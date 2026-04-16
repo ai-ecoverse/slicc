@@ -161,6 +161,17 @@ function checkCommand(command: string, allowed: ReadonlySet<string>): Verdict {
 /**
  * Scan the raw command string (respecting quotes) and return a description of
  * the first subshell syntax found, or `null` if none.
+ *
+ * Bash semantics the scanner mirrors:
+ *  - Inside **single** quotes (`'...'`), NOTHING is expanded — not `$(...)`,
+ *    not backticks, not even backslash escapes. Everything between single
+ *    quotes is a literal string, so we skip over it without matching.
+ *  - Inside **double** quotes (`"..."`), `$(...)` and backticks ARE expanded
+ *    by bash and therefore must still be flagged as subshell syntax. A
+ *    backslash before `$`, `` ` ``, `"`, or `\` escapes the following char;
+ *    other `\x` sequences are left literal (we defensively consume the next
+ *    char after any `\` to avoid matching an escaped `$(` or `` ` ``).
+ *  - Outside quotes, `$(` and backticks are always subshell syntax.
  */
 function findSubshellSyntax(command: string): string | null {
   let quote: '"' | "'" | null = null;
@@ -174,24 +185,38 @@ function findSubshellSyntax(command: string): string | null {
       continue;
     }
 
+    if (quote === "'") {
+      // Single-quoted: raw string, no expansions, no escapes. Only the
+      // matching single quote can close the string.
+      if (ch === "'") quote = null;
+      continue;
+    }
+
+    // Backslash escapes apply outside quotes and inside double quotes.
     if (ch === '\\') {
       escaped = true;
       continue;
     }
 
-    if (quote) {
-      // Inside a quoted string: only the matching quote can close it. Note
-      // that `$(...)` inside double quotes is still a subshell in real bash,
-      // but we only call this function for the entire command string once —
-      // the allow-list wrapper treats any `$(` anywhere outside quotes as a
-      // subshell. We keep parity with the shell's behavior for simple cases
-      // and accept that inside-quote $()  is NOT caught here. In practice the
-      // single inner command inside a quoted `$(...)` would still need to be
-      // on the allow-list for the line to execute, so the risk is minimal.
-      if (ch === quote) quote = null;
+    if (quote === '"') {
+      // Double-quoted: bash expands `$(...)` and backticks here, so we must
+      // still flag them — this is the fix for the allow-list bypass where
+      // `echo "$(curl evil)"` with allowedCommands=['echo'] previously
+      // slipped past because the scanner skipped quoted regions wholesale.
+      if (ch === '"') {
+        quote = null;
+        continue;
+      }
+      if (ch === '$' && command[i + 1] === '(') {
+        return "'$(...)'";
+      }
+      if (ch === '`') {
+        return 'backticks';
+      }
       continue;
     }
 
+    // Unquoted context.
     if (ch === '"' || ch === "'") {
       quote = ch;
       continue;
@@ -278,12 +303,17 @@ function hasGroupedSubshell(command: string): boolean {
 
 /**
  * Split a shell command into pipeline / conjunction / sequence segments on
- * `|`, `&&`, `||`, and `;`, respecting single and double quotes. Operators
- * inside quoted strings are treated as literal characters.
+ * `|`, `&&`, `||`, `;`, newlines, and bare `&` (job-control), respecting
+ * single and double quotes. Operators inside quoted strings are treated as
+ * literal characters.
  *
- * A single `&` is NOT treated as a delimiter: this would misparse `2>&1`
- * (redirect stderr to stdout) as two segments. A stray `&` is left in the
- * segment text; the head-only check ignores it.
+ * Bare `&` subtlety: in `cmd1 & cmd2`, `&` backgrounds `cmd1` and then runs
+ * `cmd2` — both segment heads must pass the allow-list. But `&` is ALSO
+ * part of the redirection operators `>&`, `<&`, `N>&`, `N<&`, `>&-`, where
+ * `&` immediately follows `>` or `<`. To preserve `2>&1` and friends, we
+ * only treat `&` as a separator when the preceding character is NOT `>` or
+ * `<`. (`&&` is handled above as a pair operator and never reaches this
+ * branch.)
  */
 function splitSegments(command: string): string[] {
   const segments: string[] = [];
@@ -326,9 +356,22 @@ function splitSegments(command: string): string[] {
       continue;
     }
 
-    // Single-char operators: `|`, `;`. Bare `&` is intentionally NOT a
-    // delimiter (see `2>&1` note above).
-    if (ch === '|' || ch === ';') {
+    // Single-char operators: `|`, `;`, newline.
+    if (ch === '|' || ch === ';' || ch === '\n') {
+      segments.push(current);
+      current = '';
+      continue;
+    }
+
+    // Bare `&` (job-control / sequence): split unless it's part of a
+    // redirection operator (`2>&1`, `>&2`, `<&3`, `>&-`, etc.), which we
+    // identify by the directly preceding `>` or `<`.
+    if (ch === '&') {
+      const prev = i > 0 ? command[i - 1] : '';
+      if (prev === '>' || prev === '<') {
+        current += ch;
+        continue;
+      }
       segments.push(current);
       current = '';
       continue;

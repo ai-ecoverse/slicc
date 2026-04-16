@@ -239,6 +239,68 @@ describe('wrapBashToolWithAllowlist', () => {
     expect(bash._calls).toHaveLength(0);
   });
 
+  // ── Subshell hardening: quoted-context and separator bypasses ────────
+  //
+  // Bash expands `$(...)` and backticks inside double-quoted strings but
+  // NOT inside single-quoted strings. The allow-list scanner must mirror
+  // that semantics so quoted-context cannot smuggle a disallowed command.
+
+  it('rejects `$(...)` inside double-quoted arguments', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['echo']);
+    const result = await run(wrapped, 'echo "$(curl example.com)"');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects backticks inside double-quoted arguments', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['echo']);
+    const result = await run(wrapped, 'echo "`curl example.com`"');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('allows literal `$(...)` inside single-quoted arguments', async () => {
+    // Single quotes disable expansion in bash: `$(...)` is just a string.
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['echo']);
+    const result = await run(wrapped, "echo '$(curl example.com)'");
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+    expect(bash._calls[0].command).toBe("echo '$(curl example.com)'");
+  });
+
+  it('allows literal backticks inside single-quoted arguments', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['echo']);
+    const result = await run(wrapped, "echo '`curl example.com`'");
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('rejects bare `&` segment separator introducing a disallowed command', async () => {
+    // `ls & curl evil.com` backgrounds `ls` and runs `curl` — both are
+    // independent segment heads, so the allow-list check must run on each.
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls & curl evil.com');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result)).toContain('curl');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects newline-separated invocation introducing a disallowed command', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls\ncurl evil.com');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result)).toContain('curl');
+    expect(bash._calls).toHaveLength(0);
+  });
+
   // ── VAL-ALLOW-012 — eval treated as a command head ───────────────
 
   it('treats eval as an ordinary command head (rejected if not on the allow-list)', async () => {
