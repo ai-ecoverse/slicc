@@ -78,6 +78,12 @@ export function getBedrockCampExtraModels(): Model<Api>[] {
   ] as unknown as Model<Api>[];
 }
 
+// Opus 4.7 returns 400 "temperature is deprecated for this model" when the
+// param is set. Keep temperature for every other model.
+function supportsTemperature(modelId: string): boolean {
+  return !modelId.includes('claude-opus-4-7');
+}
+
 // Extension detection
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
 
@@ -490,14 +496,15 @@ export const streamBedrockCamp = (
       if (!baseUrl) throw new Error('Base URL is required for Bedrock CAMP');
 
       // Build request body (Converse API format)
+      const inferenceConfig: Record<string, unknown> = { maxTokens: options.maxTokens };
+      if (supportsTemperature(model.id)) {
+        inferenceConfig.temperature = options.temperature;
+      }
       const body: any = {
         modelId: model.id,
         messages: convertMessages(context, model),
         system: buildSystemPrompt(context.systemPrompt, model),
-        inferenceConfig: {
-          maxTokens: options.maxTokens,
-          temperature: options.temperature,
-        },
+        inferenceConfig,
         toolConfig: convertToolConfig(context.tools, options.toolChoice),
         additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
       };
