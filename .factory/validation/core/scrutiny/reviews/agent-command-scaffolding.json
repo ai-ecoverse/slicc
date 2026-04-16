@@ -1,0 +1,36 @@
+{
+  "featureId": "agent-command-scaffolding",
+  "status": "fail",
+  "summary": "The command scaffolding is mostly solid, but it never rejects nonexistent <cwd> paths, so the feature misses its assigned VAL-CMD-017 behavior and lacks test coverage for that case.",
+  "issues": [
+    {
+      "severity": "blocking",
+      "description": "The command accepts nonexistent cwd values and forwards them to the bridge instead of returning the required not-found error.",
+      "evidence": "In packages/webapp/src/shell/supplemental-commands/agent-command.ts, resolveCwd() only normalizes the string path, and createAgentCommand() immediately uses resolvedCwd and then calls bridge.spawn() without any ctx.fs.exists()/ctx.fs.stat() validation (see the resolveCwd() helper and the resolvedCwd/bridge.spawn flow around lines 139-233). The cwd tests in packages/webapp/tests/shell/supplemental-commands/agent-command.test.ts cover relative, '.', '..', absolute, and empty-string cwd cases, but there is no nonexistent-path case even though this feature fulfills VAL-CMD-017 in mission features.json. The handoff also overstates coverage by claiming all CMD-* assertions are covered.",
+      "suggestedFix": "Validate the resolved cwd before bridge lookup/spawn (for example with ctx.fs.stat(resolvedCwd) and an isDirectory check), return a descriptive stderr/non-zero exit when the path is missing or invalid, and add a focused test for `agent /does/not/exist \"*\" \"p\"`."
+    }
+  ],
+  "sharedStateObservations": [
+    {
+      "target": "library",
+      "observation": "`.factory/library/environment.md` still tells workers to attach CDP on fixed port 9222, but the mission AGENTS.md and .factory/services.yaml already document that Chrome may auto-allocate another port and workers should prefer ws://localhost:5710/cdp or discover the port from the dev-server log.",
+      "why": "This stale library guidance can send future workers and validators to the wrong browser target during manual verification.",
+      "confidence": "high"
+    }
+  ],
+  "filesReviewed": [
+    "packages/webapp/src/shell/supplemental-commands/agent-command.ts",
+    "packages/webapp/src/shell/supplemental-commands/index.ts",
+    "packages/webapp/src/shell/supplemental-commands/help-command.ts",
+    "packages/webapp/tests/shell/supplemental-commands/agent-command.test.ts",
+    ".factory/skills/webapp-worker/SKILL.md",
+    ".factory/services.yaml",
+    ".factory/library/architecture.md",
+    ".factory/library/environment.md",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/features.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/AGENTS.md",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/worker-transcripts.jsonl",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/handoffs/2026-04-16T19-41-54-646Z__agent-command-scaffolding__27eac12e-777d-48d7-a5d2-4010417ea234.json"
+  ],
+  "commitIdsReviewed": ["f91efec0f21e801d6a47e5762e14c585afa1a4ee"]
+}

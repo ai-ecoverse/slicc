@@ -1,0 +1,43 @@
+{
+  "featureId": "bash-tool-allowlist-wrapper",
+  "status": "fail",
+  "summary": "Fail: the wrapper is wired into scoop creation correctly, but it still leaves two allow-list bypasses. Quoted command substitution/backticks and unsplit shell separators (newline and bare `&`) can execute disallowed commands while the wrapper only sees an allowed head.",
+  "issues": [
+    {
+      "severity": "blocking",
+      "description": "Quoted command substitution is still executable under a restricted allow-list. `findSubshellSyntax()` ignores `$()` and backticks while inside quotes, so an allowed head like `echo` can smuggle a disallowed command via `echo \"$(curl http://x)\"` or `echo \"`curl http://x`\"`.",
+      "evidence": "packages/webapp/src/tools/bash-tool-allowlist.ts:182-205 explicitly skips subshell detection while `quote` is set and even documents that `$(...)` inside double quotes is not caught. The feature contract requires rejecting subshell syntax (`validation-contract.md`: 371-380). The tests only cover unquoted forms at packages/webapp/tests/tools/bash-tool-allowlist.test.ts:206-220.",
+      "suggestedFix": "Treat command substitution as active inside double quotes (and reject backticks there too), then add regression tests for quoted `$()` and quoted backticks."
+    },
+    {
+      "severity": "blocking",
+      "description": "The wrapper does not enforce the allow-list for all shell command separators. Because it only splits on `|`, `&&`, `||`, and `;`, a disallowed command can run after an allowed head via bare `&` or a newline in the same bash invocation.",
+      "evidence": "packages/webapp/src/tools/bash-tool-allowlist.ts:284-286 and 329-331 explicitly leave bare `&` inside a segment, and `splitSegments()` never handles newlines. `extractHead()` then stops at the first whitespace (390-400), so `ls\\ncurl http://x` is accepted as head `ls`. packages/webapp/src/tools/bash-tool.ts:77-95 describes a full shell and forwards the raw string to `shell.executeCommand(command, signal)`, so those extra separators are still executed by bash.",
+      "suggestedFix": "Either parse or conservatively reject other command-separator constructs that the shell executes (at least bare `&` and newlines), and add regression tests covering `allowed & disallowed` and newline-separated commands."
+    }
+  ],
+  "sharedStateObservations": [
+    {
+      "target": "library",
+      "observation": "The architecture note for the allow-list wrapper only mentions `|`, `&&`, `||`, `;` and generic subshell rejection. It should explicitly call out that the bash tool executes a full shell, so background `&`, newlines, and command substitution inside double quotes are also executable forms that must be parsed or rejected.",
+      "why": "The current shared-state description matches the implementation's blind spots, so a future worker could follow the documented design and still leave the same bypasses in place.",
+      "confidence": "medium"
+    }
+  ],
+  "filesReviewed": [
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/handoffs/2026-04-16T20-32-29-607Z__bash-tool-allowlist-wrapper__762b84b7-c493-43b3-9c27-a19bbec4c115.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/features.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/validation-contract.md",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/AGENTS.md",
+    ".factory/skills/webapp-worker/SKILL.md",
+    ".factory/services.yaml",
+    ".factory/library/architecture.md",
+    "packages/webapp/src/tools/bash-tool.ts",
+    "packages/webapp/src/tools/bash-tool-allowlist.ts",
+    "packages/webapp/tests/tools/bash-tool-allowlist.test.ts",
+    "packages/webapp/src/scoops/scoop-context.ts",
+    "packages/webapp/src/scoops/agent-bridge.ts",
+    "packages/webapp/src/scoops/types.ts"
+  ],
+  "commitIdsReviewed": ["9851a5e459693c5e16279c9c7e24903943ef9e0f"]
+}

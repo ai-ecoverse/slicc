@@ -1,0 +1,39 @@
+{
+  "featureId": "publish-agent-bridge-hook",
+  "status": "fail",
+  "summary": "The bridge is published in standalone and offscreen bootstrap, but the extension Terminal tab still cannot access it because the side-panel shell runs in a different window context with no `__slicc_agent` proxy.",
+  "issues": [
+    {
+      "severity": "blocking",
+      "description": "Extension mode still leaves the user-facing Terminal tab without an AgentBridge. `publishAgentBridge()` only writes `globalThis.__slicc_agent` in the offscreen document, but the extension Terminal tab runs its own WasmShell in the side-panel window, where `agent-command` still falls back to `agent: orchestrator bridge not available`.",
+      "evidence": "`packages/webapp/src/ui/main.ts:278-339` creates the extension side-panel WasmShell for the Terminal tab; `packages/webapp/src/ui/main.ts:1158-1163` publishes `__slicc_agent` only in the standalone branch, not `mainExtension()`. `packages/chrome-extension/src/offscreen.ts:71-80` publishes the hook only in the offscreen document. `packages/chrome-extension/CLAUDE.md:50-55` documents that the side panel shell and offscreen shell do not share window globals, and `packages/webapp/src/shell/supplemental-commands/agent-command.ts:215-218` errors when the hook is missing.",
+      "suggestedFix": "Provide the bridge to the extension panel shell as well (for example by proxying spawn requests through `OffscreenClient`/`chrome.runtime` or by publishing a panel-local bridge hook), and add an integration test that exercises the extension side-panel Terminal tab path rather than only the single-context helper harness."
+    }
+  ],
+  "sharedStateObservations": [
+    {
+      "target": "library",
+      "observation": "`.factory/library/architecture.md` describes `globalThis.__slicc_agent` as a generic extension hook published from `offscreen.ts`, but it does not mention that the extension has separate side-panel and offscreen shells with isolated window globals.",
+      "why": "That omission makes the current plan look sufficient for extension support even though the panel Terminal tab cannot see the offscreen global. Capturing the dual-context constraint in the mission architecture would help future workers avoid the same mistake.",
+      "confidence": "high"
+    }
+  ],
+  "filesReviewed": [
+    "packages/chrome-extension/src/offscreen.ts",
+    "packages/webapp/src/scoops/agent-bridge.ts",
+    "packages/webapp/src/scoops/index.ts",
+    "packages/webapp/src/scoops/orchestrator.ts",
+    "packages/webapp/src/ui/main.ts",
+    "packages/webapp/src/ui/offscreen-client.ts",
+    "packages/webapp/src/shell/supplemental-commands/agent-command.ts",
+    "packages/webapp/tests/scoops/agent-bridge-hook.test.ts",
+    ".factory/library/architecture.md",
+    "packages/chrome-extension/CLAUDE.md",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/features.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/handoffs/2026-04-16T20-13-04-996Z__publish-agent-bridge-hook__85b4acd8-05b0-4fab-aee2-d33037b35fee.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/worker-transcripts.jsonl",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/AGENTS.md",
+    ".factory/services.yaml"
+  ],
+  "commitIdsReviewed": ["d87c9b68857b8f1fb56071ad2a4dfde97c73f69b"]
+}

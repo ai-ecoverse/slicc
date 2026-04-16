@@ -33,7 +33,7 @@ Location: `packages/webapp/src/scoops/agent-bridge.ts` (or equivalent)
      - R/O: `/workspace/`
   3. Instantiates a `ScoopContext` directly (not via `orchestrator.registerScoop`) so we can install our own callbacks and own the lifecycle
   4. Wraps the bash tool with an allow-list (see below) if `allowedCommands !== ['*']`
-  5. Registers the scoop in the orchestrator's map for visibility (optional) but owns init/dispose locally
+  5. Registers the scoop in the orchestrator's map for visibility during the run while still owning init/dispose locally
   6. Awaits `ctx.prompt(promptText)` — blocks until agent loop completes
   7. Determines output: last `send_message` callback text if any; else last assistant text from `ctx.getAgentMessages()`
   8. Disposes ScoopContext and deletes `/scoops/<folder>/` from the VFS
@@ -46,6 +46,7 @@ Location: published from `packages/webapp/src/ui/main.ts` (CLI) and `packages/ch
 - After `Orchestrator` is instantiated, set `(globalThis as any).__slicc_agent = createAgentBridge(orchestrator)`
 - This lets the supplemental command reach the orchestrator without dependency-injection plumbing through `SupplementalCommandsConfig`
 - Pattern matches existing hooks (`__slicc_sprinkleManager`, `__slicc_lick_handler`, `__slicc_lickManager`, etc.)
+- In extension mode, publishing only from `offscreen.ts` is not sufficient for the side-panel Terminal tab: the panel shell and offscreen shell do **not** share window globals, so panel-facing `agent` support needs a relay/proxy or a panel-local hook.
 
 ### 4. Bash-tool allow-list wrapper (NEW)
 
@@ -55,6 +56,7 @@ Location: `packages/webapp/src/tools/bash-tool-allowlist.ts` (new helper)
 - If `allowedCommands` contains `*`, returns the original tool unchanged
 - Otherwise, intercepts each bash invocation, parses the command string into pipeline segments (`|`, `&&`, `||`, `;`), extracts the first token of each segment (respecting quotes via `parse-shell-args.ts`), and rejects the invocation with a clear error if any segment's head is not in the allow-list
 - Also rejects commands containing subshell syntax (`$(...)`, backticks) to prevent trivial bypass — this is a conscious limitation
+- Because the bash tool executes a full shell, wrappers must also account for background `&`, newline-separated commands, and command substitution inside double quotes/backticks, or reject those forms conservatively.
 
 ### 5. RestrictedFS extension (MODIFICATION)
 
@@ -95,6 +97,7 @@ User sees output in terminal
 
 - The `agent` command MUST work identically in CLI and extension modes (dual-mode compatibility).
 - The global hook `globalThis.__slicc_agent` MUST be published in both `ui/main.ts` and `offscreen.ts` bootstrap paths.
+- In extension mode, the side-panel Terminal shell and offscreen agent shell are separate contexts. Publishing `globalThis.__slicc_agent` in offscreen alone does **not** make it visible to the panel shell.
 - Under normal completion, error, or parent abort, the scratch folder `/scoops/<folder>/` MUST be deleted and the scoop MUST NOT remain registered.
 - Allow-list enforcement MUST happen at the bash-tool layer (inside the scoop's agent loop), not at the shell-command layer — because the agent may invoke bash multiple times during its reasoning, each invocation must be checked.
 - The existing cone/scoop tool surface (`scoop_scoop`, `feed_scoop`, `drop_scoop`, `list_scoops`, `update_global_memory`, `send_message`) MUST remain unchanged.

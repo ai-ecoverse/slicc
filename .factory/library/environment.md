@@ -20,7 +20,7 @@ Workers set up provider credentials through the running dev app itself (stored i
 When a worker needs to manually drive the app:
 
 1. Start the dev server: service `dev` (`PORT=5710 npx tsx packages/node-server/src/index.ts --dev`).
-2. Connect to the running Chrome via CDP on port 9222.
+2. Connect through the stable CDP proxy at `ws://localhost:5710/cdp`, or discover the actual Chrome CDP port from the dev-server log before attaching. Port 9222 is only the nominal default and may auto-allocate if it is already occupied.
 3. Use the `agent-browser` skill to navigate/interact (go to `http://localhost:5710`).
 4. Configure an LLM provider in the UI (the app persists credentials locally).
 5. Drive the agent via the UI's chat box, then drop to terminal to exercise `agent`.
