@@ -74,7 +74,9 @@ If any step fails, fix it before proceeding. Every commit must leave these gates
 
 ### 6. Manual verification via CDP-connected browser
 
-**This is REQUIRED. Do not skip.** The user has explicitly asked for the dev server to stay open during development for manual investigation.
+**REQUIRED for features with user-observable UI behavior** (e.g., the `agent-command` help text, terminal-panel integration, bridge-hook presence, live smoke tests). OPTIONAL for pure utility wrappers whose `fulfills` assertions are ALL `Tool: vitest` AND which have no code path that changes UI state — in that case, full vitest + typecheck + both build gates are sufficient signal; document the decision in `whatWasLeftUndone` so it's auditable.
+
+The user has explicitly asked for the dev server to stay open during development for manual investigation of user-facing features.
 
 1. Check if the dev service is already running: `curl -sf http://localhost:5710`. (Do NOT assume CDP is on :9222 — see step 3.)
 2. If NOT running, start it:
