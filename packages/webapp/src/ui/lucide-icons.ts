@@ -81,3 +81,26 @@ if (document.readyState === 'loading') {
   // DOM already loaded
   (window as any).LucideIcons.render();
 }
+
+// Watch for dynamic content changes and auto-render new icons
+// This handles sprinkle HTML injected after initial load (extension fragment mode)
+const observer = new MutationObserver((mutations) => {
+  let hasNewIcons = false;
+  for (const mutation of mutations) {
+    for (const node of mutation.addedNodes) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const el = node as Element;
+        if (el.hasAttribute?.('data-lucide') || el.querySelector?.('[data-lucide]')) {
+          hasNewIcons = true;
+          break;
+        }
+      }
+    }
+    if (hasNewIcons) break;
+  }
+  if (hasNewIcons) {
+    (window as any).LucideIcons.render();
+  }
+});
+
+observer.observe(document.body, { childList: true, subtree: true });

@@ -10,17 +10,19 @@ Lucide icons are available globally via the `LucideIcons` object. Use declarativ
 
 ```html
 <!-- Icon renders automatically on page load -->
-<i data-lucide="check"></i>
-<i data-lucide="alert-circle"></i>
-<i data-lucide="settings" class="sprinkle-icon--l"></i>
+<i data-lucide="check" class="sprinkle-icon"></i>
+<i data-lucide="alert-circle" class="sprinkle-icon"></i>
+<i data-lucide="settings" class="sprinkle-icon sprinkle-icon--l"></i>
 
 <!-- In buttons -->
-<button class="sprinkle-btn sprinkle-btn--primary"><i data-lucide="save"></i> Save</button>
+<button class="sprinkle-btn sprinkle-btn--primary">
+  <i data-lucide="save" class="sprinkle-icon"></i> Save
+</button>
 
 <!-- In action card headers -->
 <div class="sprinkle-action-card">
   <div class="sprinkle-action-card__header">
-    <i data-lucide="check-circle" style="color: var(--uxc-positive-text)"></i>
+    <i data-lucide="check-circle" class="sprinkle-icon" style="color: var(--uxc-positive-text)"></i>
     Success
   </div>
 </div>

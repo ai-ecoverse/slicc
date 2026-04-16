@@ -7,7 +7,11 @@ This shows how to use Lucide icons in inline sprinkles instead of emojis.
 ```shtml
 <div class="sprinkle-action-card">
   <div class="sprinkle-action-card__header">
-    <i data-lucide="check-circle" style="color: var(--uxc-positive-text)"></i>
+    <i
+      data-lucide="check-circle"
+      class="sprinkle-icon"
+      style="color: var(--uxc-positive-text)"
+    ></i>
     Task Completed
   </div>
   <div class="sprinkle-action-card__body">
@@ -15,7 +19,7 @@ This shows how to use Lucide icons in inline sprinkles instead of emojis.
   </div>
   <div class="sprinkle-action-card__actions">
     <button class="sprinkle-btn" onclick="slicc.lick('dismiss')">
-      <i data-lucide="x"></i> Dismiss
+      <i data-lucide="x" class="sprinkle-icon"></i> Dismiss
     </button>
   </div>
 </div>
@@ -29,16 +33,31 @@ This shows how to use Lucide icons in inline sprinkles instead of emojis.
   <div class="sprinkle-action-card__body">
     <div class="sprinkle-stack">
       <button class="sprinkle-btn" onclick="slicc.lick({action:'status',value:'success'})">
-        <i data-lucide="check-circle" style="color: var(--uxc-positive-text)"></i> Success
+        <i
+          data-lucide="check-circle"
+          class="sprinkle-icon"
+          style="color: var(--uxc-positive-text)"
+        ></i>
+        Success
       </button>
       <button class="sprinkle-btn" onclick="slicc.lick({action:'status',value:'warning'})">
-        <i data-lucide="alert-triangle" style="color: var(--uxc-notice-text)"></i> Warning
+        <i
+          data-lucide="alert-triangle"
+          class="sprinkle-icon"
+          style="color: var(--uxc-notice-text)"
+        ></i>
+        Warning
       </button>
       <button class="sprinkle-btn" onclick="slicc.lick({action:'status',value:'error'})">
-        <i data-lucide="x-circle" style="color: var(--uxc-negative-text)"></i> Error
+        <i
+          data-lucide="x-circle"
+          class="sprinkle-icon"
+          style="color: var(--uxc-negative-text)"
+        ></i>
+        Error
       </button>
       <button class="sprinkle-btn" onclick="slicc.lick({action:'status',value:'info'})">
-        <i data-lucide="info" style="color: var(--uxc-accent-text)"></i> Info
+        <i data-lucide="info" class="sprinkle-icon" style="color: var(--uxc-accent-text)"></i> Info
       </button>
     </div>
   </div>
@@ -50,21 +69,26 @@ This shows how to use Lucide icons in inline sprinkles instead of emojis.
 ```shtml
 <div class="sprinkle-action-card">
   <div class="sprinkle-action-card__header">
-    <i data-lucide="file-text"></i> Document Actions
+    <i data-lucide="file-text" class="sprinkle-icon"></i> Document Actions
   </div>
   <div class="sprinkle-action-card__body">
     <div class="sprinkle-stack">
       <button class="sprinkle-btn" onclick="slicc.lick({action:'edit'})">
-        <i data-lucide="edit-3"></i> Edit
+        <i data-lucide="edit-3" class="sprinkle-icon"></i> Edit
       </button>
       <button class="sprinkle-btn" onclick="slicc.lick({action:'download'})">
-        <i data-lucide="download"></i> Download
+        <i data-lucide="download" class="sprinkle-icon"></i> Download
       </button>
       <button class="sprinkle-btn" onclick="slicc.lick({action:'share'})">
-        <i data-lucide="share-2"></i> Share
+        <i data-lucide="share-2" class="sprinkle-icon"></i> Share
       </button>
       <button class="sprinkle-btn" onclick="slicc.lick({action:'delete'})">
-        <i data-lucide="trash-2" style="color: var(--uxc-negative-text)"></i> Delete
+        <i
+          data-lucide="trash-2"
+          class="sprinkle-icon"
+          style="color: var(--uxc-negative-text)"
+        ></i>
+        Delete
       </button>
     </div>
   </div>
