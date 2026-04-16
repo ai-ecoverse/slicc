@@ -40,9 +40,11 @@ export const config: ProviderConfig = {
   requiresBaseUrl: true,
   baseUrlPlaceholder: 'https://bedrock-runtime.us-west-2.amazonaws.com',
   baseUrlDescription: 'Bedrock runtime endpoint from CAMP portal',
+  defaultModelId: 'claude-sonnet-4-6',
 };
 
-// Picker filter: keep only Claude 4.x on an inference-profile prefix.
+// Picker filter: keep only Claude 4.x on an inference-profile prefix that
+// is reachable from the configured endpoint region.
 //
 // 1. Inference profile (us./eu./global./apac.) — bare anthropic.* 400s with
 //    "on-demand throughput isn't supported".
@@ -50,13 +52,32 @@ export const config: ProviderConfig = {
 //    injection; non-Claude Bedrock models (Nova, Llama, Writer, …) are
 //    similarly risky, and DeepSeek R1 specifically 400s on toolConfig
 //    ("This model doesn't support tool use") which breaks the agent loop.
+// 3. Region must match the endpoint — e.g. `eu.*` IDs 400 with "invalid
+//    model identifier" when sent to a `us-*` runtime, and vice versa.
+//    `global.*` works anywhere.
 const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac)\./;
 const BEDROCK_CAMP_CLAUDE_4_RE = /\.anthropic\.claude-(opus|sonnet|haiku)-4/;
+const BEDROCK_RUNTIME_HOST_RE = /bedrock-runtime\.([a-z0-9-]+)\.amazonaws\.com/i;
 
-export function isBedrockCampCompatible(model: { id: string }): boolean {
-  return (
-    BEDROCK_CAMP_INFERENCE_PROFILE_RE.test(model.id) && BEDROCK_CAMP_CLAUDE_4_RE.test(model.id)
-  );
+export function bedrockCampRegionFromBaseUrl(baseUrl: string | null | undefined): string | null {
+  if (!baseUrl) return null;
+  return baseUrl.match(BEDROCK_RUNTIME_HOST_RE)?.[1] ?? null;
+}
+
+function profileMatchesRegion(prefix: string, region: string): boolean {
+  if (prefix === 'global') return true;
+  if (prefix === 'us') return region.startsWith('us-');
+  if (prefix === 'eu') return region.startsWith('eu-');
+  if (prefix === 'apac') return region.startsWith('ap-');
+  return false;
+}
+
+export function isBedrockCampCompatible(model: { id: string }, region?: string | null): boolean {
+  if (!BEDROCK_CAMP_INFERENCE_PROFILE_RE.test(model.id)) return false;
+  if (!BEDROCK_CAMP_CLAUDE_4_RE.test(model.id)) return false;
+  if (!region) return true; // no endpoint configured yet — stay permissive
+  const prefix = model.id.split('.', 1)[0];
+  return profileMatchesRegion(prefix, region);
 }
 
 // Models not yet in pi-ai's amazon-bedrock registry that CAMP already serves.

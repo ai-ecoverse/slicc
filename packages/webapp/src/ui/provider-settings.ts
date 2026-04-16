@@ -19,6 +19,7 @@ import type { ProviderConfig } from '../providers/index.js';
 import {
   isBedrockCampCompatible,
   getBedrockCampExtraModels,
+  bedrockCampRegionFromBaseUrl,
 } from '../providers/built-in/bedrock-camp.js';
 
 export type { ProviderConfig } from '../providers/index.js';
@@ -127,14 +128,19 @@ function applyModelMetadata(
 export function getProviderModels(providerId: string): Model<Api>[] {
   try {
     // Bedrock CAMP uses Amazon Bedrock models with custom API.
-    // Filter to inference-profile-prefixed Claude 4.x (bare IDs aren't
-    // invokable on-demand) and inject models missing from pi-ai's registry
-    // (e.g. opus-4.7). Dedupe by ID so extras auto-drop when pi-ai ships
-    // the same IDs.
+    // Filter to inference-profile-prefixed Claude 4.x whose region matches
+    // the configured endpoint (eu.* against us-* 400s "invalid model
+    // identifier"), and inject models missing from pi-ai's registry (e.g.
+    // opus-4.7). Dedupe by ID so extras auto-drop when pi-ai ships them.
     if (providerId === 'bedrock-camp') {
-      const bedrockModels = getModelsDynamic('amazon-bedrock').filter(isBedrockCampCompatible);
+      const region = bedrockCampRegionFromBaseUrl(getBaseUrlForProvider('bedrock-camp'));
+      const bedrockModels = getModelsDynamic('amazon-bedrock').filter((m) =>
+        isBedrockCampCompatible(m, region)
+      );
       const existingIds = new Set(bedrockModels.map((m) => m.id));
-      const extras = getBedrockCampExtraModels().filter((m) => !existingIds.has(m.id));
+      const extras = getBedrockCampExtraModels().filter(
+        (m) => isBedrockCampCompatible(m, region) && !existingIds.has(m.id)
+      );
       return [...bedrockModels, ...extras].map((m) => ({
         ...m,
         api: 'bedrock-camp-converse' as Api,
