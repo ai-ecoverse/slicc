@@ -476,7 +476,7 @@ export const streamBedrockCamp = (
       notifyPayload(options.onPayload, body, model);
 
       // Build URL: POST {baseUrl}/model/{modelId}/converse
-      const targetUrl = `${baseUrl.replace(/\/$/, '')}/model/${encodeURIComponent(model.id)}/converse`;
+      const targetUrl = `${baseUrl.replace(/\/$/, '')}/model/${model.id}/converse`;
 
       // Route through CORS proxy in CLI mode, direct in extension mode
       const fetchUrl = isExtension ? targetUrl : '/api/fetch-proxy';
