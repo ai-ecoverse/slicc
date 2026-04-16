@@ -27,6 +27,17 @@ export {
   createScoopManagementTools,
   type ScoopManagementToolsConfig,
 } from './scoop-management-tools.js';
+export {
+  createAgentBridge,
+  publishAgentBridge,
+  AGENT_BRIDGE_GLOBAL_KEY,
+  type AgentBridge,
+  type AgentSpawnOptions,
+  type AgentSpawnResult,
+  type AgentBridgeContext,
+  type AgentBridgeContextArgs,
+  type AgentBridgeDeps,
+} from './agent-bridge.js';
 export { Heartbeat, type HeartbeatStatus, type HeartbeatCallbacks } from './heartbeat.js';
 export {
   attachTrayFollower,

@@ -34,7 +34,7 @@ import { findDroppedSkillTransferFile, hasDroppedFiles } from './skill-drop.js';
 // — the extension agent engine runs in the offscreen document, not in this file.
 import '../providers/index.js';
 import { BrowserAPI } from '../cdp/index.js';
-import { Orchestrator } from '../scoops/index.js';
+import { Orchestrator, publishAgentBridge } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import {
@@ -1155,6 +1155,13 @@ async function main(): Promise<void> {
   // Wire shared FS to file browser and terminal
   const sharedFs = orchestrator.getSharedFS();
   if (sharedFs) {
+    // Publish the AgentBridge on globalThis.__slicc_agent so the `agent`
+    // supplemental shell command can find it. MUST run after init() resolves
+    // (sharedFs is populated) and BEFORE the WasmShell registers supplemental
+    // commands below. Mirrors the extension-offscreen hook in
+    // packages/chrome-extension/src/offscreen.ts.
+    publishAgentBridge(orchestrator, sharedFs, orchestrator.getSessionStore());
+
     layout.panels.fileBrowser.setFs(sharedFs);
     log.info('File browser wired to shared VFS');
 

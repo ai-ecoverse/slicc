@@ -275,6 +275,40 @@ export function createAgentBridge(
   return { spawn };
 }
 
+/** Global hook name used by {@link publishAgentBridge} and read by the
+ *  `agent` supplemental command via `globalThis.__slicc_agent`. */
+export const AGENT_BRIDGE_GLOBAL_KEY = '__slicc_agent';
+
+/**
+ * Bootstrap helper: create an {@link AgentBridge} for the given orchestrator
+ * and publish it to `globalThis.__slicc_agent` so the `agent` supplemental
+ * shell command can find it.
+ *
+ * This is the only sanctioned way to publish the hook. Both CLI bootstrap
+ * (`packages/webapp/src/ui/main.ts`) and extension-offscreen bootstrap
+ * (`packages/chrome-extension/src/offscreen.ts`) call this helper AFTER
+ * `orchestrator.init()` has resolved (so `sharedFs` is available) and BEFORE
+ * the WasmShell registers its supplemental commands.
+ *
+ * Call sites must guarantee that `sharedFs` is non-null — i.e. `init()` has
+ * already completed. If `init()` rejects, this helper MUST NOT be invoked,
+ * so that `globalThis.__slicc_agent` is never left in a half-initialized
+ * state.
+ *
+ * @returns The published {@link AgentBridge} (same reference as `globalThis.__slicc_agent`).
+ */
+export function publishAgentBridge(
+  orchestrator: Orchestrator,
+  sharedFs: VirtualFS,
+  sessionStore: SessionStore | null | undefined = null,
+  deps: AgentBridgeDeps = {}
+): AgentBridge {
+  const bridge = createAgentBridge(orchestrator, sharedFs, sessionStore, deps);
+  (globalThis as Record<string, unknown>)[AGENT_BRIDGE_GLOBAL_KEY] = bridge;
+  log.info('agent bridge published on globalThis.__slicc_agent');
+  return bridge;
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────────
 
 function defaultGenerateUid(): string {
@@ -299,7 +333,7 @@ function defaultResolveModel(modelId: string): string | null {
   try {
     // Dynamic import via require-esque path to avoid circular dependency with
     // provider-settings pulling in DOM-bound code at module load.
-     
+
     const { getAllAvailableModels } = require('../ui/provider-settings.js') as {
       getAllAvailableModels: () => Array<{ models: Array<{ id: string }> }>;
     };
@@ -317,7 +351,6 @@ function defaultResolveModel(modelId: string): string | null {
 
 function defaultGetInheritedModelId(): string {
   try {
-     
     const { resolveCurrentModel } = require('../ui/provider-settings.js') as {
       resolveCurrentModel: () => { id: string };
     };

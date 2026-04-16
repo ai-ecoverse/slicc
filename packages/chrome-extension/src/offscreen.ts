@@ -8,7 +8,7 @@
  */
 
 import { BrowserAPI, OffscreenCdpProxy } from '../../../packages/webapp/src/cdp/index.js';
-import { Orchestrator } from '../../../packages/webapp/src/scoops/index.js';
+import { Orchestrator, publishAgentBridge } from '../../../packages/webapp/src/scoops/index.js';
 import { LeaderTrayManager } from '../../../packages/webapp/src/scoops/tray-leader.js';
 import {
   hasStoredTrayJoinUrl,
@@ -67,6 +67,18 @@ async function init(): Promise<void> {
   console.log('[slicc-offscreen] Orchestrator created, calling init()...');
   await orchestrator.init();
   console.log('[slicc-offscreen] Orchestrator initialized');
+
+  // Publish the AgentBridge on globalThis.__slicc_agent so the `agent`
+  // supplemental shell command running inside the offscreen WasmShell can
+  // find it. MUST run after init() resolves (sharedFs is populated) and
+  // BEFORE the WasmShell registers supplemental commands below. Mirrors the
+  // CLI hook in packages/webapp/src/ui/main.ts.
+  const offscreenSharedFs = orchestrator.getSharedFS();
+  if (offscreenSharedFs) {
+    publishAgentBridge(orchestrator, offscreenSharedFs, orchestrator.getSessionStore());
+  } else {
+    log.warn('offscreen: sharedFs unavailable after init(); skipping __slicc_agent publish');
+  }
 
   // Register session costs provider for the `cost` shell command (offscreen agent shell)
   const { registerSessionCostsProvider } =

@@ -223,6 +223,17 @@ export class Orchestrator {
     return this.sharedFs;
   }
 
+  /**
+   * Get the SessionStore used for per-scoop conversation persistence. Returns
+   * `null` before {@link init} completes. Exposed so the CLI + extension
+   * bootstrap can thread the same session store into `createAgentBridge`
+   * (see `globalThis.__slicc_agent`) — ensuring bridge-created scoops share
+   * the same session database as the orchestrator's regular scoops.
+   */
+  getSessionStore(): SessionStore | null {
+    return this.sessionStore;
+  }
+
   /** Set the LickManager for guarding scoop removal against active licks */
   setLickManager(lickManager: LickManager): void {
     this.lickManager = lickManager;
