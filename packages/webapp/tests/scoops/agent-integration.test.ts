@@ -110,9 +110,21 @@ function getPublishedBridge(): AgentBridge | undefined {
 }
 
 /** Shell `ctx` shape matching the `defineCommand` callback contract. */
-function createMockShellCtx(cwd = '/home') {
+function createMockShellCtx(vfs: VirtualFS, cwd = '/home') {
   const fs: Partial<IFileSystem> = {
     resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
+    exists: (p: string) => vfs.exists(p),
+    stat: async (p: string) => {
+      const s = await vfs.stat(p);
+      return {
+        isFile: s.type === 'file',
+        isDirectory: s.type === 'directory',
+        isSymbolicLink: false,
+        mode: 0o755,
+        size: s.size,
+        mtime: new Date(s.mtime),
+      };
+    },
   };
   return {
     fs: fs as IFileSystem,
@@ -326,7 +338,7 @@ describe('agent end-to-end integration (command → hook → bridge → cleanup)
 
         const result = await createAgentCommand().execute(
           ['.', '*', "respond with 'hi' via send_message"],
-          createMockShellCtx('/home')
+          createMockShellCtx(harness.vfs, '/home')
         );
 
         const after = await snapshotScoops(harness.vfs, harness.orch);
@@ -364,7 +376,7 @@ describe('agent end-to-end integration (command → hook → bridge → cleanup)
         const before = await snapshotScoops(harness.vfs, harness.orch);
         const result = await createAgentCommand().execute(
           ['.', '*', 'summarize'],
-          createMockShellCtx('/home')
+          createMockShellCtx(harness.vfs, '/home')
         );
         const after = await snapshotScoops(harness.vfs, harness.orch);
 
@@ -394,7 +406,7 @@ describe('agent end-to-end integration (command → hook → bridge → cleanup)
 
         const result = await createAgentCommand().execute(
           ['--model', 'claude-haiku-4-5', '.', '*', 'hi'],
-          createMockShellCtx('/home')
+          createMockShellCtx(harness.vfs, '/home')
         );
 
         expect(result.exitCode).toBe(0);
@@ -417,7 +429,7 @@ describe('agent end-to-end integration (command → hook → bridge → cleanup)
         const before = await snapshotScoops(harness.vfs, harness.orch);
         const result = await createAgentCommand().execute(
           ['--model', 'totally-not-a-real-model', '.', '*', 'hi'],
-          createMockShellCtx('/home')
+          createMockShellCtx(harness.vfs, '/home')
         );
         const after = await snapshotScoops(harness.vfs, harness.orch);
 
@@ -443,7 +455,7 @@ describe('agent end-to-end integration (command → hook → bridge → cleanup)
 
         const result = await createAgentCommand().execute(
           ['.', '*', 'x'],
-          createMockShellCtx('/home')
+          createMockShellCtx(harness.vfs, '/home')
         );
 
         const after = await snapshotScoops(harness.vfs, harness.orch);
@@ -534,7 +546,7 @@ describe('agent end-to-end integration (command → hook → bridge → cleanup)
         const before = await snapshotScoops(harness.vfs, harness.orch);
         const result = await createAgentCommand().execute(
           ['.', '*', 'do something'],
-          createMockShellCtx('/home')
+          createMockShellCtx(harness.vfs, '/home')
         );
         const after = await snapshotScoops(harness.vfs, harness.orch);
 
@@ -581,7 +593,7 @@ describe('agent end-to-end integration (command → hook → bridge → cleanup)
         });
         const result = await createAgentCommand().execute(
           ['.', '*', 'probe'],
-          createMockShellCtx('/home')
+          createMockShellCtx(h.vfs, '/home')
         );
         return {
           stdout: result.stdout,

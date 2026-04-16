@@ -14,9 +14,31 @@ interface SpawnResult {
   exitCode: number;
 }
 
-function createMockCtx(cwd = '/home') {
+interface MockFsOptions {
+  /** Override the default `stat` implementation. */
+  stat?: IFileSystem['stat'];
+  /** Override the default `exists` implementation. */
+  exists?: IFileSystem['exists'];
+}
+
+function createMockCtx(cwd = '/home', fsOptions: MockFsOptions = {}) {
   const fs: Partial<IFileSystem> = {
     resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
+    exists:
+      fsOptions.exists ??
+      (async () => {
+        return true;
+      }),
+    stat:
+      fsOptions.stat ??
+      (async () => ({
+        isFile: false,
+        isDirectory: true,
+        isSymbolicLink: false,
+        mode: 0o755,
+        size: 0,
+        mtime: new Date(0),
+      })),
   };
   return {
     fs: fs as IFileSystem,
@@ -216,6 +238,73 @@ describe('agent command', () => {
       expect(result.exitCode).not.toBe(0);
       expect(result.stderr).not.toBe('');
       expect(bridge).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cwd existence validation', () => {
+    it('errors on nonexistent cwd without calling bridge', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const ctx = createMockCtx('/home', {
+        stat: async () => {
+          throw new Error('ENOENT');
+        },
+        exists: async () => false,
+      });
+      const result = await createAgentCommand().execute(['/does/not/exist', '*', 'p'], ctx);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('/does/not/exist');
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors on nonexistent relative cwd (resolved against ctx.cwd)', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const ctx = createMockCtx('/home', {
+        stat: async () => {
+          throw new Error('ENOENT');
+        },
+        exists: async () => false,
+      });
+      const result = await createAgentCommand().execute(['missing-subdir', '*', 'p'], ctx);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe('');
+      // The resolved path (e.g. /home/missing-subdir) OR the original token
+      // is expected to appear in stderr so the user can identify the target.
+      expect(result.stderr).toMatch(/missing-subdir/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when cwd exists but is not a directory', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const ctx = createMockCtx('/home', {
+        stat: async () => ({
+          isFile: true,
+          isDirectory: false,
+          isSymbolicLink: false,
+          mode: 0o644,
+          size: 42,
+          mtime: new Date(0),
+        }),
+        exists: async () => true,
+      });
+      const result = await createAgentCommand().execute(['/etc/hosts', '*', 'p'], ctx);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('/etc/hosts');
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('happy path still succeeds when cwd exists and is a directory', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'ok', exitCode: 0 });
+      installBridge(spawn);
+      // Default createMockCtx reports all paths as existing directories.
+      const result = await createAgentCommand().execute(['.', '*', 'p'], createMockCtx('/home'));
+      expect(result.exitCode).toBe(0);
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(spawn.mock.calls[0][0].cwd).toBe('/home');
     });
   });
 

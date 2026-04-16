@@ -210,6 +210,26 @@ export function createAgentCommand(): Command {
     const allowedCommands = parseAllowedCommands(parsed.allowedCommandsRaw ?? '');
     const prompt = parsed.prompt ?? '';
 
+    // Validate the resolved cwd exists and is a directory BEFORE invoking the
+    // orchestrator bridge. This keeps bad paths from spawning a scoop that
+    // would immediately fail with a less actionable error.
+    try {
+      const stat = await ctx.fs.stat(resolvedCwd);
+      if (!stat.isDirectory) {
+        return {
+          stdout: '',
+          stderr: `agent: cwd not a directory: ${cwdArg}\n`,
+          exitCode: 1,
+        };
+      }
+    } catch {
+      return {
+        stdout: '',
+        stderr: `agent: cwd not found: ${cwdArg}\n`,
+        exitCode: 1,
+      };
+    }
+
     const bridge = getBridge();
     if (!bridge) {
       return {

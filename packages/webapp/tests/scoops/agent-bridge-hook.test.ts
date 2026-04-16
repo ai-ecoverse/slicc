@@ -139,9 +139,21 @@ function createMockContextFactory(opts: {
   });
 }
 
-function createMockShellCtx(cwd = '/home') {
+function createMockShellCtx(vfs: VirtualFS, cwd = '/home') {
   const fs: Partial<IFileSystem> = {
     resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
+    exists: (p: string) => vfs.exists(p),
+    stat: async (p: string) => {
+      const s = await vfs.stat(p);
+      return {
+        isFile: s.type === 'file',
+        isDirectory: s.type === 'directory',
+        isSymbolicLink: false,
+        mode: 0o755,
+        size: s.size,
+        mtime: new Date(s.mtime),
+      };
+    },
   };
   return {
     fs: fs as IFileSystem,
@@ -320,7 +332,7 @@ describe('publishAgentBridge — bootstrap hook', () => {
         // Invoke the shell command — it should look up `globalThis.__slicc_agent`.
         const result = await createAgentCommand().execute(
           ['.', '*', 'ping'],
-          createMockShellCtx('/home')
+          createMockShellCtx(orchestrator.getSharedFS()!, '/home')
         );
 
         expect(result.exitCode).toBe(0);
@@ -352,7 +364,7 @@ describe('publishAgentBridge — bootstrap hook', () => {
 
         const result = await createAgentCommand().execute(
           ['.', '*', 'ping'],
-          createMockShellCtx('/home')
+          createMockShellCtx(orchestrator.getSharedFS()!, '/home')
         );
         expect(result.exitCode).toBe(0);
         expect(result.stdout).toBe('fallback text\n');
