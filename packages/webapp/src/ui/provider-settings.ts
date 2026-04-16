@@ -16,6 +16,10 @@ import {
   shouldIncludeProvider,
 } from '../providers/index.js';
 import type { ProviderConfig } from '../providers/index.js';
+import {
+  isBedrockCampCompatible,
+  getBedrockCampExtraModels,
+} from '../providers/built-in/bedrock-camp.js';
 
 export type { ProviderConfig } from '../providers/index.js';
 
@@ -122,10 +126,14 @@ function applyModelMetadata(
 // Get models for a provider
 export function getProviderModels(providerId: string): Model<Api>[] {
   try {
-    // Bedrock CAMP uses Amazon Bedrock models with custom API
+    // Bedrock CAMP uses Amazon Bedrock models with custom API.
+    // Filter to inference-profile-prefixed Claude 4.x (bare IDs aren't
+    // invokable on-demand) and inject models missing from pi-ai's registry
+    // (e.g. opus-4.7).
     if (providerId === 'bedrock-camp') {
-      const bedrockModels = getModelsDynamic('amazon-bedrock');
-      return bedrockModels.map((m) => ({
+      const bedrockModels = getModelsDynamic('amazon-bedrock').filter(isBedrockCampCompatible);
+      const extras = getBedrockCampExtraModels();
+      return [...bedrockModels, ...extras].map((m) => ({
         ...m,
         api: 'bedrock-camp-converse' as Api,
         provider: 'bedrock-camp',

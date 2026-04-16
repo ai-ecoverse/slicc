@@ -42,6 +42,42 @@ export const config: ProviderConfig = {
   baseUrlDescription: 'Bedrock runtime endpoint from CAMP portal',
 };
 
+// Picker filter: keep only Claude 4.x on an inference-profile prefix.
+//
+// 1. Inference profile (us./eu./global./apac.) — bare anthropic.* 400s with
+//    "on-demand throughput isn't supported".
+// 2. Claude 4.x only — older Claude 3.x are weaker at resisting prompt
+//    injection; non-Claude Bedrock models (Nova, Llama, Writer, …) are
+//    similarly risky, and DeepSeek R1 specifically 400s on toolConfig
+//    ("This model doesn't support tool use") which breaks the agent loop.
+const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac)\./;
+const BEDROCK_CAMP_CLAUDE_4_RE = /\.anthropic\.claude-(opus|sonnet|haiku)-4/;
+
+export function isBedrockCampCompatible(model: { id: string }): boolean {
+  return (
+    BEDROCK_CAMP_INFERENCE_PROFILE_RE.test(model.id) && BEDROCK_CAMP_CLAUDE_4_RE.test(model.id)
+  );
+}
+
+// Models not yet in pi-ai's amazon-bedrock registry that CAMP already serves.
+// Opus 4.7 shape mirrors 4.6 until pi-ai regenerates.
+export function getBedrockCampExtraModels(): Model<Api>[] {
+  const shared = {
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+    baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+    api: 'bedrock-converse-stream' as Api,
+    provider: 'amazon-bedrock',
+  };
+  return [
+    { ...shared, id: 'us.anthropic.claude-opus-4-7', name: 'Claude Opus 4.7 (US)' },
+    { ...shared, id: 'global.anthropic.claude-opus-4-7', name: 'Claude Opus 4.7 (Global)' },
+  ] as unknown as Model<Api>[];
+}
+
 // Extension detection
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
 
