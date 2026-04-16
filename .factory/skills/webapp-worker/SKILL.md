@@ -78,8 +78,18 @@ When a feature claims to validate the full `agent` / scoop stack or cross-runtim
 
 1. **Real ScoopContext**: Any feature that claims to cover full command → hook → bridge → scoop flow, model inheritance, or cone-tool bypass MUST have at least one test path that uses the real `new ScoopContext(...)` — i.e., does NOT override `AgentBridgeDeps.createContext`. Mock only the provider/transport layer (pi-ai stream). A mocked `createContext` seam is INSUFFICIENT evidence for these claims; scrutiny will reject it.
 2. **Runtime parity**: Any feature claiming CLI-vs-extension parity MUST exercise two genuinely distinct harnesses — either by importing the CLI bootstrap helper from `packages/webapp/src/ui/main.ts` and the extension bootstrap helper from `packages/chrome-extension/src/offscreen.ts`, or by attaching spies/stubs on the runtime-specific entry-point call sites. A single shared helper called twice with different labels does NOT count.
+3. **Command-layer FS access**: Any command-layer (supplemental command) behavior that depends on `ctx.fs` (e.g., cwd existence/is-directory validation, path resolution against real files) MUST be covered with either a real shell context OR a mock shell context whose `stat`/`exists`/`readFile` methods delegate to a VirtualFS. A `ctx.fs = {}` stub or a mock that returns stubbed values regardless of input is INSUFFICIENT — scrutiny will reject it for these behaviors.
 
-If either requirement would bloat the test, split it into a minimal smoke scenario alongside the full mock-based matrix.
+If any of these would bloat the test, split it into a minimal real-path smoke scenario alongside the full mock-based matrix.
+
+### Manual verification (disambiguation)
+
+The `.factory/library/user-testing.md` file describes the end-to-end live-browser validation strategy for the mission (owned by the `live-browser-validation` feature). It is NOT an additional per-feature requirement. For individual feature workers, the source of truth for when manual CDP verification is required is Section 6 below of this skill:
+
+- **REQUIRED** for features with user-observable UI behavior (command registration, help text, terminal panel, bridge-hook presence, live smoke tests).
+- **OPTIONAL** for pure utility wrappers / internal-routing fixes whose `fulfills` assertions are ALL `Tool: vitest` AND which have no code path that changes UI state. Document the skip in `whatWasLeftUndone`.
+
+If this skill and `user-testing.md` appear to conflict, this skill wins for the per-feature decision.
 
 ### 6. Manual verification via CDP-connected browser
 
