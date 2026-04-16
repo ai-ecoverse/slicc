@@ -636,7 +636,11 @@ export class SprinkleRenderer {
       void import('./slicc-editor.js');
     }
     if (content.includes('<slicc-diff') && !customElements.get('slicc-diff')) {
-      void import('./slicc-diff.js');
+      // Load via script tag (not Vite import) so the IIFE bundle includes
+      // @pierre/diffs' web-components.js which isn't in the package exports map.
+      const s = document.createElement('script');
+      s.src = '/slicc-diff.js';
+      document.head.appendChild(s);
     }
 
     // Ensure the global sprinkle registry exists

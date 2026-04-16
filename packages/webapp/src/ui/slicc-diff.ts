@@ -27,10 +27,9 @@ import {
   type FileContents,
   type ThemeTypes,
 } from '@pierre/diffs';
-// Register the <diffs-container> web component that provides the core CSS
-// via adoptedStyleSheets in its Shadow DOM. FileDiff renders into this element.
-// @ts-expect-error — not in package exports map but needed for core CSS injection
-import '@pierre/diffs/dist/components/web-components.js';
+// The <diffs-container> web component and core CSS are provided by the IIFE
+// bundle (slicc-diff-entry.ts → web-components.js). For the renderInline path,
+// the IIFE is loaded via a <script> tag from sprinkle-renderer.ts.
 
 /** Detect dark/light theme from inherited CSS or class. */
 function detectThemeType(): ThemeTypes {

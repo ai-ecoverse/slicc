@@ -6,6 +6,12 @@
  * with Shiki syntax highlighting.
  */
 
+// Register <diffs-container> web component (provides core CSS via adoptedStyleSheets).
+// This import is NOT valid under @pierre/diffs' exports map, but esbuild (which builds
+// this IIFE) resolves it directly from node_modules without enforcing exports.
+// Must come before slicc-diff.js so the element is defined when FileDiff renders.
+// @ts-expect-error — not in package exports map, resolved by esbuild only
+import '@pierre/diffs/dist/components/web-components.js';
 import './slicc-diff.js';
 import { parseDiffFromFile, parsePatchFiles } from '@pierre/diffs';
 
