@@ -258,6 +258,36 @@ export class SprinkleRenderer {
 
     // Send content to the sandbox for rendering, including saved state + localStorage
     const savedState = this.bridge.getState();
+
+    // For full-doc sprinkles in extension mode, the nested iframe can't load external
+    // scripts (no allow-same-origin). Fetch custom element bundles and pass inline.
+    let editorScript = '';
+    let diffScript = '';
+    if (fullDoc) {
+      const fetches: Promise<void>[] = [];
+      if (content.includes('<slicc-editor')) {
+        fetches.push(
+          fetch(chrome.runtime.getURL('slicc-editor.js'))
+            .then((r) => (r.ok ? r.text() : ''))
+            .then((t) => {
+              editorScript = t;
+            })
+            .catch(() => {})
+        );
+      }
+      if (content.includes('<slicc-diff')) {
+        fetches.push(
+          fetch(chrome.runtime.getURL('slicc-diff.js'))
+            .then((r) => (r.ok ? r.text() : ''))
+            .then((t) => {
+              diffScript = t;
+            })
+            .catch(() => {})
+        );
+      }
+      await Promise.all(fetches);
+    }
+
     iframe.contentWindow!.postMessage(
       {
         type: 'sprinkle-render',
@@ -267,6 +297,8 @@ export class SprinkleRenderer {
         savedState,
         savedStorage,
         fullDoc,
+        editorScript,
+        diffScript,
       },
       '*'
     );
@@ -397,7 +429,12 @@ export class SprinkleRenderer {
     const bridgeScript = `<script>${this.generateBridgeScript()}</script>`;
     const themeCSS = this.collectThemeCSS();
     const themeTag = themeCSS ? `<style>${themeCSS}</style>` : '';
-    const injection = bridgeScript + themeTag;
+    // Inject custom element bundles only when the sprinkle uses them
+    const editorTag = content.includes('<slicc-editor')
+      ? '<script src="/slicc-editor.js"></script>'
+      : '';
+    const diffTag = content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '';
+    const injection = bridgeScript + themeTag + editorTag + diffTag;
 
     // Inject bridge script + theme CSS after <head> tag, or before first <script> if no <head>
     let modified: string;
@@ -594,6 +631,18 @@ export class SprinkleRenderer {
    * CLI mode: render directly in the page DOM (no CSP restrictions).
    */
   private renderInline(content: string, sprinkleName: string): void {
+    // Lazy-load the <slicc-editor> custom element when a sprinkle uses it
+    if (content.includes('<slicc-editor') && !customElements.get('slicc-editor')) {
+      void import('./slicc-editor.js');
+    }
+    if (content.includes('<slicc-diff') && !customElements.get('slicc-diff')) {
+      // Load via script tag (not Vite import) so the IIFE bundle includes
+      // @pierre/diffs' web-components.js which isn't in the package exports map.
+      const s = document.createElement('script');
+      s.src = '/slicc-diff.js';
+      document.head.appendChild(s);
+    }
+
     // Ensure the global sprinkle registry exists
     if (!window.__slicc_sprinkles) window.__slicc_sprinkles = {};
     window.__slicc_sprinkles[sprinkleName] = this.bridge;
