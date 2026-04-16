@@ -139,6 +139,16 @@ export default defineConfig(({ mode }) => ({
           minify: true,
           define: { __DEV__: 'false', global: 'globalThis' },
         });
+        // Also build lucide-icons.js for sprinkles
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, '../webapp/src/ui/lucide-icons.ts')],
+          bundle: true,
+          outfile: resolve(repoRoot, 'dist/extension/lucide-icons.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
       },
     },
     {

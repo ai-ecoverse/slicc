@@ -319,6 +319,10 @@ describe('WasmShell .jsh command registration', () => {
     await fs.mkdir('/workspace/skills/test-cmd/scripts', { recursive: true });
   });
 
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
   it('registers .jsh commands as first-class bash commands available in pipelines', async () => {
     // Create a .jsh script that outputs text
     await fs.writeFile(

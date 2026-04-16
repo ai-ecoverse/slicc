@@ -28,6 +28,8 @@ export class SprinkleRenderer {
   private bridge: SprinkleBridgeAPI;
   private scripts: HTMLScriptElement[] = [];
   private iframe: HTMLIFrameElement | null = null;
+  private static cachedLucideScript: string | null = null;
+  private static lucideScriptPromise: Promise<string> | null = null;
   private messageHandler: ((event: MessageEvent) => void) | null = null;
 
   constructor(container: HTMLElement, bridge: SprinkleBridgeAPI) {
@@ -288,6 +290,10 @@ export class SprinkleRenderer {
       await Promise.all(fetches);
     }
 
+    // Always fetch lucide-icons.js for sprinkles (icons are used in most sprinkles)
+    // Cache the bundle to avoid repeated fetches
+    const lucideScript = await this.getLucideScript();
+
     iframe.contentWindow!.postMessage(
       {
         type: 'sprinkle-render',
@@ -299,6 +305,7 @@ export class SprinkleRenderer {
         fullDoc,
         editorScript,
         diffScript,
+        lucideScript,
       },
       '*'
     );
@@ -434,7 +441,9 @@ export class SprinkleRenderer {
       ? '<script src="/slicc-editor.js"></script>'
       : '';
     const diffTag = content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '';
-    const injection = bridgeScript + themeTag + editorTag + diffTag;
+    // Always inject Lucide icons for sprinkles
+    const lucideTag = '<script src="/lucide-icons.js"></script>';
+    const injection = bridgeScript + themeTag + editorTag + diffTag + lucideTag;
 
     // Inject bridge script + theme CSS after <head> tag, or before first <script> if no <head>
     let modified: string;
@@ -723,6 +732,40 @@ export class SprinkleRenderer {
     if (window.__slicc_sprinkles) {
       delete window.__slicc_sprinkles[this.bridge.name];
     }
+  }
+
+  /**
+   * Get Lucide icons bundle, using cache to avoid repeated fetches.
+   * Returns empty string if bundle is unavailable.
+   */
+  private async getLucideScript(): Promise<string> {
+    // Return cached value if available
+    if (SprinkleRenderer.cachedLucideScript !== null) {
+      return SprinkleRenderer.cachedLucideScript;
+    }
+
+    // If a fetch is already in progress, wait for it
+    if (SprinkleRenderer.lucideScriptPromise !== null) {
+      return SprinkleRenderer.lucideScriptPromise;
+    }
+
+    // Start new fetch and cache the promise
+    SprinkleRenderer.lucideScriptPromise = (async () => {
+      try {
+        const resp = await fetch(chrome.runtime.getURL('lucide-icons.js'));
+        if (resp.ok) {
+          const text = await resp.text();
+          SprinkleRenderer.cachedLucideScript = text;
+          return text;
+        }
+      } catch {
+        // Lucide unavailable — sprinkle will render without icons
+      }
+      SprinkleRenderer.cachedLucideScript = '';
+      return '';
+    })();
+
+    return SprinkleRenderer.lucideScriptPromise;
   }
 }
 
