@@ -72,6 +72,15 @@ npm run build -w @slicc/chrome-extension
 
 If any step fails, fix it before proceeding. Every commit must leave these gates green.
 
+### Full-stack test authenticity (REQUIRED)
+
+When a feature claims to validate the full `agent` / scoop stack or cross-runtime parity, the following rules apply:
+
+1. **Real ScoopContext**: Any feature that claims to cover full command → hook → bridge → scoop flow, model inheritance, or cone-tool bypass MUST have at least one test path that uses the real `new ScoopContext(...)` — i.e., does NOT override `AgentBridgeDeps.createContext`. Mock only the provider/transport layer (pi-ai stream). A mocked `createContext` seam is INSUFFICIENT evidence for these claims; scrutiny will reject it.
+2. **Runtime parity**: Any feature claiming CLI-vs-extension parity MUST exercise two genuinely distinct harnesses — either by importing the CLI bootstrap helper from `packages/webapp/src/ui/main.ts` and the extension bootstrap helper from `packages/chrome-extension/src/offscreen.ts`, or by attaching spies/stubs on the runtime-specific entry-point call sites. A single shared helper called twice with different labels does NOT count.
+
+If either requirement would bloat the test, split it into a minimal smoke scenario alongside the full mock-based matrix.
+
 ### 6. Manual verification via CDP-connected browser
 
 **REQUIRED for features with user-observable UI behavior** (e.g., the `agent-command` help text, terminal-panel integration, bridge-hook presence, live smoke tests). OPTIONAL for pure utility wrappers whose `fulfills` assertions are ALL `Tool: vitest` AND which have no code path that changes UI state — in that case, full vitest + typecheck + both build gates are sufficient signal; document the decision in `whatWasLeftUndone` so it's auditable.
