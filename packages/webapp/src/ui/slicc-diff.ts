@@ -20,13 +20,7 @@
  *   el.patch = unifiedDiffString;
  */
 
-import {
-  FileDiff,
-  parseDiffFromFile,
-  parsePatchFiles,
-  type FileContents,
-  type ThemeTypes,
-} from '@pierre/diffs';
+import { FileDiff, parsePatchFiles, type FileContents, type ThemeTypes } from '@pierre/diffs';
 // The <diffs-container> web component and core CSS are provided by the IIFE
 // bundle (slicc-diff-entry.ts → web-components.js). For the renderInline path,
 // the IIFE is loaded via a <script> tag from sprinkle-renderer.ts.

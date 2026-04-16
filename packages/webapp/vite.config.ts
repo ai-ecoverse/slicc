@@ -9,6 +9,7 @@ const previewSwEntry = resolve(__dirname, 'src/ui/preview-sw.ts');
 const electronOverlayEntry = resolve(__dirname, 'src/ui/electron-overlay-entry.ts');
 const sliccEditorEntry = resolve(__dirname, 'src/ui/slicc-editor-entry.ts');
 const sliccDiffEntry = resolve(__dirname, 'src/ui/slicc-diff-entry.ts');
+const lucideIconsEntry = resolve(__dirname, 'src/ui/lucide-icons.ts');
 
 /** esbuild plugin: resolve @pierre/diffs internal imports that aren't in the exports map. */
 function pierreDiffsPlugin() {
@@ -53,7 +54,7 @@ export default defineConfig(({ mode }) => ({
         let cachedSwMtime = 0;
         let cachedOverlayCode: string | null = null;
         let cachedOverlayMtime = 0;
-        // Editor/diff IIFE bundles are always rebuilt in dev (no mtime cache)
+        // Editor/diff/lucide IIFE bundles are always rebuilt in dev (no mtime cache)
         // because transitive imports wouldn't invalidate the entry file's mtime.
 
         server.middlewares.use('/preview-sw.js', async (_req, res) => {
@@ -177,6 +178,28 @@ export default defineConfig(({ mode }) => ({
             res.end(`console.error('[slicc-diff] Build failed:', ${JSON.stringify(errMsg)});`);
           }
         });
+
+        server.middlewares.use('/lucide-icons.js', async (_req, res) => {
+          try {
+            const esbuild = await import('esbuild');
+            const result = await esbuild.build({
+              entryPoints: [lucideIconsEntry],
+              bundle: true,
+              write: false,
+              format: 'iife',
+              target: 'esnext',
+              define: { __DEV__: 'true', global: 'globalThis' },
+            });
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(result.outputFiles![0].text);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.error('[lucide-icons] Failed to build:', errMsg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[lucide-icons] Build failed:', ${JSON.stringify(errMsg)});`);
+          }
+        });
       },
       async closeBundle() {
         // Keep this config focused on production build artifacts; node-server owns dev serving.
@@ -243,6 +266,16 @@ export default defineConfig(({ mode }) => ({
           plugins: [pierreDiffsPlugin()],
         });
 
+        // Lucide icons bundle for sprinkle iframes.
+        await esbuild.build({
+          entryPoints: [lucideIconsEntry],
+          bundle: true,
+          outfile: resolve(uiOutDir, 'lucide-icons.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
         copyFileSync(
           resolve(__dirname, '../assets/logos/favicon.png'),
           resolve(uiOutDir, 'favicon.png')
