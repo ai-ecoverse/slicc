@@ -444,64 +444,64 @@
       };
 
       var PURPOSES = [
-        { id: 'migrate-page', label: 'Migrate a page' },
-        { id: 'work', label: 'Work' },
-        { id: 'school', label: 'School' },
-        { id: 'personal', label: 'Personal' },
-        { id: 'side-project', label: 'Side project' },
-        { id: 'exploring', label: 'Just exploring' },
+        { id: 'migrate-page', label: 'Migrate a page', icon: 'file-up' },
+        { id: 'work', label: 'Work', icon: 'briefcase' },
+        { id: 'school', label: 'School', icon: 'graduation-cap' },
+        { id: 'personal', label: 'Personal', icon: 'user' },
+        { id: 'side-project', label: 'Side project', icon: 'lightbulb' },
+        { id: 'exploring', label: 'Just exploring', icon: 'compass' },
       ];
 
       var ROLES_BY_PURPOSE = {
         work: {
           heading: "What's your role?",
           roles: [
-            { id: 'developer', label: 'Developer' },
-            { id: 'designer', label: 'Designer' },
-            { id: 'content-creator', label: 'Content creator' },
-            { id: 'marketer', label: 'Marketer' },
-            { id: 'product-pm', label: 'Product / PM' },
-            { id: 'founder', label: 'Founder' },
-            { id: 'other', label: 'Something else' },
+            { id: 'developer', label: 'Developer', icon: 'code' },
+            { id: 'designer', label: 'Designer', icon: 'palette' },
+            { id: 'content-creator', label: 'Content creator', icon: 'pen-tool' },
+            { id: 'marketer', label: 'Marketer', icon: 'megaphone' },
+            { id: 'product-pm', label: 'Product / PM', icon: 'layout-dashboard' },
+            { id: 'founder', label: 'Founder', icon: 'rocket' },
+            { id: 'other', label: 'Something else', icon: 'help-circle' },
           ],
         },
         school: {
           heading: 'What are you studying?',
           roles: [
-            { id: 'student', label: 'Student' },
-            { id: 'researcher', label: 'Researcher' },
-            { id: 'developer', label: 'Developer' },
-            { id: 'designer', label: 'Designer' },
-            { id: 'other', label: 'Something else' },
+            { id: 'student', label: 'Student', icon: 'book-open' },
+            { id: 'researcher', label: 'Researcher', icon: 'microscope' },
+            { id: 'developer', label: 'Developer', icon: 'code' },
+            { id: 'designer', label: 'Designer', icon: 'palette' },
+            { id: 'other', label: 'Something else', icon: 'help-circle' },
           ],
         },
         _default: {
           heading: "What's your background?",
           roles: [
-            { id: 'developer', label: 'Developer' },
-            { id: 'designer', label: 'Designer' },
-            { id: 'content-creator', label: 'Content creator' },
-            { id: 'marketer', label: 'Marketer' },
-            { id: 'product-pm', label: 'Product / PM' },
-            { id: 'student', label: 'Student' },
-            { id: 'researcher', label: 'Researcher' },
-            { id: 'founder', label: 'Founder' },
-            { id: 'other', label: 'Something else' },
+            { id: 'developer', label: 'Developer', icon: 'code' },
+            { id: 'designer', label: 'Designer', icon: 'palette' },
+            { id: 'content-creator', label: 'Content creator', icon: 'pen-tool' },
+            { id: 'marketer', label: 'Marketer', icon: 'megaphone' },
+            { id: 'product-pm', label: 'Product / PM', icon: 'layout-dashboard' },
+            { id: 'student', label: 'Student', icon: 'book-open' },
+            { id: 'researcher', label: 'Researcher', icon: 'microscope' },
+            { id: 'founder', label: 'Founder', icon: 'rocket' },
+            { id: 'other', label: 'Something else', icon: 'help-circle' },
           ],
         },
       };
 
       var TASKS = [
-        { id: 'build-websites', label: 'Build websites' },
-        { id: 'automate', label: 'Automate tasks' },
-        { id: 'research', label: 'Research & analyze' },
-        { id: 'write-content', label: 'Write content' },
-        { id: 'extract-data', label: 'Extract data' },
-        { id: 'monitor', label: 'Monitor sites' },
-        { id: 'seo', label: 'SEO & audits' },
-        { id: 'manage-files', label: 'Manage files' },
-        { id: 'browser-automation', label: 'Browser automation' },
-        { id: 'not-sure', label: 'Not sure yet' },
+        { id: 'build-websites', label: 'Build websites', icon: 'globe' },
+        { id: 'automate', label: 'Automate tasks', icon: 'zap' },
+        { id: 'research', label: 'Research & analyze', icon: 'search' },
+        { id: 'write-content', label: 'Write content', icon: 'file-text' },
+        { id: 'extract-data', label: 'Extract data', icon: 'database' },
+        { id: 'monitor', label: 'Monitor sites', icon: 'activity' },
+        { id: 'seo', label: 'SEO & audits', icon: 'bar-chart' },
+        { id: 'manage-files', label: 'Manage files', icon: 'folder' },
+        { id: 'browser-automation', label: 'Browser automation', icon: 'mouse-pointer' },
+        { id: 'not-sure', label: 'Not sure yet', icon: 'circle-help' },
       ];
 
       /* Apps available for installation, with relevance tags */
@@ -509,6 +509,7 @@
         {
           id: 'aem',
           label: 'Adobe Experience Manager',
+          icon: 'box',
           relevance: [
             'build-websites',
             'write-content',
@@ -518,7 +519,12 @@
             'designer',
           ],
         },
-        { id: 'imessage', label: 'iMessage', relevance: ['personal', 'side-project', 'exploring'] },
+        {
+          id: 'imessage',
+          label: 'iMessage',
+          icon: 'message-circle',
+          relevance: ['personal', 'side-project', 'exploring'],
+        },
       ];
 
       function getRelevantApps() {
@@ -544,7 +550,15 @@
       PURPOSES.forEach(function (p) {
         var btn = document.createElement('button');
         btn.className = 'pill';
-        btn.textContent = p.label;
+        if (p.icon) {
+          var icon = document.createElement('i');
+          icon.setAttribute('data-lucide', p.icon);
+          icon.style.width = '16px';
+          icon.style.height = '16px';
+          icon.style.marginRight = '6px';
+          btn.appendChild(icon);
+        }
+        btn.appendChild(document.createTextNode(p.label));
         btn.dataset.id = p.id;
         btn.onclick = function () {
           profile.purpose = p.id;
@@ -564,6 +578,8 @@
         };
         purposeEl.appendChild(btn);
       });
+      // Render icons after adding to DOM
+      if (window.LucideIcons) window.LucideIcons.render();
 
       /* ── Build step 3: Task pills ── */
       var taskEl = document.getElementById('taskPills');
@@ -571,7 +587,15 @@
       TASKS.forEach(function (t) {
         var btn = document.createElement('button');
         btn.className = 'pill';
-        btn.textContent = t.label;
+        if (t.icon) {
+          var icon = document.createElement('i');
+          icon.setAttribute('data-lucide', t.icon);
+          icon.style.width = '16px';
+          icon.style.height = '16px';
+          icon.style.marginRight = '6px';
+          btn.appendChild(icon);
+        }
+        btn.appendChild(document.createTextNode(t.label));
         btn.dataset.id = t.id;
         btn.onclick = function () {
           btn.classList.toggle('selected');
@@ -582,6 +606,8 @@
         };
         taskEl.appendChild(btn);
       });
+      // Render icons after adding to DOM
+      if (window.LucideIcons) window.LucideIcons.render();
 
       /* ── Build step 7: App pills (built dynamically) ── */
       function buildAppPills() {
@@ -591,7 +617,15 @@
         apps.forEach(function (a) {
           var btn = document.createElement('button');
           btn.className = 'pill';
-          btn.textContent = a.label;
+          if (a.icon) {
+            var icon = document.createElement('i');
+            icon.setAttribute('data-lucide', a.icon);
+            icon.style.width = '16px';
+            icon.style.height = '16px';
+            icon.style.marginRight = '6px';
+            btn.appendChild(icon);
+          }
+          btn.appendChild(document.createTextNode(a.label));
           btn.dataset.id = a.id;
           btn.onclick = function () {
             btn.classList.toggle('selected');
@@ -602,6 +636,8 @@
           };
           appEl.appendChild(btn);
         });
+        // Render icons after adding to DOM
+        if (window.LucideIcons) window.LucideIcons.render();
       }
 
       /* ── Build step 6: Mount buttons ── */
@@ -611,7 +647,13 @@
 
       var mountBtn = document.createElement('button');
       mountBtn.className = 'pill';
-      mountBtn.textContent = 'Yes, connect a folder';
+      var mountIcon = document.createElement('i');
+      mountIcon.setAttribute('data-lucide', 'folder-open');
+      mountIcon.style.width = '16px';
+      mountIcon.style.height = '16px';
+      mountIcon.style.marginRight = '6px';
+      mountBtn.appendChild(mountIcon);
+      mountBtn.appendChild(document.createTextNode('Yes, connect a folder'));
       mountBtn.onclick = async function () {
         try {
           var handle = await window.showDirectoryPicker({ mode: 'readwrite' });
@@ -654,7 +696,13 @@
 
       var skipMountBtn = document.createElement('button');
       skipMountBtn.className = 'pill';
-      skipMountBtn.textContent = 'No thanks';
+      var skipIcon = document.createElement('i');
+      skipIcon.setAttribute('data-lucide', 'x');
+      skipIcon.style.width = '16px';
+      skipIcon.style.height = '16px';
+      skipIcon.style.marginRight = '6px';
+      skipMountBtn.appendChild(skipIcon);
+      skipMountBtn.appendChild(document.createTextNode('No thanks'));
       skipMountBtn.onclick = function () {
         profile.mountWorkspace = false;
         skipMountBtn.classList.add('selected');
@@ -663,6 +711,8 @@
         }, 300);
       };
       mountEl.appendChild(skipMountBtn);
+      // Render icons after adding to DOM
+      if (window.LucideIcons) window.LucideIcons.render();
 
       function buildRolePills() {
         var roleEl = document.getElementById('rolePills');
@@ -672,7 +722,15 @@
         config.roles.forEach(function (r) {
           var btn = document.createElement('button');
           btn.className = 'pill';
-          btn.textContent = r.label;
+          if (r.icon) {
+            var icon = document.createElement('i');
+            icon.setAttribute('data-lucide', r.icon);
+            icon.style.width = '16px';
+            icon.style.height = '16px';
+            icon.style.marginRight = '6px';
+            btn.appendChild(icon);
+          }
+          btn.appendChild(document.createTextNode(r.label));
           btn.dataset.id = r.id;
           btn.onclick = function () {
             profile.role = r.id;
@@ -686,6 +744,8 @@
           };
           roleEl.appendChild(btn);
         });
+        // Render icons after adding to DOM
+        if (window.LucideIcons) window.LucideIcons.render();
       }
 
       function updateDots(step) {
