@@ -26,7 +26,9 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   publishAgentBridge,
+  publishAgentBridgeProxy,
   AGENT_BRIDGE_GLOBAL_KEY,
+  AGENT_SPAWN_REQUEST_TYPE,
   type AgentBridge,
   type AgentBridgeContext,
   type AgentBridgeContextArgs,
@@ -372,5 +374,307 @@ describe('publishAgentBridge — bootstrap hook', () => {
         await orchestrator.shutdown().catch(() => {});
       }
     });
+  });
+});
+
+// ─── publishAgentBridgeProxy — side-panel relay to offscreen ─────────────
+//
+// The side-panel realm in extension mode does NOT own an Orchestrator. Its
+// WasmShell's `agent` command still looks up `globalThis.__slicc_agent`, so
+// the panel bootstrap must publish a proxy bridge whose `spawn()` forwards
+// to the offscreen document via `chrome.runtime.sendMessage` and awaits the
+// response. These tests assert:
+//   (a) the panel-side hook exists and is a function after publishAgentBridgeProxy();
+//   (b) calling it sends the expected message and returns the simulated
+//       offscreen response;
+//   (c) the CLI bootstrap path still publishes the DIRECT (non-proxy) bridge.
+//
+// Chrome's runtime API is stubbed on globalThis for these tests.
+
+interface StubbedChromeCall {
+  message: unknown;
+  respond: (response: unknown) => void;
+}
+
+/** Build a minimal globalThis.chrome stub capturing every sendMessage call. */
+function makeChromeStub(
+  onCall: (call: StubbedChromeCall) => void,
+  opts: { lastError?: { message?: string } } = {}
+): Record<string, unknown> {
+  return {
+    runtime: {
+      lastError: opts.lastError,
+      sendMessage: (message: unknown, callback?: (response: unknown) => void): void => {
+        onCall({
+          message,
+          respond: (response) => callback?.(response),
+        });
+      },
+    },
+  };
+}
+
+describe('publishAgentBridgeProxy — side-panel relay to offscreen', () => {
+  beforeEach(async () => {
+    stubWindowForOrchestrator();
+    await db.initDB();
+    clearPublishedBridge();
+  });
+
+  afterEach(() => {
+    clearPublishedBridge();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('(a) publishes globalThis.__slicc_agent with a spawn() function when chrome.runtime is stubbed', () => {
+    vi.stubGlobal(
+      'chrome',
+      makeChromeStub(() => {})
+    );
+
+    const returned = publishAgentBridgeProxy();
+
+    const bridge = getPublishedBridge();
+    expect(bridge).toBeDefined();
+    expect(typeof bridge!.spawn).toBe('function');
+    expect(bridge).toBe(returned);
+  });
+
+  it('(b) spawn() sends the expected agent-spawn-request and resolves with the simulated offscreen response', async () => {
+    const calls: StubbedChromeCall[] = [];
+    vi.stubGlobal(
+      'chrome',
+      makeChromeStub((call) => {
+        calls.push(call);
+      })
+    );
+
+    publishAgentBridgeProxy();
+    const bridge = getPublishedBridge()!;
+
+    const spawnPromise = bridge.spawn({
+      cwd: '/home/wiki',
+      allowedCommands: ['*'],
+      prompt: 'ping',
+      modelId: 'claude-opus-4-6',
+      parentJid: 'cone_1',
+    });
+
+    // The proxy must dispatch exactly one message with the expected envelope.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].message).toEqual({
+      source: 'panel',
+      payload: {
+        type: AGENT_SPAWN_REQUEST_TYPE,
+        options: {
+          cwd: '/home/wiki',
+          allowedCommands: ['*'],
+          prompt: 'ping',
+          modelId: 'claude-opus-4-6',
+          parentJid: 'cone_1',
+        },
+      },
+    });
+
+    // Simulate the offscreen document sending its response.
+    calls[0].respond({ ok: true, result: { finalText: 'pong from offscreen', exitCode: 0 } });
+
+    const result = await spawnPromise;
+    expect(result).toEqual({ finalText: 'pong from offscreen', exitCode: 0 });
+  });
+
+  it('spawn() forwards minimal options (no optional fields) correctly', async () => {
+    const calls: StubbedChromeCall[] = [];
+    vi.stubGlobal(
+      'chrome',
+      makeChromeStub((call) => {
+        calls.push(call);
+      })
+    );
+
+    publishAgentBridgeProxy();
+    const promise = getPublishedBridge()!.spawn({
+      cwd: '/',
+      allowedCommands: ['ls'],
+      prompt: '',
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].message).toEqual({
+      source: 'panel',
+      payload: {
+        type: AGENT_SPAWN_REQUEST_TYPE,
+        options: {
+          cwd: '/',
+          allowedCommands: ['ls'],
+          prompt: '',
+        },
+      },
+    });
+
+    calls[0].respond({ ok: true, result: { finalText: '', exitCode: 0 } });
+    await expect(promise).resolves.toEqual({ finalText: '', exitCode: 0 });
+  });
+
+  it('spawn() rejects when the offscreen replies with ok: false', async () => {
+    let respond!: (r: unknown) => void;
+    vi.stubGlobal(
+      'chrome',
+      makeChromeStub((call) => {
+        respond = call.respond;
+      })
+    );
+
+    publishAgentBridgeProxy();
+    const promise = getPublishedBridge()!.spawn({
+      cwd: '/',
+      allowedCommands: ['*'],
+      prompt: 'x',
+    });
+
+    respond({ ok: false, error: 'bridge unavailable' });
+    await expect(promise).rejects.toThrow(/bridge unavailable/);
+  });
+
+  it('spawn() rejects when chrome.runtime.lastError is set', async () => {
+    let respond!: (r: unknown) => void;
+    vi.stubGlobal(
+      'chrome',
+      makeChromeStub(
+        (call) => {
+          respond = call.respond;
+        },
+        { lastError: { message: 'simulated chrome error' } }
+      )
+    );
+
+    publishAgentBridgeProxy();
+    const promise = getPublishedBridge()!.spawn({
+      cwd: '/',
+      allowedCommands: ['*'],
+      prompt: 'x',
+    });
+
+    respond(undefined);
+    await expect(promise).rejects.toThrow(/simulated chrome error/);
+  });
+
+  it('spawn() rejects when chrome.runtime is not available at call time', async () => {
+    // Publish while chrome exists, then remove it before invocation — mirrors
+    // the edge case where the extension tab loses its runtime mid-flight.
+    vi.stubGlobal(
+      'chrome',
+      makeChromeStub(() => {})
+    );
+    publishAgentBridgeProxy();
+    vi.stubGlobal('chrome', undefined);
+
+    const promise = getPublishedBridge()!.spawn({
+      cwd: '/',
+      allowedCommands: ['*'],
+      prompt: 'x',
+    });
+    await expect(promise).rejects.toThrow(/chrome\.runtime\.sendMessage/);
+  });
+
+  it('spawn() rejects when the offscreen replies with ok: true but no result', async () => {
+    let respond!: (r: unknown) => void;
+    vi.stubGlobal(
+      'chrome',
+      makeChromeStub((call) => {
+        respond = call.respond;
+      })
+    );
+    publishAgentBridgeProxy();
+    const promise = getPublishedBridge()!.spawn({
+      cwd: '/',
+      allowedCommands: ['*'],
+      prompt: 'x',
+    });
+    respond({ ok: true });
+    await expect(promise).rejects.toThrow(/result/);
+  });
+
+  it('spawn() rejects when the offscreen callback is invoked with undefined', async () => {
+    let respond!: (r: unknown) => void;
+    vi.stubGlobal(
+      'chrome',
+      makeChromeStub((call) => {
+        respond = call.respond;
+      })
+    );
+    publishAgentBridgeProxy();
+    const promise = getPublishedBridge()!.spawn({
+      cwd: '/',
+      allowedCommands: ['*'],
+      prompt: 'x',
+    });
+    respond(undefined);
+    await expect(promise).rejects.toThrow(/empty response|chrome\.runtime/);
+  });
+
+  it('(c) publishAgentBridge (CLI/offscreen path) still publishes the DIRECT (non-proxy) bridge', async () => {
+    // Ensure no chrome stub — the direct bridge must work without chrome.runtime.
+    vi.unstubAllGlobals();
+
+    const orchestrator = makeOrchestrator();
+    try {
+      // Re-establish the window stub that unstubAllGlobals() would have cleared
+      // — every run needs it because Orchestrator.init() touches window.*.
+      stubWindowForOrchestrator();
+      await orchestrator.init();
+
+      const direct = publishAgentBridge(
+        orchestrator,
+        orchestrator.getSharedFS()!,
+        orchestrator.getSessionStore(),
+        {
+          createContext: createMockContextFactory({
+            sendWhilePrompting: ['direct-path output'],
+          }),
+          generateUid: () => 'directbridge1',
+          resolveModel: () => 'claude-opus-4-6',
+          getInheritedModelId: () => 'claude-opus-4-6',
+        }
+      );
+
+      // The direct bridge's spawn() executes the real scoop-spawn flow
+      // (scratch folder, ScoopContext stub, cleanup) WITHOUT touching
+      // chrome.runtime — proving it's the direct (non-proxy) bridge.
+      const result = await direct.spawn({
+        cwd: '/home',
+        allowedCommands: ['*'],
+        prompt: 'ping',
+      });
+      expect(result).toEqual({ finalText: 'direct-path output', exitCode: 0 });
+      expect(getPublishedBridge()).toBe(direct);
+    } finally {
+      await orchestrator.shutdown().catch(() => {});
+    }
+  });
+
+  it('publishAgentBridgeProxy replaces a prior direct bridge with a different reference (no double-publishing)', async () => {
+    const orchestrator = makeOrchestrator();
+    try {
+      await orchestrator.init();
+
+      const direct = publishAgentBridge(
+        orchestrator,
+        orchestrator.getSharedFS()!,
+        orchestrator.getSessionStore()
+      );
+
+      vi.stubGlobal(
+        'chrome',
+        makeChromeStub(() => {})
+      );
+      const proxy = publishAgentBridgeProxy();
+
+      expect(proxy).not.toBe(direct);
+      expect(getPublishedBridge()).toBe(proxy);
+    } finally {
+      await orchestrator.shutdown().catch(() => {});
+    }
   });
 });

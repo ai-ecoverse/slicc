@@ -30,7 +30,9 @@ export {
 export {
   createAgentBridge,
   publishAgentBridge,
+  publishAgentBridgeProxy,
   AGENT_BRIDGE_GLOBAL_KEY,
+  AGENT_SPAWN_REQUEST_TYPE,
   type AgentBridge,
   type AgentSpawnOptions,
   type AgentSpawnResult,

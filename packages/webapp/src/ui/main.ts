@@ -34,7 +34,7 @@ import { findDroppedSkillTransferFile, hasDroppedFiles } from './skill-drop.js';
 // — the extension agent engine runs in the offscreen document, not in this file.
 import '../providers/index.js';
 import { BrowserAPI } from '../cdp/index.js';
-import { Orchestrator, publishAgentBridge } from '../scoops/index.js';
+import { Orchestrator, publishAgentBridge, publishAgentBridgeProxy } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import {
@@ -320,6 +320,14 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   registerSkillDropInstall(localFs, skillDropToast, async () => {
     await layout.panels.fileBrowser.refresh();
   });
+
+  // Publish a PROXY AgentBridge on globalThis.__slicc_agent for the panel's
+  // WasmShell. The real bridge lives in the offscreen realm (published by
+  // packages/chrome-extension/src/offscreen.ts); this proxy relays spawn()
+  // calls via chrome.runtime.sendMessage so that `agent <args>` typed into
+  // the Terminal tab finds a working hook on the panel side. MUST run
+  // BEFORE the shell registers its supplemental commands below.
+  publishAgentBridgeProxy();
 
   // Mount a terminal shell on the local VFS with BrowserAPI via CDP proxy
   try {
