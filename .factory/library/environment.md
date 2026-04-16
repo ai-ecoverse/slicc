@@ -33,6 +33,11 @@ Credentials never leave the local machine; no repo-level secrets are required.
 - `just-bash@2.14.2` is the shell layer; supplemental commands follow its `Command` interface.
 - pi-agent-core / pi-ai are the agent loop and streaming LLM layer — they drive the scoop's `Agent` instance.
 
+## Dev Server Gotchas
+
+- **Vite HMR does NOT reliably pick up edits to bootstrap files** (`packages/webapp/src/ui/main.ts`, `packages/chrome-extension/src/offscreen.ts`). Even a browser reload may serve a stale module. After editing these files, **restart the dev server** (`lsof -ti :5710 | xargs kill`, then start again) before manually verifying in the browser. Component-level HMR works normally.
+- When auto-discovering the Chrome CDP port from the dev-server log, also verify the `[agent-bridge] agent bridge published on globalThis.__slicc_agent` line appears during bootstrap — this is the easiest smoke signal that the bridge hook was published before the UI finished loading.
+
 ## Build Targets
 
 - Browser bundle (tsconfig.json): everything except `packages/node-server/src/`.
