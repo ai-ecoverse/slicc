@@ -11,6 +11,20 @@ interface AgentSpawnOptions {
   allowedCommands: string[];
   prompt: string;
   modelId?: string;
+  parentJid?: string;
+}
+
+/** Options accepted by {@link createAgentCommand}. */
+export interface AgentCommandOptions {
+  /**
+   * Returns the JID of the scoop (or cone) that owns the shell invoking
+   * `agent`. Forwarded to the bridge as `parentJid` so the spawned scoop
+   * inherits the parent's `config.modelId` (or falls back to the global UI
+   * selection when the parent has none). Returns `undefined` when the shell
+   * is not attached to a scoop context — e.g., the terminal panel's own
+   * standalone `WasmShell`.
+   */
+  getParentJid?: () => string | undefined;
 }
 
 /** Result returned by the orchestrator bridge. */
@@ -185,7 +199,8 @@ function getBridge(): AgentBridge | undefined {
  * (exit code `!== 0` or promise rejection) the error text is written to
  * stderr and the exit code is propagated.
  */
-export function createAgentCommand(): Command {
+export function createAgentCommand(options: AgentCommandOptions = {}): Command {
+  const { getParentJid } = options;
   return defineCommand('agent', async (args, ctx) => {
     const parsed = parseArgs(args);
 
@@ -246,6 +261,14 @@ export function createAgentCommand(): Command {
     };
     if (parsed.modelId !== undefined) {
       spawnOptions.modelId = parsed.modelId;
+    }
+    // Forward the parent scoop's JID when available so the bridge can
+    // inherit the parent's model id (see `AgentSpawnOptions.parentJid` in
+    // `agent-bridge.ts`). The hook is omitted for top-level terminal
+    // invocations where no scoop owns the shell.
+    const parentJid = getParentJid?.();
+    if (parentJid !== undefined && parentJid.length > 0) {
+      spawnOptions.parentJid = parentJid;
     }
 
     try {

@@ -259,6 +259,13 @@ export interface WasmShellOptions {
   bshDiscoveryFs?: BshDiscoveryFS;
   /** Optional shared script catalog. When omitted, WasmShell creates and owns one. */
   scriptCatalog?: ScriptCatalog;
+  /**
+   * JID of the scoop (or cone) that owns this shell. Forwarded to the
+   * `agent` supplemental command as `parentJid` so spawned scoops can
+   * inherit the parent's model id. Leave undefined for standalone shells
+   * (e.g., the terminal panel) that are not bound to a scoop context.
+   */
+  scoopJid?: string;
 }
 
 type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
@@ -347,12 +354,18 @@ export class WasmShell {
 
     // Create custom commands for just-bash
     const gitCommand = this.createGitCustomCommand();
+    // Capture the owning scoop's JID so the `agent` supplemental command can
+    // forward it to the bridge as `parentJid` for model inheritance. Read
+    // lazily via a getter so future changes can remain reactive; today the
+    // JID is set once at construction time.
+    const scoopJid = options.scoopJid;
     const supplementalCommands = createSupplementalCommands({
       onMediaPreview: async (items) => this.renderMediaPreview(items),
       getJshCommands: () => this.getJshCommandNames(),
       fs: options.fs,
       scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
+      getParentJid: scoopJid ? () => scoopJid : undefined,
     });
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();

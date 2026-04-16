@@ -40,6 +40,15 @@ export interface AgentSpawnOptions {
   prompt: string;
   /** Optional model id override. When omitted, the parent's model is inherited. */
   modelId?: string;
+  /**
+   * JID of the scoop (or cone) that invoked `agent`. When provided and the
+   * scoop exists in `orchestrator.getScoops()`, its `config.modelId` is used
+   * for model inheritance (NOT the global UI selection). When the looked-up
+   * scoop has no configured model (e.g., the cone uses the global UI model),
+   * the bridge falls back to `getInheritedModelId()`. Omitted for top-level
+   * terminal invocations where no scoop context owns the call.
+   */
+  parentJid?: string;
 }
 
 /** Result returned by {@link AgentBridge.spawn}. */
@@ -133,6 +142,25 @@ export function createAgentBridge(
   const getInheritedModelId = deps.getInheritedModelId ?? defaultGetInheritedModelId;
   const getBrowserAPI = deps.getBrowserAPI ?? (() => ({}) as BrowserAPI);
 
+  /**
+   * Look up the parent scoop by `jid` in the orchestrator registry and return
+   * its configured model id. Returns `null` when:
+   *   - `parentJid` is `undefined` (top-level invocation).
+   *   - The parent is not found in `orchestrator.getScoops()`.
+   *   - The parent exists but has no `config.modelId` (e.g., the cone, which
+   *     tracks the global UI selection through `resolveCurrentModel()`).
+   *
+   * `null` signals "continue to the next precedence tier" in the caller's
+   * `??` chain — typically falling back to `getInheritedModelId()`.
+   */
+  function resolveParentModelId(parentJid: string | undefined): string | null {
+    if (parentJid === undefined) return null;
+    const parent = orchestrator.getScoops().find((s) => s.jid === parentJid);
+    if (!parent) return null;
+    const modelId = parent.config?.modelId;
+    return modelId && modelId.length > 0 ? modelId : null;
+  }
+
   async function spawn(options: AgentSpawnOptions): Promise<AgentSpawnResult> {
     const requestedModelId = options.modelId;
 
@@ -147,7 +175,16 @@ export function createAgentBridge(
       }
     }
 
-    const effectiveModelId = requestedModelId ?? getInheritedModelId();
+    // Model inheritance precedence (highest priority first):
+    //   1. Explicit `--model` override (`requestedModelId`).
+    //   2. Parent scoop's `config.modelId`, looked up by `parentJid` in the
+    //      orchestrator registry. This is the key path for model inheritance
+    //      across nested `agent` invocations from inside a scoop's bash tool.
+    //   3. `getInheritedModelId()` — the global UI selection (fallback used
+    //      when the parent is the cone with no configured model, the parent
+    //      is unknown, or no `parentJid` was supplied).
+    const effectiveModelId =
+      requestedModelId ?? resolveParentModelId(options.parentJid) ?? getInheritedModelId();
 
     // Mint a unique folder + jid.
     const uid = generateUid();

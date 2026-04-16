@@ -26,6 +26,7 @@ import { RestrictedFS } from '../../src/fs/restricted-fs.js';
 import { FsError } from '../../src/fs/types.js';
 import * as db from '../../src/scoops/db.js';
 import type { AgentMessage } from '../../src/core/types.js';
+import type { RegisteredScoop } from '../../src/scoops/types.js';
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
@@ -910,6 +911,204 @@ describe('createAgentBridge', () => {
       await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
       // Exactly one context was constructed via the factory.
       expect(captured).toHaveLength(1);
+    });
+  });
+
+  // ── Parent-scoop model inheritance (parentJid) ────────────────────
+  //
+  // When the `agent` supplemental shell command is invoked from inside a
+  // scoop's bash tool, the bridge must inherit the *parent scoop's* model id
+  // (from `orchestrator.getScoops()`), NOT the globally-selected UI model.
+  // Only when the parent is the cone (or has no configured model) does the
+  // bridge fall back to `getInheritedModelId()` (which reflects the global
+  // UI selection).
+  //
+  // Plumbing: `agent-command` forwards the caller's scoop jid via
+  // `spawn({ ..., parentJid })`, and the bridge looks it up in the
+  // orchestrator's registry to read `config.modelId`.
+
+  describe('parent-scoop model inheritance via parentJid', () => {
+    function registerParentScoop(opts: {
+      jid: string;
+      folder: string;
+      isCone?: boolean;
+      modelId?: string;
+    }): void {
+      const scoop: RegisteredScoop = {
+        jid: opts.jid,
+        name: opts.folder,
+        folder: opts.folder,
+        isCone: opts.isCone ?? false,
+        type: opts.isCone ? 'cone' : 'scoop',
+        requiresTrigger: false,
+        assistantLabel: opts.folder,
+        addedAt: new Date().toISOString(),
+        config: opts.modelId !== undefined ? { modelId: opts.modelId } : {},
+      };
+      orch.registerExistingScoop(scoop);
+    }
+
+    it("inherits the parent scoop's config.modelId (NOT the global default) when parentJid is supplied and no override is given", async () => {
+      registerParentScoop({
+        jid: 'parent-opus',
+        folder: 'parent-opus',
+        modelId: 'claude-opus-4-6',
+      });
+
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({ captured }),
+        generateUid: () => 'child-1',
+        // The global default must NOT win here — parent's modelId takes priority.
+        getInheritedModelId: () => 'GLOBAL-DEFAULT-SHOULD-NOT-BE-USED',
+      });
+
+      await bridge.spawn({
+        cwd: '/home',
+        allowedCommands: ['*'],
+        prompt: 'p',
+        parentJid: 'parent-opus',
+      });
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0].args.modelId).toBe('claude-opus-4-6');
+    });
+
+    it('explicit --model override wins even when parentJid is supplied', async () => {
+      registerParentScoop({
+        jid: 'parent-opus',
+        folder: 'parent-opus',
+        modelId: 'claude-opus-4-6',
+      });
+
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({ captured }),
+        generateUid: () => 'child-override',
+        resolveModel: (id) => id,
+        getInheritedModelId: () => 'GLOBAL-DEFAULT-SHOULD-NOT-BE-USED',
+      });
+
+      await bridge.spawn({
+        cwd: '/home',
+        allowedCommands: ['*'],
+        prompt: 'p',
+        parentJid: 'parent-opus',
+        modelId: 'claude-haiku-4-5',
+      });
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0].args.modelId).toBe('claude-haiku-4-5');
+      // The recorded scoop config still reflects the override (not parent's).
+      expect(captured[0].args.scoop.config?.modelId).toBe('claude-haiku-4-5');
+    });
+
+    it('cone parent with no configured model falls back to getInheritedModelId (global UI default)', async () => {
+      registerParentScoop({
+        jid: 'cone',
+        folder: 'cone',
+        isCone: true,
+        // No modelId — cone relies on the global UI selection.
+      });
+
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({ captured }),
+        generateUid: () => 'from-cone',
+        getInheritedModelId: () => 'claude-sonnet-4-6',
+      });
+
+      await bridge.spawn({
+        cwd: '/home',
+        allowedCommands: ['*'],
+        prompt: 'p',
+        parentJid: 'cone',
+      });
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0].args.modelId).toBe('claude-sonnet-4-6');
+    });
+
+    it('scoop parent with no configured model falls back to getInheritedModelId', async () => {
+      registerParentScoop({
+        jid: 'parent-nomodel',
+        folder: 'parent-nomodel',
+        // No modelId set — scoop inherited from global UI at registration time.
+      });
+
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({ captured }),
+        generateUid: () => 'from-scoop',
+        getInheritedModelId: () => 'claude-sonnet-4-6',
+      });
+
+      await bridge.spawn({
+        cwd: '/home',
+        allowedCommands: ['*'],
+        prompt: 'p',
+        parentJid: 'parent-nomodel',
+      });
+
+      expect(captured[0].args.modelId).toBe('claude-sonnet-4-6');
+    });
+
+    it('unknown parentJid gracefully falls back to getInheritedModelId', async () => {
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({ captured }),
+        generateUid: () => 'unknown-parent',
+        getInheritedModelId: () => 'claude-sonnet-4-6',
+      });
+
+      await bridge.spawn({
+        cwd: '/home',
+        allowedCommands: ['*'],
+        prompt: 'p',
+        parentJid: 'does-not-exist',
+      });
+
+      expect(captured[0].args.modelId).toBe('claude-sonnet-4-6');
+    });
+
+    it('omitted parentJid falls back to getInheritedModelId (legacy behavior preserved)', async () => {
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({ captured }),
+        generateUid: () => 'no-parent',
+        getInheritedModelId: () => 'claude-sonnet-4-6',
+      });
+
+      await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+
+      expect(captured[0].args.modelId).toBe('claude-sonnet-4-6');
+    });
+
+    it("does not mutate the parent scoop's config.modelId after spawn", async () => {
+      registerParentScoop({
+        jid: 'parent-stable',
+        folder: 'parent-stable',
+        modelId: 'claude-opus-4-6',
+      });
+
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({ captured }),
+        generateUid: () => 'mutation-test',
+        resolveModel: (id) => id,
+        getInheritedModelId: () => 'claude-sonnet-4-6',
+      });
+
+      await bridge.spawn({
+        cwd: '/home',
+        allowedCommands: ['*'],
+        prompt: 'p',
+        parentJid: 'parent-stable',
+        modelId: 'claude-haiku-4-5',
+      });
+
+      const parent = orch.getScoops().find((s) => s.jid === 'parent-stable');
+      expect(parent?.config?.modelId).toBe('claude-opus-4-6');
     });
   });
 

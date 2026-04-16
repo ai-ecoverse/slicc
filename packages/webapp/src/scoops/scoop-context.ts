@@ -162,6 +162,9 @@ export class ScoopContext {
         env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
         browserAPI: browser,
         jshDiscoveryFs: this.skillsFs ? effectiveSkillsFs : undefined,
+        // Identify this shell's owning scoop so the `agent` supplemental
+        // command can forward `parentJid` to the bridge for model inheritance.
+        scoopJid: this.scoop.jid,
       });
       log.info('WasmShell initialized', { folder: this.scoop.folder });
       const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);

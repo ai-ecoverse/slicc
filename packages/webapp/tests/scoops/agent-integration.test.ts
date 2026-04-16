@@ -566,6 +566,127 @@ describe('agent end-to-end integration (command → hook → bridge → cleanup)
         expect(after.scratchFolders).not.toContain('agent-cone-tools');
         expect(after.registeredJids).toEqual(before.registeredJids);
       });
+
+      // ── Scenario 5b: parent scoop model inheritance end-to-end ────
+
+      it('inherits parent scoop modelId end-to-end (command → bridge → provider request) via parentJid', async () => {
+        // Register a parent scoop whose config.modelId must be inherited by
+        // the spawned agent-scoop.
+        const parentScoop: RegisteredScoop = {
+          jid: 'parent-inherit-jid',
+          name: 'parent-inherit',
+          folder: 'parent-inherit',
+          isCone: false,
+          type: 'scoop',
+          requiresTrigger: false,
+          assistantLabel: 'parent-inherit',
+          addedAt: new Date().toISOString(),
+          config: { modelId: 'claude-opus-4-6' },
+        };
+        harness.orch.registerExistingScoop(parentScoop);
+
+        const { recording, createContext } = makeMockProvider({
+          sendWhilePrompting: ['inherited'],
+        });
+        harness.publish({
+          createContext,
+          generateUid: () => 'inherit-run',
+          resolveModel: (id) => id,
+          // The global default should NOT win here — parent's model takes priority.
+          getInheritedModelId: () => 'GLOBAL-DEFAULT-SHOULD-NOT-BE-USED',
+        });
+
+        // Simulate the plumbing performed by WasmShell + supplemental-commands:
+        // the `agent` supplemental command receives a `getParentJid` factory
+        // that returns the owning scoop's jid.
+        const result = await createAgentCommand({
+          getParentJid: () => 'parent-inherit-jid',
+        }).execute(['.', '*', 'hi'], createMockShellCtx(harness.vfs, '/home'));
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toBe('inherited\n');
+        // Mock provider recorded the parent's modelId — not the global default.
+        expect(recording.modelIdsRequested).toEqual(['claude-opus-4-6']);
+
+        // Parent scoop's config.modelId is untouched after the spawn.
+        const parent = harness.orch.getScoops().find((s) => s.jid === 'parent-inherit-jid');
+        expect(parent?.config?.modelId).toBe('claude-opus-4-6');
+      });
+
+      it('explicit --model override beats parent inheritance (end-to-end)', async () => {
+        const parentScoop: RegisteredScoop = {
+          jid: 'parent-override-jid',
+          name: 'parent-override',
+          folder: 'parent-override',
+          isCone: false,
+          type: 'scoop',
+          requiresTrigger: false,
+          assistantLabel: 'parent-override',
+          addedAt: new Date().toISOString(),
+          config: { modelId: 'claude-opus-4-6' },
+        };
+        harness.orch.registerExistingScoop(parentScoop);
+
+        const { recording, createContext } = makeMockProvider({
+          sendWhilePrompting: ['overridden'],
+        });
+        harness.publish({
+          createContext,
+          generateUid: () => 'override-run',
+          resolveModel: (id) => id,
+          getInheritedModelId: () => 'GLOBAL-DEFAULT-SHOULD-NOT-BE-USED',
+        });
+
+        const result = await createAgentCommand({
+          getParentJid: () => 'parent-override-jid',
+        }).execute(
+          ['--model', 'claude-haiku-4-5', '.', '*', 'hi'],
+          createMockShellCtx(harness.vfs, '/home')
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toBe('overridden\n');
+        // Override wins — parent's opus is ignored when --model is given.
+        expect(recording.modelIdsRequested).toEqual(['claude-haiku-4-5']);
+
+        // Parent scoop's config.modelId is still untouched.
+        const parent = harness.orch.getScoops().find((s) => s.jid === 'parent-override-jid');
+        expect(parent?.config?.modelId).toBe('claude-opus-4-6');
+      });
+
+      it('parent that is a cone with no configured model falls back to getInheritedModelId', async () => {
+        const coneScoop: RegisteredScoop = {
+          jid: 'cone-fallback-jid',
+          name: 'sliccy',
+          folder: 'cone',
+          isCone: true,
+          type: 'cone',
+          requiresTrigger: false,
+          assistantLabel: 'sliccy',
+          addedAt: new Date().toISOString(),
+          // No config.modelId — the cone relies on the global UI selection.
+        };
+        harness.orch.registerExistingScoop(coneScoop);
+
+        const { recording, createContext } = makeMockProvider({
+          sendWhilePrompting: ['fallback'],
+        });
+        harness.publish({
+          createContext,
+          generateUid: () => 'fallback-run',
+          resolveModel: (id) => id,
+          getInheritedModelId: () => 'claude-sonnet-4-6',
+        });
+
+        const result = await createAgentCommand({
+          getParentJid: () => 'cone-fallback-jid',
+        }).execute(['.', '*', 'hi'], createMockShellCtx(harness.vfs, '/home'));
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toBe('fallback\n');
+        // No parent modelId → fall through to global default.
+        expect(recording.modelIdsRequested).toEqual(['claude-sonnet-4-6']);
+      });
     });
   }
 
