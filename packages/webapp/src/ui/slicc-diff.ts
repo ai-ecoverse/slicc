@@ -25,7 +25,6 @@ import {
   parseDiffFromFile,
   parsePatchFiles,
   type FileContents,
-  type FileDiffMetadata,
   type ThemeTypes,
 } from '@pierre/diffs';
 
@@ -195,27 +194,24 @@ export class SliccDiffElement extends HTMLElement {
       this.diff.setThemeType(themeType);
     }
 
-    // Determine the diff metadata
-    let fileDiff: FileDiffMetadata | undefined;
-
-    if (this._patch) {
-      // Patch mode — parsePatchFiles returns ParsedPatch[] with .files arrays
-      const patches = parsePatchFiles(this._patch);
-      if (patches.length > 0 && patches[0].files.length > 0) {
-        fileDiff = patches[0].files[0];
-      }
-    } else if (this._oldFile && this._newFile) {
-      // Two-file mode
-      fileDiff = parseDiffFromFile(this._oldFile, this._newFile);
-    }
-
-    if (!fileDiff) return;
-
     try {
-      this.diff.render({
-        fileDiff,
-        fileContainer: this.container,
-      });
+      if (this._patch) {
+        // Patch mode — parsePatchFiles returns ParsedPatch[] with .files arrays
+        const patches = parsePatchFiles(this._patch);
+        if (patches.length > 0 && patches[0].files.length > 0) {
+          this.diff.render({
+            fileDiff: patches[0].files[0],
+            fileContainer: this.container,
+          });
+        }
+      } else if (this._oldFile && this._newFile) {
+        // Two-file mode — pass files directly and let FileDiff handle diffing
+        this.diff.render({
+          oldFile: this._oldFile,
+          newFile: this._newFile,
+          fileContainer: this.container,
+        });
+      }
     } catch (err) {
       console.error('[slicc-diff] render error:', err);
     }
