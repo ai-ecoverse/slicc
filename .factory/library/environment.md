@@ -45,3 +45,12 @@ Credentials never leave the local machine; no repo-level secrets are required.
 - Extension (packages/chrome-extension/vite.config.ts).
 
 All three must typecheck and build cleanly after every feature.
+
+## Lint / Style — Important
+
+This repo's **CI gate for style is `npx prettier --check .`**, not `eslint`.
+See the root `CLAUDE.md` "Verification" section: the CI steps are prettier-check, typecheck, test, build, build-extension.
+
+`npx eslint .` has a large pre-existing baseline on `main` (66 errors / 1100+ warnings, mostly `no-undef` for `process`/`console` in Node scripts and `no-explicit-any` warnings). Fixing it is out of scope for this mission.
+
+Workers and validators must treat `prettier --check` as the lint gate. `.factory/services.yaml`'s `lint` command is explicitly wired to `prettier --check` for this reason.

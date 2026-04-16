@@ -5,7 +5,12 @@ commands:
   build: npm run build -w @slicc/webapp
   build_extension: npm run build -w @slicc/chrome-extension
   build_full: npm run build
-  lint: npx eslint . --fix
+  # The repo's CI gate for style/lint is `npx prettier --check .` (see root
+  # CLAUDE.md "Verification"). eslint has a large pre-existing baseline
+  # (66 errors / 1100+ warnings on main, unrelated to this mission) and is
+  # NOT part of CI. Using prettier-check here keeps scrutiny aligned with
+  # what CI actually enforces.
+  lint: npx prettier --check .
   format: npx prettier --write .
   format_check: npx prettier --check .
 
