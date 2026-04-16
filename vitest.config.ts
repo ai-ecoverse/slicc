@@ -22,6 +22,10 @@ export default defineConfig({
             // that CJS entry imports Node crypto. Force the browser-safe ESM
             // entry instead.
             'isomorphic-git': resolve(workspaceRoot, 'node_modules/isomorphic-git/index.js'),
+            // Match the Vite-time alias in packages/webapp/vite.config.ts so
+            // vitest resolves `just-bash` to the vendored browser bundle that
+            // exposes the AST parser surface.
+            'just-bash': resolve(webappDir, 'src/vendor/just-bash/dist/bundle/browser.js'),
             'node:zlib': resolve(webappDir, 'src/shims/empty.ts'),
             'node:module': resolve(webappDir, 'src/shims/empty.ts'),
             stream: resolve(webappDir, 'src/shims/stream.ts'),

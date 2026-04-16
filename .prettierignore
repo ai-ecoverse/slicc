@@ -4,6 +4,9 @@ node_modules/
 *.min.css
 package-lock.json
 artifacts/
+# Vendored upstream artifacts — do not reformat. See
+# packages/webapp/src/vendor/just-bash/README.md for removal plan.
+packages/webapp/src/vendor/just-bash/dist/
 # HTML files with embedded content that shouldn't be reformatted
 index.html
 sandbox.html

@@ -28,6 +28,11 @@ export default defineConfig(({ mode }) => ({
       // CJS entry imports Node crypto. Force the browser-safe ESM entry
       // instead.
       'isomorphic-git': resolve(repoRoot, 'node_modules/isomorphic-git/index.js'),
+      // Use the vendored just-bash browser bundle (see
+      // packages/webapp/src/vendor/just-bash/README.md). Mirrors the alias in
+      // packages/webapp/vite.config.ts so the chrome-extension build resolves
+      // 'just-bash' to the same patched copy that exposes the AST parser.
+      'just-bash': resolve(__dirname, '../webapp/src/vendor/just-bash/dist/bundle/browser.js'),
       'node:zlib': resolve(__dirname, '../webapp/src/shims/empty.ts'),
       'node:module': resolve(__dirname, '../webapp/src/shims/empty.ts'),
       stream: resolve(__dirname, '../webapp/src/shims/stream.ts'),

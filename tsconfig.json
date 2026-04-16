@@ -19,7 +19,8 @@
       ],
       "@mariozechner/pi-ai/dist/providers/simple-options.js": [
         "./node_modules/@mariozechner/pi-ai/dist/providers/simple-options.d.ts"
-      ]
+      ],
+      "just-bash": ["./packages/webapp/src/vendor/just-bash/dist/index.d.ts"]
     }
   },
   "include": ["packages/webapp/src/**/*.ts", "packages/chrome-extension/src/**/*.ts"],
