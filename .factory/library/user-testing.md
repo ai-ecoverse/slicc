@@ -22,11 +22,19 @@ The user explicitly requested: **"launch a dev server, let the user investigate 
 
 This means workers and validators MUST:
 
-1. Start the `dev` service defined in `.factory/services.yaml` (binds UI to `http://localhost:5710` and Chrome CDP to `http://localhost:9222`)
-2. Use the `agent-browser` skill to connect via CDP to the running Chrome instance
-3. Navigate to `http://localhost:5710`
-4. Interact with the SLICC UI — open the terminal panel, type `agent ...` commands, observe output in the terminal panel
-5. Capture screenshots/logs as evidence
+1. Start the `dev` service defined in `.factory/services.yaml` (binds UI to `http://localhost:5710`; Chrome CDP defaults to `:9222`).
+2. **Discover the actual CDP port.** If port 9222 is already occupied on the machine, the dev server's chromium-launcher auto-allocates an ephemeral port. Read the dev-server log after startup for lines like `CDP proxy at ws://localhost:5710/cdp` or a `remote-debugging-port=<N>` token. Prefer connecting via `ws://localhost:5710/cdp` because the proxy port is stable regardless of Chrome's actual port.
+3. Use the `agent-browser` skill to connect via CDP (prefer the :5710 proxy endpoint) to the running Chrome instance.
+4. Navigate to `http://localhost:5710`.
+5. Interact with the SLICC UI — open the terminal panel, type `agent ...` commands, observe output in the terminal panel.
+6. Capture screenshots/logs as evidence.
+
+**Discovery helper** (run after `fireAndForget` start):
+
+```bash
+# Wait briefly, then grep the dev-server log for the CDP endpoint.
+rg -o 'remote-debugging-port=\d+|CDP proxy at ws://localhost:\d+/cdp' <log-file>
+```
 
 For interactive `agent` validation, the LLM provider must be configured in the running app before exercising the command. If no provider is configured, agent invocation will fail with a provider-missing error — record that as a distinct failure mode rather than treating it as a bug.
 

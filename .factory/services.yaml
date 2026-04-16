@@ -11,6 +11,9 @@ commands:
 
 services:
   dev:
+    # PORT=5710 binds the SLICC UI + /cdp proxy. Chrome's CDP port defaults to
+    # 9222 but auto-allocates if occupied — workers must discover the actual
+    # port from the dev-server log and prefer ws://localhost:5710/cdp (stable).
     start: PORT=5710 npx tsx packages/node-server/src/index.ts --dev
     stop: lsof -ti :5710 | xargs kill 2>/dev/null; lsof -ti :9222 | xargs kill 2>/dev/null || true
     healthcheck: curl -sf http://localhost:5710

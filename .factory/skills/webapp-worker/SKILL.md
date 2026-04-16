@@ -76,7 +76,7 @@ If any step fails, fix it before proceeding. Every commit must leave these gates
 
 **This is REQUIRED. Do not skip.** The user has explicitly asked for the dev server to stay open during development for manual investigation.
 
-1. Check if the dev service is already running: `curl -sf http://localhost:5710` and `curl -sf http://localhost:9222/json/version`.
+1. Check if the dev service is already running: `curl -sf http://localhost:5710`. (Do NOT assume CDP is on :9222 — see step 3.)
 2. If NOT running, start it:
 
    ```bash
@@ -84,15 +84,16 @@ If any step fails, fix it before proceeding. Every commit must leave these gates
    PORT=5710 npx tsx packages/node-server/src/index.ts --dev
    ```
 
-   Wait ~5 seconds, then healthcheck both endpoints.
+   Wait ~5 seconds, then `curl -sf http://localhost:5710` to confirm the UI server is up.
 
-3. Invoke the `agent-browser` skill to connect to the running Chrome via CDP (port 9222) and navigate to `http://localhost:5710`.
-4. Take a screenshot of the initial UI.
-5. Open the terminal panel (it may need to be toggled via `debug on`).
-6. Type a representative `agent` invocation for the feature under test (e.g., for an arg-parsing feature, test `agent --help`; for the scoop-spawn feature, test `agent . "*" "say hello"` with a configured provider).
-7. Capture the output and take screenshots.
-8. Record EVERY manual step as a separate `interactiveChecks` entry in your handoff.
-9. **Leave the dev server running** for the next worker / the user's manual investigation.
+3. **Discover the actual Chrome CDP port** from the dev-server log. If :9222 is already in use on this machine (common), chromium-launcher auto-allocates an ephemeral port. Grep the log file for `remote-debugging-port=<N>` or the `CDP proxy at ws://localhost:5710/cdp` line. **Prefer `ws://localhost:5710/cdp`** for agent-browser — it is stable regardless of Chrome's port. If you need the direct port, confirm with `curl -sf http://localhost:<port>/json/version` before attaching.
+4. Invoke the `agent-browser` skill with the discovered CDP endpoint and navigate to `http://localhost:5710`.
+5. Take a screenshot of the initial UI.
+6. Open the terminal panel (it may need to be toggled via `debug on`).
+7. Type a representative `agent` invocation for the feature under test (e.g., for an arg-parsing feature, test `agent --help`; for the scoop-spawn feature, test `agent . "*" "say hello"` with a configured provider).
+8. Capture the output and take screenshots.
+9. Record EVERY manual step as a separate `interactiveChecks` entry in your handoff.
+10. **Leave the dev server running** for the next worker / the user's manual investigation.
 
 If the dev server cannot be started (port conflict, missing dep, build failure), STOP and return to orchestrator with diagnostic info.
 
@@ -224,7 +225,7 @@ Fill in the handoff with the level of detail shown in the Example Handoff below.
 
 - Baseline CI gates fail on clean checkout
 - The `dev` service cannot be started (port conflict, Chrome launch failure, missing deps)
-- CDP port 9222 is not reachable even after the dev server comes up
+- The CDP endpoint (direct port OR the `:5710/cdp` proxy) is not reachable even after the dev server comes up
 - A test you wrote as red unexpectedly passes without your implementation — the spec is ambiguous
 - You hit a scope creep moment — the feature requires touching files the description didn't mention, AND those changes would be substantial
 - An assertion in your `fulfills` cannot be made to pass without violating another assertion
