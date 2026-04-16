@@ -525,6 +525,18 @@
           icon: 'message-circle',
           relevance: ['personal', 'side-project', 'exploring'],
         },
+        {
+          id: 'teams',
+          label: 'Microsoft Teams',
+          icon: 'users',
+          relevance: ['work', 'developer', 'product-pm', 'marketer', 'content-creator'],
+        },
+        {
+          id: 'slack',
+          label: 'Slack',
+          icon: 'hash',
+          relevance: ['work', 'developer', 'product-pm', 'founder'],
+        },
       ];
 
       function getRelevantApps() {
