@@ -1,0 +1,18 @@
+commands:
+  install: npm install
+  typecheck: npm run typecheck
+  test: npm run test
+  build: npm run build -w @slicc/webapp
+  build_extension: npm run build -w @slicc/chrome-extension
+  build_full: npm run build
+  lint: npx eslint . --fix
+  format: npx prettier --write .
+  format_check: npx prettier --check .
+
+services:
+  dev:
+    start: PORT=5710 npx tsx packages/node-server/src/index.ts --dev
+    stop: lsof -ti :5710 | xargs kill 2>/dev/null; lsof -ti :9222 | xargs kill 2>/dev/null || true
+    healthcheck: curl -sf http://localhost:5710
+    port: 5710
+    depends_on: []
