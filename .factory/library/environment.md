@@ -54,3 +54,5 @@ See the root `CLAUDE.md` "Verification" section: the CI steps are prettier-check
 `npx eslint .` has a large pre-existing baseline on `main` (66 errors / 1100+ warnings, mostly `no-undef` for `process`/`console` in Node scripts and `no-explicit-any` warnings). Fixing it is out of scope for this mission.
 
 Workers and validators must treat `prettier --check` as the lint gate. `.factory/services.yaml`'s `lint` command is explicitly wired to `prettier --check` for this reason.
+
+- Prettier does **not** honor the nested package `.gitignore` files in `packages/swift-launcher/` and `packages/swift-server/`. If local ignored Swift build artifacts exist under `packages/swift-launcher/.build/` or `packages/swift-server/.build/`, `npx prettier --check .` can fail on those generated files. Clean those ignored `.build/` directories before re-running the lint gate.

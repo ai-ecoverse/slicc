@@ -1,6 +1,6 @@
 {
   "milestone": "core",
-  "round": 1,
+  "round": 2,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -15,100 +15,54 @@
     },
     "lint": {
       "passed": true,
-      "command": "npx --prefix \"/Users/trieloff/Developer/slicc/.yolo/droid-2\" prettier --check \"/Users/trieloff/Developer/slicc/.yolo/droid-2\"",
+      "command": "cd \"/Users/trieloff/Developer/slicc/.yolo/droid-2\" && npx prettier --check .",
       "exitCode": 0
     }
   },
   "reviewsSummary": {
-    "total": 5,
-    "passed": 0,
-    "failed": 5,
-    "failedFeatures": [
-      "agent-command-scaffolding",
-      "agent-bridge-implementation",
-      "publish-agent-bridge-hook",
-      "bash-tool-allowlist-wrapper",
-      "core-integration-tests"
-    ]
+    "total": 6,
+    "passed": 5,
+    "failed": 1,
+    "failedFeatures": ["fix-agent-bridge-model-inheritance"]
   },
   "blockingIssues": [
     {
-      "featureId": "agent-command-scaffolding",
+      "featureId": "fix-agent-bridge-model-inheritance",
       "severity": "blocking",
-      "description": "`agent` forwards nonexistent `<cwd>` paths to the bridge instead of rejecting them at the command layer, so VAL-CMD-017 is not satisfied."
-    },
-    {
-      "featureId": "agent-bridge-implementation",
-      "severity": "blocking",
-      "description": "`AgentBridge.spawn()` never registers its ephemeral scoop in orchestrator state during execution, so the required registered-scoop lifecycle is missing."
-    },
-    {
-      "featureId": "agent-bridge-implementation",
-      "severity": "blocking",
-      "description": "The no-override model path does not inherit the parent scoop/cone model in the real `ScoopContext`; it falls back to the global UI selection instead."
-    },
-    {
-      "featureId": "publish-agent-bridge-hook",
-      "severity": "blocking",
-      "description": "Publishing `globalThis.__slicc_agent` only in the offscreen document leaves the extension side-panel Terminal shell without a bridge because the panel and offscreen shells do not share window globals."
-    },
-    {
-      "featureId": "bash-tool-allowlist-wrapper",
-      "severity": "blocking",
-      "description": "The allow-list wrapper still permits quoted command substitution/backticks such as `echo \"$(curl ...)\"`, so disallowed commands can be smuggled through an allowed head."
-    },
-    {
-      "featureId": "bash-tool-allowlist-wrapper",
-      "severity": "blocking",
-      "description": "The allow-list wrapper does not parse or reject bare `&` and newline command separators, so disallowed commands can run after an allowed head in a single bash invocation."
-    },
-    {
-      "featureId": "core-integration-tests",
-      "severity": "blocking",
-      "description": "The integration suite replaces the real `ScoopContext` path with a mocked `createContext` seam, so it does not actually validate the claimed full command → hook → bridge → scoop flow or real cone-tool bypass behavior."
-    },
-    {
-      "featureId": "core-integration-tests",
-      "severity": "blocking",
-      "description": "The CLI-vs-extension parity scenario uses the same bootstrap helper for both labels, so it cannot catch divergence between `packages/webapp/src/ui/main.ts` and `packages/chrome-extension/src/offscreen.ts`."
+      "description": "`AgentBridge.spawn()` threads `parentJid` through the shell stack but does not copy the inherited `effectiveModelId` onto the spawned `RegisteredScoop.config.modelId`, so the real `ScoopContext` path still falls back to `resolveCurrentModel()` when no explicit `--model` override is provided."
     }
   ],
   "appliedUpdates": [
     {
       "target": "library",
-      "description": "Updated `.factory/library/environment.md` to direct workers to use `ws://localhost:5710/cdp` or discover the auto-allocated Chrome CDP port from the dev-server log instead of assuming port 9222.",
-      "sourceFeature": "agent-command-scaffolding"
+      "description": "Updated `.factory/library/environment.md` with a validator note that local Swift `.build/` artifacts can cause `npx prettier --check .` to fail because Prettier does not honor the nested package `.gitignore` files; workers should clean those ignored directories before rerunning the lint gate.",
+      "sourceFeature": "scrutiny-validator-core"
     },
     {
       "target": "library",
-      "description": "Updated `.factory/library/architecture.md` to note that extension panel and offscreen shells do not share `globalThis`, so publishing `__slicc_agent` only in offscreen is insufficient for the side-panel Terminal.",
-      "sourceFeature": "publish-agent-bridge-hook"
-    },
-    {
-      "target": "library",
-      "description": "Updated `.factory/library/architecture.md` to record that bridge-created scoops must be visible in orchestrator state during the run and that bash allow-list wrappers must handle full-shell separators and quoted command substitution conservatively.",
-      "sourceFeature": "agent-bridge-implementation"
+      "description": "Updated `.factory/library/architecture.md` to capture the `parentJid` bridge contract and the architectural requirement that inherited model selection must flow through `RegisteredScoop.config.modelId` for the real `ScoopContext` path.",
+      "sourceFeature": "fix-agent-bridge-model-inheritance"
     }
   ],
   "suggestedGuidanceUpdates": [
     {
       "target": ".factory/skills/webapp-worker/SKILL.md",
-      "suggestion": "When a feature claims full-stack `agent` or scoop validation, require at least one test path that uses the real `ScoopContext`/tool assembly and only mocks the provider or transport seams. Do not treat a mocked `createContext` seam as sufficient evidence for model-threading or cone-tool-bypass behavior.",
-      "evidence": "Both `agent-bridge-implementation` and `core-integration-tests` passed with heavily mocked context factories while missing production-path bugs in model inheritance and full-stack scoop execution.",
+      "suggestion": "When command-layer behavior depends on `ctx.fs`, require either a real shell context or a mock shell context whose `stat`/`exists` delegate to VirtualFS. Today the skill calls out real `ScoopContext` coverage, but not FS-backed shell contexts for preflight validations.",
+      "evidence": "`fix-agent-command-cwd-validation` had to retrofit `createMockShellCtx()` in `agent-integration.test.ts` and `agent-bridge-hook.test.ts` so command-layer cwd validation used real VFS-backed `stat`/`exists`, a gap not currently spelled out in the worker procedure.",
       "isSystemic": true
     },
     {
       "target": ".factory/skills/webapp-worker/SKILL.md",
-      "suggestion": "For CLI-vs-extension parity claims, require genuinely distinct harnesses or explicit spies on the runtime-specific bootstrap call sites (`ui/main.ts` vs `offscreen.ts`) rather than a shared helper that only varies by label.",
-      "evidence": "`core-integration-tests` labeled two runs as CLI and extension parity, but both executions used the same `startBootstrap()` helper and never exercised the separate runtime call sites.",
+      "suggestion": "Clarify, and align with `.factory/library/user-testing.md`, when live-browser/CDP verification is mandatory versus optional for pure headless utility-wrapper fixes. The current mission/library/skill wording leads workers to make contradictory completion claims.",
+      "evidence": "`fix-bash-allowlist-hardening` cites conflicting instructions: mission.md says no browser UI testing required, the webapp-worker skill makes CDP checks optional for pure utility wrappers, while `.factory/library/user-testing.md` says workers and validators MUST perform live-browser validation.",
       "isSystemic": true
     }
   ],
   "rejectedObservations": [
     {
-      "observation": "Add a separate webapp-worker skill note distinguishing \"mock provider\" from \"mock `createContext`\".",
-      "reason": "duplicate of the broader recommended skill update requiring at least one real `ScoopContext` path for full-stack `agent` validation."
+      "observation": "Tighten the skill to remind workers that skipped required real-path coverage or skipped manual verification must set `followedProcedure: false`.",
+      "reason": "already-documented/enforcement: the current `webapp-worker` skill already requires real `ScoopContext` coverage for full-stack/model claims and already distinguishes required versus optional manual verification; the reviewed handoff mismatches reflect worker non-compliance more than a missing procedure."
     }
   ],
-  "previousRound": null
+  "previousRound": ".factory/validation/core/scrutiny/synthesis.round1.json"
 }

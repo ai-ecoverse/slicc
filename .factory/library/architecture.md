@@ -26,18 +26,19 @@ Location: `packages/webapp/src/shell/supplemental-commands/agent-command.ts`
 Location: `packages/webapp/src/scoops/agent-bridge.ts` (or equivalent)
 
 - Exposes `createAgentBridge(orchestrator: Orchestrator): AgentBridge`
-- `spawn({ cwd, allowedCommands, prompt, modelId? })`:
+- `spawn({ cwd, allowedCommands, prompt, modelId?, parentJid? })`:
   1. Generates a unique folder `agent-<uid>`, builds a `RegisteredScoop` record with `isCone: false`
   2. Constructs a `RestrictedFS` with:
      - R/W: `/scoops/<folder>/`, `/shared/`, and the user-supplied `cwd`
      - R/O: `/workspace/`
   3. Instantiates a `ScoopContext` directly (not via `orchestrator.registerScoop`) so we can install our own callbacks and own the lifecycle
   4. Wraps the bash tool with an allow-list (see below) if `allowedCommands !== ['*']`
-  5. Registers the scoop in the orchestrator's map for visibility during the run while still owning init/dispose locally
-  6. Awaits `ctx.prompt(promptText)` — blocks until agent loop completes
-  7. Determines output: last `send_message` callback text if any; else last assistant text from `ctx.getAgentMessages()`
-  8. Disposes ScoopContext and deletes `/scoops/<folder>/` from the VFS
-  9. Returns `{ finalText, exitCode: 0 }` on success; on agent error returns `{ finalText: errMsg, exitCode: 1 }`
+  5. Resolves the effective model with precedence `modelId` override → parent scoop/cone from `parentJid` → inherited global fallback. The real `ScoopContext` path only observes that choice if it is also copied onto `RegisteredScoop.config.modelId` before `ctx.init()`.
+  6. Registers the scoop in the orchestrator's map for visibility during the run while still owning init/dispose locally
+  7. Awaits `ctx.prompt(promptText)` — blocks until agent loop completes
+  8. Determines output: last `send_message` callback text if any; else last assistant text from `ctx.getAgentMessages()`
+  9. Disposes ScoopContext and deletes `/scoops/<folder>/` from the VFS
+  10. Returns `{ finalText, exitCode: 0 }` on success; on agent error returns `{ finalText: errMsg, exitCode: 1 }`
 
 ### 3. Global bridge hook (NEW)
 
@@ -72,7 +73,7 @@ User types in terminal:
 WasmShell.bash parses tokens -> calls agent-command.execute(args, ctx)
         |
         v
-agent-command reads globalThis.__slicc_agent.spawn({ cwd, allowed, prompt })
+agent-command reads globalThis.__slicc_agent.spawn({ cwd, allowed, prompt, parentJid })
         |
         v
 AgentBridge.spawn:
@@ -80,11 +81,12 @@ AgentBridge.spawn:
   2. Build RestrictedFS (RW: cwd + /scoops/<folder>/ + /shared/; RO: /workspace/)
   3. Construct ScoopContext
   4. Install callbacks (collect onSendMessage)
-  5. Optionally wrap bash tool with allow-list
-  6. await ctx.init() then await ctx.prompt(promptText)
-  7. Read last send_message (or last assistant text)
-  8. Dispose + delete /scoops/<folder>/
-  9. Return { finalText, exitCode }
+  5. Resolve the effective model; inheritance only reaches the real `ScoopContext` path if that choice is copied onto `scoop.config.modelId`
+  6. Optionally wrap bash tool with allow-list
+  7. await ctx.init() then await ctx.prompt(promptText)
+  8. Read last send_message (or last assistant text)
+  9. Dispose + delete /scoops/<folder>/
+  10. Return { finalText, exitCode }
         |
         v
 agent-command returns { stdout: finalText + '\n', stderr: '', exitCode }
@@ -100,6 +102,7 @@ User sees output in terminal
 - In extension mode, the side-panel Terminal shell and offscreen agent shell are separate contexts. Publishing `globalThis.__slicc_agent` in offscreen alone does **not** make it visible to the panel shell.
 - Under normal completion, error, or parent abort, the scratch folder `/scoops/<folder>/` MUST be deleted and the scoop MUST NOT remain registered.
 - Allow-list enforcement MUST happen at the bash-tool layer (inside the scoop's agent loop), not at the shell-command layer — because the agent may invoke bash multiple times during its reasoning, each invocation must be checked.
+- Real model inheritance depends on the spawned `RegisteredScoop` carrying the chosen model in `config.modelId`; `ScoopContext` resolves its runtime model from the scoop config, not from any transient bridge-local argument object.
 - The existing cone/scoop tool surface (`scoop_scoop`, `feed_scoop`, `drop_scoop`, `list_scoops`, `update_global_memory`, `send_message`) MUST remain unchanged.
 - The command SHOULD be callable from inside a scoop's bash, not just the cone's — nesting is supported because we bypass the cone-only `scoop_scoop` tool gate by calling `AgentBridge` directly.
 

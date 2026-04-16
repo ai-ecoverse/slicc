@@ -1,0 +1,21 @@
+{
+  "featureId": "fix-bash-allowlist-hardening",
+  "reviewedAt": "2026-04-16T22:24:02Z",
+  "commitId": "40d1fd087b156da27805a7041e92455f16d32fa4",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The fix fully closes the two blocking allow-list bypasses from the prior review. `findSubshellSyntax()` now keeps scanning inside double quotes so `$(...)` and backticks are rejected there while single-quoted literals remain allowed, and `splitSegments()` now treats bare `&` and newlines as segment separators while preserving redirection forms like `2>&1`. The updated tests exercise all reported bypasses plus the required redirection regression guard, and I did not find a remaining path that preserves the original failures.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "Mission guidance still conflicts on whether a headless allow-list fix must include live-browser validation. The mission says this feature does not require browser UI testing, and the worker skill makes CDP checks optional for pure utility wrappers, but the shared user-testing guidance says workers and validators MUST perform live-browser validation. This worker skipped `agent-browser` and left `whatWasLeftUndone` empty, so future workers can resolve the conflict differently.",
+      "evidence": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/mission.md:119 says \"No browser UI testing required because the feature is exercised programmatically through the shell layer.\"; /Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/skills/webapp-worker/SKILL.md:86 says browser checks are OPTIONAL for pure utility wrappers if documented in `whatWasLeftUndone`; /Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/library/user-testing.md:23 says workers and validators MUST do live-browser validation; /Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/handoffs/2026-04-16T21-52-16-918Z__fix-bash-allowlist-hardening__bb414c14-1147-4c78-ad31-6511b6373e85.json:12 records `whatWasLeftUndone` as an empty string."
+    }
+  ],
+  "addressesFailureFrom": "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/validation/core/scrutiny/reviews/bash-tool-allowlist-wrapper.json",
+  "summary": "Pass. Commit `40d1fd0` resolves the previously reported double-quoted subshell/backtick bypass and the bare-`&`/newline separator bypass, while preserving the `2>&1` regression case and the single-quoted literal behavior required by the fix feature. No code issues remain from the original failure; one shared-state documentation conflict around live-browser validation is worth triaging."
+}
