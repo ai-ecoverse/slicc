@@ -60,9 +60,11 @@ export function isBedrockCampCompatible(model: { id: string }): boolean {
 }
 
 // Models not yet in pi-ai's amazon-bedrock registry that CAMP already serves.
-// Opus 4.7 shape mirrors 4.6 until pi-ai regenerates.
+// Opus 4.7 shape mirrors 4.6 until pi-ai regenerates. Caller must dedupe
+// against the registry — once pi-ai ships these IDs, the dedup drops them
+// and this function becomes a no-op that can be removed.
 export function getBedrockCampExtraModels(): Model<Api>[] {
-  const shared = {
+  const shared: Omit<Model<Api>, 'id' | 'name'> = {
     reasoning: true,
     input: ['text', 'image'],
     cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
@@ -70,12 +72,12 @@ export function getBedrockCampExtraModels(): Model<Api>[] {
     maxTokens: 128_000,
     baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
     api: 'bedrock-converse-stream' as Api,
-    provider: 'amazon-bedrock',
+    provider: 'amazon-bedrock' as Model<Api>['provider'],
   };
   return [
     { ...shared, id: 'us.anthropic.claude-opus-4-7', name: 'Claude Opus 4.7 (US)' },
     { ...shared, id: 'global.anthropic.claude-opus-4-7', name: 'Claude Opus 4.7 (Global)' },
-  ] as unknown as Model<Api>[];
+  ];
 }
 
 // Opus 4.7 returns 400 "temperature is deprecated for this model" when the

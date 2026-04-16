@@ -129,10 +129,12 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     // Bedrock CAMP uses Amazon Bedrock models with custom API.
     // Filter to inference-profile-prefixed Claude 4.x (bare IDs aren't
     // invokable on-demand) and inject models missing from pi-ai's registry
-    // (e.g. opus-4.7).
+    // (e.g. opus-4.7). Dedupe by ID so extras auto-drop when pi-ai ships
+    // the same IDs.
     if (providerId === 'bedrock-camp') {
       const bedrockModels = getModelsDynamic('amazon-bedrock').filter(isBedrockCampCompatible);
-      const extras = getBedrockCampExtraModels();
+      const existingIds = new Set(bedrockModels.map((m) => m.id));
+      const extras = getBedrockCampExtraModels().filter((m) => !existingIds.has(m.id));
       return [...bedrockModels, ...extras].map((m) => ({
         ...m,
         api: 'bedrock-camp-converse' as Api,
