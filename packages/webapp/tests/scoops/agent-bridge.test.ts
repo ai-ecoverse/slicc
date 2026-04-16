@@ -678,6 +678,96 @@ describe('createAgentBridge', () => {
       const jid = captured[0].args.scoop.jid;
       expect(orch.getScoops().find((s) => s.jid === jid)).toBeUndefined();
     });
+
+    it('orchestrator.getScoops() contains the spawned scoop DURING prompt and NOT after cleanup', async () => {
+      const captured: CapturedCtxArgs[] = [];
+      let jidsDuringPrompt: string[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({
+          captured,
+          onPrompt: async () => {
+            jidsDuringPrompt = orch.getScoops().map((s) => s.jid);
+          },
+        }),
+        generateUid: () => 'registered',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+      await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      const jid = captured[0].args.scoop.jid;
+      // (a) During prompt() the bridge MUST have registered the scoop with
+      //     the orchestrator so it is visible via getScoops().
+      expect(jidsDuringPrompt).toContain(jid);
+      // (b) After cleanup, the scoop must be unregistered again.
+      expect(orch.getScoops().find((s) => s.jid === jid)).toBeUndefined();
+    });
+
+    it('concurrent overlapping spawns each appear in getScoops() until their own prompt resolves', async () => {
+      let counter = 0;
+      const captured: CapturedCtxArgs[] = [];
+
+      const defs: Array<{ promise: Promise<void>; resolve: () => void }> = [];
+      const started: Array<{ promise: Promise<void>; resolve: () => void }> = [];
+      for (let i = 0; i < 2; i++) {
+        let resolve!: () => void;
+        const promise = new Promise<void>((r) => {
+          resolve = r;
+        });
+        defs.push({ promise, resolve });
+        let startedResolve!: () => void;
+        const startedPromise = new Promise<void>((r) => {
+          startedResolve = r;
+        });
+        started.push({ promise: startedPromise, resolve: startedResolve });
+      }
+
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: (args) => {
+          const idx = counter++;
+          captured.push({ args });
+          return {
+            async init() {},
+            async prompt() {
+              started[idx].resolve();
+              await defs[idx].promise;
+            },
+            dispose() {},
+            getAgentMessages() {
+              return [];
+            },
+          };
+        },
+        generateUid: (() => {
+          let c = 0;
+          return () => `reglist${c++}`;
+        })(),
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+
+      const p1 = bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'first' });
+      const p2 = bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'second' });
+
+      // Wait until both prompts have started (which happens after registration).
+      await Promise.all([started[0].promise, started[1].promise]);
+
+      // Both entries should be registered during their pending prompts.
+      const midJids = orch.getScoops().map((s) => s.jid);
+      expect(midJids).toContain(captured[0].args.scoop.jid);
+      expect(midJids).toContain(captured[1].args.scoop.jid);
+
+      // Resolve second first; its entry should be removed but the first remains.
+      defs[1].resolve();
+      await p2;
+      const afterSecond = orch.getScoops().map((s) => s.jid);
+      expect(afterSecond).not.toContain(captured[1].args.scoop.jid);
+      expect(afterSecond).toContain(captured[0].args.scoop.jid);
+
+      // Resolve the first spawn and verify both are cleaned up.
+      defs[0].resolve();
+      await p1;
+      const afterFirst = orch.getScoops().map((s) => s.jid);
+      expect(afterFirst).not.toContain(captured[0].args.scoop.jid);
+      expect(afterFirst).not.toContain(captured[1].args.scoop.jid);
+    });
   });
 
   // ── MODEL — explicit override, inheritance, unknown model ─────────

@@ -258,6 +258,28 @@ export class Orchestrator {
     });
   }
 
+  /**
+   * Register an already-constructed {@link RegisteredScoop} with the
+   * orchestrator WITHOUT creating a {@link ScoopContext}. Used by
+   * {@link ../scoops/agent-bridge.ts `AgentBridge`} for ephemeral
+   * `agent`-command scoops that own their own context directly.
+   *
+   * The scoop becomes visible via {@link getScoops} / {@link getScoop} for
+   * the duration of the bridge's run, and is removed again by the bridge's
+   * cleanup path calling {@link unregisterScoop} (safe for entries whose
+   * context was never constructed here — `destroyScoopTab` and
+   * `db.deleteScoop` both tolerate missing entries).
+   *
+   * This is intentionally synchronous: the record is purely in-memory and
+   * is NOT persisted (no `db.saveScoop`), since ephemeral bridge scoops
+   * should never survive a reload.
+   */
+  registerExistingScoop(scoop: RegisteredScoop): void {
+    this.scoops.set(scoop.jid, scoop);
+    this.messageQueues.set(scoop.jid, []);
+    log.info('Scoop registered (external context)', { jid: scoop.jid, name: scoop.name });
+  }
+
   /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */
   async unregisterScoop(jid: string): Promise<void> {
     // Guard: check for active licks before allowing removal

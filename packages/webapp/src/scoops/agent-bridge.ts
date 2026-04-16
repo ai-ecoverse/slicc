@@ -167,10 +167,12 @@ export function createAgentBridge(
       };
     }
 
-    // Build the scoop record. We do NOT add it to `orchestrator.registerScoop`
-    // because that spins up a full ScoopContext via `createScoopTab`. We own
-    // the context directly. `unregisterScoop` is still called during cleanup
-    // as a defensive no-op in case anything upstream tracks the jid.
+    // Build the scoop record. We do NOT call `orchestrator.registerScoop()`
+    // because that spins up a full ScoopContext via `createScoopTab` — we own
+    // the context directly. Instead we register the already-built record via
+    // `registerExistingScoop()` so the ephemeral scoop is visible through
+    // `orchestrator.getScoops()` while its run is in flight. The cleanup path
+    // below calls `unregisterScoop(jid)` which removes the entry again.
     //
     // The bash allow-list is forwarded into `config.allowedCommands`. The
     // ScoopContext picks it up during `init()` and wraps its bash tool with
@@ -191,6 +193,12 @@ export function createAgentBridge(
       addedAt: now,
       config: scoopConfig,
     };
+
+    // Insert the ephemeral scoop into the orchestrator's registry so it is
+    // visible via `orchestrator.getScoops()` for the duration of the run.
+    // This does NOT create a ScoopContext — the bridge owns the context
+    // directly via `createContext` below.
+    orchestrator.registerExistingScoop(scoop);
 
     // Build the sandboxed FS.
     const cwdPrefix = normalizeRwPrefix(options.cwd);
