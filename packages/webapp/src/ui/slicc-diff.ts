@@ -103,7 +103,12 @@ export class SliccDiffElement extends HTMLElement {
     if (this.connected) return;
     this.connected = true;
 
-    // Create a container div — FileDiff renders into it with Shadow DOM
+    // Ensure the host element is block-level so it has dimensions
+    if (!this.style.display) {
+      this.style.display = 'block';
+    }
+
+    // Create a container div — FileDiff renders into it with its own Shadow DOM
     this.container = document.createElement('div');
     this.container.style.cssText = 'width:100%;min-height:0;';
     this.appendChild(this.container);
@@ -182,6 +187,7 @@ export class SliccDiffElement extends HTMLElement {
       this.diff = new FileDiff({
         diffStyle: this._options.diffStyle ?? 'split',
         overflow: this._options.overflow ?? 'scroll',
+        theme: { dark: 'pierre-dark', light: 'pierre-light' },
         themeType,
         disableFileHeader: this._options.disableFileHeader ?? false,
       });
@@ -205,10 +211,14 @@ export class SliccDiffElement extends HTMLElement {
 
     if (!fileDiff) return;
 
-    this.diff.render({
-      fileDiff,
-      fileContainer: this.container,
-    });
+    try {
+      this.diff.render({
+        fileDiff,
+        fileContainer: this.container,
+      });
+    } catch (err) {
+      console.error('[slicc-diff] render error:', err);
+    }
   }
 }
 
