@@ -78,6 +78,8 @@ mkdir -p packages/webapp/src/vendor/<pkg-name>/
 # Do NOT copy source maps unless strictly necessary; they bloat the repo.
 ```
 
+**Important gotcha — .d.ts transitive references:** Most upstream packages' top-level `.d.ts` files transitively reference subdirectories beyond what the package.json `files` field advertises (e.g. `transform/`, `helpers/`, `security/`, `regex/`, `shell/`). A blanket "copy all `.d.ts` then prune test-only directories" strategy is the practical approach. After copying, run `npm run typecheck` from the repo root; any "cannot find module" error tells you which subdirectory is still missing.
+
 Write a short `packages/webapp/src/vendor/<pkg-name>/README.md` documenting:
 
 - The upstream URL, commit hash, and version
@@ -89,6 +91,8 @@ Write a short `packages/webapp/src/vendor/<pkg-name>/README.md` documenting:
 ### 7. Wire the vendor via Vite alias
 
 In the consuming package's Vite config (e.g. `packages/webapp/vite.config.ts`), add an alias so `import '<pkg>'` resolves to the vendored bundle. Prefer a conditional alias keyed on NODE_ENV so CI/prod both use the vendor. Document the change inline.
+
+**Important:** `vitest.config.ts` needs the SAME alias duplicated — Vite and Vitest do NOT share resolver configs automatically in this repo. Similarly, if the package is also consumed by the Chrome extension build, add the alias to `packages/chrome-extension/vite.config.ts` as well.
 
 Also update any TypeScript path mappings if the .d.ts lives in the vendor directory (`tsconfig.json` `paths`).
 
@@ -128,6 +132,12 @@ The PR body should:
 - Keep it under 400 words
 
 Record the PR URL in the handoff.
+
+**Gotcha — GH_TOKEN injection:** Some environments inject `GH_TOKEN` / `GITHUB_TOKEN` backed by a GitHub App that lacks PR-creation scope on arbitrary public repos. If `gh pr create` fails with "GraphQL: Resource not accessible by integration", strip the injected token so `gh` falls back to keyring credentials:
+
+```bash
+env -i HOME="$HOME" PATH="$PATH" bash -c 'gh pr create --repo <upstream-org>/<pkg-name> --title "..." --body-file /tmp/<pkg-name>-pr-body.md --base main --head <fork-user>:<branch-name>'
+```
 
 ### 10. Commit vendor changes + run CI gates in our repo
 
