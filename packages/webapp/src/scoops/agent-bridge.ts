@@ -264,7 +264,13 @@ export function createAgentBridge(
       onError: (errMsg) => {
         log.warn('scoop error', { jid, errMsg });
       },
-      onStatusChange: () => {},
+      // Propagate scope-context status transitions to the orchestrator's
+      // `onStatusChange` callback pipeline so the UI panels (side-panel
+      // `ScoopsPanel` + CLI scoop panel) refresh and show the bridge scoop
+      // during its run. See VAL-SPAWN-015.
+      onStatusChange: (status) => {
+        orchestrator.updateBridgeTabStatus(jid, status);
+      },
       onSendMessage: (text) => {
         captured.push(text);
       },
@@ -287,6 +293,13 @@ export function createAgentBridge(
         modelId: effectiveModelId,
       });
       await ctx.init();
+      // Drive the visible bridge-tab status from 'initializing' →
+      // 'processing' so the UI panel shows the in-flight state even when
+      // the underlying ScoopContext doesn't emit its own transitions
+      // (e.g., simple mock contexts or certain error paths). Safe to fire
+      // even if the context also emits the same transition — the tab's
+      // lastActivity just refreshes on both.
+      orchestrator.updateBridgeTabStatus(jid, 'processing');
       await ctx.prompt(options.prompt);
 
       if (captured.length > 0) {

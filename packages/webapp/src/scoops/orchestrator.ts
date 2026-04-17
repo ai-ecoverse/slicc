@@ -273,11 +273,78 @@ export class Orchestrator {
    * This is intentionally synchronous: the record is purely in-memory and
    * is NOT persisted (no `db.saveScoop`), since ephemeral bridge scoops
    * should never survive a reload.
+   *
+   * The orchestrator records a companion {@link ScoopTabState} entry in
+   * `this.tabs` with `status: 'initializing'` and fires the UI-facing
+   * `onStatusChange` callback so that:
+   *
+   *   1. The cone-only `list_scoops` tool reports a first-class status
+   *      (`'initializing'`) for bridge scoops instead of falling back to
+   *      the `'unknown'` sentinel in `scoop-management-tools.ts`
+   *      (VAL-SPAWN-014).
+   *   2. The side-panel `ScoopsPanel` and its extension mirror refresh on
+   *      the status change so bridge-spawned scoops are visible in the UI
+   *      panel during their run (VAL-SPAWN-015).
+   *
+   * The bridge drives subsequent transitions through
+   * {@link updateBridgeTabStatus} — typically `initializing → processing`
+   * when the agent loop enters `ctx.prompt()` and a final `ready`
+   * transition on cleanup so the UI sees the terminal state before
+   * {@link unregisterScoop} removes the tab entry.
    */
   registerExistingScoop(scoop: RegisteredScoop): void {
     this.scoops.set(scoop.jid, scoop);
     this.messageQueues.set(scoop.jid, []);
+    const now = new Date().toISOString();
+    this.tabs.set(scoop.jid, {
+      jid: scoop.jid,
+      contextId: `bridge-${scoop.folder}`,
+      status: 'initializing',
+      lastActivity: now,
+    });
     log.info('Scoop registered (external context)', { jid: scoop.jid, name: scoop.name });
+    this.callbacks.onStatusChange(scoop.jid, 'initializing');
+  }
+
+  /**
+   * Update the tab status for a bridge-registered scoop and fire the
+   * orchestrator's `onStatusChange` callback so the UI refreshes.
+   *
+   * Bridge scoops (those registered via {@link registerExistingScoop}) own
+   * their {@link ScoopContext} outside the orchestrator. Because the
+   * context's transitions do NOT flow through the private `createScoopTab`
+   * callback chain, the bridge explicitly drives status updates through
+   * this helper. Safe no-op when `jid` is not currently registered as a
+   * bridge tab (covers late-arriving transitions after
+   * {@link unregisterScoop} has cleaned the entry).
+   *
+   * @param jid    The bridge scoop jid returned in the
+   *               {@link RegisteredScoop.jid} field at registration time.
+   * @param status The new tab status. Must be a first-class
+   *               {@link ScoopTabState['status']} — NEVER the `'unknown'`
+   *               fallback string.
+   */
+  updateBridgeTabStatus(jid: string, status: ScoopTabState['status']): void {
+    const tab = this.tabs.get(jid);
+    if (!tab) return;
+    tab.status = status;
+    tab.lastActivity = new Date().toISOString();
+    this.tabs.set(jid, tab);
+    this.callbacks.onStatusChange(jid, status);
+  }
+
+  /**
+   * Read the current {@link ScoopTabState} for a scoop.
+   *
+   * Exposed so external callers (including tests and the cone's
+   * `list_scoops` tool which reads status via the
+   * `getScoopTabState?.(jid)?.status ?? 'unknown'` fallback chain) can
+   * observe a first-class status for bridge scoops. Returns `undefined`
+   * when no tab exists — that's the expected state AFTER a scoop has been
+   * unregistered.
+   */
+  getScoopTabState(jid: string): ScoopTabState | undefined {
+    return this.tabs.get(jid);
   }
 
   /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */
@@ -295,6 +362,14 @@ export class Orchestrator {
 
     this.clearIdleTimer(jid);
     await this.destroyScoopTab(jid);
+    // Bridge-registered tabs have no associated context, so destroyScoopTab
+    // does NOT touch them. Fire a terminal `onStatusChange` so the UI
+    // refreshes and then drop the tab entry here. Safe no-op when the tab
+    // was already removed by destroyScoopTab (context-backed scoop path).
+    if (this.tabs.has(jid)) {
+      this.callbacks.onStatusChange(jid, 'ready');
+      this.tabs.delete(jid);
+    }
     this.sessionStore?.delete(jid).catch((err) => {
       log.warn('Failed to delete agent session', {
         jid,

@@ -82,6 +82,25 @@ Location: `packages/webapp/src/tools/bash-tool-allowlist.ts` (new helper)
 
 The existing `RestrictedFS` already supports multiple R/W and R/O prefixes. The agent bridge supplies custom prefix arrays — no change to `RestrictedFS` internals needed.
 
+### 6. Orchestrator registration handshake for bridge scoops (INVARIANT)
+
+Bridge-spawned scoops are visible through the orchestrator's registry AND through the `tabs` map. Both must be populated at registration time and both must be kept in sync during the run. This is what makes the scoop visible to:
+
+- `list_scoops` (reads `getScoopTabState(jid)?.status ?? 'unknown'`)
+- The UI's `ScoopsPanel` and its extension mirror (refreshes on `OrchestratorCallbacks.onStatusChange`)
+
+Required handshake (already wired in `AgentBridge.spawn()`):
+
+1. `orchestrator.registerExistingScoop(scoop)` MUST:
+   - insert into `this.scoops` and `this.messageQueues`
+   - ALSO insert a well-formed `ScoopTabState` into `this.tabs` with `status: 'initializing'`, `contextId: 'bridge-<folder>'`, and a fresh `lastActivity`
+   - fire `this.callbacks.onStatusChange(jid, 'initializing')` so the UI refreshes
+2. Every subsequent bridge-side status transition MUST go through `orchestrator.updateBridgeTabStatus(jid, status)` (NOT direct `this.tabs` mutation) so the UI callback pipeline fires.
+3. The bridge's `ScoopContextCallbacks.onStatusChange` MUST forward transitions to the orchestrator via `updateBridgeTabStatus` — a no-op callback would drop scope-context state transitions on the floor.
+4. `orchestrator.unregisterScoop(jid)` MUST fire a terminal `onStatusChange(jid, 'ready')` before removing the tab entry. Without this, the UI panel never learns the scoop is gone and retains the stale row until the next unrelated refresh.
+
+Historical note (2026-04-17): Before this handshake was codified, `registerExistingScoop` populated only `scoops` + `messageQueues` and the bridge's scope-context callback was a no-op `() => {}`. This caused two production bugs: `list_scoops` returned bridge scoops with status `'unknown'`, and the UI panel never rendered them at all. See VAL-SPAWN-014 + VAL-SPAWN-015.
+
 ## Data Flow
 
 ```
