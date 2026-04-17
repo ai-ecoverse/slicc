@@ -194,8 +194,15 @@ export class NavigationWatcher {
     }
   }
 
-  /** Stop observing and release all listeners. */
-  stop(): void {
+  /**
+   * Stop observing and release all listeners.
+   *
+   * Best-effort: also disables `Target.setAutoAttach` and
+   * `Target.setDiscoverTargets` on the browser so CDP stops spawning
+   * sessions and discovery traffic after stop. Errors on those commands
+   * are swallowed — teardown should never throw.
+   */
+  async stop(): Promise<void> {
     if (!this.started) return;
     this.started = false;
     this.transport.off('Target.attachedToTarget', this.onAttachedToTarget);
@@ -204,6 +211,25 @@ export class NavigationWatcher {
     this.transport.off('Page.frameNavigated', this.onFrameNavigated);
     this.transport.off('Network.responseReceived', this.onResponseReceived);
     this.sessions.clear();
+
+    try {
+      await this.transport.send('Target.setAutoAttach', {
+        autoAttach: false,
+        waitForDebuggerOnStart: false,
+        flatten: true,
+      });
+    } catch (err) {
+      log.debug('Failed to disable auto-attach on stop', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    try {
+      await this.transport.send('Target.setDiscoverTargets', { discover: false });
+    } catch (err) {
+      log.debug('Failed to disable target discovery on stop', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private async handleAttachedToTarget(params: Record<string, unknown>): Promise<void> {

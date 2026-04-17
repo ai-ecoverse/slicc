@@ -291,7 +291,7 @@ describe('NavigationWatcher', () => {
     expect(events).toHaveLength(0);
   });
 
-  it('stop() unsubscribes listeners', async () => {
+  it('stop() unsubscribes listeners and disables discovery/auto-attach', async () => {
     await watcher.start();
     transport.emit('Target.attachedToTarget', {
       sessionId: 'sess-1',
@@ -299,8 +299,19 @@ describe('NavigationWatcher', () => {
     });
     await new Promise((r) => setTimeout(r, 0));
 
-    watcher.stop();
+    transport.sentCommands.length = 0;
+    await watcher.stop();
 
+    // Teardown commands dispatched best-effort.
+    const methods = transport.sentCommands.map((c) => c.method);
+    expect(methods).toContain('Target.setAutoAttach');
+    expect(methods).toContain('Target.setDiscoverTargets');
+    const autoAttach = transport.sentCommands.find((c) => c.method === 'Target.setAutoAttach');
+    expect(autoAttach?.params).toMatchObject({ autoAttach: false });
+    const discover = transport.sentCommands.find((c) => c.method === 'Target.setDiscoverTargets');
+    expect(discover?.params).toMatchObject({ discover: false });
+
+    // Listeners are unhooked.
     transport.emit('Network.responseReceived', {
       sessionId: 'sess-1',
       type: 'Document',
