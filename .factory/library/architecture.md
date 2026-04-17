@@ -82,7 +82,7 @@ Location: `packages/webapp/src/tools/bash-tool-allowlist.ts` (new helper)
 
 The existing `RestrictedFS` already supports multiple R/W and R/O prefixes. The agent bridge supplies custom prefix arrays — no change to `RestrictedFS` internals needed.
 
-#### RestrictedFS exposes the full VfsAdapter surface (sync + async + realpath), with one remaining `lstat` fallback gap
+#### RestrictedFS exposes the full VfsAdapter surface (sync + async + realpath) with ancestor-symlink ACL parity
 
 `packages/webapp/src/shell/vfs-adapter.ts` — the bridge between just-bash and our VFS — calls **synchronous fast-path methods** on its `vfs` field before falling back to async: `statSync`, `lstatSync`, `readDirSync`, plus async `realpath`. Non-cone scoops wrap the VFS in `RestrictedFS` and pass that instance to `WasmShell` (see `scoop-context.ts`: `this.shell = new WasmShell({ fs: this.fs as VirtualFS, ... })`), so `RestrictedFS` MUST implement those four methods itself with the same ACL as its async counterparts.
 
@@ -91,11 +91,11 @@ Historical note (2026-04-17): Before this contract was pinned down, `RestrictedF
 The surface `RestrictedFS` now exposes (plus one caveat future workers should remember):
 
 - **`statSync(path): Stats | null`** — returns `null` (no throw) for disallowed paths, matching `VirtualFS.statSync` null semantics. Returns `null` for allowed paths that are symlinks (forcing the adapter to fall back to the async `stat()`, which enforces symlink-escape ACL via `resolveAndCheckRead`).
-- **`lstatSync(path): Stats | null`** — returns `null` (no throw) for disallowed paths. Does NOT follow the leaf symlink, but returns `null` when any ancestor is a symlink so the adapter falls back to async `lstat()`. **Known gap (scrutiny/core-followup round 2, 2026-04-17):** `RestrictedFS.lstat()` still delegates directly to `vfs.lstat(path)` after only a lexical `isAllowed()` check; LightningFS follows ancestor symlinks during `lstat`, so metadata can still leak through shell paths that hit the async fallback.
+- **`lstatSync(path): Stats | null`** — returns `null` (no throw) for disallowed paths. Does NOT follow the leaf symlink, but returns `null` when any ancestor is a symlink so the adapter falls back to async `lstat()`. The async `lstat()` fallback now enforces the same ancestor-symlink ACL: it resolves the PARENT directory via `vfs.realpath(dir)`, rejoins the leaf, and throws `ENOENT` if the resolved path escapes every allowed prefix. The leaf symlink itself is NOT resolved (regression-tested: `lstat('/shared/legit-symlink')` still returns Stats with `type === 'symlink'`).
 - **`readDirSync(path): DirEntry[] | null`** — returns `null` for disallowed paths. Parent-only-allowed paths (e.g. `/`, `/scoops`): filters the entries to those whose child path is allowed, mirroring the async `readDir`'s ACL filter. For strict paths it now scans for ancestor/leaf symlinks first and returns `null` to force the async `readDir()` path whenever a symlink could affect resolution, closing the earlier shell `readDirSync` escape.
 - **`realpath(path): Promise<string>`** — resolves symlinks through the underlying VFS; if the resolved path escapes every allowed prefix, throws `FsError('ENOENT', ...)` (consistent with VAL-FS-019 symlink-escape semantics).
 
-Because `RestrictedFS` now exposes every member `VfsAdapter` calls into (async read/write/symlink surface + the four methods above), the `as VirtualFS` cast in `scoop-context.ts` is no longer a missing-method type lie. The former `readDirSync()` symlink-directory gap is fixed, but full ACL parity still requires closing the async `lstat()` fallback caveat above.
+Because `RestrictedFS` now exposes every member `VfsAdapter` calls into (async read/write/symlink surface + the four methods above), the `as VirtualFS` cast in `scoop-context.ts` is no longer a missing-method type lie. The former `readDirSync()` symlink-directory gap AND the async `lstat()` ancestor-symlink leak (scrutiny/core-followup round 2, 2026-04-17) are both closed — VAL-FS-019 parity now holds across sync and async paths.
 
 ### 6. Orchestrator registration handshake for bridge scoops
 

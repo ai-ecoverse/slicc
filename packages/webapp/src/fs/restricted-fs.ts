@@ -504,7 +504,34 @@ export class RestrictedFS {
     if (!this.isAllowed(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
-    return this.vfs.lstat(path);
+    // Resolve the PARENT directory only — `lstat` must NOT follow the leaf
+    // symlink (regression: lstat on a valid in-sandbox symlink must still
+    // return Stats with type === 'symlink'). But LightningFS follows
+    // ancestor symlinks during lstat, so an escape symlink anywhere in the
+    // path can leak sibling-scoop metadata through the async fallback
+    // `VfsAdapter.lstat()` hits when the sync fast path returns null.
+    //
+    // Mirrors the parent-resolution pattern used in writeFile / mkdir /
+    // symlink. See VAL-FS-019 parity.
+    const normalized = normalizePath(path);
+    const dir = this.vfs.dirname(normalized);
+    const base = this.vfs.basename(normalized);
+    let resolvedDir: string;
+    if (dir === normalized) {
+      // Root — no parent to resolve.
+      resolvedDir = dir;
+    } else {
+      try {
+        resolvedDir = await this.vfs.realpath(dir);
+      } catch {
+        throw new FsError('ENOENT', 'no such file or directory', normalized);
+      }
+    }
+    const resolved = resolvedDir === '/' ? `/${base}` : `${resolvedDir}/${base}`;
+    if (!this.isAllowed(resolved)) {
+      throw new FsError('ENOENT', 'no such file or directory', normalized);
+    }
+    return this.vfs.lstat(resolved);
   }
 
   // ── Watcher operations ──────────────────────────────────────────────
