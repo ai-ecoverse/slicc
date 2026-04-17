@@ -1,6 +1,6 @@
 {
   "milestone": "core",
-  "round": 3,
+  "round": 4,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -20,56 +20,35 @@
     }
   },
   "reviewsSummary": {
-    "total": 3,
-    "passed": 1,
-    "failed": 2,
-    "failedFeatures": [
-      "vendor-just-bash-with-parse-exposed",
-      "rewrite-bash-allowlist-on-just-bash-ast"
-    ]
+    "total": 4,
+    "passed": 3,
+    "failed": 1,
+    "failedFeatures": ["rewrite-bash-allowlist-on-just-bash-ast"]
   },
   "blockingIssues": [
     {
-      "featureId": "vendor-just-bash-with-parse-exposed",
-      "severity": "blocking",
-      "description": "The vendored `just-bash` smoke test puts its type-only assertions in `packages/webapp/tests/vendor/just-bash-smoke.test.ts`, but `npm run typecheck` does not compile test files, so CI never validates the promised `import { parse, type ScriptNode } from 'just-bash'` type surface."
-    },
-    {
       "featureId": "rewrite-bash-allowlist-on-just-bash-ast",
       "severity": "blocking",
-      "description": "The AST-backed allow-list walker does not inspect `SimpleCommand.assignments`, so assignment values like `FOO=$(whoami) ls` can smuggle command substitution under an allow-listed head."
-    },
-    {
-      "featureId": "rewrite-bash-allowlist-on-just-bash-ast",
-      "severity": "blocking",
-      "description": "The AST-backed allow-list walker only recurses through `DoubleQuoted` parts and misses nested executable words under parameter-expansion defaults/assignments and brace-expansion items, leaving additional substitution bypasses under an allow-listed head."
+      "description": "`packages/webapp/src/tools/bash-tool-allowlist.ts` still treats `ArithBracedExpansion` as safe inside substring arithmetic, so inputs like `ls ${FOO:0:${BAR:-$(whoami)}}` can execute command substitution under an allow-listed head. The current regression suite covers direct `ArithCommandSubst` but not this braced-expansion arithmetic variant."
     }
   ],
   "appliedUpdates": [
     {
       "target": "library",
-      "description": "Updated `.factory/library/environment.md` to note that `npm run typecheck` only runs the repo's three production `tsconfig` entry points and does not compile Vitest `.test.ts` files, so compile-time assertions placed only in tests are not CI-backed by the TypeScript gate.",
-      "sourceFeature": "scrutiny-validator-core"
-    },
-    {
-      "target": "library",
-      "description": "Updated `.factory/library/architecture.md` with just-bash AST gotchas for allow-list work: `&&` chains remain within one `StatementNode`, and executable nested words can appear in assignments, parameter-expansion defaults/assignments, and brace-expansion items.",
+      "description": "Updated `.factory/library/architecture.md` to correct the allow-list substring-arithmetic note: the current walker rejects direct `ArithCommandSubst` nodes but still leaves `ArithBracedExpansion` unchecked, so future workers do not assume that path is already covered.",
       "sourceFeature": "scrutiny-validator-core"
     }
   ],
-  "suggestedGuidanceUpdates": [
-    {
-      "target": ".factory/skills/upstream-integration-worker/SKILL.md",
-      "suggestion": "When a vendoring feature promises CI-backed type-surface coverage, require the compile-time assertion to live on a `tsc`-covered source path or a dedicated typecheck target that `npm run typecheck` actually compiles; `.test.ts`-only assertions are not enough.",
-      "evidence": "`vendor-just-bash-with-parse-exposed` placed its type-only smoke assertions in `packages/webapp/tests/vendor/just-bash-smoke.test.ts`, but `npm run typecheck` only runs `tsc --noEmit` on `tsconfig.cli.json`, `tsconfig.json`, and `tsconfig.worker.json`, whose include globs exclude test files.",
-      "isSystemic": true
-    }
-  ],
+  "suggestedGuidanceUpdates": [],
   "rejectedObservations": [
     {
-      "observation": "Clarify the mission-wide live-browser/CDP requirement for pure utility-wrapper features.",
-      "reason": "duplicate: round 2 already captured the same systemic guidance conflict in `suggestedGuidanceUpdates`, so repeating it here would not add new evidence."
+      "observation": "The vendored `just-bash` README still implies the smoke test is the canonical type-level guard.",
+      "reason": "out-of-scope: this is feature-local README drift rather than a services.yaml/library fact or an AGENTS/skill guidance update for the validator to apply."
+    },
+    {
+      "observation": "Pure utility-wrapper features still have conflicting live-browser validation guidance between the `webapp-worker` skill and `.factory/library/user-testing.md`.",
+      "reason": "duplicate: earlier scrutiny rounds already captured this systemic guidance conflict, so round 4 adds no materially new evidence."
     }
   ],
-  "previousRound": ".factory/validation/core/scrutiny/synthesis.round2.json"
+  "previousRound": ".factory/validation/core/scrutiny/synthesis.round3.json"
 }

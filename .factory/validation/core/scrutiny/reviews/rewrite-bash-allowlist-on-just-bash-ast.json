@@ -1,39 +1,33 @@
 {
   "featureId": "rewrite-bash-allowlist-on-just-bash-ast",
-  "reviewedAt": "2026-04-17T00:01:13Z",
+  "reviewedAt": "2026-04-17T01:04:01Z",
   "commitId": "f5523a2",
   "transcriptSkeletonReviewed": true,
   "diffReviewed": true,
   "status": "fail",
   "codeReview": {
-    "summary": "The rewrite correctly moves the wrapper onto `just-bash`'s AST, keeps the tool-layer integration intact, and adds substantial new coverage. However, the AST walk is still incomplete: it never inspects `SimpleCommand.assignments`, and its recursive word-part scan only descends through `DoubleQuoted`, so executable substitutions can still slip through assignment values, parameter-expansion default words, and brace-expansion items under an allow-listed head.",
+    "summary": "The follow-up fix at current HEAD closes the two round-3 gaps: `checkSimpleCommand()` now walks `cmd.assignments`, and `walkWordParts()` now descends through nested `ParameterExpansion`/`BraceExpansion` words with matching regression coverage. But the wrapper still leaves one executable substring-arithmetic shape unchecked: `walkArithExpr()` only rejects `ArithCommandSubst` and treats `ArithBracedExpansion` as safe, so `${FOO:0:${BAR:-$(whoami)}}` can still smuggle command substitution under an allow-listed head.",
     "issues": [
       {
         "file": "packages/webapp/src/tools/bash-tool-allowlist.ts",
-        "line": 215,
+        "line": 570,
         "severity": "blocking",
-        "description": "`checkSimpleCommand()` validates `cmd.name`, `cmd.args`, and `cmd.redirections`, but it never walks `cmd.assignments`. In just-bash, inputs like `FOO=$(whoami) ls` parse as a `SimpleCommand` named `ls` with an `AssignmentNode.value` containing `CommandSubstitution`, so the wrapper will forward the invocation whenever `ls` is allow-listed. The pre-AST scanner rejected raw `$(` anywhere in the command text, so this is a real allow-list bypass rather than a harmless message change."
-      },
-      {
-        "file": "packages/webapp/src/tools/bash-tool-allowlist.ts",
-        "line": 340,
-        "severity": "blocking",
-        "description": "`walkWordParts()` only recurses into `DoubleQuoted` and explicitly treats `ParameterExpansion` and `BraceExpansion` as safe leaves. just-bash nests executable `WordNode`s under parameter-expansion operations (for example `${X:-$(whoami)}` / `${X:=...}`) and under `BraceExpansion.items[].word`, so command, arithmetic, or process substitutions inside those nodes still execute in args/redirection targets beneath an allow-listed head. That violates the feature brief's \"any nesting depth\" requirement and reopens cases the old raw scanner would have rejected."
+        "description": "`walkArithExpr()` treats `ArithBracedExpansion` as a safe leaf. just-bash parses `ls ${FOO:0:${BAR:-$(whoami)}}` as a `Substring` whose `length.expression.type === 'ArithBracedExpansion'` with raw content `BAR:-$(whoami)`. Because `checkSimpleCommand()` delegates substring offset/length validation only to this arithmetic walker, the wrapper accepts an allow-listed `ls` invocation even though `${BAR:-$(whoami)}` executes `$(whoami)` before `ls` runs. This reopens a real allow-list bypass the pre-AST scanner would have rejected on raw `$(`, and the current regression suite only covers the direct `ArithCommandSubst` form (`${FOO:0:$(...)}`), not this braced-expansion arithmetic variant."
       }
     ]
   },
   "sharedStateObservations": [
     {
       "area": "knowledge",
-      "observation": "The new architecture note now codifies the same incomplete AST traversal rule as the implementation: it says the walker only needs to scan `args` and `redirections[].target`, and it explicitly states that `ParameterExpansionPart` in args is safe. Because just-bash nests executable words under `AssignmentNode.value`, `ParameterExpansion.operation.word`, and `BraceExpansion.items[].word`, future workers following the shared note will repeat the current allow-list blind spots.",
-      "evidence": "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/library/architecture.md:58-65 documents the walker as only checking args/redirections and says `ParameterExpansionPart` in args is allowed; packages/webapp/src/tools/bash-tool-allowlist.ts:215-258 and 340-368 mirror that incomplete traversal."
+      "observation": "The architecture note now overstates substring-arithmetic coverage. It says the current walker covers `Substring.offset` / `.length` by rejecting `ArithCommandSubst`, but just-bash also represents `${...}` inside arithmetic as `ArithBracedExpansion`, which can carry raw `$(...)` text and is currently uninspected.",
+      "evidence": "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/library/architecture.md:66-75 says the current allow-list walker covers all security-sensitive substring arithmetic nodes via `ArithCommandSubst`; /Users/trieloff/Developer/slicc/.yolo/droid-2/packages/webapp/src/tools/bash-tool-allowlist.ts:514-574 skips `ArithBracedExpansion` in `walkArithExpr()`."
     },
     {
       "area": "skills",
-      "observation": "Mission guidance still disagrees on whether pure utility-wrapper features must perform live-browser validation. The mission and the worker skill both treat CDP verification as optional for this kind of feature, while the shared user-testing doc still says workers and validators MUST run the live-browser surface. This worker skipped CDP verification and documented the skip, so future workers and reviewers can still interpret the policy differently.",
-      "evidence": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/mission.md:115-125 says the browser smoke test is optional and that no browser UI testing is required here; /Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/skills/webapp-worker/SKILL.md:85-96 says CDP checks are OPTIONAL for pure utility wrappers; /Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/library/user-testing.md:19-41 says workers and validators MUST perform live-browser validation; /Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/handoffs/2026-04-16T23-44-40-237Z__rewrite-bash-allowlist-on-just-bash-ast__1213770f-2849-436f-b0d7-d22539e6acd9.json:10-12 documents the intentional skip."
+      "observation": "Shared guidance still conflicts on whether pure utility-wrapper features must perform live-browser validation. Both the original rewrite and the follow-up fix skipped CDP checks in their handoffs following the webapp-worker skill, while the shared user-testing doc still says workers and validators MUST run the live-browser surface.",
+      "evidence": "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/skills/webapp-worker/SKILL.md:94-98 makes CDP verification optional for pure utility wrappers; /Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/library/user-testing.md:19-25 says workers and validators MUST do live-browser validation; /Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/handoffs/2026-04-16T23-44-40-237Z__rewrite-bash-allowlist-on-just-bash-ast__1213770f-2849-436f-b0d7-d22539e6acd9.json:12 and :61 plus /Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/handoffs/2026-04-17T00-31-21-332Z__fix-allowlist-assignment-and-nested-word-bypasses__ba640e88-a11c-489b-a536-93c06ed54a1a.json:56 both show empty `interactiveChecks`."
     }
   ],
   "addressesFailureFrom": null,
-  "summary": "Fail. Commit `f5523a2` successfully replaces the hand-rolled scanner with a just-bash AST walker and adds a large set of regression tests, but it still misses executable substitutions in assignment values and in nested word-bearing nodes such as parameter-expansion defaults and brace-expansion items. Those gaps leave real allow-list bypasses under an allow-listed head, so the feature does not yet preserve the previous rejection semantics or the promised any-depth substitution coverage."
+  "summary": "Fail. Current HEAD resolves the round-3 blockers around `cmd.assignments` and nested parameter/brace word traversal, but the allow-list walker still trusts `ArithBracedExpansion` inside substring arithmetic. That leaves a surviving bypass such as `ls ${FOO:0:${BAR:-$(whoami)}}`, so the original feature cannot yet be considered passing in combination with the follow-up fix."
 }
