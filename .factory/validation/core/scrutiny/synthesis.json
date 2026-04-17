@@ -1,7 +1,7 @@
 {
   "milestone": "core",
-  "round": 4,
-  "status": "fail",
+  "round": 5,
+  "status": "pass",
   "validatorsRun": {
     "test": {
       "passed": true,
@@ -20,35 +20,14 @@
     }
   },
   "reviewsSummary": {
-    "total": 4,
-    "passed": 3,
-    "failed": 1,
-    "failedFeatures": ["rewrite-bash-allowlist-on-just-bash-ast"]
+    "total": 2,
+    "passed": 2,
+    "failed": 0,
+    "failedFeatures": []
   },
-  "blockingIssues": [
-    {
-      "featureId": "rewrite-bash-allowlist-on-just-bash-ast",
-      "severity": "blocking",
-      "description": "`packages/webapp/src/tools/bash-tool-allowlist.ts` still treats `ArithBracedExpansion` as safe inside substring arithmetic, so inputs like `ls ${FOO:0:${BAR:-$(whoami)}}` can execute command substitution under an allow-listed head. The current regression suite covers direct `ArithCommandSubst` but not this braced-expansion arithmetic variant."
-    }
-  ],
-  "appliedUpdates": [
-    {
-      "target": "library",
-      "description": "Updated `.factory/library/architecture.md` to correct the allow-list substring-arithmetic note: the current walker rejects direct `ArithCommandSubst` nodes but still leaves `ArithBracedExpansion` unchecked, so future workers do not assume that path is already covered.",
-      "sourceFeature": "scrutiny-validator-core"
-    }
-  ],
+  "blockingIssues": [],
+  "appliedUpdates": [],
   "suggestedGuidanceUpdates": [],
-  "rejectedObservations": [
-    {
-      "observation": "The vendored `just-bash` README still implies the smoke test is the canonical type-level guard.",
-      "reason": "out-of-scope: this is feature-local README drift rather than a services.yaml/library fact or an AGENTS/skill guidance update for the validator to apply."
-    },
-    {
-      "observation": "Pure utility-wrapper features still have conflicting live-browser validation guidance between the `webapp-worker` skill and `.factory/library/user-testing.md`.",
-      "reason": "duplicate: earlier scrutiny rounds already captured this systemic guidance conflict, so round 4 adds no materially new evidence."
-    }
-  ],
-  "previousRound": ".factory/validation/core/scrutiny/synthesis.round3.json"
+  "rejectedObservations": [],
+  "previousRound": ".factory/validation/core/scrutiny/synthesis.round4.json"
 }
