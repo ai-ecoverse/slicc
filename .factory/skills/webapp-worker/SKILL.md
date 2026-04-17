@@ -120,6 +120,8 @@ The user has explicitly asked for the dev server to stay open during development
 
 If the dev server cannot be started (port conflict, missing dep, build failure), STOP and return to orchestrator with diagnostic info.
 
+**Evidence fallback when `page.screenshot` times out** (learned in core-followup-2 `fix-offscreen-bridge-midstream-persist-and-dedup-status`, 2026-04-17): `agent-browser page.screenshot` sometimes times out at 10s on the SLICC app's CDP-connected Chrome session even when `document.readyState === 'complete'` and fonts have loaded. If this happens and the feature's evidence lives in program state (IndexedDB contents, callback counts, DOM trees, event ordering), satisfy the manual-verification gate via `agent-browser eval` instead — import the module, drive the callbacks with stubs, and inspect the observed state. Record the eval results under `interactiveChecks` with the same detail a screenshot would convey. Screenshots remain required only when the evidence is genuinely pixel-level (visual regressions, layout bugs, rendering glitches).
+
 ### 7. Update `.factory/library/` if you discovered new facts
 
 If you learned something a future worker would benefit from (gotcha, API detail, constraint), append a short, dated note to the relevant library file (`architecture.md`, `environment.md`, or `user-testing.md`).
