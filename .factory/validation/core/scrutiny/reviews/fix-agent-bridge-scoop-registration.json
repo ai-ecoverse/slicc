@@ -1,0 +1,15 @@
+{
+  "featureId": "fix-agent-bridge-scoop-registration",
+  "reviewedAt": "2026-04-16T22:22:32.681444Z",
+  "commitId": "a5580fb",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass: `packages/webapp/src/scoops/agent-bridge.ts` now calls `orchestrator.registerExistingScoop(scoop)` before the bridge-owned context starts, and `packages/webapp/src/scoops/orchestrator.ts` implements that API as an in-memory-only registration that avoids double-constructing a `ScoopContext` or persisting ephemeral bridge scoops. The new tests in `packages/webapp/tests/scoops/agent-bridge.test.ts` assert visibility in `orchestrator.getScoops()` during `prompt()` and correct isolation/cleanup for overlapping spawns, which directly covers the original blocking failure.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/validation/core/scrutiny/reviews/agent-bridge-implementation.json",
+  "summary": "Pass: commit `a5580fb` resolves the missing orchestrator-registration bug for bridge-spawned scoops and adds targeted regression coverage for both single-run and overlapping-run visibility. I found no blocking or non-blocking issues in this fix and no shared-state gaps that need triage."
+}

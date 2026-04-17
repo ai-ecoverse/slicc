@@ -1,0 +1,21 @@
+{
+  "featureId": "add-vendor-type-surface-typecheck-coverage",
+  "reviewedAt": "2026-04-17T00:57:23Z",
+  "commitId": "12278d8",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass. The prior blocker was that `vendor-just-bash-with-parse-exposed` only type-asserted the vendored surface inside `packages/webapp/tests/vendor/just-bash-smoke.test.ts`, which `npm run typecheck` never compiled. Current HEAD closes that gap by adding `packages/webapp/src/vendor/just-bash/type-check.ts`, a `tsconfig.json`-covered source file that re-imports the top-level `just-bash` AST/value surface plus the vendored `dist/ast/types.js` subtypes actually consumed by `packages/webapp/src/tools/bash-tool-allowlist.ts`; the smoke test now explicitly points to that file as the canonical CI-backed anchor. Between the new source file, the repo's `tsconfig.json` include, and the recorded `ScriptNodeXYZ` sanity-break in the handoff, I did not find a remaining path where a missing type-only export could slip past CI the way it did in round 3.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The vendored `just-bash` README is now slightly stale: it still frames `packages/webapp/tests/vendor/just-bash-smoke.test.ts` as the thing guarding the AST surface \"at both runtime and type level\", but after this fix the canonical CI-backed type-surface guard lives in `packages/webapp/src/vendor/just-bash/type-check.ts`. A future worker reading only the vendor README could repeat the original mistaken assumption.",
+      "evidence": "`packages/webapp/src/vendor/just-bash/README.md:110-112` says the smoke test guards the AST type aliases at both runtime and type level; `packages/webapp/tests/vendor/just-bash-smoke.test.ts:24-32` now says the CI-backed assertion lives in `packages/webapp/src/vendor/just-bash/type-check.ts` because Vitest `.test.ts` files are not run through the project `tsc --noEmit` gate; `packages/webapp/src/vendor/just-bash/type-check.ts:4-23` documents that source-file anchor."
+    }
+  ],
+  "addressesFailureFrom": "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/validation/core/scrutiny/reviews/vendor-just-bash-with-parse-exposed.json",
+  "summary": "Pass: commit `12278d8` moves the vendored `just-bash` type-surface proof onto a `packages/webapp/src/...` file that `npm run typecheck` actually compiles, while leaving the smoke test as the runtime companion. The current HEAD implementation matches the types `bash-tool-allowlist.ts` really consumes, and the recorded sanity-break shows a missing export now fails CI as intended."
+}

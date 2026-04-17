@@ -1,0 +1,40 @@
+{
+  "milestone": "core-followup",
+  "round": 3,
+  "status": "pass",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "npm run test",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "npx prettier --check .",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "webapp-worker skill",
+      "suggestion": "When a feature claims shell-level coverage for a VfsAdapter fallback bug, require evidence that the chosen shell command actually exercises the targeted adapter path, or explicitly label that shell case as regression-only smoke coverage.",
+      "evidence": "Review `fix-restricted-fs-async-lstat-ancestor-symlink-escape` found that `packages/webapp/tests/fs/restricted-fs-async-lstat.test.ts` used just-bash `stat`, while the red-phase failure came from the direct `RestrictedFS.lstat()` assertions; the shell case stayed green pre-fix and therefore did not itself prove the `VfsAdapter.lstat()` fallback path. See `.factory/validation/core-followup/scrutiny/reviews/fix-restricted-fs-async-lstat-ancestor-symlink-escape.json` and the feature handoff `handoffs/2026-04-17T18-25-22-743Z__fix-restricted-fs-async-lstat-ancestor-symlink-escape__8c9862c8-e3ea-41b4-b88e-4b4f5fde4ad3.json`.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": ".factory/validation/core-followup/scrutiny/synthesis.round2.json"
+}

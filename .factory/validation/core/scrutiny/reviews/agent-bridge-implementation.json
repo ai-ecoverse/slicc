@@ -1,0 +1,43 @@
+{
+  "featureId": "agent-bridge-implementation",
+  "status": "fail",
+  "summary": "Fail: the bridge never registers the spawned scoop in orchestrator state, and the no-override model path does not inherit the parent model in the real ScoopContext. The mocked-context tests miss both regressions.",
+  "issues": [
+    {
+      "severity": "blocking",
+      "description": "`spawn()` never registers the ephemeral scoop in orchestrator state, so the feature does not satisfy the required registered-scoop behavior during execution.",
+      "evidence": "In commit `bc8c9e6`, `packages/webapp/src/scoops/agent-bridge.ts:170-185` explicitly says \"We do NOT add it to orchestrator.registerScoop\" and only creates a local `RegisteredScoop` object. `validation-contract.md:653-669` requires an orchestrator state snapshot showing the scoop registered for the run, but `packages/webapp/tests/scoops/agent-bridge.test.ts:179-189` only inspects the mocked `createContext` args and `:670-679` merely asserts the scoop is absent after cleanup, so the missing registration is never exercised.",
+      "suggestedFix": "Add a lightweight registration path that inserts the spawned scoop into the orchestrator map/message queue for the lifetime of the run (without booting a second context), then assert `orch.getScoops()` contains it during `prompt()` and drops it after cleanup."
+    },
+    {
+      "severity": "blocking",
+      "description": "The no-override model path does not actually inherit the parent scoop/cone model in production: it falls back to the global UI selection, and the computed inherited value is never threaded into the real `ScoopContext`.",
+      "evidence": "In commit `bc8c9e6`, `packages/webapp/src/scoops/agent-bridge.ts:150` computes `effectiveModelId`, but `:123-129` constructs the real `ScoopContext` from `args.scoop` only and `:184` writes `config.modelId` only for explicit overrides. The fallback helper at `packages/webapp/src/scoops/agent-bridge.ts:318-325` reads `resolveCurrentModel()` instead of the parent scoop/cone model. The real context resolves models from `packages/webapp/src/scoops/scoop-context.ts:239-241`, i.e. `scoop.config.modelId` or `resolveCurrentModel()`, so inherited models are ignored. The tests at `packages/webapp/tests/scoops/agent-bridge.test.ts:685-728` only inspect mocked `createContext` args instead of exercising the real `ScoopContext`/LLM path required by the feature.",
+      "suggestedFix": "Plumb the actual parent model into `spawn()`, persist the effective inherited model onto the spawned `RegisteredScoop` before constructing `ScoopContext`, and add a real-`ScoopContext` test with a mock provider that verifies the stream call uses the inherited model."
+    }
+  ],
+  "sharedStateObservations": [
+    {
+      "target": "library",
+      "observation": "`.factory/library/architecture.md` currently says the bridge registers the scoop in the orchestrator map only \"for visibility (optional)\", while `validation-contract.md` makes registration mandatory for VAL-SPAWN-003/004/005.",
+      "why": "That contradiction likely contributed directly to the reviewed implementation intentionally skipping registration. Aligning the architecture note with the validation contract would reduce future false passes.",
+      "confidence": "high"
+    },
+    {
+      "target": "skill",
+      "observation": "The `webapp-worker` skill does not explicitly warn that features requiring model-threading-to-the-LLM-stream need a real `ScoopContext`/provider test path; this review found a fully mocked-context test suite that passed while the production model inheritance path was broken.",
+      "why": "Adding that reminder would make the procedure more robust for bridge/scoop features whose correctness depends on what `ScoopContext.init()` actually does, not just on the arguments passed into a mock factory.",
+      "confidence": "medium"
+    }
+  ],
+  "filesReviewed": [
+    "packages/webapp/src/scoops/agent-bridge.ts",
+    "packages/webapp/tests/scoops/agent-bridge.test.ts",
+    "packages/webapp/src/scoops/scoop-context.ts",
+    ".factory/library/architecture.md",
+    ".factory/skills/webapp-worker/SKILL.md",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/validation-contract.md",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/handoffs/2026-04-16T19-57-27-509Z__agent-bridge-implementation__9420f02a-6b34-4a4f-869c-8804d70f7b4d.json"
+  ],
+  "commitIdsReviewed": ["bc8c9e6"]
+}

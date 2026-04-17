@@ -1,0 +1,15 @@
+{
+  "featureId": "rewrite-bash-allowlist-on-just-bash-ast",
+  "reviewedAt": "2026-04-17T01:29:30Z",
+  "commitId": "f5523a2",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Current HEAD closes the round-4 residual gap. `walkArithExpr()` now explicitly rejects both `ArithBracedExpansion` and `ArithSyntaxError` in substring arithmetic (`packages/webapp/src/tools/bash-tool-allowlist.ts:570-592`), and the regression suite adds direct coverage for the previously surviving offset/length cases plus wildcard controls (`packages/webapp/tests/tools/bash-tool-allowlist.test.ts:1027-1117`). In combination with the earlier assignment and nested-word fixes already landed on HEAD, the AST-based allow-list rewrite is now acceptable; I did not find a new blocking gap in the rewritten traversal path.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/validation/core/scrutiny/reviews/rewrite-bash-allowlist-on-just-bash-ast.json",
+  "summary": "Pass. Current HEAD, including follow-up fix `2ba0c43`, now rejects the surviving `ArithBracedExpansion` / `ArithSyntaxError` substring-arithmetic shapes from round 4, and I did not identify a new blocking issue that should keep the original AST rewrite failing."
+}

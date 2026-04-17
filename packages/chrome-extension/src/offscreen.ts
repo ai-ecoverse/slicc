@@ -8,7 +8,14 @@
  */
 
 import { BrowserAPI, OffscreenCdpProxy } from '../../../packages/webapp/src/cdp/index.js';
-import { Orchestrator } from '../../../packages/webapp/src/scoops/index.js';
+import {
+  Orchestrator,
+  bootstrapAgentBridgeOffscreen,
+  AGENT_BRIDGE_GLOBAL_KEY,
+  AGENT_SPAWN_REQUEST_TYPE,
+  type AgentBridge,
+  type AgentSpawnOptions,
+} from '../../../packages/webapp/src/scoops/index.js';
 import { LeaderTrayManager } from '../../../packages/webapp/src/scoops/tray-leader.js';
 import {
   hasStoredTrayJoinUrl,
@@ -68,6 +75,20 @@ async function init(): Promise<void> {
   await orchestrator.init();
   console.log('[slicc-offscreen] Orchestrator initialized');
 
+  // Publish the AgentBridge on globalThis.__slicc_agent so the `agent`
+  // supplemental shell command running inside the offscreen WasmShell can
+  // find it. MUST run after init() resolves (sharedFs is populated) and
+  // BEFORE the WasmShell registers supplemental commands below. Mirrors the
+  // CLI hook in packages/webapp/src/ui/main.ts — both realms route through
+  // realm-specific bootstrap helpers in
+  // `packages/webapp/src/scoops/agent-bridge-bootstrap.ts` so cross-realm
+  // parity tests can exercise genuinely distinct call sites.
+  if (orchestrator.getSharedFS()) {
+    bootstrapAgentBridgeOffscreen(orchestrator);
+  } else {
+    log.warn('offscreen: sharedFs unavailable after init(); skipping __slicc_agent publish');
+  }
+
   // Register session costs provider for the `cost` shell command (offscreen agent shell)
   const { registerSessionCostsProvider } =
     await import('../../../packages/webapp/src/shell/supplemental-commands/cost-command.js');
@@ -96,6 +117,58 @@ async function init(): Promise<void> {
       }
     }
     return false;
+  });
+
+  // Handle agent-spawn requests from the side-panel WasmShell's `agent`
+  // supplemental command. The panel publishes a PROXY bridge on its own
+  // `globalThis.__slicc_agent` (see `publishAgentBridgeProxy` in
+  // packages/webapp/src/scoops/agent-bridge.ts) which dispatches this
+  // message; we forward the call to the REAL bridge that was just published
+  // on THIS offscreen realm's `globalThis.__slicc_agent`, and return the
+  // result (or error) via `sendResponse`.
+  chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+    if (
+      typeof message !== 'object' ||
+      message === null ||
+      !('source' in message) ||
+      !('payload' in message)
+    ) {
+      return false;
+    }
+    const msg = message as {
+      source: string;
+      payload: { type: string; options?: AgentSpawnOptions };
+    };
+    if (msg.source !== 'panel' || msg.payload?.type !== AGENT_SPAWN_REQUEST_TYPE) {
+      return false;
+    }
+
+    const bridge = (globalThis as Record<string, unknown>)[AGENT_BRIDGE_GLOBAL_KEY] as
+      | AgentBridge
+      | undefined;
+    if (!bridge || typeof bridge.spawn !== 'function') {
+      sendResponse({
+        ok: false,
+        error: 'agent: offscreen __slicc_agent bridge not available',
+      });
+      return false;
+    }
+
+    const options = msg.payload.options;
+    if (!options) {
+      sendResponse({ ok: false, error: 'agent: missing spawn options' });
+      return false;
+    }
+
+    bridge.spawn(options).then(
+      (result) => sendResponse({ ok: true, result }),
+      (err: unknown) =>
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        })
+    );
+    return true; // Keep message channel open for async sendResponse
   });
 
   // Initialize lick manager for cron tasks in extension mode

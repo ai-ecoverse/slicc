@@ -128,6 +128,47 @@ export interface HandoffDismissMsg {
   handoffId: string;
 }
 
+/**
+ * Panel → offscreen: request to spawn an ephemeral agent (scoop) via the
+ * bridge published on the OFFSCREEN `globalThis.__slicc_agent`. The panel
+ * cannot call the real bridge directly because the panel and offscreen
+ * realms have independent globals; instead the panel publishes a proxy
+ * bridge (see `publishAgentBridgeProxy` in `packages/webapp/src/scoops/
+ * agent-bridge.ts`) that dispatches this message and awaits the response.
+ *
+ * `options` mirrors the real bridge's `AgentSpawnOptions` shape — we keep
+ * it structural here so the extension package does not take a compile-time
+ * dependency on the webapp scoops module.
+ */
+export interface AgentSpawnRequestMsg {
+  type: 'agent-spawn-request';
+  options: {
+    cwd: string;
+    allowedCommands: string[];
+    prompt: string;
+    modelId?: string;
+    parentJid?: string;
+  };
+}
+
+/**
+ * Shape the offscreen document sends back via `sendResponse` after handling
+ * an {@link AgentSpawnRequestMsg}. Not wrapped in an envelope because it is
+ * delivered through `chrome.runtime.sendMessage`'s callback, not as a
+ * broadcast — hence no `source`/`payload` wrapper.
+ */
+export interface AgentSpawnResponseMsg {
+  /** Whether the offscreen bridge produced a result. */
+  ok: boolean;
+  /** Present only when `ok === true`. */
+  result?: {
+    finalText: string;
+    exitCode: number;
+  };
+  /** Present only when `ok === false`. */
+  error?: string;
+}
+
 export type PanelToOffscreenMessage =
   | UserMessageMsg
   | ScoopCreateMsg
@@ -146,7 +187,8 @@ export type PanelToOffscreenMessage =
   | ReloadSkillsMsg
   | HandoffListRequestMsg
   | HandoffAcceptMsg
-  | HandoffDismissMsg;
+  | HandoffDismissMsg
+  | AgentSpawnRequestMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)

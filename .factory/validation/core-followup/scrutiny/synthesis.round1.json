@@ -1,0 +1,62 @@
+{
+  "milestone": "core-followup",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "npm run test",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "npx prettier --check .",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 2,
+    "passed": 0,
+    "failed": 2,
+    "failedFeatures": ["fix-agent-scoop-visibility", "fix-restricted-fs-shell-contract"]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "fix-agent-scoop-visibility",
+      "severity": "blocking",
+      "description": "`orchestrator.unregisterScoop()` emits `onStatusChange(jid, 'ready')` before removing bridge scoops from orchestrator state, so both scoop-panel refresh paths can keep rendering a cleaned-up bridge scoop until a later refresh."
+    },
+    {
+      "featureId": "fix-restricted-fs-shell-contract",
+      "severity": "blocking",
+      "description": "`RestrictedFS.readDirSync()` delegates strictly allowed paths straight to `VirtualFS.readDirSync()`, which follows symlinked directory paths; shell commands like `ls`/`find` can still enumerate out-of-sandbox contents through symlinked directories."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Corrected `.factory/library/architecture.md` to record the remaining `RestrictedFS.readDirSync()` symlinked-directory ACL gap instead of treating the sync fast path as equivalent to async `readDir()`.",
+      "sourceFeature": "fix-restricted-fs-shell-contract"
+    },
+    {
+      "target": "library",
+      "description": "Corrected `.factory/library/architecture.md` to note that bridge-scoop cleanup currently signals `onStatusChange('ready')` before removing the scoop from orchestrator state, which can leave ghost scoop rows until a later refresh.",
+      "sourceFeature": "fix-agent-scoop-visibility"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "webapp-worker skill",
+      "suggestion": "Clarify that user-visible UI fixes still require manual CDP/agent-browser verification even when the feature's fulfilled assertions are Vitest-based, and workers who skip that check must mark `followedProcedure: false`.",
+      "evidence": "Feature `fix-agent-scoop-visibility` changed scoop-panel visibility/status behavior but its handoff recorded no interactive checks and still marked `followedProcedure=true`, despite the skill's manual-validation requirement.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": null
+}

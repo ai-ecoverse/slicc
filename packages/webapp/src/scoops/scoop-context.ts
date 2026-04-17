@@ -28,6 +28,7 @@ import { isContextOverflow } from '@mariozechner/pi-ai';
 import type { AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
 import type { SessionStore } from '../core/session.js';
 import { createFileTools, createBashTool } from '../tools/index.js';
+import { wrapBashToolWithAllowlist } from '../tools/bash-tool-allowlist.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import {
   getApiKey,
@@ -161,6 +162,9 @@ export class ScoopContext {
         env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
         browserAPI: browser,
         jshDiscoveryFs: this.skillsFs ? effectiveSkillsFs : undefined,
+        // Identify this shell's owning scoop so the `agent` supplemental
+        // command can forward `parentJid` to the bridge for model inheritance.
+        scoopJid: this.scoop.jid,
       });
       log.info('WasmShell initialized', { folder: this.scoop.folder });
       const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
@@ -185,7 +189,19 @@ export class ScoopContext {
         createBashTool(this.shell),
         ...scoopManagementTools,
       ];
-      const tools = adaptTools(legacyTools);
+      let tools = adaptTools(legacyTools);
+
+      // Apply the bash-command allow-list wrapper when the scoop was spawned
+      // with a restricted list (see `AgentBridge.spawn` / the `agent` shell
+      // command). Wildcard `'*'` is a passthrough — the wrapper returns the
+      // original tool unchanged in that case. Other scoops/cones never set
+      // `allowedCommands`, so this is a no-op for them.
+      const allowedCommands = this.scoop.config?.allowedCommands;
+      if (allowedCommands) {
+        tools = tools.map((tool) =>
+          tool.name === 'bash' ? wrapBashToolWithAllowlist(tool, allowedCommands) : tool
+        );
+      }
 
       // Load scoop memory
       const memoryPath = this.scoop.isCone
@@ -833,9 +849,12 @@ ${this.scoop.isCone ? '- Use update_global_memory tool for information that shou
 ## Communication
 
 When using send_message:
-- Use it for progress updates on long tasks
-- Use it when you want to send multiple messages
-- Your final output is also sent, so don't repeat yourself
+- Use it for progress updates during multi-step work
+- Use it when you want to send several updates before a final answer
+- **Your last message wins** — the chronologically LAST output (either a send_message call or plain assistant text, whichever came last) is what the caller actually receives
+- Prefer a plain assistant-text reply for the final answer; only end on send_message when you explicitly need to distinguish the final payload from subsequent work
+- Pattern that works well: send_message("Starting.") → do the work → plain-text summary as your final turn
+- Also fine: skip progress updates entirely and just reply with a single plain-text answer
 
 ${this.scoop.config?.systemPromptAppend ?? ''}`;
 

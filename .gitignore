@@ -1,5 +1,10 @@
 node_modules/
 dist/
+# Exception: the vendored just-bash artifacts live under a dist/ directory
+# because that is how upstream publishes them. See
+# packages/webapp/src/vendor/just-bash/README.md for the removal plan.
+!packages/webapp/src/vendor/just-bash/dist/
+!packages/webapp/src/vendor/just-bash/dist/**
 *.tsbuildinfo
 .DS_STORE
 /workspace/

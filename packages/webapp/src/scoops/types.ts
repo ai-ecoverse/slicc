@@ -40,6 +40,15 @@ export interface ScoopConfig {
   assistantName?: string;
   /** Model ID override (e.g., "claude-sonnet-4-20250514"). Uses globally selected model if not set. */
   modelId?: string;
+  /**
+   * Bash command allow-list. When set, the scoop's bash tool is wrapped with
+   * {@link ../tools/bash-tool-allowlist.ts `wrapBashToolWithAllowlist`} so
+   * that each bash invocation is rejected unless its head (and the head of
+   * every pipeline/conjunction/sequence segment) is on this list. A list
+   * containing `'*'` disables the wrapper (passthrough). Only set by the
+   * `agent` supplemental command via {@link ../scoops/agent-bridge.ts `AgentBridge`}.
+   */
+  allowedCommands?: readonly string[];
 }
 
 /** Message from any channel */

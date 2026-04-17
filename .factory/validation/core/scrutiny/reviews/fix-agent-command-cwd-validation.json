@@ -1,0 +1,21 @@
+{
+  "featureId": "fix-agent-command-cwd-validation",
+  "reviewedAt": "2026-04-16T22:22:47Z",
+  "commitId": "5b4bf2173948eb8cc944a7674fe052ca3b996e4f",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass. The fix closes the original VAL-CMD-017 gap by stat-checking the resolved cwd before bridge lookup/spawn (`packages/webapp/src/shell/supplemental-commands/agent-command.ts:231-244`), returning a clean non-zero stderr result for nonexistent and non-directory paths. The new regression block in `packages/webapp/tests/shell/supplemental-commands/agent-command.test.ts:244-305` covers both failure branches plus the existing-directory happy path, and the updated full-stack helpers now delegate `stat`/`exists` to VirtualFS (`packages/webapp/tests/scoops/agent-integration.test.ts:177-190`, `packages/webapp/tests/scoops/agent-bridge-hook.test.ts:144-157`) so command→hook coverage still exercises the new preflight behavior on real directories.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The `webapp-worker` skill explains mock `CommandContext` usage and separately requires real ScoopContext/runtime-parity coverage, but it does not spell out that command-layer validations depending on `ctx.fs` need the shell context wired to a real/VirtualFS as well.",
+      "evidence": "This fix had to retrofit `createMockShellCtx()` in `packages/webapp/tests/scoops/agent-integration.test.ts:177-190` and `packages/webapp/tests/scoops/agent-bridge-hook.test.ts:144-157` so `stat`/`exists` delegate to VirtualFS, plus update the affected call sites (`agent-integration.test.ts:405,443,473,496,522,613,668,708,747`; `agent-bridge-hook.test.ts:337,369`). By comparison, `.factory/skills/webapp-worker/SKILL.md:50` only calls out mock `CommandContext`, while the authenticity guidance at lines 77-80 discusses real ScoopContext and distinct runtime harnesses but not FS-backed shell contexts."
+    }
+  ],
+  "addressesFailureFrom": "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/validation/core/scrutiny/reviews/agent-command-scaffolding.json",
+  "summary": "Pass: commit 5b4bf21 fixes the prior blocking cwd-validation gap, keeps valid cwd behavior intact, and adds focused regression coverage with no blocking or non-blocking code issues found."
+}

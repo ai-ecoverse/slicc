@@ -1,0 +1,15 @@
+{
+  "featureId": "fix-allowlist-assignment-and-nested-word-bypasses",
+  "reviewedAt": "2026-04-17T00:57:21Z",
+  "commitId": "e76542d",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The round-3 allow-list gaps are closed at current HEAD. Compared with the original failing implementation in `f5523a2`, `checkSimpleCommand()` now walks `cmd.assignments` before allowing an invocation through (`packages/webapp/src/tools/bash-tool-allowlist.ts:253-270`), and `walkWordParts()` now descends into `ParameterExpansion` operations, `BraceExpansion` items, and substring arithmetic (`packages/webapp/src/tools/bash-tool-allowlist.ts:365-575`). The targeted regression tests at `packages/webapp/tests/tools/bash-tool-allowlist.test.ts:722-1024` cover the reported assignment, nested parameter-expansion, brace-expansion, indirection, substring, and wildcard-passthrough cases. I did not find a remaining current-HEAD path that reproduces the two blocking round-3 bypasses.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/validation/core/scrutiny/reviews/rewrite-bash-allowlist-on-just-bash-ast.json",
+  "summary": "Pass. Commit `e76542d` resolves the previously reported assignment and nested `ParameterExpansion`/`BraceExpansion` allow-list bypasses, and the reviewed files are unchanged between that commit and current HEAD. The added regression coverage matches the round-3 findings plus the expected wildcard-preservation checks, and I did not find a new blocking problem in the reviewed path."
+}

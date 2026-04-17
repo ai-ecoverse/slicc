@@ -1,0 +1,75 @@
+{
+  "milestone": "core",
+  "round": 3,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "npm run test",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "npx prettier --check .",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 3,
+    "passed": 1,
+    "failed": 2,
+    "failedFeatures": [
+      "vendor-just-bash-with-parse-exposed",
+      "rewrite-bash-allowlist-on-just-bash-ast"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "vendor-just-bash-with-parse-exposed",
+      "severity": "blocking",
+      "description": "The vendored `just-bash` smoke test puts its type-only assertions in `packages/webapp/tests/vendor/just-bash-smoke.test.ts`, but `npm run typecheck` does not compile test files, so CI never validates the promised `import { parse, type ScriptNode } from 'just-bash'` type surface."
+    },
+    {
+      "featureId": "rewrite-bash-allowlist-on-just-bash-ast",
+      "severity": "blocking",
+      "description": "The AST-backed allow-list walker does not inspect `SimpleCommand.assignments`, so assignment values like `FOO=$(whoami) ls` can smuggle command substitution under an allow-listed head."
+    },
+    {
+      "featureId": "rewrite-bash-allowlist-on-just-bash-ast",
+      "severity": "blocking",
+      "description": "The AST-backed allow-list walker only recurses through `DoubleQuoted` parts and misses nested executable words under parameter-expansion defaults/assignments and brace-expansion items, leaving additional substitution bypasses under an allow-listed head."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Updated `.factory/library/environment.md` to note that `npm run typecheck` only runs the repo's three production `tsconfig` entry points and does not compile Vitest `.test.ts` files, so compile-time assertions placed only in tests are not CI-backed by the TypeScript gate.",
+      "sourceFeature": "scrutiny-validator-core"
+    },
+    {
+      "target": "library",
+      "description": "Updated `.factory/library/architecture.md` with just-bash AST gotchas for allow-list work: `&&` chains remain within one `StatementNode`, and executable nested words can appear in assignments, parameter-expansion defaults/assignments, and brace-expansion items.",
+      "sourceFeature": "scrutiny-validator-core"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": ".factory/skills/upstream-integration-worker/SKILL.md",
+      "suggestion": "When a vendoring feature promises CI-backed type-surface coverage, require the compile-time assertion to live on a `tsc`-covered source path or a dedicated typecheck target that `npm run typecheck` actually compiles; `.test.ts`-only assertions are not enough.",
+      "evidence": "`vendor-just-bash-with-parse-exposed` placed its type-only smoke assertions in `packages/webapp/tests/vendor/just-bash-smoke.test.ts`, but `npm run typecheck` only runs `tsc --noEmit` on `tsconfig.cli.json`, `tsconfig.json`, and `tsconfig.worker.json`, whose include globs exclude test files.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "Clarify the mission-wide live-browser/CDP requirement for pure utility-wrapper features.",
+      "reason": "duplicate: round 2 already captured the same systemic guidance conflict in `suggestedGuidanceUpdates`, so repeating it here would not add new evidence."
+    }
+  ],
+  "previousRound": ".factory/validation/core/scrutiny/synthesis.round2.json"
+}

@@ -223,6 +223,17 @@ export class Orchestrator {
     return this.sharedFs;
   }
 
+  /**
+   * Get the SessionStore used for per-scoop conversation persistence. Returns
+   * `null` before {@link init} completes. Exposed so the CLI + extension
+   * bootstrap can thread the same session store into `createAgentBridge`
+   * (see `globalThis.__slicc_agent`) — ensuring bridge-created scoops share
+   * the same session database as the orchestrator's regular scoops.
+   */
+  getSessionStore(): SessionStore | null {
+    return this.sessionStore;
+  }
+
   /** Set the LickManager for guarding scoop removal against active licks */
   setLickManager(lickManager: LickManager): void {
     this.lickManager = lickManager;
@@ -247,6 +258,225 @@ export class Orchestrator {
     });
   }
 
+  /**
+   * Register an already-constructed {@link RegisteredScoop} with the
+   * orchestrator WITHOUT creating a {@link ScoopContext}. Used by
+   * {@link ../scoops/agent-bridge.ts `AgentBridge`} for ephemeral
+   * `agent`-command scoops that own their own context directly.
+   *
+   * The scoop becomes visible via {@link getScoops} / {@link getScoop} for
+   * the duration of the bridge's run, and is removed again by the bridge's
+   * cleanup path calling {@link unregisterScoop} (safe for entries whose
+   * context was never constructed here — `destroyScoopTab` and
+   * `db.deleteScoop` both tolerate missing entries).
+   *
+   * This is intentionally synchronous: the record is purely in-memory and
+   * is NOT persisted (no `db.saveScoop`), since ephemeral bridge scoops
+   * should never survive a reload.
+   *
+   * The orchestrator records a companion {@link ScoopTabState} entry in
+   * `this.tabs` with `status: 'initializing'` and fires the UI-facing
+   * `onStatusChange` callback so that:
+   *
+   *   1. The cone-only `list_scoops` tool reports a first-class status
+   *      (`'initializing'`) for bridge scoops instead of falling back to
+   *      the `'unknown'` sentinel in `scoop-management-tools.ts`
+   *      (VAL-SPAWN-014).
+   *   2. The side-panel `ScoopsPanel` and its extension mirror refresh on
+   *      the status change so bridge-spawned scoops are visible in the UI
+   *      panel during their run (VAL-SPAWN-015).
+   *
+   * The bridge drives subsequent transitions through
+   * {@link updateBridgeTabStatus} — typically `initializing → processing`
+   * when the agent loop enters `ctx.prompt()` and a final `ready`
+   * transition on cleanup so the UI sees the terminal state before
+   * {@link unregisterScoop} removes the tab entry.
+   */
+  registerExistingScoop(scoop: RegisteredScoop): void {
+    this.scoops.set(scoop.jid, scoop);
+    this.messageQueues.set(scoop.jid, []);
+    const now = new Date().toISOString();
+    this.tabs.set(scoop.jid, {
+      jid: scoop.jid,
+      contextId: `bridge-${scoop.folder}`,
+      status: 'initializing',
+      lastActivity: now,
+    });
+    log.info('Scoop registered (external context)', { jid: scoop.jid, name: scoop.name });
+    this.callbacks.onStatusChange(scoop.jid, 'initializing');
+  }
+
+  /**
+   * Update the tab-state entry for a bridge-registered scoop.
+   *
+   * Bridge scoops (those registered via {@link registerExistingScoop}) own
+   * their {@link ScoopContext} outside the orchestrator. Because the
+   * context's transitions do NOT flow through the private `createScoopTab`
+   * callback chain, the bridge explicitly drives tab-state updates through
+   * this helper so the cone's `list_scoops` tool (reading via
+   * {@link getScoopTabState}) and the extension-mode `OffscreenBridge`
+   * state snapshots see the current status.
+   *
+   * Safe no-op when `jid` is not currently registered as a bridge tab
+   * (covers late-arriving transitions after {@link unregisterScoop} has
+   * cleaned the entry).
+   *
+   * **Single-purpose mutator — does NOT broadcast `onStatusChange`.**
+   * Status forwarding to {@link OrchestratorCallbacks.onStatusChange} is
+   * the sole responsibility of {@link buildForwardingScoopCallbacks}.
+   * Having this method ALSO broadcast created a duplicate transition
+   * (extras invoked `updateBridgeTabStatus` → broadcast #1, then the
+   * helper's forwarding phase fired broadcast #2 for the same event),
+   * which was harmless today but unnecessary churn + a foot-gun for any
+   * future status-sensitive behavior (see core-followup-2, VAL-SPAWN-016
+   * round-1 scrutiny). Direct callers that need to drive a panel refresh
+   * without a scope-context transition should emit via
+   * `this.callbacks.onStatusChange(jid, status)` explicitly.
+   *
+   * @param jid    The bridge scoop jid returned in the
+   *               {@link RegisteredScoop.jid} field at registration time.
+   * @param status The new tab status. Must be a first-class
+   *               {@link ScoopTabState['status']} — NEVER the `'unknown'`
+   *               fallback string.
+   */
+  updateBridgeTabStatus(jid: string, status: ScoopTabState['status']): void {
+    const tab = this.tabs.get(jid);
+    if (!tab) return;
+    tab.status = status;
+    tab.lastActivity = new Date().toISOString();
+    this.tabs.set(jid, tab);
+  }
+
+  /**
+   * Read the current {@link ScoopTabState} for a scoop.
+   *
+   * Exposed so external callers (including tests and the cone's
+   * `list_scoops` tool which reads status via the
+   * `getScoopTabState?.(jid)?.status ?? 'unknown'` fallback chain) can
+   * observe a first-class status for bridge scoops. Returns `undefined`
+   * when no tab exists — that's the expected state AFTER a scoop has been
+   * unregistered.
+   */
+  getScoopTabState(jid: string): ScoopTabState | undefined {
+    return this.tabs.get(jid);
+  }
+
+  /**
+   * Build a {@link ScoopContextCallbacks} object that forwards every
+   * scope-context event to the orchestrator's top-level
+   * {@link OrchestratorCallbacks} (injecting `jid` as the first arg).
+   *
+   * This is the authoritative single-source for wiring a scoop's context
+   * callbacks to the orchestrator callback chain. Both code paths that
+   * create a {@link ScoopContext} MUST use this helper:
+   *
+   *   1. {@link createScoopTab} — regular feed_scoop / user-created scoops.
+   *   2. {@link ../scoops/agent-bridge.ts `AgentBridge.spawn`} — ephemeral
+   *      `agent`-command scoops.
+   *
+   * Without the helper, a caller risks skipping some subset of the
+   * forwarding chain (e.g., `onResponse` / `onResponseDone` / `onToolStart`
+   * / `onToolEnd`). The consequence is that downstream consumers of
+   * `OrchestratorCallbacks` — most notably
+   * `packages/chrome-extension/src/offscreen-bridge.ts`
+   * `OffscreenBridge.createCallbacks` — never emit `agent-event` messages
+   * for those transitions AND never call `persistScoop(jid)` to write the
+   * scoop's message buffer to the shared UI `SessionStore`. The visible
+   * symptom was VAL-SPAWN-016: clicking an agent-spawned scoop row in the
+   * sidebar showed an empty chat panel even while the agent was actively
+   * running.
+   *
+   * The `extras` parameter lets callers layer LOCAL concerns (tab-state
+   * mutation, scoop-completion routing back to the cone, `captured[]`
+   * ring for the bridge's `send_message` fallback, etc.) WITHOUT dropping
+   * the forwarding chain. Each `extras.onX` handler runs FIRST (observation
+   * phase); then the helper invokes `this.callbacks.onX(jid, ...)`
+   * (forwarding phase). Extras can short-circuit the forward by using
+   * `this.scoops.has(jid)` inside the handler (the helper itself does this
+   * for the response / tool / status events so late-firing callbacks after
+   * `unregisterScoop` are safely dropped).
+   *
+   * Cone-only callbacks (`onFeedScoop`, `onScoopScoop`, `onDropScoop`,
+   * `setGlobalMemory`, `getScoopTabState`) are passed through from
+   * `extras` unchanged — the helper does not synthesize them. `getScoops`,
+   * `getGlobalMemory`, and `getBrowserAPI` default to orchestrator-scoped
+   * implementations when not explicitly overridden via `extras`.
+   */
+  buildForwardingScoopCallbacks(
+    jid: string,
+    folder: string,
+    extras: Partial<ScoopContextCallbacks> = {}
+  ): ScoopContextCallbacks {
+    // `folder` is accepted for future-proofing + log traceability. Today the
+    // scope-context callbacks identify the scoop via `jid`; folder is
+    // intentionally unused. Referenced here so strict-unused-locals rules
+    // don't flag it while keeping it in the signature for callers.
+    void folder;
+    return {
+      onResponse: (text, isPartial) => {
+        extras.onResponse?.(text, isPartial);
+        if (!this.scoops.has(jid)) return;
+        this.callbacks.onResponse(jid, text, isPartial);
+      },
+      onResponseDone: () => {
+        extras.onResponseDone?.();
+        if (!this.scoops.has(jid)) return;
+        this.callbacks.onResponseDone(jid);
+      },
+      onToolStart: (toolName, toolInput) => {
+        extras.onToolStart?.(toolName, toolInput);
+        if (!this.scoops.has(jid)) return;
+        this.callbacks.onToolStart?.(jid, toolName, toolInput);
+      },
+      onToolEnd: (toolName, result, isError) => {
+        extras.onToolEnd?.(toolName, result, isError);
+        if (!this.scoops.has(jid)) return;
+        this.callbacks.onToolEnd?.(jid, toolName, result, isError);
+      },
+      onToolUI: (toolName, requestId, html) => {
+        extras.onToolUI?.(toolName, requestId, html);
+        if (!this.scoops.has(jid)) return;
+        this.callbacks.onToolUI?.(jid, toolName, requestId, html);
+      },
+      onToolUIDone: (requestId) => {
+        extras.onToolUIDone?.(requestId);
+        if (!this.scoops.has(jid)) return;
+        this.callbacks.onToolUIDone?.(jid, requestId);
+      },
+      onError: (error) => {
+        extras.onError?.(error);
+        if (!this.scoops.has(jid)) return;
+        this.callbacks.onError(jid, error);
+      },
+      onSendMessage: (text, sender) => {
+        extras.onSendMessage?.(text, sender);
+        if (!this.scoops.has(jid)) return;
+        // Preserve sender-tag prefix when supplied (e.g., by cone delegation
+        // relays). When sender is undefined, forward the text unchanged so
+        // bridge-spawned scoops' `send_message('hi')` lands in the panel
+        // with the exact bytes that `captured[]` also records.
+        const forwardedText = sender ? `[${sender}] ${text}` : text;
+        this.callbacks.onSendMessage(jid, forwardedText);
+      },
+      onStatusChange: (status) => {
+        extras.onStatusChange?.(status);
+        if (!this.scoops.has(jid)) return;
+        this.callbacks.onStatusChange(jid, status);
+      },
+      getScoops: extras.getScoops ?? (() => this.getScoops()),
+      getGlobalMemory: extras.getGlobalMemory ?? (() => this.getGlobalMemory()),
+      getBrowserAPI: extras.getBrowserAPI ?? (() => this.callbacks.getBrowserAPI()),
+      // Cone-only wiring: passed through unchanged. Non-cone callers leave
+      // these unset so scoop-side scope contexts cannot invoke cone-only
+      // tools (same contract as pre-refactor createScoopTab).
+      getScoopTabState: extras.getScoopTabState,
+      onFeedScoop: extras.onFeedScoop,
+      onScoopScoop: extras.onScoopScoop,
+      onDropScoop: extras.onDropScoop,
+      setGlobalMemory: extras.setGlobalMemory,
+    };
+  }
+
   /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */
   async unregisterScoop(jid: string): Promise<void> {
     // Guard: check for active licks before allowing removal
@@ -262,6 +492,38 @@ export class Orchestrator {
 
     this.clearIdleTimer(jid);
     await this.destroyScoopTab(jid);
+    // Cleanup-ordering contract: the terminal `onStatusChange(jid, 'ready')`
+    // callback below drives `ScoopsPanel.refreshScoops()` in the UI — which
+    // re-reads `getScoops()` and `getScoopTabState(jid)`. Every registry
+    // entry for `jid` MUST be removed BEFORE that callback fires so the UI
+    // refresh observes a fully-cleaned state (no ghost scoop row after
+    // `AgentBridge.spawn()` resolves). See `agent-cleanup.test.ts`.
+    //
+    // `destroyScoopTab` already removed the tab entry for context-backed
+    // scoops; bridge scoops (registered via `registerExistingScoop`) still
+    // have a live tab entry here, hence the explicit delete + flag.
+    const hadBridgeTab = this.tabs.has(jid);
+    this.tabs.delete(jid);
+    this.scoops.delete(jid);
+    this.messageQueues.delete(jid);
+    this.lastAgentTimestamp.delete(jid);
+    this.scoopResponseBuffer.delete(jid);
+
+    // Fire the terminal callback AFTER registry removal so refresh
+    // handlers read an already-clean snapshot. Only fire for bridge tabs
+    // — context-backed scoops don't emit a terminal `ready` through this
+    // path (their final transition flows via `ScoopContext.setStatus`
+    // while still inside `createScoopTab`'s callback chain, which is
+    // guarded by `this.scoops.has(jid)` and correctly no-ops after
+    // removal).
+    if (hadBridgeTab) {
+      this.callbacks.onStatusChange(jid, 'ready');
+    }
+
+    // Post-callback cleanup: the session-store delete is fire-and-forget
+    // and doesn't drive UI refreshes, so its ordering relative to the
+    // callback is immaterial. Keep it + the DB delete here at the end of
+    // the method so the synchronous registry state is settled first.
     this.sessionStore?.delete(jid).catch((err) => {
       log.warn('Failed to delete agent session', {
         jid,
@@ -269,10 +531,6 @@ export class Orchestrator {
       });
     });
     await db.deleteScoop(jid);
-    this.scoops.delete(jid);
-    this.messageQueues.delete(jid);
-    this.lastAgentTimestamp.delete(jid);
-    this.scoopResponseBuffer.delete(jid);
     log.info('Scoop unregistered', { jid });
   }
 
@@ -474,142 +732,134 @@ export class Orchestrator {
       ? this.sharedFs // Cone gets unrestricted access
       : new RestrictedFS(this.sharedFs, [`/scoops/${scoop.folder}/`, '/shared/'], ['/workspace/']);
 
-    // Create the scoop context with full callbacks
-    const contextCallbacks: ScoopContextCallbacks = {
-      onResponse: (text, isPartial) => {
-        if (!this.scoops.has(jid)) return;
-
-        this.callbacks.onResponse(jid, text, isPartial);
-        // Accumulate response text for routing back to cone.
-        // Accumulate both partial (streaming deltas) and full (non-streaming) responses,
-        // since models that don't stream emit isPartial=false with the full text.
-        if (!scoop.isCone) {
-          if (isPartial) {
-            const buf = this.scoopResponseBuffer.get(jid) ?? '';
-            this.scoopResponseBuffer.set(jid, buf + text);
-          } else {
-            // Full response — replace buffer (text is the complete output)
-            this.scoopResponseBuffer.set(jid, text);
-          }
-        }
-      },
-      onResponseDone: () => {
-        if (!this.scoops.has(jid)) return;
-
-        // Per-turn callback — DON'T set tab to 'ready' here.
-        // The tab stays 'processing' until prompt() resolves (setStatus('ready') in finally).
-        // This prevents the message queue from dequeuing during multi-turn.
-        const tab = this.tabs.get(jid);
-        if (tab) {
-          tab.lastActivity = new Date().toISOString();
-          this.tabs.set(jid, tab);
-        }
-        this.callbacks.onResponseDone(jid);
-      },
-      onError: (error) => {
-        if (!this.scoops.has(jid)) return;
-
-        const tab = this.tabs.get(jid);
-        if (tab) {
-          tab.status = 'error';
-          tab.error = error;
-          this.tabs.set(jid, tab);
-        }
-        this.callbacks.onError(jid, error);
-        this.callbacks.onStatusChange(jid, 'error');
-      },
-      onStatusChange: (status) => {
-        if (!this.scoops.has(jid)) return;
-
-        const tab = this.tabs.get(jid);
-        if (tab) {
-          tab.status = status;
-          tab.lastActivity = new Date().toISOString();
-          this.tabs.set(jid, tab);
-        }
-        this.callbacks.onStatusChange(jid, status);
-
-        // When a non-cone scoop finishes, route its response to the cone
-        // so the cone's agent can react (e.g., move files, report to user).
-        if (status === 'ready' && !scoop.isCone) {
-          const responseText = this.scoopResponseBuffer.get(jid);
-          this.scoopResponseBuffer.delete(jid);
-          if (responseText) {
-            const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-            if (cone) {
-              const summary =
-                responseText.length > 2000
-                  ? responseText.slice(0, 2000) + '\n... (truncated)'
-                  : responseText;
-              const notifyMsg: ChannelMessage = {
-                id: `scoop-done-${jid}-${Date.now()}`,
-                chatJid: cone.jid,
-                senderId: scoop.folder,
-                senderName: scoop.assistantLabel,
-                content: `[@${scoop.assistantLabel} completed]:\n${summary}`,
-                timestamp: new Date().toISOString(),
-                fromAssistant: false,
-                channel: 'scoop-notify',
-              };
-              log.info('Routing scoop completion to cone', {
-                scoop: scoop.folder,
-                responseLength: responseText.length,
-              });
-              this.handleMessage(notifyMsg).catch((err) => {
-                const msg = err instanceof Error ? err.message : String(err);
-                log.error('Failed to route scoop completion to cone', {
-                  scoop: scoop.folder,
-                  error: msg,
-                });
-                this.callbacks.onError(
-                  cone.jid,
-                  `Scoop ${scoop.folder} completed but notification failed: ${msg}`
-                );
-              });
+    // Build the scope-context callbacks via the shared forwarding helper
+    // (see `buildForwardingScoopCallbacks` for the architectural contract).
+    // Extras here carry createScoopTab's local concerns — tab-state mutation,
+    // response-buffer routing back to the cone on completion — WITHOUT
+    // duplicating the forwarding chain. The helper's `this.scoops.has(jid)`
+    // guards protect the forwarded `this.callbacks.*` calls against
+    // late-firing callbacks after `unregisterScoop` has cleaned the entry.
+    const contextCallbacks: ScoopContextCallbacks = this.buildForwardingScoopCallbacks(
+      jid,
+      scoop.folder,
+      {
+        onResponse: (text, isPartial) => {
+          if (!this.scoops.has(jid)) return;
+          // Accumulate response text for routing back to cone.
+          // Accumulate both partial (streaming deltas) and full (non-streaming) responses,
+          // since models that don't stream emit isPartial=false with the full text.
+          if (!scoop.isCone) {
+            if (isPartial) {
+              const buf = this.scoopResponseBuffer.get(jid) ?? '';
+              this.scoopResponseBuffer.set(jid, buf + text);
+            } else {
+              // Full response — replace buffer (text is the complete output)
+              this.scoopResponseBuffer.set(jid, text);
             }
           }
-        }
-      },
-      onToolStart: (toolName, toolInput) => {
-        this.callbacks.onToolStart?.(jid, toolName, toolInput);
-      },
-      onToolEnd: (toolName, result, isError) => {
-        this.callbacks.onToolEnd?.(jid, toolName, result, isError);
-      },
-      onToolUI: (toolName, requestId, html) => {
-        this.callbacks.onToolUI?.(jid, toolName, requestId, html);
-      },
-      onToolUIDone: (requestId) => {
-        this.callbacks.onToolUIDone?.(jid, requestId);
-      },
-      // NanoClaw tools callbacks
-      onSendMessage: (text, sender) => {
-        this.callbacks.onSendMessage(jid, `${sender ? `[${sender}] ` : ''}${text}`);
-      },
-      getScoops: () => this.getScoops(),
-      getScoopTabState: scoop.isCone ? (jid: string) => this.tabs.get(jid) : undefined,
-      onFeedScoop: scoop.isCone
-        ? (scoopJid, prompt) => this.delegateToScoop(scoopJid, prompt, scoop.assistantLabel)
-        : undefined,
-      onScoopScoop: scoop.isCone
-        ? async (newScoop) => {
-            const fullScoop: RegisteredScoop = {
-              ...newScoop,
-              jid: `scoop_${newScoop.folder}_${Date.now()}`,
-            };
-            await this.registerScoop(fullScoop);
-            return fullScoop;
+        },
+        onResponseDone: () => {
+          if (!this.scoops.has(jid)) return;
+          // Per-turn callback — DON'T set tab to 'ready' here.
+          // The tab stays 'processing' until prompt() resolves
+          // (setStatus('ready') in finally). This prevents the message
+          // queue from dequeuing during multi-turn.
+          const tab = this.tabs.get(jid);
+          if (tab) {
+            tab.lastActivity = new Date().toISOString();
+            this.tabs.set(jid, tab);
           }
-        : undefined,
-      onDropScoop: scoop.isCone
-        ? async (scoopJid) => {
-            await this.unregisterScoop(scoopJid);
+        },
+        onError: (error) => {
+          if (!this.scoops.has(jid)) return;
+          const tab = this.tabs.get(jid);
+          if (tab) {
+            tab.status = 'error';
+            tab.error = error;
+            this.tabs.set(jid, tab);
           }
-        : undefined,
-      getGlobalMemory: () => this.getGlobalMemory(),
-      setGlobalMemory: scoop.isCone ? (content) => this.setGlobalMemory(content) : undefined,
-      getBrowserAPI: () => this.callbacks.getBrowserAPI(),
-    };
+          // Also broadcast an explicit status-change so the UI reflects
+          // the error tab state (the helper forwards onError only; the
+          // `error` status transition is part of the error-handling
+          // contract and must fire independently).
+          this.callbacks.onStatusChange(jid, 'error');
+        },
+        onStatusChange: (status) => {
+          if (!this.scoops.has(jid)) return;
+          const tab = this.tabs.get(jid);
+          if (tab) {
+            tab.status = status;
+            tab.lastActivity = new Date().toISOString();
+            this.tabs.set(jid, tab);
+          }
+
+          // When a non-cone scoop finishes, route its response to the cone
+          // so the cone's agent can react (e.g., move files, report to user).
+          if (status === 'ready' && !scoop.isCone) {
+            const responseText = this.scoopResponseBuffer.get(jid);
+            this.scoopResponseBuffer.delete(jid);
+            if (responseText) {
+              const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+              if (cone) {
+                const summary =
+                  responseText.length > 2000
+                    ? responseText.slice(0, 2000) + '\n... (truncated)'
+                    : responseText;
+                const notifyMsg: ChannelMessage = {
+                  id: `scoop-done-${jid}-${Date.now()}`,
+                  chatJid: cone.jid,
+                  senderId: scoop.folder,
+                  senderName: scoop.assistantLabel,
+                  content: `[@${scoop.assistantLabel} completed]:\n${summary}`,
+                  timestamp: new Date().toISOString(),
+                  fromAssistant: false,
+                  channel: 'scoop-notify',
+                };
+                log.info('Routing scoop completion to cone', {
+                  scoop: scoop.folder,
+                  responseLength: responseText.length,
+                });
+                this.handleMessage(notifyMsg).catch((err) => {
+                  const msg = err instanceof Error ? err.message : String(err);
+                  log.error('Failed to route scoop completion to cone', {
+                    scoop: scoop.folder,
+                    error: msg,
+                  });
+                  this.callbacks.onError(
+                    cone.jid,
+                    `Scoop ${scoop.folder} completed but notification failed: ${msg}`
+                  );
+                });
+              }
+            }
+          }
+        },
+        // Cone-only wiring: only attached when this scoop is the cone so
+        // non-cone scopes cannot invoke cone-only tools via the context.
+        getScoopTabState: scoop.isCone
+          ? (lookupJid: string) => this.tabs.get(lookupJid)
+          : undefined,
+        onFeedScoop: scoop.isCone
+          ? (scoopJid, prompt) => this.delegateToScoop(scoopJid, prompt, scoop.assistantLabel)
+          : undefined,
+        onScoopScoop: scoop.isCone
+          ? async (newScoop) => {
+              const fullScoop: RegisteredScoop = {
+                ...newScoop,
+                jid: `scoop_${newScoop.folder}_${Date.now()}`,
+              };
+              await this.registerScoop(fullScoop);
+              return fullScoop;
+            }
+          : undefined,
+        onDropScoop: scoop.isCone
+          ? async (scoopJid) => {
+              await this.unregisterScoop(scoopJid);
+            }
+          : undefined,
+        setGlobalMemory: scoop.isCone ? (content) => this.setGlobalMemory(content) : undefined,
+      }
+    );
 
     const context = new ScoopContext(
       scoop,

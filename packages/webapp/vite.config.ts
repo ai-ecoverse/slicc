@@ -303,6 +303,14 @@ export default defineConfig(({ mode }) => ({
       // CJS entry imports Node crypto. Force the browser-safe ESM entry
       // instead.
       'isomorphic-git': resolve(workspaceRoot, 'node_modules/isomorphic-git/index.js'),
+      // Use the vendored just-bash browser bundle (see
+      // packages/webapp/src/vendor/just-bash/README.md). The vendored copy
+      // patches src/browser.ts to additionally export the AST parser surface
+      // (parse, Parser, ParseException, ScriptNode, AST node types, etc.)
+      // that is physically bundled at runtime but not re-exported from the
+      // published browser entry point. Delete this alias and the vendor
+      // directory once the upstream PR lands in a published release.
+      'just-bash': resolve(__dirname, 'src/vendor/just-bash/dist/bundle/browser.js'),
       // just-bash's browser bundle references node:zlib and node:module for
       // gzip/gunzip commands that aren't functional in browsers anyway.
       // Alias to empty stubs so the bundled JS never tries to fetch them.
