@@ -1191,15 +1191,26 @@ describe('tray worker skeleton', () => {
     expect(response.status).toBe(200);
   });
 
-  it('serves the handoff preview page at GET /handoff', async () => {
+  it('serves the handoff page without x-slicc header when msg is absent', async () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/handoff'), env);
     expect(response.status).toBe(200);
     expect(response.headers.get('Content-Type')).toContain('text/html');
+    expect(response.headers.get('x-slicc')).toBeNull();
     const html = await response.text();
     expect(html).toContain('SLICC handoff');
-    expect(html).toContain('location.hash');
-    expect(html).toContain('Invalid handoff payload');
+  });
+
+  it('sets x-slicc header to the msg query value', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request(
+        'https://www.sliccy.ai/handoff?msg=upskill%3Ahttps%3A%2F%2Fgithub.com%2Ffoo%2Fbar'
+      ),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-slicc')).toBe('upskill:https://github.com/foo/bar');
   });
 });
 
