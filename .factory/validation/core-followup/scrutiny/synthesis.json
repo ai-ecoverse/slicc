@@ -1,7 +1,7 @@
 {
   "milestone": "core-followup",
-  "round": 2,
-  "status": "fail",
+  "round": 3,
+  "status": "pass",
   "validatorsRun": {
     "test": {
       "passed": true,
@@ -20,38 +20,21 @@
     }
   },
   "reviewsSummary": {
-    "total": 2,
+    "total": 1,
     "passed": 1,
-    "failed": 1,
-    "failedFeatures": ["fix-restricted-fs-readdirsync-symlink-escape"]
+    "failed": 0,
+    "failedFeatures": []
   },
-  "blockingIssues": [
-    {
-      "featureId": "fix-restricted-fs-readdirsync-symlink-escape",
-      "severity": "blocking",
-      "description": "`RestrictedFS.lstat()` still delegates directly to `this.vfs.lstat(path)` after only a lexical `isAllowed()` check, so when `lstatSync()` returns null for an ancestor symlink, `VfsAdapter.lstat()` can fall back to an async path that still follows the ancestor symlink out of sandbox and leak metadata through shell `lstat` consumers. Because that adapter surface remains ACL-unsafe, `fix-restricted-fs-shell-contract` is not yet fully re-verified."
-    }
-  ],
-  "appliedUpdates": [
-    {
-      "target": "library",
-      "description": "Updated `.factory/library/architecture.md` to record that bridge-scoop cleanup now removes registry state before the terminal `onStatusChange('ready')` callback, closing the ghost-row gap verified by `fix-agent-scoop-cleanup-ordering`.",
-      "sourceFeature": "fix-agent-scoop-cleanup-ordering"
-    },
-    {
-      "target": "library",
-      "description": "Updated `.factory/library/architecture.md` to note that the `readDirSync()` symlink-directory gap is fixed and that the remaining RestrictedFS ACL caveat is the async `lstat()` fallback on ancestor symlinks discovered while reviewing `fix-restricted-fs-readdirsync-symlink-escape`.",
-      "sourceFeature": "fix-restricted-fs-readdirsync-symlink-escape"
-    }
-  ],
+  "blockingIssues": [],
+  "appliedUpdates": [],
   "suggestedGuidanceUpdates": [
     {
-      "target": "AGENTS.md",
-      "suggestion": "Clarify the precedence for required manual CDP smoke checks when port 5710 is already occupied: mission guidance should explicitly say whether workers must kill the existing occupant and continue, or return immediately, so UI-visible fixes do not skip meaningful browser verification.",
-      "evidence": "Both visibility-related workers skipped a meaningful port-5710 smoke run because mission AGENTS.md told them to try killing the occupant first while the feature-level instructions told them to stop and return if the port was already held. That ambiguity produced two handoffs without real browser validation of the updated bundle.",
+      "target": "webapp-worker skill",
+      "suggestion": "When a feature claims shell-level coverage for a VfsAdapter fallback bug, require evidence that the chosen shell command actually exercises the targeted adapter path, or explicitly label that shell case as regression-only smoke coverage.",
+      "evidence": "Review `fix-restricted-fs-async-lstat-ancestor-symlink-escape` found that `packages/webapp/tests/fs/restricted-fs-async-lstat.test.ts` used just-bash `stat`, while the red-phase failure came from the direct `RestrictedFS.lstat()` assertions; the shell case stayed green pre-fix and therefore did not itself prove the `VfsAdapter.lstat()` fallback path. See `.factory/validation/core-followup/scrutiny/reviews/fix-restricted-fs-async-lstat-ancestor-symlink-escape.json` and the feature handoff `handoffs/2026-04-17T18-25-22-743Z__fix-restricted-fs-async-lstat-ancestor-symlink-escape__8c9862c8-e3ea-41b4-b88e-4b4f5fde4ad3.json`.",
       "isSystemic": false
     }
   ],
   "rejectedObservations": [],
-  "previousRound": ".factory/validation/core-followup/scrutiny/synthesis.round1.json"
+  "previousRound": ".factory/validation/core-followup/scrutiny/synthesis.round2.json"
 }

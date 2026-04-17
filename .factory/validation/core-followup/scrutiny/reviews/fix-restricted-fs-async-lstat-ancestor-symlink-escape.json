@@ -1,0 +1,21 @@
+{
+  "featureId": "fix-restricted-fs-async-lstat-ancestor-symlink-escape",
+  "reviewedAt": "2026-04-17T18:32:59Z",
+  "commitId": "8a6d01a",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Commit 8a6d01a closes the remaining round-2 blocker. `RestrictedFS.lstat()` now resolves only the parent directory, re-checks ACLs on the rejoined path, and then delegates to `vfs.lstat()`, which blocks ancestor-symlink escapes without following legitimate leaf symlinks. Together with the already-reviewed sync guards and the `VfsAdapter` sync-null \u2192 async fallback, the current `statSync/readDirSync/lstatSync` and `stat/readDir/lstat` surfaces are ACL-symmetric and I did not find a remaining reachable metadata leak.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The worker marked `followedProcedure: true`, but the new shell case in `restricted-fs-async-lstat.test.ts` was not actually a red-phase test for the targeted bug. It invokes just-bash `stat`, which only calls `t.fs.stat()`; the handoff's pre-fix run reports `7 tests | 1 failed`, so this shell case stayed green against the buggy async `lstat()` implementation. Future guidance should either require a truly lstat-driven shell command for this class of fix or explicitly label such cases as regression-only smoke tests.",
+      "evidence": "packages/webapp/tests/fs/restricted-fs-async-lstat.test.ts:149-160; packages/webapp/src/vendor/just-bash/dist/bundle/browser.js:155-161; /Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/handoffs/2026-04-17T18-25-22-743Z__fix-restricted-fs-async-lstat-ancestor-symlink-escape__8c9862c8-e3ea-41b4-b88e-4b4f5fde4ad3.json (pre-fix verification says `7 tests | 1 failed`)."
+    }
+  ],
+  "addressesFailureFrom": "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/validation/core-followup/scrutiny/reviews/fix-restricted-fs-readdirsync-symlink-escape.json",
+  "summary": "Pass: the async `RestrictedFS.lstat()` fix closes the ancestor-symlink metadata leak and restores ACL symmetry across the `VfsAdapter` sync/async `stat`, `readDir`, and `lstat` surfaces. No blocking issues found."
+}
