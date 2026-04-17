@@ -1,0 +1,46 @@
+{
+  "milestone": "core-followup-3",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "npm run test",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "npx prettier --check .",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "failedFeatures": ["fix-agent-output-chronological-last-message"]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "fix-agent-output-chronological-last-message",
+      "severity": "blocking",
+      "description": "The new chronological-last picker in packages/webapp/src/scoops/agent-bridge.ts returns only the final TextContent block when assistant text wins. Providers such as Bedrock Camp preserve multiple text blocks in one assistant turn, and ScoopContext still joins those blocks before surfacing the final response, so a winning assistant message like [text(\"Hello\"), text(\" world\")] now truncates to \" world\" on agent stdout."
+    }
+  ],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "webapp-worker skill",
+      "suggestion": "Document the expected handling for provider-gated manual verification when no provider is configured, and explicitly point workers to .factory/library/user-testing.md for that case.",
+      "evidence": "The scrutiny review for fix-agent-output-chronological-last-message found that the worker improvised an eval-based substitute after discovering no provider keys were configured in the running app. The provider-gated guidance already exists in .factory/library/user-testing.md, but the webapp-worker skill does not explicitly direct feature workers to use it when live agent invocations cannot run.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": null
+}

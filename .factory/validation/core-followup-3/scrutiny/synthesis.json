@@ -1,6 +1,6 @@
 {
   "milestone": "core-followup-3",
-  "round": 1,
+  "round": 2,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -20,27 +20,31 @@
     }
   },
   "reviewsSummary": {
-    "total": 1,
-    "passed": 0,
+    "total": 2,
+    "passed": 1,
     "failed": 1,
-    "failedFeatures": ["fix-agent-output-chronological-last-message"]
+    "failedFeatures": ["fix-agent-output-concatenate-multi-text-blocks"]
   },
   "blockingIssues": [
     {
-      "featureId": "fix-agent-output-chronological-last-message",
+      "featureId": "fix-agent-output-concatenate-multi-text-blocks",
       "severity": "blocking",
-      "description": "The new chronological-last picker in packages/webapp/src/scoops/agent-bridge.ts returns only the final TextContent block when assistant text wins. Providers such as Bedrock Camp preserve multiple text blocks in one assistant turn, and ScoopContext still joins those blocks before surfacing the final response, so a winning assistant message like [text(\"Hello\"), text(\" world\")] now truncates to \" world\" on agent stdout."
+      "description": "When the winning assistant output spans multiple text blocks, `pickChronologicallyLastOutput()` rejoins them with `\\n\\n` instead of preserving the message's literal concatenation. Providers such as Bedrock Camp preserve adjacent text blocks from a single assistant turn, while `extractLastAssistantText()` and `ScoopContext` still join those blocks with `''`, so outputs like `[text(\"Hello\"), text(\" world\")]` surface as `Hello\\n\\n world` instead of `Hello world`."
     }
   ],
-  "appliedUpdates": [],
-  "suggestedGuidanceUpdates": [
+  "appliedUpdates": [
     {
-      "target": "webapp-worker skill",
-      "suggestion": "Document the expected handling for provider-gated manual verification when no provider is configured, and explicitly point workers to .factory/library/user-testing.md for that case.",
-      "evidence": "The scrutiny review for fix-agent-output-chronological-last-message found that the worker improvised an eval-based substitute after discovering no provider keys were configured in the running app. The provider-gated guidance already exists in .factory/library/user-testing.md, but the webapp-worker skill does not explicitly direct feature workers to use it when live agent invocations cannot run.",
-      "isSystemic": false
+      "target": "library",
+      "description": "Updated .factory/library/architecture.md to record that the current AgentBridge multi-text-block joiner (`\\n\\n`) is a known bug and that canonical assistant-text assembly elsewhere in SLICC still uses literal concatenation.",
+      "sourceFeature": "fix-agent-output-concatenate-multi-text-blocks"
     }
   ],
-  "rejectedObservations": [],
-  "previousRound": null
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [
+    {
+      "observation": "The webapp-worker skill still does not explicitly document what to do when manual `agent` verification is provider-gated and no provider is configured.",
+      "reason": "already captured in round-1 synthesis as a suggested guidance update"
+    }
+  ],
+  "previousRound": ".factory/validation/core-followup-3/scrutiny/synthesis.round1.json"
 }
