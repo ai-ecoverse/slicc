@@ -1,0 +1,57 @@
+{
+  "groupId": "vitest-core-followup",
+  "surface": "vitest",
+  "status": "pass",
+  "assertions": [
+    {
+      "id": "VAL-SPAWN-014",
+      "status": "pass",
+      "evidence": [
+        "core-followup/vitest-core-followup/targeted-vitest.log",
+        "core-followup/vitest-core-followup/targeted-vitest-report.json"
+      ],
+      "reason": "Existing checked-in tests in agent-visibility.test.ts passed explicit VAL-SPAWN-014 cases proving bridge scoops report a first-class mid-run tab status and disappear after cleanup."
+    },
+    {
+      "id": "VAL-SPAWN-015",
+      "status": "pass",
+      "evidence": [
+        "core-followup/vitest-core-followup/targeted-vitest.log",
+        "core-followup/vitest-core-followup/targeted-vitest-report.json"
+      ],
+      "reason": "Existing checked-in tests in agent-visibility.test.ts passed explicit VAL-SPAWN-015 cases proving onStatusChange fires on registration and during bridge scoop status transitions."
+    },
+    {
+      "id": "VAL-FS-021",
+      "status": "pass",
+      "evidence": [
+        "core-followup/vitest-core-followup/targeted-vitest.log",
+        "core-followup/vitest-core-followup/targeted-vitest-report.json"
+      ],
+      "reason": "Existing checked-in tests in restricted-fs-sync.test.ts passed explicit VAL-FS-021 WasmShell cases for ls /shared, ls <cwd>, cat readable file, and ls / without TypeError."
+    },
+    {
+      "id": "VAL-FS-022",
+      "status": "pass",
+      "evidence": [
+        "core-followup/vitest-core-followup/targeted-vitest.log",
+        "core-followup/vitest-core-followup/targeted-vitest-report.json"
+      ],
+      "reason": "Existing checked-in tests in restricted-fs-sync.test.ts passed explicit VAL-FS-022 graceful-failure cases for disallowed paths without TypeError."
+    }
+  ],
+  "commandsRun": [
+    {
+      "command": "npm --prefix \"/Users/trieloff/Developer/slicc/.yolo/droid-2\" run test -- --maxWorkers=1 --maxConcurrency=1 --no-file-parallelism --reporter=verbose --reporter=json --outputFile.json=\"/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/core-followup/vitest-core-followup/targeted-vitest-report.json\" \"/Users/trieloff/Developer/slicc/.yolo/droid-2/packages/webapp/tests/scoops/agent-visibility.test.ts\" \"/Users/trieloff/Developer/slicc/.yolo/droid-2/packages/webapp/tests/fs/restricted-fs-sync.test.ts\" -t \"VAL-SPAWN-014|VAL-SPAWN-015|VAL-FS-021|VAL-FS-022\"",
+      "exitCode": 0,
+      "observation": "Targeted existing checked-in tests explicitly naming the four assigned assertion IDs all passed. Vitest reported 13 passing tests and 36 skipped non-matching tests across 2 files; no temporary harness was needed."
+    }
+  ],
+  "toolsUsed": ["vitest", "shell"],
+  "frictions": [],
+  "blockers": [],
+  "artifacts": [
+    "core-followup/vitest-core-followup/targeted-vitest.log",
+    "core-followup/vitest-core-followup/targeted-vitest-report.json"
+  ]
+}

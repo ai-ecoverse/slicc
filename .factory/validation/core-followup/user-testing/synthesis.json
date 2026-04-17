@@ -1,0 +1,16 @@
+{
+  "milestone": "core-followup",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": ["VAL-SPAWN-014", "VAL-SPAWN-015", "VAL-FS-021", "VAL-FS-022"],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null
+}
