@@ -82,22 +82,22 @@ Location: `packages/webapp/src/tools/bash-tool-allowlist.ts` (new helper)
 
 The existing `RestrictedFS` already supports multiple R/W and R/O prefixes. The agent bridge supplies custom prefix arrays — no change to `RestrictedFS` internals needed.
 
-#### RestrictedFS satisfies the full VfsAdapter contract (sync + async + realpath)
+#### RestrictedFS exposes the full VfsAdapter surface (sync + async + realpath), with one known `readDirSync` gap
 
 `packages/webapp/src/shell/vfs-adapter.ts` — the bridge between just-bash and our VFS — calls **synchronous fast-path methods** on its `vfs` field before falling back to async: `statSync`, `lstatSync`, `readDirSync`, plus async `realpath`. Non-cone scoops wrap the VFS in `RestrictedFS` and pass that instance to `WasmShell` (see `scoop-context.ts`: `this.shell = new WasmShell({ fs: this.fs as VirtualFS, ... })`), so `RestrictedFS` MUST implement those four methods itself with the same ACL as its async counterparts.
 
 Historical note (2026-04-17): Before this contract was pinned down, `RestrictedFS` implemented only the async methods. `VfsAdapter` would call `undefined(...)` inside the sync branch and the resulting `TypeError` was surfaced by the shell as `No such file or directory` / exit code 2. The user-visible symptom was that every bridge-spawned scoop's bash tool shell failed on `ls`, `cat`, `find`, and friends — while `pwd`, `date`, `echo` worked because they never touch the filesystem. See VAL-FS-021 + VAL-FS-022.
 
-The contract `RestrictedFS` now satisfies (invariants future subsystems can rely on):
+The surface `RestrictedFS` now exposes (plus one caveat future workers should remember):
 
 - **`statSync(path): Stats | null`** — returns `null` (no throw) for disallowed paths, matching `VirtualFS.statSync` null semantics. Returns `null` for allowed paths that are symlinks (forcing the adapter to fall back to the async `stat()`, which enforces symlink-escape ACL via `resolveAndCheckRead`).
 - **`lstatSync(path): Stats | null`** — returns `null` (no throw) for disallowed paths. Does NOT follow symlinks. Returns the raw symlink entry when the path IS a symlink (matching `VirtualFS.lstatSync`).
-- **`readDirSync(path): DirEntry[] | null`** — returns `null` for disallowed paths. Strictly-allowed paths: delegates to the VFS fast path. Parent-only-allowed paths (e.g. `/`, `/scoops`): filters the entries to those whose child path is allowed, mirroring the async `readDir`'s ACL filter.
+- **`readDirSync(path): DirEntry[] | null`** — returns `null` for disallowed paths. Parent-only-allowed paths (e.g. `/`, `/scoops`): filters the entries to those whose child path is allowed, mirroring the async `readDir`'s ACL filter. **Known gap (scrutiny/core-followup, 2026-04-17):** the strict-path fast path still delegates to `VirtualFS.readDirSync()`, and that helper follows symlinks in the directory path. A symlinked directory inside `/shared/` or a scoop sandbox can therefore enumerate out-of-sandbox contents through shell commands such as `ls`/`find` until a follow-up fix re-validates the resolved directory target.
 - **`realpath(path): Promise<string>`** — resolves symlinks through the underlying VFS; if the resolved path escapes every allowed prefix, throws `FsError('ENOENT', ...)` (consistent with VAL-FS-019 symlink-escape semantics).
 
-Because `RestrictedFS` now exposes every member `VfsAdapter` calls into (async read/write/symlink surface + the four methods above), the `as VirtualFS` cast in `scoop-context.ts` is no longer a type lie — `RestrictedFS` is a structural drop-in for `VirtualFS` across the shell/adapter layer.
+Because `RestrictedFS` now exposes every member `VfsAdapter` calls into (async read/write/symlink surface + the four methods above), the `as VirtualFS` cast in `scoop-context.ts` is no longer a missing-method type lie. Security parity with async `readDir()` is still incomplete until the symlinked-directory caveat above is fixed.
 
-### 6. Orchestrator registration handshake for bridge scoops (INVARIANT)
+### 6. Orchestrator registration handshake for bridge scoops (current flow + known cleanup gap)
 
 Bridge-spawned scoops are visible through the orchestrator's registry AND through the `tabs` map. Both must be populated at registration time and both must be kept in sync during the run. This is what makes the scoop visible to:
 
@@ -112,7 +112,7 @@ Required handshake (already wired in `AgentBridge.spawn()`):
    - fire `this.callbacks.onStatusChange(jid, 'initializing')` so the UI refreshes
 2. Every subsequent bridge-side status transition MUST go through `orchestrator.updateBridgeTabStatus(jid, status)` (NOT direct `this.tabs` mutation) so the UI callback pipeline fires.
 3. The bridge's `ScoopContextCallbacks.onStatusChange` MUST forward transitions to the orchestrator via `updateBridgeTabStatus` — a no-op callback would drop scope-context state transitions on the floor.
-4. `orchestrator.unregisterScoop(jid)` MUST fire a terminal `onStatusChange(jid, 'ready')` before removing the tab entry. Without this, the UI panel never learns the scoop is gone and retains the stale row until the next unrelated refresh.
+4. `orchestrator.unregisterScoop(jid)` **currently** fires a terminal `onStatusChange(jid, 'ready')` before removing the bridge scoop from `this.tabs` and `this.scoops`. Scrutiny round `core-followup` found that both the CLI scoop panel and the extension mirror rebuild their rows from `orchestrator.getScoops()` during that callback, so this ordering can leave a ghost bridge-scoop row visible until a later unrelated refresh. Do **not** treat the pre-removal callback ordering as a correct invariant; the cleanup signal needs a follow-up fix.
 
 Historical note (2026-04-17): Before this handshake was codified, `registerExistingScoop` populated only `scoops` + `messageQueues` and the bridge's scope-context callback was a no-op `() => {}`. This caused two production bugs: `list_scoops` returned bridge scoops with status `'unknown'`, and the UI panel never rendered them at all. See VAL-SPAWN-014 + VAL-SPAWN-015.
 

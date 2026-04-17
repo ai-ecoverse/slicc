@@ -1,0 +1,28 @@
+{
+  "featureId": "fix-restricted-fs-shell-contract",
+  "reviewedAt": "2026-04-17T17:24:18Z",
+  "commitId": "abde8d7",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The patch adds the missing RestrictedFS methods and the new tests demonstrate the original TypeError is fixed for common ls/cat paths, but the implementation still leaves a shell-facing ACL bypass. `RestrictedFS.readDirSync()` trusts `VirtualFS.readDirSync()` for strictly allowed paths even though that fast path follows symlinks in the directory path, so symlinked directories inside `/shared/` or the scoop sandbox can still enumerate out-of-sandbox content.",
+    "issues": [
+      {
+        "file": "packages/webapp/src/fs/restricted-fs.ts",
+        "line": 221,
+        "severity": "blocking",
+        "description": "`readDirSync()` returns `this.vfs.readDirSync(path)` unchanged for strictly allowed paths. `VirtualFS.readDirSync()` explicitly follows symlinks in the directory path (`packages/webapp/tests/fs/virtual-fs-sync.test.ts:57-60`), and `VfsAdapter.readdir()` prefers this sync fast path before the async ACL-checked path (`packages/webapp/src/shell/vfs-adapter.ts:257-263`). A symlink like `/shared/outside -> /secret` would therefore make `ls /shared/outside` or `find /shared/outside` enumerate `/secret` instead of failing like async `readDir()` does via `resolveAndCheckRead()`. The feature still does not fully enforce the RestrictedFS read ACL in the shell path."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The new architecture note overstates the current RestrictedFS contract. It says strictly allowed `readDirSync` can delegate directly to the VFS fast path, but that fast path follows symlinks in the directory path and is not ACL-safe until RestrictedFS re-validates the resolved target or forces async fallback for symlinked directories.",
+      "evidence": ".factory/library/architecture.md:95 says strict `readDirSync` delegation mirrors the async ACL; packages/webapp/src/fs/restricted-fs.ts:221-225 returns the fast-path result unconditionally; packages/webapp/tests/fs/virtual-fs-sync.test.ts:57-60 shows `VirtualFS.readDirSync('/linked-dir')` follows symlinks in the directory path."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Fail: the original missing-method crash is fixed for basic cases, but `RestrictedFS.readDirSync()` still allows symlinked-directory escapes through the shell fast path, so the feature is not fully ACL-correct. Report written after reviewing the feature transcript, handoff, commit `abde8d7`, and shared-state docs."
+}
