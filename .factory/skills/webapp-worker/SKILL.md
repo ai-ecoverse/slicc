@@ -107,6 +107,8 @@ The user has explicitly asked for the dev server to stay open during development
 
    Wait ~5 seconds, then `curl -sf http://localhost:5710` to confirm the UI server is up.
 
+   **Vite transform-cache gotcha (IMPORTANT):** a long-running dev server can serve stale transformed output for source files edited AFTER server startup. If the dev server was running BEFORE your code changes, RESTART it before manual verification — `lsof -ti :<PORT> | xargs kill -9` then `PORT=<PORT> npm run dev &`. To detect staleness mid-verification: `curl http://localhost:<PORT>/packages/webapp/src/<file-you-edited>.ts | grep <new-identifier>` — missing match means stale. Only cache-busting query params (`?t=<ts>`) return fresh code on the stale path, but that fix doesn't propagate to the already-loaded browser module. Failure to detect this makes your "manual CDP fails" observation test pre-fix code, not your actual fix. See `.factory/library/user-testing.md` for the full note.
+
 3. **Discover the actual Chrome CDP port** from the dev-server log. If :9222 is already in use on this machine (common), chromium-launcher auto-allocates an ephemeral port. Grep the log file for `remote-debugging-port=<N>` or the `CDP proxy at ws://localhost:5710/cdp` line. **Prefer `ws://localhost:5710/cdp`** for agent-browser — it is stable regardless of Chrome's port. If you need the direct port, confirm with `curl -sf http://localhost:<port>/json/version` before attaching.
 4. Invoke the `agent-browser` skill with the discovered CDP endpoint and navigate to `http://localhost:5710`.
 5. Take a screenshot of the initial UI.
