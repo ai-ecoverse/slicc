@@ -36,10 +36,10 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 
 ## External Handoffs
 
-- Browser handoffs use the `x-slicc` response header on main-frame document responses. `https://www.sliccy.ai/handoff?msg=<urlencoded>` is a convenience endpoint that echoes the query value into the header.
-- SLICC emits a `navigate` lick event carrying `{ url, sliccHeader, title? }`; the cone renders a yes/no approval card and dispatches by verb prefix (`handoff:`, `upskill:`).
-- The cone-facing handoff instructions live in `/workspace/skills/handoff/SKILL.md`.
-- When handoff behavior changes, keep this guide, the handoff skill, and `docs/slicc-handoff.md` aligned.
+- Mechanism: `x-slicc` response header on main-frame document responses → `navigate` lick → cone approval card.
+- Agent-facing flow: `packages/vfs-root/workspace/skills/handoff/SKILL.md` (bundled to `/workspace/skills/handoff/SKILL.md`) and the trigger line in `shared/CLAUDE.md` (bundled to `/shared/CLAUDE.md`).
+- Protocol reference: `docs/slicc-handoff.md`.
+- When handoff behavior changes, keep the skill, `shared/CLAUDE.md`, and `docs/slicc-handoff.md` aligned — do not duplicate their content here.
 
 ## Important Distinction
 
