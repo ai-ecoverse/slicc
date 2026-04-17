@@ -130,11 +130,15 @@ export class NavigationWatcher {
     this.onEvent = onEvent;
   }
 
-  /** Begin observing. Idempotent. */
+  /**
+   * Begin observing. Idempotent on success; retriable after a transient
+   * failure enabling target discovery.
+   */
   async start(): Promise<void> {
     if (this.started) return;
-    this.started = true;
 
+    // Register listeners first so any events that fire as a side effect of
+    // setAutoAttach are captured.
     this.transport.on('Target.attachedToTarget', this.onAttachedToTarget);
     this.transport.on('Target.detachedFromTarget', this.onDetachedFromTarget);
     this.transport.on('Target.targetInfoChanged', this.onTargetInfoChanged);
@@ -152,8 +156,16 @@ export class NavigationWatcher {
       log.error('Failed to enable target discovery', {
         error: err instanceof Error ? err.message : String(err),
       });
+      // Tear down listeners so a later start() can retry cleanly.
+      this.transport.off('Target.attachedToTarget', this.onAttachedToTarget);
+      this.transport.off('Target.detachedFromTarget', this.onDetachedFromTarget);
+      this.transport.off('Target.targetInfoChanged', this.onTargetInfoChanged);
+      this.transport.off('Page.frameNavigated', this.onFrameNavigated);
+      this.transport.off('Network.responseReceived', this.onResponseReceived);
       return;
     }
+
+    this.started = true;
 
     // Pick up pages that were already open before we started.
     try {

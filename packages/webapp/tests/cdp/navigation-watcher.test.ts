@@ -222,6 +222,55 @@ describe('NavigationWatcher', () => {
     expect(events[0].sliccHeader).toBe('handoff:navigated');
   });
 
+  it('can be retried after a transient setDiscoverTargets failure', async () => {
+    // First call: make Target.setDiscoverTargets throw.
+    let failOnce = true;
+    const originalSend = transport.send.bind(transport);
+    (transport.send as unknown) = async (
+      method: string,
+      params?: Record<string, unknown>,
+      sessionId?: string
+    ) => {
+      if (failOnce && method === 'Target.setDiscoverTargets') {
+        failOnce = false;
+        throw new Error('transient CDP failure');
+      }
+      return originalSend(method, params, sessionId);
+    };
+
+    await watcher.start();
+
+    // Emitting an event now must NOT produce anything — listeners should
+    // have been torn down on the failure path.
+    transport.emit('Target.attachedToTarget', {
+      sessionId: 'sess-1',
+      targetInfo: { targetId: 'tab-1', type: 'page', url: 'https://ex.com/' },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    transport.emit('Network.responseReceived', {
+      sessionId: 'sess-1',
+      type: 'Document',
+      frameId: 'root-sess-1',
+      response: { url: 'https://ex.com/', headers: { 'x-slicc': 'handoff:first-try' } },
+    });
+    expect(events).toHaveLength(0);
+
+    // Retry: should succeed.
+    await watcher.start();
+    transport.emit('Target.attachedToTarget', {
+      sessionId: 'sess-2',
+      targetInfo: { targetId: 'tab-2', type: 'page', url: 'https://ex.com/' },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    transport.emit('Network.responseReceived', {
+      sessionId: 'sess-2',
+      type: 'Document',
+      frameId: 'root-sess-2',
+      response: { url: 'https://ex.com/', headers: { 'x-slicc': 'handoff:second-try' } },
+    });
+    expect(events.map((e) => e.sliccHeader)).toEqual(['handoff:second-try']);
+  });
+
   it('stop() unsubscribes listeners', async () => {
     await watcher.start();
     transport.emit('Target.attachedToTarget', {
