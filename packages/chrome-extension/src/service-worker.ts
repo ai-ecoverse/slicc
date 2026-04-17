@@ -131,7 +131,13 @@ function findSliccHeader(
   if (!headers) return null;
   for (const h of headers) {
     if (h.name.toLowerCase() === 'x-slicc' && typeof h.value === 'string' && h.value.length > 0) {
-      return h.value;
+      // Producers percent-encode the value so non-Latin1 input survives
+      // transport. Decode on read; fall back to raw if malformed.
+      try {
+        return decodeURIComponent(h.value);
+      } catch {
+        return h.value;
+      }
     }
   }
   return null;

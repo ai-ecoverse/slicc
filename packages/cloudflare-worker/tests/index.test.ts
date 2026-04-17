@@ -1201,7 +1201,7 @@ describe('tray worker skeleton', () => {
     expect(html).toContain('SLICC handoff');
   });
 
-  it('sets x-slicc header to the msg query value', async () => {
+  it('percent-encodes the msg into the x-slicc header', async () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(
       new Request(
@@ -1210,7 +1210,33 @@ describe('tray worker skeleton', () => {
       env
     );
     expect(response.status).toBe(200);
-    expect(response.headers.get('x-slicc')).toBe('upskill:https://github.com/foo/bar');
+    // encodeURIComponent preserves ':' and '/' as unreserved-for-components.
+    expect(response.headers.get('x-slicc')).toBe('upskill%3Ahttps%3A%2F%2Fgithub.com%2Ffoo%2Fbar');
+  });
+
+  it('survives non-Latin1 msg values (emoji, CJK) instead of throwing', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/handoff?msg=handoff%3A%F0%9F%9A%80%20%E4%BD%A0%E5%A5%BD'),
+      env
+    );
+    expect(response.status).toBe(200);
+    const header = response.headers.get('x-slicc');
+    expect(header).toBeTruthy();
+    expect(decodeURIComponent(header!)).toBe('handoff:🚀 你好');
+  });
+
+  it('neutralises CR/LF header injection attempts', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/handoff?msg=handoff%3Afoo%0D%0AX-Injected%3A+bar'),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-Injected')).toBeNull();
+    // The CRLF bytes are percent-encoded inside the value, not split into
+    // a new header line.
+    expect(response.headers.get('x-slicc')).toBe('handoff%3Afoo%0D%0AX-Injected%3A%20bar');
   });
 });
 
