@@ -344,7 +344,12 @@ export default defineConfig(({ mode }) => ({
   },
   server: {
     watch: {
-      ignored: ['**/.yolo/**', '**/.intent/**'],
+      // Anchor to workspaceRoot so the ignore only matches the top-level
+      // .yolo/.intent dirs in the main checkout. Using a bare `**/.yolo/**`
+      // glob matches chokidar's absolute paths, which silently mutes the
+      // watcher for every file when the dev server runs from *inside* a
+      // .yolo/ worktree (e.g. `PORT=5720 npm run dev` in `.yolo/claude-1`).
+      ignored: [resolve(workspaceRoot, '.yolo/**'), resolve(workspaceRoot, '.intent/**')],
     },
   },
   build: {
