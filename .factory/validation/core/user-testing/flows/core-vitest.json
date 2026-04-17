@@ -1,0 +1,778 @@
+{
+  "groupId": "core-vitest",
+  "surface": "vitest",
+  "status": "blocked",
+  "assertions": [
+    {
+      "id": "VAL-CMD-008",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-009",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-010",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-011",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-012",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-013",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-014",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-015",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-016",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-017",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-018",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-019",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-020",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-021",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-022",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-023",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-024",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-025",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-026",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-027",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-028",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-029",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-030",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-031",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-032",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-033",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-034",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CMD-035",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-OUTPUT-001",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-OUTPUT-002",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-OUTPUT-003",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-OUTPUT-004",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-OUTPUT-005",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-OUTPUT-006",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-OUTPUT-007",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-OUTPUT-008",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-OUTPUT-009",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-OUTPUT-010",
+      "status": "blocked",
+      "evidence": ["core/core-vitest/core-vitest-run.log"],
+      "reason": "No explicit Vitest case in the executed evidence proves that scoop-internal tool traces or log lines are suppressed from the outer shell stdout."
+    },
+    {
+      "id": "VAL-OUTPUT-011",
+      "status": "blocked",
+      "evidence": ["core/core-vitest/core-vitest-run.log"],
+      "reason": "No explicit Vitest case in the executed evidence proves that bash output produced inside the scoop is suppressed from the outer shell stdout."
+    },
+    {
+      "id": "VAL-OUTPUT-012",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-OUTPUT-013",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-OUTPUT-014",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-OUTPUT-015",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-001",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-002",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-003",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-004",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-005",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-006",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-007",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-008",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-009",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-010",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-011",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-012",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-013",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-014",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-015",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-016",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-017",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-018",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-019",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-020",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-021",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-022",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-023",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-024",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-025",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-026",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-ALLOW-027",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-MODEL-001",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-MODEL-002",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-MODEL-003",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-MODEL-004",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-MODEL-005",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-MODEL-006",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-MODEL-007",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-MODEL-008",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-MODEL-009",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-MODEL-010",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-MODEL-011",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-MODEL-012",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-MODEL-013",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-SPAWN-001",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-SPAWN-002",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-SPAWN-003",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-SPAWN-004",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-SPAWN-005",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-SPAWN-006",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-SPAWN-007",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-SPAWN-009",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-SPAWN-010",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-SPAWN-011",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-SPAWN-012",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-SPAWN-013",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-FS-001",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-002",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-003",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-004",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-005",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-006",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-007",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-008",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-009",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-010",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-011",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-012",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-013",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-014",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-015",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-016",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-017",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-018",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-019",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-FS-020",
+      "status": "pass",
+      "evidence": [
+        "core/core-vitest/core-vitest-run.log",
+        "core/core-vitest/core-vitest-restricted-fs.log"
+      ]
+    },
+    {
+      "id": "VAL-CLEAN-001",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-002",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-003",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-004",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-005",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-006",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-007",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-008",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-009",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-010",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-011",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-012",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-013",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-014",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CLEAN-015",
+      "status": "blocked",
+      "evidence": ["core/core-vitest/core-vitest-run.log"],
+      "reason": "No explicit Vitest case in the executed evidence proves that nested cleanup removes only the inner scratch folder while the outer agent is still running."
+    },
+    {
+      "id": "VAL-CROSS-001",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CROSS-002",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CROSS-003",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CROSS-011",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CROSS-012",
+      "status": "pass",
+      "evidence": ["core/core-vitest/core-vitest-run.log"]
+    },
+    {
+      "id": "VAL-CROSS-013",
+      "status": "blocked",
+      "evidence": ["core/core-vitest/core-vitest-run.log"],
+      "reason": "The executed Vitest suite proves cone scoop-management tools are not invoked during `agent`, but it does not explicitly prove a post-run `scoop_scoop` call still works normally."
+    }
+  ],
+  "commandsRun": [
+    {
+      "command": "cd \"/Users/trieloff/Developer/slicc/.yolo/droid-2\" && npx vitest run packages/webapp/tests/shell/supplemental-commands/agent-command.test.ts packages/webapp/tests/tools/bash-tool-allowlist.test.ts packages/webapp/tests/scoops/agent-bridge.test.ts packages/webapp/tests/scoops/agent-integration.test.ts --reporter=verbose --maxWorkers=1",
+      "exitCode": 0,
+      "observation": "Passed 4 files / 236 tests in 18.20s. The log shows command parsing/output checks, allow-list hardening cases, spawn/cleanup/model scenarios, real ScoopContext success, and CLI/offscreen parity all green."
+    },
+    {
+      "command": "cd \"/Users/trieloff/Developer/slicc/.yolo/droid-2\" && npx vitest run packages/webapp/tests/fs/restricted-fs.test.ts --reporter=verbose --maxWorkers=1",
+      "exitCode": 0,
+      "observation": "Added broader coverage for filesystem ACL confidence: passed 1 file / 48 tests in 224ms, including root readDir filtering, path traversal ENOENT, mkdir/rm EACCES on protected parents, and symlink escape protection."
+    }
+  ],
+  "toolsUsed": ["vitest"],
+  "frictions": [
+    "I added a second targeted Vitest run for packages/webapp/tests/fs/restricted-fs.test.ts because the four agent-specific files did not explicitly cover every filesystem ACL edge case in the validation contract."
+  ],
+  "blockers": [
+    "VAL-OUTPUT-010 and VAL-OUTPUT-011 remain blocked: no explicit Vitest case in the executed evidence proves that scoop-internal logs or scoop-side bash output are suppressed from the outer shell stdout.",
+    "VAL-CLEAN-015 remains blocked: no explicit Vitest case proves that nested cleanup removes only the inner scratch folder while the outer agent is still running.",
+    "VAL-CROSS-013 remains blocked: the executed suite proves cone scoop-management tools are not invoked during `agent`, but it does not explicitly prove a post-run `scoop_scoop` invocation still works normally."
+  ],
+  "artifacts": [
+    "core/core-vitest/core-vitest-run.log",
+    "core/core-vitest/core-vitest-exit-code.txt",
+    "core/core-vitest/core-vitest-restricted-fs.log",
+    "core/core-vitest/core-vitest-restricted-fs-exit-code.txt"
+  ]
+}

@@ -24,6 +24,7 @@ This means workers and validators MUST:
 
 1. Start the `dev` service defined in `.factory/services.yaml` (binds UI to `http://localhost:5710`; Chrome CDP defaults to `:9222`).
 2. **Discover the actual CDP port.** If port 9222 is already occupied on the machine, the dev server's chromium-launcher auto-allocates an ephemeral port. Read the dev-server log after startup for lines like `CDP proxy at ws://localhost:5710/cdp` or a `remote-debugging-port=<N>` token. Prefer connecting via `ws://localhost:5710/cdp` because the proxy port is stable regardless of Chrome's actual port.
+   - If the proxy handshake intermittently reports `No page found`, fall back to the discovered Chrome CDP port from the dev-server log for that validation run; you are still testing the same shared browser.
 3. Use the `agent-browser` skill to connect via CDP (prefer the :5710 proxy endpoint) to the running Chrome instance.
 4. Navigate to `http://localhost:5710`.
 5. Interact with the SLICC UI — open the terminal panel, type `agent ...` commands, observe output in the terminal panel.
@@ -57,10 +58,40 @@ For interactive `agent` validation, the LLM provider must be configured in the r
 - Per validator cost: ~1 GB (dev server + Chrome + agent-browser).
 - Theoretical: ~10 concurrent. Practical cap: **2** concurrent validators — the SLICC app launches a real Chrome instance and CDP routing gets messy with parallel instances; the user's stated workflow is single-user investigation.
 
+### Shell surface
+
+- Read-only shell checks (`rg`, `curl`, `git status`, file listings) are cheap and do not interfere with Vitest or the dev server.
+- Because machine load is already elevated, keep shell validators conservative anyway.
+- **Max concurrent validators: 2**
+
 ## Known Constraints
 
 - Extension build produces a Chrome extension bundle — not tested in dev mode; validated via `npm run build -w @slicc/chrome-extension` gate.
 - Manual agent invocation requires a user-configured LLM provider (stored in browser IndexedDB). Validators cannot populate this from outside the browser; they must drive the UI to configure it, OR document that the smoke test is provider-gated.
+- A fresh browser session may land on the provider dialog instead of the already-initialized workspace. For provider-free smoke checks against a running dev server, attaching to the shared dev Chrome session is often more reliable than opening a brand-new session.
+
+## Flow Validator Guidance: vitest
+
+- Run from the repo root only.
+- Do **not** start or stop services from a Vitest validator; the parent validator manages shared setup.
+- Keep Vitest isolated: only one Vitest validator may run at a time.
+- Prefer the smallest test selection that fully covers the assigned assertions; if a broader run is needed, record why in the flow report.
+- Treat the repo as read-only except for the assigned flow report and evidence files.
+
+## Flow Validator Guidance: shell
+
+- Shell validators are read-only unless the prompt explicitly assigns a report/evidence path.
+- Do not modify source files, install dependencies, or stop shared services.
+- Use absolute paths in commands and prefer `rg`, `jq`, `git status`, and `curl` over ad hoc shell scripts.
+- If a shell check depends on the dev server, use the parent's shared server at `http://localhost:5710`.
+
+## Flow Validator Guidance: agent-browser
+
+- Use the shared dev server at `http://localhost:5710` and prefer the stable CDP proxy at `ws://localhost:5710/cdp`.
+- Stay inside the assigned browser surface; do not open unrelated sites or mutate settings outside the assigned scope.
+- For the `core` milestone, prefer provider-free terminal checks (`agent --help`, malformed invocation, hook presence) unless the prompt explicitly assigns provider setup.
+- Capture screenshots and terminal text for each assigned assertion, and include any console errors in the flow report.
+- Leave dev-server lifecycle management to the parent validator; do not kill the shared server.
 
 ## Testable Behaviors (high level)
 

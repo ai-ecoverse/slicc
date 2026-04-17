@@ -1,0 +1,140 @@
+{
+  "groupId": "core-browser",
+  "surface": "agent-browser",
+  "status": "pass",
+  "assertions": [
+    {
+      "id": "VAL-CMD-001",
+      "status": "pass",
+      "reason": "`agent -h` printed the usage/help block in the terminal and the appended `echo` reported `__EXIT:0`.",
+      "evidence": [
+        "core/core-browser/VAL-CMD-001-agent-h.png",
+        "core/core-browser/VAL-CMD-001-agent-h.txt",
+        "core/core-browser/VAL-CMD-001-agent-h-errors.txt"
+      ]
+    },
+    {
+      "id": "VAL-CMD-002",
+      "status": "pass",
+      "reason": "`agent --help` printed the same usage/help block and the appended `echo` reported `__EXIT:0`.",
+      "evidence": [
+        "core/core-browser/VAL-CMD-002-agent-help.png",
+        "core/core-browser/VAL-CMD-002-agent-help.txt",
+        "core/core-browser/VAL-CMD-002-agent-help-errors.txt"
+      ]
+    },
+    {
+      "id": "VAL-CMD-003",
+      "status": "pass",
+      "reason": "The help output visibly included `agent <cwd> <allowed-commands> <prompt>`, the `<cwd>`, `<allowed-commands>`, and `<prompt>` argument labels, plus `--model <id>` under Options.",
+      "evidence": [
+        "core/core-browser/VAL-CMD-001-agent-h.png",
+        "core/core-browser/VAL-CMD-001-agent-h.txt",
+        "core/core-browser/VAL-CMD-001-agent-h-errors.txt",
+        "core/core-browser/VAL-CMD-002-agent-help.txt"
+      ]
+    },
+    {
+      "id": "VAL-CMD-004",
+      "status": "pass",
+      "reason": "The help block included three concrete `agent ...` example invocations with quoted prompts.",
+      "evidence": [
+        "core/core-browser/VAL-CMD-001-agent-h.png",
+        "core/core-browser/VAL-CMD-001-agent-h.txt",
+        "core/core-browser/VAL-CMD-001-agent-h-errors.txt"
+      ]
+    },
+    {
+      "id": "VAL-CMD-005",
+      "status": "pass",
+      "reason": "`agent -h . \"*\" \"ignored prompt\"` still rendered help instead of spawning work, and the appended `echo` reported `__EXIT:0`.",
+      "evidence": [
+        "core/core-browser/VAL-CMD-005-agent-h-with-args.png",
+        "core/core-browser/VAL-CMD-005-agent-h-with-args.txt",
+        "core/core-browser/VAL-CMD-005-agent-h-with-args-errors.txt"
+      ]
+    },
+    {
+      "id": "VAL-CMD-006",
+      "status": "pass",
+      "reason": "`agent . \"*\" \"prompt\" --help` still rendered help with no spawn output, and the appended `echo` reported `__EXIT:0`.",
+      "evidence": [
+        "core/core-browser/VAL-CMD-006-agent-help-last.png",
+        "core/core-browser/VAL-CMD-006-agent-help-last.txt",
+        "core/core-browser/VAL-CMD-006-agent-help-last-errors.txt"
+      ]
+    },
+    {
+      "id": "VAL-CMD-007",
+      "status": "pass",
+      "reason": "Bare `agent` printed `agent: missing required argument <cwd>` in the terminal and the appended `echo` reported `__EXIT:1`.",
+      "evidence": [
+        "core/core-browser/VAL-CMD-007-agent-no-args.png",
+        "core/core-browser/VAL-CMD-007-agent-no-args.txt",
+        "core/core-browser/VAL-CMD-007-agent-no-args-errors.txt"
+      ]
+    },
+    {
+      "id": "VAL-SPAWN-008",
+      "status": "pass",
+      "reason": "Page evaluation returned `typeof globalThis.__slicc_agent === \"object\"` and `typeof globalThis.__slicc_agent.spawn === \"function\"`.",
+      "evidence": [
+        "core/core-browser/VAL-SPAWN-008-hook-check.png",
+        "core/core-browser/VAL-SPAWN-008-hook-check.txt",
+        "core/core-browser/VAL-SPAWN-008-hook-check-errors.txt"
+      ]
+    }
+  ],
+  "interactiveChecks": [
+    {
+      "action": "Entered `agent -h; echo \"__EXIT:$?\"` in the SLICC terminal.",
+      "observed": "The terminal printed the full help block with usage, arguments, options, and examples, then printed `__EXIT:0`."
+    },
+    {
+      "action": "Entered `agent --help; echo \"__EXIT:$?\"` in the SLICC terminal.",
+      "observed": "The terminal printed the same help block and then printed `__EXIT:0`."
+    },
+    {
+      "action": "Entered `agent -h . \"*\" \"ignored prompt\"; echo \"__EXIT:$?\"` in the SLICC terminal.",
+      "observed": "The help flag won over the positional arguments, the help block rendered again, and the terminal printed `__EXIT:0`."
+    },
+    {
+      "action": "Entered `agent . \"*\" \"prompt\" --help; echo \"__EXIT:$?\"` in the SLICC terminal.",
+      "observed": "A trailing `--help` still rendered the help block and the terminal printed `__EXIT:0`."
+    },
+    {
+      "action": "Entered `agent; echo \"__EXIT:$?\"` in the SLICC terminal.",
+      "observed": "The terminal printed `agent: missing required argument <cwd>` and `__EXIT:1`."
+    },
+    {
+      "action": "Evaluated `typeof globalThis.__slicc_agent` and `typeof globalThis.__slicc_agent.spawn` in the running page.",
+      "observed": "The page returned `{ \"hookType\": \"object\", \"spawnType\": \"function\" }`."
+    }
+  ],
+  "toolsUsed": ["agent-browser"],
+  "frictions": [
+    "The preferred `ws://localhost:5710/cdp` proxy intermittently returned `No page found`; I completed the checks by attaching agent-browser directly to the discovered Chrome CDP port `60583`, which still exercised the same shared dev browser surface.",
+    "Opening `http://localhost:5710` in a fresh agent-browser session landed on the provider dialog instead of the live workspace, so the smoke test had to attach to the already running shared Chrome session rather than using a new isolated browser window."
+  ],
+  "blockers": [],
+  "artifacts": [
+    "core/core-browser/VAL-CMD-001-agent-h.png",
+    "core/core-browser/VAL-CMD-001-agent-h.txt",
+    "core/core-browser/VAL-CMD-001-agent-h-errors.txt",
+    "core/core-browser/VAL-CMD-002-agent-help.png",
+    "core/core-browser/VAL-CMD-002-agent-help.txt",
+    "core/core-browser/VAL-CMD-002-agent-help-errors.txt",
+    "core/core-browser/VAL-CMD-005-agent-h-with-args.png",
+    "core/core-browser/VAL-CMD-005-agent-h-with-args.txt",
+    "core/core-browser/VAL-CMD-005-agent-h-with-args-errors.txt",
+    "core/core-browser/VAL-CMD-006-agent-help-last.png",
+    "core/core-browser/VAL-CMD-006-agent-help-last.txt",
+    "core/core-browser/VAL-CMD-006-agent-help-last-errors.txt",
+    "core/core-browser/VAL-CMD-007-agent-no-args.png",
+    "core/core-browser/VAL-CMD-007-agent-no-args.txt",
+    "core/core-browser/VAL-CMD-007-agent-no-args-errors.txt",
+    "core/core-browser/VAL-SPAWN-008-hook-check.png",
+    "core/core-browser/VAL-SPAWN-008-hook-check.txt",
+    "core/core-browser/VAL-SPAWN-008-hook-check-errors.txt"
+  ]
+}
