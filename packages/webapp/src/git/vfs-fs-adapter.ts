@@ -67,13 +67,6 @@ function toStats(type: 'file' | 'dir' | 'symlink', raw: Partial<NodeLikeStats>):
   };
 }
 
-function isPathUnderAnyMount(path: string, mounts: string[]): boolean {
-  for (const m of mounts) {
-    if (path === m || path.startsWith(m + '/')) return true;
-  }
-  return false;
-}
-
 function wantsUtf8(options: unknown): boolean {
   if (typeof options === 'string') return /^utf-?8$/i.test(options);
   if (options && typeof options === 'object') {
@@ -87,7 +80,7 @@ function wantsUtf8(options: unknown): boolean {
 export function createIsomorphicGitFs(vfs: VirtualFS): PromiseFsClient {
   const lfs: FS.PromisifiedFS = vfs.getLightningFS();
 
-  const inMount = (path: string): boolean => isPathUnderAnyMount(path, vfs.listMounts());
+  const inMount = (path: string): boolean => vfs.isPathUnderMount(path);
 
   const promises: IsoGitFsPromises = {
     async readFile(path, options) {
@@ -128,12 +121,18 @@ export function createIsomorphicGitFs(vfs: VirtualFS): PromiseFsClient {
       return (await lfs.readdir(path)) as string[];
     },
 
-    async mkdir(path, _options) {
+    async mkdir(path, options) {
+      const opts = (options ?? undefined) as { recursive?: boolean; mode?: number } | undefined;
       if (inMount(path)) {
-        await vfs.mkdir(path);
+        await vfs.mkdir(
+          path,
+          opts?.recursive !== undefined ? { recursive: opts.recursive } : undefined
+        );
         return;
       }
-      await lfs.mkdir(path);
+      // LightningFS accepts { mode } (but not recursive). Drop `recursive` so
+      // callers that include it don't break the signature.
+      await lfs.mkdir(path, opts?.mode !== undefined ? { mode: opts.mode } : undefined);
     },
 
     async rmdir(path) {

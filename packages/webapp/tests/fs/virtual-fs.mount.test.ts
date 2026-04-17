@@ -38,6 +38,27 @@ describe('VirtualFS mount interactions with script discovery', () => {
     expect(commands.get('run')).toBe('/workspace/skills/test-skill/run.jsh');
   });
 
+  it('maps FSA InvalidModificationError to ENOTEMPTY when rm-ing a non-empty mounted directory', async () => {
+    await vfs.mkdir('/mnt/repo', { recursive: true });
+    await vfs.mount(
+      '/mnt/repo',
+      createDirectoryHandle({
+        pack: {
+          'entry.txt': 'contents',
+        },
+      })
+    );
+
+    // Non-recursive rm on a non-empty mounted directory must surface ENOTEMPTY
+    // so callers (isomorphic-git checkout/reset cleanup) can tolerate it.
+    await expect(vfs.rm('/mnt/repo/pack')).rejects.toEqual(
+      expect.objectContaining<FsError>({
+        code: 'ENOTEMPTY',
+        path: '/mnt/repo/pack',
+      })
+    );
+  });
+
   it('discovers nested mounted .jsh and .bsh scripts through the parent mount', async () => {
     await vfs.mount(
       '/workspace/repo',
