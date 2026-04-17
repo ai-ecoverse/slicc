@@ -1023,4 +1023,95 @@ describe('wrapBashToolWithAllowlist', () => {
     expect(isErrorResult(result)).toBe(false);
     expect(bash._calls).toHaveLength(1);
   });
+
+  // ── VAL-ALLOW-027 — Substring arithmetic: braced + syntax-error leaves ─
+  //
+  // just-bash's arithmetic parser produces two leaf-ish `ArithExpr` variants
+  // that the walker previously fell through via `default: return OK`:
+  //
+  //   1. `ArithBracedExpansion` — shape `{ type, content: string }`. The
+  //      arith parser emits this whenever it encounters a `${…}` form it
+  //      cannot further parse (e.g., `${BAR:-$(whoami)}` used as a
+  //      substring length). Because it carries ONLY raw content (no nested
+  //      AST), there is no safe structural recursion available — the
+  //      content may contain an arbitrary `$(…)` that would execute during
+  //      expansion. Must be rejected outright.
+  //
+  //   2. `ArithSyntaxError` — shape `{ type, errorToken, message }`. Emitted
+  //      for any arithmetic the parser cannot lex/parse cleanly (e.g.,
+  //      `$((1 + $(whoami)))` nested as a substring length). The raw
+  //      un-parsed text would still be evaluated by bash at runtime —
+  //      accepting it is unsafe. Must be rejected outright.
+  //
+  // Live-parse evidence (recorded while writing these tests):
+  //   `ls ${FOO:0:${BAR:-$(whoami)}}`
+  //     → length = ArithBracedExpansion{content: 'BAR:-$(whoami)'}
+  //   `ls ${FOO:${X:-$(whoami)}:2}`
+  //     → offset = ArithBracedExpansion{content: 'X'}  (plus length = ArithSyntaxError)
+  //   `ls ${FOO:0:$((1 + $(whoami)))}`
+  //     → length = ArithSyntaxError
+
+  it('rejects ${FOO:0:${BAR:-$(...)}} Substring length containing ArithBracedExpansion', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO:0:${BAR:-$(whoami)}}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toMatch(/braced|parameter expansion|arithmetic/);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects ${FOO:${X:-$(...)}:2} Substring offset containing ArithBracedExpansion', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO:${X:-$(whoami)}:2}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toMatch(
+      /braced|unparseable|parameter expansion|arithmetic/
+    );
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects ${FOO:0:$((1 + $(whoami)))} Substring length parsed as ArithSyntaxError', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO:0:$((1 + $(whoami)))}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toMatch(/unparseable|syntax|arithmetic|subshell/);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('allows ${FOO:$((1+1)):2} Substring with well-formed ArithNested/ArithBinary', async () => {
+    // Sanity control: a legitimate arithmetic expression like `1+1` parses
+    // to ArithNested(ArithBinary(ArithNumber, ArithNumber)) — no substitution
+    // and no leaf variants. The walker must continue to allow it.
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO:$((1+1)):2}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('wildcard `*` passthrough still allows ${FOO:0:${BAR:-$(whoami)}}', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['*']);
+    const result = await run(wrapped, 'ls ${FOO:0:${BAR:-$(whoami)}}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('wildcard `*` passthrough still allows ${FOO:${X:-$(whoami)}:2}', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['*']);
+    const result = await run(wrapped, 'ls ${FOO:${X:-$(whoami)}:2}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('wildcard `*` passthrough still allows ${FOO:0:$((1 + $(whoami)))}', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['*']);
+    const result = await run(wrapped, 'ls ${FOO:0:$((1 + $(whoami)))}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
 });

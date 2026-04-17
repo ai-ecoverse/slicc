@@ -567,9 +567,30 @@ function walkArithExpr(expr: ArithExpr): Verdict {
       return expr.index ? walkArithExpr(expr.index) : OK;
     case 'ArithDoubleSubscript':
       return walkArithExpr(expr.index);
-    // Number, Variable, SpecialVar, BracedExpansion, DynamicBase,
-    // DynamicNumber, NumberSubscript, SyntaxError, SingleQuote — all
-    // leaf-ish nodes that do not hold a nested $(…). Safe to skip.
+    case 'ArithBracedExpansion':
+      // `ArithBracedExpansion` carries only a raw `content` string (e.g.
+      // `"BAR:-$(whoami)"` from `${FOO:0:${BAR:-$(whoami)}}`) — there is
+      // no nested AST to walk, so the content could contain an arbitrary
+      // `$(…)` that would execute during expansion. Reject conservatively;
+      // the wildcard `*` allow-list remains the escape hatch.
+      return {
+        ok: false,
+        reason: `agent: subshell syntax not allowed (braced parameter expansion inside arithmetic); wildcard '*' allow-list is required to use braced arithmetic forms`,
+      };
+    case 'ArithSyntaxError':
+      // `ArithSyntaxError` is emitted by just-bash's arithmetic parser for
+      // any arithmetic fragment it cannot lex/parse (e.g., the nested
+      // `$((1 + $(whoami)))` in a substring length). Bash would still
+      // evaluate the un-parsed source at runtime, so accepting it is
+      // unsafe. Reject conservatively; the wildcard `*` allow-list remains
+      // the escape hatch.
+      return {
+        ok: false,
+        reason: `agent: subshell syntax not allowed (unparseable arithmetic expression); wildcard '*' allow-list is required to use unparseable arithmetic forms`,
+      };
+    // Number, Variable, SpecialVar, DynamicBase, DynamicNumber,
+    // NumberSubscript, SingleQuote — all leaf nodes that do not hold a
+    // nested $(…) and cannot smuggle a disallowed command. Safe to skip.
     default:
       return OK;
   }
