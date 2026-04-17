@@ -532,14 +532,15 @@ export class VirtualFS {
       try {
         const fh = await VirtualFS.fsaGetFile(mount.handle, mount.relParts, true);
         const writable = await fh.createWritable();
+        // Preserve byteOffset/byteLength: pooled Buffer instances share a
+        // backing ArrayBuffer with other allocations, so `content.buffer`
+        // alone would write the whole pool.
         const data =
           typeof content === 'string'
             ? new TextEncoder().encode(content)
-            : new Uint8Array(
-                content instanceof Uint8Array
-                  ? (content.buffer as ArrayBuffer)
-                  : (content as ArrayBuffer)
-              );
+            : content instanceof Uint8Array
+              ? new Uint8Array(content.buffer, content.byteOffset, content.byteLength)
+              : new Uint8Array(content as ArrayBuffer);
         await writable.write(data as unknown as FileSystemWriteChunkType);
         await writable.close();
       } catch (err) {

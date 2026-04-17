@@ -42,6 +42,43 @@ class MockFileHandle {
       arrayBuffer: async () => bytes.slice().buffer,
     } as File;
   }
+
+  async createWritable(): Promise<FileSystemWritableFileStream> {
+    const node = this.node;
+    const chunks: Uint8Array[] = [];
+    return {
+      async write(chunk: unknown): Promise<void> {
+        let bytes: Uint8Array;
+        if (typeof chunk === 'string') {
+          bytes = new TextEncoder().encode(chunk);
+        } else if (chunk instanceof Uint8Array) {
+          bytes = chunk;
+        } else if (chunk instanceof ArrayBuffer) {
+          bytes = new Uint8Array(chunk);
+        } else if (chunk && typeof chunk === 'object' && 'data' in chunk) {
+          const data = (chunk as { data: unknown }).data;
+          if (typeof data === 'string') bytes = new TextEncoder().encode(data);
+          else if (data instanceof Uint8Array) bytes = data;
+          else if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
+          else throw new Error('Unsupported chunk data type');
+        } else {
+          throw new Error('Unsupported chunk type');
+        }
+        chunks.push(bytes);
+      },
+      async close(): Promise<void> {
+        const total = chunks.reduce((n, c) => n + c.byteLength, 0);
+        const merged = new Uint8Array(total);
+        let offset = 0;
+        for (const c of chunks) {
+          merged.set(c, offset);
+          offset += c.byteLength;
+        }
+        node.content = merged;
+        node.mtime = Date.now();
+      },
+    } as unknown as FileSystemWritableFileStream;
+  }
 }
 
 class MockDirectoryHandle {
@@ -99,6 +136,17 @@ class MockDirectoryHandle {
         yield [name, new MockFileHandle(name, entry)];
       }
     }
+  }
+
+  async removeEntry(name: string, options?: { recursive?: boolean }): Promise<void> {
+    const entry = this.node.entries.get(name);
+    if (!entry) {
+      throw new MockFsError('NotFoundError', `No such entry: ${name}`);
+    }
+    if (entry.kind === 'directory' && entry.entries.size > 0 && !options?.recursive) {
+      throw new MockFsError('InvalidModificationError', `Directory not empty: ${name}`);
+    }
+    this.node.entries.delete(name);
   }
 }
 
