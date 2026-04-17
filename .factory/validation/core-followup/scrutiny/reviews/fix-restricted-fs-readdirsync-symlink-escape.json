@@ -1,0 +1,28 @@
+{
+  "featureId": "fix-restricted-fs-readdirsync-symlink-escape",
+  "reviewedAt": "2026-04-17T18:06:53Z",
+  "commitId": "cc45faf",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The round-2 patch fixes the original `readDirSync()` symlink-directory escape from `fix-restricted-fs-shell-contract`, but it still leaves an ACL leak on the same adapter surface: `lstatSync()` now returns null on ancestor escape symlinks, and `VfsAdapter.lstat()` immediately falls back to async `RestrictedFS.lstat()`, which still follows ancestor symlinks out of sandbox. That means the overall RestrictedFS/VfsAdapter contract is still not fully VAL-FS-019-safe, so the original feature is not yet re-verified.",
+    "issues": [
+      {
+        "file": "packages/webapp/src/fs/restricted-fs.ts",
+        "line": 503,
+        "severity": "blocking",
+        "description": "`RestrictedFS.lstat()` still does only a lexical `isAllowed()` check and then delegates directly to `this.vfs.lstat(path)`. After `cc45faf`, `lstatSync()` returns null whenever an ancestor symlink is present (`packages/webapp/src/fs/restricted-fs.ts:249-253`), and `VfsAdapter.lstat()` immediately falls back to this async path (`packages/webapp/src/shell/vfs-adapter.ts:227-242`). But LightningFS `CacheFS.lstat()` still follows ancestor symlinks even when the leaf itself is not followed (`node_modules/@isomorphic-git/lightning-fs/src/CacheFS.js:108-125, 224-225`), so a path like `/shared/link-to-other-scoop/secret-file` can still resolve into a sibling scoop and leak metadata through any shell path that uses `fs.lstat()` (for example just-bash `ls` classification/long-listing code in `packages/webapp/src/vendor/just-bash/dist/bundle/browser.js:55-78`). The new tests only cover direct `RestrictedFS.lstatSync()` plus `ls`/`cat` regressions, so this fallback hole remains untested and unfixed."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The shared architecture note now points reviewers at a closed `readDirSync` caveat and misses the remaining live `lstat` fallback gap. Future workers reading `.factory/library/architecture.md` will think the open issue is still `readDirSync`, even though `cc45faf` fixed that path and the surviving ACL hole is in async `RestrictedFS.lstat()`.",
+      "evidence": ".factory/library/architecture.md:85-98 still says the known caveat is `readDirSync` symlink escape; the fix now guards `readDirSync` with `scanPathForSymlinks` in `packages/webapp/src/fs/restricted-fs.ts:202-278` and adds regression tests at `packages/webapp/tests/fs/restricted-fs-sync.test.ts:391-413` and `512-526`."
+    }
+  ],
+  "addressesFailureFrom": "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/validation/core-followup/scrutiny/reviews/fix-restricted-fs-shell-contract.json",
+  "summary": "Fail: `cc45faf` fixes the prior `readDirSync` symlink-escape blocker from `abde8d7`, but a blocking ancestor-symlink escape remains via the `VfsAdapter.lstat()` fallback to async `RestrictedFS.lstat()`. Because that adapter surface is still ACL-unsafe, the original `fix-restricted-fs-shell-contract` feature is not yet fully re-verified."
+}

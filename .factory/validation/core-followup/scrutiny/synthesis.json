@@ -1,6 +1,6 @@
 {
   "milestone": "core-followup",
-  "round": 1,
+  "round": 2,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -21,42 +21,37 @@
   },
   "reviewsSummary": {
     "total": 2,
-    "passed": 0,
-    "failed": 2,
-    "failedFeatures": ["fix-agent-scoop-visibility", "fix-restricted-fs-shell-contract"]
+    "passed": 1,
+    "failed": 1,
+    "failedFeatures": ["fix-restricted-fs-readdirsync-symlink-escape"]
   },
   "blockingIssues": [
     {
-      "featureId": "fix-agent-scoop-visibility",
+      "featureId": "fix-restricted-fs-readdirsync-symlink-escape",
       "severity": "blocking",
-      "description": "`orchestrator.unregisterScoop()` emits `onStatusChange(jid, 'ready')` before removing bridge scoops from orchestrator state, so both scoop-panel refresh paths can keep rendering a cleaned-up bridge scoop until a later refresh."
-    },
-    {
-      "featureId": "fix-restricted-fs-shell-contract",
-      "severity": "blocking",
-      "description": "`RestrictedFS.readDirSync()` delegates strictly allowed paths straight to `VirtualFS.readDirSync()`, which follows symlinked directory paths; shell commands like `ls`/`find` can still enumerate out-of-sandbox contents through symlinked directories."
+      "description": "`RestrictedFS.lstat()` still delegates directly to `this.vfs.lstat(path)` after only a lexical `isAllowed()` check, so when `lstatSync()` returns null for an ancestor symlink, `VfsAdapter.lstat()` can fall back to an async path that still follows the ancestor symlink out of sandbox and leak metadata through shell `lstat` consumers. Because that adapter surface remains ACL-unsafe, `fix-restricted-fs-shell-contract` is not yet fully re-verified."
     }
   ],
   "appliedUpdates": [
     {
       "target": "library",
-      "description": "Corrected `.factory/library/architecture.md` to record the remaining `RestrictedFS.readDirSync()` symlinked-directory ACL gap instead of treating the sync fast path as equivalent to async `readDir()`.",
-      "sourceFeature": "fix-restricted-fs-shell-contract"
+      "description": "Updated `.factory/library/architecture.md` to record that bridge-scoop cleanup now removes registry state before the terminal `onStatusChange('ready')` callback, closing the ghost-row gap verified by `fix-agent-scoop-cleanup-ordering`.",
+      "sourceFeature": "fix-agent-scoop-cleanup-ordering"
     },
     {
       "target": "library",
-      "description": "Corrected `.factory/library/architecture.md` to note that bridge-scoop cleanup currently signals `onStatusChange('ready')` before removing the scoop from orchestrator state, which can leave ghost scoop rows until a later refresh.",
-      "sourceFeature": "fix-agent-scoop-visibility"
+      "description": "Updated `.factory/library/architecture.md` to note that the `readDirSync()` symlink-directory gap is fixed and that the remaining RestrictedFS ACL caveat is the async `lstat()` fallback on ancestor symlinks discovered while reviewing `fix-restricted-fs-readdirsync-symlink-escape`.",
+      "sourceFeature": "fix-restricted-fs-readdirsync-symlink-escape"
     }
   ],
   "suggestedGuidanceUpdates": [
     {
-      "target": "webapp-worker skill",
-      "suggestion": "Clarify that user-visible UI fixes still require manual CDP/agent-browser verification even when the feature's fulfilled assertions are Vitest-based, and workers who skip that check must mark `followedProcedure: false`.",
-      "evidence": "Feature `fix-agent-scoop-visibility` changed scoop-panel visibility/status behavior but its handoff recorded no interactive checks and still marked `followedProcedure=true`, despite the skill's manual-validation requirement.",
+      "target": "AGENTS.md",
+      "suggestion": "Clarify the precedence for required manual CDP smoke checks when port 5710 is already occupied: mission guidance should explicitly say whether workers must kill the existing occupant and continue, or return immediately, so UI-visible fixes do not skip meaningful browser verification.",
+      "evidence": "Both visibility-related workers skipped a meaningful port-5710 smoke run because mission AGENTS.md told them to try killing the occupant first while the feature-level instructions told them to stop and return if the port was already held. That ambiguity produced two handoffs without real browser validation of the updated bundle.",
       "isSystemic": false
     }
   ],
   "rejectedObservations": [],
-  "previousRound": null
+  "previousRound": ".factory/validation/core-followup/scrutiny/synthesis.round1.json"
 }
