@@ -16,6 +16,7 @@ import type {
   CdpCommandMsg,
   CdpResponseMsg,
   CdpEventMsg,
+  NavigateLickMsg,
   TraySocketCommandMessage,
   TraySocketErrorMsg,
   TraySocketMessageMsg,
@@ -24,14 +25,6 @@ import type {
   OAuthRequestMsg,
   OAuthResultMsg,
 } from './messages.js';
-import {
-  handleCreatedTabHandoff,
-  handlePanelHandoffMessage,
-  handleUpdatedTabHandoff,
-  initializeHandoffs,
-  isHandoffPanelMessage,
-} from './handoffs.js';
-
 // ---------------------------------------------------------------------------
 // Side panel behavior
 // ---------------------------------------------------------------------------
@@ -87,10 +80,8 @@ async function ensureOffscreen(): Promise<void> {
 // Create offscreen doc on install/startup
 chrome.runtime.onInstalled?.addListener?.(() => {
   ensureOffscreen();
-  initializeHandoffs();
 });
 ensureOffscreen();
-initializeHandoffs();
 
 // ---------------------------------------------------------------------------
 // Tab grouping — inline copy for service worker (SW can't import shared chunks)
@@ -129,12 +120,51 @@ async function addToSliccGroup(tabId: number): Promise<void> {
   }
 }
 
-chrome.tabs.onCreated.addListener(handleCreatedTabHandoff);
+// ---------------------------------------------------------------------------
+// x-slicc header observer — emit a navigate lick when a main-frame document
+// response carries the x-slicc header.
+// ---------------------------------------------------------------------------
 
-chrome.tabs.onUpdated.addListener(
-  (_tabId: number, changeInfo: ChromeTabChangeInfo, tab: ChromeTab) => {
-    handleUpdatedTabHandoff(changeInfo, tab);
+function findSliccHeader(
+  headers: Array<{ name: string; value?: string }> | undefined
+): string | null {
+  if (!headers) return null;
+  for (const h of headers) {
+    if (h.name.toLowerCase() === 'x-slicc' && typeof h.value === 'string' && h.value.length > 0) {
+      return h.value;
+    }
   }
+  return null;
+}
+
+chrome.webRequest.onHeadersReceived.addListener(
+  (details) => {
+    const sliccHeader = findSliccHeader(details.responseHeaders);
+    if (!sliccHeader) return;
+    const payload: NavigateLickMsg = {
+      type: 'navigate-lick',
+      url: details.url,
+      sliccHeader,
+      tabId: details.tabId >= 0 ? details.tabId : undefined,
+    };
+    const tabId = details.tabId;
+    const dispatch = (title?: string) => {
+      if (title) payload.title = title;
+      chrome.runtime.sendMessage({ source: 'service-worker' as const, payload }).catch(() => {
+        // Offscreen may not be listening yet — best effort.
+      });
+    };
+    if (tabId >= 0) {
+      chrome.tabs
+        .get(tabId)
+        .then((tab) => dispatch(tab.title))
+        .catch(() => dispatch());
+    } else {
+      dispatch();
+    }
+  },
+  { urls: ['<all_urls>'], types: ['main_frame'] },
+  ['responseHeaders']
 );
 
 // ---------------------------------------------------------------------------
@@ -160,11 +190,6 @@ chrome.runtime.onMessage.addListener(
 
     if (msg.source === 'panel') {
       const panelPayload = msg.payload;
-
-      if (isHandoffPanelMessage(panelPayload)) {
-        handlePanelHandoffMessage(panelPayload);
-        return false;
-      }
 
       // Handle OAuth requests — service worker has chrome.identity access
       if (panelPayload.type === 'oauth-request') {

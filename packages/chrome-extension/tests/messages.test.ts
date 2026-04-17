@@ -46,19 +46,13 @@ describe('isExtensionMessage', () => {
     expect(isExtensionMessage(msg)).toBe(true);
   });
 
-  it('returns true for pending handoff list envelopes', () => {
+  it('returns true for navigate-lick envelopes', () => {
     const msg: ExtensionMessage = {
       source: 'service-worker',
       payload: {
-        type: 'handoff-pending-list',
-        handoffs: [
-          {
-            handoffId: 'handoff-1',
-            sourceUrl: 'https://www.sliccy.ai/handoff#abc',
-            receivedAt: new Date().toISOString(),
-            payload: { instruction: 'Continue this task in SLICC.' },
-          },
-        ],
+        type: 'navigate-lick',
+        url: 'https://example.com/',
+        sliccHeader: 'handoff:do the thing',
       },
     };
     expect(isExtensionMessage(msg)).toBe(true);
