@@ -36,14 +36,29 @@ interface SessionState {
 }
 
 /**
+ * Decode an x-slicc header value. Producers (including sliccy.ai's
+ * /handoff?msg= endpoint) percent-encode the value so non-Latin1 inputs
+ * survive `Headers.set`. If decoding fails (malformed percent sequence),
+ * fall back to the raw value — a percent-encoded string is a superset of
+ * ASCII, so decoding is idempotent on already-safe values.
+ */
+export function decodeSliccHeader(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/**
  * Find the x-slicc header value in a CDP Network.Response.headers bag.
- * Header names are case-insensitive per RFC 7230.
+ * Header names are case-insensitive per RFC 7230. Value is returned decoded.
  */
 export function extractSliccHeader(headers: Record<string, unknown> | undefined): string | null {
   if (!headers) return null;
   for (const [name, value] of Object.entries(headers)) {
     if (name.toLowerCase() === 'x-slicc' && typeof value === 'string' && value.length > 0) {
-      return value;
+      return decodeSliccHeader(value);
     }
   }
   return null;

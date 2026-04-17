@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { NavigationWatcher, extractSliccHeader } from '../../src/cdp/navigation-watcher.js';
+import {
+  NavigationWatcher,
+  extractSliccHeader,
+  decodeSliccHeader,
+} from '../../src/cdp/navigation-watcher.js';
 import type { CDPTransport } from '../../src/cdp/transport.js';
 import type { CDPEventListener, ConnectionState, CDPConnectOptions } from '../../src/cdp/types.js';
 
@@ -51,9 +55,31 @@ class MockCDPTransport implements CDPTransport {
   }
 }
 
+describe('decodeSliccHeader', () => {
+  it('decodes percent-encoded values', () => {
+    expect(decodeSliccHeader('handoff%3Afoo%20bar')).toBe('handoff:foo bar');
+    expect(decodeSliccHeader('upskill%3Ahttps%3A%2F%2Fgithub.com%2Fx%2Fy')).toBe(
+      'upskill:https://github.com/x/y'
+    );
+  });
+
+  it('round-trips unicode produced by encodeURIComponent', () => {
+    const original = 'handoff:🚀 你好';
+    expect(decodeSliccHeader(encodeURIComponent(original))).toBe(original);
+  });
+
+  it('leaves plain ASCII unchanged (idempotent)', () => {
+    expect(decodeSliccHeader('handoff:do-it')).toBe('handoff:do-it');
+  });
+
+  it('falls back to the raw value for malformed percent sequences', () => {
+    expect(decodeSliccHeader('handoff:50%')).toBe('handoff:50%');
+  });
+});
+
 describe('extractSliccHeader', () => {
-  it('returns the value for x-slicc (case-insensitive)', () => {
-    expect(extractSliccHeader({ 'X-Slicc': 'handoff:do it' })).toBe('handoff:do it');
+  it('decodes the value for x-slicc (case-insensitive)', () => {
+    expect(extractSliccHeader({ 'X-Slicc': 'handoff%3Ado%20it' })).toBe('handoff:do it');
     expect(extractSliccHeader({ 'x-slicc': 'upskill:url' })).toBe('upskill:url');
   });
 

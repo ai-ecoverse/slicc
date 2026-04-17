@@ -80,10 +80,14 @@ const PAGE_HTML = `<!DOCTYPE html>
 </html>`;
 
 /**
- * Build the `/handoff` response. The `msg` query parameter becomes the
- * `x-slicc` header value verbatim (capped at a reasonable length to avoid
- * abuse). Missing or empty `msg` falls back to an informational page with
- * no header.
+ * Build the `/handoff` response.
+ *
+ * The `msg` query parameter is percent-encoded before being written to the
+ * `x-slicc` response header. This avoids `Headers.set` rejecting non-Latin1
+ * input (emoji, CJK, etc.) and neutralises CR/LF header-injection attempts.
+ * SLICC clients `decodeURIComponent` the value on read.
+ *
+ * Missing or empty `msg` falls back to an informational page with no header.
  */
 export function buildHandoffResponse(request: Request): Response {
   const url = new URL(request.url);
@@ -92,7 +96,7 @@ export function buildHandoffResponse(request: Request): Response {
 
   const headers = new Headers({ 'Content-Type': 'text/html; charset=utf-8' });
   if (msg.length > 0) {
-    headers.set('x-slicc', msg);
+    headers.set('x-slicc', encodeURIComponent(msg));
   }
 
   return new Response(PAGE_HTML, { status: 200, headers });
