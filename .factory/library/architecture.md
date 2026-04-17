@@ -116,6 +116,26 @@ Required handshake (already wired in `AgentBridge.spawn()`):
 
 Historical note (2026-04-17): Before this handshake was codified, `registerExistingScoop` populated only `scoops` + `messageQueues` and the bridge's scope-context callback was a no-op `() => {}`. This caused two production bugs: `list_scoops` returned bridge scoops with status `'unknown'`, and the UI panel never rendered them at all. A later cleanup-ordering fix also moved bridge-scoop removal ahead of the terminal callback so the UI no longer leaves ghost rows behind. See VAL-SPAWN-014 + VAL-SPAWN-015.
 
+### 6b. Scope-context → OrchestratorCallbacks forwarding (single-source helper)
+
+`Orchestrator.buildForwardingScoopCallbacks(jid, folder, extras?)` is the **authoritative single-source** for wiring a scoop's `ScoopContextCallbacks` into the orchestrator's top-level `OrchestratorCallbacks` chain. Every scope-context callback (`onResponse`, `onResponseDone`, `onToolStart`, `onToolEnd`, `onToolUI`, `onToolUIDone`, `onError`, `onSendMessage`, `onStatusChange`) forwards to `this.callbacks.X(jid, ...)` — injecting `jid` as the first arg — so downstream consumers receive the events.
+
+**Both code paths that create a `ScoopContext` MUST delegate to this helper:**
+
+1. `Orchestrator.createScoopTab` (regular feed_scoop / user-created scoops)
+2. `AgentBridge.spawn` in `packages/webapp/src/scoops/agent-bridge.ts` (ephemeral `agent`-command scoops)
+
+**Skipping the helper means the panel/persistence layer will not see the scoop's messages.** The most important downstream consumer is `OffscreenBridge.createCallbacks` in `packages/chrome-extension/src/offscreen-bridge.ts`: its `onResponse` / `onResponseDone` / `onToolStart` / `onToolEnd` handlers emit `agent-event` messages to the side panel AND call `persistScoop(jid)` to write the scoop's message buffer to the shared UI `SessionStore` (`session-agent-<uid>` or `session-cone`). Without the forwarding chain, a scoop's row in the sidebar is clickable but the chat panel stays empty — even while the agent is actively running.
+
+**Extras parameter**: lets callers layer LOCAL concerns on top of the forwarding chain WITHOUT dropping any forwards. Each `extras.onX` handler runs FIRST (observation phase); then the helper invokes `this.callbacks.onX(jid, ...)` (forwarding phase). Callers use extras for:
+
+- `createScoopTab`: tab-state mutation (`lastActivity`, error tracking), response-buffer routing back to cone on completion, cone-only wiring (`onFeedScoop`, `onScoopScoop`, `onDropScoop`, `setGlobalMemory`, `getScoopTabState`).
+- `AgentBridge.spawn`: `onSendMessage` captures final text into the `captured[]` ring (SLICC stdout contract); `onStatusChange` drives `orchestrator.updateBridgeTabStatus`; `onError` logs bridge-local errors.
+
+**Guard contract**: the helper's forwarding phase is guarded by `if (!this.scoops.has(jid)) return;` so late-firing callbacks after `unregisterScoop` are safely dropped. Extras fire unconditionally (for local cleanup), then the guard checks before forwarding.
+
+Historical note (2026-04-17): before the helper was extracted, `AgentBridge.spawn` built its own `ScoopContextCallbacks` with no-op `onResponse` / `onResponseDone` and missing `onToolStart` / `onToolEnd`. The visible symptom was VAL-SPAWN-016: clicking an agent-spawned scoop row in the sidebar showed an empty chat panel even while the agent was actively running. The fix extracts the wiring into `buildForwardingScoopCallbacks` and delegates both code paths to it — enforcing architectural parity via shared code + the `agent-bridge-callback-forwarding.test.ts` regression guard.
+
 ## Data Flow
 
 ```

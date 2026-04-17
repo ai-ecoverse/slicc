@@ -258,26 +258,52 @@ export function createAgentBridge(
 
     // Collect `send_message` payloads; the latest one wins for final output.
     const captured: string[] = [];
-    const callbacks: ScoopContextCallbacks = {
-      onResponse: () => {},
-      onResponseDone: () => {},
-      onError: (errMsg) => {
-        log.warn('scoop error', { jid, errMsg });
-      },
-      // Propagate scope-context status transitions to the orchestrator's
-      // `onStatusChange` callback pipeline so the UI panels (side-panel
-      // `ScoopsPanel` + CLI scoop panel) refresh and show the bridge scoop
-      // during its run. See VAL-SPAWN-015.
-      onStatusChange: (status) => {
-        orchestrator.updateBridgeTabStatus(jid, status);
-      },
-      onSendMessage: (text) => {
-        captured.push(text);
-      },
-      getScoops: () => orchestrator.getScoops(),
-      getGlobalMemory: async () => '',
-      getBrowserAPI,
-    };
+    // Build the scope-context callbacks via the shared forwarding helper
+    // (Orchestrator.buildForwardingScoopCallbacks). Every callback dispatched
+    // by the spawned ScoopContext is forwarded to the orchestrator's top-level
+    // OrchestratorCallbacks chain — enabling the side-panel relay
+    // (`OffscreenBridge.createCallbacks`) to emit `agent-event` messages AND
+    // call `persistScoop(jid)` for bridge scoops. Without this forwarding
+    // chain, clicking an agent-spawned scoop row in the sidebar showed an
+    // empty chat panel (VAL-SPAWN-016).
+    //
+    // Extras layer bridge-local concerns on top of the forwarding chain:
+    //   - `onSendMessage` captures the final text into `captured[]` for the
+    //     SLICC stdout contract (last-send_message-wins) while the helper
+    //     ALSO forwards to `orchestrator.callbacks.onSendMessage(jid, text)`
+    //     so the side panel renders the message in real time.
+    //   - `onStatusChange` drives `orchestrator.updateBridgeTabStatus` so
+    //     the bridge-tab entry in `this.tabs` stays in sync with the
+    //     scope context's transitions. The helper ALSO forwards the
+    //     transition to `orchestrator.callbacks.onStatusChange` (so
+    //     `ScoopsPanel.refreshScoops()` fires in the panel), but
+    //     `updateBridgeTabStatus` already does that AND updates the tab
+    //     state — see VAL-SPAWN-015. The helper's additional forward is a
+    //     benign duplicate `onStatusChange` broadcast that panels already
+    //     coalesce by status set.
+    //   - `onError` logs the bridge-local error message; the helper then
+    //     forwards `onError(jid, error)` to the panel.
+    const callbacks: ScoopContextCallbacks = orchestrator.buildForwardingScoopCallbacks(
+      jid,
+      folder,
+      {
+        onError: (errMsg) => {
+          log.warn('scoop error', { jid, errMsg });
+        },
+        onStatusChange: (status) => {
+          // Keep the bridge tab entry's status + lastActivity in sync with
+          // the scope context's transitions. `updateBridgeTabStatus` is a
+          // safe no-op when the tab entry has already been cleaned up.
+          orchestrator.updateBridgeTabStatus(jid, status);
+        },
+        onSendMessage: (text) => {
+          captured.push(text);
+        },
+        getScoops: () => orchestrator.getScoops(),
+        getGlobalMemory: async () => '',
+        getBrowserAPI,
+      }
+    );
 
     let ctx: AgentBridgeContext | null = null;
     let finalText = '';
