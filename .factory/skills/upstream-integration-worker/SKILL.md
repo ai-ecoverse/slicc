@@ -80,6 +80,8 @@ mkdir -p packages/webapp/src/vendor/<pkg-name>/
 
 **Important gotcha — .d.ts transitive references:** Most upstream packages' top-level `.d.ts` files transitively reference subdirectories beyond what the package.json `files` field advertises (e.g. `transform/`, `helpers/`, `security/`, `regex/`, `shell/`). A blanket "copy all `.d.ts` then prune test-only directories" strategy is the practical approach. After copying, run `npm run typecheck` from the repo root; any "cannot find module" error tells you which subdirectory is still missing.
 
+**Important gotcha — type-surface assertions must live in a typecheck-covered source path:** When a feature promises "CI-backed type-surface coverage" for the vendored package's exported types, the compile-time assertions must live in a file that `npm run typecheck` actually compiles. This repo's typecheck runs `tsc --noEmit` against `tsconfig.cli.json`, `tsconfig.json`, and `tsconfig.worker.json` — whose `include` globs ONLY cover `packages/*/src/**/*.ts`, never test files. A `.test.ts` file that type-imports AST types is transpiled by vitest at run time (so missing RUNTIME exports throw), but missing type-only exports are invisible to CI. The fix is to add a dedicated typecheck-target source file, e.g. `packages/webapp/src/vendor/<pkg>/type-check.ts`, that re-imports and unions every type the wrapper relies on. That file lives under the `tsconfig.json` include glob and becomes a hard CI gate for the vendor's type surface.
+
 Write a short `packages/webapp/src/vendor/<pkg-name>/README.md` documenting:
 
 - The upstream URL, commit hash, and version
