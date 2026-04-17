@@ -634,14 +634,16 @@ function extractLastAssistantText(messages: AgentMessage[]): string {
  * assistant message collecting every consecutive text block until we hit
  * either (a) a `toolCall` block — which acts as a chronological checkpoint
  * and stops the walk — or (b) the start of the content array. The collected
- * text blocks are then joined in their ORIGINAL (forward) order with
- * `\n\n` so multi-block assistant responses (common with certain providers,
- * e.g. Bedrock Claude emitting interleaved thinking+answer) are not
- * truncated to their final block. Whitespace-only text blocks are skipped
- * during collection to keep the output readable. Text blocks that appear
- * BEFORE the last `toolCall` within the same message are considered
- * intermediate narrative and are intentionally dropped — the agent produced
- * more work after them.
+ * text blocks are then concatenated LITERALLY in their ORIGINAL (forward)
+ * order via `.join('')` — matching the canonical assistant-text assembly
+ * used by `ScoopContext.handleAgentEvent` (`message_end` case) and
+ * `extractLastAssistantText()` in this file. This preserves split-token
+ * output verbatim: adjacent blocks like `[text('Hello'), text(' world')]`
+ * yield `'Hello world'`, not a fabricated paragraph break. Whitespace-only
+ * text blocks are skipped during collection to keep the output readable.
+ * Text blocks that appear BEFORE the last `toolCall` within the same
+ * message are considered intermediate narrative and are intentionally
+ * dropped — the agent produced more work after them.
  *
  * Fallback: if the walk completes without finding a qualifying block but
  * `captured[]` is non-empty, return the LAST captured entry. This preserves
@@ -666,8 +668,13 @@ function pickChronologicallyLastOutput(messages: AgentMessage[], captured: strin
           // Winning block is text. Keep scanning this same message
           // backward, collecting all text blocks bounded by the nearest
           // preceding toolCall (the chronological checkpoint). Join in
-          // forward order with `\n\n` so multi-text-block messages are
-          // not truncated to the final block.
+          // forward order with `''` (literal concatenation) so that
+          // multi-text-block messages are not truncated to the final
+          // block AND split-token output like
+          // [text('Hello'), text(' world')] is preserved verbatim as
+          // 'Hello world'. This matches the canonical assistant-text
+          // assembly in ScoopContext.message_end and
+          // extractLastAssistantText.
           const collected: string[] = [textBlock.text];
           for (let k = j - 1; k >= 0; k--) {
             const b = content[k];
@@ -679,7 +686,7 @@ function pickChronologicallyLastOutput(messages: AgentMessage[], captured: strin
             // Other block types (e.g. thinking) are skipped but do NOT
             // act as checkpoints — they are side-channels, not output.
           }
-          return collected.join('\n\n');
+          return collected.join('');
         }
       } else if (block.type === 'toolCall') {
         const toolCall = block as ToolCall;

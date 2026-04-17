@@ -652,7 +652,9 @@ describe('createAgentBridge', () => {
     it('multi-text-block assistant message: joins ALL text blocks when text wins', async () => {
       // Content: [text('alpha'), text('beta'), text('gamma')]
       // No tool_use — all three blocks belong to the final turn.
-      // Expected: 'alpha\n\nbeta\n\ngamma' (joined with double-newline).
+      // Expected: 'alphabetagamma' (literal concatenation — matches
+      // ScoopContext.message_end `.join('')` and extractLastAssistantText
+      // `.join('')` conventions).
       const captured: CapturedCtxArgs[] = [];
       const bridge = createAgentBridge(orch, vfs, null, {
         createContext: makeMockContextFactory({
@@ -686,7 +688,7 @@ describe('createAgentBridge', () => {
       });
       const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
       expect(result.exitCode).toBe(0);
-      expect(result.finalText).toBe('alpha\n\nbeta\n\ngamma');
+      expect(result.finalText).toBe('alphabetagamma');
     });
 
     it('tool_use acts as a chronological boundary within a message (regression guard)', async () => {
@@ -731,9 +733,10 @@ describe('createAgentBridge', () => {
 
     it('empty / whitespace-only text blocks are skipped when concatenating', async () => {
       // Content: [text('real'), text('   '), text('more')]
-      // Expected: 'real\n\nmore' — whitespace-only block is elided from the
-      // join (keeps output readable; mirrors the trim-length check already
-      // used when deciding whether a block "wins").
+      // Expected: 'realmore' — whitespace-only block is elided from the
+      // literal concatenation (keeps output readable; mirrors the
+      // trim-length check already used when deciding whether a block
+      // "wins").
       const captured: CapturedCtxArgs[] = [];
       const bridge = createAgentBridge(orch, vfs, null, {
         createContext: makeMockContextFactory({
@@ -767,7 +770,51 @@ describe('createAgentBridge', () => {
       });
       const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
       expect(result.exitCode).toBe(0);
-      expect(result.finalText).toBe('real\n\nmore');
+      expect(result.finalText).toBe('realmore');
+    });
+
+    it('split-token adjacent text blocks concatenate literally (no fabricated whitespace)', async () => {
+      // Content: [text('Hello'), text(' world')]
+      // pi-ai providers can split a single logical sentence across adjacent
+      // text blocks at arbitrary token boundaries (e.g. Anthropic streaming
+      // can emit 'Hello' + ' world' as two content blocks). The joiner must
+      // concatenate literally — `''` — matching ScoopContext.message_end
+      // (`.join('')`) and extractLastAssistantText (`.join('')`). A `\n\n`
+      // joiner would fabricate a paragraph break and mutate the output to
+      // `'Hello\n\n world'`.
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({
+          captured,
+          agentMessages: [
+            {
+              role: 'assistant',
+              content: [
+                { type: 'text', text: 'Hello' },
+                { type: 'text', text: ' world' },
+              ],
+              api: 'anthropic',
+              provider: 'anthropic',
+              model: 'test-model',
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: 'stop',
+              timestamp: Date.now(),
+            } as AgentMessage,
+          ],
+        }),
+        generateUid: () => 'split-token',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(0);
+      expect(result.finalText).toBe('Hello world');
     });
 
     it('single-text-block assistant message still returns just the block (no regression)', async () => {
