@@ -53,6 +53,18 @@ import {
   type WordNode,
   type WordPart,
 } from 'just-bash';
+// Sub-types that are not re-exported from `just-bash`'s top-level entry point
+// but are exposed on the vendored `.d.ts` bundle. We reach into the vendored
+// path only for pure TYPE imports so the wrapper can exhaustively pattern
+// match the ParameterExpansion / BraceExpansion / arithmetic sub-trees.
+import type {
+  ParameterExpansionPart,
+  ParameterOperation,
+  InnerParameterOperation,
+  BraceExpansionPart,
+  ArithmeticExpressionNode,
+  ArithExpr,
+} from '../vendor/just-bash/dist/ast/types.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('bash-tool-allowlist');
@@ -238,6 +250,25 @@ function checkSimpleCommand(cmd: SimpleCommandNode, allowed: ReadonlySet<string>
     };
   }
 
+  // Walk every pre-command assignment. Assignments execute BEFORE the
+  // command name even if the command itself is allow-listed — so
+  // `FOO=$(whoami) ls` with allow-list=['ls'] must still be rejected
+  // because the substitution fires before `ls` does. `assignment.value`
+  // holds a single WordNode (for `FOO=…` / `FOO+=…`), while
+  // `assignment.array` holds an array of WordNodes (for `ARR=(…)`).
+  for (const assignment of cmd.assignments) {
+    if (assignment.value) {
+      const verdict = walkWordParts(assignment.value.parts);
+      if (!verdict.ok) return verdict;
+    }
+    if (assignment.array) {
+      for (const element of assignment.array) {
+        const verdict = walkWordParts(element.parts);
+        if (!verdict.ok) return verdict;
+      }
+    }
+  }
+
   // Walk every argument word for disallowed substitution parts.
   for (const arg of cmd.args) {
     const verdict = walkWordParts(arg.parts);
@@ -332,10 +363,13 @@ function extractLiteralHeadPart(part: WordPart): HeadResult {
 }
 
 /**
- * Walk a `WordNode`'s parts (including nested parts inside DoubleQuoted)
- * looking for disallowed substitution forms. Parameter expansion is
- * allowed in args — this mirrors bash's semantics where `$HOME` is just a
- * value and doesn't change the current command's head.
+ * Walk a `WordNode`'s parts (including nested parts inside DoubleQuoted,
+ * ParameterExpansion operation words, and BraceExpansion items) looking for
+ * disallowed substitution forms. Plain `$VAR` parameter expansion with no
+ * operation is allowed — it cannot smuggle a disallowed command. But the
+ * operation sub-tree (`${VAR:-word}`, `${VAR/pat/rep}`, etc.) can carry
+ * nested WordNodes that DO expand substitutions, so those must be walked.
+ * Similarly, BraceExpansion `Word` items carry nested WordNodes.
  */
 function walkWordParts(parts: readonly WordPart[]): Verdict {
   for (const part of parts) {
@@ -360,15 +394,185 @@ function walkWordParts(parts: readonly WordPart[]): Verdict {
         if (!inner.ok) return inner;
         break;
       }
-      // Literal, SingleQuoted, Escaped, ParameterExpansion, TildeExpansion,
-      // BraceExpansion, Glob are all allowed at the args / redirection-
-      // target level. They cannot smuggle a disallowed command because the
-      // resulting string is passed to the already-allow-listed head.
+      case 'ParameterExpansion': {
+        const inner = walkParameterExpansion(part);
+        if (!inner.ok) return inner;
+        break;
+      }
+      case 'BraceExpansion': {
+        const inner = walkBraceExpansion(part);
+        if (!inner.ok) return inner;
+        break;
+      }
+      // Literal, SingleQuoted, Escaped, TildeExpansion, Glob are all
+      // allowed at the args / redirection-target level. They cannot smuggle
+      // a disallowed command because the resulting string is passed to the
+      // already-allow-listed head.
       default:
         break;
     }
   }
   return OK;
+}
+
+/**
+ * Walk a `ParameterExpansion` part's operation for nested WordNodes that
+ * bash would expand (and therefore execute substitutions in) at runtime.
+ *
+ * The plain `$VAR` / `${VAR}` form (operation === null) is safe.
+ *
+ * Operations that carry a nested `WordNode` and MUST be walked:
+ *   - DefaultValue      (`${VAR:-word}` / `${VAR-word}`)
+ *   - AssignDefault     (`${VAR:=word}` / `${VAR=word}`)
+ *   - ErrorIfUnset      (`${VAR:?word}` / `${VAR?word}`) — word may be null
+ *   - UseAlternative    (`${VAR:+word}` / `${VAR+word}`)
+ *   - PatternRemoval    (`${VAR#pat}` / `${VAR##pat}` / `${VAR%pat}` / `${VAR%%pat}`)
+ *   - PatternReplacement (`${VAR/pat/rep}` — replacement may be null)
+ *   - CaseModification  (`${VAR^pat}` / `${VAR^^pat}` / `${VAR,pat}` / `${VAR,,pat}`) — pattern may be null
+ *   - Substring         (`${VAR:offset:length}` — offset + length are arithmetic)
+ *   - Indirection       (`${!VAR…}` — innerOp wraps any InnerParameterOperation)
+ *
+ * Operations that carry NO WordNode (safe to skip):
+ *   - Length, ArrayKeys, VarNamePrefix, Transform, LengthSliceError,
+ *     BadSubstitution.
+ */
+function walkParameterExpansion(part: ParameterExpansionPart): Verdict {
+  if (!part.operation) return OK;
+  return walkParameterOperation(part.operation);
+}
+
+function walkParameterOperation(op: ParameterOperation): Verdict {
+  switch (op.type) {
+    case 'DefaultValue':
+    case 'AssignDefault':
+    case 'UseAlternative':
+      return walkWordParts(op.word.parts);
+    case 'ErrorIfUnset':
+      return op.word ? walkWordParts(op.word.parts) : OK;
+    case 'PatternRemoval':
+      return walkWordParts(op.pattern.parts);
+    case 'PatternReplacement': {
+      const pat = walkWordParts(op.pattern.parts);
+      if (!pat.ok) return pat;
+      if (op.replacement) return walkWordParts(op.replacement.parts);
+      return OK;
+    }
+    case 'CaseModification':
+      return op.pattern ? walkWordParts(op.pattern.parts) : OK;
+    case 'Substring': {
+      const offset = walkArithExpression(op.offset);
+      if (!offset.ok) return offset;
+      if (op.length) return walkArithExpression(op.length);
+      return OK;
+    }
+    case 'Indirection':
+      return op.innerOp ? walkInnerParameterOperation(op.innerOp) : OK;
+    // The remaining operations (Length, ArrayKeys, VarNamePrefix, Transform,
+    // LengthSliceError, BadSubstitution) carry no nested WordNode and
+    // cannot smuggle a substitution.
+    default:
+      return OK;
+  }
+}
+
+/** Narrowed to InnerParameterOperation so Indirection.innerOp recurses cleanly. */
+function walkInnerParameterOperation(op: InnerParameterOperation): Verdict {
+  // InnerParameterOperation is a subset of ParameterOperation, so the
+  // same switch applies. We cast the type to satisfy the narrower helper's
+  // contract without widening the surface area.
+  return walkParameterOperation(op as ParameterOperation);
+}
+
+/**
+ * Walk a `BraceExpansion` part's items. `Word` items carry a nested
+ * `WordNode` whose substitutions would execute before the current command
+ * runs. `Range` items (`{1..5}`) carry only strings/numbers and are safe.
+ */
+function walkBraceExpansion(part: BraceExpansionPart): Verdict {
+  for (const item of part.items) {
+    if (item.type === 'Word') {
+      const verdict = walkWordParts(item.word.parts);
+      if (!verdict.ok) return verdict;
+    }
+    // 'Range' items contain only primitive start/end/step — no WordNode.
+  }
+  return OK;
+}
+
+/**
+ * Walk an `ArithmeticExpressionNode` (the offset/length of a Substring
+ * parameter expansion) and reject any `ArithCommandSubst` node — that is
+ * bash's `$(…)` (or backtick) form nested inside an arithmetic context,
+ * which would execute a subshell during expansion. Other arith nodes are
+ * safe because they only combine literal numbers, variable names, and
+ * operators.
+ */
+function walkArithExpression(expr: ArithmeticExpressionNode): Verdict {
+  return walkArithExpr(expr.expression);
+}
+
+function walkArithExpr(expr: ArithExpr): Verdict {
+  switch (expr.type) {
+    case 'ArithCommandSubst':
+      return {
+        ok: false,
+        reason: `agent: subshell syntax not allowed ('$(...)' inside arithmetic expansion); wildcard '*' allow-list is required to use command substitutions`,
+      };
+    case 'ArithBinary': {
+      const left = walkArithExpr(expr.left);
+      if (!left.ok) return left;
+      return walkArithExpr(expr.right);
+    }
+    case 'ArithUnary':
+      return walkArithExpr(expr.operand);
+    case 'ArithTernary': {
+      const cond = walkArithExpr(expr.condition);
+      if (!cond.ok) return cond;
+      const cons = walkArithExpr(expr.consequent);
+      if (!cons.ok) return cons;
+      return walkArithExpr(expr.alternate);
+    }
+    case 'ArithAssignment': {
+      if (expr.subscript) {
+        const sub = walkArithExpr(expr.subscript);
+        if (!sub.ok) return sub;
+      }
+      return walkArithExpr(expr.value);
+    }
+    case 'ArithDynamicAssignment': {
+      const target = walkArithExpr(expr.target);
+      if (!target.ok) return target;
+      if (expr.subscript) {
+        const sub = walkArithExpr(expr.subscript);
+        if (!sub.ok) return sub;
+      }
+      return walkArithExpr(expr.value);
+    }
+    case 'ArithDynamicElement': {
+      const name = walkArithExpr(expr.nameExpr);
+      if (!name.ok) return name;
+      return walkArithExpr(expr.subscript);
+    }
+    case 'ArithGroup':
+    case 'ArithNested':
+      return walkArithExpr(expr.expression);
+    case 'ArithConcat': {
+      for (const p of expr.parts) {
+        const v = walkArithExpr(p);
+        if (!v.ok) return v;
+      }
+      return OK;
+    }
+    case 'ArithArrayElement':
+      return expr.index ? walkArithExpr(expr.index) : OK;
+    case 'ArithDoubleSubscript':
+      return walkArithExpr(expr.index);
+    // Number, Variable, SpecialVar, BracedExpansion, DynamicBase,
+    // DynamicNumber, NumberSubscript, SyntaxError, SingleQuote — all
+    // leaf-ish nodes that do not hold a nested $(…). Safe to skip.
+    default:
+      return OK;
+  }
 }
 
 /** Build a rejection {@link AgentToolResult}. */

