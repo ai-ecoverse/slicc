@@ -16,6 +16,11 @@ import {
   shouldIncludeProvider,
 } from '../providers/index.js';
 import type { ProviderConfig } from '../providers/index.js';
+import {
+  isBedrockCampCompatible,
+  getBedrockCampExtraModels,
+  bedrockCampRegionFromBaseUrl,
+} from '../providers/built-in/bedrock-camp.js';
 
 export type { ProviderConfig } from '../providers/index.js';
 
@@ -50,7 +55,6 @@ export interface Account {
   providerId: string;
   apiKey: string;
   baseUrl?: string;
-  modelId?: string;
   deployment?: string;
   apiVersion?: string;
   // OAuth fields (used by OAuth providers)
@@ -123,15 +127,21 @@ function applyModelMetadata(
 // Get models for a provider
 export function getProviderModels(providerId: string): Model<Api>[] {
   try {
-    // Bedrock CAMP uses Amazon Bedrock models with custom API
+    // Bedrock CAMP uses Amazon Bedrock models with custom API.
+    // Filter to inference-profile-prefixed Claude 4.x whose region matches
+    // the configured endpoint (eu.* against us-* 400s "invalid model
+    // identifier"), and inject models missing from pi-ai's registry (e.g.
+    // opus-4.7). Dedupe by ID so extras auto-drop when pi-ai ships them.
     if (providerId === 'bedrock-camp') {
-      const bedrockModels = getModelsDynamic('amazon-bedrock');
-      // Filter to selected model if one is configured
-      const selectedModelId = getModelIdForProvider('bedrock-camp');
-      const filtered = selectedModelId
-        ? bedrockModels.filter((m) => m.id === selectedModelId)
-        : bedrockModels;
-      return (filtered.length > 0 ? filtered : bedrockModels).map((m) => ({
+      const region = bedrockCampRegionFromBaseUrl(getBaseUrlForProvider('bedrock-camp'));
+      const bedrockModels = getModelsDynamic('amazon-bedrock').filter((m) =>
+        isBedrockCampCompatible(m, region)
+      );
+      const existingIds = new Set(bedrockModels.map((m) => m.id));
+      const extras = getBedrockCampExtraModels().filter(
+        (m) => isBedrockCampCompatible(m, region) && !existingIds.has(m.id)
+      );
+      return [...bedrockModels, ...extras].map((m) => ({
         ...m,
         api: 'bedrock-camp-converse' as Api,
         provider: 'bedrock-camp',
@@ -339,22 +349,16 @@ export function addAccount(
   providerId: string,
   apiKey: string,
   baseUrl?: string,
-  modelId?: string,
   deployment?: string,
   apiVersion?: string
 ): void {
   const accounts = getAccounts().filter((a) => a.providerId !== providerId);
   const entry: Account = { providerId, apiKey };
   if (baseUrl) entry.baseUrl = baseUrl;
-  if (modelId) entry.modelId = modelId;
   if (deployment) entry.deployment = deployment;
   if (apiVersion) entry.apiVersion = apiVersion;
   accounts.push(entry);
   saveAccounts(accounts);
-}
-
-export function getModelIdForProvider(providerId: string): string | undefined {
-  return getAccounts().find((a) => a.providerId === providerId)?.modelId;
 }
 
 export function removeAccount(providerId: string): void {
@@ -1092,29 +1096,6 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       dialog.appendChild(apiVersionSection);
 
-      // Model selector section (shown for providers with requiresModelSelection)
-      const modelSection = document.createElement('div');
-      modelSection.style.display = 'none';
-
-      const modelLabel = document.createElement('div');
-      modelLabel.className = 'dialog__desc';
-      modelLabel.textContent = 'Model:';
-      modelSection.appendChild(modelLabel);
-
-      const modelSelect = document.createElement('select');
-      modelSelect.className = 'dialog__input';
-      modelSelect.style.marginBottom = '16px';
-      modelSection.appendChild(modelSelect);
-
-      const modelDesc = document.createElement('div');
-      modelDesc.className = 'dialog__desc';
-      modelDesc.style.cssText =
-        'font-size: 11px; color: var(--s2-content-secondary); margin-top: -12px; margin-bottom: 16px;';
-      modelDesc.textContent = 'Select the model available in your deployment';
-      modelSection.appendChild(modelDesc);
-
-      dialog.appendChild(modelSection);
-
       // Error message area
       const errorEl = document.createElement('div');
       errorEl.style.cssText =
@@ -1175,32 +1156,6 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         } else {
           apiVersionSection.style.display = 'none';
         }
-
-        // Model selector (shown when requiresModelSelection is set)
-        if (providerConfig.requiresModelSelection) {
-          modelSection.style.display = '';
-          modelSelect.innerHTML = '';
-          const sourceProvider = pid === 'bedrock-camp' ? 'amazon-bedrock' : pid;
-          const models = getModelsDynamic(sourceProvider);
-          for (const m of models) {
-            const opt = document.createElement('option');
-            opt.value = m.id;
-            opt.textContent = m.name || m.id;
-            modelSelect.appendChild(opt);
-          }
-          // Pre-select if editing
-          if (isEdit && editing.modelId) {
-            modelSelect.value = editing.modelId;
-          } else if (providerConfig.defaultModelId) {
-            // Try to match the default model by substring
-            const defaultMatch = models.find((m) =>
-              m.id.toLowerCase().includes(providerConfig.defaultModelId!.toLowerCase())
-            );
-            if (defaultMatch) modelSelect.value = defaultMatch.id;
-          }
-        } else {
-          modelSection.style.display = 'none';
-        }
       }
 
       providerSelect.addEventListener('change', () => {
@@ -1235,14 +1190,10 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           return;
         }
 
-        const selectedModelId = config.requiresModelSelection
-          ? modelSelect.value || undefined
-          : undefined;
         addAccount(
           pid,
           apiKeyInput.value.trim(),
           baseUrlInput.value.trim() || undefined,
-          selectedModelId,
           deploymentInput.value.trim() || undefined,
           apiVersionInput.value.trim() || undefined
         );

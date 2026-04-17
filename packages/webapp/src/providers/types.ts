@@ -61,8 +61,6 @@ export interface ProviderConfig {
    * Falls back to the first model in the list if no match is found.
    */
   defaultModelId?: string;
-  /** When true, the setup dialog shows a model selector dropdown. */
-  requiresModelSelection?: boolean;
   /** When true, the setup dialog shows a deployment name text input. */
   requiresDeployment?: boolean;
   deploymentPlaceholder?: string;
