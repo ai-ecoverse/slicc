@@ -116,7 +116,9 @@ export class NavigationWatcher {
     if (!response) return;
     const sliccHeader = extractSliccHeader(response.headers);
     if (!sliccHeader) return;
-    const url = typeof response.url === 'string' ? response.url : (state.url ?? '');
+    const url =
+      typeof response.url === 'string' && response.url.length > 0 ? response.url : state.url;
+    if (!url) return;
     this.onEvent({
       url,
       sliccHeader,

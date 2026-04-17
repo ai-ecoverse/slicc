@@ -271,6 +271,26 @@ describe('NavigationWatcher', () => {
     expect(events.map((e) => e.sliccHeader)).toEqual(['handoff:second-try']);
   });
 
+  it('does not emit when neither response.url nor session url is known', async () => {
+    await watcher.start();
+    transport.emit('Target.attachedToTarget', {
+      sessionId: 'sess-1',
+      // No `url` on the target info — session.url stays undefined.
+      targetInfo: { targetId: 'tab-1', type: 'page' },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    transport.emit('Network.responseReceived', {
+      sessionId: 'sess-1',
+      type: 'Document',
+      frameId: 'root-sess-1',
+      // Response has no url field.
+      response: { headers: { 'x-slicc': 'handoff:unreachable' } },
+    });
+
+    expect(events).toHaveLength(0);
+  });
+
   it('stop() unsubscribes listeners', async () => {
     await watcher.start();
     transport.emit('Target.attachedToTarget', {
