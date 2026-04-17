@@ -21,6 +21,15 @@ import {
   CommandCollectorPlugin,
   TeePlugin,
 } from 'just-bash';
+// NOTE: The CI-backed type-surface assertion for these AST node types lives
+// in `packages/webapp/src/vendor/just-bash/type-check.ts`, which is compiled
+// by `npm run typecheck`. The block below is retained for this smoke test's
+// own local type annotations (ScriptNode / StatementNode / PipelineNode /
+// CommandNode / SimpleCommandNode / WordNode / WordPart / the `_Assert`
+// union below) — Vitest transpiles `.test.ts` files and does NOT run them
+// through the project `tsc --noEmit` gate, so type-only assertions that
+// live only here would silently vanish from CI if a vendor export
+// regressed. See `type-check.ts` header for the full rationale.
 import type {
   ScriptNode,
   StatementNode,
