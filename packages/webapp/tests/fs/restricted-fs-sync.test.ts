@@ -335,3 +335,208 @@ describe('RestrictedFS integration with WasmShell (VAL-FS-021 + VAL-FS-022)', ()
     expect(result.exitCode).not.toBe(0);
   });
 });
+
+/**
+ * VAL-FS-019 parity for synchronous RestrictedFS fast-path methods.
+ *
+ * The async `readDir()` / `stat()` / `lstat()` already refuse to dereference a
+ * symlink inside an allowed prefix whose resolved target escapes every allowed
+ * prefix (VAL-FS-019). The sync fast-path methods (`readDirSync`, `statSync`,
+ * `lstatSync`) must enforce the same guarantee — otherwise a symlinked
+ * directory inside `/shared/` pointing to `/scoops/other-scoop/` would let
+ * `ls /shared/link-to-other-scoop/` enumerate a sibling scoop's contents via
+ * the shell's sync fast path.
+ */
+describe('RestrictedFS sync methods reject symlink-escape (VAL-FS-019 parity)', () => {
+  let vfs: VirtualFS;
+  let restricted: RestrictedFS;
+  const scoopFolder = '/scoops/agent-z/';
+  const cwd = '/home/wiki/';
+
+  beforeAll(async () => {
+    vfs = await VirtualFS.create({ dbName: 'test-restricted-fs-sync-symlink', wipe: true });
+    await vfs.mkdir('/scoops/agent-z/workspace', { recursive: true });
+    await vfs.mkdir('/shared', { recursive: true });
+    await vfs.mkdir('/workspace/skills', { recursive: true });
+    await vfs.mkdir('/home/wiki', { recursive: true });
+    await vfs.mkdir('/scoops/other-scoop', { recursive: true });
+
+    await vfs.writeFile('/shared/README.md', '# shared readme');
+    await vfs.writeFile('/shared/real-file', 'real file contents');
+    await vfs.writeFile('/home/wiki/index.md', '# index');
+    await vfs.writeFile('/scoops/other-scoop/secret-file', 'SIBLING SCOOP SECRET');
+    await vfs.writeFile('/scoops/other-scoop/another-secret', 'another leaked secret');
+    await vfs.writeFile('/outside-file', 'outside data');
+
+    // Escape symlinks: INSIDE an allowed prefix, but target escapes every
+    // allowed prefix.
+    await vfs.symlink('/scoops/other-scoop', '/shared/link-to-other-scoop');
+    await vfs.symlink('/outside-file', '/shared/link-to-outside-file');
+
+    // Legitimate symlink: target stays inside allowed prefixes.
+    await vfs.symlink('/shared/real-file', '/shared/legit-link');
+
+    restricted = new RestrictedFS(vfs, [scoopFolder, '/shared/', cwd], ['/workspace/']);
+  });
+
+  afterAll(async () => {
+    await vfs.dispose();
+  });
+
+  it('readDirSync on a symlinked directory whose target escapes returns null', () => {
+    const entries = (
+      restricted as unknown as {
+        readDirSync(p: string): Array<{ name: string }> | null;
+      }
+    ).readDirSync('/shared/link-to-other-scoop');
+    expect(entries).toBeNull();
+  });
+
+  it('readDirSync on a symlinked directory whose target escapes (trailing slash) returns null', () => {
+    const entries = (
+      restricted as unknown as {
+        readDirSync(p: string): Array<{ name: string }> | null;
+      }
+    ).readDirSync('/shared/link-to-other-scoop/');
+    expect(entries).toBeNull();
+  });
+
+  it('readDirSync traversing an escape-symlink ancestor returns null', () => {
+    // Even though the final segment is not a symlink, the ancestor
+    // `/shared/link-to-other-scoop` is — traversal would escape.
+    const entries = (
+      restricted as unknown as {
+        readDirSync(p: string): Array<{ name: string }> | null;
+      }
+    ).readDirSync('/shared/link-to-other-scoop/some-subdir');
+    expect(entries).toBeNull();
+  });
+
+  it('statSync on a file reached via an escape-symlink ancestor returns null', () => {
+    const s = (restricted as unknown as { statSync(p: string): unknown }).statSync(
+      '/shared/link-to-other-scoop/secret-file'
+    );
+    expect(s).toBeNull();
+  });
+
+  it('statSync on an escape symlink itself returns null (follows symlink)', () => {
+    // statSync follows symlinks, so it would resolve to the escape target
+    // outside the ACL.
+    const s = (restricted as unknown as { statSync(p: string): unknown }).statSync(
+      '/shared/link-to-outside-file'
+    );
+    expect(s).toBeNull();
+  });
+
+  it('lstatSync traversing an escape-symlink ancestor returns null', () => {
+    const s = (restricted as unknown as { lstatSync(p: string): unknown }).lstatSync(
+      '/shared/link-to-other-scoop/secret-file'
+    );
+    expect(s).toBeNull();
+  });
+
+  it('lstatSync on the escape symlink node itself still reports symlink (does not follow)', () => {
+    // lstat does NOT follow — the leaf is the symlink itself, no escape.
+    const s = (restricted as unknown as { lstatSync(p: string): unknown }).lstatSync(
+      '/shared/link-to-other-scoop'
+    ) as { type: string } | null;
+    expect(s?.type).toBe('symlink');
+  });
+
+  it('regression: readDirSync on /shared/ still succeeds and lists entries', () => {
+    const entries = (
+      restricted as unknown as {
+        readDirSync(p: string): Array<{ name: string }> | null;
+      }
+    ).readDirSync('/shared');
+    expect(entries).not.toBeNull();
+    const names = entries!.map((e) => e.name);
+    expect(names).toContain('README.md');
+    expect(names).toContain('real-file');
+  });
+
+  it('regression: statSync on a legitimate symlink (target within allowed) returns Stats', () => {
+    // /shared/legit-link -> /shared/real-file — both are inside /shared/.
+    // The sync fast path may still return null (forcing async fallback for
+    // symlinks) which is acceptable. What matters is that when it DOES return
+    // a value, it must be the file target — and the async path must succeed.
+    const s = (restricted as unknown as { statSync(p: string): unknown }).statSync(
+      '/shared/legit-link'
+    ) as { type: string } | null;
+    if (s !== null) {
+      expect(s.type).toBe('file');
+    }
+  });
+
+  it('regression: async readFile through a legitimate symlink still works', async () => {
+    const content = await restricted.readFile('/shared/legit-link', { encoding: 'utf-8' });
+    expect(content).toBe('real file contents');
+  });
+});
+
+describe('RestrictedFS symlink-escape shell integration (VAL-FS-019 parity)', () => {
+  let vfs: VirtualFS;
+  let restricted: RestrictedFS;
+  let shell: WasmShell;
+  const scoopFolder = '/scoops/agent-w/';
+  const cwd = '/home/wiki/';
+
+  beforeAll(async () => {
+    vfs = await VirtualFS.create({ dbName: 'test-restricted-fs-shell-symlink', wipe: true });
+    await vfs.mkdir('/scoops/agent-w/workspace', { recursive: true });
+    await vfs.mkdir('/shared', { recursive: true });
+    await vfs.mkdir('/workspace', { recursive: true });
+    await vfs.mkdir('/home/wiki', { recursive: true });
+    await vfs.mkdir('/scoops/other-scoop', { recursive: true });
+
+    await vfs.writeFile('/shared/real-file', 'real shared file');
+    await vfs.writeFile('/scoops/other-scoop/secret-file', 'SIBLING SCOOP SECRET');
+    await vfs.writeFile('/scoops/other-scoop/another-secret', 'another leaked secret');
+
+    // Escape symlink inside /shared/ pointing to a sibling scoop's folder.
+    await vfs.symlink('/scoops/other-scoop', '/shared/link-to-other-scoop');
+    // Legit symlink within the same allowed prefix.
+    await vfs.symlink('/shared/real-file', '/shared/legit-link');
+
+    restricted = new RestrictedFS(vfs, [scoopFolder, '/shared/', cwd], ['/workspace/']);
+    shell = new WasmShell({
+      fs: restricted as unknown as VirtualFS,
+      cwd,
+    });
+  });
+
+  afterAll(async () => {
+    await vfs.dispose();
+  });
+
+  it('`ls /shared/link-to-other-scoop/` does NOT enumerate the sibling scoop', async () => {
+    const result = await shell.executeCommand('ls /shared/link-to-other-scoop/');
+    expect(result.stderr).not.toMatch(/TypeError/i);
+    expect(result.exitCode).not.toBe(0);
+    // Sibling scoop's entries MUST NOT appear in stdout.
+    expect(result.stdout).not.toContain('secret-file');
+    expect(result.stdout).not.toContain('another-secret');
+  });
+
+  it('`cat /shared/link-to-other-scoop/secret-file` fails and does not leak content', async () => {
+    const result = await shell.executeCommand('cat /shared/link-to-other-scoop/secret-file');
+    expect(result.stderr).not.toMatch(/TypeError/i);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain('SIBLING SCOOP SECRET');
+  });
+
+  it('regression: `cat /shared/legit-link` still returns the target contents', async () => {
+    const result = await shell.executeCommand('cat /shared/legit-link');
+    expect(result.stderr).not.toMatch(/TypeError/i);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('real shared file');
+  });
+
+  it('regression: `ls /shared/` still lists the legit symlink and real files', async () => {
+    const result = await shell.executeCommand('ls /shared/');
+    expect(result.stderr).not.toMatch(/TypeError/i);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('real-file');
+    expect(result.stdout).toContain('legit-link');
+  });
+});

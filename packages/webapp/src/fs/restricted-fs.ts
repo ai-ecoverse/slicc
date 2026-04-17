@@ -176,35 +176,80 @@ export class RestrictedFS {
   // for disallowed or fast-path-unavailable paths — never throw.
 
   /**
+   * Walk each path segment via `vfs.lstatSync` and detect whether the
+   * path traverses through (or ends at, when `includeLeaf` is true) a
+   * symlink.
+   *
+   * Returns:
+   *   - `true`  if a symlink was found in the scanned scope. Callers
+   *     should return `null` so `VfsAdapter` falls back to the async
+   *     path, which enforces symlink-escape ACL via
+   *     `resolveAndCheckRead` (VAL-FS-019 semantics).
+   *   - `false` if no symlink was found — safe to use the sync fast
+   *     path.
+   *   - `null`  if any segment could not be `lstatSync`-ed (e.g., the
+   *     path is under a mount, CacheFS fast path is unavailable, or the
+   *     segment does not exist). Callers should also return `null` to
+   *     force the async fallback, which handles these cases cleanly.
+   *
+   * Without this scan, a symlink INSIDE an allowed prefix whose target
+   * escapes every allowed prefix (e.g., `/shared/link-to-other-scoop`
+   * → `/scoops/other-scoop`) would let callers enumerate or read the
+   * escape target through the sync shell fast path — the exact
+   * symlink-escape regression VAL-FS-019 guards against on the async
+   * path.
+   */
+  private scanPathForSymlinks(path: string, includeLeaf: boolean): boolean | null {
+    const normalized = normalizePath(path);
+    if (normalized === '/') return false;
+    const segs = normalized.slice(1).split('/');
+    const limit = includeLeaf ? segs.length : segs.length - 1;
+    let current = '';
+    for (let i = 0; i < limit; i++) {
+      current = current + '/' + segs[i];
+      const s = this.vfs.lstatSync(current);
+      if (s === null) {
+        // Segment missing OR fast path unavailable — force async fallback
+        // so the caller uses the safe async code path.
+        return null;
+      }
+      if (s.type === 'symlink') return true;
+    }
+    return false;
+  }
+
+  /**
    * Synchronous stat (follows symlinks) — VfsAdapter fast path.
    * Returns null for disallowed paths (matches VirtualFS null semantics
    * so the adapter can fall back to the async path cleanly).
+   *
+   * Also returns null when the path traverses (or ends at) any symlink
+   * — the async `stat()` path will then resolve + ACL-check the
+   * canonical path through `resolveAndCheckRead` (VAL-FS-019).
    */
   statSync(path: string): Stats | null {
     if (!this.isAllowedStrict(path)) return null;
-    const fast = this.vfs.statSync(path);
-    if (fast === null) return null;
-    // Sync fast path uses CacheFS.lstat internally. For symlinks it
-    // already resolves through `resolveSymlinksSync`, but that resolver
-    // does not enforce our ACL. Gate the result behind an ACL check.
-    // We can't call async realpath here, so we accept the sync result
-    // only when no symlink traversal is needed — i.e., lstatSync at the
-    // same path reports a non-symlink type. Otherwise return null and
-    // let the async path (`stat()`, which uses `resolveAndCheckRead`)
-    // handle symlink ACL enforcement.
-    const lstat = this.vfs.lstatSync(path);
-    if (lstat && lstat.type === 'symlink') {
-      return null;
-    }
-    return fast;
+    // Scan ancestors AND leaf: `statSync` follows symlinks (via
+    // `resolveSymlinksSync`), so a symlink anywhere in the path can
+    // escape the ACL. If any is found, force async fallback.
+    const scan = this.scanPathForSymlinks(path, true);
+    if (scan !== false) return null;
+    return this.vfs.statSync(path);
   }
 
   /**
    * Synchronous lstat (does NOT follow symlinks) — VfsAdapter fast path.
    * Returns null for disallowed paths.
+   *
+   * `lstat` does not follow the leaf symlink, so the leaf being a
+   * symlink is safe. However, ancestors ARE followed by CacheFS's
+   * internal `_lookup`, so an ancestor symlink escaping the ACL would
+   * still leak the resolved node. Scan ancestors only.
    */
   lstatSync(path: string): Stats | null {
     if (!this.isAllowed(path)) return null;
+    const scan = this.scanPathForSymlinks(path, false);
+    if (scan !== false) return null;
     return this.vfs.lstatSync(path);
   }
 
@@ -213,13 +258,23 @@ export class RestrictedFS {
    *
    * - Disallowed paths: return `null` (so the adapter falls back to the
    *   async `readDir`, which itself returns `[]` for disallowed paths).
-   * - Strictly-allowed paths: delegate to the VFS fast path.
+   * - Strictly-allowed paths: delegate to the VFS fast path, but only
+   *   after verifying no symlink in the path could make it escape the
+   *   ACL (VAL-FS-019 parity). If a symlink is detected anywhere in the
+   *   path (ancestor or leaf), return `null` to force async fallback —
+   *   the async `readDir` uses `resolveAndCheckRead` to reject escape
+   *   targets.
    * - Parent-only-allowed paths (e.g. `/`, `/scoops`): filter the
    *   returned entries to those whose child path is allowed, mirroring
    *   the async `readDir`.
    */
   readDirSync(path: string): DirEntry[] | null {
     if (!this.isAllowed(path)) return null;
+    // `readDir` follows symlinks in the directory path (CacheFS.readdir
+    // uses _lookup with follow=true), so a symlink anywhere in the
+    // path — ancestor or leaf — can escape the ACL. Scan full path.
+    const scan = this.scanPathForSymlinks(path, true);
+    if (scan !== false) return null;
     const fast = this.vfs.readDirSync(path);
     if (fast === null) return null;
     if (this.isAllowedStrict(path)) return fast;
