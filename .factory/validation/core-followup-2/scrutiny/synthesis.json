@@ -1,7 +1,20 @@
 {
   "milestone": "core-followup-2",
   "round": 2,
-  "status": "fail",
+  "status": "overridden",
+  "overrideJustification": {
+    "decidedBy": "user + orchestrator",
+    "decidedAt": "2026-04-17T20:50:00Z",
+    "summary": "User manually verified the end-user behavior for VAL-SPAWN-016 in the live dev server on :5720 after commit c6bf365: 'I verified visually, the agents are visible in the sidebar and the full agent messages appear when clicking them.' The scrutiny reviewer's remaining concern (OffscreenClient.currentMessageId not reconciled at selection) is a theoretical timing edge case — post-click text_delta forking a second message, or post-click tool_end/response_done being dropped — that was not reproduced during manual verification. Automated test suite is 2950 / 2 skipped green. The tech debt is tracked as a non-blocking fix feature `misc-reconcile-offscreen-client-currentmessageid-on-selection` in a new `misc-hydration` milestone scheduled for a later hardening pass. See features.json for that entry. Proceeding to user-testing validator for core-followup-2.",
+    "remainingTechDebt": [
+      {
+        "feature": "misc-reconcile-offscreen-client-currentmessageid-on-selection",
+        "milestone": "misc-hydration",
+        "tracks": "Reconcile OffscreenClient.currentMessageId to the hydrated in-progress assistant message when selectScoop loads an active session."
+      }
+    ]
+  },
+  "originalStatus": "fail",
   "validatorsRun": {
     "test": {
       "passed": true,
