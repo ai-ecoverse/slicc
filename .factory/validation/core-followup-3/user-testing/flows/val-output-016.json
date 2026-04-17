@@ -1,0 +1,28 @@
+{
+  "groupId": "val-output-016",
+  "testedAt": "2026-04-17T23:39:05Z",
+  "surface": "vitest",
+  "status": "pass",
+  "assertions": [
+    {
+      "id": "VAL-OUTPUT-016",
+      "status": "pass",
+      "summary": "The targeted bridge suite passed all 12 chronological-last output cases for VAL-OUTPUT-016, covering scenarios A-E plus within-message and multi-text-block regressions, and the command-level scenario A stdout test also passed end-to-end.",
+      "reason": "The bridge tests verified the chronologically last assistant output wins across mixed send_message and assistant-text flows, including the user's reported scenario where an earlier send_message(\"Starting.\") is followed by a final assistant summary. The command test confirmed stdout was the final assistant text (`Summary.\\n`), not the earlier progress update.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/core-followup-3/val-output-016/agent-bridge-vitest.txt",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/core-followup-3/val-output-016/agent-command-vitest.txt"
+      ]
+    }
+  ],
+  "toolsUsed": [
+    "npx vitest run \"/Users/trieloff/Developer/slicc/.yolo/droid-2/packages/webapp/tests/scoops/agent-bridge.test.ts\" -t \"chronological-last output \\(VAL-OUTPUT-016\\)\" --reporter=verbose",
+    "npx vitest run \"/Users/trieloff/Developer/slicc/.yolo/droid-2/packages/webapp/tests/shell/supplemental-commands/agent-command.test.ts\" -t \"scenario A: writes the final assistant text \\(not an earlier send_message\\) to stdout\" --reporter=verbose"
+  ],
+  "frictions": [],
+  "blockers": [],
+  "notes": [
+    "The bridge evidence file shows `12 passed | 47 skipped` for the targeted VAL-OUTPUT-016 suite in `packages/webapp/tests/scoops/agent-bridge.test.ts`.",
+    "The command evidence file shows the targeted `scenario A: writes the final assistant text (not an earlier send_message) to stdout` test passed with `1 passed | 60 skipped` in `packages/webapp/tests/shell/supplemental-commands/agent-command.test.ts`."
+  ]
+}
