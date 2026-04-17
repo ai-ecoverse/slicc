@@ -1,6 +1,6 @@
 {
   "milestone": "core-followup-2",
-  "round": 1,
+  "round": 2,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -20,33 +20,41 @@
     }
   },
   "reviewsSummary": {
-    "total": 1,
+    "total": 2,
     "passed": 0,
-    "failed": 1,
-    "failedFeatures": ["fix-agent-bridge-chat-panel-wiring"]
+    "failed": 2,
+    "failedFeatures": [
+      "fix-offscreen-bridge-midstream-persist-and-dedup-status",
+      "fix-agent-bridge-chat-panel-wiring"
+    ]
   },
   "blockingIssues": [
     {
-      "featureId": "fix-agent-bridge-chat-panel-wiring",
+      "featureId": "fix-offscreen-bridge-midstream-persist-and-dedup-status",
       "severity": "blocking",
-      "description": "Extension selection still hydrates running bridge scoops only from persisted SessionStore state, so partial text/tool-start events emitted before the user clicks the scoop row can remain invisible; callback forwarding alone does not satisfy VAL-SPAWN-016."
+      "description": "Selecting a running bridge scoop mid-turn still hydrates persisted pre-click state without reconnecting OffscreenClient.currentMessageId to that in-progress assistant turn. Post-click text deltas can fork a second message, while post-click tool_end/response_done events can be dropped entirely, so c6bf365 does not fully close VAL-SPAWN-016 and fix-agent-bridge-chat-panel-wiring remains unresolved."
     }
   ],
   "appliedUpdates": [
     {
       "target": "library",
-      "description": "Updated .factory/library/architecture.md to document the extension selection-time hydration invariant: callback forwarding alone is insufficient unless pre-selection offscreen buffer state is persisted or replayed on scoop selection.",
-      "sourceFeature": "fix-agent-bridge-chat-panel-wiring"
+      "description": "Updated .factory/library/architecture.md to record that VAL-SPAWN-016 requires both per-event SessionStore persistence and selection-time reconnection of OffscreenClient.currentMessageId to the hydrated in-progress message.",
+      "sourceFeature": "fix-offscreen-bridge-midstream-persist-and-dedup-status"
     }
   ],
   "suggestedGuidanceUpdates": [
     {
       "target": "webapp-worker skill",
-      "suggestion": "For extension-side chat/persistence fixes, require at least one automated or manual verification where output or tool-start occurs before the user selects the scoop row, so selection-time hydration is exercised end to end instead of only callback plumbing.",
-      "evidence": "Review of fix-agent-bridge-chat-panel-wiring found that the new tests stopped at Orchestrator callback spies, while the remaining failure was specifically the pre-selection extension flow: UI selection still hydrates only from SessionStore and does not replay already-buffered offscreen events. See .factory/validation/core-followup-2/scrutiny/reviews/fix-agent-bridge-chat-panel-wiring.json.",
+      "suggestion": "For extension-side chat hydration fixes, require a regression test or manual verification that selects a running scoop after pre-click partial/tool-start state has been persisted, then asserts post-click text_delta, tool_end, and response_done continue the same message instead of creating or dropping events.",
+      "evidence": "Round-2 scrutiny for fix-offscreen-bridge-midstream-persist-and-dedup-status and the re-verification of fix-agent-bridge-chat-panel-wiring both found that tests covered pre-click persistence and already-selected live events separately, but not the stitched selection handoff through OffscreenClient.handleAgentEvent().",
       "isSystemic": false
     }
   ],
-  "rejectedObservations": [],
-  "previousRound": null
+  "rejectedObservations": [
+    {
+      "observation": "The selection-handoff regression-gap observation was reported in both round-2 reviews.",
+      "reason": "duplicate"
+    }
+  ],
+  "previousRound": ".factory/validation/core-followup-2/scrutiny/synthesis.round1.json"
 }
