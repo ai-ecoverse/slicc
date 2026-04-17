@@ -1,0 +1,28 @@
+{
+  "featureId": "fix-agent-output-chronological-last-message",
+  "reviewedAt": "2026-04-17T22:42:46Z",
+  "commitId": "37564cf",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The feature fixes the reported progress-update-vs-final-text ordering for single text blocks, but the new chronological walker introduces a blocking truncation bug for multi-block assistant messages. `pickChronologicallyLastOutput()` now returns only the last `TextContent` block it encounters (`packages/webapp/src/scoops/agent-bridge.ts:649-652`), while the rest of the scoop stack still treats assistant text as the concatenation of all text blocks in a turn (`packages/webapp/src/scoops/scoop-context.ts:488-491`). Supported providers such as Bedrock Camp preserve each provider text block separately (`packages/webapp/src/providers/built-in/bedrock-camp.ts:361-367`), so a valid final assistant message like `[text(\"Hello\"), text(\" world\")]` now prints only `\" world\"` on `agent` stdout. The new tests cover scenarios A-E and within-message send_message precedence, but they do not cover this multi-block assistant-text shape, so the regression slips through.",
+    "issues": [
+      {
+        "file": "packages/webapp/src/scoops/agent-bridge.ts",
+        "line": 649,
+        "severity": "blocking",
+        "description": "When the reverse walk lands on assistant text, it returns only `textBlock.text` from the final block instead of the full assistant-text output for that turn. That breaks supported provider shapes where one assistant message contains multiple text blocks: `packages/webapp/src/providers/built-in/bedrock-camp.ts:361-367` preserves each API text block separately, while `packages/webapp/src/scoops/scoop-context.ts:488-491` still joins all assistant text blocks before surfacing them. As a result, a final assistant message like `[text('Hello'), text(' world')]` yields `finalText === ' world'` instead of `Hello world`, so the chronologically-last fix still returns incorrect stdout whenever the winning assistant turn spans multiple text blocks."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The per-feature `webapp-worker` procedure does not document what to do when a user-visible `agent` verification is provider-gated but no provider is configured, so the worker improvised an eval-based substitute for the exact repro instead of following a documented path.",
+      "evidence": "`.factory/skills/webapp-worker/SKILL.md` section 6 makes manual CDP verification required for user-observable features and only documents an eval fallback for screenshot timeouts. The handoff/transcript for worker session `43803c84-de75-4353-b6f3-89e801eadc97` says the exact repro could not be run because the `provider-api-keys` store was empty, so verification switched to module-level evals. `.factory/library/user-testing.md` contains provider-gated guidance, but the worker skill does not point to it for this case."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Fail. The chronological-last picker is correct for the reported single-block repro, but it now truncates any winning assistant response that spans multiple `TextContent` blocks, so `agent` stdout is still incorrect for valid provider outputs."
+}
