@@ -799,7 +799,6 @@ describe('BrowserAPI', () => {
   describe('withTab mutex', () => {
     it('serializes two concurrent withTab calls with different targetIds', async () => {
       const order: string[] = [];
-      const timings: Array<{ operation: string; start: number; end: number }> = [];
 
       (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
         if (method === 'Target.attachToTarget') {
@@ -814,15 +813,11 @@ describe('BrowserAPI', () => {
       });
 
       // Fire two concurrent withTab calls
-      const op1Start = Date.now();
       const p1 = api
         .withTab('target-1', async (sessionId) => {
           order.push('op1-start');
-          timings.push({ operation: 'op1', start: Date.now() - op1Start, end: -1 });
           await new Promise((r) => setTimeout(r, 20));
           order.push('op1-end');
-          const idx = timings.findIndex((t) => t.operation === 'op1');
-          timings[idx].end = Date.now() - op1Start;
           return `result-1-${sessionId}`;
         })
         .catch((err) => {
@@ -832,15 +827,11 @@ describe('BrowserAPI', () => {
       // Let p1 start
       await new Promise((r) => setTimeout(r, 5));
 
-      const op2Start = Date.now();
       const p2 = api
         .withTab('target-2', async (sessionId) => {
           order.push('op2-start');
-          timings.push({ operation: 'op2', start: Date.now() - op2Start, end: -1 });
           await new Promise((r) => setTimeout(r, 15));
           order.push('op2-end');
-          const idx = timings.findIndex((t) => t.operation === 'op2');
-          timings[idx].end = Date.now() - op2Start;
           return `result-2-${sessionId}`;
         })
         .catch((err) => {
@@ -851,13 +842,10 @@ describe('BrowserAPI', () => {
       expect(r1).toContain('result-1-');
       expect(r2).toContain('result-2-');
 
-      // Verify strict serialization: op1 fully completes before op2 starts
+      // Strict serialization: op1 fully completes before op2 starts.
+      // The ordering check alone proves the mutex held — wall-clock margin
+      // checks are prone to jitter on CI runners and add no extra coverage.
       expect(order).toEqual(['op1-start', 'op1-end', 'op2-start', 'op2-end']);
-
-      // Timing check: op2 should start well after op1 ends
-      const op1Timing = timings.find((t) => t.operation === 'op1')!;
-      const op2Timing = timings.find((t) => t.operation === 'op2')!;
-      expect(op2Timing.start).toBeGreaterThan(op1Timing.end + 5); // op2 starts after op1 ends
     });
 
     it('recovers from errors in withTab and releases lock for next operation', async () => {
