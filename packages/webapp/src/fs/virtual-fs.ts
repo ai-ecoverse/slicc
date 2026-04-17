@@ -408,6 +408,18 @@ export class VirtualFS {
   }
 
   /**
+   * Check whether an absolute path is under any active mount point.
+   * Non-allocating (iterates the mount map directly) — safe to call on a hot
+   * path such as the per-operation check in the isomorphic-git fs adapter.
+   */
+  isPathUnderMount(path: string): boolean {
+    for (const mountPath of this.mountPoints.keys()) {
+      if (path === mountPath || path.startsWith(mountPath + '/')) return true;
+    }
+    return false;
+  }
+
+  /**
    * Find the mount point that owns `path`.
    * Returns the handle and the path segments relative to the mount root,
    * or null if the path is not under any mount.
@@ -471,6 +483,13 @@ export class VirtualFS {
         return new FsError('ENOENT', 'no such file or directory', path);
       if (err.name === 'TypeMismatchError') return new FsError('ENOTDIR', 'not a directory', path);
       if (err.name === 'NotAllowedError') return new FsError('EINVAL', 'permission denied', path);
+      // FSA throws InvalidModificationError from removeEntry() when the target
+      // is a non-empty directory and `recursive` was not requested. Surface
+      // that as ENOTEMPTY so callers (notably isomorphic-git's checkout/reset
+      // cleanup path) can tolerate untracked files the same way they do on
+      // the LightningFS-backed path.
+      if (err.name === 'InvalidModificationError')
+        return new FsError('ENOTEMPTY', 'directory not empty', path);
     }
     return new FsError('EINVAL', err instanceof Error ? err.message : String(err), path);
   }
@@ -532,14 +551,15 @@ export class VirtualFS {
       try {
         const fh = await VirtualFS.fsaGetFile(mount.handle, mount.relParts, true);
         const writable = await fh.createWritable();
+        // Preserve byteOffset/byteLength: pooled Buffer instances share a
+        // backing ArrayBuffer with other allocations, so `content.buffer`
+        // alone would write the whole pool.
         const data =
           typeof content === 'string'
             ? new TextEncoder().encode(content)
-            : new Uint8Array(
-                content instanceof Uint8Array
-                  ? (content.buffer as ArrayBuffer)
-                  : (content as ArrayBuffer)
-              );
+            : content instanceof Uint8Array
+              ? new Uint8Array(content.buffer, content.byteOffset, content.byteLength)
+              : new Uint8Array(content as ArrayBuffer);
         await writable.write(data as unknown as FileSystemWriteChunkType);
         await writable.close();
       } catch (err) {
