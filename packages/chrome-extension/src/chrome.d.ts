@@ -124,6 +124,7 @@ interface ChromeAPI {
   debugger: ChromeDebuggerAPI;
   tabs: {
     query(queryInfo: Record<string, unknown>): Promise<ChromeTab[]>;
+    get(tabId: number): Promise<ChromeTab>;
     create(properties: { url?: string; active?: boolean }): Promise<{ id: number }>;
     remove(tabId: number): Promise<void>;
     group(options: { tabIds: number | number[]; groupId?: number }): Promise<number>;
@@ -133,6 +134,21 @@ interface ChromeAPI {
     onUpdated: {
       addListener(
         callback: (tabId: number, changeInfo: ChromeTabChangeInfo, tab: ChromeTab) => void
+      ): void;
+    };
+  };
+  webRequest: {
+    onHeadersReceived: {
+      addListener(
+        callback: (details: {
+          url: string;
+          tabId: number;
+          type: string;
+          frameId: number;
+          responseHeaders?: Array<{ name: string; value?: string }>;
+        }) => void,
+        filter: { urls: string[]; types?: string[] },
+        extraInfoSpec?: string[]
       ): void;
     };
   };
