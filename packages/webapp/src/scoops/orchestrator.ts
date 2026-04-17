@@ -362,14 +362,38 @@ export class Orchestrator {
 
     this.clearIdleTimer(jid);
     await this.destroyScoopTab(jid);
-    // Bridge-registered tabs have no associated context, so destroyScoopTab
-    // does NOT touch them. Fire a terminal `onStatusChange` so the UI
-    // refreshes and then drop the tab entry here. Safe no-op when the tab
-    // was already removed by destroyScoopTab (context-backed scoop path).
-    if (this.tabs.has(jid)) {
+    // Cleanup-ordering contract: the terminal `onStatusChange(jid, 'ready')`
+    // callback below drives `ScoopsPanel.refreshScoops()` in the UI — which
+    // re-reads `getScoops()` and `getScoopTabState(jid)`. Every registry
+    // entry for `jid` MUST be removed BEFORE that callback fires so the UI
+    // refresh observes a fully-cleaned state (no ghost scoop row after
+    // `AgentBridge.spawn()` resolves). See `agent-cleanup.test.ts`.
+    //
+    // `destroyScoopTab` already removed the tab entry for context-backed
+    // scoops; bridge scoops (registered via `registerExistingScoop`) still
+    // have a live tab entry here, hence the explicit delete + flag.
+    const hadBridgeTab = this.tabs.has(jid);
+    this.tabs.delete(jid);
+    this.scoops.delete(jid);
+    this.messageQueues.delete(jid);
+    this.lastAgentTimestamp.delete(jid);
+    this.scoopResponseBuffer.delete(jid);
+
+    // Fire the terminal callback AFTER registry removal so refresh
+    // handlers read an already-clean snapshot. Only fire for bridge tabs
+    // — context-backed scoops don't emit a terminal `ready` through this
+    // path (their final transition flows via `ScoopContext.setStatus`
+    // while still inside `createScoopTab`'s callback chain, which is
+    // guarded by `this.scoops.has(jid)` and correctly no-ops after
+    // removal).
+    if (hadBridgeTab) {
       this.callbacks.onStatusChange(jid, 'ready');
-      this.tabs.delete(jid);
     }
+
+    // Post-callback cleanup: the session-store delete is fire-and-forget
+    // and doesn't drive UI refreshes, so its ordering relative to the
+    // callback is immaterial. Keep it + the DB delete here at the end of
+    // the method so the synchronous registry state is settled first.
     this.sessionStore?.delete(jid).catch((err) => {
       log.warn('Failed to delete agent session', {
         jid,
@@ -377,10 +401,6 @@ export class Orchestrator {
       });
     });
     await db.deleteScoop(jid);
-    this.scoops.delete(jid);
-    this.messageQueues.delete(jid);
-    this.lastAgentTimestamp.delete(jid);
-    this.scoopResponseBuffer.delete(jid);
     log.info('Scoop unregistered', { jid });
   }
 
