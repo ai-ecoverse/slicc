@@ -637,6 +637,154 @@ describe('createAgentBridge', () => {
       expect(result.exitCode).toBe(0);
       expect(result.finalText).toBe('answer');
     });
+
+    // ── Multi-text-block concatenation (bounded by tool_use checkpoints) ─────
+    //
+    // Within a single assistant message, pi-agent-core content arrays can
+    // contain multiple consecutive `text` blocks (e.g., Bedrock Claude with
+    // interleaved thinking+answer, or any provider that splits a final
+    // answer across blocks). The walker MUST join ALL text blocks that
+    // trail the LAST tool_use block in that message (or all text blocks if
+    // no tool_use exists) so we do not truncate multi-block responses to
+    // the final block only. A tool_use block acts as a chronological
+    // checkpoint — text BEFORE it is intermediate narrative and is dropped.
+
+    it('multi-text-block assistant message: joins ALL text blocks when text wins', async () => {
+      // Content: [text('alpha'), text('beta'), text('gamma')]
+      // No tool_use — all three blocks belong to the final turn.
+      // Expected: 'alpha\n\nbeta\n\ngamma' (joined with double-newline).
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({
+          captured,
+          agentMessages: [
+            {
+              role: 'assistant',
+              content: [
+                { type: 'text', text: 'alpha' },
+                { type: 'text', text: 'beta' },
+                { type: 'text', text: 'gamma' },
+              ],
+              api: 'anthropic',
+              provider: 'anthropic',
+              model: 'test-model',
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: 'stop',
+              timestamp: Date.now(),
+            } as AgentMessage,
+          ],
+        }),
+        generateUid: () => 'multi-text',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(0);
+      expect(result.finalText).toBe('alpha\n\nbeta\n\ngamma');
+    });
+
+    it('tool_use acts as a chronological boundary within a message (regression guard)', async () => {
+      // Content: [text('early'), tool_use(bash), text('late')]
+      // tool_use is a checkpoint — 'early' is pre-tool-call narrative and
+      // is dropped; only 'late' (after the checkpoint) is returned.
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({
+          captured,
+          agentMessages: [
+            {
+              role: 'assistant',
+              content: [
+                { type: 'text', text: 'early' },
+                { type: 'toolCall', id: 'bash-mid', name: 'bash', arguments: { command: 'ls' } },
+                { type: 'text', text: 'late' },
+              ],
+              api: 'anthropic',
+              provider: 'anthropic',
+              model: 'test-model',
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: 'toolUse',
+              timestamp: Date.now(),
+            } as AgentMessage,
+          ],
+        }),
+        generateUid: () => 'boundary',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(0);
+      expect(result.finalText).toBe('late');
+    });
+
+    it('empty / whitespace-only text blocks are skipped when concatenating', async () => {
+      // Content: [text('real'), text('   '), text('more')]
+      // Expected: 'real\n\nmore' — whitespace-only block is elided from the
+      // join (keeps output readable; mirrors the trim-length check already
+      // used when deciding whether a block "wins").
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({
+          captured,
+          agentMessages: [
+            {
+              role: 'assistant',
+              content: [
+                { type: 'text', text: 'real' },
+                { type: 'text', text: '   ' },
+                { type: 'text', text: 'more' },
+              ],
+              api: 'anthropic',
+              provider: 'anthropic',
+              model: 'test-model',
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: 'stop',
+              timestamp: Date.now(),
+            } as AgentMessage,
+          ],
+        }),
+        generateUid: () => 'multi-trim',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(0);
+      expect(result.finalText).toBe('real\n\nmore');
+    });
+
+    it('single-text-block assistant message still returns just the block (no regression)', async () => {
+      // Content: [text('only')]  → 'only' (no join needed, no extra newlines).
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({
+          captured,
+          agentMessages: [assistantTextMessage('only')],
+        }),
+        generateUid: () => 'single-text',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(0);
+      expect(result.finalText).toBe('only');
+    });
   });
 
   // ── CLEAN — every completion path wipes the scratch folder ────────

@@ -629,6 +629,20 @@ function extractLastAssistantText(messages: AgentMessage[]): string {
  * send_messages in different assistant turns. If the counter runs past
  * `captured.length` (malformed state) we skip that block rather than throw.
  *
+ * Multi-text-block joining (bounded by tool_use checkpoints): when the
+ * winning block is a text block, we keep scanning backward within the SAME
+ * assistant message collecting every consecutive text block until we hit
+ * either (a) a `toolCall` block — which acts as a chronological checkpoint
+ * and stops the walk — or (b) the start of the content array. The collected
+ * text blocks are then joined in their ORIGINAL (forward) order with
+ * `\n\n` so multi-block assistant responses (common with certain providers,
+ * e.g. Bedrock Claude emitting interleaved thinking+answer) are not
+ * truncated to their final block. Whitespace-only text blocks are skipped
+ * during collection to keep the output readable. Text blocks that appear
+ * BEFORE the last `toolCall` within the same message are considered
+ * intermediate narrative and are intentionally dropped — the agent produced
+ * more work after them.
+ *
  * Fallback: if the walk completes without finding a qualifying block but
  * `captured[]` is non-empty, return the LAST captured entry. This preserves
  * the legacy "send_message-only" stdout contract and keeps callers that
@@ -648,8 +662,24 @@ function pickChronologicallyLastOutput(messages: AgentMessage[], captured: strin
       const block = content[j];
       if (block.type === 'text') {
         const textBlock = block as TextContent;
-        if (textBlock.text.length > 0) {
-          return textBlock.text;
+        if (textBlock.text.trim().length > 0) {
+          // Winning block is text. Keep scanning this same message
+          // backward, collecting all text blocks bounded by the nearest
+          // preceding toolCall (the chronological checkpoint). Join in
+          // forward order with `\n\n` so multi-text-block messages are
+          // not truncated to the final block.
+          const collected: string[] = [textBlock.text];
+          for (let k = j - 1; k >= 0; k--) {
+            const b = content[k];
+            if (b.type === 'toolCall') break; // checkpoint — stop.
+            if (b.type === 'text') {
+              const t = (b as TextContent).text;
+              if (t.trim().length > 0) collected.unshift(t);
+            }
+            // Other block types (e.g. thinking) are skipped but do NOT
+            // act as checkpoints — they are side-channels, not output.
+          }
+          return collected.join('\n\n');
         }
       } else if (block.type === 'toolCall') {
         const toolCall = block as ToolCall;
