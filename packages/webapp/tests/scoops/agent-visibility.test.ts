@@ -349,7 +349,13 @@ describe('Agent bridge scoop visibility (VAL-SPAWN-014 + VAL-SPAWN-015)', () => 
   // ── Orchestrator API surface ─────────────────────────────────────────
 
   describe('Orchestrator.updateBridgeTabStatus', () => {
-    it('updates the tab status, refreshes lastActivity, and fires onStatusChange', async () => {
+    it('updates the tab status and refreshes lastActivity without broadcasting onStatusChange', async () => {
+      // core-followup-2 / VAL-SPAWN-016 scrutiny-round-1 dedup:
+      // `updateBridgeTabStatus` is now a single-purpose tab-state mutator.
+      // Status broadcasts are forwarded solely by
+      // `buildForwardingScoopCallbacks` — having this method ALSO broadcast
+      // produced duplicate `onStatusChange` events for every bridge-scoop
+      // transition (extras trigger here + helper forwarding phase).
       const jid = 'agent_update_unit';
       orch.registerExistingScoop({
         jid,
@@ -378,7 +384,8 @@ describe('Agent bridge scoop visibility (VAL-SPAWN-014 + VAL-SPAWN-015)', () => 
       const after = orch.getScoopTabState(jid);
       expect(after?.status).toBe('processing');
       expect(after?.lastActivity).not.toBe(beforeActivity);
-      expect(spy).toHaveBeenCalledWith(jid, 'processing');
+      // NO broadcast — the helper's forwarding phase owns status dispatch.
+      expect(spy).not.toHaveBeenCalled();
     });
 
     it('is a safe no-op when the jid is not registered as a bridge tab', () => {

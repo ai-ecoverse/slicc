@@ -326,6 +326,104 @@ describe('OffscreenBridge createCallbacks', () => {
     expect(responseDone).toBeDefined();
     expect(responseDone.scoopJid).toBe(targetJid);
   });
+
+  // ── Mid-stream persistence (core-followup-2 / VAL-SPAWN-016 re-verify) ──
+  //
+  // Rationale: before this fix, `createCallbacks().onResponse` and
+  // `onToolStart` only mutated the in-memory buffer — they did NOT persist
+  // to `SessionStore`. The shared UI `SessionStore` is the single source
+  // of panel hydration (`ChatPanel.switchToContext` reads from there),
+  // so an agent-bridge scoop that emitted partial text or a `tool-start`
+  // event BEFORE the user clicked its row would show an empty chat panel
+  // on selection. Persisting on every buffer-mutating event closes that
+  // gap without changing the existing async semantics of `persistScoop`.
+  describe('mid-stream persistence (VAL-SPAWN-016)', () => {
+    it('onResponse persists buffer immediately when partial text arrives (pre-response_done)', () => {
+      (bridge as any).orchestrator = mockOrchestrator;
+      const mockStore = new SessionStore();
+      (bridge as any).sessionStore = mockStore;
+
+      // Register a bridge-style scoop so persistScoop's getScoops lookup
+      // succeeds and maps to `session-agent-<uid>`.
+      mockOrchestrator.getScoops.mockReturnValue([
+        {
+          jid: 'agent_abc',
+          name: 'agent-abc',
+          folder: 'agent-abc',
+          isCone: false,
+          assistantLabel: 'agent-abc',
+        },
+      ]);
+
+      callbacks.onResponse('agent_abc', 'partial text part 1', true);
+
+      expect(mockStore.saveMessages).toHaveBeenCalled();
+      const lastCall = (mockStore.saveMessages as ReturnType<typeof vi.fn>).mock.calls.at(-1)!;
+      expect(lastCall[0]).toBe('session-agent-abc');
+      const persistedMsgs = lastCall[1] as Array<{ content: string; isStreaming?: boolean }>;
+      expect(persistedMsgs).toHaveLength(1);
+      expect(persistedMsgs[0].content).toBe('partial text part 1');
+      expect(persistedMsgs[0].isStreaming).toBe(true);
+    });
+
+    it('onToolStart persists buffer immediately after pushing tool call', () => {
+      (bridge as any).orchestrator = mockOrchestrator;
+      const mockStore = new SessionStore();
+      (bridge as any).sessionStore = mockStore;
+
+      mockOrchestrator.getScoops.mockReturnValue([
+        {
+          jid: 'agent_abc',
+          name: 'agent-abc',
+          folder: 'agent-abc',
+          isCone: false,
+          assistantLabel: 'agent-abc',
+        },
+      ]);
+
+      callbacks.onToolStart('agent_abc', 'bash', { command: 'ls' });
+
+      expect(mockStore.saveMessages).toHaveBeenCalled();
+      const lastCall = (mockStore.saveMessages as ReturnType<typeof vi.fn>).mock.calls.at(-1)!;
+      expect(lastCall[0]).toBe('session-agent-abc');
+      const persistedMsgs = lastCall[1] as Array<{
+        toolCalls?: Array<{ name: string; input: unknown }>;
+      }>;
+      expect(persistedMsgs).toHaveLength(1);
+      expect(persistedMsgs[0].toolCalls).toHaveLength(1);
+      expect(persistedMsgs[0].toolCalls![0].name).toBe('bash');
+      expect(persistedMsgs[0].toolCalls![0].input).toEqual({ command: 'ls' });
+    });
+
+    it('consecutive onResponse deltas concatenate and persist each delta', () => {
+      (bridge as any).orchestrator = mockOrchestrator;
+      const mockStore = new SessionStore();
+      (bridge as any).sessionStore = mockStore;
+
+      mockOrchestrator.getScoops.mockReturnValue([
+        {
+          jid: 'agent_abc',
+          name: 'agent-abc',
+          folder: 'agent-abc',
+          isCone: false,
+          assistantLabel: 'agent-abc',
+        },
+      ]);
+
+      callbacks.onResponse('agent_abc', 'Hello ', true);
+      callbacks.onResponse('agent_abc', 'world', true);
+
+      const saveSpy = mockStore.saveMessages as ReturnType<typeof vi.fn>;
+      // Each delta must trigger a persist so pre-selection hydration sees
+      // the latest buffer contents.
+      expect(saveSpy).toHaveBeenCalledTimes(2);
+      const lastCall = saveSpy.mock.calls.at(-1)!;
+      expect(lastCall[0]).toBe('session-agent-abc');
+      const persistedMsgs = lastCall[1] as Array<{ content: string }>;
+      expect(persistedMsgs).toHaveLength(1);
+      expect(persistedMsgs[0].content).toBe('Hello world');
+    });
+  });
 });
 
 describe('OffscreenBridge buildStateSnapshot', () => {

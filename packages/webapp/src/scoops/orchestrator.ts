@@ -307,16 +307,31 @@ export class Orchestrator {
   }
 
   /**
-   * Update the tab status for a bridge-registered scoop and fire the
-   * orchestrator's `onStatusChange` callback so the UI refreshes.
+   * Update the tab-state entry for a bridge-registered scoop.
    *
    * Bridge scoops (those registered via {@link registerExistingScoop}) own
    * their {@link ScoopContext} outside the orchestrator. Because the
    * context's transitions do NOT flow through the private `createScoopTab`
-   * callback chain, the bridge explicitly drives status updates through
-   * this helper. Safe no-op when `jid` is not currently registered as a
-   * bridge tab (covers late-arriving transitions after
-   * {@link unregisterScoop} has cleaned the entry).
+   * callback chain, the bridge explicitly drives tab-state updates through
+   * this helper so the cone's `list_scoops` tool (reading via
+   * {@link getScoopTabState}) and the extension-mode `OffscreenBridge`
+   * state snapshots see the current status.
+   *
+   * Safe no-op when `jid` is not currently registered as a bridge tab
+   * (covers late-arriving transitions after {@link unregisterScoop} has
+   * cleaned the entry).
+   *
+   * **Single-purpose mutator — does NOT broadcast `onStatusChange`.**
+   * Status forwarding to {@link OrchestratorCallbacks.onStatusChange} is
+   * the sole responsibility of {@link buildForwardingScoopCallbacks}.
+   * Having this method ALSO broadcast created a duplicate transition
+   * (extras invoked `updateBridgeTabStatus` → broadcast #1, then the
+   * helper's forwarding phase fired broadcast #2 for the same event),
+   * which was harmless today but unnecessary churn + a foot-gun for any
+   * future status-sensitive behavior (see core-followup-2, VAL-SPAWN-016
+   * round-1 scrutiny). Direct callers that need to drive a panel refresh
+   * without a scope-context transition should emit via
+   * `this.callbacks.onStatusChange(jid, status)` explicitly.
    *
    * @param jid    The bridge scoop jid returned in the
    *               {@link RegisteredScoop.jid} field at registration time.
@@ -330,7 +345,6 @@ export class Orchestrator {
     tab.status = status;
     tab.lastActivity = new Date().toISOString();
     this.tabs.set(jid, tab);
-    this.callbacks.onStatusChange(jid, status);
   }
 
   /**

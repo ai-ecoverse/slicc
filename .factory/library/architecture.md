@@ -138,6 +138,14 @@ In extension mode, callback forwarding is **necessary but not sufficient** for s
 
 Historical note (2026-04-17): before the helper was extracted, `AgentBridge.spawn` built its own `ScoopContextCallbacks` with no-op `onResponse` / `onResponseDone` and missing `onToolStart` / `onToolEnd`. The visible symptom was VAL-SPAWN-016: clicking an agent-spawned scoop row in the sidebar showed an empty chat panel even while the agent was actively running. The fix extracts the wiring into `buildForwardingScoopCallbacks` and delegates both code paths to it — enforcing architectural parity via shared code + the `agent-bridge-callback-forwarding.test.ts` regression guard.
 
+### 6c. SessionStore is the single source of panel hydration
+
+`SessionStore` (`packages/webapp/src/ui/session-store.ts`, backed by the `browser-coding-agent` IndexedDB) is the **single source of panel hydration**: `ChatPanel.switchToContext('session-<folder>', ...)` reads exclusively from `SessionStore.load('session-<folder>')` and renders whatever message buffer lives there. The extension's `OffscreenClient.handleAgentEvent` additionally streams live `agent-event`s into the chat panel — but ONLY for events that arrive after the scoop is selected (the pre-selection handler early-returns when `msg.scoopJid !== selectedScoopJid`).
+
+**Therefore, `OffscreenBridge` MUST persist every state-mutating event** — including mid-stream partials (`onResponse` with `isPartial=true`) and tool-starts (`onToolStart`) — so that post-click hydration sees the complete pre-click state. Persisting only on `onResponseDone` / `onToolEnd` / `onSendMessage` is insufficient: if a bridge scoop streams text for 5s before the user clicks its row, `onResponseDone` has not fired yet, and the chat panel hydrates from an empty `SessionStore` snapshot. The fix (core-followup-2, VAL-SPAWN-016 round-2 scrutiny) adds `bridge.persistScoop(scoopJid)` calls to both `createCallbacks().onResponse` (after buffer mutation) and `createCallbacks().onToolStart` (after pushing to `msg.toolCalls`). `persistScoop` is fire-and-forget async (`SessionStore.saveMessages` → `IDBObjectStore.put`) — per-delta writes do NOT block the hot path.
+
+Companion rule — `Orchestrator.updateBridgeTabStatus` is a **single-purpose tab-state mutator** and does NOT broadcast `onStatusChange`. Status forwarding to `OrchestratorCallbacks.onStatusChange` is solely owned by `buildForwardingScoopCallbacks`. Before this rule was codified, `updateBridgeTabStatus` broadcast internally AND the helper's forwarding phase also broadcast, producing duplicate `onStatusChange` events for every bridge-scoop transition. Harmless today but unnecessary churn and a foot-gun for future status-sensitive behavior. Direct callers that need to drive a panel refresh without a scope-context transition should emit via `this.callbacks.onStatusChange(jid, status)` explicitly.
+
 ## Data Flow
 
 ```

@@ -470,3 +470,94 @@ describe('Orchestrator.createScoopTab — helper-delegated forwarding regression
     expect(callbacks.onToolEnd).toHaveBeenCalledWith(jid, 'bash', 'ok', false);
   });
 });
+
+// ─── E. Status-broadcast dedup (core-followup-2) ───────────────────────
+
+describe('Orchestrator bridge-scoop status broadcast dedup (core-followup-2)', () => {
+  // Rationale: before the fix, a single scope-context `onStatusChange`
+  // transition fired `OrchestratorCallbacks.onStatusChange` TWICE for
+  // bridge scoops — once via `updateBridgeTabStatus` (which broadcast
+  // internally) AND once via the helper's forwarding phase. That is
+  // harmless today but unnecessary churn + a foot-gun for future
+  // status-sensitive behavior. The fix removes the duplicate broadcast
+  // from `updateBridgeTabStatus` so forwarding is solely owned by
+  // `buildForwardingScoopCallbacks`. The helper forwards exactly once
+  // per transition; `updateBridgeTabStatus` remains the tab-state mutator.
+
+  let vfs: VirtualFS;
+  let orch: Orchestrator;
+  let callbacks: OrchestratorCallbacks;
+
+  beforeEach(async () => {
+    vfs = await makeVfs();
+    const made = await makeOrchestrator();
+    orch = made.orch;
+    callbacks = made.callbacks;
+  });
+
+  afterEach(async () => {
+    await orch.shutdown().catch(() => {});
+    await vfs.dispose().catch(() => {});
+  });
+
+  it('bridge extras + forwarding helper produce exactly ONE onStatusChange broadcast per transition', () => {
+    // Arrange — register a bridge scoop. This fires an initial
+    // `onStatusChange(jid, "initializing")` broadcast via
+    // `registerExistingScoop`; clear the spy so only transitions under
+    // test are counted.
+    const jid = 'dedup-status';
+    orch.registerExistingScoop({
+      jid,
+      name: 'dedup-folder',
+      folder: 'dedup-folder',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'dedup-folder',
+      addedAt: new Date().toISOString(),
+      config: {},
+    });
+    (callbacks.onStatusChange as ReturnType<typeof vi.fn>).mockClear();
+
+    // Act — wire the helper the SAME way `AgentBridge.spawn` does: extras
+    // route every scope-context status change through
+    // `orchestrator.updateBridgeTabStatus`. Drive two transitions.
+    const cbs = orch.buildForwardingScoopCallbacks(jid, 'dedup-folder', {
+      onStatusChange: (status) => {
+        orch.updateBridgeTabStatus(jid, status);
+      },
+    });
+    cbs.onStatusChange('processing');
+    cbs.onStatusChange('ready');
+
+    // Assert — exactly one broadcast per transition (pre-fix: two each).
+    const spy = callbacks.onStatusChange as ReturnType<typeof vi.fn>;
+    const processingCalls = spy.mock.calls.filter((c) => c[0] === jid && c[1] === 'processing');
+    const readyCalls = spy.mock.calls.filter((c) => c[0] === jid && c[1] === 'ready');
+    expect(processingCalls).toHaveLength(1);
+    expect(readyCalls).toHaveLength(1);
+  });
+
+  it('updateBridgeTabStatus preserves tab-state mutation (broadcast removed, mutation intact)', () => {
+    const jid = 'mut-preserved';
+    orch.registerExistingScoop({
+      jid,
+      name: 'mut-folder',
+      folder: 'mut-folder',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'mut-folder',
+      addedAt: new Date().toISOString(),
+      config: {},
+    });
+
+    // updateBridgeTabStatus must still mutate the tab entry so the UI
+    // (and `list_scoops`) observe the new status via `getScoopTabState`.
+    orch.updateBridgeTabStatus(jid, 'processing');
+    expect(orch.getScoopTabState(jid)?.status).toBe('processing');
+
+    orch.updateBridgeTabStatus(jid, 'ready');
+    expect(orch.getScoopTabState(jid)?.status).toBe('ready');
+  });
+});

@@ -91,6 +91,17 @@ export class OffscreenBridge {
           msg.isStreaming = false;
         }
 
+        // Persist on every delta so `ChatPanel.switchToContext` hydration
+        // (which reads from the shared UI `SessionStore` — the single
+        // source of panel state on selection) sees pre-selection partials.
+        // Without this call, an agent-bridge scoop that streamed text
+        // BEFORE the user clicked its sidebar row would render an empty
+        // chat panel until the next `onResponseDone`/`onToolEnd`
+        // persist fires. `persistScoop` is fire-and-forget (async enqueue
+        // to `SessionStore.saveMessages`) so per-delta writes do NOT
+        // block the hot path. See VAL-SPAWN-016 (core-followup-2).
+        bridge.persistScoop(scoopJid);
+
         bridge.emit({
           type: 'agent-event',
           scoopJid,
@@ -171,6 +182,12 @@ export class OffscreenBridge {
         const msg = bridge.getOrCreateAssistantMsg(scoopJid);
         if (!msg.toolCalls) msg.toolCalls = [];
         msg.toolCalls.push({ id: uid(), name: toolName, input: toolInput });
+
+        // Persist the tool-start so pre-selection panel hydration sees the
+        // in-flight tool call. Like the `onResponse` persist, this closes
+        // the "empty panel on click of running bridge scoop" gap
+        // (VAL-SPAWN-016 / core-followup-2). Fire-and-forget async.
+        bridge.persistScoop(scoopJid);
 
         bridge.emit({
           type: 'agent-event',
