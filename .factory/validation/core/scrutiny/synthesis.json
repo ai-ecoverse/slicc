@@ -1,68 +1,75 @@
 {
   "milestone": "core",
-  "round": 2,
+  "round": 3,
   "status": "fail",
   "validatorsRun": {
     "test": {
       "passed": true,
-      "command": "npm --prefix \"/Users/trieloff/Developer/slicc/.yolo/droid-2\" run test",
+      "command": "npm run test",
       "exitCode": 0
     },
     "typecheck": {
       "passed": true,
-      "command": "npm --prefix \"/Users/trieloff/Developer/slicc/.yolo/droid-2\" run typecheck",
+      "command": "npm run typecheck",
       "exitCode": 0
     },
     "lint": {
       "passed": true,
-      "command": "cd \"/Users/trieloff/Developer/slicc/.yolo/droid-2\" && npx prettier --check .",
+      "command": "npx prettier --check .",
       "exitCode": 0
     }
   },
   "reviewsSummary": {
-    "total": 6,
-    "passed": 5,
-    "failed": 1,
-    "failedFeatures": ["fix-agent-bridge-model-inheritance"]
+    "total": 3,
+    "passed": 1,
+    "failed": 2,
+    "failedFeatures": [
+      "vendor-just-bash-with-parse-exposed",
+      "rewrite-bash-allowlist-on-just-bash-ast"
+    ]
   },
   "blockingIssues": [
     {
-      "featureId": "fix-agent-bridge-model-inheritance",
+      "featureId": "vendor-just-bash-with-parse-exposed",
       "severity": "blocking",
-      "description": "`AgentBridge.spawn()` threads `parentJid` through the shell stack but does not copy the inherited `effectiveModelId` onto the spawned `RegisteredScoop.config.modelId`, so the real `ScoopContext` path still falls back to `resolveCurrentModel()` when no explicit `--model` override is provided."
+      "description": "The vendored `just-bash` smoke test puts its type-only assertions in `packages/webapp/tests/vendor/just-bash-smoke.test.ts`, but `npm run typecheck` does not compile test files, so CI never validates the promised `import { parse, type ScriptNode } from 'just-bash'` type surface."
+    },
+    {
+      "featureId": "rewrite-bash-allowlist-on-just-bash-ast",
+      "severity": "blocking",
+      "description": "The AST-backed allow-list walker does not inspect `SimpleCommand.assignments`, so assignment values like `FOO=$(whoami) ls` can smuggle command substitution under an allow-listed head."
+    },
+    {
+      "featureId": "rewrite-bash-allowlist-on-just-bash-ast",
+      "severity": "blocking",
+      "description": "The AST-backed allow-list walker only recurses through `DoubleQuoted` parts and misses nested executable words under parameter-expansion defaults/assignments and brace-expansion items, leaving additional substitution bypasses under an allow-listed head."
     }
   ],
   "appliedUpdates": [
     {
       "target": "library",
-      "description": "Updated `.factory/library/environment.md` with a validator note that local Swift `.build/` artifacts can cause `npx prettier --check .` to fail because Prettier does not honor the nested package `.gitignore` files; workers should clean those ignored directories before rerunning the lint gate.",
+      "description": "Updated `.factory/library/environment.md` to note that `npm run typecheck` only runs the repo's three production `tsconfig` entry points and does not compile Vitest `.test.ts` files, so compile-time assertions placed only in tests are not CI-backed by the TypeScript gate.",
       "sourceFeature": "scrutiny-validator-core"
     },
     {
       "target": "library",
-      "description": "Updated `.factory/library/architecture.md` to capture the `parentJid` bridge contract and the architectural requirement that inherited model selection must flow through `RegisteredScoop.config.modelId` for the real `ScoopContext` path.",
-      "sourceFeature": "fix-agent-bridge-model-inheritance"
+      "description": "Updated `.factory/library/architecture.md` with just-bash AST gotchas for allow-list work: `&&` chains remain within one `StatementNode`, and executable nested words can appear in assignments, parameter-expansion defaults/assignments, and brace-expansion items.",
+      "sourceFeature": "scrutiny-validator-core"
     }
   ],
   "suggestedGuidanceUpdates": [
     {
-      "target": ".factory/skills/webapp-worker/SKILL.md",
-      "suggestion": "When command-layer behavior depends on `ctx.fs`, require either a real shell context or a mock shell context whose `stat`/`exists` delegate to VirtualFS. Today the skill calls out real `ScoopContext` coverage, but not FS-backed shell contexts for preflight validations.",
-      "evidence": "`fix-agent-command-cwd-validation` had to retrofit `createMockShellCtx()` in `agent-integration.test.ts` and `agent-bridge-hook.test.ts` so command-layer cwd validation used real VFS-backed `stat`/`exists`, a gap not currently spelled out in the worker procedure.",
-      "isSystemic": true
-    },
-    {
-      "target": ".factory/skills/webapp-worker/SKILL.md",
-      "suggestion": "Clarify, and align with `.factory/library/user-testing.md`, when live-browser/CDP verification is mandatory versus optional for pure headless utility-wrapper fixes. The current mission/library/skill wording leads workers to make contradictory completion claims.",
-      "evidence": "`fix-bash-allowlist-hardening` cites conflicting instructions: mission.md says no browser UI testing required, the webapp-worker skill makes CDP checks optional for pure utility wrappers, while `.factory/library/user-testing.md` says workers and validators MUST perform live-browser validation.",
+      "target": ".factory/skills/upstream-integration-worker/SKILL.md",
+      "suggestion": "When a vendoring feature promises CI-backed type-surface coverage, require the compile-time assertion to live on a `tsc`-covered source path or a dedicated typecheck target that `npm run typecheck` actually compiles; `.test.ts`-only assertions are not enough.",
+      "evidence": "`vendor-just-bash-with-parse-exposed` placed its type-only smoke assertions in `packages/webapp/tests/vendor/just-bash-smoke.test.ts`, but `npm run typecheck` only runs `tsc --noEmit` on `tsconfig.cli.json`, `tsconfig.json`, and `tsconfig.worker.json`, whose include globs exclude test files.",
       "isSystemic": true
     }
   ],
   "rejectedObservations": [
     {
-      "observation": "Tighten the skill to remind workers that skipped required real-path coverage or skipped manual verification must set `followedProcedure: false`.",
-      "reason": "already-documented/enforcement: the current `webapp-worker` skill already requires real `ScoopContext` coverage for full-stack/model claims and already distinguishes required versus optional manual verification; the reviewed handoff mismatches reflect worker non-compliance more than a missing procedure."
+      "observation": "Clarify the mission-wide live-browser/CDP requirement for pure utility-wrapper features.",
+      "reason": "duplicate: round 2 already captured the same systemic guidance conflict in `suggestedGuidanceUpdates`, so repeating it here would not add new evidence."
     }
   ],
-  "previousRound": ".factory/validation/core/scrutiny/synthesis.round1.json"
+  "previousRound": ".factory/validation/core/scrutiny/synthesis.round2.json"
 }

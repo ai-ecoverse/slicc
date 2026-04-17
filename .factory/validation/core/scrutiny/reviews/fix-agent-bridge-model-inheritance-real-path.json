@@ -1,0 +1,15 @@
+{
+  "featureId": "fix-agent-bridge-model-inheritance-real-path",
+  "reviewedAt": "2026-04-16T23:58:55Z",
+  "commitId": "c02c395",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "This rerun fixes the blocking defect from `fix-agent-bridge-model-inheritance`: `createAgentBridge().spawn()` now copies the computed `effectiveModelId` onto the spawned scoop's `config.modelId` before `ctx.init()`, which is exactly what the real `ScoopContext` path reads to choose between `resolveModelById()` and `resolveCurrentModel()`. The new regression tests in the real `ScoopContext` suite fail on the old behavior, now pass on the new commit, and cover both parent-scoop inheritance and the cone-with-no-model fallback. I did not find any remaining blocking or high-confidence issues in this feature's scope.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/validation/core/scrutiny/reviews/fix-agent-bridge-model-inheritance.json",
+  "summary": "Pass: commit `c02c395` resolves the prior blocking real-path model-inheritance bug by persisting the inherited model onto the spawned `RegisteredScoop` before `ScoopContext.init()`. The prior failure described in the previous review is now directly covered by real-`ScoopContext` regression tests, and the expected cone fallback behavior remains intact."
+}

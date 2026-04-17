@@ -1,0 +1,33 @@
+{
+  "featureId": "vendor-just-bash-with-parse-exposed",
+  "reviewedAt": "2026-04-17T00:02:46Z",
+  "commitId": "88007812c8971d3ef6d2a46a95a647d1839140f2",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The vendor wiring itself looks sound: commit `8800781` adds the patched browser bundle, mirrors the alias into the webapp, extension, and Vitest configs, and the runtime parser exports are present. The blocking gap is in the advertised compile-time verification: the new smoke test places all of its type-only assertions inside a Vitest file that the repo's `npm run typecheck` script never compiles, so this feature still lacks a CI-backed proof that `import { parse, type ScriptNode } from 'just-bash'` type-checks in webapp code.",
+    "issues": [
+      {
+        "file": "packages/webapp/tests/vendor/just-bash-smoke.test.ts",
+        "line": 126,
+        "severity": "blocking",
+        "description": "The smoke test's 'type-level' guard is not actually exercised by any project validator. `packages/webapp/tests/vendor/just-bash-smoke.test.ts:24-44,126-143` imports the AST aliases and relies on a compile-only `_Assert` union, but `npm run typecheck` only runs `tsc --noEmit` on `tsconfig.cli.json`, `tsconfig.json`, and `tsconfig.worker.json` (`package.json:40`), and the main browser tsconfig explicitly includes only `packages/webapp/src/**/*.ts` and `packages/chrome-extension/src/**/*.ts` (`tsconfig.json:26`). Vitest is configured to run the file (`vitest.config.ts:25-31,51-54`), but there is no Vitest typecheck mode enabled, so CI only proves the runtime exports, not the promised `import { parse, type ScriptNode } from 'just-bash'` compile path from the feature spec (`features.json:745`) or the README/handoff claims that the test guards the surface 'at both runtime and type level'."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "Neither the shared worker guidance nor the library notes currently warn that `packages/webapp/tests/**/*.test.ts` files are excluded from the repo's `npm run typecheck` gate. That makes it easy for workers to put compile-time assertions into Vitest files and assume CI will validate them, which is exactly what happened in this feature's vendor smoke test.",
+      "evidence": "`package.json:40` defines `npm run typecheck` as `tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json`; `tsconfig.json:26` includes only `packages/webapp/src/**/*.ts` and `packages/chrome-extension/src/**/*.ts`; `.factory/skills/upstream-integration-worker/SKILL.md:81-108` tells workers to rely on `npm run typecheck` plus `npm run test` when vendoring browser packages, but does not mention that `.test.ts` files are outside the tsc gate."
+    },
+    {
+      "area": "knowledge",
+      "observation": "The mission feature text records the wrong `just-bash` AST shape for `ls -la | wc -l && echo done`. In the vendored parser, `&&` produces one `StatementNode` with two `PipelineNode`s, not two top-level statements. That nuance is important for later AST-walker work and should be corrected anywhere the sample is reused.",
+      "evidence": "`/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/features.json:734` asks workers to assert `statements.length === 2` for `ls -la | wc -l && echo done`, but `packages/webapp/tests/vendor/just-bash-smoke.test.ts:79-96` documents and asserts the observed shape as one statement with two pipelines, matching the parser output from the vendored bundle."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Fail. Commit `8800781` successfully vendors and aliases the patched `just-bash` browser bundle, but the new smoke test does not actually give CI-backed type coverage for the promised `parse`/`ScriptNode` import surface because its type-only assertions live in a `.test.ts` file excluded from `npm run typecheck`."
+}

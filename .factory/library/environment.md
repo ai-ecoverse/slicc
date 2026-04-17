@@ -46,6 +46,12 @@ Credentials never leave the local machine; no repo-level secrets are required.
 
 All three must typecheck and build cleanly after every feature.
 
+## Typecheck Coverage
+
+- `npm run typecheck` runs `tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json`.
+- Those `tsconfig` entry points do **not** include `packages/webapp/tests/**/*.test.ts` or other Vitest-only files, so compile-time assertions that live only in test files are **not** validated by the TypeScript gate.
+- If a feature needs CI-backed type-surface coverage, put the assertion in a `tsc`-included source file/shim or add a dedicated typecheck target for that surface instead of relying on a `.test.ts` file alone.
+
 ## Lint / Style — Important
 
 This repo's **CI gate for style is `npx prettier --check .`**, not `eslint`.

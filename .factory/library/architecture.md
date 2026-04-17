@@ -61,9 +61,15 @@ Location: `packages/webapp/src/tools/bash-tool-allowlist.ts` (new helper)
   - Iterates `ScriptNode.statements` → `pipelines` → `commands`.
   - Rejects any compound command (`Subshell`, `Group`, `If`, `For`, `CStyleFor`, `While`, `Until`, `Case`, `ArithmeticCommand`, `ConditionalCommand`, `FunctionDef`) — the allow-list cannot reason about their inner heads.
   - For each `SimpleCommand`: extracts the literal head by walking `WordNode.parts` and joining only `Literal` / `SingleQuoted` / `Escaped` / nested-literal `DoubleQuoted` parts. Any `ParameterExpansion`, `CommandSubstitution`, `ArithmeticExpansion`, or `ProcessSubstitution` part at the head position triggers a non-literal-head rejection.
-  - Walks `args` and `redirections[].target` (including inside `DoubleQuoted` nesting) and rejects any `CommandSubstitutionPart` / `ArithmeticExpansionPart` / `ProcessSubstitutionPart` at any nesting depth. `ParameterExpansionPart` in args is allowed (bash substitutes its value as a string, it does not change the allow-listed head).
+  - Walks the reachable word-bearing nodes conservatively and rejects any `CommandSubstitutionPart` / `ArithmeticExpansionPart` / `ProcessSubstitutionPart` at any nesting depth. Plain parameter expansion without nested word operands is not itself a command head, but parameter-expansion defaults/assignments still carry nested `WordNode`s that matter for allow-list safety.
   - `StatementNode.background === true` (bare `&`) is NOT grounds to reject — every pipeline head has already been checked.
 - Preserves wildcard `*` passthrough, case-sensitive matching, duplicate-entry tolerance, and atomic rejection (no partial run) from the original design.
+
+#### just-bash AST gotchas
+
+- `&&` / `||` chains stay within a single `StatementNode`; for example, `ls -la | wc -l && echo done` parses as **one** statement with multiple `PipelineNode`s, not two top-level statements.
+- Security-sensitive traversal cannot stop at top-level args and redirection targets: just-bash also nests executable `WordNode`s inside `AssignmentNode.value`, `ParameterExpansion.operation.word` (for defaults/assignments such as `${X:-$(...)}` and `${X:=...}`), and `BraceExpansion.items[].word`.
+- If a future allow-list change needs CI-backed confidence about parser shape, keep at least one assertion on a `tsc`-covered path rather than relying solely on Vitest `.test.ts` files.
 
 ### 5. RestrictedFS extension (MODIFICATION)
 
