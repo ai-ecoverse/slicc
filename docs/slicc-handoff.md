@@ -1,57 +1,37 @@
-# SLICC Handoff URLs
+# SLICC Handoff via `x-slicc`
 
-SLICC can accept a handoff from another agent through a browser tab URL:
+SLICC accepts a handoff from another agent (or any external system) through the `x-slicc` response header on a main-frame navigation. Any page, anywhere, can opt in — there is no allow-list.
 
-```text
-https://www.sliccy.ai/handoff#<base64url-json>
-https://slicc-tray-hub-staging.minivelos.workers.dev/handoff#<base64url-json>
-```
+## Mechanism
 
-The fragment contains a base64url-encoded UTF-8 JSON payload. The handoff page serves a lightweight preview at `/handoff`, and both the Chrome extension and the standalone app watch for matching tabs. When one is seen, SLICC queues a pending handoff and shows an approval prompt in the Chat tab.
+1. A tab navigates to a URL whose main-frame document response carries the header:
 
-## Payload shape
+   ```text
+   x-slicc: <verb>:<payload>
+   ```
 
-Required:
+2. SLICC observes the header (via a CDP `Network.responseReceived` watcher in CLI/Electron floats, or `chrome.webRequest.onHeadersReceived` in the extension float) and emits a `navigate` lick event carrying `{ url, sliccHeader, title? }`.
+3. The cone shows a yes/no approval card quoting the origin URL and the header value.
+4. On accept, the cone dispatches by verb prefix.
 
-- `instruction: string`
+## Verb prefixes
 
-Optional:
+- `handoff:<free-form instruction>` — cone fetches the page body (`curl <url>`) and acts on whatever it finds there alongside the instruction.
+- `upskill:<github-url>` — cone confirms, then runs `upskill <github-url>` to install the skill.
 
-- `title: string`
-- `urls: string[]`
-- `context: string`
-- `acceptanceCriteria: string[]`
-- `notes: string`
+Unknown prefixes are treated as free-form — the cone asks the user what to do with them.
 
-Example:
+## Convenience endpoint
 
-```json
-{
-  "title": "Verify signup flow",
-  "instruction": "Continue this task in SLICC and verify the signup flow works end to end.",
-  "urls": ["http://localhost:3000/signup"],
-  "context": "The local coding agent already changed the validation and submit flow.",
-  "acceptanceCriteria": [
-    "The signup form renders",
-    "Submitting valid data reaches the success state",
-    "No uncaught console errors appear"
-  ],
-  "notes": "Use the currently signed-in browser session."
-}
-```
+The tray-hub worker at `https://www.sliccy.ai/handoff?msg=<urlencoded>` echoes the `msg` query parameter into an `x-slicc` response header. External tools that want to trigger a handoff without hosting their own page can point users at that URL.
 
-## Helper
+## Helper script
 
-Use the helper bundled with the `slicc-handoff` skill:
+`.agents/skills/slicc-handoff/scripts/slicc-handoff` builds the URL for you:
 
 ```bash
-.agents/skills/slicc-handoff/scripts/slicc-handoff payload.json
+.agents/skills/slicc-handoff/scripts/slicc-handoff --open "Continue the signup flow"
+.agents/skills/slicc-handoff/scripts/slicc-handoff --open "upskill:https://github.com/slicc/skills-extra"
 ```
 
-The helper is a Node script and auto-detects piped stdin:
-
-```bash
-cat payload.json | .agents/skills/slicc-handoff/scripts/slicc-handoff
-```
-
-Add `--open` to launch the generated URL in the local browser when the host environment supports it. `--stdin` is still accepted as a compatibility alias, but it is no longer required when stdin is piped.
+If the instruction does not start with a known verb, the helper prepends `handoff:`.
