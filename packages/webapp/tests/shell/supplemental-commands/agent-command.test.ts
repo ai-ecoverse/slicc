@@ -612,6 +612,24 @@ describe('agent command', () => {
         modelId: 'claude-haiku-4-5',
       });
     });
+
+    // VAL-OUTPUT-016 scenario A end-to-end: the user's repro pipes stdout
+    // through the agent command, expecting the final assistant-text summary
+    // rather than the earlier `send_message("Starting.")` progress update.
+    it('scenario A: writes the final assistant text (not an earlier send_message) to stdout', async () => {
+      installBridge(async () => ({ finalText: 'Summary.', exitCode: 0 }));
+      const result = await createAgentCommand().execute(
+        [
+          '.',
+          '*',
+          'First write Starting. in chat. Then run bash. Then summarize as the scoop result.',
+        ],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('Summary.\n');
+      expect(result.stderr).toBe('');
+    });
   });
 
   describe('missing bridge', () => {

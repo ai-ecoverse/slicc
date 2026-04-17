@@ -26,7 +26,7 @@ import type { RegisteredScoop } from './types.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
 import { createLogger } from '../core/logger.js';
-import type { AgentMessage, AssistantMessage, TextContent } from '../core/types.js';
+import type { AgentMessage, AssistantMessage, TextContent, ToolCall } from '../core/types.js';
 
 const log = createLogger('agent-bridge');
 
@@ -328,12 +328,7 @@ export function createAgentBridge(
       orchestrator.updateBridgeTabStatus(jid, 'processing');
       await ctx.prompt(options.prompt);
 
-      if (captured.length > 0) {
-        finalText = captured[captured.length - 1];
-      } else {
-        const messages = ctx.getAgentMessages();
-        finalText = extractLastAssistantText(messages);
-      }
+      finalText = pickChronologicallyLastOutput(ctx.getAgentMessages(), captured);
     } catch (err) {
       exitCode = 1;
       finalText = errText(err);
@@ -606,6 +601,78 @@ function extractLastAssistantText(messages: AgentMessage[]): string {
         .map((c) => c.text);
       if (parts.length > 0) return parts.join('');
     }
+  }
+  return '';
+}
+
+/**
+ * Pick the chronologically LAST "assistant output" for the `agent` stdout
+ * contract (VAL-OUTPUT-016).
+ *
+ * Two sources compete for the slot:
+ *   (a) `send_message(text)` tool calls — already pushed into `captured[]`
+ *       by the bridge's `onSendMessage` callback, in the order they fired.
+ *   (b) Assistant-text blocks — i.e. `content` entries with `type: 'text'`
+ *       inside a `role: 'assistant'` message.
+ *
+ * We walk `messages` in reverse; within each assistant message we also walk
+ * `content` in reverse so that within a single assistant turn the later block
+ * wins. (pi-agent-core emits content blocks in chronological order: if a
+ * turn is `[text, send_message]`, the send_message is later.) The first
+ * qualifying block we encounter wins — it is the chronologically last
+ * assistant output.
+ *
+ * A running counter of send_message tool calls encountered during the reverse
+ * walk maps each send_message block to its corresponding `captured[]` index
+ * (`captured.length - sendMsgsEncountered`). This preserves the original
+ * source ordering of callbacks even when the caller dispatched multiple
+ * send_messages in different assistant turns. If the counter runs past
+ * `captured.length` (malformed state) we skip that block rather than throw.
+ *
+ * Fallback: if the walk completes without finding a qualifying block but
+ * `captured[]` is non-empty, return the LAST captured entry. This preserves
+ * the legacy "send_message-only" stdout contract and keeps callers that
+ * surface send_message payloads WITHOUT also describing the corresponding
+ * toolCall blocks in `getAgentMessages()` (e.g. simplified test doubles)
+ * behaving identically to the pre-walker implementation.
+ *
+ * Returns `''` when neither source has any content.
+ */
+function pickChronologicallyLastOutput(messages: AgentMessage[], captured: string[]): string {
+  let sendMsgsEncountered = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'assistant') continue;
+    const content = (msg as AssistantMessage).content;
+    for (let j = content.length - 1; j >= 0; j--) {
+      const block = content[j];
+      if (block.type === 'text') {
+        const textBlock = block as TextContent;
+        if (textBlock.text.length > 0) {
+          return textBlock.text;
+        }
+      } else if (block.type === 'toolCall') {
+        const toolCall = block as ToolCall;
+        if (toolCall.name === 'send_message') {
+          sendMsgsEncountered += 1;
+          const idx = captured.length - sendMsgsEncountered;
+          if (idx >= 0 && idx < captured.length) {
+            return captured[idx];
+          }
+          // Captured array is shorter than the number of send_message tool
+          // calls (should not happen under normal operation). Keep walking
+          // — an earlier text block or send_message might still qualify.
+        }
+      }
+      // Other block types (thinking, non-send_message toolCall) are skipped.
+    }
+  }
+  // Walk completed without a hit. If callers captured send_message payloads
+  // but did not surface the corresponding toolCall blocks in messages (e.g.
+  // minimal mocks), fall back to the latest captured entry rather than
+  // swallowing the output.
+  if (captured.length > 0) {
+    return captured[captured.length - 1];
   }
   return '';
 }

@@ -134,6 +134,68 @@ function assistantTextMessage(text: string): AgentMessage {
   };
 }
 
+/**
+ * Build an assistant message that contains a single `send_message` tool call
+ * with the given payload. Shape mirrors what pi-agent-core produces after a
+ * scoop invokes the NanoClaw `send_message` tool.
+ */
+function assistantSendMessageToolCall(id: string, text: string): AgentMessage {
+  return {
+    role: 'assistant',
+    content: [{ type: 'toolCall', id, name: 'send_message', arguments: { text } }],
+    api: 'anthropic',
+    provider: 'anthropic',
+    model: 'test-model',
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: 'toolUse',
+    timestamp: Date.now(),
+  };
+}
+
+/**
+ * Build an assistant message that contains a single non-`send_message` tool
+ * call (e.g. bash). Used to simulate work between progress updates and the
+ * final assistant-text summary.
+ */
+function assistantBashToolCall(id: string, command: string): AgentMessage {
+  return {
+    role: 'assistant',
+    content: [{ type: 'toolCall', id, name: 'bash', arguments: { command } }],
+    api: 'anthropic',
+    provider: 'anthropic',
+    model: 'test-model',
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: 'toolUse',
+    timestamp: Date.now(),
+  };
+}
+
+/** Tool-result message (role 'toolResult') paired with a prior tool call. */
+function toolResultMessage(toolCallId: string, toolName: string, text: string): AgentMessage {
+  return {
+    role: 'toolResult',
+    toolCallId,
+    toolName,
+    content: [{ type: 'text', text }],
+    isError: false,
+    timestamp: Date.now(),
+  };
+}
+
 // ─── Tests ─────────────────────────────────────────────────────────────
 
 describe('createAgentBridge', () => {
@@ -402,6 +464,178 @@ describe('createAgentBridge', () => {
       const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
       expect(result.exitCode).toBe(0);
       expect(result.finalText).toBe('');
+    });
+  });
+
+  // ── OUTPUT — chronological-last precedence (VAL-OUTPUT-016) ───────
+
+  // The `agent` stdout contract says whichever assistant output came LAST
+  // chronologically wins, whether that output is a `send_message(text)` tool
+  // call or a plain assistant-text block. The bridge's previous behavior —
+  // "always prefer captured[last] over assistant text" — flipped the wrong
+  // direction for the user's reported scenario where a progress-update
+  // `send_message("Starting.")` preceded a final assistant-text summary.
+  //
+  // Scenario legend:
+  //   A — send_message then bash then assistant text  → assistant text wins
+  //   B — assistant text then send_message            → send_message wins
+  //   C — only send_message                           → that send_message
+  //   D — only assistant text                         → that text
+  //   E — neither                                     → ''
+  describe('chronological-last output (VAL-OUTPUT-016)', () => {
+    it('scenario A: assistant text wins when it comes AFTER an earlier send_message (user repro)', async () => {
+      // Pattern: send_message("Starting.") → bash → toolResult → assistant text "Summary."
+      // Expected finalText: "Summary."  (assistant text is chronologically last)
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({
+          captured,
+          onSendWhilePrompting: ['Starting.'],
+          agentMessages: [
+            assistantSendMessageToolCall('sm-1', 'Starting.'),
+            assistantBashToolCall('bash-1', 'echo ready && sleep 10 && echo done'),
+            toolResultMessage('bash-1', 'bash', 'ready\ndone'),
+            assistantTextMessage('Summary.'),
+          ],
+        }),
+        generateUid: () => 'chrono-a',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(0);
+      expect(result.finalText).toBe('Summary.');
+    });
+
+    it('scenario B: send_message wins when it comes AFTER an earlier assistant text', async () => {
+      // Pattern: assistant text "Draft" → assistant send_message("Polished")
+      // Expected finalText: "Polished"  (send_message is chronologically last)
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({
+          captured,
+          onSendWhilePrompting: ['Polished'],
+          agentMessages: [
+            assistantTextMessage('Draft'),
+            assistantSendMessageToolCall('sm-1', 'Polished'),
+          ],
+        }),
+        generateUid: () => 'chrono-b',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(0);
+      expect(result.finalText).toBe('Polished');
+    });
+
+    it('scenario C: returns the single send_message when no assistant text exists', async () => {
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({
+          captured,
+          onSendWhilePrompting: ['only'],
+          agentMessages: [assistantSendMessageToolCall('sm-1', 'only')],
+        }),
+        generateUid: () => 'chrono-c',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(0);
+      expect(result.finalText).toBe('only');
+    });
+
+    it('scenario D: returns the single assistant text when no send_message was emitted', async () => {
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({
+          captured,
+          agentMessages: [assistantTextMessage('answer')],
+        }),
+        generateUid: () => 'chrono-d',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(0);
+      expect(result.finalText).toBe('answer');
+    });
+
+    it('scenario E: returns empty finalText when no output exists', async () => {
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({ captured, agentMessages: [] }),
+        generateUid: () => 'chrono-e',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(0);
+      expect(result.finalText).toBe('');
+    });
+
+    // Additional within-message precedence coverage: when a single assistant
+    // turn contains BOTH a text block AND a send_message tool call, the later
+    // block (by content-array index) wins. pi-agent-core emits content blocks
+    // in chronological order, so the last block in the array is the latest
+    // output for that turn.
+    it('within-message: assistant-text-then-toolcall → toolcall wins (send_message is later block)', async () => {
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({
+          captured,
+          onSendWhilePrompting: ['late-in-turn'],
+          agentMessages: [
+            {
+              role: 'assistant',
+              content: [
+                { type: 'text', text: 'early-in-turn' },
+                {
+                  type: 'toolCall',
+                  id: 'sm-1',
+                  name: 'send_message',
+                  arguments: { text: 'late-in-turn' },
+                },
+              ],
+              api: 'anthropic',
+              provider: 'anthropic',
+              model: 'test-model',
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: 'toolUse',
+              timestamp: Date.now(),
+            } as AgentMessage,
+          ],
+        }),
+        generateUid: () => 'chrono-inline',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(0);
+      expect(result.finalText).toBe('late-in-turn');
+    });
+
+    // Ignore non-`send_message` tool calls (bash, etc.) — they are not
+    // "assistant output" for the stdout contract.
+    it('ignores non-send_message tool calls when finding the chronological last', async () => {
+      const captured: CapturedCtxArgs[] = [];
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: makeMockContextFactory({
+          captured,
+          agentMessages: [
+            assistantTextMessage('answer'),
+            assistantBashToolCall('bash-post', 'ls /'),
+            toolResultMessage('bash-post', 'bash', 'root dirs'),
+          ],
+        }),
+        generateUid: () => 'chrono-ignore',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(0);
+      expect(result.finalText).toBe('answer');
     });
   });
 

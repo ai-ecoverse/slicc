@@ -849,9 +849,12 @@ ${this.scoop.isCone ? '- Use update_global_memory tool for information that shou
 ## Communication
 
 When using send_message:
-- Use it for progress updates on long tasks
-- Use it when you want to send multiple messages
-- Your final output is also sent, so don't repeat yourself
+- Use it for progress updates during multi-step work
+- Use it when you want to send several updates before a final answer
+- **Your last message wins** — the chronologically LAST output (either a send_message call or plain assistant text, whichever came last) is what the caller actually receives
+- Prefer a plain assistant-text reply for the final answer; only end on send_message when you explicitly need to distinguish the final payload from subsequent work
+- Pattern that works well: send_message("Starting.") → do the work → plain-text summary as your final turn
+- Also fine: skip progress updates entirely and just reply with a single plain-text answer
 
 ${this.scoop.config?.systemPromptAppend ?? ''}`;
 
