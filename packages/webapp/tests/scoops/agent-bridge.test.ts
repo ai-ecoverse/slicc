@@ -1541,6 +1541,83 @@ describe('createAgentBridge', () => {
     });
   });
 
+  // ── Error surfacing: scoopError vs prompt() throw precedence ─────
+  //
+  // Regression guard uncovered by VAL-LIVE-010 on a fresh profile with no
+  // provider configured:
+  //
+  //   1. `ScoopContext.init()` catches its own failure (e.g. no API key for
+  //      the selected provider) and fires `callbacks.onError(msg)` instead
+  //      of re-throwing. The bridge's `onError` hook captures the specific
+  //      message into `scoopError`.
+  //   2. Control returns to the bridge, which proceeds to `ctx.prompt()`.
+  //   3. `ctx.prompt()` throws `new Error('Agent not initialized')` because
+  //      init never completed successfully.
+  //   4. The bridge's outer `catch` previously overwrote the specific
+  //      scoopError with the generic prompt failure via `errText(err)`.
+  //
+  // Fix: when catching a prompt-level throw, prefer `scoopError` (if a
+  // specific scoop-level error was surfaced earlier) over the generic
+  // prompt text. When no scoopError was captured, fall back to the
+  // prompt's own error text — no regression for genuine prompt-time
+  // failures.
+
+  describe('error surfacing: scoopError takes precedence over prompt() throw', () => {
+    it('prefers scoopError from init()-onError over a later generic "Agent not initialized" throw', async () => {
+      // Mirrors the real VAL-LIVE-010 flow: ScoopContext.init() swallows its
+      // failure and surfaces the specific message via callbacks.onError(msg).
+      // ctx.prompt() then throws the generic follow-up because init never
+      // completed. The bridge must return the specific init-time message.
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: (args) => ({
+          async init() {
+            // Match ScoopContext.init()'s swallow semantics: surface via
+            // callback and return normally (do NOT re-throw).
+            args.callbacks.onError('No API key configured for provider "anthropic"');
+          },
+          async prompt() {
+            throw new Error('Agent not initialized');
+          },
+          dispose() {},
+          getAgentMessages() {
+            return [];
+          },
+        }),
+        generateUid: () => 'init-fail',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(1);
+      expect(result.finalText).toBe('No API key configured for provider "anthropic"');
+    });
+
+    it('uses prompt() error text when prompt throws without any prior onError (regression guard)', async () => {
+      // init() resolves cleanly and fires NO onError calls — scoopError
+      // stays null. ctx.prompt() then throws a genuine network error. The
+      // bridge must use the prompt's own error text, proving the
+      // preservation path does not swallow real prompt-time failures.
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: () => ({
+          async init() {},
+          async prompt() {
+            throw new Error('Network error: ECONNRESET');
+          },
+          dispose() {},
+          getAgentMessages() {
+            return [];
+          },
+        }),
+        generateUid: () => 'prompt-fail-no-onerror',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(1);
+      expect(result.finalText).toBe('Network error: ECONNRESET');
+    });
+  });
+
   // ── Sanity: FsError is what RestrictedFS throws ───────────────────
 
   describe('FsError sanity', () => {

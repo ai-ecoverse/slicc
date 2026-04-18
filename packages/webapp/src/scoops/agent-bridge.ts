@@ -355,7 +355,17 @@ export function createAgentBridge(
       }
     } catch (err) {
       exitCode = 1;
-      finalText = errText(err);
+      // When a more specific scoop-level error was captured earlier via
+      // `callbacks.onError` — typically a `ScoopContext.init()` failure
+      // that was swallowed into the callback (e.g., "No API key configured
+      // for provider 'anthropic'") — prefer that over the generic
+      // follow-up throw from `ctx.prompt()` (commonly `'Agent not
+      // initialized'`). Without this preservation the user-visible stderr
+      // collapses to the generic message and the actual root cause is
+      // lost (VAL-LIVE-010 evidence). When no scoopError was captured,
+      // fall back to the prompt's own error text — this keeps genuine
+      // prompt-time failures (network, tool errors, etc.) visible.
+      finalText = scoopError ?? errText(err);
     } finally {
       // 1. Dispose the context (best-effort; never re-throws).
       try {
