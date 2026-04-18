@@ -14,7 +14,12 @@ Use this skill when the user says things like `handoff to slicc`, `move this to 
 
 ## How it works
 
-The script builds a URL like `https://www.sliccy.ai/handoff?msg=<urlencoded>`. The cloudflare-worker serves that URL with an `x-slicc: <msg>` response header. SLICC observes the header on main-frame navigation and shows a yes/no approval card. On accept, the cone dispatches by prefix.
+The script builds a URL like `https://www.sliccy.ai/handoff?msg=<urlencoded>`. Two delivery paths fire in parallel:
+
+- **Localhost POST** to `http://localhost:${SLICC_PORT ?? 5710}/api/handoff` with `{sliccHeader, url, title}`. The node-server rebroadcasts it as a navigate lick to the connected webapp. This is the profile-independent path — it reaches SLICC even when the user's default browser is a different Chrome profile than the one SLICC controls.
+- **`--open`** opens the URL in the local browser. If that browser profile has the SLICC extension installed, `chrome.webRequest` observes the `x-slicc` response header and emits the navigate lick.
+
+Either path results in a yes/no approval card in the cone; accept dispatches by verb prefix.
 
 ## Examples
 

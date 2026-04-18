@@ -1746,6 +1746,29 @@ async function main(): Promise<void> {
             data.body
           );
         }
+
+        // Handle handoffs injected via POST /api/handoff. This is the
+        // profile-independent fallback: the CDP navigation-watcher only
+        // sees tabs in the SLICC-controlled Chrome profile, so external
+        // tools running elsewhere post here instead.
+        if (data.type === 'navigate_event') {
+          const sliccHeader = typeof data.sliccHeader === 'string' ? data.sliccHeader : '';
+          const navUrl = typeof data.url === 'string' && data.url.length > 0 ? data.url : '';
+          if (sliccHeader && navUrl) {
+            lickManager.emitEvent({
+              type: 'navigate',
+              navigateUrl: navUrl,
+              targetScoop: undefined,
+              timestamp:
+                typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString(),
+              body: {
+                url: navUrl,
+                sliccHeader,
+                title: typeof data.title === 'string' ? data.title : undefined,
+              },
+            });
+          }
+        }
       } catch (err) {
         log.error('Failed to process lick message', {
           error: err instanceof Error ? err.message : String(err),
