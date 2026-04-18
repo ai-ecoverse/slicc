@@ -231,23 +231,52 @@ export class Orchestrator {
     };
   }
 
-  /** Register a new scoop and fully initialize its context before returning.
+  /** Register a new scoop and wait until its tab/context has been registered
+   *  before returning. Does NOT guarantee successful initialization:
+   *  `ScoopContext.init()` can handle failures internally and leave the tab
+   *  in 'error' state while `createScoopTab` still resolves. The guarantee
+   *  here is that by the time this resolves, the tab/context entry exists in
+   *  `this.contexts` / `this.tabs` (ready or error).
    *
-   *  Awaiting createScoopTab here (rather than firing-and-forgetting it) is
-   *  what prevents a race with the caller's immediate follow-up sendPrompt.
-   *  `scoop_scoop` with an initial prompt fires `onFeedScoop` the moment this
-   *  resolves: if the tab has not yet been registered in `this.contexts` /
-   *  `this.tabs`, sendPrompt calls createScoopTab itself, and both calls race
-   *  past the `this.contexts.has(jid)` early-return guard (the guard only
-   *  catches duplicates once contexts.set has run, which happens partway
-   *  through the function). The losing context ends up orphaned and the
-   *  initial prompt is dropped. See issue #440. */
+   *  Awaiting createScoopTab (rather than firing-and-forgetting it) is what
+   *  prevents a race with the caller's immediate follow-up sendPrompt.
+   *  `scoop_scoop` with an initial prompt fires `onFeedScoop` the moment
+   *  this resolves: if the tab had not yet been registered in `this.contexts`
+   *  / `this.tabs`, sendPrompt would call createScoopTab itself, and both
+   *  calls would race past the `this.contexts.has(jid)` early-return guard
+   *  (the guard only catches duplicates once `contexts.set` has run, which
+   *  happens partway through the function). The losing context ends up
+   *  orphaned and the initial prompt is silently dropped. See issue #440.
+   *
+   *  On failure, rolls back the in-memory and on-disk scoop records so the
+   *  caller doesn't see a half-registered scoop, and rethrows so the caller
+   *  can surface the error. */
   async registerScoop(scoop: RegisteredScoop): Promise<void> {
     await db.saveScoop(scoop);
     this.scoops.set(scoop.jid, scoop);
     this.messageQueues.set(scoop.jid, []);
     log.info('Scoop registered', { jid: scoop.jid, name: scoop.name });
-    await this.createScoopTab(scoop.jid);
+    try {
+      await this.createScoopTab(scoop.jid);
+    } catch (err) {
+      log.error('Scoop init failed', {
+        jid: scoop.jid,
+        name: scoop.name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // Best-effort rollback — leave no half-registered scoop behind.
+      await this.destroyScoopTab(scoop.jid).catch(() => {});
+      this.scoops.delete(scoop.jid);
+      this.messageQueues.delete(scoop.jid);
+      await db.deleteScoop(scoop.jid).catch((rollbackErr) => {
+        log.warn('Failed to rollback scoop registration', {
+          jid: scoop.jid,
+          name: scoop.name,
+          error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+        });
+      });
+      throw err;
+    }
   }
 
   /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */
