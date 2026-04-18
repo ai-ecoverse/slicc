@@ -5,7 +5,7 @@
  * Uses the DB layer directly to verify message persistence and routing.
  */
 
-import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import {
   initDB,
@@ -429,12 +429,28 @@ describe('Scoop idle detection', () => {
 
 describe('Orchestrator session-restore compat for visiblePaths', () => {
   let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
 
   beforeAll(() => {
     // TaskScheduler.start() calls window.setInterval; vitest runs in node.
-    // Expose a minimal shim so orchestrator.init() can boot.
+    // Expose a minimal shim so orchestrator.init() can boot, remembering the
+    // prior value so afterAll can restore it (vitest may share a worker
+    // across test files and we don't want to leak a globalThis.window shim).
     if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
       (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
     }
   });
 
@@ -450,8 +466,11 @@ describe('Orchestrator session-restore compat for visiblePaths', () => {
   });
 
   afterEach(async () => {
-    // Stop the scheduler's poll timer so tests don't leak across runs.
+    // Stop the scheduler's poll timer AND dispose the shared VirtualFS so
+    // BroadcastChannel / IndexedDB handles don't leak across test runs.
+    const sharedFs = orch?.getSharedFS();
     await orch?.shutdown();
+    await sharedFs?.dispose();
   });
 
   function noopCallbacks() {

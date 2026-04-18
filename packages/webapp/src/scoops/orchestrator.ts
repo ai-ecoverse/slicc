@@ -171,8 +171,12 @@ export class Orchestrator {
   }
 
   /**
-   * One-shot compat migration for `ScoopConfig`. Mutates the scoop record in
-   * place so the next `saveScoop` persists the normalized shape.
+   * One-shot in-memory compat migration for `ScoopConfig`. Mutates the scoop
+   * record in place so the rest of the runtime sees the normalized shape;
+   * the DB copy stays legacy until some other operation happens to call
+   * `db.saveScoop` (e.g. a user-initiated scoop update). That's fine — this
+   * migration is idempotent and cheap, so re-running it on every boot until
+   * the record gets rewritten is a non-issue.
    *
    * Gated on {@link RegisteredScoop.configSchemaVersion} rather than a truthy
    * check on individual fields, so a record explicitly saved with
