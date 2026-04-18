@@ -214,14 +214,30 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
 
             log.info('Scoop created', { name, folder });
 
-            // If prompt provided, feed immediately (fire-and-forget)
+            // If prompt provided, feed immediately and await the delegate
+            // call so setup failures (e.g. db.saveMessage) surface to the
+            // cone instead of being logged after a success response.
+            // onFeedScoop → delegateToScoop awaits only the persistence +
+            // prompt dispatch; the scoop's agent loop still runs
+            // fire-and-forget in the background, so this doesn't block on
+            // the LLM turn. The scoop's context is already initialized by
+            // the time onScoopScoop resolves (orchestrator.registerScoop
+            // awaits createScoopTab), so the prompt won't race init either.
             if (taskPrompt && onFeedScoop) {
-              onFeedScoop(newScoop.jid, taskPrompt).catch((err) => {
+              try {
+                await onFeedScoop(newScoop.jid, taskPrompt);
+              } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 log.error('Auto-feed failed', { name, error: msg });
-              });
+                return {
+                  content:
+                    `Scoop "${name}" created as "${folder}" but the initial task could not be sent: ${msg}. ` +
+                    `Use feed_scoop to retry.`,
+                  isError: true,
+                };
+              }
               return {
-                content: `Scoop "${name}" created as "${folder}" and task sent. It will start working as soon as initialization completes.`,
+                content: `Scoop "${name}" created as "${folder}" and task sent. It is now working on it.`,
               };
             }
 
