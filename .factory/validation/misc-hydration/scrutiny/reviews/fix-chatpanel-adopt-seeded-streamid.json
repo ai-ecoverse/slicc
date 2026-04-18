@@ -1,0 +1,33 @@
+{
+  "featureId": "fix-chatpanel-adopt-seeded-streamid",
+  "reviewedAt": "2026-04-18T06:50:38Z",
+  "commitId": "09b2361",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "Commit 09b2361 fixes the specific seeded-id bug from the prior 22edcf1 review by letting ChatPanel adopt a hydrated message as the active stream, but the end-to-end selection chain still drops already-buffered text in the exact 'persist lands between reconcile and render' window that originally triggered scrutiny. In that interleaving the panel intentionally renders the older preloaded snapshot, the live relay synthesizes a fresh assistant id on the next delta, and the already-buffered pre-click content never reaches the visible row.",
+    "issues": [
+      {
+        "file": "packages/webapp/src/ui/main.ts",
+        "line": 402,
+        "severity": "blocking",
+        "description": "The rerun repairs the seeded branch, but the original between-read timing window still does not preserve the same in-progress message across selection. `selectScoop()` always passes the earlier `reconciledSession` snapshot into `ChatPanel.switchToContext()` (`main.ts:402-410`, `chat-panel.ts:198-201`). If `OffscreenBridge.persistScoop()` commits an assistant message immediately after reconcile returns, `OffscreenClient.currentMessageId` is still empty, so the next `text_delta` synthesizes a brand-new `message_start` (`offscreen-client.ts:426-429`) even though the offscreen bridge already has buffered content for the real message and only emits the incremental chunk (`packages/chrome-extension/src/offscreen-bridge.ts:85-109`). The committed race regression test explicitly treats that synthetic-row outcome as success (`packages/webapp/tests/ui/selection-session-race.test.ts:192-194`), which means the user can still lose the pre-click partial text in the exact race scrutiny was meant to close; and because `handleTurnEnd()` persists the panel buffer (`chat-panel.ts:882-885`), that truncated local row can also win a last-write race against the bridge's fuller session state."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The shared architecture notes now say selection fixes must preserve persisted pre-click state, snapshot-consistent hydration, and message-ID continuity, but the canonical `selection-session-race` regression still accepts a synthesized assistant row as success for the between-reconcile-and-render race. That mismatch leaves the most important continuity invariant under-specified.",
+      "evidence": "`.factory/library/architecture.md:148` requires all three invariants, while `packages/webapp/tests/ui/selection-session-race.test.ts:186-195` documents the post-fix success case as 'only one row is created, sourced from the delta's synthesized id.'"
+    },
+    {
+      "area": "skills",
+      "observation": "The `webapp-worker` manual-verification guidance is still easy to misapply for ChatPanel/rendering fixes. This worker skipped live CDP checks and still marked `followedProcedure: true`, even though the skill says features affecting what the user sees in the UI require manual verification.",
+      "evidence": "`.factory/skills/webapp-worker/SKILL.md:89-96` makes manual verification REQUIRED for user-observable UI behavior and says to set `followedProcedure: false` if such checks are skipped; the handoff `/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/handoffs/2026-04-18T06-41-10-788Z__fix-chatpanel-adopt-seeded-streamid__40997a0f-7439-42f4-a1ac-78fb5c0dce52.json:12,61,84` records no `interactiveChecks`, says manual verification was skipped, and still reports `followedProcedure: true`."
+    }
+  ],
+  "addressesFailureFrom": "misc-reconcile-offscreen-client-currentmessageid-on-selection",
+  "summary": "Fail. The 09b2361 ChatPanel change fixes the seeded-id `currentStreamId` drop identified in the previous `fix-unify-selection-session-read` review, but the full selection-time fix chain still loses already-buffered assistant text when the bridge persist lands after reconcile but before the panel renders. The committed regression test still blesses a synthesized replacement row in that window, so the original mid-stream continuity problem is not fully closed."
+}

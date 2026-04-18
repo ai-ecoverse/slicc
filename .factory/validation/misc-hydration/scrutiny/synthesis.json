@@ -1,6 +1,6 @@
 {
   "milestone": "misc-hydration",
-  "round": 1,
+  "round": 2,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -20,42 +20,54 @@
     }
   },
   "reviewsSummary": {
-    "total": 1,
+    "total": 2,
     "passed": 0,
-    "failed": 1,
-    "failedFeatures": ["misc-reconcile-offscreen-client-currentmessageid-on-selection"]
+    "failed": 2,
+    "failedFeatures": ["fix-unify-selection-session-read", "fix-chatpanel-adopt-seeded-streamid"]
   },
   "reviewedFeatures": [
     {
-      "featureId": "misc-reconcile-offscreen-client-currentmessageid-on-selection",
-      "commitId": "4fa795e",
+      "featureId": "fix-unify-selection-session-read",
+      "commitId": "22edcf1",
       "status": "fail",
-      "summary": "The patch seeds `currentMessageId` for the helper-level happy path, but the real selection flow still does one SessionStore read for seeding and a second read for `ChatPanel.switchToContext()`, so async bridge persistence can leave the hydrated panel snapshot ahead of the live relay and the next `text_delta` can still fork a new row."
+      "summary": "The feature removed the round-1 double-load mismatch, but a hydrated in-progress assistant still never became the active ChatPanel stream, so seeded post-click deltas were buffered and dropped."
+    },
+    {
+      "featureId": "fix-chatpanel-adopt-seeded-streamid",
+      "commitId": "09b2361",
+      "status": "fail",
+      "summary": "The follow-on ChatPanel change repaired the seeded `currentStreamId` handoff, but the selection path still accepts a synthesized replacement row when persistence lands after reconcile and before render, losing already-buffered pre-click text."
     }
   ],
   "blockingIssues": [
     {
-      "featureId": "misc-reconcile-offscreen-client-currentmessageid-on-selection",
+      "featureId": "fix-chatpanel-adopt-seeded-streamid",
       "severity": "blocking",
-      "description": "`selectScoop()` seeds `OffscreenClient.currentMessageId` via `reconcileForScoopSelection()` before `ChatPanel.switchToContext()` loads the chat session, but those are two independent SessionStore reads. Because `OffscreenBridge.persistScoop()` writes are fire-and-forget, the two reads can observe different snapshots: the panel can hydrate an in-progress assistant message that `currentMessageId` never seeds, so the next `text_delta` still forks a fresh row.",
-      "suggestedFix": "Drive selection-time seeding from the same session snapshot that `ChatPanel.switchToContext()` renders (or thread the hydrated in-progress message id through the selection flow) so `currentMessageId` cannot lag behind the panel after async `persistScoop()` writes."
+      "description": "Selecting a running bridge scoop can still render the earlier reconciled snapshot even if `OffscreenBridge.persistScoop()` commits the real in-progress assistant immediately afterward. In that interleaving `OffscreenClient.currentMessageId` stays empty, the next post-click `text_delta` synthesizes a replacement assistant id, the panel loses the bridge's already-buffered pre-click text, and `handleTurnEnd()` can later persist that truncated local row back over the fuller bridge state.",
+      "suggestedFix": "Make the selection handoff preserve the real in-progress assistant identity and content across the reconcile→render gap. If persistence lands after reconcile but before render, reconcile or refresh the rendered session before accepting post-click deltas, and tighten the regression to require the original hydrated message id/content instead of a synthesized replacement row."
     }
   ],
   "appliedUpdates": [
     {
       "target": "library",
-      "description": "Updated `.factory/library/architecture.md` to record that selection-time `currentMessageId` seeding must use the same SessionStore snapshot that `ChatPanel.switchToContext()` renders; separate pre-hydration loads can race with async `persistScoop()` writes.",
-      "sourceFeature": "misc-reconcile-offscreen-client-currentmessageid-on-selection"
+      "description": "Updated `.factory/library/architecture.md` to state that a selection-time fix is not complete unless the hydrated in-progress assistant remains the row that receives post-click deltas; a synthesized replacement row that drops pre-click buffered text is still a failure and can later overwrite fuller bridge state.",
+      "sourceFeature": "fix-chatpanel-adopt-seeded-streamid"
     }
   ],
   "suggestedGuidanceUpdates": [
     {
       "target": "webapp-worker skill",
-      "suggestion": "Clarify the precedence between the generic manual CDP verification requirement and feature-level instructions that mark browser checks optional. If a worker skips the generic check because a feature narrows it, the handoff should mark `followedProcedure: false` unless the skill explicitly codifies that exception.",
-      "evidence": "This review found `features.json` marked manual CDP verification OPTIONAL for `misc-reconcile-offscreen-client-currentmessageid-on-selection`, the worker skipped browser checks, and the handoff still reported `followedProcedure: true`. A similar mismatch was already captured in core-followup scrutiny for `fix-agent-scoop-visibility`, so the ambiguity is recurring rather than one-off.",
+      "suggestion": "For UI race-condition fixes, require regression tests to assert exact message identity/continuity and preserved pre-click content through the described interleaving; row-count-only assertions or synthesized replacement rows should not be accepted as success.",
+      "evidence": "The misc-hydration `fix-unify-selection-session-read` feature described a race where the hydrated assistant must remain `msg-5`, but the committed `selection-session-race` test accepted a synthesized `scoop-<jid>-<uid>` row instead; round-2 scrutiny and the follow-on fix review both found the underlying continuity bug remained.",
+      "isSystemic": false
+    },
+    {
+      "target": "webapp-worker skill",
+      "suggestion": "Strengthen the handoff rules so any skipped live CDP verification for UI-facing ChatPanel/offscreen-client fixes must set `followedProcedure: false` and call out the skip explicitly, even when the worker believes the change is an internal routing tweak.",
+      "evidence": "This milestone's `fix-chatpanel-adopt-seeded-streamid` handoff skipped manual verification for a user-visible chat-rendering fix yet still reported `followedProcedure: true`; a similar mismatch was already recorded in misc-hydration round 1, so the rule remains easy to misapply.",
       "isSystemic": true
     }
   ],
   "rejectedObservations": [],
-  "previousRound": null
+  "previousRound": ".factory/validation/misc-hydration/scrutiny/synthesis.round1.json"
 }

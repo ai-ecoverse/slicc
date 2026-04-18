@@ -1,0 +1,33 @@
+{
+  "featureId": "fix-unify-selection-session-read",
+  "reviewedAt": "2026-04-18T06:48:21Z",
+  "commitId": "22edcf1",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The rerun does remove the exact double-load divergence called out in the prior review by threading one Session snapshot from OffscreenClient.reconcileForScoopSelection() into ChatPanel.switchToContext(), but it still does not make a clicked mid-stream assistant continue rendering. Once the original 4fa795e seeding helper and this snapshot-unification patch are combined, the selected scoop can enter a seeded-id path where OffscreenClient emits only content_delta for an already-hydrated assistant row; ChatPanel never re-adopts that row as the active stream, so the continuation text is buffered and then discarded.",
+    "issues": [
+      {
+        "file": "packages/webapp/src/ui/chat-panel.ts",
+        "line": 729,
+        "severity": "blocking",
+        "description": "Commit 22edcf1 fixes the two-SessionStore-read race, but it leaves the seeded continuation path broken. `switchToContext()` resets `currentStreamId` and hydrates persisted messages with `isStreaming: false` (`chat-panel.ts:183-206`), while the seeded branch from the original 4fa795e fix makes `OffscreenClient.handleAgentEvent()` emit only `content_delta` for the hydrated message id (`offscreen-client.ts:422-429`) and intentionally skips `message_start`. When the next post-click delta reaches `handleContentDelta()`, it only appends to `pendingDeltaText`; `flushPendingDelta()` immediately returns because `currentStreamId` is still null (`chat-panel.ts:1060-1063`), and `handleContentDone()` later clears the pending buffer without appending it (`chat-panel.ts:738-744`). Net effect: the duplicate-row race is replaced by a silent continuation drop, so this rerun still does not fully resolve the original selection-time hydration failure."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The shared architecture notes captured the need to reuse the same SessionStore snapshot for selection hydration, but they did not also record the downstream ChatPanel requirement that a hydrated in-progress message must become the active stream before seeded `content_delta` events can flush. That omission made the 22edcf1 fix look complete even though continuation text was still dropped.",
+      "evidence": "`.factory/library/architecture.md:142-149` documents persisted pre-click state plus snapshot-consistent hydration, but does not mention `ChatPanel.currentStreamId` / `flushPendingDelta`. The worker's own handoff for `fix-unify-selection-session-read` also records the missing downstream behavior in `handoff.discoveredIssues[0]` of `handoffs/2026-04-18T06-30-44-999Z__fix-unify-selection-session-read__05bc1db3-e1e3-4e07-b4b3-3c1f77a891e5.json`."
+    },
+    {
+      "area": "conventions",
+      "observation": "The feature spec mixed two different race variants, which weakened the regression test. It asked the user-only S1 race to preserve hydrated `msg-5`, but the committed test only asserted 'one assistant row' and explicitly accepted a synthesized `scoop-<jid>-<uid>` row. That ambiguity left room for a green test suite that still missed the real mid-stream continuation failure.",
+      "evidence": "`features.json:1862-1883` step 8 requires the user-only S1 race test to end with one assistant row whose id is `msg-5`; the committed regression in the reviewed commit (`packages/webapp/tests/ui/selection-session-race.test.ts:186-196`) only asserts row count and comments that the post-fix row is sourced from the delta's synthesized id. The worker echoed the mismatch in `handoff.skillFeedback.suggestedChanges[0]` of `handoffs/2026-04-18T06-30-44-999Z__fix-unify-selection-session-read__05bc1db3-e1e3-4e07-b4b3-3c1f77a891e5.json`."
+    }
+  ],
+  "addressesFailureFrom": "misc-reconcile-offscreen-client-currentmessageid-on-selection",
+  "summary": "Fail. Commit 22edcf1 correctly unifies the reconcile and hydration SessionStore reads that caused the prior scrutiny failure, but it still leaves the seeded-message continuation path broken: once a mid-stream assistant row is hydrated, subsequent `text_delta` events are buffered and dropped because ChatPanel has no active stream id for that row. The rerun therefore does not adequately address the original blocking issue."
+}
