@@ -729,6 +729,15 @@ export class ChatPanel {
   private handleContentDelta(messageId: string, text: string): void {
     const msg = this.findMessage(messageId);
     if (!msg) return;
+    // Seeded-id path: when OffscreenClient seeded currentMessageId from an
+    // in-progress assistant in the preloaded session, it skips message_start
+    // to avoid double-rendering. Adopt streaming state lazily so the panel's
+    // own RAF flush gate (flushPendingDelta) actually fires.
+    if (this.currentStreamId === null) {
+      this.currentStreamId = messageId;
+      if (!msg.isStreaming) msg.isStreaming = true;
+      this.setStreamingState(true);
+    }
     this.pendingDeltaText += text;
     if (this.streamingRafId === null) {
       this.streamingRafId = requestAnimationFrame(() => this.flushPendingDelta());

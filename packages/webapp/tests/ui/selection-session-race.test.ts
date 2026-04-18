@@ -302,4 +302,155 @@ describe('selection-time hydration race', () => {
     const msgs = panel.getMessages();
     expect(msgs.map((m) => m.id)).toEqual(['u1', 'a1']);
   });
+
+  it('applies text_delta to a seeded in-progress assistant id without dropping', async () => {
+    // Seeded-id adoption regression: after reconcileForScoopSelection seeds
+    // currentMessageId for an in-progress assistant, OffscreenClient skips
+    // message_start and emits only content_delta. ChatPanel must lazily
+    // adopt that messageId as currentStreamId so pendingDeltaText flushes
+    // into the real message row — otherwise flushPendingDelta early-returns
+    // (currentStreamId === null) and the tokens disappear.
+    const scoopJid = 'agent_seeded_adopt';
+    const folder = 'scoop-adopt';
+    const contextId = `session-${folder}`;
+
+    const store = new SessionStore();
+    await store.init();
+    const s1: ChatMessage[] = [
+      { id: 'u1', role: 'user', content: 'hi', timestamp: 1 },
+      {
+        id: 'msg-5',
+        role: 'assistant',
+        content: 'hello',
+        timestamp: 2,
+        isStreaming: true,
+      },
+    ];
+    await store.saveMessages(contextId, s1);
+
+    const client = new OffscreenClient({
+      onStatusChange: vi.fn(),
+      onScoopCreated: vi.fn(),
+      onScoopListUpdate: vi.fn(),
+      onIncomingMessage: vi.fn(),
+      onPendingHandoffsChange: vi.fn(),
+    });
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const panel = new ChatPanel(container);
+    await panel.initSession('default');
+
+    // Reconcile seeds currentMessageId = 'msg-5' and returns the snapshot.
+    const reconciledSession = await client.reconcileForScoopSelection(makeScoop(scoopJid, folder));
+    expect((client as any).currentMessageId.get(scoopJid)).toBe('msg-5');
+
+    // Use the unified snapshot for rendering.
+    await panel.switchToContext(contextId, false, folder, reconciledSession);
+
+    // Wire the panel's agent handle to the client so it receives events.
+    client.selectedScoopJid = scoopJid;
+    const handle = client.createAgentHandle();
+    panel.setAgent(handle);
+
+    // Fire a seeded-id text_delta — OffscreenClient emits ONLY content_delta
+    // (no message_start) because currentMessageId was seeded.
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid,
+      eventType: 'text_delta',
+      text: ' world',
+    });
+
+    // Flush RAF-scheduled pendingDeltaText.
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Then the response completes.
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid,
+      eventType: 'response_done',
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const msgs = panel.getMessages();
+    const assistantRows = msgs.filter((m) => m.role === 'assistant');
+    // Exactly one assistant row — no fork from a synthetic message_start.
+    expect(assistantRows).toHaveLength(1);
+    const target = msgs.find((m) => m.id === 'msg-5');
+    expect(target).toBeDefined();
+    // Pre-fix: content stays 'hello' because flushPendingDelta early-returns
+    // when currentStreamId is null. Post-fix: delta appends.
+    expect(target!.content).toBe('hello world');
+    // After content_done, streaming flag flips off.
+    expect(target!.isStreaming).toBe(false);
+  });
+
+  it('accumulates multiple seeded deltas across frames', async () => {
+    // Progression regression: once currentStreamId is adopted for a seeded
+    // id, subsequent RAF flushes must keep accumulating into the same row.
+    const scoopJid = 'agent_seeded_multi';
+    const folder = 'scoop-multi';
+    const contextId = `session-${folder}`;
+
+    const store = new SessionStore();
+    await store.init();
+    const s1: ChatMessage[] = [
+      { id: 'u1', role: 'user', content: 'hi', timestamp: 1 },
+      {
+        id: 'msg-5',
+        role: 'assistant',
+        content: 'hello',
+        timestamp: 2,
+        isStreaming: true,
+      },
+    ];
+    await store.saveMessages(contextId, s1);
+
+    const client = new OffscreenClient({
+      onStatusChange: vi.fn(),
+      onScoopCreated: vi.fn(),
+      onScoopListUpdate: vi.fn(),
+      onIncomingMessage: vi.fn(),
+      onPendingHandoffsChange: vi.fn(),
+    });
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const panel = new ChatPanel(container);
+    await panel.initSession('default');
+
+    const reconciledSession = await client.reconcileForScoopSelection(makeScoop(scoopJid, folder));
+    await panel.switchToContext(contextId, false, folder, reconciledSession);
+
+    client.selectedScoopJid = scoopJid;
+    const handle = client.createAgentHandle();
+    panel.setAgent(handle);
+
+    // Fire three text_delta events with a RAF flush between each.
+    for (const chunk of [' a', ' b', ' c']) {
+      simulateMessage('offscreen', {
+        type: 'agent-event',
+        scoopJid,
+        eventType: 'text_delta',
+        text: chunk,
+      });
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid,
+      eventType: 'response_done',
+    });
+    await new Promise((r) => setTimeout(r, 20));
+
+    const msgs = panel.getMessages();
+    const assistantRows = msgs.filter((m) => m.role === 'assistant');
+    expect(assistantRows).toHaveLength(1);
+    const target = msgs.find((m) => m.id === 'msg-5');
+    expect(target).toBeDefined();
+    expect(target!.content).toBe('hello a b c');
+    expect(target!.isStreaming).toBe(false);
+  });
 });
