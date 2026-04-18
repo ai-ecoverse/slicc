@@ -33,7 +33,7 @@ import { findDroppedSkillTransferFile, hasDroppedFiles } from './skill-drop.js';
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
 import '../providers/index.js';
-import { BrowserAPI } from '../cdp/index.js';
+import { BrowserAPI, NavigationWatcher } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
@@ -80,9 +80,6 @@ import {
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
-import { formatAcceptedHandoffMessage } from './accepted-handoff-message.js';
-import { StandaloneHandoffWatcher } from './standalone-handoff-watcher.js';
-import type { PendingHandoff } from '../../../chrome-extension/src/messages.js';
 
 const log = createLogger('main');
 
@@ -367,10 +364,6 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // Uses `client` which is assigned right after construction.
   let client!: InstanceType<typeof OffscreenClient>;
   let knownScoopFolders = new Set<string>();
-  const syncPendingHandoffs = (handoffs: PendingHandoff[]) => {
-    layout.setPendingHandoffCount(handoffs.length);
-    layout.panels.chat.setPendingHandoffs(handoffs);
-  };
 
   const selectScoop = async (scoop: RegisteredScoop) => {
     selectedScoop = scoop;
@@ -446,7 +439,6 @@ async function mainExtension(app: HTMLElement): Promise<void> {
         layout.panels.chat.addUserMessage(content);
       }
     },
-    onPendingHandoffsChange: syncPendingHandoffs,
     onReady: async () => {
       try {
         log.info('Offscreen engine ready, scoop count:', client.getScoops().length);
@@ -485,27 +477,6 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // Wire agent handle
   const agentHandle = client.createAgentHandle();
   layout.panels.chat.setAgent(agentHandle);
-  layout.panels.chat.setPendingHandoffActions({
-    onAccept: async (handoff) => {
-      const cone = client.getScoops().find((s) => s.isCone);
-      if (!cone) {
-        log.warn('Cannot accept handoff without a cone scoop', { handoffId: handoff.handoffId });
-        return;
-      }
-
-      await selectScoop(cone);
-      layout.setActiveTab('chat');
-      agentHandle.sendMessage(
-        formatAcceptedHandoffMessage(handoff),
-        `handoff-${handoff.handoffId}`
-      );
-      client.acceptPendingHandoff(handoff.handoffId);
-    },
-    onDismiss: (handoff) => {
-      client.dismissPendingHandoff(handoff.handoffId);
-    },
-  });
-  client.requestPendingHandoffs();
 
   // Wire panels — OffscreenClient implements the Orchestrator methods
   // that ScoopsPanel, ScoopSwitcher, and MemoryPanel need
@@ -906,10 +877,6 @@ async function main(): Promise<void> {
 
   // Initialize the BrowserAPI (CLI mode only — extension uses CDP proxy in offscreen)
   const browser = new BrowserAPI();
-  const syncPendingHandoffs = (handoffs: PendingHandoff[]) => {
-    layout.setPendingHandoffCount(handoffs.length);
-    layout.panels.chat.setPendingHandoffs(handoffs);
-  };
 
   // Event system for UI
   const eventListeners = new Set<(event: UIAgentEvent) => void>();
@@ -1259,7 +1226,6 @@ async function main(): Promise<void> {
   // Mutable reference to leader sync — set when tray leader mode is active.
   // Used by coneAgentHandle to broadcast user messages to followers.
   let leaderSyncRef: LeaderSyncManager | null = null;
-  let standaloneHandoffWatcher: StandaloneHandoffWatcher | null = null;
 
   // Build the cone agent handle — all user input routes through orchestrator
   const coneAgentHandle: AgentHandle = {
@@ -1314,31 +1280,6 @@ async function main(): Promise<void> {
   };
 
   layout.panels.chat.setAgent(coneAgentHandle);
-  layout.panels.chat.setPendingHandoffActions({
-    onAccept: async (handoff) => {
-      const cone = orchestrator.getScoops().find((s) => s.isCone);
-      if (!cone) {
-        log.warn('Cannot accept handoff without a cone scoop', { handoffId: handoff.handoffId });
-        return;
-      }
-
-      await handleScoopSelect(cone);
-      layout.setActiveTab('chat');
-      coneAgentHandle.sendMessage(
-        formatAcceptedHandoffMessage(handoff),
-        `handoff-${handoff.handoffId}`
-      );
-
-      const cleared = standaloneHandoffWatcher?.clearHandoff(handoff.handoffId);
-      if (!cleared) return;
-      await Promise.allSettled(cleared.targetIds.map((targetId) => browser.closePage(targetId)));
-    },
-    onDismiss: async (handoff) => {
-      const cleared = standaloneHandoffWatcher?.clearHandoff(handoff.handoffId);
-      if (!cleared) return;
-      await Promise.allSettled(cleared.targetIds.map((targetId) => browser.closePage(targetId)));
-    },
-  });
 
   // Wire delete callback for queued messages
   layout.panels.chat.setDeleteQueuedMessageCallback((messageId: string) => {
@@ -1376,6 +1317,7 @@ async function main(): Promise<void> {
     const isSprinkle = event.type === 'sprinkle';
     const isFsWatch = event.type === 'fswatch';
     const isSessionReload = event.type === 'session-reload';
+    const isNavigate = event.type === 'navigate';
     const eventName = isWebhook
       ? event.webhookName
       : isSprinkle
@@ -1384,7 +1326,9 @@ async function main(): Promise<void> {
           ? event.fswatchName
           : isSessionReload
             ? 'session-reload'
-            : event.cronName;
+            : isNavigate
+              ? event.navigateUrl
+              : event.cronName;
     const eventId = isWebhook
       ? event.webhookId
       : isSprinkle
@@ -1393,7 +1337,9 @@ async function main(): Promise<void> {
           ? event.fswatchId
           : isSessionReload
             ? 'session-reload'
-            : event.cronId;
+            : isNavigate
+              ? event.navigateUrl
+              : event.cronId;
     const channel = event.type;
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
@@ -1480,7 +1426,9 @@ async function main(): Promise<void> {
             ? 'File Watch Event'
             : isSessionReload
               ? 'Session Reload'
-              : 'Cron Event';
+              : isNavigate
+                ? 'Navigate Event'
+                : 'Cron Event';
       const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
 
       const msg: ChannelMessage = {
@@ -1507,7 +1455,7 @@ async function main(): Promise<void> {
         layout.panels.chat.addLickMessage(
           msgId,
           content,
-          channel as 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload'
+          channel as 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate'
         );
       }
 
@@ -1523,6 +1471,33 @@ async function main(): Promise<void> {
   };
 
   lickManager.setEventHandler(routeLickToScoop);
+
+  // ── Navigation watcher: emit 'navigate' licks for main-frame responses
+  // that carry an x-slicc header. ──────────────────────────────────────
+  const navigationWatcher = new NavigationWatcher(browser.getTransport(), (navEvent) => {
+    lickManager.emitEvent({
+      type: 'navigate',
+      navigateUrl: navEvent.url,
+      targetScoop: undefined,
+      timestamp: new Date().toISOString(),
+      body: {
+        url: navEvent.url,
+        sliccHeader: navEvent.sliccHeader,
+        title: navEvent.title,
+      },
+    });
+  });
+  (async () => {
+    try {
+      await browser.connect();
+      await navigationWatcher.start();
+      log.info('Navigation watcher started');
+    } catch (err) {
+      log.warn('Failed to start navigation watcher', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  })();
 
   // ── Restore persisted mounts from IndexedDB ──────────────────────────
   if (sharedFs) {
@@ -1772,12 +1747,27 @@ async function main(): Promise<void> {
           );
         }
 
-        // Handle handoff injected via local API
-        if (data.type === 'handoff_event' && standaloneHandoffWatcher) {
-          standaloneHandoffWatcher.injectHandoff(
-            data.payload as PendingHandoff['payload'],
-            data.sourceUrl as string | undefined
-          );
+        // Handle handoffs injected via POST /api/handoff. This is the
+        // profile-independent fallback: the CDP navigation-watcher only
+        // sees tabs in the SLICC-controlled Chrome profile, so external
+        // tools running elsewhere post here instead.
+        if (data.type === 'navigate_event') {
+          const sliccHeader = typeof data.sliccHeader === 'string' ? data.sliccHeader : '';
+          const navUrl = typeof data.url === 'string' && data.url.length > 0 ? data.url : '';
+          if (sliccHeader && navUrl) {
+            lickManager.emitEvent({
+              type: 'navigate',
+              navigateUrl: navUrl,
+              targetScoop: undefined,
+              timestamp:
+                typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString(),
+              body: {
+                url: navUrl,
+                sliccHeader,
+                title: typeof data.title === 'string' ? data.title : undefined,
+              },
+            });
+          }
         }
       } catch (err) {
         log.error('Failed to process lick message', {
@@ -1901,10 +1891,6 @@ async function main(): Promise<void> {
     // Trigger scoop select to properly load the chat context
     await handleScoopSelect(selectedScoop);
   }
-
-  standaloneHandoffWatcher = new StandaloneHandoffWatcher({
-    onPendingHandoffsChange: syncPendingHandoffs,
-  });
 
   if (runtimeMode === 'standalone' || runtimeMode === 'electron-overlay') {
     const runtimeConfig = await fetchRuntimeConfig();

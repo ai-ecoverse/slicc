@@ -6,7 +6,7 @@ import {
   type CreateTrayRequest,
   type DurableObjectNamespaceLike,
 } from './shared.js';
-import { HANDOFF_PAGE_HTML } from './handoff-page.js';
+import { buildHandoffResponse } from './handoff-page.js';
 import { SessionTrayDurableObject } from './session-tray.js';
 
 export interface WorkerEnv {
@@ -95,10 +95,7 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
   }
 
   if (url.pathname === '/handoff' && request.method === 'GET') {
-    return new Response(HANDOFF_PAGE_HTML, {
-      status: 200,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
-    });
+    return buildHandoffResponse(request);
   }
 
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);

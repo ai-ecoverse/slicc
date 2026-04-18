@@ -109,20 +109,25 @@ async function init(): Promise<void> {
     const isWebhook = event.type === 'webhook';
     const isSprinkle = event.type === 'sprinkle';
     const isFsWatch = event.type === 'fswatch';
+    const isNavigate = event.type === 'navigate';
     const eventName = isWebhook
       ? event.webhookName
       : isSprinkle
         ? event.sprinkleName
         : isFsWatch
           ? (event as any).fswatchName
-          : event.cronName;
+          : isNavigate
+            ? (event as any).navigateUrl
+            : event.cronName;
     const eventId = isWebhook
       ? event.webhookId
       : isSprinkle
         ? event.sprinkleName
         : isFsWatch
           ? (event as any).fswatchId
-          : event.cronId;
+          : isNavigate
+            ? (event as any).navigateUrl
+            : event.cronId;
     const channel = event.type;
 
     const scoops = orchestrator.getScoops();
@@ -148,7 +153,9 @@ async function init(): Promise<void> {
           ? 'Sprinkle Event'
           : isFsWatch
             ? 'File Watch Event'
-            : 'Cron Event';
+            : isNavigate
+              ? 'Navigate Event'
+              : 'Cron Event';
       const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
 
       const channelMsg: import('../../../packages/webapp/src/scoops/types.js').ChannelMessage = {
@@ -175,6 +182,27 @@ async function init(): Promise<void> {
   const { startLickManagerHost } = await import('./lick-manager-proxy.js');
   startLickManagerHost(lickManager);
   console.log('[slicc-offscreen] LickManager initialized (host + proxy)');
+
+  // Listen for navigate-lick events forwarded from the service worker's
+  // chrome.webRequest observer and emit them as lick events.
+  chrome.runtime.onMessage.addListener((message: unknown) => {
+    if (!isExtensionMessage(message) || message.source !== 'service-worker') return false;
+    const payload = message.payload as { type?: string };
+    if (payload?.type !== 'navigate-lick') return false;
+    const navMsg = payload as import('./messages.js').NavigateLickMsg;
+    lickManager.emitEvent({
+      type: 'navigate',
+      navigateUrl: navMsg.url,
+      targetScoop: undefined,
+      timestamp: new Date().toISOString(),
+      body: {
+        url: navMsg.url,
+        sliccHeader: navMsg.sliccHeader,
+        title: navMsg.title,
+      },
+    });
+    return false;
+  });
 
   // Ensure cone exists
   const allScoops = orchestrator.getScoops();
