@@ -77,6 +77,13 @@ export interface ScoopConfig {
    * they always use an unrestricted filesystem.
    */
   writablePaths?: readonly string[];
+  /**
+   * Shell command allow-list. When omitted (or when it contains `'*'`), every
+   * built-in, custom, and `.jsh` command is available — the default. Otherwise
+   * only commands whose names appear in the list can execute inside this
+   * scoop's shell, including through pipelines and substitution.
+   */
+  allowedCommands?: readonly string[];
 }
 
 /** Message from any channel */
