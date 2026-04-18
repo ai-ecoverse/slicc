@@ -613,11 +613,18 @@ describe('agent error/abort hardening (integration)', () => {
               acceptedIsError = isErrorResult(accepted);
               acceptedText = resultText(accepted);
 
-              // Rejected line: swap a segment for a disallowed command.
-              // The ENTIRE line must be rejected atomically — `cat` and
-              // `wc` must not run, and `/shared/x` must remain untouched.
+              // Rejected line: the PRE-rejection segment is a write with
+              // an OBSERVABLE side-effect (`echo PARTIAL > /shared/x`) and
+              // the POST-rejection segment is a disallowed command (`rm`).
+              // The ENTIRE line must be rejected atomically — the `echo`
+              // redirect must NOT run, so `/shared/x` must retain its
+              // original bytes (not be truncated to `PARTIAL\n`). This
+              // distinguishes "nothing ran" from "read-only segments ran
+              // but writes didn't": a regression to per-segment execution
+              // would overwrite `/shared/x` with `PARTIAL\n` before the
+              // allow-list ever saw the disallowed `rm` head.
               const rejected = await wrapped.execute('c2', {
-                command: 'cat /shared/x | wc -l && rm -rf /shared/',
+                command: 'echo PARTIAL > /shared/x && rm -rf /shared/',
               });
               rejectedIsError = isErrorResult(rejected);
               rejectedText = resultText(rejected);
@@ -658,10 +665,16 @@ describe('agent error/abort hardening (integration)', () => {
       expect(rejectedText).toMatch(/command 'rm' is not allowed/);
 
       // VFS is byte-identical — the rejected line never executed any
-      // segment, so `/shared/x` was never touched and `/shared/` was
-      // never removed.
+      // segment, so `/shared/x` was never touched (not even by the
+      // allow-listed `echo` head whose redirect would have truncated the
+      // file to `PARTIAL\n`), and `/shared/` was never removed.
       expect(await vfs.exists('/shared/x')).toBe(true);
-      expect(await vfs.readTextFile('/shared/x')).toBe(preRejectionSha);
+      const postRejectionContent = await vfs.readTextFile('/shared/x');
+      expect(postRejectionContent).toBe(preRejectionSha);
+      // Explicit observable-write check: a regression to per-segment
+      // execution would leave `PARTIAL` in the file (either as a
+      // standalone truncated write or concatenated onto the original).
+      expect(postRejectionContent).not.toContain('PARTIAL');
       expect(await vfs.exists('/shared')).toBe(true);
 
       // Cleanup invariants.
