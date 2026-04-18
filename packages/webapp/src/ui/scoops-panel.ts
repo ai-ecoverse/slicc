@@ -588,43 +588,32 @@ export class ScoopsPanel {
     log.info('Scoop deleted', { jid, name: scoop.name });
   }
 
-  /** Create a new scoop */
-  async createScoop(name: string, isCone = false): Promise<RegisteredScoop> {
+  /**
+   * Bootstrap the cone. Only ever used once, from `main.ts`, when the
+   * orchestrator starts with no existing cone on disk. Non-cone scoops come
+   * exclusively from the agent's `scoop_scoop` tool.
+   */
+  async createCone(name = 'Cone'): Promise<RegisteredScoop> {
     if (!this.orchestrator) {
       throw new Error('Orchestrator not set');
     }
 
-    const folder = isCone ? 'cone' : this.sanitizeFolderName(name) + '-scoop';
-    const jid = isCone ? `cone_${Date.now()}` : `scoop_${folder}_${Date.now()}`;
-
     const scoop: RegisteredScoop = {
-      jid,
+      jid: `cone_${Date.now()}`,
       name,
-      folder,
-      trigger: isCone ? undefined : `@${folder}`,
-      requiresTrigger: !isCone,
-      isCone,
-      type: isCone ? 'cone' : 'scoop',
-      assistantLabel: isCone ? 'sliccy' : folder,
+      folder: 'cone',
+      requiresTrigger: false,
+      isCone: true,
+      type: 'cone',
+      assistantLabel: 'sliccy',
       addedAt: new Date().toISOString(),
     };
 
     await this.orchestrator.registerScoop(scoop);
     this.refreshScoops();
 
-    log.info('Scoop created', { jid, name, isCone });
+    log.info('Cone created', { jid: scoop.jid, name });
     return scoop;
-  }
-
-  /** Sanitize a name into a valid folder name */
-  private sanitizeFolderName(name: string): string {
-    return (
-      name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 50) || 'scoop'
-    );
   }
 
   /** Render the panel as an icon-only nav rail (UXC design). */

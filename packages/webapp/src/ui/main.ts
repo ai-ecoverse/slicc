@@ -1231,7 +1231,7 @@ async function main(): Promise<void> {
   if (allowProviderlessTrayJoin) {
     log.info('Skipping local cone bootstrap while joining a tray without a configured provider');
   } else if (!hasCone) {
-    const cone = await layout.panels.scoops.createScoop('Cone', true);
+    const cone = await layout.panels.scoops.createCone();
     selectedScoop = cone;
     log.info('Created cone');
   } else {

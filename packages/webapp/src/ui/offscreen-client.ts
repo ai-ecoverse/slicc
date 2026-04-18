@@ -111,7 +111,7 @@ export class OffscreenClient {
     return this.scoopStatuses.get(jid) === 'processing';
   }
 
-  /** Called by ScoopsPanel.createScoop(). Adds optimistically so the UI
+  /** Called by ScoopsPanel.createCone(). Adds optimistically so the UI
    *  updates immediately, then sends to offscreen. The real scoop (with a
    *  different JID) replaces the optimistic one when scoop-created arrives. */
   async registerScoop(scoop: RegisteredScoop): Promise<void> {
