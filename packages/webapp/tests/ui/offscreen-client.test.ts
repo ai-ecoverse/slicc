@@ -274,8 +274,8 @@ describe('OffscreenClient', () => {
     ]);
   });
 
-  it('registerScoop sends a cone-create message (cone-only path)', () => {
-    client.registerScoop({
+  it('registerScoop sends a cone-create message (cone-only path)', async () => {
+    await client.registerScoop({
       jid: 'temp',
       name: 'Cone',
       folder: 'cone',

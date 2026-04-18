@@ -395,7 +395,7 @@ export class OffscreenBridge {
         // offscreen orchestrator by the agent's `scoop_scoop` tool, which is
         // where their path-config defaults (visiblePaths / writablePaths) get
         // injected. Building a non-cone scoop here would bypass that layer
-        // and yield a sandbox with no writable paths — see review of #436.
+        // and yield a sandbox with no writable paths; see #436.
         const scoop: RegisteredScoop = {
           jid: `cone_${Date.now()}`,
           name: msg.name,
