@@ -1,0 +1,29 @@
+{
+  "featureId": "fix-hardening-fresh-profile-val-live-010",
+  "reviewedAt": "2026-04-18T03:52:51Z",
+  "commitId": "5233a3f",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "This diff is evidence-only. The remediation credibly replaces the earlier unknown-model proxy with the real missing-provider path inside `ScoopContext.init()`, so the round-1 blocker about exercising the wrong code path is resolved. But the new evidence also shows the user-facing `agent` failure text would still be the generic `Agent not initialized`, so VAL-LIVE-010 is still not satisfied at the terminal surface.",
+    "issues": [
+      {
+        "file": ".factory/validation/hardening/user-testing/flows/val-live-010.json",
+        "line": 160,
+        "severity": "blocking",
+        "description": "The new evidence artifact records `actualBridgeFinalText: \"Agent not initialized\"`, `match: \"PARTIAL\"`, and explicitly states that the `agent` supplemental command would therefore render `Agent not initialized\\n` instead of a provider-identifying message (`.factory/validation/hardening/user-testing/flows/val-live-010.json:160-166`). That does prove the remediation exercised the missing-provider throw in `packages/webapp/src/scoops/scoop-context.ts:237-239`, but it also proves the user-facing VAL-LIVE-010 contract is still unmet. In the reviewed snapshot, non-zero `bridge.spawn()` results are written straight to terminal stderr by `packages/webapp/src/shell/supplemental-commands/agent-command.ts:274-286`, and the bridge still overwrites the earlier specific init failure with the later generic follow-up from `prompt()` (`packages/webapp/src/scoops/agent-bridge.ts:356-358` in commit `5233a3f^`).",
+        "suggestedFix": "Preserve the first specific `ScoopContext.init()` failure through `AgentBridge.spawn()` so the `agent` command prints `No API key configured for provider ...`, then rerun the fresh/no-provider live check and update the evidence."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "target": "skill",
+      "observation": "`webapp-worker` still tells workers to type a representative `agent` invocation in the terminal and only documents the screenshot-timeout fallback; it does not mention the now-documented xterm keyboard-input fallback or the fresh/no-provider bootstrap procedure.",
+      "rationale": "The fix handoff had to justify a manual deviation for both points (`/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/handoffs/2026-04-18T03-37-49-099Z__fix-hardening-fresh-profile-val-live-010__de5c4082-9cb8-472b-a03b-741daf4f1c91.json:10-12,140-141`), while `.factory/skills/webapp-worker/SKILL.md:116-123` still lacks that guidance and `.factory/library/user-testing.md:102-108` now documents it."
+    }
+  ],
+  "addressesFailureFrom": "live-browser-validation",
+  "summary": "Fail. The round-1 blocker is resolved in the narrow sense that this remediation exercised the real missing-provider path inside `ScoopContext.init()` instead of the unknown-model short-circuit. But the new evidence also shows the user-facing `agent` stderr would still be `Agent not initialized`, so VAL-LIVE-010 is still not fully satisfied."
+}

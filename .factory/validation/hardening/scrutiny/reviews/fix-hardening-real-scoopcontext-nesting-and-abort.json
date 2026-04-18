@@ -1,0 +1,22 @@
+{
+  "featureId": "fix-hardening-real-scoopcontext-nesting-and-abort",
+  "reviewedAt": "2026-04-18T03:54:00Z",
+  "commitId": "f762e05",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The remediation meaningfully improves coverage: the new file drives a real nested `bash -> agent -> AgentBridge -> ScoopContext` path and a real `pi-ai` aborted-stream path, so the mocked-path blockers are addressed. But the VAL-NEST-015 remediation is still detached from the actual cone-tool execution surface, so the round-1 blockers for `nesting-and-parallel-concurrency` are only partially resolved even though the targeted abort blocker for `error-and-abort-hardening` now appears resolved.",
+    "issues": [
+      {
+        "file": "packages/webapp/tests/scoops/agent-nesting-real-context.test.ts",
+        "line": 416,
+        "severity": "blocking",
+        "description": "The new real-context nesting scenario fixes the first blocker by sending `bash(\"agent . '*' 'inner-prompt'\")` through a real outer `ScoopContext`, but the VAL-NEST-015 counter proof is still not wired to the execution surface that a regression would hit. This test registers a bare `coneScoop` (`:406`), builds a standalone `coneTools = createScoopManagementTools(...)` array and wraps those local `execute()` functions with counters (`:416-447`), then runs `publishAgentBridge(...)` with no reference to `coneTools` and no real cone `ScoopContext` instrumentation (`:455-459`). The final `expect(coneCounters)` assertion (`:497-503`) therefore remains vacuous: those counters stay zero regardless of whether the real nested run accidentally routes through the cone-only tool layer. That means the specific round-1 blocker called out in `nesting-and-parallel-concurrency.json` — detached VAL-NEST-015 proof — is still unresolved."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": ["nesting-and-parallel-concurrency", "error-and-abort-hardening"],
+  "summary": "Fail. Commit `f762e05` does resolve the 'mocked nested path' blocker for `nesting-and-parallel-concurrency` by exercising a real outer bash -> `agent` -> inner `ScoopContext` flow, and it also resolves the targeted `error-and-abort-hardening` blocker by exercising a real `ScoopContext`/pi-ai aborted-stream path plus bridge exit-code handling. However, the round-1 VAL-NEST-015 blocker is still not resolved: the cone-tool counters in `agent-nesting-real-context.test.ts` are attached to a standalone tool array rather than the actual cone-tool execution surface, so this remediation only partially closes the nesting feature's prior failure."
+}

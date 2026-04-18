@@ -1,0 +1,21 @@
+{
+  "featureId": "fix-hardening-rerun-baseline-full-build",
+  "reviewedAt": "2026-04-18T03:51:42Z",
+  "commitId": "0dee7d4",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The remediation closes the round-1 blocker it was assigned: it identifies the intended pre-mission baseline commit (`c252d0e`), reruns the missing full-workspace `npm run build` there, and records the result in committed scrutiny artifacts with supporting handoff/transcript evidence. I found no blocking gap in the newly captured baseline-build evidence.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "`webapp-worker` is still written as a code-change/TDD workflow and does not clearly carve out pure validation-evidence remediations like this one.",
+      "evidence": "`.factory/skills/webapp-worker/SKILL.md:29-61` requires reading `validation-contract.md` and `.factory/library/architecture.md`, writing tests first, and following code-oriented CI gates. Worker session `913a35a4-f395-4cac-b0cd-6b8646806bed` instead only read mission/AGENTS/services/synthesis artifacts, edited `.factory/validation/hardening/scrutiny/synthesis.json`, added no tests, and its handoff.skillFeedback explicitly asks for validation-only guidance."
+    }
+  ],
+  "addressesFailureFrom": "ci-gates-verification",
+  "summary": "Review passed: the baseline full-workspace `npm run build` evidence gap is closed. Commit `0dee7d4` adds a durable remediation entry in `.factory/validation/hardening/scrutiny/synthesis.json`, and the fix handoff/transcript preserve enough detail to audit that baseline build run."
+}
