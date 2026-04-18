@@ -1,0 +1,73 @@
+{
+  "groupId": "hardening-vitest-rerun-round2",
+  "surface": "vitest",
+  "testedAt": "2026-04-18T05:32:21Z",
+  "status": "pass",
+  "isolation": {
+    "repoRoot": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+    "missionDir": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4",
+    "assignedAssertionIds": ["VAL-CROSS-014"],
+    "surface": "vitest",
+    "flowValidatorGuidance": "Flow Validator Guidance: vitest",
+    "repoReadOnly": true,
+    "servicesModified": false
+  },
+  "toolsUsed": ["vitest"],
+  "commandsRun": [
+    {
+      "command": "\"/Users/trieloff/Developer/slicc/.yolo/droid-2/node_modules/.bin/vitest\" run --root \"/Users/trieloff/Developer/slicc/.yolo/droid-2\" --config \"/Users/trieloff/Developer/slicc/.yolo/droid-2/vitest.config.ts\" --reporter verbose \"/Users/trieloff/Developer/slicc/.yolo/droid-2/packages/webapp/tests/scoops/agent-hardening.test.ts\" -t \"10 sequential agent calls leave /scoops and orchestrator.getScoops() at baseline after every iteration\"",
+      "exitCode": 0,
+      "result": "Vitest started successfully but executed no matching test; summary reported 1 skipped file and 10 skipped tests.",
+      "evidence": "hardening/vitest-rerun-round2/VAL-CROSS-014-vitest-suggested-command-skipped.log"
+    },
+    {
+      "command": "\"/Users/trieloff/Developer/slicc/.yolo/droid-2/node_modules/.bin/vitest\" run --root \"/Users/trieloff/Developer/slicc/.yolo/droid-2\" --config \"/Users/trieloff/Developer/slicc/.yolo/droid-2/vitest.config.ts\" --reporter verbose \"/Users/trieloff/Developer/slicc/.yolo/droid-2/packages/webapp/tests/scoops/agent-hardening.test.ts\" -t \"10 sequential agent calls leave /scoops and orchestrator\\.getScoops\\(\\) at baseline after every iteration\"",
+      "exitCode": 0,
+      "result": "Exact VAL-CROSS-014 test executed and passed; Vitest summary reported 1 passed test and 9 skipped tests in the selected file.",
+      "evidence": "hardening/vitest-rerun-round2/VAL-CROSS-014-vitest.log"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "VAL-CROSS-014",
+      "title": "Sequential cleanup leaves no orphans",
+      "status": "pass",
+      "testFile": "packages/webapp/tests/scoops/agent-hardening.test.ts",
+      "testName": "agent error/abort hardening (integration) > (6) sequential cleanup (VAL-CROSS-014) > 10 sequential agent calls leave /scoops and orchestrator.getScoops() at baseline after every iteration",
+      "steps": [
+        {
+          "action": "Inspect the dedicated Vitest case in packages/webapp/tests/scoops/agent-hardening.test.ts (around lines 871-1023)",
+          "expected": "The file contains an explicit VAL-CROSS-014 test that runs 10 sequential agent calls and checks cleanup after every iteration.",
+          "observed": "The dedicated test captures the baseline `/scoops` directory and orchestrator registry, loops through 10 agent invocations, asserts per-iteration equality to the baseline, verifies each `agent_seqN` scratch folder and scoop are removed, and rechecks the final baseline after the loop."
+        },
+        {
+          "action": "Run the smallest Vitest selection for the dedicated VAL-CROSS-014 case with verbose reporting",
+          "expected": "Only the targeted sequential-cleanup test executes and passes, producing evidence that the cleanup invariants hold.",
+          "observed": "After escaping regex metacharacters in the `-t` pattern, Vitest ran the targeted test successfully: `Test Files 1 passed (1)` and `Tests 1 passed | 9 skipped (10)`."
+        }
+      ],
+      "evidence": {
+        "logs": ["hardening/vitest-rerun-round2/VAL-CROSS-014-vitest.log"],
+        "assertionOutput": "Verbose output includes the exact test name and a green pass line for `10 sequential agent calls leave /scoops and orchestrator.getScoops() at baseline after every iteration`.",
+        "perIterationProof": "The verbose log shows `agent_seq0` through `agent_seq9` each being registered and then unregistered, matching the test body's per-iteration `/scoops` and `orchestrator.getScoops()` baseline assertions.",
+        "sourceCoverage": "The test body explicitly asserts baseline equality after every iteration and again after the loop, satisfying the contract's required evidence of per-iteration snapshots."
+      },
+      "issues": null
+    }
+  ],
+  "frictions": [
+    {
+      "description": "Vitest interprets `-t` as a regex. The unescaped suggested pattern did not match the literal `orchestrator.getScoops()` text, so the first attempt reported all 10 tests as skipped instead of executing the targeted case.",
+      "resolved": true,
+      "resolution": "Reran the same smallest file selection with the `-t` pattern escaped as `orchestrator\\.getScoops\\(\\)`.",
+      "affectedAssertions": ["VAL-CROSS-014"],
+      "evidence": "hardening/vitest-rerun-round2/VAL-CROSS-014-vitest-suggested-command-skipped.log"
+    }
+  ],
+  "blockers": [],
+  "artifacts": [
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/vitest-rerun-round2/VAL-CROSS-014-vitest.log",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/vitest-rerun-round2/VAL-CROSS-014-vitest-suggested-command-skipped.log"
+  ],
+  "summary": "VAL-CROSS-014 passed. The dedicated test in packages/webapp/tests/scoops/agent-hardening.test.ts executed successfully and proved that 10 sequential agent calls leave both `/scoops/` and `orchestrator.getScoops()` at the pre-call baseline after every iteration."
+}
