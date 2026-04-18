@@ -258,6 +258,19 @@ export function createAgentBridge(
 
     // Collect `send_message` payloads; the latest one wins for final output.
     const captured: string[] = [];
+    // Track the most recent scoop-level error message. The real
+    // ScoopContext surfaces pi-ai stream error events (e.g., `reason:
+    // 'aborted'` / `reason: 'error'`) through `callbacks.onError(msg)`
+    // during the `agent_end` handler — the event is terminal but does NOT
+    // reject `ctx.prompt()`. Without tracking it here the bridge would
+    // silently return `{ exitCode: 0, finalText: '' }`, hiding an abort
+    // from the caller. After `ctx.prompt()` resolves we promote any
+    // non-null `scoopError` to `exitCode: 1` + `finalText: scoopError`
+    // (unless the prompt already threw, in which case the catch block
+    // wins). Recovery-path onError invocations
+    // (overflow / image errors) re-set this to their surfaced error text
+    // on the final attempt only, matching existing ScoopContext semantics.
+    let scoopError: string | null = null;
     // Build the scope-context callbacks via the shared forwarding helper
     // (Orchestrator.buildForwardingScoopCallbacks). Every callback dispatched
     // by the spawned ScoopContext is forwarded to the orchestrator's top-level
@@ -288,6 +301,7 @@ export function createAgentBridge(
       folder,
       {
         onError: (errMsg) => {
+          scoopError = errMsg;
           log.warn('scoop error', { jid, errMsg });
         },
         onStatusChange: (status) => {
@@ -329,6 +343,16 @@ export function createAgentBridge(
       await ctx.prompt(options.prompt);
 
       finalText = pickChronologicallyLastOutput(ctx.getAgentMessages(), captured);
+      // Promote a scoop-level error (e.g., pi-ai stream `error` event with
+      // `reason: 'aborted'` / `'error'`) to `exitCode: 1`. The pi-agent-core
+      // loop treats `error` events as terminal without rejecting, so the
+      // bridge must detect the failure via the `onError` callback trail
+      // captured in `scoopError` above. Only promotes when the prompt did
+      // not already throw — the catch branch below takes precedence.
+      if (scoopError !== null && exitCode === 0) {
+        exitCode = 1;
+        finalText = scoopError;
+      }
     } catch (err) {
       exitCode = 1;
       finalText = errText(err);
