@@ -15,7 +15,11 @@ import {
   getAllScoops,
 } from '../../src/scoops/db.js';
 import { Orchestrator, SCOOP_IDLE_TIMEOUT_MS } from '../../src/scoops/orchestrator.js';
-import type { RegisteredScoop, ChannelMessage } from '../../src/scoops/types.js';
+import {
+  CURRENT_SCOOP_CONFIG_VERSION,
+  type RegisteredScoop,
+  type ChannelMessage,
+} from '../../src/scoops/types.js';
 
 // Test helpers — we can't instantiate a full Orchestrator (needs VirtualFS, DOM, etc.)
 // but we CAN test the DB-level routing by simulating what handleMessage does.
@@ -427,7 +431,7 @@ describe('Scoop idle detection', () => {
   });
 });
 
-describe('Orchestrator session-restore compat for visiblePaths', () => {
+describe('Orchestrator session-restore compat for path config', () => {
   let orch: Orchestrator;
   let priorWindow: unknown;
   let windowWasShimmed = false;
@@ -494,7 +498,7 @@ describe('Orchestrator session-restore compat for visiblePaths', () => {
     return orch;
   }
 
-  it('backfills visiblePaths = ["/workspace/"] for truly-legacy non-cone scoops (no configSchemaVersion)', async () => {
+  it('backfills both visiblePaths and writablePaths for truly-legacy non-cone scoops', async () => {
     const legacy: RegisteredScoop = {
       jid: 'scoop_legacy_1',
       name: 'legacy',
@@ -513,77 +517,104 @@ describe('Orchestrator session-restore compat for visiblePaths', () => {
     const o = await initOrchestrator();
     const restored = o.getScoop('scoop_legacy_1');
     expect(restored?.config?.visiblePaths).toEqual(['/workspace/']);
-    expect(restored?.configSchemaVersion).toBe(1);
+    expect(restored?.config?.writablePaths).toEqual(['/scoops/legacy-scoop/', '/shared/']);
+    expect(restored?.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
   });
 
-  it('preserves an explicitly-set visiblePaths under the current schema version', async () => {
-    const configured: RegisteredScoop = {
-      jid: 'scoop_configured_1',
-      name: 'configured',
-      folder: 'configured-scoop',
-      trigger: '@configured-scoop',
+  it('bumps a v1-schema record to v2 by filling writablePaths only', async () => {
+    // A scoop stamped under the previous (visiblePaths-only) schema must
+    // gain writablePaths on restore without losing its existing visiblePaths.
+    const v1: RegisteredScoop = {
+      jid: 'scoop_v1_1',
+      name: 'v1',
+      folder: 'v1-scoop',
+      trigger: '@v1-scoop',
       isCone: false,
       type: 'scoop',
       requiresTrigger: true,
-      assistantLabel: 'configured-scoop',
+      assistantLabel: 'v1-scoop',
       addedAt: new Date().toISOString(),
       config: { visiblePaths: ['/custom/'] },
       configSchemaVersion: 1,
     };
+    await saveScoop(v1);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_v1_1');
+    expect(restored?.config?.visiblePaths).toEqual(['/custom/']);
+    expect(restored?.config?.writablePaths).toEqual(['/scoops/v1-scoop/', '/shared/']);
+    expect(restored?.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
+  });
+
+  it('preserves an explicitly-set writablePaths under the current schema', async () => {
+    const configured: RegisteredScoop = {
+      jid: 'scoop_configured_writable_1',
+      name: 'configured-writable',
+      folder: 'configured-writable-scoop',
+      trigger: '@configured-writable-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'configured-writable-scoop',
+      addedAt: new Date().toISOString(),
+      config: { visiblePaths: [], writablePaths: ['/custom-write/'] },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
     await saveScoop(configured);
 
     const o = await initOrchestrator();
-    const restored = o.getScoop('scoop_configured_1');
-    expect(restored?.config?.visiblePaths).toEqual(['/custom/']);
-  });
-
-  it('preserves an explicit undefined visiblePaths on a current-schema record (no silent backfill)', async () => {
-    // A scoop created deliberately with no read-only paths under the new
-    // schema must keep that contract — the migration only fires for truly
-    // legacy records (versions below the current schema).
-    const strict: RegisteredScoop = {
-      jid: 'scoop_strict_1',
-      name: 'strict',
-      folder: 'strict-scoop',
-      trigger: '@strict-scoop',
-      isCone: false,
-      type: 'scoop',
-      requiresTrigger: true,
-      assistantLabel: 'strict-scoop',
-      addedAt: new Date().toISOString(),
-      config: { modelId: 'claude-sonnet-4-6' }, // has config, no visiblePaths
-      configSchemaVersion: 1,
-    };
-    await saveScoop(strict);
-
-    const o = await initOrchestrator();
-    const restored = o.getScoop('scoop_strict_1');
-    expect(restored?.config?.visiblePaths).toBeUndefined();
-    expect(restored?.configSchemaVersion).toBe(1);
-  });
-
-  it('preserves an explicit empty-array visiblePaths across restart', async () => {
-    const strict: RegisteredScoop = {
-      jid: 'scoop_empty_1',
-      name: 'empty',
-      folder: 'empty-scoop',
-      trigger: '@empty-scoop',
-      isCone: false,
-      type: 'scoop',
-      requiresTrigger: true,
-      assistantLabel: 'empty-scoop',
-      addedAt: new Date().toISOString(),
-      config: { visiblePaths: [] },
-      configSchemaVersion: 1,
-    };
-    await saveScoop(strict);
-
-    const o = await initOrchestrator();
-    const restored = o.getScoop('scoop_empty_1');
+    const restored = o.getScoop('scoop_configured_writable_1');
+    expect(restored?.config?.writablePaths).toEqual(['/custom-write/']);
     expect(restored?.config?.visiblePaths).toEqual([]);
   });
 
-  it('does not touch cone records (cones ignore visiblePaths)', async () => {
+  it('preserves an explicit undefined writablePaths on a current-schema record (no silent backfill)', async () => {
+    // A scoop created deliberately with no writable paths under the current
+    // schema must keep that contract — migration only fires below current.
+    const strict: RegisteredScoop = {
+      jid: 'scoop_strict_writable_1',
+      name: 'strict-writable',
+      folder: 'strict-writable-scoop',
+      trigger: '@strict-writable-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'strict-writable-scoop',
+      addedAt: new Date().toISOString(),
+      config: { modelId: 'claude-sonnet-4-6' }, // has config, no paths at all
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(strict);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_strict_writable_1');
+    expect(restored?.config?.writablePaths).toBeUndefined();
+    expect(restored?.config?.visiblePaths).toBeUndefined();
+    expect(restored?.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
+  });
+
+  it('preserves an explicit empty-array writablePaths across restart', async () => {
+    const strict: RegisteredScoop = {
+      jid: 'scoop_empty_writable_1',
+      name: 'empty-writable',
+      folder: 'empty-writable-scoop',
+      trigger: '@empty-writable-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'empty-writable-scoop',
+      addedAt: new Date().toISOString(),
+      config: { writablePaths: [] },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(strict);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_empty_writable_1');
+    expect(restored?.config?.writablePaths).toEqual([]);
+  });
+
+  it('does not touch cone records (cones ignore path config)', async () => {
     const legacyCone: RegisteredScoop = {
       jid: 'cone_legacy_1',
       name: 'Cone',
@@ -599,6 +630,7 @@ describe('Orchestrator session-restore compat for visiblePaths', () => {
     const o = await initOrchestrator();
     const restored = o.getScoop('cone_legacy_1');
     expect(restored?.config?.visiblePaths).toBeUndefined();
+    expect(restored?.config?.writablePaths).toBeUndefined();
     // Cones never get a schema stamp — they have no path-config surface.
     expect(restored?.configSchemaVersion).toBeUndefined();
   });

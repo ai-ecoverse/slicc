@@ -201,13 +201,14 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
 
           try {
             // Every scoop created through the tool gets the standard sandbox:
-            // read-only access to `/workspace/` so it can see the cone's
-            // skills. The orchestrator itself does not inject any defaults —
-            // keeping the default at the tool layer means the `ScoopConfig`
-            // surface stays pure-replace (what you set is what you get).
-            // Stamping `configSchemaVersion` tells the orchestrator this
-            // record was created with explicit config and its `visiblePaths`
-            // value is authoritative — no compat migration on restore.
+            // read-only access to `/workspace/` (for skills) and read-write
+            // access to its own `/scoops/<folder>/` and `/shared/`. The
+            // orchestrator itself does not inject any defaults — keeping the
+            // default at the tool layer means the `ScoopConfig` surface stays
+            // pure-replace (what you set is what you get). Stamping
+            // `configSchemaVersion` tells the orchestrator this record was
+            // created with explicit config and its path values are
+            // authoritative — no compat migration on restore.
             const newScoop = await onScoopScoop({
               name,
               folder,
@@ -220,6 +221,7 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               config: {
                 ...(model ? { modelId: model } : {}),
                 visiblePaths: ['/workspace/'],
+                writablePaths: [`/scoops/${folder}/`, '/shared/'],
               },
               configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
             });

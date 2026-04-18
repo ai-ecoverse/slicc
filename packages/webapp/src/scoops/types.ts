@@ -14,8 +14,9 @@
  * and never touches records already at the current version.
  *
  * - `1`: `visiblePaths` is authoritative (may be an explicit empty list).
+ * - `2`: `writablePaths` is authoritative (may be an explicit empty list).
  */
-export const CURRENT_SCOOP_CONFIG_VERSION = 1;
+export const CURRENT_SCOOP_CONFIG_VERSION = 2;
 
 /** Registered scoop metadata */
 export interface RegisteredScoop {
@@ -67,6 +68,15 @@ export interface ScoopConfig {
    * field — they always use an unrestricted filesystem.
    */
   visiblePaths?: readonly string[];
+  /**
+   * VFS paths this scoop can READ AND WRITE. Pure replace — when
+   * `undefined` the scoop gets no writable paths at all (reads are still
+   * governed by `visiblePaths`). The `scoop_scoop` tool injects the
+   * standard `['/scoops/<folder>/', '/shared/']` default so existing
+   * agent-facing behavior is preserved. Cone scoops ignore this field —
+   * they always use an unrestricted filesystem.
+   */
+  writablePaths?: readonly string[];
 }
 
 /** Message from any channel */
