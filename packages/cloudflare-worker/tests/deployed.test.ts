@@ -30,6 +30,8 @@ describeIfConfigured('deployed tray worker', () => {
         'POST /tray',
         'GET /download/slicc.dmg',
         'GET /handoff',
+        'POST /github/token',
+        'POST /github/revoke',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',

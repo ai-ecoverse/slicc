@@ -45,8 +45,8 @@ export class GitCommands {
   private authorEmail: string;
   private globalDbName: string;
   /** GitHub token for authentication (avoids rate limits on public repos, required for private). */
-  private githubToken?: string;
-  private githubTokenLoaded = false;
+  private static githubTokenCache: string | undefined;
+  private static githubTokenCacheLoaded = false;
 
   constructor(private options: GitCommandsOptions) {
     // Route through a VirtualFS-backed adapter so isomorphic-git sees mount
@@ -59,13 +59,19 @@ export class GitCommands {
     this.globalDbName = options.globalDbName ?? 'slicc-fs-global';
   }
 
+  /** Clear the cached GitHub token so the next git operation re-reads from VFS. */
+  static resetTokenCache(): void {
+    GitCommands.githubTokenCache = undefined;
+    GitCommands.githubTokenCacheLoaded = false;
+  }
+
   /**
    * Get onAuth callback for isomorphic-git operations.
    * Returns credentials if a GitHub token is configured.
    */
   private getOnAuth(): (() => { username: string; password: string }) | undefined {
-    if (!this.githubToken) return undefined;
-    const token = this.githubToken;
+    if (!GitCommands.githubTokenCache) return undefined;
+    const token = GitCommands.githubTokenCache;
     return () => ({
       username: 'x-access-token',
       password: token,
@@ -83,14 +89,14 @@ export class GitCommands {
 
   /** Load GitHub token from global VFS if not loaded in-memory yet. */
   private async ensureGithubTokenLoaded(): Promise<void> {
-    if (this.githubTokenLoaded) return;
-    this.githubTokenLoaded = true;
+    if (GitCommands.githubTokenCacheLoaded) return;
+    GitCommands.githubTokenCacheLoaded = true;
     try {
       const globalFs = await this.getGlobalFs();
       const token = (await globalFs.readTextFile('/workspace/.git/github-token')).trim();
-      this.githubToken = token || undefined;
+      GitCommands.githubTokenCache = token || undefined;
     } catch {
-      this.githubToken = undefined;
+      GitCommands.githubTokenCache = undefined;
     }
   }
 
@@ -104,13 +110,13 @@ export class GitCommands {
       } catch {
         // ignore if not present
       }
-      this.githubToken = undefined;
-      this.githubTokenLoaded = true;
+      GitCommands.githubTokenCache = undefined;
+      GitCommands.githubTokenCacheLoaded = true;
       return;
     }
     await globalFs.writeFile('/workspace/.git/github-token', trimmed);
-    this.githubToken = trimmed;
-    this.githubTokenLoaded = true;
+    GitCommands.githubTokenCache = trimmed;
+    GitCommands.githubTokenCacheLoaded = true;
   }
 
   /**
@@ -1755,9 +1761,9 @@ Available commands:
     // Get config
     if (path === 'credential.token' || path === 'github.token') {
       return {
-        stdout: this.githubToken ? `${this.githubToken}\n` : '',
+        stdout: GitCommands.githubTokenCache ? `${GitCommands.githubTokenCache}\n` : '',
         stderr: '',
-        exitCode: this.githubToken ? 0 : 1,
+        exitCode: GitCommands.githubTokenCache ? 0 : 1,
       };
     }
 
@@ -2756,4 +2762,11 @@ Available commands:
  */
 export function createGitCommands(options: GitCommandsOptions): GitCommands {
   return new GitCommands(options);
+}
+
+// Invalidate cached token when the GitHub OAuth provider signals a change.
+if (typeof window !== 'undefined') {
+  window.addEventListener('github-token-changed', () => {
+    GitCommands.resetTokenCache();
+  });
 }

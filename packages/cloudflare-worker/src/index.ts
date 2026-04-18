@@ -14,10 +14,108 @@ export interface WorkerEnv {
   ASSETS: { fetch(request: Request): Promise<Response> };
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
 }
 
 function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
   return env.ASSETS.fetch(request);
+}
+
+function githubCorsHeaders(request: Request): Record<string, string> {
+  const origin = request.headers.get('Origin') ?? '*';
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+}
+
+async function handleGitHubToken(
+  request: Request,
+  env: WorkerEnv,
+  fetchImpl: typeof fetch
+): Promise<Response> {
+  const cors = githubCorsHeaders(request);
+
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: cors });
+  }
+  if (request.method !== 'POST') {
+    return jsonResponse({ error: 'Method not allowed' }, 405, cors);
+  }
+
+  const body = (await request.json()) as {
+    code?: string;
+    redirect_uri?: string;
+  };
+
+  const ghResponse = await fetchImpl('https://github.com/login/oauth/access_token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      client_id: env.GITHUB_CLIENT_ID,
+      client_secret: env.GITHUB_CLIENT_SECRET,
+      code: body.code,
+      redirect_uri: body.redirect_uri,
+    }),
+  });
+
+  const ghBody = await ghResponse.text();
+  return new Response(ghBody, {
+    status: ghResponse.status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      ...cors,
+    },
+  });
+}
+
+async function handleGitHubRevoke(
+  request: Request,
+  env: WorkerEnv,
+  fetchImpl: typeof fetch
+): Promise<Response> {
+  const cors = githubCorsHeaders(request);
+
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: cors });
+  }
+  if (request.method !== 'POST') {
+    return jsonResponse({ error: 'Method not allowed' }, 405, cors);
+  }
+
+  const body = (await request.json()) as { access_token?: string };
+  const credentials = btoa(`${env.GITHUB_CLIENT_ID}:${env.GITHUB_CLIENT_SECRET}`);
+
+  const ghResponse = await fetchImpl(
+    `https://api.github.com/applications/${env.GITHUB_CLIENT_ID}/token`,
+    {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Basic ${credentials}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({ access_token: body.access_token }),
+    }
+  );
+
+  if (ghResponse.status === 204) {
+    return new Response(null, { status: 204, headers: cors });
+  }
+
+  const ghBody = await ghResponse.text();
+  return new Response(ghBody, {
+    status: ghResponse.status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      ...cors,
+    },
+  });
 }
 const OAUTH_RELAY_HTML = `<!DOCTYPE html>
 <html><head><title>Redirecting to SLICC...</title></head>
@@ -43,7 +141,11 @@ try {
 </script>
 </body></html>`;
 
-export async function handleWorkerRequest(request: Request, env: WorkerEnv): Promise<Response> {
+export async function handleWorkerRequest(
+  request: Request,
+  env: WorkerEnv,
+  fetchImpl: typeof fetch = fetch
+): Promise<Response> {
   const url = new URL(request.url);
 
   if (url.hostname === 'sliccy.ai') {
@@ -101,6 +203,14 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     });
   }
 
+  if (url.pathname === '/github/token') {
+    return handleGitHubToken(request, env, fetchImpl);
+  }
+
+  if (url.pathname === '/github/revoke') {
+    return handleGitHubRevoke(request, env, fetchImpl);
+  }
+
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
   if (tokenMatch) {
     const route = tokenMatch[1];
@@ -148,6 +258,8 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
         'POST /tray',
         'GET /download/slicc.dmg',
         'GET /handoff',
+        'POST /github/token',
+        'POST /github/revoke',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',

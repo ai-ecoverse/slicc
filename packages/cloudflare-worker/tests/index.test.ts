@@ -1136,6 +1136,176 @@ describe('tray worker skeleton', () => {
     expect(expired.status).toBe(410);
   });
 
+  it('exchanges a GitHub OAuth code for an access token via POST /github/token', async () => {
+    const { env } = createTestHarness();
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(JSON.stringify({ access_token: 'gho_abc123', token_type: 'bearer' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/github/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code: 'test-code', redirect_uri: 'https://example.com/cb' }),
+      }),
+      { ...env, GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'csecret' },
+      mockFetch
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      access_token: 'gho_abc123',
+      token_type: 'bearer',
+    });
+    expect(mockFetch).toHaveBeenCalledWith('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        client_id: 'cid',
+        client_secret: 'csecret',
+        code: 'test-code',
+        redirect_uri: 'https://example.com/cb',
+      }),
+    });
+  });
+
+  it('passes through GitHub error responses from token exchange', async () => {
+    const { env } = createTestHarness();
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: 'bad_verification_code',
+          error_description: 'The code is wrong',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/github/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code: 'bad-code' }),
+      }),
+      { ...env, GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'csecret' },
+      mockFetch
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'bad_verification_code',
+    });
+  });
+
+  it('returns CORS headers on OPTIONS preflight and POST for /github/token', async () => {
+    const { env } = createTestHarness();
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(JSON.stringify({ access_token: 'gho_test' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    );
+
+    const preflight = await handleWorkerRequest(
+      new Request('https://tray.test/github/token', {
+        method: 'OPTIONS',
+        headers: { Origin: 'https://app.example.com' },
+      }),
+      { ...env, GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'csecret' },
+      mockFetch
+    );
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('Access-Control-Allow-Origin')).toBe('https://app.example.com');
+    expect(preflight.headers.get('Access-Control-Allow-Methods')).toContain('POST');
+    expect(preflight.headers.get('Access-Control-Allow-Headers')).toContain('Content-Type');
+
+    const post = await handleWorkerRequest(
+      new Request('https://tray.test/github/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Origin: 'https://app.example.com' },
+        body: JSON.stringify({ code: 'c' }),
+      }),
+      { ...env, GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'csecret' },
+      mockFetch
+    );
+    expect(post.headers.get('Access-Control-Allow-Origin')).toBe('https://app.example.com');
+  });
+
+  it('returns 405 for non-POST methods on /github/token', async () => {
+    const { env } = createTestHarness();
+    const mockFetch = vi.fn<typeof fetch>();
+
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/github/token', { method: 'GET' }),
+      { ...env, GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'csecret' },
+      mockFetch
+    );
+    expect(response.status).toBe(405);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('revokes a GitHub token via POST /github/revoke', async () => {
+    const { env } = createTestHarness();
+    const mockFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/github/revoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ access_token: 'gho_revokeme' }),
+      }),
+      { ...env, GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'csecret' },
+      mockFetch
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.body).toBeNull();
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://api.github.com/applications/cid/token',
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: expect.objectContaining({
+          Authorization: `Basic ${btoa('cid:csecret')}`,
+        }),
+      })
+    );
+  });
+
+  it('returns CORS headers on OPTIONS preflight for /github/revoke', async () => {
+    const { env } = createTestHarness();
+
+    const preflight = await handleWorkerRequest(
+      new Request('https://tray.test/github/revoke', {
+        method: 'OPTIONS',
+        headers: { Origin: 'https://app.example.com' },
+      }),
+      { ...env, GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'csecret' }
+    );
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('Access-Control-Allow-Origin')).toBe('https://app.example.com');
+  });
+
+  it('returns 405 for non-POST methods on /github/revoke', async () => {
+    const { env } = createTestHarness();
+    const mockFetch = vi.fn<typeof fetch>();
+
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/github/revoke', { method: 'DELETE' }),
+      { ...env, GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'csecret' },
+      mockFetch
+    );
+    expect(response.status).toBe(405);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('advertises /tray as the only create route in service metadata', async () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(new Request('https://tray.test/?json=true'), env);
@@ -1146,6 +1316,8 @@ describe('tray worker skeleton', () => {
         'POST /tray',
         'GET /download/slicc.dmg',
         'GET /handoff',
+        'POST /github/token',
+        'POST /github/revoke',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',

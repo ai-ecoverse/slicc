@@ -2097,4 +2097,10 @@ describe('GitCommands', () => {
       expect(row?.slice(1)).toEqual([1, 0, 0]); // staged deletion
     });
   });
+
+  describe('resetTokenCache', () => {
+    it('is callable and does not throw', () => {
+      expect(() => GitCommands.resetTokenCache()).not.toThrow();
+    });
+  });
 });
