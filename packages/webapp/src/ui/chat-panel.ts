@@ -5,7 +5,7 @@
  * Connects to an AgentHandle for sending messages and receiving events.
  */
 
-import type { AgentHandle, AgentEvent, ChatMessage, ToolCall } from './types.js';
+import type { AgentHandle, AgentEvent, ChatMessage, Session, ToolCall } from './types.js';
 import {
   renderAssistantMessageContent,
   renderMessageContent,
@@ -155,8 +155,28 @@ export class ChatPanel {
     await this.sessionStore.delete(sessionId);
   }
 
-  /** Switch to a different scoop's chat context. */
-  async switchToContext(contextId: string, readOnly: boolean, scoopName?: string): Promise<void> {
+  /**
+   * Switch to a different scoop's chat context.
+   *
+   * When `preloadedSession` is `undefined` (default, CLI call sites), the
+   * panel performs a fresh `SessionStore.load()` to populate the message
+   * list — original behavior preserved.
+   *
+   * When `preloadedSession` is explicitly provided (including `null`), the
+   * panel uses that snapshot instead of reading IndexedDB. Extension-mode
+   * `selectScoop` passes the session returned from
+   * `OffscreenClient.reconcileForScoopSelection()` so the same IndexedDB
+   * snapshot drives both the `currentMessageId` seed and the rendered
+   * messages. This closes the selection-time race where a bridge
+   * `persistScoop()` landing between reconcile's load and this load would
+   * otherwise leave the two in disagreement (fork / silent-drop).
+   */
+  async switchToContext(
+    contextId: string,
+    readOnly: boolean,
+    scoopName?: string,
+    preloadedSession?: Session | null
+  ): Promise<void> {
     // Save current session first
     await this.persistSessionAsync();
 
@@ -171,8 +191,14 @@ export class ChatPanel {
     this.currentScoopName = scoopName ?? null; // null means cone
     this.setReadOnly(readOnly);
 
-    // Load the new session
-    const session = await this.sessionStore.load(this.sessionId);
+    // Load the new session — use preloaded snapshot if the caller explicitly
+    // provided one (even `null` means "skip the load; this context has no
+    // session yet"). A `preloadedSession === undefined` means "no preload
+    // info; do a fresh load" (CLI-mode selectScoop + backward compat).
+    const session =
+      preloadedSession !== undefined
+        ? preloadedSession
+        : await this.sessionStore.load(this.sessionId);
     if (session && session.messages.length > 0) {
       this.messages = session.messages.map((m) => ({
         ...m,

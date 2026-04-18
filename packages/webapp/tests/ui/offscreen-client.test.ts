@@ -424,7 +424,12 @@ describe('OffscreenClient', () => {
       ]);
 
       // Act: select the scoop (reconciles offscreen-client state with session).
-      await client.reconcileForScoopSelection(makeScoop(scoopJid, folder));
+      // reconcileForScoopSelection now returns the loaded Session (so the
+      // caller can pass the same snapshot to ChatPanel.switchToContext and
+      // avoid a second IndexedDB read that could race with a bridge persist).
+      const reconciled = await client.reconcileForScoopSelection(makeScoop(scoopJid, folder));
+      expect(reconciled).not.toBeNull();
+      expect(reconciled?.messages.map((m) => m.id)).toEqual(['msg-user-1', 'msg-1']);
 
       // Assert: internal currentMessageId now points at the in-progress message.
       client.selectedScoopJid = scoopJid;
@@ -467,7 +472,9 @@ describe('OffscreenClient', () => {
       // Pretend a stale currentMessageId is still around from a previous selection.
       (client as any).currentMessageId.set(scoopJid, 'stale-id-1');
 
-      await client.reconcileForScoopSelection(makeScoop(scoopJid, folder));
+      const reconciled = await client.reconcileForScoopSelection(makeScoop(scoopJid, folder));
+      // The loaded session is returned so callers can share it with the panel.
+      expect(reconciled?.messages.map((m) => m.id)).toEqual(['msg-user-1', 'msg-final']);
 
       // The stale id should be cleared; next text_delta creates a fresh message.
       expect((client as any).currentMessageId.has(scoopJid)).toBe(false);
@@ -505,7 +512,8 @@ describe('OffscreenClient', () => {
         },
       ]);
 
-      await client.reconcileForScoopSelection(makeScoop(scoopJid, folder));
+      const reconciled = await client.reconcileForScoopSelection(makeScoop(scoopJid, folder));
+      expect(reconciled?.messages.map((m) => m.id)).toEqual(['msg-seed']);
 
       client.selectedScoopJid = scoopJid;
       const handle = client.createAgentHandle();
@@ -535,9 +543,11 @@ describe('OffscreenClient', () => {
       // Stale entry should be cleared even when there's no loadable session.
       (client as any).currentMessageId.set(scoopJid, 'stale-id');
 
-      await expect(
-        client.reconcileForScoopSelection(makeScoop(scoopJid, folder))
-      ).resolves.not.toThrow();
+      // Returns null when the session has never been persisted; callers
+      // should pass that through to switchToContext which will fall back
+      // to the empty-messages branch.
+      const reconciled = await client.reconcileForScoopSelection(makeScoop(scoopJid, folder));
+      expect(reconciled).toBeNull();
 
       expect((client as any).currentMessageId.has(scoopJid)).toBe(false);
     });

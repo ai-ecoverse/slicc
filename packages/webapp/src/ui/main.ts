@@ -390,13 +390,25 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     // Seed OffscreenClient.currentMessageId from the persisted session so a
     // running bridge scoop's post-click `text_delta` events continue the
     // in-progress assistant message rather than forking a new one.
-    await client.reconcileForScoopSelection(scoop);
+    //
+    // reconcileForScoopSelection returns the SAME Session snapshot it used
+    // to seed currentMessageId — we pass that snapshot through to
+    // switchToContext so the panel renders from the identical IndexedDB
+    // read. Without this unification, a fire-and-forget
+    // OffscreenBridge.persistScoop() could land between the two loads,
+    // leaving the reconciled state (seed) and rendered state
+    // (switchToContext) disagreeing. The net effect was either a forked
+    // duplicate assistant row or a silently-dropped text_delta.
+    const reconciledSession = await client.reconcileForScoopSelection(scoop);
 
-    // switchToContext loads messages from the shared browser-coding-agent IndexedDB
-    // (written by the offscreen bridge). No buffer reconciliation needed.
     const contextId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
     const scoopName = scoop.isCone ? undefined : scoop.name;
-    await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
+    await layout.panels.chat.switchToContext(
+      contextId,
+      !scoop.isCone,
+      scoopName,
+      reconciledSession
+    );
 
     if (client.isProcessing(scoop.jid)) {
       layout.panels.chat.setProcessing(true);

@@ -8,7 +8,7 @@
  * - State sync on reconnect with retry logic
  */
 
-import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
+import type { AgentHandle, AgentEvent as UIAgentEvent, Session } from './types.js';
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 import type { VirtualFS } from '../fs/index.js';
 import type {
@@ -93,13 +93,21 @@ export class OffscreenClient {
    * Safe to call repeatedly; tolerant of missing sessions and SessionStore
    * init errors (fire-and-forget semantics mirror the bridge's persist
    * policy — see `offscreen-bridge.persistScoop`).
+   *
+   * Returns the loaded `Session` (or `null` if the session does not yet
+   * exist or the SessionStore could not be initialized). Callers can pass
+   * this through to `ChatPanel.switchToContext(..., preloadedSession)` so
+   * the same IndexedDB snapshot drives both the seed and the render,
+   * closing the selection-time hydration race (a bridge persist landing
+   * between two independent `SessionStore.load()` calls would otherwise
+   * leave the reconciled state and the rendered state disagreeing).
    */
-  async reconcileForScoopSelection(scoop: RegisteredScoop): Promise<void> {
+  async reconcileForScoopSelection(scoop: RegisteredScoop): Promise<Session | null> {
     try {
       const store = await this.ensureSessionStore();
       if (!store) {
         this.currentMessageId.delete(scoop.jid);
-        return;
+        return null;
       }
       const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
       const session = await store.load(sessionId);
@@ -124,13 +132,18 @@ export class OffscreenClient {
       } else {
         this.currentMessageId.delete(scoop.jid);
       }
+
+      return session;
     } catch (err) {
       // Non-fatal — leave currentMessageId untouched so we don't amplify
-      // the timing bug if SessionStore is transiently unavailable.
+      // the timing bug if SessionStore is transiently unavailable. Return
+      // null so the caller falls back to a fresh load inside
+      // switchToContext (preserves prior behavior on the error path).
       log.warn('reconcileForScoopSelection failed', {
         scoopJid: scoop.jid,
         error: err instanceof Error ? err.message : String(err),
       });
+      return null;
     }
   }
 
