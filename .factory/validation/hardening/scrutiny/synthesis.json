@@ -75,6 +75,53 @@
       "sourceFeature": "live-browser-validation"
     }
   ],
+  "remediations": [
+    {
+      "addressesBlockingIssue": {
+        "featureId": "ci-gates-verification",
+        "description": "Baseline verification does not include the required pre-feature `npm run build`, so VAL-CI-010 is not fully evidenced."
+      },
+      "remediationFeatureId": "fix-hardening-rerun-baseline-full-build",
+      "workerSessionId": "913a35a4-f395-4cac-b0cd-6b8646806bed",
+      "capturedAt": "2026-04-18T03:14:22Z",
+      "baseline": {
+        "commit": "c252d0e7dcdbd279079b253d56bd3dc76468d04a",
+        "shortSha": "c252d0e",
+        "subject": "chore: scaffold mission infrastructure for `agent` supplemental command",
+        "rationale": "Parent (^1) of commit f91efec ('feat(shell): add `agent` supplemental command scaffolding'), which is the first commit that adds packages/webapp/src/shell/supplemental-commands/agent-command.ts. Identified via `git log --diff-filter=A -- packages/webapp/src/shell/supplemental-commands/agent-command.ts --oneline`."
+      },
+      "command": "npm run build",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 0,
+      "durationSeconds": 25,
+      "invokedWorkspaceBuilds": [
+        "npm run build -w @slicc/webapp",
+        "npm run build -w @slicc/node-server",
+        "npm run build -w @slicc/chrome-extension",
+        "npm run build -w @slicc/cloudflare-worker",
+        "npm run build -w @slicc/swift-server",
+        "npm run build -w @slicc/swift-launcher"
+      ],
+      "artifactSummary": [
+        "@slicc/webapp: vite build, 1510 modules transformed, emitted dist/ui/** (built in 1.32s)",
+        "@slicc/chrome-extension: vite build, emitted dist/extension/** including pyodide, xterm, shell, providers (built in 1.07s)",
+        "@slicc/cloudflare-worker: wrangler deploy --dry-run, 178 assets, 48.53 KiB upload",
+        "@slicc/swift-server: swift build -c release, produced swift-server/.build/release/slicc-server (Build complete! 0.54s)",
+        "@slicc/swift-launcher: swift build -c release + node assemble-app.mjs, produced packages/swift-launcher/build/Sliccstart.app (83M)"
+      ],
+      "evidence": "Full CI gate chain `npx prettier --check . && npm run typecheck && npm run test && npm run build && npm run build -w @slicc/chrome-extension` is now fully witnessed on the pre-mission baseline commit c252d0e. The original `ci-gates-verification` handoff had captured the four other gates on baseline and the two workspace-scoped builds (`@slicc/webapp`, `@slicc/chrome-extension`), but the full-workspace `npm run build` on baseline — which additionally builds @slicc/node-server, @slicc/cloudflare-worker, @slicc/swift-server, and @slicc/swift-launcher (via `node assemble-app.mjs`) — was not recorded. This remediation runs that command on the baseline commit, captures exit code 0 and 25s duration, and documents the artifacts produced. VAL-CI-010 is now fully evidenced.",
+      "logPath": "/tmp/baseline-full-build.log",
+      "logLines": 248,
+      "procedure": [
+        "git log --diff-filter=A -- packages/webapp/src/shell/supplemental-commands/agent-command.ts --oneline → first-addition commit f91efec",
+        "git rev-parse f91efec^1 → baseline c252d0e",
+        "git checkout c252d0e (working tree already clean; no stash needed)",
+        "time npm run build (> /tmp/baseline-full-build.log 2>&1) → exit 0 in 25s",
+        "git checkout droid-2 → restored hardening tip (HEAD 395f141 at time of remediation)",
+        "Updated this synthesis.json to record the evidence"
+      ]
+    }
+  ],
   "suggestedGuidanceUpdates": [
     {
       "target": "AGENTS.md",
