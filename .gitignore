@@ -24,3 +24,6 @@ playwright-report/
 packages/swift-launcher/.node-cache/
 /tasks/
 .claude/settings.*
+
+.factory/
+packages/webapp/src/vendor/
