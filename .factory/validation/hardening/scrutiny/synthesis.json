@@ -1,0 +1,113 @@
+{
+  "milestone": "hardening",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "npm run test",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "npx prettier --check .",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 4,
+    "passed": 0,
+    "failed": 4,
+    "failedFeatures": [
+      "nesting-and-parallel-concurrency",
+      "error-and-abort-hardening",
+      "ci-gates-verification",
+      "live-browser-validation"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "nesting-and-parallel-concurrency",
+      "severity": "blocking",
+      "description": "The nesting suite still recurses through mocked bridge contexts instead of invoking the real nested `agent` command from a scoop bash/tool path, so the key nested execution behaviors remain unproven.",
+      "suggestedFix": "Keep at least one nesting scenario on the real `ScoopContext` path and drive the inner invocation through the `agent` supplemental command from a scoop."
+    },
+    {
+      "featureId": "nesting-and-parallel-concurrency",
+      "severity": "blocking",
+      "description": "The VAL-NEST-015 cone-tool counter assertion is detached from the real bridge/tool path, so zero counters are not meaningful evidence that nested runs bypass `scoop_scoop`/`feed_scoop`.",
+      "suggestedFix": "Instrument the actual nested execution surface that would hit cone-only scoop tools instead of a standalone local tool array."
+    },
+    {
+      "featureId": "error-and-abort-hardening",
+      "severity": "blocking",
+      "description": "The parent-abort case only rejects a mocked `prompt()` promise; it does not exercise a real bridge/orchestrator teardown path, and current orchestrator shutdown does not appear to stop bridge-owned contexts.",
+      "suggestedFix": "Wire a real abort/shutdown path for bridge-spawned contexts and replace the mocked rejection with a real `ScoopContext` abort test."
+    },
+    {
+      "featureId": "error-and-abort-hardening",
+      "severity": "blocking",
+      "description": "The pipeline/conjunction rejection test cannot catch partial pre-rejection execution because every segment before the disallowed `rm` is read-only.",
+      "suggestedFix": "Use a rejected line with an earlier write-capable or otherwise observable side effect and assert that no earlier segment ran."
+    },
+    {
+      "featureId": "ci-gates-verification",
+      "severity": "blocking",
+      "description": "Baseline verification does not include the required pre-feature `npm run build`, so VAL-CI-010 is not fully evidenced.",
+      "suggestedFix": "Re-run the baseline chain on the pre-feature commit including `npm run build` and capture the result."
+    },
+    {
+      "featureId": "live-browser-validation",
+      "severity": "blocking",
+      "description": "The required fresh/no-provider live check was skipped and replaced with an unknown-model probe, which exercises a different failure path than VAL-LIVE-010.",
+      "suggestedFix": "Repeat live validation in a clean no-provider state and capture the real `agent . \"*\" \"say hello\"` missing-provider behavior."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Documented reliable dev-server shell liveness probes in `.factory/library/environment.md` (`Accept: text/html` on `/` or `/api/runtime-config`) so workers can avoid false-negative raw curl checks.",
+      "sourceFeature": "live-browser-validation"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add the full `npm run build` gate and the requirement to rerun the same gate set on the baseline commit to the worker checklist for CI verification features.",
+      "evidence": "The `ci-gates-verification` review found the worker omitted baseline `npm run build` evidence while otherwise following mission guidance, because the checklist did not spell out that requirement.",
+      "isSystemic": true
+    },
+    {
+      "target": "webapp-worker",
+      "suggestion": "Clarify how workers must record a skipped feature-listed manual/CDP verification step when the skill allows it to be optional; the handoff should explicitly note the omission in `whatWasLeftUndone` or equivalent.",
+      "evidence": "The `error-and-abort-hardening` review found a feature-listed manual smoke step was omitted while the handoff still reported `whatWasLeftUndone: \"\"` and `followedProcedure: true`.",
+      "isSystemic": true
+    },
+    {
+      "target": "webapp-worker",
+      "suggestion": "Replace raw `curl -sf http://localhost:5710` health checks with an HTML-accepting probe or `/api/runtime-config` for dev-server liveness checks.",
+      "evidence": "The `live-browser-validation` review found raw root curls can false-negative in dev mode because the HTML fallback requires `Accept: text/html`, leading to unnecessary debugging during live validation.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "Change the existing `dev` service healthcheck in `.factory/services.yaml` away from a raw root curl probe.",
+      "reason": "Not applied in this pass because the scrutiny workflow limits `services.yaml` edits to additive changes; the reliable liveness workaround was documented in `.factory/library/environment.md` instead."
+    },
+    {
+      "observation": "Document a non-destructive procedure for validating both the no-provider and provider-configured live states in one run.",
+      "reason": "Rejected as ambiguous because the reviews identified the gap but did not establish a proven, repeatable procedure to document."
+    },
+    {
+      "observation": "Update this mission's feature metadata that still describes ESLint as a CI gate.",
+      "reason": "Rejected as mission-specific/ambiguous for this validator pass; the contract and shared library already correctly state that Prettier is the actual lint gate."
+    }
+  ],
+  "previousRound": null
+}

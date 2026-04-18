@@ -1,0 +1,32 @@
+{
+  "featureId": "ci-gates-verification",
+  "reviewedAt": "2026-04-18T00:39:05.427109Z",
+  "commitId": "031d5cb8428f93405f6c69c237f7107d48ec73d4",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The worker gathered solid tip-of-branch evidence, but the required baseline verification is incomplete.",
+    "issues": [
+      {
+        "severity": "blocking",
+        "description": "The feature claims the pre-feature baseline was green, but `handoffs/2026-04-18T00-12-23-612Z__ci-gates-verification__68b2f0a9-d22d-4a21-825c-39d5cc441698.json:66-86` records only baseline `npx prettier --check .`, `npm run typecheck`, `npm run test`, `npm run build -w @slicc/webapp`, and `npm run build -w @slicc/chrome-extension`. There is no baseline `npm run build`, even though `features.json:1467` says to rerun the same gates on the parent commit and `validation-contract.md:1064` requires the baseline chain to include full `npm run build`. Without that command, VAL-CI-010 is not actually proven.",
+        "suggestedFix": "Check out `HEAD~1` again, run the full baseline chain including `npm run build`, record the exit code/output, and update the handoff so the baseline-green claim is backed by evidence."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "target": "AGENTS.md",
+      "observation": "The mission AGENTS worker checklist does not mention the full `npm run build` gate or the requirement to rerun the same gate set on the baseline commit.",
+      "rationale": "This verification feature missed the baseline full-build evidence while otherwise following mission guidance. Aligning the checklist with `features.json` / `validation-contract.md` would make the required evidence harder to overlook."
+    },
+    {
+      "target": "unknown",
+      "observation": "Mission feature metadata still describes `npx eslint .` as part of \"every CI gate that ci.yml enforces\", even though `validation-contract.md:1014-1018` and `.factory/library/environment.md:57-62` already document that the actual lint gate is `npx prettier --check .`.",
+      "rationale": "The contradiction caused the worker to spend time on an unnecessary ESLint run and to write stale handoff commentary about a lint-gate mismatch even though the shared library/contract had already been corrected."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Review failed: the feature never recorded a baseline `npm run build`, so the claimed pre-feature green baseline is not fully evidenced. The rest of the inspected evidence on the tip commit looked consistent."
+}

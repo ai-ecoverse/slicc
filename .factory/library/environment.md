@@ -36,6 +36,7 @@ Credentials never leave the local machine; no repo-level secrets are required.
 ## Dev Server Gotchas
 
 - **Vite HMR does NOT reliably pick up edits to bootstrap files** (`packages/webapp/src/ui/main.ts`, `packages/chrome-extension/src/offscreen.ts`). Even a browser reload may serve a stale module. After editing these files, **restart the dev server** (`lsof -ti :5710 | xargs kill`, then start again) before manually verifying in the browser. Component-level HMR works normally.
+- Raw shell probes against `http://localhost:5710/` can false-negative in dev mode: the SPA HTML fallback only serves when the request `Accept` header includes `text/html`. For shell liveness checks, use `curl -sf -H 'Accept: text/html' http://localhost:5710` or `curl -sf http://localhost:5710/api/runtime-config`.
 - When auto-discovering the Chrome CDP port from the dev-server log, also verify the `[agent-bridge] agent bridge published on globalThis.__slicc_agent` line appears during bootstrap — this is the easiest smoke signal that the bridge hook was published before the UI finished loading.
 
 ## Build Targets

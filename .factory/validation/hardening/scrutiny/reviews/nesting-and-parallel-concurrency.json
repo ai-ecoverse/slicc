@@ -1,0 +1,30 @@
+{
+  "featureId": "nesting-and-parallel-concurrency",
+  "reviewedAt": "2026-04-18T00:38:49Z",
+  "commitId": "0a402a9",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The new test file adds useful coverage scaffolding, but it does not actually exercise the real nested `agent` path it claims to harden. Every nested scenario replaces `ScoopContext` with a fake `createContext` seam and drives recursion by calling `bridge.spawn()` directly from mocked prompts, and the cone-tool isolation check is disconnected from the bridge path under test.",
+    "issues": [
+      {
+        "file": "packages/webapp/tests/scoops/agent-nesting.test.ts",
+        "line": 218,
+        "severity": "blocking",
+        "description": "`makeScriptedProvider()` builds a fake `AgentBridgeContext` with no-op `init()` and synthetic `prompt()`/`getAgentMessages()` behavior, and every nested scenario uses that seam plus direct `bridge.spawn()` recursion (`packages/webapp/tests/scoops/agent-nesting.test.ts:218-262`, `:291-308`, `:354-366`, `:462-487`, `:616-630`, `:769-775`, `:914-926`). That means the tests never invoke a nested `agent` call through the real command/WasmShell path, so they do not verify the feature's key requirement that `agent` be callable from within a scoop's bash via the same bridge path. Regressions in nested command parsing, `getParentJid` propagation in `packages/webapp/src/shell/supplemental-commands/agent-command.ts:203-275`, or nested bash-tool wiring in `packages/webapp/src/scoops/scoop-context.ts:184-202` would still leave this file green.",
+        "suggestedFix": "Keep at least one nesting/concurrency scenario on the bridge's default `new ScoopContext(...)` path (no `createContext` override) and drive the inner invocation through the real `agent` command from the scoop's bash/tool stack, reusing the scripted pi-ai provider pattern that already exists in `packages/webapp/tests/scoops/agent-integration.test.ts`."
+      },
+      {
+        "file": "packages/webapp/tests/scoops/agent-nesting.test.ts",
+        "line": 827,
+        "severity": "blocking",
+        "description": "Scenario (11) creates a fresh `createScoopManagementTools()` array, wraps each tool's `execute()` with counters, and then never wires that array into `publishAgentBridge`, the orchestrator, or the mocked context (`packages/webapp/tests/scoops/agent-nesting.test.ts:827-909`). Because the nested run still goes through the mocked `bridge.spawn()` path, those counters are detached from the system under test and will stay zero regardless of whether the real implementation accidentally routes through `scoop_scoop`/`feed_scoop`. The requested spy-counter proof for VAL-NEST-015 is therefore still missing.",
+        "suggestedFix": "Attach the spy to the real nested execution path \u2014 for example, run a real `ScoopContext` and instrument the actual cone-tool callbacks or tool-construction/execution surface that a regression would hit \u2014 rather than a standalone local tool array."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Fail: the feature adds a substantial new nesting test file, but the critical nested-path coverage is still mocked out and the cone-tool isolation assertion is vacuous, so the requested hardening behaviors are not fully proven."
+}
