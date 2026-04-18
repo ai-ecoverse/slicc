@@ -97,6 +97,23 @@ For interactive `agent` validation, the LLM provider must be configured in the r
 - Capture screenshots and terminal text for each assigned assertion, and include any console errors in the flow report.
 - Leave dev-server lifecycle management to the parent validator; do not kill the shared server.
 
+### Keyboard-input fallback for xterm.js
+
+In some CDP sessions (observed when Chrome has ~10+ tabs open), agent-browser's keyboard methods (`keyboard type`, `keyboard inserttext`, `type <sel> <text>`, `press`, synthetic `KeyboardEvent` dispatch) return success but no characters land in the rendered `xterm.js` canvas. `xterm.js` reacts only to CDP-trusted keydown events; in these sessions the events apparently don't reach the window.
+
+When terminal-driven input fails for an assertion about the `agent` supplemental command's exit code / error messages / state, `globalThis.__slicc_agent.spawn()` via `agent-browser eval` is an acceptable equivalent-code-path verification. The `agent` supplemental command's only runtime effect beyond arg parsing and cwd/ACL setup is `bridge.spawn()` (see `agent-command.ts:265`), so exit code and final text are identical. Note any such fallback in the flow report and attempt the terminal path first.
+
+### Fresh/no-provider profile bootstrap
+
+On a truly-empty isolated Chrome profile (e.g., :5720 with no prior Adobe/Anthropic OAuth), the app's first-run "Add Account" dialog blocks full UI initialization — `globalThis.__slicc_agent` is never published, and the terminal panel is unreachable. To reach a fully-initialized main UI for a fresh no-provider validation, use this workaround:
+
+1. Seed a dummy account via `localStorage.setItem('slicc_accounts', JSON.stringify([{providerId:'anthropic',apiKey:'x'}]))`.
+2. Reload the page; wait for init (model picker, terminal, `globalThis.__slicc_agent`).
+3. Clear the dummy: `localStorage.removeItem('slicc_accounts')`.
+4. Invoke the assertion under test. `ScoopContext.init()` re-reads `getApiKey()` on each spawn (`scoop-context.ts:236-240`), so the runtime state at spawn time is equivalent to a never-configured profile.
+
+Alternative: load the profile with a configured provider (e.g., from primary `:5710`) then use the existing `--model totally-not-a-real-model` path to exercise the unknown-model short-circuit — BUT note this is a different code path (`agent-bridge.ts:167-173`, pre-`ScoopContext.init()`) with different error message wording.
+
 ## Testable Behaviors (high level)
 
 Per the validation contract (`validation-contract.md`), validation covers:
