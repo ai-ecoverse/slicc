@@ -1,0 +1,241 @@
+{
+  "groupId": "hardening-shell",
+  "surface": "shell",
+  "status": "fail",
+  "assertions": [
+    {
+      "id": "VAL-CI-001",
+      "status": "fail",
+      "reason": "`npx prettier --check .` exited 2 because `.factory/services.yaml` currently has invalid YAML syntax at line 24.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-001-002-prettier-check.log",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/prettier-failure-context-git-status.log"
+      ]
+    },
+    {
+      "id": "VAL-CI-002",
+      "status": "fail",
+      "reason": "The repo's actual lint gate is still `npx prettier --check .`, and that gate failed on the same `.factory/services.yaml` parse error.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-001-002-prettier-check.log",
+        "/Users/trieloff/Developer/slicc/.yolo/droid-2/.github/workflows/ci.yml",
+        "/Users/trieloff/Developer/slicc/.yolo/droid-2/CLAUDE.md"
+      ]
+    },
+    {
+      "id": "VAL-CI-003",
+      "status": "pass",
+      "reason": "`npm run typecheck` exited 0.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-003-typecheck.log"
+      ]
+    },
+    {
+      "id": "VAL-CI-004",
+      "status": "pass",
+      "reason": "`npm run test` exited 0; final summary shows 160 passed test files, 1 skipped, and 2990 passed tests, 2 skipped.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-004-vitest.log"
+      ]
+    },
+    {
+      "id": "VAL-CI-005",
+      "status": "pass",
+      "reason": "The key test files exist on disk and all three appear in the verbose Vitest run output.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-005-test-files-exist.log",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-005-vitest-file-hits.log",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-004-vitest-verbose.log"
+      ]
+    },
+    {
+      "id": "VAL-CI-006",
+      "status": "pass",
+      "reason": "`npm run build -w @slicc/webapp` exited 0; `dist/ui/` entries were present with fresh mtimes captured after the build.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-006-webapp-build.log",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-006-dist-ui-stat.log"
+      ]
+    },
+    {
+      "id": "VAL-CI-007",
+      "status": "pass",
+      "reason": "`npm run build -w @slicc/chrome-extension` exited 0; `dist/extension/` entries were present with fresh mtimes captured after the build.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-007-extension-build.log",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-007-dist-extension-stat.log"
+      ]
+    },
+    {
+      "id": "VAL-CI-009",
+      "status": "pass",
+      "reason": "Ripgrep shows `createAgentCommand` imported and invoked in `supplemental-commands/index.ts`, and `help-command.ts` categorizes `agent` under `Agents`.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-009-ripgrep.log"
+      ]
+    },
+    {
+      "id": "VAL-CI-010",
+      "status": "pass",
+      "reason": "Committed remediation artifacts already capture the baseline rerun on commit `c252d0e` with `npm run build` exit code 0, so no new baseline rerun was needed.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-010-baseline-evidence-review.json",
+        "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/validation/hardening/scrutiny/reviews/fix-hardening-rerun-baseline-full-build.json",
+        "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/validation/hardening/scrutiny/synthesis.round1.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/handoffs/2026-04-18T03-17-04-400Z__fix-hardening-rerun-baseline-full-build__913a35a4-f395-4cac-b0cd-6b8646806bed.json",
+        "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/validation/hardening/scrutiny/synthesis.json"
+      ]
+    },
+    {
+      "id": "VAL-CI-011",
+      "status": "pass",
+      "reason": "`git status --porcelain -- dist/` produced empty stdout after the builds (0-byte evidence file).",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-011-git-status-dist.log"
+      ]
+    }
+  ],
+  "commandsRun": [
+    {
+      "command": "npx prettier --check .",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 2,
+      "log": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-001-002-prettier-check.log"
+    },
+    {
+      "command": "git status --porcelain -- .factory/services.yaml",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 0,
+      "log": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/prettier-failure-context-git-status.log",
+      "note": "Captured context for the Prettier failure."
+    },
+    {
+      "command": "npm run typecheck",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 0,
+      "log": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-003-typecheck.log"
+    },
+    {
+      "command": "npm run test",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 0,
+      "log": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-004-vitest.log"
+    },
+    {
+      "command": "npm run test -- --reporter=verbose",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 0,
+      "log": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-004-vitest-verbose.log",
+      "note": "Full-suite rerun used only to capture per-file evidence for VAL-CI-005."
+    },
+    {
+      "command": "rg --files packages/webapp/tests | rg '(^|/)(agent-command\\.test\\.ts|bash-tool-allowlist\\.test\\.ts|agent-bridge\\.test\\.ts)$'",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 0,
+      "log": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-005-test-files-exist.log"
+    },
+    {
+      "command": "rg -n '(agent-command\\.test\\.ts|bash-tool-allowlist\\.test\\.ts|agent-bridge\\.test\\.ts)' /Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-004-vitest-verbose.log",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 0,
+      "log": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-005-vitest-file-hits.log"
+    },
+    {
+      "command": "{ rg -n 'createAgentCommand|agent' packages/webapp/src/shell/supplemental-commands/index.ts; printf '\\n'; rg -n 'COMMAND_CATEGORIES|agent' packages/webapp/src/shell/supplemental-commands/help-command.ts; }",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 0,
+      "log": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-009-ripgrep.log"
+    },
+    {
+      "command": "npm run build -w @slicc/webapp",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 0,
+      "log": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-006-webapp-build.log"
+    },
+    {
+      "command": "stat -f '%Sm %z %N' -t '%Y-%m-%dT%H:%M:%S%z' dist/ui/*",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 0,
+      "log": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-006-dist-ui-stat.log"
+    },
+    {
+      "command": "npm run build -w @slicc/chrome-extension",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 0,
+      "log": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-007-extension-build.log"
+    },
+    {
+      "command": "stat -f '%Sm %z %N' -t '%Y-%m-%dT%H:%M:%S%z' dist/extension/*",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 0,
+      "log": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-007-dist-extension-stat.log"
+    },
+    {
+      "command": "git status --porcelain -- dist/",
+      "cwd": "/Users/trieloff/Developer/slicc/.yolo/droid-2",
+      "exitCode": 0,
+      "log": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-011-git-status-dist.log"
+    }
+  ],
+  "toolsUsed": ["shell", "ripgrep", "Read"],
+  "frictions": [],
+  "blockers": [],
+  "artifacts": [
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-001-002-prettier-check.log",
+      "description": "Prettier check output for VAL-CI-001 and VAL-CI-002."
+    },
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/prettier-failure-context-git-status.log",
+      "description": "Git status context showing `.factory/services.yaml` is modified in the working tree."
+    },
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-003-typecheck.log",
+      "description": "Typecheck output."
+    },
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-004-vitest.log",
+      "description": "Standard full Vitest gate output."
+    },
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-004-vitest-verbose.log",
+      "description": "Verbose full Vitest output used for per-file evidence."
+    },
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-005-test-files-exist.log",
+      "description": "On-disk listing of the key hardening test files."
+    },
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-005-vitest-file-hits.log",
+      "description": "Verbose Vitest hits for the key hardening test files."
+    },
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-006-webapp-build.log",
+      "description": "Webapp build output."
+    },
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-006-dist-ui-stat.log",
+      "description": "Post-build `dist/ui` timestamps and sizes."
+    },
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-007-extension-build.log",
+      "description": "Chrome extension build output."
+    },
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-007-dist-extension-stat.log",
+      "description": "Post-build `dist/extension` timestamps and sizes."
+    },
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-009-ripgrep.log",
+      "description": "Ripgrep evidence for `agent` command registration and help categorization."
+    },
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-010-baseline-evidence-review.json",
+      "description": "Summary of committed baseline-evidence review for VAL-CI-010."
+    },
+    {
+      "path": "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/shell/val-ci-011-git-status-dist.log",
+      "description": "Empty `git status --porcelain -- dist/` output after builds."
+    }
+  ]
+}

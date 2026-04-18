@@ -1,0 +1,301 @@
+{
+  "groupId": "hardening-live-browser",
+  "surface": "live-browser",
+  "status": "fail",
+  "assertions": [
+    {
+      "id": "VAL-LIVE-001",
+      "status": "pass",
+      "reason": "The shared dev server responded on http://localhost:5710 with HTTP 200 and the startup log shows the UI binding on :5710.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-001-http.txt",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-001-002-dev-server-log.txt"
+      ]
+    },
+    {
+      "id": "VAL-LIVE-002",
+      "status": "pass",
+      "reason": "Chrome CDP was reachable on raw port 50194, /json/version returned Chrome metadata, and agent-browser connected successfully after the stable proxy session could not open a new test tab.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-001-002-dev-server-log.txt",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-002-json-version.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-002-connect.txt"
+      ]
+    },
+    {
+      "id": "VAL-LIVE-003",
+      "status": "fail",
+      "reason": "The UI loaded and page errors were empty, but after a clean reload + 5s idle the console still logged `[cdp] Connection closed unexpectedly {pendingCommands: 0}`, so the surface did not meet the no-console-errors contract.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-003-ui-loaded-clean.png",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-003-errors-after-reload.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-003-console-filtered.txt"
+      ]
+    },
+    {
+      "id": "VAL-LIVE-004",
+      "status": "pass",
+      "reason": "The terminal tab was visible and mounted with one `.xterm` instance, one helper textarea, and a working prompt.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-004-terminal-visible.png",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-004-dom.json"
+      ]
+    },
+    {
+      "id": "VAL-LIVE-005",
+      "status": "pass",
+      "reason": "Running `commands` in the terminal listed `Agents:` followed by `agent`.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-005-commands.png",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-005-terminal.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-005-errors.json"
+      ]
+    },
+    {
+      "id": "VAL-LIVE-006",
+      "status": "pass",
+      "reason": "Running `which agent` in the terminal returned `/usr/bin/agent`.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-006-which-agent.png",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-006-terminal.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-006-errors.json"
+      ]
+    },
+    {
+      "id": "VAL-LIVE-007",
+      "status": "pass",
+      "reason": "Running `agent --help; echo $?` printed the expected usage text containing `<cwd>`, `<allowed-commands>`, `<prompt>`, and `--model`, and the chained exit code was `0`.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-007-agent-help.png",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-007-terminal.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-007-errors.json"
+      ]
+    },
+    {
+      "id": "VAL-LIVE-008",
+      "status": "pass",
+      "reason": "Running `agent -h` printed the same short-help usage block as `agent --help`.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-008-agent-short-help.png",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-008-terminal.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-008-errors.json"
+      ]
+    },
+    {
+      "id": "VAL-LIVE-009",
+      "status": "pass",
+      "reason": "Running `agent; echo $?` produced `agent: missing required argument <cwd>` with a chained exit code of `1`, and the terminal remained usable with a prompt afterward.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-009-agent-no-args.png",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-009-terminal.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-009-errors.json"
+      ]
+    },
+    {
+      "id": "VAL-LIVE-010",
+      "status": "blocked",
+      "reason": "The real missing-provider path was exercised and console evidence showed `No API key configured for provider \"adobe\"` and `No API key configured for provider \"anthropic\"`, but the shared :5710 dev server is serving a stale transformed `agent-bridge.ts` bundle that lacks the init-error-preservation fix. In the live terminal, `agent . \"*\" \"say hello\"; echo $?` still rendered `0` with no provider-identifying stderr, and the served module probe confirmed the stale bundle (`suppressedGenericFollowUpLog=False`). Restarting the shared server would be required to validate the fixed user-facing text, which was out of scope for this validator.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-no-provider.png",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-terminal.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-console-filtered.txt",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/stale-agent-bridge-served-module.txt",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-bootstrap-seed.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-post-clear.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/state-final.json"
+      ]
+    },
+    {
+      "id": "VAL-LIVE-011",
+      "status": "pass",
+      "reason": "Runtime evaluation returned `{\"bridgeType\":\"object\",\"spawnType\":\"function\"}` for `globalThis.__slicc_agent`.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-011-bridge.json"
+      ]
+    },
+    {
+      "id": "VAL-LIVE-012",
+      "status": "pass",
+      "reason": "After all automated checks, http://localhost:5710 still returned HTTP 200 and the listener remained active on PID 25718.",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-012-http.txt",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-012-listener.txt"
+      ]
+    },
+    {
+      "id": "VAL-CROSS-015",
+      "status": "pass",
+      "reason": "With the restored Adobe provider on the shared session, `agent . \"*\" \"reply with the single word: hello\"; echo $?; ls /scoops/` printed `hello`, returned exit code `0`, and the specific generated scoop folder `agent-00c615525bd8` was absent afterward (`ls /scoops/agent-00c615525bd8` -> `No such file or directory`).",
+      "evidence": [
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-CROSS-015-happy-path.png",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-CROSS-015-terminal.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-CROSS-015-console.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-CROSS-015-cleanup-check.json",
+        "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-CROSS-015-errors.json"
+      ]
+    }
+  ],
+  "commandsRun": [
+    {
+      "command": "curl -sf http://localhost:5710/",
+      "result": "HTTP 200 before and after validation."
+    },
+    {
+      "command": "curl -sf http://localhost:50194/json/version",
+      "result": "Returned Chrome/DevTools version JSON for the raw CDP port from the shared dev-server log."
+    },
+    {
+      "command": "agent-browser --session hardening-live-browser-20260418 connect \"ws://localhost:5710/cdp\"",
+      "result": "Connected, but opening a fresh test tab failed, so the validator fell back to the raw CDP port as allowed by guidance."
+    },
+    {
+      "command": "agent-browser --session hardening-live-browser-20260418 connect 50194",
+      "result": "Connected to the shared Chrome instance for the rest of the run."
+    },
+    {
+      "command": "echo READY",
+      "result": "Confirmed terminal keyboard input worked on the live surface."
+    },
+    {
+      "command": "commands",
+      "result": "Output included `Agents:` -> `agent`."
+    },
+    {
+      "command": "which agent",
+      "result": "Returned `/usr/bin/agent`."
+    },
+    {
+      "command": "agent --help; echo $?",
+      "result": "Printed usage and returned `0`."
+    },
+    {
+      "command": "agent -h",
+      "result": "Printed the same short-help usage block."
+    },
+    {
+      "command": "agent; echo $?",
+      "result": "Returned `1` with the missing-`<cwd>` error."
+    },
+    {
+      "command": "browser eval to back up/seed/restore provider localStorage",
+      "result": "Backed up `slicc_accounts` and model keys, exercised the no-provider bootstrap path, then restored the shared session to Adobe."
+    },
+    {
+      "command": "agent . \"*\" \"say hello\"; echo $?",
+      "result": "Used for VAL-LIVE-010 after no-provider bootstrap; terminal output stayed incorrect due the stale shared bundle, while console logs confirmed the real missing-provider path."
+    },
+    {
+      "command": "agent . \"*\" \"reply with the single word: hello\"; echo $?; ls /scoops/",
+      "result": "Printed `hello`, returned `0`, and showed current `/scoops/` contents for the happy-path smoke."
+    },
+    {
+      "command": "ls /scoops/agent-00c615525bd8; echo $?",
+      "result": "Returned `No such file or directory`, confirming cleanup of the current happy-path scoop folder."
+    }
+  ],
+  "interactiveChecks": [
+    {
+      "action": "Opened the shared SLICC UI through the shared Chrome session and captured annotated screenshots of the initial UI and terminal tab.",
+      "observed": "The UI loaded and the terminal tab mounted successfully."
+    },
+    {
+      "action": "Drove the live terminal with `echo READY`, `commands`, `which agent`, `agent --help`, `agent -h`, and `agent; echo $?`.",
+      "observed": "Terminal input worked normally and the provider-free command-surface assertions passed."
+    },
+    {
+      "action": "Exercised the real no-provider path by backing up `slicc_accounts`, bootstrapping the UI with a dummy account, clearing the account before the `agent` invocation, and then restoring the original provider state.",
+      "observed": "Console logs showed the real init-time missing-provider errors, but the shared live bundle still surfaced stale behavior for the user-facing text."
+    },
+    {
+      "action": "Ran the live happy-path smoke after restoring the Adobe provider.",
+      "observed": "The terminal printed `hello`, exit `0`, and the specific generated scoop folder was gone after completion."
+    }
+  ],
+  "toolsUsed": ["agent-browser", "curl"],
+  "frictions": [
+    {
+      "description": "The stable proxy session (`ws://localhost:5710/cdp`) connected but could not open a clean test tab (`browserContext.newPage: Target page, context or browser has been closed`), so validation fell back to the raw CDP port 50194 as allowed by the mission guidance.",
+      "affectedAssertions": [
+        "VAL-LIVE-002",
+        "VAL-LIVE-003",
+        "VAL-LIVE-004",
+        "VAL-LIVE-005",
+        "VAL-LIVE-006",
+        "VAL-LIVE-007",
+        "VAL-LIVE-008",
+        "VAL-LIVE-009",
+        "VAL-LIVE-010",
+        "VAL-LIVE-011",
+        "VAL-LIVE-012",
+        "VAL-CROSS-015"
+      ]
+    },
+    {
+      "description": "The shared dev server on :5710 is serving a stale transformed `agent-bridge.ts` module (`suppressedGenericFollowUpLog=False`), so the live VAL-LIVE-010 surface does not reflect the latest init-error-preservation fix present on disk.",
+      "affectedAssertions": ["VAL-LIVE-010"]
+    },
+    {
+      "description": "The shared `/scoops/` directory already contained unrelated scoop folders, including a pre-existing `agent-25ebb7c28f97`, so cleanup for VAL-CROSS-015 had to be verified against the current run's exact folder id (`agent-00c615525bd8`) rather than from an empty directory listing.",
+      "affectedAssertions": ["VAL-CROSS-015"]
+    }
+  ],
+  "blockers": [
+    {
+      "description": "VAL-LIVE-010 could not be validated against the fixed user-facing text because the shared :5710 runtime is stale and restarting the shared dev server was outside this validator's allowed scope.",
+      "affectedAssertions": ["VAL-LIVE-010"]
+    }
+  ],
+  "artifacts": [
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-CROSS-015-cleanup-check.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-CROSS-015-console.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-CROSS-015-errors.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-CROSS-015-happy-path.png",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-CROSS-015-terminal.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-001-002-dev-server-log.txt",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-001-http.txt",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-002-connect.txt",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-002-json-version.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-003-console-after-reload.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-003-console-filtered.txt",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-003-console.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-003-errors-after-reload.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-003-errors.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-003-ui-loaded-clean.png",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-003-ui-loaded.png",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-004-dom.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-004-terminal-visible.png",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-005-commands.png",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-005-errors.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-005-terminal.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-006-errors.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-006-terminal.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-006-which-agent.png",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-007-agent-help.png",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-007-errors.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-007-terminal.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-008-agent-short-help.png",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-008-errors.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-008-terminal.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-009-agent-no-args.png",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-009-errors.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-009-terminal.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-backup-clear.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-bootstrap-seed.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-console-filtered.txt",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-errors.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-no-provider.png",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-post-bootstrap-reload.png",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-post-clear.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-restore-pre-bootstrap.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-010-terminal.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-011-bridge.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-012-http.txt",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-012-listener.txt",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/VAL-LIVE-012-pids.txt",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/stale-agent-bridge-served-module.txt",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/state-final.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/state-restore-console.json",
+    "/Users/trieloff/.factory/missions/094c0314-6896-4f76-bf58-89b7dfee66f4/evidence/hardening/live-browser/state-restore.json"
+  ],
+  "testedAt": "2026-04-18T04:50:49.388528Z"
+}
