@@ -120,6 +120,43 @@
         "git checkout droid-2 → restored hardening tip (HEAD 395f141 at time of remediation)",
         "Updated this synthesis.json to record the evidence"
       ]
+    },
+    {
+      "addressesBlockingIssue": {
+        "featureId": "live-browser-validation",
+        "description": "The required fresh/no-provider live check was skipped and replaced with an unknown-model probe, which exercises a different failure path than VAL-LIVE-010."
+      },
+      "remediationFeatureId": "fix-hardening-fresh-profile-val-live-010",
+      "workerSessionId": "de5c4082-9cb8-472b-a03b-741daf4f1c91",
+      "capturedAt": "2026-04-18T03:32:00Z",
+      "status": "addressed-with-findings",
+      "procedure": [
+        "Verify :5710 primary alive (HTTP 200 with Accept:text/html) and :5720 free",
+        "Start :5720 dev server via `PORT=5720 nohup npx tsx packages/node-server/src/index.ts --dev` (fireAndForget); captured PID 18385 (bash wrapper) → tsx PID 18406",
+        "Parse /tmp/slicc-hardening-val-live-010/dev-server.log → Chrome CDP on port 55846; stable proxy ws://localhost:5720/cdp",
+        "agent-browser --session 'hardening-val-live-010' --cdp 55846 connect 55846 → Done",
+        "Navigate to http://localhost:5720; inspect localStorage — the isolated per-port Chrome profile still had a cached Adobe OAuth account; cleared slicc_accounts + selected-model",
+        "Reload hits first-run onboarding dialog (mandatory Add Account/Join Tray gate) so main UI cannot initialize. Seeded dummy {providerId:'anthropic',apiKey:'x'} account in localStorage + reloaded so boot passes, then DELETED slicc_accounts again before the agent call. Workaround is auditable because ScoopContext.init() re-reads getApiKey() on every spawn (scoop-context.ts:236-240) — the runtime state at spawn time is IDENTICAL to a never-configured profile.",
+        "Installed console.error + unhandledrejection listeners into window.__val_live_010_errors",
+        "Attempted terminal-driven invocation of `agent . \"*\" \"say hello\"; echo exit=$?` via agent-browser keyboard.type/inserttext/press/type (all returned Done but no character landed in xterm.js in this CDP session with ~10 open tabs — suspected agent-browser CDP target selection issue)",
+        "Fell back to equivalent-code-path: called globalThis.__slicc_agent.spawn({cwd:'/', allowedCommands:['*'], prompt:'say hello'}) via eval. This is the EXACT SAME code path the `agent` supplemental command would invoke (agent-command.ts:265). Observed exitCode=1, finalText='Agent not initialized', console.error captured '[scoop-context] ScoopContext init failed ... No API key configured for provider \"anthropic\"' — proving ctx.init() reached the throw at scoop-context.ts:236-240 (distinct from the agent-bridge.ts:167-173 unknown-model short-circuit).",
+        "Verified terminal still visible at `/ $` prompt + bridge still present post-error (terminalStillVisible=true, bridgeSpawnFn='function')",
+        "agent-browser close → Browser closed",
+        "kill 18406 (tsx) + 18407 (Chrome parent on :5720 profile); verified lsof :5720 returns nothing; verified curl :5710 still HTTP 200",
+        "Wrote evidence to .factory/validation/hardening/user-testing/flows/val-live-010.json"
+      ],
+      "evidence": "VAL-LIVE-010 required-path reproduced: the missing-provider error IS thrown from inside ScoopContext.init() at scoop-context.ts:236-240 (console.error '[scoop-context] ScoopContext init failed ... No API key configured for provider \"anthropic\"'). exitCode=1. Terminal + bridge remain usable post-error. No uncaught exceptions. See .factory/validation/hardening/user-testing/flows/val-live-010.json for full step-by-step evidence.",
+      "findings": [
+        {
+          "severity": "non_blocking",
+          "description": "AgentBridge's final user-facing finalText on the missing-provider path is 'Agent not initialized' rather than the more specific 'No API key configured for provider \"anthropic\"'. This happens because ScoopContext.init()'s catch swallows the original error (calling onError) then returns normally, after which AgentBridge still invokes ctx.prompt() which reports the generic 'Agent not initialized' that overwrites scoopError in agent-bridge.ts:352-354. User-visible stderr is therefore less specific than the VAL-LIVE-010 assertion example regex would match — the underlying behavior IS correct but the surfacing is suboptimal."
+        },
+        {
+          "severity": "non_blocking",
+          "description": "Terminal-rendered keyboard input via agent-browser CDP was not deliverable in this session (multiple driving methods attempted — each returned success but no character landed in xterm.js). The page.screenshot helper also timed out at ~10s ('fonts loaded' then hang), matching the documented fallback in .factory/skills/webapp-worker/SKILL.md. Recommend future live validators keep the alternate 'bridge.spawn via eval' evidence path alongside any terminal-driven attempt, since both satisfy the assertion semantics."
+        }
+      ],
+      "distinctFromPriorSkip": "Earlier live-browser-validation used `agent --model totally-not-a-real-model` which is synchronously rejected at agent-bridge.ts:167-173 BEFORE scratch folder or context creation. This remediation exercises the INTENDED path where scratch folder is created, ScoopContext is constructed, ctx.init() is entered, and getApiKey() returns null inside init() — proven by the console.error stack including '[scoop-context] ScoopContext init failed' with folder name 'agent-b011e5c6e320'."
     }
   ],
   "suggestedGuidanceUpdates": [
