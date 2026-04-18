@@ -1833,8 +1833,13 @@ async function main(): Promise<void> {
     layout.panels.memory.setSelectedScoop(scoop.jid);
     layout.panels.scoops.setSelectedJid(scoop.jid);
 
-    // Switch chat context. Load from per-scoop message buffer (has full tool call detail)
-    // falling back to SessionStore, then orchestrator DB.
+    // Switch chat context.
+    // - First select per scoop (this runtime): load from SessionStore, then
+    //   fall back to orchestrator DB. The in-memory buffer is ignored here
+    //   because boot-time licks pushed to it before the UI rendered, and
+    //   loadMessages(buffer) would replace restored history with just the lick.
+    // - Subsequent selects: prefer the buffer, which carries transient detail
+    //   (screenshots, streamed tool calls) not in SessionStore.
     const contextId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
     const buffer = scoopMessageBuffers.get(scoop.jid);
     const isFirstSelect = !selectedOnceThisRuntime.has(scoop.jid);
@@ -1848,7 +1853,8 @@ async function main(): Promise<void> {
       await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
       layout.panels.chat.loadMessages(buffer);
     } else {
-      // No buffer — load from SessionStore (persisted from previous sessions)
+      // First select, or no buffer — load from SessionStore (persisted from
+      // previous sessions), then fall back to orchestrator DB if nothing there.
       await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
 
       // If still empty, fall back to orchestrator DB (simple text, no tool calls)
