@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { createScoopManagementTools } from '../../src/scoops/scoop-management-tools.js';
-import type { RegisteredScoop } from '../../src/scoops/types.js';
+import { CURRENT_SCOOP_CONFIG_VERSION, type RegisteredScoop } from '../../src/scoops/types.js';
 
 const cone: RegisteredScoop = {
   jid: 'cone_main_1',
@@ -67,5 +67,13 @@ describe('scoop_scoop tool — config defaults', () => {
     const created = onScoopScoop.mock.calls[0][0];
     expect(created.isCone).toBe(false);
     expect(created.folder).toBe('hero-block-1-scoop');
+  });
+
+  it('stamps the current configSchemaVersion so the orchestrator skips compat migration', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'hero-block' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
   });
 });

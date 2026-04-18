@@ -6,6 +6,17 @@
  * and restricted filesystem access.
  */
 
+/**
+ * Current `ScoopConfig` schema generation. Bumped whenever a new field is
+ * introduced that demands a compat backfill for records saved before it
+ * existed. Scoops created today are stamped with this value; the orchestrator
+ * runs one-shot migrations for any record whose version is strictly lower
+ * and never touches records already at the current version.
+ *
+ * - `1`: `visiblePaths` is authoritative (may be an explicit empty list).
+ */
+export const CURRENT_SCOOP_CONFIG_VERSION = 1;
+
 /** Registered scoop metadata */
 export interface RegisteredScoop {
   /** Unique identifier */
@@ -28,6 +39,14 @@ export interface RegisteredScoop {
   addedAt: string;
   /** Scoop-specific config */
   config?: ScoopConfig;
+  /**
+   * Generation of `ScoopConfig` that produced this record. `undefined` means
+   * "truly legacy" — a record saved before any of the path-config fields
+   * existed. The orchestrator migrates up to {@link CURRENT_SCOOP_CONFIG_VERSION}
+   * on restore; records already at the current version are left alone so
+   * explicit `undefined`/empty values stay authoritative.
+   */
+  configSchemaVersion?: number;
 }
 
 /** Per-scoop configuration */

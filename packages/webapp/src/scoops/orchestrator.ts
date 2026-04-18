@@ -9,7 +9,13 @@
  * - Owns a single shared VirtualFS instance
  */
 
-import type { RegisteredScoop, ChannelMessage, ScoopTabState, ScheduledTask } from './types.js';
+import {
+  CURRENT_SCOOP_CONFIG_VERSION,
+  type RegisteredScoop,
+  type ChannelMessage,
+  type ScoopTabState,
+  type ScheduledTask,
+} from './types.js';
 import * as db from './db.js';
 import { createLogger } from '../core/logger.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
@@ -118,12 +124,7 @@ export class Orchestrator {
         scoop.requiresTrigger = false;
         scoop.assistantLabel = scoop.assistantLabel || 'sliccy';
       }
-      // Restore compat: non-cone scoops saved before `visiblePaths` existed
-      // default to the historical `['/workspace/']` so existing scoops keep
-      // seeing skills. Written back on the next `saveScoop`.
-      if (!scoop.isCone && !scoop.config?.visiblePaths) {
-        scoop.config = { ...scoop.config, visiblePaths: ['/workspace/'] };
-      }
+      this.migrateScoopConfig(scoop);
       this.scoops.set(scoop.jid, scoop);
       this.messageQueues.set(scoop.jid, []);
 
@@ -167,6 +168,35 @@ export class Orchestrator {
 
     // Start polling for pending messages
     this.startMessageLoop();
+  }
+
+  /**
+   * One-shot compat migration for `ScoopConfig`. Mutates the scoop record in
+   * place so the next `saveScoop` persists the normalized shape.
+   *
+   * Gated on {@link RegisteredScoop.configSchemaVersion} rather than a truthy
+   * check on individual fields, so a record explicitly saved with
+   * `visiblePaths: undefined` (or an empty array) under the current schema
+   * keeps that authoritative value — "no read-only paths" stays "no read-only
+   * paths." Only records that predate a field get the historical default
+   * filled in.
+   *
+   * Cones have no `ScoopConfig` path surface at all; they ignore the version.
+   */
+  private migrateScoopConfig(scoop: RegisteredScoop): void {
+    if (scoop.isCone) return;
+    const version = scoop.configSchemaVersion ?? 0;
+    if (version >= CURRENT_SCOOP_CONFIG_VERSION) return;
+
+    if (version < 1) {
+      // Pre-visiblePaths era: default to the historical `/workspace/` read
+      // access so skills stay visible after restart.
+      scoop.config = {
+        ...scoop.config,
+        visiblePaths: scoop.config?.visiblePaths ?? ['/workspace/'],
+      };
+    }
+    scoop.configSchemaVersion = CURRENT_SCOOP_CONFIG_VERSION;
   }
 
   /** Ensure root directory structure exists on the shared FS */
