@@ -89,12 +89,10 @@ import {
   type AgentBridge,
 } from '../../src/scoops/agent-bridge.js';
 import { Orchestrator } from '../../src/scoops/orchestrator.js';
-import { createScoopManagementTools } from '../../src/scoops/scoop-management-tools.js';
 import type { RegisteredScoop, ScoopTabState } from '../../src/scoops/types.js';
 import { type VirtualFS } from '../../src/fs/virtual-fs.js';
 import * as db from '../../src/scoops/db.js';
 import { createAgentCommand } from '../../src/shell/supplemental-commands/agent-command.js';
-import type { ToolDefinition } from '../../src/core/types.js';
 
 // ─── Fixtures ─────────────────────────────────────────────────────────
 
@@ -386,13 +384,15 @@ describe('agent REAL ScoopContext — nesting and abort (integration)', () => {
       providerRecording.invocations = 0;
     });
 
-    it('outer scoop dispatches bash → inner agent → inner `send_message` bubbles to outer stdout; both scratch folders cleaned; cone-only tool counters stay 0', async () => {
-      // Build a cone scoop + its registered management tools with counters
-      // as a tripwire. The cone surface (scoop_scoop / feed_scoop /
-      // drop_scoop / list_scoops / send_message / update_global_memory)
-      // MUST NOT be invoked during a nested `agent` run — the bridge
-      // spawns scoops via `new ScoopContext(...)` directly, bypassing this
-      // tool layer entirely.
+    it('outer scoop dispatches bash → inner agent → inner `send_message` bubbles to outer stdout; both scratch folders cleaned; registry + scratch snapshots unchanged', async () => {
+      // Register a cone scoop so the orchestrator has its canonical entry
+      // present during the run. The cone here is registry-only — no
+      // ScoopContext is constructed for it, so no cone management tools
+      // are ever invoked by this test. The real regression signal comes
+      // from the functional assertions below (stdout bubble, jids snapshot,
+      // scratch snapshot, scoop unregistration) — they catch any regression
+      // that would cause the bridge to route through the cone's tool
+      // surface or leak ephemeral scoops.
       const coneScoop: RegisteredScoop = {
         jid: 'cone-real-nesting',
         name: 'sliccy',
@@ -404,47 +404,6 @@ describe('agent REAL ScoopContext — nesting and abort (integration)', () => {
         addedAt: new Date().toISOString(),
       };
       orch.registerExistingScoop(coneScoop);
-
-      const coneCounters = {
-        scoop_scoop: 0,
-        feed_scoop: 0,
-        drop_scoop: 0,
-        list_scoops: 0,
-        send_message: 0,
-        update_global_memory: 0,
-      };
-      const coneTools: ToolDefinition[] = createScoopManagementTools({
-        scoop: coneScoop,
-        onSendMessage: () => {
-          /* tripwire-only — no real send_message routing */
-        },
-        onFeedScoop: async () => {},
-        onScoopScoop: async (input) => ({ ...input, jid: 'cone-child-jid' }),
-        onDropScoop: async () => {},
-        onSetGlobalMemory: async () => {},
-        getGlobalMemory: async () => '',
-        getScoops: () => orch.getScoops(),
-      });
-      for (const tool of coneTools) {
-        const original = tool.execute;
-        tool.execute = async (input) => {
-          if (tool.name in coneCounters) {
-            coneCounters[tool.name as keyof typeof coneCounters] += 1;
-          }
-          return original(input);
-        };
-      }
-      // Sanity: the cone surface is registered.
-      expect(coneTools.map((t) => t.name).sort()).toEqual(
-        [
-          'send_message',
-          'feed_scoop',
-          'list_scoops',
-          'scoop_scoop',
-          'drop_scoop',
-          'update_global_memory',
-        ].sort()
-      );
 
       // Publish the bridge with NO createContext override — real
       // ScoopContext instances are constructed for the outer AND inner
@@ -492,18 +451,7 @@ describe('agent REAL ScoopContext — nesting and abort (integration)', () => {
       expect(await vfs.exists('/scoops/agent-outer')).toBe(false);
       expect(await vfs.exists('/scoops/agent-inner')).toBe(false);
 
-      // (c) Cone-only tool counters remain 0 — the bridge never routed
-      // through the cone's tool surface at either depth.
-      expect(coneCounters).toEqual({
-        scoop_scoop: 0,
-        feed_scoop: 0,
-        drop_scoop: 0,
-        list_scoops: 0,
-        send_message: 0,
-        update_global_memory: 0,
-      });
-
-      // Orchestrator registry still contains the cone only — both
+      // (c) Orchestrator registry still contains the cone only — both
       // ephemeral bridge scoops were unregistered.
       const jidsAfter = orch
         .getScoops()
