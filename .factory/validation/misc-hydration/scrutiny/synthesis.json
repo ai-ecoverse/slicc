@@ -1,0 +1,61 @@
+{
+  "milestone": "misc-hydration",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "npm run test",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "npm run typecheck",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "npx prettier --check .",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "failedFeatures": ["misc-reconcile-offscreen-client-currentmessageid-on-selection"]
+  },
+  "reviewedFeatures": [
+    {
+      "featureId": "misc-reconcile-offscreen-client-currentmessageid-on-selection",
+      "commitId": "4fa795e",
+      "status": "fail",
+      "summary": "The patch seeds `currentMessageId` for the helper-level happy path, but the real selection flow still does one SessionStore read for seeding and a second read for `ChatPanel.switchToContext()`, so async bridge persistence can leave the hydrated panel snapshot ahead of the live relay and the next `text_delta` can still fork a new row."
+    }
+  ],
+  "blockingIssues": [
+    {
+      "featureId": "misc-reconcile-offscreen-client-currentmessageid-on-selection",
+      "severity": "blocking",
+      "description": "`selectScoop()` seeds `OffscreenClient.currentMessageId` via `reconcileForScoopSelection()` before `ChatPanel.switchToContext()` loads the chat session, but those are two independent SessionStore reads. Because `OffscreenBridge.persistScoop()` writes are fire-and-forget, the two reads can observe different snapshots: the panel can hydrate an in-progress assistant message that `currentMessageId` never seeds, so the next `text_delta` still forks a fresh row.",
+      "suggestedFix": "Drive selection-time seeding from the same session snapshot that `ChatPanel.switchToContext()` renders (or thread the hydrated in-progress message id through the selection flow) so `currentMessageId` cannot lag behind the panel after async `persistScoop()` writes."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Updated `.factory/library/architecture.md` to record that selection-time `currentMessageId` seeding must use the same SessionStore snapshot that `ChatPanel.switchToContext()` renders; separate pre-hydration loads can race with async `persistScoop()` writes.",
+      "sourceFeature": "misc-reconcile-offscreen-client-currentmessageid-on-selection"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "webapp-worker skill",
+      "suggestion": "Clarify the precedence between the generic manual CDP verification requirement and feature-level instructions that mark browser checks optional. If a worker skips the generic check because a feature narrows it, the handoff should mark `followedProcedure: false` unless the skill explicitly codifies that exception.",
+      "evidence": "This review found `features.json` marked manual CDP verification OPTIONAL for `misc-reconcile-offscreen-client-currentmessageid-on-selection`, the worker skipped browser checks, and the handoff still reported `followedProcedure: true`. A similar mismatch was already captured in core-followup scrutiny for `fix-agent-scoop-visibility`, so the ambiguity is recurring rather than one-off.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": null
+}
