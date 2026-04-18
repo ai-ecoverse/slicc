@@ -5,10 +5,16 @@
  * Uses the DB layer directly to verify message persistence and routing.
  */
 
-import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
-import { initDB, saveScoop, getMessagesForScoop, clearAllMessages } from '../../src/scoops/db.js';
-import { SCOOP_IDLE_TIMEOUT_MS } from '../../src/scoops/orchestrator.js';
+import {
+  initDB,
+  saveScoop,
+  getMessagesForScoop,
+  clearAllMessages,
+  getAllScoops,
+} from '../../src/scoops/db.js';
+import { Orchestrator, SCOOP_IDLE_TIMEOUT_MS } from '../../src/scoops/orchestrator.js';
 import type { RegisteredScoop, ChannelMessage } from '../../src/scoops/types.js';
 
 // Test helpers — we can't instantiate a full Orchestrator (needs VirtualFS, DOM, etc.)
@@ -418,5 +424,112 @@ describe('Scoop idle detection', () => {
     // Verify it does NOT show up in the scoop's messages
     const scoopMessages = await getMessagesForScoop(testScoop.jid);
     expect(scoopMessages).toHaveLength(0);
+  });
+});
+
+describe('Orchestrator session-restore compat for visiblePaths', () => {
+  let orch: Orchestrator;
+
+  beforeAll(() => {
+    // TaskScheduler.start() calls window.setInterval; vitest runs in node.
+    // Expose a minimal shim so orchestrator.init() can boot.
+    if (typeof (globalThis as any).window === 'undefined') {
+      (globalThis as any).window = globalThis;
+    }
+  });
+
+  beforeEach(async () => {
+    // Fresh DB state — clear any scoops from previous tests so we control
+    // exactly what gets hydrated.
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+  });
+
+  afterEach(async () => {
+    // Stop the scheduler's poll timer so tests don't leak across runs.
+    await orch?.shutdown();
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  async function initOrchestrator(): Promise<Orchestrator> {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+    return orch;
+  }
+
+  it('backfills visiblePaths = ["/workspace/"] for legacy non-cone scoops', async () => {
+    const legacy: RegisteredScoop = {
+      jid: 'scoop_legacy_1',
+      name: 'legacy',
+      folder: 'legacy-scoop',
+      trigger: '@legacy-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'legacy-scoop',
+      addedAt: new Date().toISOString(),
+      // Deliberately no `config` — mirrors a scoop saved before this field existed.
+    };
+    await saveScoop(legacy);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_legacy_1');
+    expect(restored?.config?.visiblePaths).toEqual(['/workspace/']);
+  });
+
+  it('preserves an explicitly-set visiblePaths (no overwrite)', async () => {
+    const configured: RegisteredScoop = {
+      jid: 'scoop_configured_1',
+      name: 'configured',
+      folder: 'configured-scoop',
+      trigger: '@configured-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'configured-scoop',
+      addedAt: new Date().toISOString(),
+      config: { visiblePaths: ['/custom/'] },
+    };
+    await saveScoop(configured);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_configured_1');
+    expect(restored?.config?.visiblePaths).toEqual(['/custom/']);
+  });
+
+  it('does not touch cone records (cones ignore visiblePaths)', async () => {
+    const legacyCone: RegisteredScoop = {
+      jid: 'cone_legacy_1',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: new Date().toISOString(),
+    };
+    await saveScoop(legacyCone);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('cone_legacy_1');
+    expect(restored?.config?.visiblePaths).toBeUndefined();
   });
 });

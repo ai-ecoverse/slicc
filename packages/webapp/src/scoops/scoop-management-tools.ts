@@ -200,6 +200,11 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               .slice(0, 50) + '-scoop';
 
           try {
+            // Every scoop created through the tool gets the standard sandbox:
+            // read-only access to `/workspace/` so it can see the cone's
+            // skills. The orchestrator itself does not inject any defaults —
+            // keeping the default at the tool layer means the `ScoopConfig`
+            // surface stays pure-replace (what you set is what you get).
             const newScoop = await onScoopScoop({
               name,
               folder,
@@ -209,7 +214,10 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               requiresTrigger: true,
               assistantLabel: folder,
               addedAt: new Date().toISOString(),
-              config: model ? { modelId: model } : undefined,
+              config: {
+                ...(model ? { modelId: model } : {}),
+                visiblePaths: ['/workspace/'],
+              },
             });
 
             log.info('Scoop created', { name, folder });

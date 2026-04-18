@@ -118,6 +118,12 @@ export class Orchestrator {
         scoop.requiresTrigger = false;
         scoop.assistantLabel = scoop.assistantLabel || 'sliccy';
       }
+      // Restore compat: non-cone scoops saved before `visiblePaths` existed
+      // default to the historical `['/workspace/']` so existing scoops keep
+      // seeing skills. Written back on the next `saveScoop`.
+      if (!scoop.isCone && !scoop.config?.visiblePaths) {
+        scoop.config = { ...scoop.config, visiblePaths: ['/workspace/'] };
+      }
       this.scoops.set(scoop.jid, scoop);
       this.messageQueues.set(scoop.jid, []);
 
@@ -501,10 +507,17 @@ export class Orchestrator {
 
     const contextId = `scoop-${scoop.folder}-${Date.now()}`;
 
-    // Create the appropriate filesystem for this scoop
+    // Create the appropriate filesystem for this scoop.
+    // Cone gets unrestricted access; non-cone scoops use a RestrictedFS whose
+    // read-only prefixes come straight from config (pure replace — defaults
+    // live in `scoop_scoop` and in the restore backfill, not here).
     const fs = scoop.isCone
-      ? this.sharedFs // Cone gets unrestricted access
-      : new RestrictedFS(this.sharedFs, [`/scoops/${scoop.folder}/`, '/shared/'], ['/workspace/']);
+      ? this.sharedFs
+      : new RestrictedFS(
+          this.sharedFs,
+          [`/scoops/${scoop.folder}/`, '/shared/'],
+          scoop.config?.visiblePaths ? [...scoop.config.visiblePaths] : []
+        );
 
     // Create the scoop context with full callbacks
     const contextCallbacks: ScoopContextCallbacks = {

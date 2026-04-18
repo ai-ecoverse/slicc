@@ -40,6 +40,14 @@ export interface ScoopConfig {
   assistantName?: string;
   /** Model ID override (e.g., "claude-sonnet-4-20250514"). Uses globally selected model if not set. */
   modelId?: string;
+  /**
+   * VFS paths this scoop can READ (but not write). Pure replace — when
+   * `undefined` the scoop gets no read-only paths at all. The `scoop_scoop`
+   * tool injects the standard `['/workspace/']` default when creating scoops
+   * so existing agent-facing behavior is preserved. Cone scoops ignore this
+   * field — they always use an unrestricted filesystem.
+   */
+  visiblePaths?: readonly string[];
 }
 
 /** Message from any channel */
