@@ -894,6 +894,35 @@ async function main() {
     }
   });
 
+  // Profile-independent handoff injection.
+  //
+  // The CDP navigation-watcher only sees tabs inside the Chrome instance
+  // SLICC launched (isolated profile keyed by port); similarly the
+  // extension's webRequest observer only fires inside the profile where it
+  // is installed. External tools (e.g. the slicc-handoff helper) post here
+  // so a handoff reaches the cone regardless of which browser profile the
+  // user is currently driving.
+  app.post('/api/handoff', (req, res) => {
+    const payload = req.body as {
+      sliccHeader?: unknown;
+      url?: unknown;
+      title?: unknown;
+    };
+    if (typeof payload?.sliccHeader !== 'string' || payload.sliccHeader.length === 0) {
+      res.status(400).json({ error: 'sliccHeader is required (non-empty string)' });
+      return;
+    }
+    broadcastLickEvent({
+      type: 'navigate_event',
+      sliccHeader: payload.sliccHeader,
+      url:
+        typeof payload.url === 'string' && payload.url.length > 0 ? payload.url : 'about:handoff',
+      title: typeof payload.title === 'string' ? payload.title : undefined,
+      timestamp: new Date().toISOString(),
+    });
+    res.json({ ok: true });
+  });
+
   // Secret management API — direct .env file access (no browser needed)
   const secretStore = new EnvSecretStore(RUNTIME_FLAGS.envFile ?? undefined);
 

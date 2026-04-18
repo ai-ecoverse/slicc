@@ -14,6 +14,21 @@ SLICC accepts a handoff from another agent (or any external system) through the 
 3. The cone shows a yes/no approval card quoting the origin URL and the header value.
 4. On accept, the cone dispatches by verb prefix.
 
+### Profile-independent fallback
+
+The CDP watcher only sees tabs in the Chrome instance SLICC launched (an isolated profile keyed by port); the extension's `webRequest` listener only fires inside the profile where it is installed. Tools running outside that profile — most CLI helpers, other coding agents, Claude Code — would miss the navigation entirely.
+
+To bridge this, the node-server exposes a POST endpoint:
+
+```http
+POST http://localhost:${SLICC_PORT ?? 5710}/api/handoff
+Content-Type: application/json
+
+{ "sliccHeader": "handoff:<instruction>", "url": "<origin>", "title": "<optional>" }
+```
+
+It broadcasts a `navigate_event` over the lick WebSocket, which the webapp turns into the same navigate lick the CDP watcher would emit. External tools should post here alongside (or instead of) opening the URL.
+
 ## Verb prefixes
 
 - `handoff:<free-form instruction>` — cone fetches the page body (`curl <url>`) and acts on whatever it finds there alongside the instruction.

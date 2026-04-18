@@ -87,6 +87,28 @@ async function main() {
   const url = `${BASE_URL}?msg=${encodeURIComponent(instruction)}`;
 
   process.stdout.write(`${url}\n`);
+
+  // Always try to notify a local SLICC node-server over localhost. This
+  // works regardless of which browser profile the user is currently
+  // driving — the CDP watcher only sees tabs in the SLICC-launched Chrome
+  // profile, and the extension's webRequest listener only fires in the
+  // profile where it is installed.
+  const port = process.env['SLICC_PORT'] ?? '5710';
+  try {
+    await fetch(`http://localhost:${port}/api/handoff`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sliccHeader: instruction,
+        url,
+        title: 'SLICC handoff',
+      }),
+      signal: AbortSignal.timeout(2000),
+    });
+  } catch {
+    // No local SLICC server running — fall through to --open.
+  }
+
   if (openOnSuccess) await openUrl(url);
 }
 
