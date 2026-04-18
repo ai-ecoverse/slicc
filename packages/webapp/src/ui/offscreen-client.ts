@@ -25,6 +25,7 @@ import type {
   HandoffPendingListMsg,
   PendingHandoff,
 } from '../../../chrome-extension/src/messages.js';
+import { SessionStore } from './session-store.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('offscreen-client');
@@ -48,6 +49,15 @@ export class OffscreenClient {
   private ready = false;
   private stateRetryTimer: ReturnType<typeof setInterval> | null = null;
   private localFs: VirtualFS | null = null;
+  /**
+   * Lazily-initialized view into the shared UI SessionStore
+   * (`browser-coding-agent` IndexedDB — same DB the offscreen bridge
+   * persists to). Used by `reconcileForScoopSelection()` to seed
+   * `currentMessageId` with the id of an in-progress assistant message
+   * after the user selects a running bridge scoop mid-turn.
+   */
+  private sessionStore: SessionStore | null = null;
+  private sessionStoreInit: Promise<void> | null = null;
 
   /** Currently selected scoop JID (set by the UI). */
   selectedScoopJid: string | null = null;
@@ -60,6 +70,88 @@ export class OffscreenClient {
   /** Set a local VFS instance (same IndexedDB as offscreen) for memory panel / file browser. */
   setLocalFS(fs: VirtualFS): void {
     this.localFs = fs;
+  }
+
+  /**
+   * Reconcile per-scoop state with the shared UI SessionStore on selection.
+   *
+   * When the user selects a running bridge scoop mid-turn, the chat panel
+   * re-hydrates its messages from the shared `browser-coding-agent`
+   * IndexedDB (which the offscreen bridge persists to on every delta /
+   * tool call). The panel then renders those messages with bridge-owned
+   * IDs. For subsequent `text_delta` / `tool_end` / `response_done`
+   * events to mutate the SAME message rather than fork a new one, this
+   * OffscreenClient instance must also know the in-progress id — which
+   * is what `handleAgentEvent()` reads from `this.currentMessageId`.
+   *
+   * This method:
+   *  - loads the session for the selected scoop (cone or scoop-folder),
+   *  - finds the trailing assistant message that is still streaming,
+   *  - seeds `currentMessageId[scoopJid]` with its id (if any),
+   *  - otherwise clears any stale entry.
+   *
+   * Safe to call repeatedly; tolerant of missing sessions and SessionStore
+   * init errors (fire-and-forget semantics mirror the bridge's persist
+   * policy — see `offscreen-bridge.persistScoop`).
+   */
+  async reconcileForScoopSelection(scoop: RegisteredScoop): Promise<void> {
+    try {
+      const store = await this.ensureSessionStore();
+      if (!store) {
+        this.currentMessageId.delete(scoop.jid);
+        return;
+      }
+      const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+      const session = await store.load(sessionId);
+      const messages = session?.messages ?? [];
+
+      // Walk backwards to find the most recent streaming assistant message.
+      // We stop at the first non-streaming assistant message (indicates a
+      // completed turn sits after any prior in-progress message) so we
+      // don't resurrect stale ids from earlier turns.
+      let seedId: string | null = null;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m.role !== 'assistant') continue;
+        if (m.isStreaming) {
+          seedId = m.id;
+        }
+        break;
+      }
+
+      if (seedId) {
+        this.currentMessageId.set(scoop.jid, seedId);
+      } else {
+        this.currentMessageId.delete(scoop.jid);
+      }
+    } catch (err) {
+      // Non-fatal — leave currentMessageId untouched so we don't amplify
+      // the timing bug if SessionStore is transiently unavailable.
+      log.warn('reconcileForScoopSelection failed', {
+        scoopJid: scoop.jid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private async ensureSessionStore(): Promise<SessionStore | null> {
+    if (this.sessionStore) return this.sessionStore;
+    if (!this.sessionStoreInit) {
+      const store = new SessionStore();
+      this.sessionStoreInit = store
+        .init()
+        .then(() => {
+          this.sessionStore = store;
+        })
+        .catch((err) => {
+          log.warn('SessionStore init failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          this.sessionStore = null;
+        });
+    }
+    await this.sessionStoreInit;
+    return this.sessionStore;
   }
 
   // -------------------------------------------------------------------------

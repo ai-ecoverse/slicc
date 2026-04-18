@@ -2,6 +2,7 @@
  * Tests for OffscreenClient — side panel's interface to the offscreen agent engine.
  */
 
+import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock chrome.runtime
@@ -30,6 +31,9 @@ const mockChrome = {
 (globalThis as any).chrome = mockChrome;
 
 const { OffscreenClient } = await import('../../src/ui/offscreen-client.js');
+const { SessionStore } = await import('../../src/ui/session-store.js');
+import type { ChatMessage } from '../../src/ui/types.js';
+import type { RegisteredScoop } from '../../src/scoops/types.js';
 
 function simulateMessage(source: string, payload: unknown): void {
   for (const listener of messageListeners) {
@@ -381,5 +385,161 @@ describe('OffscreenClient', () => {
     expect((events[1] as any).toolName).toBe('bash');
     expect((events[2] as any).type).toBe('tool_result');
     expect((events[2] as any).result).toBe('file1.txt\nfile2.txt');
+  });
+
+  describe('reconcileForScoopSelection', () => {
+    /** Helper: seed the shared UI SessionStore with messages for a scoop folder. */
+    async function seedSession(folder: string, messages: ChatMessage[]): Promise<void> {
+      const store = new SessionStore();
+      await store.init();
+      await store.saveMessages(`session-${folder}`, messages);
+    }
+
+    const makeScoop = (jid: string, folder: string): RegisteredScoop => ({
+      jid,
+      name: folder,
+      folder,
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: folder,
+      addedAt: '',
+    });
+
+    it('seeds currentMessageId from last in-progress assistant message on selection', async () => {
+      const scoopJid = 'agent_uid1';
+      const folder = 'agent-uid1';
+
+      // Arrange: the bridge persisted a partial assistant message before click.
+      await seedSession(folder, [
+        { id: 'msg-user-1', role: 'user', content: 'hi', timestamp: 1000 },
+        {
+          id: 'msg-1',
+          role: 'assistant',
+          content: 'hello',
+          timestamp: 1001,
+          isStreaming: true,
+          toolCalls: [],
+        },
+      ]);
+
+      // Act: select the scoop (reconciles offscreen-client state with session).
+      await client.reconcileForScoopSelection(makeScoop(scoopJid, folder));
+
+      // Assert: internal currentMessageId now points at the in-progress message.
+      client.selectedScoopJid = scoopJid;
+      const handle = client.createAgentHandle();
+      const events: unknown[] = [];
+      handle.onEvent((e) => events.push(e));
+
+      simulateMessage('offscreen', {
+        type: 'agent-event',
+        scoopJid,
+        eventType: 'text_delta',
+        text: ' world',
+      });
+
+      // With the seeded id, we should NOT see a new message_start — deltas
+      // continue the hydrated message. Exactly one content_delta with the
+      // seeded messageId should be emitted.
+      expect(events.length).toBe(1);
+      expect((events[0] as any).type).toBe('content_delta');
+      expect((events[0] as any).messageId).toBe('msg-1');
+      expect((events[0] as any).text).toBe(' world');
+    });
+
+    it('clears currentMessageId when the loaded session has no in-progress assistant', async () => {
+      const scoopJid = 'agent_uid2';
+      const folder = 'agent-uid2';
+
+      // Arrange: seed a completed turn (no in-progress assistant).
+      await seedSession(folder, [
+        { id: 'msg-user-1', role: 'user', content: 'hi', timestamp: 1000 },
+        {
+          id: 'msg-final',
+          role: 'assistant',
+          content: 'all done',
+          timestamp: 1002,
+          isStreaming: false,
+        },
+      ]);
+
+      // Pretend a stale currentMessageId is still around from a previous selection.
+      (client as any).currentMessageId.set(scoopJid, 'stale-id-1');
+
+      await client.reconcileForScoopSelection(makeScoop(scoopJid, folder));
+
+      // The stale id should be cleared; next text_delta creates a fresh message.
+      expect((client as any).currentMessageId.has(scoopJid)).toBe(false);
+
+      client.selectedScoopJid = scoopJid;
+      const handle = client.createAgentHandle();
+      const events: unknown[] = [];
+      handle.onEvent((e) => events.push(e));
+
+      simulateMessage('offscreen', {
+        type: 'agent-event',
+        scoopJid,
+        eventType: 'text_delta',
+        text: 'next turn',
+      });
+
+      expect(events.length).toBe(2);
+      expect((events[0] as any).type).toBe('message_start');
+      expect((events[0] as any).messageId).not.toBe('stale-id-1');
+      expect((events[1] as any).type).toBe('content_delta');
+    });
+
+    it('response_done after seeded selection mutates the existing message and clears id', async () => {
+      const scoopJid = 'agent_uid3';
+      const folder = 'agent-uid3';
+
+      await seedSession(folder, [
+        {
+          id: 'msg-seed',
+          role: 'assistant',
+          content: 'hello',
+          timestamp: 1001,
+          isStreaming: true,
+          toolCalls: [],
+        },
+      ]);
+
+      await client.reconcileForScoopSelection(makeScoop(scoopJid, folder));
+
+      client.selectedScoopJid = scoopJid;
+      const handle = client.createAgentHandle();
+      const events: unknown[] = [];
+      handle.onEvent((e) => events.push(e));
+
+      // Post-click response_done should reference the seeded id.
+      simulateMessage('offscreen', {
+        type: 'agent-event',
+        scoopJid,
+        eventType: 'response_done',
+      });
+
+      expect(events.length).toBe(1);
+      expect((events[0] as any).type).toBe('content_done');
+      expect((events[0] as any).messageId).toBe('msg-seed');
+
+      // After response_done the id is cleared, so a following text_delta
+      // would fork a new message (next turn) — not the old one.
+      expect((client as any).currentMessageId.has(scoopJid)).toBe(false);
+    });
+
+    it('is a no-op (no throw) when no session exists yet', async () => {
+      const scoopJid = 'agent_uid4';
+      const folder = 'agent-uid4-never-persisted';
+
+      // Stale entry should be cleared even when there's no loadable session.
+      (client as any).currentMessageId.set(scoopJid, 'stale-id');
+
+      await expect(
+        client.reconcileForScoopSelection(makeScoop(scoopJid, folder))
+      ).resolves.not.toThrow();
+
+      expect((client as any).currentMessageId.has(scoopJid)).toBe(false);
+    });
   });
 });

@@ -387,6 +387,11 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     layout.setScoopSwitcherSelected?.(scoop.jid);
     layout.panels.scoops.setSelectedJid(scoop.jid);
 
+    // Seed OffscreenClient.currentMessageId from the persisted session so a
+    // running bridge scoop's post-click `text_delta` events continue the
+    // in-progress assistant message rather than forking a new one.
+    await client.reconcileForScoopSelection(scoop);
+
     // switchToContext loads messages from the shared browser-coding-agent IndexedDB
     // (written by the offscreen bridge). No buffer reconciliation needed.
     const contextId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
