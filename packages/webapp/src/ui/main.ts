@@ -1805,10 +1805,18 @@ async function main(): Promise<void> {
     orchestrator.updateModel();
   };
 
+  // Track which scoops have been selected at least once this runtime.
+  // The first select per scoop must load from SessionStore — the in-memory
+  // buffer may contain boot-time lick events (e.g. mount-recovery from PR #325)
+  // pushed before the UI rendered, and loadMessages(buffer) would wipe the
+  // restored history by replacing this.messages with just the lick.
+  const selectedOnceThisRuntime = new Set<string>();
+
   // Wire clear chat to also clear orchestrator messages + buffers
   layout.onClearChat = async () => {
     await orchestrator.clearAllMessages();
     scoopMessageBuffers.clear();
+    selectedOnceThisRuntime.clear();
   };
 
   layout.onClearFilesystem = async () => {
@@ -1829,12 +1837,14 @@ async function main(): Promise<void> {
     // falling back to SessionStore, then orchestrator DB.
     const contextId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
     const buffer = scoopMessageBuffers.get(scoop.jid);
+    const isFirstSelect = !selectedOnceThisRuntime.has(scoop.jid);
 
     // Pass scoop name for non-cone contexts
     const scoopName = scoop.isCone ? undefined : scoop.name;
 
-    if (buffer && buffer.length > 0) {
-      // Load from in-memory buffer (has tool calls captured during this session)
+    if (!isFirstSelect && buffer && buffer.length > 0) {
+      // Mid-session switch: the buffer carries transient detail (screenshots)
+      // not in SessionStore, so prefer it over the persisted view.
       await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
       layout.panels.chat.loadMessages(buffer);
     } else {
@@ -1891,6 +1901,8 @@ async function main(): Promise<void> {
     if (scoop.isCone && orchestrator.isProcessing(scoop.jid)) {
       layout.panels.chat.setProcessing(true);
     }
+
+    selectedOnceThisRuntime.add(scoop.jid);
   };
 
   layout.onScoopSelect = handleScoopSelect;
