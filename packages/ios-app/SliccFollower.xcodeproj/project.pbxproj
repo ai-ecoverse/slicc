@@ -1,0 +1,515 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		02019B8CFDC4B36D610933B8 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 434BBAD25E91BD0B7D626821 /* AppState.swift */; };
+		07D3C6559F4B00E26067D5C4 /* chat.css in Resources */ = {isa = PBXBuildFile; fileRef = E0052066D742EEE8123EDE79 /* chat.css */; };
+		0CAAEE94D02D4006193FA4BB /* InputBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */; };
+		0E6ABE1BE4750990FE352E48 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B26DA62FD50A37F19C808293 /* QRScannerView.swift */; };
+		238295F68E3669C0968C9934 /* WebRTCManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9AF8A8A50FCC9C2DBECA0CF /* WebRTCManager.swift */; };
+		2401C7FE702795E1066A7C9F /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB646EF0D0006D1A43F527D /* ChatMessage.swift */; };
+		3A9E122F6A6C4C0F6258C5C6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A069AA812629AC5FE70AC9 /* SettingsView.swift */; };
+		3EDEBD047CEC3F24BC3ED785 /* SliccFollowerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7D4AD0E32B059DB9EABFF3E /* SliccFollowerApp.swift */; };
+		44FAA1B19D8705A9AAD4D458 /* chat.html in Resources */ = {isa = PBXBuildFile; fileRef = A47A1376F89AB8ECBC3F688B /* chat.html */; };
+		4874F8858460397F336DE469 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = CEF104FB1C3EDA0B98BC5FFF /* WebRTC */; };
+		487756D13ED6B5D4FB9FF6A0 /* TrayFollowerConnector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93EE217FAA3F9F7DD3A0B07F /* TrayFollowerConnector.swift */; };
+		4BA93B0DC88934132A09F1D6 /* FollowerSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82060520ADE3CE44E0D0FAE0 /* FollowerSyncManager.swift */; };
+		532EBF4FC79CF40ABCD366F0 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4E99369A8A6B1A9B8EBE996E /* WebKit.framework */; };
+		5A678420A08BBB43297E1D8D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F0583BDF50B1A1B9CE68AE67 /* Assets.xcassets */; };
+		5DBC389110F337A40762C4E1 /* MessageListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E727142147B0FB449F418D1 /* MessageListView.swift */; };
+		73CC65978EB7E4B1818441ED /* MessageWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 293EF6D00AE2A86081777881 /* MessageWebView.swift */; };
+		73CD8FDB68D950291A923BCD /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B186EDFDE184DC8B3215C4 /* ChatView.swift */; };
+		7AFB535E78304FCE5CE7058A /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 523A4A068180D7EE98435885 /* MarkdownText.swift */; };
+		7BEE859F6C68FEAFD63D1FBB /* SyncProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618555E73F15FDB4DB0CAA6F /* SyncProtocol.swift */; };
+		8A4DC8067E31936EA9C475BC /* TrayTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EDB6F858D918DBBE06D4702 /* TrayTypes.swift */; };
+		977007CC44BE2B53361DF256 /* Keepalive.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDA931BF1BE121985E2FB3EE /* Keepalive.swift */; };
+		A50239DCBBAD6235AC7C296A /* MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF78C09597C5D63A373EB126 /* MessageBubble.swift */; };
+		B4A19D759C5C4CDDFFA1FC35 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F8BFCDA8C3F71C0A853D573 /* ContentView.swift */; };
+		C43F5710585B9C800CAAA0A2 /* ConnectionStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */; };
+		D2A85DC611A43443DEC75989 /* TraySignaling.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E70132BA0E6C4BC99D8CB73 /* TraySignaling.swift */; };
+		E9A8037C43172F9E94827567 /* chat.js in Resources */ = {isa = PBXBuildFile; fileRef = 80B1AD93046CF0476B3BBC39 /* chat.js */; };
+		FBCB39B163E63ED4E5CA70C6 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B4C27643E1CF51B1F1B38003 /* AVFoundation.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		11B186EDFDE184DC8B3215C4 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		1F8BFCDA8C3F71C0A853D573 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		293EF6D00AE2A86081777881 /* MessageWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageWebView.swift; sourceTree = "<group>"; };
+		2EDB6F858D918DBBE06D4702 /* TrayTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayTypes.swift; sourceTree = "<group>"; };
+		434BBAD25E91BD0B7D626821 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		4E70132BA0E6C4BC99D8CB73 /* TraySignaling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraySignaling.swift; sourceTree = "<group>"; };
+		4E99369A8A6B1A9B8EBE996E /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		523A4A068180D7EE98435885 /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
+		618555E73F15FDB4DB0CAA6F /* SyncProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncProtocol.swift; sourceTree = "<group>"; };
+		7E727142147B0FB449F418D1 /* MessageListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageListView.swift; sourceTree = "<group>"; };
+		80B1AD93046CF0476B3BBC39 /* chat.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = chat.js; sourceTree = "<group>"; };
+		82060520ADE3CE44E0D0FAE0 /* FollowerSyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowerSyncManager.swift; sourceTree = "<group>"; };
+		93EE217FAA3F9F7DD3A0B07F /* TrayFollowerConnector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayFollowerConnector.swift; sourceTree = "<group>"; };
+		940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusView.swift; sourceTree = "<group>"; };
+		A47A1376F89AB8ECBC3F688B /* chat.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = chat.html; sourceTree = "<group>"; };
+		AF78C09597C5D63A373EB126 /* MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubble.swift; sourceTree = "<group>"; };
+		B26DA62FD50A37F19C808293 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
+		B4C27643E1CF51B1F1B38003 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		BBB646EF0D0006D1A43F527D /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
+		BDA931BF1BE121985E2FB3EE /* Keepalive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keepalive.swift; sourceTree = "<group>"; };
+		C00DD8A5F90DA65983AA6601 /* SliccFollower.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SliccFollower.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C7D4AD0E32B059DB9EABFF3E /* SliccFollowerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SliccFollowerApp.swift; sourceTree = "<group>"; };
+		C9AF8A8A50FCC9C2DBECA0CF /* WebRTCManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCManager.swift; sourceTree = "<group>"; };
+		CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputBar.swift; sourceTree = "<group>"; };
+		E0052066D742EEE8123EDE79 /* chat.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = chat.css; sourceTree = "<group>"; };
+		F0583BDF50B1A1B9CE68AE67 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F0A069AA812629AC5FE70AC9 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		5B55828FCBC44084D22E9080 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4874F8858460397F336DE469 /* WebRTC in Frameworks */,
+				532EBF4FC79CF40ABCD366F0 /* WebKit.framework in Frameworks */,
+				FBCB39B163E63ED4E5CA70C6 /* AVFoundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		465A70583C8607C07D58E04D /* App */ = {
+			isa = PBXGroup;
+			children = (
+				434BBAD25E91BD0B7D626821 /* AppState.swift */,
+				C7D4AD0E32B059DB9EABFF3E /* SliccFollowerApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		4F9716065FA89F76CAF30D9E /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C00DD8A5F90DA65983AA6601 /* SliccFollower.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		51886095A534C38E3C7A30E7 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				BBB646EF0D0006D1A43F527D /* ChatMessage.swift */,
+				618555E73F15FDB4DB0CAA6F /* SyncProtocol.swift */,
+				2EDB6F858D918DBBE06D4702 /* TrayTypes.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		645B35912FE46A12B4225E91 = {
+			isa = PBXGroup;
+			children = (
+				BB5014359700AC04F578180A /* SliccFollower */,
+				B2AAEACBF84A968A5C6054DD /* Frameworks */,
+				4F9716065FA89F76CAF30D9E /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		8004F77F534D7D3B9F54E8C3 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				11B186EDFDE184DC8B3215C4 /* ChatView.swift */,
+				940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */,
+				1F8BFCDA8C3F71C0A853D573 /* ContentView.swift */,
+				CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */,
+				523A4A068180D7EE98435885 /* MarkdownText.swift */,
+				AF78C09597C5D63A373EB126 /* MessageBubble.swift */,
+				7E727142147B0FB449F418D1 /* MessageListView.swift */,
+				293EF6D00AE2A86081777881 /* MessageWebView.swift */,
+				B26DA62FD50A37F19C808293 /* QRScannerView.swift */,
+				F0A069AA812629AC5FE70AC9 /* SettingsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		80119D42659B50BB2CDB15EA /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				93EE217FAA3F9F7DD3A0B07F /* TrayFollowerConnector.swift */,
+				4E70132BA0E6C4BC99D8CB73 /* TraySignaling.swift */,
+				C9AF8A8A50FCC9C2DBECA0CF /* WebRTCManager.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		9CFF76BF3998C901E0323030 /* Sync */ = {
+			isa = PBXGroup;
+			children = (
+				82060520ADE3CE44E0D0FAE0 /* FollowerSyncManager.swift */,
+				BDA931BF1BE121985E2FB3EE /* Keepalive.swift */,
+			);
+			path = Sync;
+			sourceTree = "<group>";
+		};
+		B2AAEACBF84A968A5C6054DD /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B4C27643E1CF51B1F1B38003 /* AVFoundation.framework */,
+				4E99369A8A6B1A9B8EBE996E /* WebKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		BB5014359700AC04F578180A /* SliccFollower */ = {
+			isa = PBXGroup;
+			children = (
+				465A70583C8607C07D58E04D /* App */,
+				51886095A534C38E3C7A30E7 /* Models */,
+				80119D42659B50BB2CDB15EA /* Networking */,
+				D21C97524CF4DBC5E515AA40 /* Resources */,
+				9CFF76BF3998C901E0323030 /* Sync */,
+				8004F77F534D7D3B9F54E8C3 /* Views */,
+				BB5EEDF34391D0512442CFAE /* WebView */,
+			);
+			path = SliccFollower;
+			sourceTree = "<group>";
+		};
+		BB5EEDF34391D0512442CFAE /* WebView */ = {
+			isa = PBXGroup;
+			children = (
+				E0052066D742EEE8123EDE79 /* chat.css */,
+				A47A1376F89AB8ECBC3F688B /* chat.html */,
+				80B1AD93046CF0476B3BBC39 /* chat.js */,
+			);
+			path = WebView;
+			sourceTree = "<group>";
+		};
+		D21C97524CF4DBC5E515AA40 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				F0583BDF50B1A1B9CE68AE67 /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		DF5C349429D85D6ADB077CD0 /* SliccFollower */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5BB123793342DC590D40B995 /* Build configuration list for PBXNativeTarget "SliccFollower" */;
+			buildPhases = (
+				453D32FDE3BC3DC23025768F /* Sources */,
+				0A046FDD1D95235866F8CCD1 /* Resources */,
+				5B55828FCBC44084D22E9080 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SliccFollower;
+			packageProductDependencies = (
+				CEF104FB1C3EDA0B98BC5FFF /* WebRTC */,
+			);
+			productName = SliccFollower;
+			productReference = C00DD8A5F90DA65983AA6601 /* SliccFollower.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		54B6C2249B6DB4AE685DD53E /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 72096B669C8B76EFAEF1AC1F /* Build configuration list for PBXProject "SliccFollower" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 645B35912FE46A12B4225E91;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				FFE71351C061C8F247B95AFA /* XCRemoteSwiftPackageReference "WebRTC" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 4F9716065FA89F76CAF30D9E /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				DF5C349429D85D6ADB077CD0 /* SliccFollower */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		0A046FDD1D95235866F8CCD1 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5A678420A08BBB43297E1D8D /* Assets.xcassets in Resources */,
+				07D3C6559F4B00E26067D5C4 /* chat.css in Resources */,
+				44FAA1B19D8705A9AAD4D458 /* chat.html in Resources */,
+				E9A8037C43172F9E94827567 /* chat.js in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		453D32FDE3BC3DC23025768F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				02019B8CFDC4B36D610933B8 /* AppState.swift in Sources */,
+				2401C7FE702795E1066A7C9F /* ChatMessage.swift in Sources */,
+				73CD8FDB68D950291A923BCD /* ChatView.swift in Sources */,
+				C43F5710585B9C800CAAA0A2 /* ConnectionStatusView.swift in Sources */,
+				B4A19D759C5C4CDDFFA1FC35 /* ContentView.swift in Sources */,
+				4BA93B0DC88934132A09F1D6 /* FollowerSyncManager.swift in Sources */,
+				0CAAEE94D02D4006193FA4BB /* InputBar.swift in Sources */,
+				977007CC44BE2B53361DF256 /* Keepalive.swift in Sources */,
+				7AFB535E78304FCE5CE7058A /* MarkdownText.swift in Sources */,
+				A50239DCBBAD6235AC7C296A /* MessageBubble.swift in Sources */,
+				5DBC389110F337A40762C4E1 /* MessageListView.swift in Sources */,
+				73CC65978EB7E4B1818441ED /* MessageWebView.swift in Sources */,
+				0E6ABE1BE4750990FE352E48 /* QRScannerView.swift in Sources */,
+				3A9E122F6A6C4C0F6258C5C6 /* SettingsView.swift in Sources */,
+				3EDEBD047CEC3F24BC3ED785 /* SliccFollowerApp.swift in Sources */,
+				7BEE859F6C68FEAFD63D1FBB /* SyncProtocol.swift in Sources */,
+				487756D13ED6B5D4FB9FF6A0 /* TrayFollowerConnector.swift in Sources */,
+				D2A85DC611A43443DEC75989 /* TraySignaling.swift in Sources */,
+				8A4DC8067E31936EA9C475BC /* TrayTypes.swift in Sources */,
+				238295F68E3669C0968C9934 /* WebRTCManager.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		06C3FEC686A41AB83DA91216 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Scan QR codes to connect to a tray";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.slicc.follower;
+				PRODUCT_NAME = SliccFollower;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		898FEDDFE2F2D6618A799EE4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+		B9FA03858931CADEB7F9629F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Scan QR codes to connect to a tray";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.slicc.follower;
+				PRODUCT_NAME = SliccFollower;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C16A65DFB8C62E6F36D09347 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		5BB123793342DC590D40B995 /* Build configuration list for PBXNativeTarget "SliccFollower" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B9FA03858931CADEB7F9629F /* Debug */,
+				06C3FEC686A41AB83DA91216 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		72096B669C8B76EFAEF1AC1F /* Build configuration list for PBXProject "SliccFollower" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C16A65DFB8C62E6F36D09347 /* Debug */,
+				898FEDDFE2F2D6618A799EE4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		FFE71351C061C8F247B95AFA /* XCRemoteSwiftPackageReference "WebRTC" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stasel/WebRTC.git";
+			requirement = {
+				kind = exactVersion;
+				version = 125.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		CEF104FB1C3EDA0B98BC5FFF /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FFE71351C061C8F247B95AFA /* XCRemoteSwiftPackageReference "WebRTC" */;
+			productName = WebRTC;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 54B6C2249B6DB4AE685DD53E /* Project object */;
+}
