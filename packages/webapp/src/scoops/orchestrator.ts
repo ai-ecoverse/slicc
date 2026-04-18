@@ -231,20 +231,23 @@ export class Orchestrator {
     };
   }
 
-  /** Register a new scoop. Initialization is non-blocking — the scoop
-   *  starts as 'initializing' and becomes 'ready' in the background.
-   *  `sendPrompt` already handles this by waiting for 'ready' status. */
+  /** Register a new scoop and fully initialize its context before returning.
+   *
+   *  Awaiting createScoopTab here (rather than firing-and-forgetting it) is
+   *  what prevents a race with the caller's immediate follow-up sendPrompt.
+   *  `scoop_scoop` with an initial prompt fires `onFeedScoop` the moment this
+   *  resolves: if the tab has not yet been registered in `this.contexts` /
+   *  `this.tabs`, sendPrompt calls createScoopTab itself, and both calls race
+   *  past the `this.contexts.has(jid)` early-return guard (the guard only
+   *  catches duplicates once contexts.set has run, which happens partway
+   *  through the function). The losing context ends up orphaned and the
+   *  initial prompt is dropped. See issue #440. */
   async registerScoop(scoop: RegisteredScoop): Promise<void> {
     await db.saveScoop(scoop);
     this.scoops.set(scoop.jid, scoop);
     this.messageQueues.set(scoop.jid, []);
     log.info('Scoop registered', { jid: scoop.jid, name: scoop.name });
-
-    // Fire-and-forget: init runs in background. sendPrompt waits if needed.
-    this.createScoopTab(scoop.jid).catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error('Scoop init failed', { jid: scoop.jid, error: msg });
-    });
+    await this.createScoopTab(scoop.jid);
   }
 
   /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */

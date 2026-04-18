@@ -214,14 +214,17 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
 
             log.info('Scoop created', { name, folder });
 
-            // If prompt provided, feed immediately (fire-and-forget)
+            // If prompt provided, feed immediately (fire-and-forget). The
+            // scoop's context is already initialized by the time
+            // onScoopScoop resolves (orchestrator.registerScoop awaits
+            // createScoopTab), so the prompt won't race init.
             if (taskPrompt && onFeedScoop) {
               onFeedScoop(newScoop.jid, taskPrompt).catch((err) => {
                 const msg = err instanceof Error ? err.message : String(err);
                 log.error('Auto-feed failed', { name, error: msg });
               });
               return {
-                content: `Scoop "${name}" created as "${folder}" and task sent. It will start working as soon as initialization completes.`,
+                content: `Scoop "${name}" created as "${folder}" and task sent. It is now working on it.`,
               };
             }
 
