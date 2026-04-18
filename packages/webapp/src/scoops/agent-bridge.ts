@@ -301,6 +301,20 @@ export function createAgentBridge(
       folder,
       {
         onError: (errMsg) => {
+          // `ScoopContext.prompt()` emits 'Agent not initialized' as a
+          // deterministic follow-up to ANY init failure (agent === null at
+          // scoop-context.ts:305-311). It's always less specific than the
+          // earlier init-time error captured via this same callback, so if
+          // we already have a scoopError, ignore this generic message.
+          // Real-runtime VAL-LIVE-010 evidence: both init() and prompt()
+          // swallow via callback and return normally, so the bridge never
+          // enters the catch branch — last-wins semantics would otherwise
+          // overwrite the specific init-time message with this generic
+          // follow-up.
+          if (errMsg === 'Agent not initialized' && scoopError !== null) {
+            log.warn('scoop error suppressed (generic follow-up)', { jid });
+            return;
+          }
           scoopError = errMsg;
           log.warn('scoop error', { jid, errMsg });
         },

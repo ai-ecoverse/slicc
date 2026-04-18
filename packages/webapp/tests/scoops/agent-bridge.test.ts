@@ -1616,6 +1616,54 @@ describe('createAgentBridge', () => {
       expect(result.exitCode).toBe(1);
       expect(result.finalText).toBe('Network error: ECONNRESET');
     });
+
+    it('suppresses generic "Agent not initialized" onError follow-up when a prior scoopError was captured (real-runtime VAL-LIVE-010 shape)', async () => {
+      // Real-runtime shape observed in VAL-LIVE-010 (val-live-010.json):
+      //   - ScoopContext.init() catches its own init failure (no API key)
+      //     and calls callbacks.onError('Failed to initialize: No API key
+      //     configured for provider "anthropic"'), then returns NORMALLY
+      //     (does NOT throw).
+      //   - Because init swallowed, the bridge proceeds to ctx.prompt().
+      //   - ScoopContext.prompt() at scoop-context.ts:305-311 observes
+      //     `this.agent === null` and fires
+      //     callbacks.onError('Agent not initialized') — then RETURNS
+      //     NORMALLY (also does NOT throw).
+      //   - The bridge never enters its catch branch; instead, it reaches
+      //     the post-prompt promotion path. Under last-wins onError
+      //     semantics, `scoopError` would be 'Agent not initialized' —
+      //     erasing the specific init-time error that the user needs.
+      //
+      // The fix suppresses the literal 'Agent not initialized' follow-up
+      // when a prior scoopError has already been captured, so the user-
+      // visible finalText stays the specific init-time message.
+      const bridge = createAgentBridge(orch, vfs, null, {
+        createContext: (args) => ({
+          async init() {
+            // Match ScoopContext.init() — emit via callback, do NOT throw.
+            args.callbacks.onError(
+              'Failed to initialize: No API key configured for provider "anthropic"'
+            );
+          },
+          async prompt() {
+            // Match ScoopContext.prompt() when agent === null — emit via
+            // callback, do NOT throw.
+            args.callbacks.onError('Agent not initialized');
+          },
+          dispose() {},
+          getAgentMessages() {
+            return [];
+          },
+        }),
+        generateUid: () => 'real-runtime-init-fail',
+        getInheritedModelId: () => 'claude-opus-4-6',
+      });
+
+      const result = await bridge.spawn({ cwd: '/home', allowedCommands: ['*'], prompt: 'p' });
+      expect(result.exitCode).toBe(1);
+      expect(result.finalText).toBe(
+        'Failed to initialize: No API key configured for provider "anthropic"'
+      );
+    });
   });
 
   // ── Sanity: FsError is what RestrictedFS throws ───────────────────
