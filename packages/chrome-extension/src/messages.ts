@@ -35,10 +35,15 @@ export interface UserMessageMsg {
   messageId: string;
 }
 
-export interface ScoopCreateMsg {
-  type: 'scoop-create';
+/**
+ * Panel → offscreen: bootstrap the cone. Sent exactly once per side-panel
+ * session when no cone exists on disk yet. Non-cone scoops are created by
+ * the agent's `scoop_scoop` tool inside the offscreen orchestrator, not
+ * through this message.
+ */
+export interface ConeCreateMsg {
+  type: 'cone-create';
   name: string;
-  isCone: boolean;
 }
 
 export interface ScoopFeedMsg {
@@ -130,7 +135,7 @@ export interface HandoffDismissMsg {
 
 export type PanelToOffscreenMessage =
   | UserMessageMsg
-  | ScoopCreateMsg
+  | ConeCreateMsg
   | ScoopFeedMsg
   | ScoopDropMsg
   | AbortMsg

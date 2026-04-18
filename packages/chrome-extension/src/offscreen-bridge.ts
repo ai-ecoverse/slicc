@@ -152,7 +152,7 @@ export class OffscreenBridge {
 
         // Also emit the full scoop list so the panel can update its switcher.
         // This catches agent-created scoops (via scoop_scoop tool) that bypass
-        // the panel's scoop-create → scoop-created flow.
+        // the panel's cone-create → scoop-created flow.
         bridge.emitScoopList();
       },
 
@@ -390,21 +390,20 @@ export class OffscreenBridge {
         break;
       }
 
-      case 'scoop-create': {
-        const folder =
-          msg.name
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, '-')
-            .replace(/-+$/, '') + (msg.isCone ? '' : '-scoop');
+      case 'cone-create': {
+        // This path is cone-only. Non-cone scoops are created inside the
+        // offscreen orchestrator by the agent's `scoop_scoop` tool, which is
+        // where their path-config defaults (visiblePaths / writablePaths) get
+        // injected. Building a non-cone scoop here would bypass that layer
+        // and yield a sandbox with no writable paths — see review of #436.
         const scoop: RegisteredScoop = {
-          jid: msg.isCone ? `cone_${Date.now()}` : `scoop_${folder}_${Date.now()}`,
+          jid: `cone_${Date.now()}`,
           name: msg.name,
-          folder,
-          isCone: msg.isCone,
-          type: msg.isCone ? 'cone' : 'scoop',
-          trigger: msg.isCone ? undefined : `@${folder}`,
-          requiresTrigger: !msg.isCone,
-          assistantLabel: msg.isCone ? 'sliccy' : folder,
+          folder: 'cone',
+          isCone: true,
+          type: 'cone',
+          requiresTrigger: false,
+          assistantLabel: 'sliccy',
           addedAt: new Date().toISOString(),
         };
         await this.orchestrator.registerScoop(scoop);
