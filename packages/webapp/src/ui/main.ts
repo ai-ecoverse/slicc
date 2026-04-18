@@ -1849,7 +1849,9 @@ async function main(): Promise<void> {
 
     if (!isFirstSelect && buffer && buffer.length > 0) {
       // Mid-session switch: the buffer carries transient detail (screenshots)
-      // not in SessionStore, so prefer it over the persisted view.
+      // not in SessionStore, so prefer it over the persisted view. The buffer
+      // was seeded with the canonical history on first-select, so it contains
+      // prior-runtime messages in addition to runtime-only events.
       await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
       layout.panels.chat.loadMessages(buffer);
     } else {
@@ -1867,28 +1869,10 @@ async function main(): Promise<void> {
 
           if (isLick) {
             // Lick events - show as incoming with tongue emoji
-            const chatMsg: ChatMessage = {
-              id: msg.id,
-              role: 'user',
-              content: msg.content,
-              timestamp: new Date(msg.timestamp).getTime(),
-              source: 'lick',
-              channel: msg.channel,
-            };
-            getBuffer(scoop.jid).push(chatMsg);
             layout.panels.chat.addUserMessage(msg.content);
           } else if (isDelegation) {
             // Delegation from cone - show as incoming instructions
-            const chatMsg: ChatMessage = {
-              id: msg.id,
-              role: 'user',
-              content: `**[Instructions from sliccy]**\n\n${msg.content}`,
-              timestamp: new Date(msg.timestamp).getTime(),
-              source: 'delegation',
-              channel: 'delegation',
-            };
-            getBuffer(scoop.jid).push(chatMsg);
-            layout.panels.chat.addUserMessage(chatMsg.content);
+            layout.panels.chat.addUserMessage(`**[Instructions from sliccy]**\n\n${msg.content}`);
           } else if (msg.fromAssistant) {
             // Scoop's own response
             emitToUI({ type: 'message_start', messageId: msg.id });
@@ -1898,6 +1882,33 @@ async function main(): Promise<void> {
             layout.panels.chat.addUserMessage(msg.content);
           }
         }
+      }
+
+      // Merge the canonical view with any runtime-only buffer entries.
+      //
+      // Context: the buffer accumulates orchestrator events (streamed content,
+      // tool calls, delegations, licks) regardless of whether this scoop was
+      // selected. For scoops the cone delegates to, the buffer can hold rich
+      // transient detail (including tool-call results with screenshots) that
+      // was never written to SessionStore — we don't want to drop it on the
+      // first open.
+      //
+      // At the same time, a later switch back to this scoop will take the
+      // buffer branch above and call loadMessages(buffer), which replaces
+      // this.messages wholesale. So the buffer needs to carry the full
+      // history too, not just what arrived during this runtime.
+      //
+      // Solution: rebuild the buffer as [canonical + runtime-only entries],
+      // deduped by id. If there were runtime-only entries, also surface them
+      // in the chat view now so the first open isn't missing them.
+      const canonical = layout.panels.chat.getMessages();
+      const canonicalIds = new Set(canonical.map((m) => m.id));
+      const buf = getBuffer(scoop.jid);
+      const runtimeOnly = buf.filter((m) => !canonicalIds.has(m.id));
+      buf.length = 0;
+      buf.push(...canonical, ...runtimeOnly);
+      if (runtimeOnly.length > 0) {
+        layout.panels.chat.loadMessages(buf);
       }
     }
 
