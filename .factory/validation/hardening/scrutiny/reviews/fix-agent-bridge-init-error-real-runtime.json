@@ -1,0 +1,15 @@
+{
+  "featureId": "fix-agent-bridge-init-error-real-runtime",
+  "reviewedAt": "2026-04-18T04:19:41Z",
+  "commitId": "32d3039",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass. The new suppression in packages/webapp/src/scoops/agent-bridge.ts fixes the real runtime path that round 2 identified: ScoopContext.init() surfaces the specific init error via onError, ScoopContext.prompt() then emits the generic \"Agent not initialized\" follow-up and returns normally, and the bridge now keeps that later callback from overwriting the earlier specific message before the existing post-prompt promotion/catch handling runs. The added regression test in packages/webapp/tests/scoops/agent-bridge.test.ts matches that callback order exactly (init onError + normal return, then prompt onError + normal return), while the earlier 17ff0ae tests still cover the throwing prompt path. I did not find a remaining blocker or a new real regression in the reviewed diff.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/trieloff/Developer/slicc/.yolo/droid-2/.factory/validation/hardening/scrutiny/reviews/fix-agent-bridge-preserve-specific-init-error.json",
+  "summary": "Pass. This rerun resolves the prior blocker: the fix now targets the real init-failure callback sequence instead of only the mocked prompt-throw path, and the new regression test matches the ScoopContext.init()/prompt() order that previously collapsed VAL-LIVE-010 to the generic error."
+}
