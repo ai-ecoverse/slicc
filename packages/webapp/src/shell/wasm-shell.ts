@@ -10,7 +10,7 @@ import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
-import type { BashExecResult, SecureFetch, Command } from 'just-bash';
+import type { BashExecResult, SecureFetch, Command, CommandName } from 'just-bash';
 import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { getFetchBodyBytes } from './fetch-body.js';
@@ -259,6 +259,24 @@ export interface WasmShellOptions {
   bshDiscoveryFs?: BshDiscoveryFS;
   /** Optional shared script catalog. When omitted, WasmShell creates and owns one. */
   scriptCatalog?: ScriptCatalog;
+  /**
+   * Optional command allow-list. When omitted (or when the list contains `'*'`),
+   * every built-in, custom, and `.jsh` command is available — the default. When
+   * provided, only command heads whose names appear in the list are registered
+   * on the underlying Bash instance; anything else fails at dispatch with
+   * "command not found" (exit code 127), including inside pipelines, subshells,
+   * and command substitution, because just-bash resolves every simple command
+   * through the same registry.
+   */
+  allowedCommands?: readonly string[];
+  /**
+   * Returns the JID of the scoop whose shell this is, when running inside
+   * a scoop context. Forwarded to the `agent` supplemental command so it
+   * can tell the AgentBridge which scoop is the parent (for model
+   * inheritance). Returns `undefined` for standalone / terminal-panel
+   * shells that have no scoop owner.
+   */
+  getParentJid?: () => string | undefined;
 }
 
 type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
@@ -291,6 +309,11 @@ export class WasmShell {
   private cwd: string;
   /** Set of all built-in + custom command names (for shadowing protection). */
   private builtinCommandNames: Set<string>;
+  /**
+   * Allow-list of command names. `null` means unrestricted — every command is
+   * permitted. Otherwise only names in the set may be registered or executed.
+   */
+  private readonly allowedCommands: ReadonlySet<string> | null;
   private readonly scriptCatalog: ScriptCatalog;
   private readonly ownsScriptCatalog: boolean;
   /** Maps .jsh command names to their registered script paths (for staleness detection). */
@@ -302,6 +325,10 @@ export class WasmShell {
 
   constructor(private options: WasmShellOptions) {
     this.vfsAdapter = new VfsAdapter(options.fs);
+    this.allowedCommands =
+      options.allowedCommands && !options.allowedCommands.includes('*')
+        ? new Set(options.allowedCommands)
+        : null;
     const initialCwd = options.cwd ?? '/';
     const initialEnv: Record<string, string> = {
       HOME: '/',
@@ -353,33 +380,71 @@ export class WasmShell {
       fs: options.fs,
       scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
+      getParentJid: options.getParentJid,
     });
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();
 
-    const customCommands = [
+    const allCustomCommands = [
       gitCommand,
       mountCommand,
       createSkillCommand(options.fs),
       createUpskillCommand(options.fs, fetchFn),
       ...supplementalCommands,
     ];
+    const customCommands = allCustomCommands.filter((c) => this.isCommandAllowed(c.name));
+
+    // When restricted, pass `commands:` so just-bash only registers allow-listed
+    // built-ins. When unrestricted, leave it undefined to get the full default set.
+    const allBuiltinNames = [
+      ...getCommandNames(),
+      ...getNetworkCommandNames(),
+    ] as readonly CommandName[];
+    const allowedBuiltinNames: CommandName[] | undefined = this.allowedCommands
+      ? allBuiltinNames.filter((n) => this.isCommandAllowed(n))
+      : undefined;
 
     this.bash = new Bash({
       fs: this.vfsAdapter,
       cwd: initialCwd,
       env: initialEnv,
       fetch: fetchFn,
+      commands: allowedBuiltinNames,
       customCommands,
     });
 
+    // Network-command post-registration cleanup (Codex P1 on #433).
+    //
+    // just-bash's `BashOptions.commands` filter controls only the non-network
+    // built-ins. When `fetch` (or `network`) is set, just-bash unconditionally
+    // registers EVERY name from `getNetworkCommandNames()` regardless of
+    // `commands` — see `Bash` constructor in just-bash's bundle:
+    //   `if (t.fetch || t.network) for (let i of U0()) this.registerCommand(i);`
+    // We always pass `fetch` (via `createProxiedFetch()`), so without this
+    // cleanup a scoop with `allowedCommands: ['echo']` could still execute
+    // `curl`, `wget`, etc. — defeating the per-scoop isolation guarantee.
+    //
+    // Delete the disallowed network commands from the already-populated
+    // registry. Reaches into `Bash`'s private `commands: Map` via cast; the
+    // property name is stable across versions and tests below guard the
+    // behavior, but the upstream ergonomics here are what warrants the
+    // comment.
+    if (this.allowedCommands !== null) {
+      const bashInternals = this.bash as unknown as { commands: Map<string, unknown> };
+      for (const name of getNetworkCommandNames()) {
+        if (!this.isCommandAllowed(name)) {
+          bashInternals.commands.delete(name);
+        }
+      }
+    }
+
     // Wire up /usr/bin virtual directory with all registered command names
     const customCommandNames = customCommands.map((c) => c.name);
-    this.builtinCommandNames = new Set([
+    const registeredBuiltinNames = allowedBuiltinNames ?? [
       ...getCommandNames(),
       ...getNetworkCommandNames(),
-      ...customCommandNames,
-    ]);
+    ];
+    this.builtinCommandNames = new Set([...registeredBuiltinNames, ...customCommandNames]);
     this.vfsAdapter.setRegisteredCommandsFn(() => [...this.builtinCommandNames]);
 
     this.lastEnv = { ...initialEnv };
@@ -387,6 +452,11 @@ export class WasmShell {
 
     // Kick off initial .jsh registration (async, non-blocking)
     void this.syncJshCommands().catch(() => undefined);
+  }
+
+  /** True when `name` is registrable/executable under the current allow-list. */
+  private isCommandAllowed(name: string): boolean {
+    return this.allowedCommands === null || this.allowedCommands.has(name);
   }
 
   /**
@@ -410,6 +480,9 @@ export class WasmShell {
       const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
 
       for (const [name, scriptPath] of jshMap) {
+        // Skip commands blocked by the allow-list.
+        if (!this.isCommandAllowed(name)) continue;
+
         // Never shadow built-in or custom commands
         if (this.builtinCommandNames.has(name) && !this.registeredJshCommands.has(name)) {
           continue;
@@ -539,9 +612,9 @@ export class WasmShell {
     const all = await this.scriptCatalog.getJshCommands();
     const filtered = new Map<string, string>();
     for (const [name, path] of all) {
-      if (!this.builtinCommandNames.has(name)) {
-        filtered.set(name, path);
-      }
+      if (this.builtinCommandNames.has(name)) continue;
+      if (!this.isCommandAllowed(name)) continue;
+      filtered.set(name, path);
     }
     return filtered;
   }

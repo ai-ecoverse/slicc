@@ -35,6 +35,7 @@ import { findDroppedSkillTransferFile, hasDroppedFiles } from './skill-drop.js';
 import '../providers/index.js';
 import { BrowserAPI } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
+import { publishAgentBridge } from '../scoops/agent-bridge.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import {
@@ -278,12 +279,19 @@ function registerSkillDropInstall(
 async function mainExtension(app: HTMLElement): Promise<void> {
   const { OffscreenClient } = await import('./offscreen-client.js');
   const { VirtualFS } = await import('../fs/index.js');
+  const { publishAgentBridgeProxy } = await import('../scoops/agent-bridge.js');
 
   const layout = new Layout(app, true);
   // Expose debug tab toggle for the shell `debug` command
   (window as unknown as Record<string, unknown>).__slicc_debug_tabs = (show: boolean) =>
     layout.setDebugTabs(show);
   await layout.panels.chat.initSession('session-cone');
+
+  // Publish the AgentBridge proxy on the panel realm's globalThis. The
+  // real bridge lives in the offscreen document (`publishAgentBridge` in
+  // `offscreen.ts`); the proxy forwards spawn requests through
+  // chrome.runtime.sendMessage and awaits the offscreen response.
+  publishAgentBridgeProxy();
 
   let selectedScoop: RegisteredScoop | null = null;
 
@@ -1151,6 +1159,20 @@ async function main(): Promise<void> {
   layout.panels.scoops.setOrchestrator(orchestrator);
   layout.panels.memory.setOrchestrator(orchestrator);
   layout.setScoopSwitcherOrchestrator?.(orchestrator);
+
+  // Publish the AgentBridge on globalThis.__slicc_agent so the `agent`
+  // supplemental shell command can spawn sub-scoops from any bash
+  // invocation (terminal panel OR a scoop's bash tool). Must happen AFTER
+  // orchestrator.init() resolves so sharedFs is available, and BEFORE any
+  // WasmShell registers its supplemental commands.
+  {
+    const sharedFs = orchestrator.getSharedFS();
+    if (sharedFs) {
+      publishAgentBridge(orchestrator, sharedFs, orchestrator.getSessionStore());
+    } else {
+      log.warn('AgentBridge not published — orchestrator.getSharedFS() returned null');
+    }
+  }
 
   // Wire shared FS to file browser and terminal
   const sharedFs = orchestrator.getSharedFS();

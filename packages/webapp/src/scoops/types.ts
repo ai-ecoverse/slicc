@@ -48,6 +48,20 @@ export interface RegisteredScoop {
    * explicit `undefined`/empty values stay authoritative.
    */
   configSchemaVersion?: number;
+  /**
+   * When `false`, suppresses the orchestrator's cone-notify side effect
+   * that fires when this scoop reaches the terminal `ready` status after
+   * processing a prompt. Default (`undefined` / `true`) preserves the
+   * historical behavior: the cone receives a `scoop-notify` message with
+   * the scoop's last response, triggering a cone turn.
+   *
+   * Set to `false` for ephemeral, self-contained invocations (e.g. scoops
+   * spawned through the `agent` shell command) where the caller already
+   * drains the scoop's output via an `observeScoop` subscription and does
+   * NOT want the completion to bill an extra cone turn. Not persisted —
+   * ephemeral scoops are unregistered at the end of their run.
+   */
+  notifyOnComplete?: boolean;
 }
 
 /** Per-scoop configuration */
@@ -70,13 +84,22 @@ export interface ScoopConfig {
   visiblePaths?: readonly string[];
   /**
    * VFS paths this scoop can READ AND WRITE. Pure replace — when
-   * `undefined` the scoop gets no writable paths at all (reads are still
-   * governed by `visiblePaths`). The `scoop_scoop` tool injects the
-   * standard `['/scoops/<folder>/', '/shared/']` default so existing
-   * agent-facing behavior is preserved. Cone scoops ignore this field —
-   * they always use an unrestricted filesystem.
+   * `undefined` the scoop gets no writable paths at all. Read access is
+   * the union of `writablePaths` and `visiblePaths` (RestrictedFS
+   * surfaces both as readable); write access is limited to
+   * `writablePaths`. The `scoop_scoop` tool injects the standard
+   * `['/scoops/<folder>/', '/shared/']` default so existing agent-facing
+   * behavior is preserved. Cone scoops ignore this field — they always
+   * use an unrestricted filesystem.
    */
   writablePaths?: readonly string[];
+  /**
+   * Shell command allow-list. When omitted (or when it contains `'*'`), every
+   * built-in, custom, and `.jsh` command is available — the default. Otherwise
+   * only commands whose names appear in the list can execute inside this
+   * scoop's shell, including through pipelines and substitution.
+   */
+  allowedCommands?: readonly string[];
 }
 
 /** Message from any channel */

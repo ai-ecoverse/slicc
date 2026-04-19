@@ -165,7 +165,7 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
       tools.push({
         name: 'scoop_scoop',
         description:
-          'Create a new scoop. Optionally specify a model and/or a prompt. If prompt is provided, the scoop starts working immediately after creation (no separate feed_scoop needed).',
+          'Create a new scoop. Optionally specify a model, a prompt, and per-scoop sandbox shape (visible/writable paths + command allow-list). If prompt is provided, the scoop starts working immediately after creation (no separate feed_scoop needed).',
         inputSchema: {
           type: 'object',
           properties: {
@@ -183,6 +183,24 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               description:
                 'Task prompt for the scoop. If provided, the scoop starts working immediately after creation.',
             },
+            visiblePaths: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'VFS paths the scoop can READ (not write). Pure replace — what you set is what you get. Omit to use the default ["/workspace/"] which exposes the shared skills tree. Pass [] for no extra read-only paths. Note: the scoop\'s writablePaths are always readable too, so a true read-nothing sandbox also requires writablePaths: []. Mounts remain readable regardless. Trailing slash recommended (e.g. "/shared/data/").',
+            },
+            writablePaths: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'VFS paths the scoop can READ AND WRITE. Pure replace. Omit to use the default ["/scoops/<folder>/", "/shared/"] which gives the scoop its own sandbox plus shared space. Pass [] to block all writes. Trailing slash recommended.',
+            },
+            allowedCommands: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'Shell command allow-list. Omit for unrestricted access to every built-in, custom, and .jsh command (the default). Pass a list of command names to restrict the scoop\'s shell — e.g. ["echo","cat","grep"] for a read-only text-processing scoop. Pass ["*"] for explicit unrestricted. Applies to pipelines, substitutions, and network commands too.',
+            },
           },
           required: ['name'],
         },
@@ -191,7 +209,17 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
             name,
             model,
             prompt: taskPrompt,
-          } = input as { name: string; model?: string; prompt?: string };
+            visiblePaths,
+            writablePaths,
+            allowedCommands,
+          } = input as {
+            name: string;
+            model?: string;
+            prompt?: string;
+            visiblePaths?: string[];
+            writablePaths?: string[];
+            allowedCommands?: string[];
+          };
           const folder =
             name
               .toLowerCase()
@@ -200,15 +228,12 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               .slice(0, 50) + '-scoop';
 
           try {
-            // Every scoop created through the tool gets the standard sandbox:
-            // read-only access to `/workspace/` (for skills) and read-write
-            // access to its own `/scoops/<folder>/` and `/shared/`. The
-            // orchestrator itself does not inject any defaults — keeping the
-            // default at the tool layer means the `ScoopConfig` surface stays
-            // pure-replace (what you set is what you get). Stamping
-            // `configSchemaVersion` tells the orchestrator this record was
-            // created with explicit config and its path values are
-            // authoritative — no compat migration on restore.
+            // Scoop sandbox shape — the cone can override any of these three
+            // via tool input. Defaults are applied here (not in the
+            // orchestrator) so the `ScoopConfig` surface stays pure-replace:
+            // what you set is what you get. Stamping `configSchemaVersion`
+            // tells the orchestrator this record has explicit config and
+            // skips the compat migration on restore.
             const newScoop = await onScoopScoop({
               name,
               folder,
@@ -220,8 +245,9 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               addedAt: new Date().toISOString(),
               config: {
                 ...(model ? { modelId: model } : {}),
-                visiblePaths: ['/workspace/'],
-                writablePaths: [`/scoops/${folder}/`, '/shared/'],
+                visiblePaths: visiblePaths ?? ['/workspace/'],
+                writablePaths: writablePaths ?? [`/scoops/${folder}/`, '/shared/'],
+                ...(allowedCommands ? { allowedCommands } : {}),
               },
               configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
             });

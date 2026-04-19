@@ -368,4 +368,12 @@ describe('VirtualFS', () => {
       vfs.setWatcher(null as any);
     });
   });
+
+  describe('canWrite', () => {
+    it('returns true for any path (unrestricted filesystem)', () => {
+      expect(vfs.canWrite('/')).toBe(true);
+      expect(vfs.canWrite('/anywhere')).toBe(true);
+      expect(vfs.canWrite('/scoops/other-scoop/secret.txt')).toBe(true);
+    });
+  });
 });

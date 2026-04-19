@@ -30,8 +30,9 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 ### Orchestrator
 
 - Path: `packages/webapp/src/scoops/`
-- `orchestrator.ts` creates and destroys scoops, routes messages, and manages shared runtime state.
+- `orchestrator.ts` creates and destroys scoops, routes messages, and manages shared runtime state. Exposes `observeScoop(jid, handler)` for per-scoop event taps used by the agent bridge; observers are dropped defensively by both `unregisterScoop` and `destroyScoopTab`.
 - `scoop-context.ts` owns per-scoop prompt execution and filesystem/tool isolation.
+- `agent-bridge.ts` wraps the orchestrator into a stable `globalThis.__slicc_agent` surface used by the `agent` shell command. Registers ephemeral sub-scoops with `notifyOnComplete: false` so spawns from any float don't trigger cone turns. Sandbox defaults: `writablePaths = [cwd, /shared/, <scratch>/, /tmp/]`, `visiblePaths = [/workspace/, invokingCwd]` unioned and de-duped; `--read-only` is pure-replace and drops both defaults.
 - `skills.ts`, tray files, and scheduler files extend orchestration rather than the UI directly.
 
 ### VirtualFS
@@ -46,9 +47,9 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 - Path: `packages/webapp/src/shell/`
 - `wasm-shell.ts` hosts the just-bash runtime.
 - `script-catalog.ts` is the shared `.jsh`/`.bsh` discovery service; it caches behind `FsWatcher` invalidation and bypasses cache for mounted trees where external changes are invisible to the watcher.
-- `supplemental-commands/` contains built-in commands.
+- `supplemental-commands/` contains built-in commands, including `supplemental-commands/agent-command.ts` which forwards `ctx.cwd` as `invokingCwd` and validates `<cwd>` writability via `ctx.fs.canWrite` to prevent nested-scoop sandbox escape.
 - `jsh-discovery.ts` and `bsh-discovery.ts` provide the raw scans used by the shared catalog.
-- `vfs-adapter.ts` bridges shell calls into the virtual filesystem.
+- `vfs-adapter.ts` bridges shell calls into the virtual filesystem and forwards `canWrite` (duck-typed so both `VirtualFS` and `RestrictedFS` back it without branching).
 
 ### CDP
 
