@@ -18,6 +18,7 @@ function createMockCtx() {
   };
 }
 
+const now = Date.now();
 const mockCosts: ScoopCostData[] = [
   {
     name: 'sliccy',
@@ -32,6 +33,9 @@ const mockCosts: ScoopCostData[] = [
       cost: { input: 0.45, output: 0.51, cacheRead: 0.12, cacheWrite: 0.05, total: 1.13 },
     },
     turns: 5,
+    firstActivity: now - 60 * 60 * 1000, // 1 hour ago
+    lastActivity: now,
+    activeTimeMs: 60 * 60 * 1000, // 1 hour (4 intervals of 15 minutes)
   },
   {
     name: 'worker',
@@ -46,6 +50,9 @@ const mockCosts: ScoopCostData[] = [
       cost: { input: 0.1, output: 0.05, cacheRead: 0, cacheWrite: 0, total: 0.15 },
     },
     turns: 2,
+    firstActivity: now - 30 * 60 * 1000, // 30 minutes ago
+    lastActivity: now,
+    activeTimeMs: 30 * 60 * 1000, // 30 minutes (2 intervals of 15 minutes)
   },
 ];
 
@@ -89,11 +96,13 @@ describe('cost command', () => {
     registerSessionCostsProvider(() => mockCosts);
     const result = await createCostCommand().execute([], ctx);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('sliccy (cone)');
-    expect(result.stdout).toContain('worker (scoop)');
+    expect(result.stdout).toContain('sliccy');
+    expect(result.stdout).toContain('worker');
     expect(result.stdout).toContain('claude-opus-4-6');
     expect(result.stdout).toContain('$1.13');
     expect(result.stdout).toContain('Total');
+    expect(result.stdout).toContain('MTok');
+    expect(result.stdout).toContain('$/hour');
   });
 
   it('outputs JSON with --json', async () => {
