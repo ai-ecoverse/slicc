@@ -391,7 +391,9 @@ export class Orchestrator {
     if (!cone) return;
 
     const summary =
-      responseText.length > 20000 ? responseText.slice(0, 20000) + '\n... (truncated)' : responseText;
+      responseText.length > 20000
+        ? responseText.slice(0, 20000) + '\n... (truncated)'
+        : responseText;
     const notifyMsg: ChannelMessage = {
       id: `scoop-done-${jid}-${Date.now()}`,
       chatJid: cone.jid,

@@ -819,6 +819,183 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
   });
 });
 
+describe('Orchestrator scoop-notify truncation', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    await clearAllMessages();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await sharedFs?.dispose();
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  interface OrchestratorPrivate {
+    scoopResponseBuffer: Map<string, string>;
+    maybeNotifyConeOnScoopComplete(jid: string): void;
+    handleMessage(msg: ChannelMessage): Promise<void>;
+  }
+
+  it('truncates scoop response >20000 chars and appends truncation marker', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_truncate_test_1',
+      name: 'truncate-test',
+      folder: 'truncate-test-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'truncate-test-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    // Create a response that exceeds 20000 chars
+    const longResponse = 'x'.repeat(25000);
+    priv.scoopResponseBuffer.set(scoop.jid, longResponse);
+    priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].channel).toBe('scoop-notify');
+    // The content includes the prefix "[@truncate-test-scoop completed]:\n" plus truncated text
+    expect(captured[0].content).toContain('\n... (truncated)');
+    // Verify actual truncation: prefix + 20000 chars + truncation marker
+    const prefix = `[@${scoop.assistantLabel} completed]:\n`;
+    const expectedContent = prefix + longResponse.slice(0, 20000) + '\n... (truncated)';
+    expect(captured[0].content).toBe(expectedContent);
+  });
+
+  it('does not truncate scoop response <=20000 chars', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_no_truncate_test_1',
+      name: 'no-truncate-test',
+      folder: 'no-truncate-test-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'no-truncate-test-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    // Create a response exactly at the limit
+    const exactLimitResponse = 'y'.repeat(20000);
+    priv.scoopResponseBuffer.set(scoop.jid, exactLimitResponse);
+    priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].channel).toBe('scoop-notify');
+    // Should NOT be truncated
+    expect(captured[0].content).not.toContain('(truncated)');
+    const prefix = `[@${scoop.assistantLabel} completed]:\n`;
+    expect(captured[0].content).toBe(prefix + exactLimitResponse);
+  });
+
+  it('forwards short responses unmodified', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_short_test_1',
+      name: 'short-test',
+      folder: 'short-test-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'short-test-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    const shortResponse = 'Short completion message';
+    priv.scoopResponseBuffer.set(scoop.jid, shortResponse);
+    priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].content).not.toContain('(truncated)');
+    const prefix = `[@${scoop.assistantLabel} completed]:\n`;
+    expect(captured[0].content).toBe(prefix + shortResponse);
+  });
+});
+
 describe('Orchestrator observer cleanup on scoop teardown', () => {
   let orch: Orchestrator;
   let priorWindow: unknown;
