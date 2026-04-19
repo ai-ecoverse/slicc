@@ -515,9 +515,12 @@ export class ChatPanel {
       this.container.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 0) || 0;
     const maxHeight = Math.max(18, Math.floor(panelHeight * 0.3));
     this.textarea.style.height = 'auto';
-    const next = Math.min(this.textarea.scrollHeight, maxHeight);
+    // Cache scrollHeight once — it's layout-dependent and reading it twice
+    // would force an extra reflow.
+    const scrollHeight = this.textarea.scrollHeight;
+    const next = Math.min(scrollHeight, maxHeight);
     this.textarea.style.height = next + 'px';
-    this.textarea.style.overflowY = this.textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
+    this.textarea.style.overflowY = scrollHeight > maxHeight ? 'auto' : 'hidden';
   }
 
   /** Reset the textarea back to a single row after submit or clear. */
