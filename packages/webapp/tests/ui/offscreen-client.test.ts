@@ -44,7 +44,6 @@ describe('OffscreenClient', () => {
     onScoopCreated: vi.fn(),
     onScoopListUpdate: vi.fn(),
     onIncomingMessage: vi.fn(),
-    onPendingHandoffsChange: vi.fn(),
   };
 
   beforeEach(() => {
@@ -215,27 +214,6 @@ describe('OffscreenClient', () => {
     expect(envelope.payload.type).toBe('clear-chat');
   });
 
-  it('requests pending handoffs from the service worker', () => {
-    client.requestPendingHandoffs();
-
-    const envelope = sentMessages[0] as { payload: any };
-    expect(envelope.payload.type).toBe('handoff-list-request');
-  });
-
-  it('sends accept and dismiss actions for pending handoffs', () => {
-    client.acceptPendingHandoff('handoff-1');
-    client.dismissPendingHandoff('handoff-2');
-
-    expect((sentMessages[0] as any).payload).toEqual({
-      type: 'handoff-accept',
-      handoffId: 'handoff-1',
-    });
-    expect((sentMessages[1] as any).payload).toEqual({
-      type: 'handoff-dismiss',
-      handoffId: 'handoff-2',
-    });
-  });
-
   it('ignores messages from non-offscreen sources', () => {
     client.selectedScoopJid = 'cone_123';
     const handle = client.createAgentHandle();
@@ -253,29 +231,8 @@ describe('OffscreenClient', () => {
     expect(events.length).toBe(0);
   });
 
-  it('handles pending handoff lists from the service worker', () => {
-    simulateMessage('service-worker', {
-      type: 'handoff-pending-list',
-      handoffs: [
-        {
-          handoffId: 'handoff-1',
-          sourceUrl: 'https://www.sliccy.ai/handoff#abc',
-          receivedAt: new Date().toISOString(),
-          payload: { instruction: 'Continue this task in SLICC.' },
-        },
-      ],
-    });
-
-    expect(callbacks.onPendingHandoffsChange).toHaveBeenCalledWith([
-      expect.objectContaining({
-        handoffId: 'handoff-1',
-        payload: expect.objectContaining({ instruction: 'Continue this task in SLICC.' }),
-      }),
-    ]);
-  });
-
-  it('registerScoop sends a cone-create message (cone-only path)', async () => {
-    await client.registerScoop({
+  it('registerScoop sends scoop-create message', () => {
+    client.registerScoop({
       jid: 'temp',
       name: 'Cone',
       folder: 'cone',

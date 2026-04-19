@@ -28,6 +28,10 @@ Read `/workspace/skills/scoop-management/SKILL.md` before delegating — it cove
 
 When the user asks for a dashboard, editor, or visualization — read `/workspace/skills/sprinkles/SKILL.md` first. One scoop per sprinkle, named identically. The cone MUST NOT write `.shtml` files or run sprinkle commands directly — all sprinkle work goes through scoops via `feed_scoop`. For detailed rules, read `/workspace/skills/sprinkle-guide/SKILL.md`.
 
+## Handoffs
+
+On `[Navigate Event: ...]`, read `/workspace/skills/handoff/SKILL.md` first. Show approval card, wait for user, dispatch by verb.
+
 ## Environment
 
 This is a sandboxed browser-based VFS, not a regular Linux box. Run `commands` to see what's available. Use `serve <dir>` for apps, `open <path>` for files. No package managers, no long-running servers. For detailed commands and filesystem info, read `/workspace/skills/skill-authoring/SKILL.md`. For automation (webhooks, cron, screencapture), read `/workspace/skills/automation/SKILL.md`.

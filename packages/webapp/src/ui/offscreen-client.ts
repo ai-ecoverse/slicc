@@ -22,8 +22,6 @@ import type {
   ErrorMsg,
   IncomingMessageMsg,
   ScoopListMsg,
-  HandoffPendingListMsg,
-  PendingHandoff,
 } from '../../../chrome-extension/src/messages.js';
 import { createLogger } from '../core/logger.js';
 
@@ -34,7 +32,6 @@ export interface OffscreenClientCallbacks {
   onScoopCreated: (scoop: RegisteredScoop) => void;
   onScoopListUpdate: (scoops: ScoopListMsg['scoops']) => void;
   onIncomingMessage: (scoopJid: string, message: IncomingMessageMsg['message']) => void;
-  onPendingHandoffsChange?: (handoffs: PendingHandoff[]) => void;
   /** Called when the offscreen engine is ready and state has been received. */
   onReady?: () => void;
 }
@@ -189,18 +186,6 @@ export class OffscreenClient {
     this.send({ type: 'clear-chat' });
   }
 
-  requestPendingHandoffs(): void {
-    this.send({ type: 'handoff-list-request' });
-  }
-
-  acceptPendingHandoff(handoffId: string): void {
-    this.send({ type: 'handoff-accept', handoffId });
-  }
-
-  dismissPendingHandoff(handoffId: string): void {
-    this.send({ type: 'handoff-dismiss', handoffId });
-  }
-
   clearFilesystem(): void {
     this.send({ type: 'clear-filesystem' });
   }
@@ -269,8 +254,6 @@ export class OffscreenClient {
           } else {
             this.handleOffscreenMessage(msg.payload as OffscreenToPanelMessage | StateSnapshotMsg);
           }
-        } else if (msg.source === 'service-worker' && msg.payload.type === 'handoff-pending-list') {
-          this.handlePendingHandoffs(msg.payload as HandoffPendingListMsg);
         }
 
         return false;
@@ -437,10 +420,6 @@ export class OffscreenClient {
 
   private handleIncomingMessage(msg: IncomingMessageMsg): void {
     this.callbacks.onIncomingMessage(msg.scoopJid, msg.message);
-  }
-
-  private handlePendingHandoffs(msg: HandoffPendingListMsg): void {
-    this.callbacks.onPendingHandoffsChange?.(msg.handoffs);
   }
 
   private msgScoopToRegistered(s: ScoopListMsg['scoops'][number]): RegisteredScoop {
