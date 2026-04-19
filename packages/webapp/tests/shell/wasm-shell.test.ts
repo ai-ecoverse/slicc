@@ -387,3 +387,161 @@ describe('WasmShell .jsh command registration', () => {
     expect(result.stdout).not.toContain('fake echo');
   });
 });
+
+let allowlistDbCounter = 0;
+
+describe('WasmShell command allow-list', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-allowlist-${allowlistDbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  it('registers all commands when allowedCommands is omitted (default)', async () => {
+    const shell = new WasmShell({ fs });
+
+    expect((await shell.executeCommand('echo hi')).exitCode).toBe(0);
+    expect((await shell.executeCommand('pwd')).exitCode).toBe(0);
+    expect((await shell.executeCommand('ls /')).exitCode).toBe(0);
+  });
+
+  it('registers all commands when allowedCommands is the wildcard ["*"]', async () => {
+    const shell = new WasmShell({ fs, allowedCommands: ['*'] });
+
+    expect((await shell.executeCommand('echo hi')).exitCode).toBe(0);
+    expect((await shell.executeCommand('ls /')).exitCode).toBe(0);
+  });
+
+  it('blocks every command when allowedCommands is empty', async () => {
+    const shell = new WasmShell({ fs, allowedCommands: [] });
+
+    const result = await shell.executeCommand('echo hi');
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/command not found|not found/i);
+  });
+
+  it('allows listed commands and rejects unlisted ones with exit 127', async () => {
+    const shell = new WasmShell({ fs, allowedCommands: ['echo'] });
+
+    const ok = await shell.executeCommand('echo hello');
+    expect(ok.exitCode).toBe(0);
+    expect(ok.stdout).toContain('hello');
+
+    const blocked = await shell.executeCommand('ls /');
+    expect(blocked.exitCode).toBe(127);
+    expect(blocked.stderr).toMatch(/ls/);
+    expect(blocked.stderr).toMatch(/not found/i);
+  });
+
+  it('blocks disallowed commands inside a pipeline', async () => {
+    const shell = new WasmShell({ fs, allowedCommands: ['echo'] });
+
+    // `echo` is allowed but `cat` is not — the pipeline should fail at `cat`.
+    const piped = await shell.executeCommand('echo hi | cat');
+    expect(piped.exitCode).not.toBe(0);
+    expect(piped.stderr).toMatch(/cat/);
+    expect(piped.stderr).toMatch(/not found/i);
+  });
+
+  it('blocks disallowed commands inside command substitution', async () => {
+    const shell = new WasmShell({ fs, allowedCommands: ['echo'] });
+
+    // The substitution `$(ls /)` invokes `ls`, which must be blocked. Bash
+    // continues and runs `echo` with an empty substitution, but stderr
+    // carries the substitution failure.
+    const result = await shell.executeCommand('echo "before:$(ls /):after"');
+    expect(result.stderr).toMatch(/ls/);
+    expect(result.stderr).toMatch(/not found/i);
+    expect(result.stdout).toContain('before::after');
+  });
+
+  it('filters custom (supplemental) commands the same way as built-ins', async () => {
+    // Use a custom command — `mount` is created by MountCommands. Omitting it
+    // from the allow-list should block it; including it should keep it working.
+    const blockedShell = new WasmShell({ fs, allowedCommands: ['echo'] });
+    const blocked = await blockedShell.executeCommand('mount');
+    expect(blocked.exitCode).toBe(127);
+    expect(blocked.stderr).toMatch(/mount/);
+    expect(blocked.stderr).toMatch(/not found/i);
+
+    // When `mount` is allow-listed the custom command is dispatched — even if
+    // it returns non-zero for missing args, the stderr must not say
+    // "command not found" (that would mean the allow-list blocked it).
+    const allowedShell = new WasmShell({ fs, allowedCommands: ['mount'] });
+    const allowed = await allowedShell.executeCommand('mount');
+    expect(allowed.stderr).not.toMatch(/not found/i);
+  });
+
+  it('filters .jsh commands the same way as built-ins', async () => {
+    await fs.mkdir('/workspace/skills/allowlist-jsh/scripts', { recursive: true });
+    await fs.writeFile(
+      '/workspace/skills/allowlist-jsh/scripts/greet.jsh',
+      'console.log("hello from greet");'
+    );
+
+    // With `greet` blocked, the shell should not dispatch to the .jsh file.
+    const blocked = new WasmShell({ fs, allowedCommands: ['echo'] });
+    await blocked.syncJshCommands();
+    const blockedResult = await blocked.executeCommand('greet');
+    expect(blockedResult.exitCode).toBe(127);
+    expect(blockedResult.stderr).toMatch(/not found/i);
+
+    // With `greet` listed, the .jsh file is registered and runs normally.
+    const allowed = new WasmShell({ fs, allowedCommands: ['greet'] });
+    await allowed.syncJshCommands();
+    const allowedResult = await allowed.executeCommand('greet');
+    expect(allowedResult.exitCode).toBe(0);
+    expect(allowedResult.stdout).toContain('hello from greet');
+  });
+
+  it('omits blocked commands from the /usr/bin virtual directory', async () => {
+    const shell = new WasmShell({ fs, allowedCommands: ['echo', 'ls'] });
+
+    const listing = await shell.executeCommand('ls /usr/bin');
+    expect(listing.exitCode).toBe(0);
+    expect(listing.stdout).toContain('echo');
+    expect(listing.stdout).toContain('ls');
+    // `cat` exists in just-bash but was not allowed — it must not appear.
+    expect(listing.stdout.split(/\s+/).filter((w) => w === 'cat')).toHaveLength(0);
+  });
+
+  it('blocks network commands (curl, wget) that just-bash auto-registers when fetch is set', async () => {
+    // just-bash's constructor unconditionally registers every network command
+    // when `fetch` or `network` is provided, regardless of `BashOptions.commands`.
+    // `WasmShell` always provides `fetch`, so without post-construction cleanup
+    // a scoop with `allowedCommands: ['echo']` could still run `curl`. This
+    // test guards the cleanup in `WasmShell`'s constructor. See Codex review
+    // of #433.
+    const shell = new WasmShell({ fs, allowedCommands: ['echo'] });
+
+    const curl = await shell.executeCommand('curl http://example.com');
+    expect(curl.exitCode).toBe(127);
+    expect(curl.stderr).toMatch(/curl/);
+    expect(curl.stderr).toMatch(/not found/i);
+
+    const wget = await shell.executeCommand('wget http://example.com');
+    expect(wget.exitCode).toBe(127);
+    expect(wget.stderr).toMatch(/wget/);
+    expect(wget.stderr).toMatch(/not found/i);
+  });
+
+  it('keeps network commands available when they are on the allow-list', async () => {
+    // Inverse of the above — when a network command IS allowed, the cleanup
+    // must not remove it. We don't try to actually fetch (would need a real
+    // network); it's enough that the command name is recognized at dispatch.
+    const shell = new WasmShell({ fs, allowedCommands: ['curl'] });
+
+    const result = await shell.executeCommand('curl');
+    // curl with no args exits with usage error (2) — NOT 127. If cleanup
+    // accidentally removed it, we'd see 127 / "command not found" instead.
+    expect(result.exitCode).not.toBe(127);
+    expect(result.stderr).not.toMatch(/not found/i);
+  });
+});
