@@ -13,6 +13,16 @@ interface AgentSpawnOptions {
   modelId?: string;
   parentJid?: string;
   visiblePaths?: string[];
+  /**
+   * The invoking shell's cwd at the moment `agent` ran. The bridge
+   * unions this into visiblePaths (read-only) when `--read-only` is
+   * absent, so the spawned scoop can READ the directory it was launched
+   * from without gaining write access there.
+   *
+   * See the `agent` command's help text and {@link AgentSpawnOptions}
+   * on the bridge for the read-only tradeoff.
+   */
+  invokingCwd?: string;
 }
 
 /** Options accepted by {@link createAgentCommand}. */
@@ -45,23 +55,30 @@ Spawns a sub-scoop, feeds it a task, blocks until the agent loop completes,
 then prints the scoop's final message on stdout.
 
 Arguments:
-  <cwd>               Working directory for the spawned scoop. Relative paths
-                      are resolved against the current shell's cwd; '.', '..',
-                      and absolute paths are all supported.
+  <cwd>               Working directory for the spawned scoop. Becomes the
+                      scoop's sole writable prefix. Relative paths are resolved
+                      against the current shell's cwd; '.', '..', and absolute
+                      paths are all supported.
   <allowed-commands>  Comma-separated list of bash commands the scoop may run.
                       Use '*' to allow every command. Whitespace is trimmed
                       around each entry; duplicates are tolerated.
   <prompt>            Prompt forwarded verbatim to the scoop.
+
+Default sandbox:
+  The spawned scoop sees (read-only):  /workspace/ + the invoking shell's cwd
+  The spawned scoop writes to:         <cwd>, /shared/, /scoops/<name>/, /tmp/
+  /tmp/ is always writable — no flag toggles it.
 
 Options:
   --model <id>            Override the model id used by the spawned scoop.
                           Defaults to inheriting the parent's model.
   --read-only <paths>     Comma-separated VFS paths exposed read-only to the
                           spawned scoop (visiblePaths). Pure replace — when
-                          set, the default ["/workspace/"] is dropped. Pass
-                          an explicit list if you want /workspace/ included
-                          (e.g. "/workspace/,/shared/assets/"). Each entry
-                          is normalized to a trailing slash.
+                          set, the default ["/workspace/"] AND the implicit
+                          ctx.cwd read-only add are BOTH dropped. Pass an
+                          explicit list if you want them back (e.g.
+                          "/workspace/,$(pwd)"). Each entry is normalized to
+                          a trailing slash.
   -h, --help              Show this help message and exit.
 
 Examples:
@@ -237,11 +254,23 @@ function getBridge(): AgentBridge | undefined {
  * Create the `agent` supplemental command.
  *
  * Usage: `agent <cwd> <allowed-commands> <prompt>` plus `--model <id>` /
- * `-h` / `--help`. The command forwards parsed options to the orchestrator
- * bridge published at `globalThis.__slicc_agent` and prints the bridge's
- * `finalText` on stdout with exactly one trailing newline. On a bridge error
+ * `--read-only <paths>` / `-h` / `--help`. The command forwards parsed
+ * options to the orchestrator bridge published at
+ * `globalThis.__slicc_agent` and prints the bridge's `finalText` on
+ * stdout with exactly one trailing newline. On a bridge error
  * (exit code `!== 0` or promise rejection) the error text is written to
  * stderr and the exit code is propagated.
+ *
+ * Sandbox defaults:
+ *   - writablePaths: `<cwd>`, `/shared/`, the scoop's scratch folder,
+ *     AND `/tmp/` (always-on ambient scratch; not toggleable).
+ *   - visiblePaths: `/workspace/` + the invoking shell's `ctx.cwd`
+ *     (so the agent can READ where it was launched from), de-duped.
+ *
+ * The `--read-only` flag is pure-replace for visiblePaths — passing it
+ * drops BOTH the `/workspace/` default AND the implicit `ctx.cwd` add.
+ * Callers who want the invoking cwd back alongside a custom list must
+ * include it explicitly, e.g. `--read-only "/docs/,$(pwd)"`.
  */
 export function createAgentCommand(options: AgentCommandOptions = {}): Command {
   const { getParentJid } = options;
@@ -326,6 +355,15 @@ export function createAgentCommand(options: AgentCommandOptions = {}): Command {
     }
     if (parsed.visiblePaths !== undefined) {
       spawnOptions.visiblePaths = parsed.visiblePaths;
+    }
+    // Forward the invoking shell's cwd. The bridge uses it as an
+    // implicit read-only root (visiblePaths) ONLY when `--read-only`
+    // was NOT passed — that flag is pure-replace, so we don't sneak an
+    // extra entry into a list the user explicitly opted out of. A
+    // caller who still wants the ctx.cwd visible alongside `--read-only`
+    // can pass `--read-only foo/,$(pwd)` to re-add it.
+    if (ctx.cwd && ctx.cwd.length > 0) {
+      spawnOptions.invokingCwd = ctx.cwd;
     }
     // Forward the parent scoop's JID when available so the bridge can
     // inherit the parent's model id (see `AgentSpawnOptions.parentJid` in

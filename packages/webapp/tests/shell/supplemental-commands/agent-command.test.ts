@@ -8,6 +8,7 @@ interface SpawnArgs {
   prompt: string;
   modelId?: string;
   visiblePaths?: string[];
+  invokingCwd?: string;
 }
 
 interface SpawnResult {
@@ -710,6 +711,48 @@ describe('agent command', () => {
     });
   });
 
+  describe('invokingCwd forwarding (ctx.cwd → bridge)', () => {
+    it('forwards ctx.cwd as invokingCwd on the bridge call', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx('/home/user'));
+      expect(spawn.mock.calls[0][0].invokingCwd).toBe('/home/user');
+    });
+
+    it('forwards invokingCwd even when --read-only is set (bridge decides whether to union)', async () => {
+      // The command layer always forwards ctx.cwd; the bridge is the
+      // single arbiter of whether to union or discard it based on
+      // visiblePaths. Keeps the command layer policy-free.
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--read-only', '/foo/', '.', '*', 'p'],
+        createMockCtx('/home/user')
+      );
+      expect(spawn.mock.calls[0][0].invokingCwd).toBe('/home/user');
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/foo/']);
+    });
+
+    it('forwards invokingCwd as an absolute path even when the positional cwd is relative', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['sub', '*', 'p'], createMockCtx('/home/user'));
+      expect(spawn.mock.calls[0][0].invokingCwd).toBe('/home/user');
+      expect(spawn.mock.calls[0][0].cwd).toBe('/home/user/sub');
+    });
+
+    it('does not set invokingCwd when ctx.cwd is empty string', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['/abs', '*', 'p'], createMockCtx(''));
+      // Empty-string ctx.cwd: bridge would get an empty prefix anyway,
+      // and the invariant is that the command doesn't forward noise —
+      // keep the field absent so the bridge can use its "treat as no
+      // invokingCwd" path.
+      expect(spawn.mock.calls[0][0].invokingCwd).toBeUndefined();
+    });
+  });
+
   describe('bridge output handling', () => {
     it('writes finalText with one trailing newline on exit 0', async () => {
       installBridge(async () => ({ finalText: 'hello', exitCode: 0 }));
@@ -830,6 +873,9 @@ describe('agent command', () => {
         allowedCommands: ['ls', 'wc'],
         prompt: 'do it',
         modelId: 'claude-haiku-4-5',
+        // ctx.cwd is always forwarded so the bridge can choose whether
+        // to union it into visiblePaths.
+        invokingCwd: '/home',
       });
     });
 
