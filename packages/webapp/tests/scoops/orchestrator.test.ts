@@ -635,3 +635,316 @@ describe('Orchestrator session-restore compat for path config', () => {
     expect(restored?.configSchemaVersion).toBeUndefined();
   });
 });
+
+describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    // TaskScheduler.start() calls window.setInterval; vitest runs in node.
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    // Start from a clean slate so notify messages from an earlier test
+    // don't bleed into the next — the gate tests assert presence/absence
+    // of a single scoop-notify keyed on the cone's jid.
+    await clearAllMessages();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    // Seed a cone so the notify path has a target; without one the
+    // orchestrator short-circuits out before we can observe gating.
+    await saveScoop(cone);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await sharedFs?.dispose();
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  async function initOrchestrator(): Promise<Orchestrator> {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+    return orch;
+  }
+
+  /**
+   * Cast to expose the private helper + response-buffer Map for tests.
+   * Hitting the helper directly lets us assert the gate without driving
+   * a full `ScoopContext` through an agent loop, which is what the
+   * production code path uses to reach this method.
+   *
+   * We ALSO stub out `handleMessage` per-test so the fire-and-forget
+   * notify path is fully in-memory and doesn't touch LightningFS —
+   * otherwise afterEach's VFS dispose can race the 500ms LightningFS
+   * deactivation timer and produce "Cannot read properties of null
+   * (reading 'deactivate')" unhandled rejections.
+   */
+  interface OrchestratorPrivate {
+    scoopResponseBuffer: Map<string, string>;
+    maybeNotifyConeOnScoopComplete(jid: string): void;
+    handleMessage(msg: ChannelMessage): Promise<void>;
+  }
+
+  it('writes a scoop-notify to the cone when notifyOnComplete is unset (default)', async () => {
+    const notifyingScoop: RegisteredScoop = {
+      jid: 'scoop_notify_default_1',
+      name: 'notify-default',
+      folder: 'notify-default-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'notify-default-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(notifyingScoop);
+    const o = await initOrchestrator();
+    const priv = o as unknown as OrchestratorPrivate;
+
+    // Capture the notify instead of letting it flush through LightningFS.
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    priv.scoopResponseBuffer.set(notifyingScoop.jid, 'all done');
+    priv.maybeNotifyConeOnScoopComplete(notifyingScoop.jid);
+
+    // handleMessage is invoked synchronously inside the method (the
+    // `.catch(...)` chain it wires up is not awaited, but the call itself
+    // runs before the method returns), so the stub sees the payload
+    // immediately.
+    expect(captured).toHaveLength(1);
+    expect(captured[0].channel).toBe('scoop-notify');
+    expect(captured[0].chatJid).toBe(cone.jid);
+    expect(captured[0].content).toContain('all done');
+    expect(captured[0].senderId).toBe(notifyingScoop.folder);
+    // Buffer cleared on fire.
+    expect(priv.scoopResponseBuffer.has(notifyingScoop.jid)).toBe(false);
+  });
+
+  it('suppresses the scoop-notify when notifyOnComplete is false', async () => {
+    const ephemeralScoop: RegisteredScoop = {
+      jid: 'scoop_ephemeral_1',
+      name: 'ephemeral',
+      folder: 'agent-ephemeral',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'agent-ephemeral',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+      notifyOnComplete: false,
+    };
+    await saveScoop(ephemeralScoop);
+    const o = await initOrchestrator();
+    const priv = o as unknown as OrchestratorPrivate;
+
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    priv.scoopResponseBuffer.set(ephemeralScoop.jid, 'final ephemeral output');
+    priv.maybeNotifyConeOnScoopComplete(ephemeralScoop.jid);
+
+    expect(captured).toHaveLength(0);
+    // Buffer still cleared so memory stays bounded even when the notify
+    // side effect is opted out.
+    expect(priv.scoopResponseBuffer.has(ephemeralScoop.jid)).toBe(false);
+  });
+
+  it('clears the response buffer and skips notify when the scoop produced no output', async () => {
+    const notifyingScoop: RegisteredScoop = {
+      jid: 'scoop_noout_default_1',
+      name: 'noout',
+      folder: 'noout-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'noout-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(notifyingScoop);
+    const o = await initOrchestrator();
+    const priv = o as unknown as OrchestratorPrivate;
+
+    const captured: ChannelMessage[] = [];
+    priv.handleMessage = async (msg) => {
+      captured.push(msg);
+    };
+
+    // No response buffer entry — scoop said nothing.
+    priv.maybeNotifyConeOnScoopComplete(notifyingScoop.jid);
+
+    // Even with notifyOnComplete default, empty output => no notify sent.
+    expect(captured).toHaveLength(0);
+  });
+});
+
+describe('Orchestrator observer cleanup on scoop teardown', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await sharedFs?.dispose();
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  interface OrchestratorObserverInternals {
+    scoopObservers: Map<string, Set<unknown>>;
+    dispatchScoopEvent(jid: string, event: 'onSendMessage', text: string): void;
+  }
+
+  it('drops lingering observers when unregisterScoop runs', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_observer_leak_1',
+      name: 'observer-leak',
+      folder: 'observer-leak-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'observer-leak-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const handler = vi.fn();
+    // Subscribe but "forget" to unsubscribe — the production pathway
+    // that matters is a crash/exception preventing the bridge's
+    // `finally` from running. We skip the `unsubscribe()` return value
+    // on purpose.
+    orch.observeScoop(scoop.jid, { onSendMessage: handler });
+
+    const internals = orch as unknown as OrchestratorObserverInternals;
+    expect(internals.scoopObservers.has(scoop.jid)).toBe(true);
+
+    await orch.unregisterScoop(scoop.jid);
+
+    expect(internals.scoopObservers.has(scoop.jid)).toBe(false);
+
+    // A post-teardown dispatch must NOT reach the lingering handler.
+    internals.dispatchScoopEvent(scoop.jid, 'onSendMessage', 'post-teardown text');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('drops observers when destroyScoopTab runs standalone (shutdown / reset paths)', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_observer_leak_2',
+      name: 'observer-leak-2',
+      folder: 'observer-leak-2-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'observer-leak-2-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const handler = vi.fn();
+    orch.observeScoop(scoop.jid, { onSendMessage: handler });
+
+    const internals = orch as unknown as OrchestratorObserverInternals;
+    expect(internals.scoopObservers.has(scoop.jid)).toBe(true);
+
+    await orch.destroyScoopTab(scoop.jid);
+
+    expect(internals.scoopObservers.has(scoop.jid)).toBe(false);
+    internals.dispatchScoopEvent(scoop.jid, 'onSendMessage', 'post-teardown text');
+    expect(handler).not.toHaveBeenCalled();
+  });
+});

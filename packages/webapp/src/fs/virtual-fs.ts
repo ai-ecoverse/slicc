@@ -93,6 +93,16 @@ export class VirtualFS {
     return this.lfs;
   }
 
+  /**
+   * Writability predicate — the unrestricted VirtualFS has no ACL, so every
+   * path is writable. Exists to mirror {@link RestrictedFS.canWrite} so
+   * callers (e.g., the `agent` shell command) can duck-type across both
+   * without checking which instance they hold.
+   */
+  canWrite(_path: string): boolean {
+    return true;
+  }
+
   /** Attach a file system watcher for change notifications. */
   setWatcher(watcher: FsWatcher | null): void {
     this.watcher = watcher;

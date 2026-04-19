@@ -36,6 +36,7 @@ import { createDebugCommand } from './debug-command.js';
 import { createModelsCommand } from './models-command.js';
 import { createCostCommand } from './cost-command.js';
 import { createNukeCommand } from './nuke-command.js';
+import { createAgentCommand } from './agent-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 export type {
@@ -52,6 +53,14 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   scriptCatalog?: ScriptCatalog;
   /** Browser automation backend for playwright-cli aliases. Optional so aliases stay discoverable even without browser support. */
   browserAPI?: BrowserAPI;
+  /**
+   * Returns the JID of the scoop whose shell is about to run a command,
+   * when that shell lives inside a scoop context. Used by the `agent`
+   * command to forward the parent's jid to the AgentBridge for model
+   * inheritance. Returns `undefined` when the shell has no scoop owner
+   * (the terminal panel's standalone WasmShell).
+   */
+  getParentJid?: () => string | undefined;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -93,6 +102,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createModelsCommand(options.fs),
     createCostCommand(),
     createNukeCommand(),
+    createAgentCommand({ getParentJid: options.getParentJid }),
   ];
 
   // Extension-only commands

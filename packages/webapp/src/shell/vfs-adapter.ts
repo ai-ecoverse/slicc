@@ -50,6 +50,22 @@ export class VfsAdapter implements IFileSystem {
     return this.registeredCommandsFn?.() ?? [];
   }
 
+  /**
+   * Writability predicate — delegates to the wrapped `VirtualFS` /
+   * `RestrictedFS`. Exposed so shell commands can check whether a path
+   * is writable under the current sandbox (if any) BEFORE delegating an
+   * op to a lower layer that can't see the caller's ACL. `VirtualFS`
+   * always returns `true`; `RestrictedFS` checks its writable prefixes.
+   *
+   * Not part of the `IFileSystem` contract; callers that need this must
+   * feature-detect (`'canWrite' in ctx.fs`) or cast. See the `agent`
+   * supplemental command for a concrete use.
+   */
+  canWrite(path: string): boolean {
+    const wrapped = this.vfs as unknown as { canWrite?: (p: string) => boolean };
+    return typeof wrapped.canWrite === 'function' ? wrapped.canWrite(path) : true;
+  }
+
   async readFile(path: string, options?: ReadFileOptions | BufferEncoding): Promise<string> {
     const normalized = normalizePath(path);
     const raw = await this.vfs.readFile(normalized, { encoding: 'binary' });

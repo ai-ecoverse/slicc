@@ -75,6 +75,27 @@ export class RestrictedFS {
     );
   }
 
+  /**
+   * Public writability predicate. Returns `true` when this RestrictedFS
+   * would accept a write op at `path` under its current ACL (mirrors the
+   * prefix check used internally by {@link checkWrite}, minus the thrown
+   * error). Callers use this to validate intent BEFORE delegating an op
+   * that the restricted fs itself cannot gate — e.g., the `agent` shell
+   * command must ensure the caller can write to `cwd` before handing it to
+   * the orchestrator bridge, because `stat(cwd)` succeeds on parent dirs
+   * of the sandbox (needed for PATH traversal) and would otherwise let a
+   * scoop escape by passing `/scoops` as `cwd`.
+   *
+   * Symlink targets are NOT followed here; callers that need escape-proof
+   * semantics should pair this with a `realpath` resolution first. For the
+   * `agent` command's use case (validating a cwd token), prefix-level
+   * matching is sufficient — the orchestrator builds a RestrictedFS with
+   * the resolved cwd as a writable prefix anyway.
+   */
+  canWrite(path: string): boolean {
+    return this.isWritable(path);
+  }
+
   /** Throw EACCES for write operations outside read-write paths. */
   private checkWrite(path: string): void {
     if (!this.isWritable(path)) {
