@@ -165,6 +165,148 @@ export class RestrictedFS {
     return this.vfs.stat(path);
   }
 
+  // ── Synchronous fast-path methods (VfsAdapter contract) ─────────────
+  //
+  // `VfsAdapter` (shell/vfs-adapter.ts) calls `statSync`, `lstatSync`,
+  // and `readDirSync` on its `vfs` field before falling back to the
+  // async counterparts. Non-cone scoops pass a `RestrictedFS` as that
+  // field (cast to `VirtualFS` in `scoop-context.ts`). These methods
+  // must therefore exist here too, enforce the same ACL as the async
+  // methods, and return `null` (matching `VirtualFS`'s null semantics)
+  // for disallowed or fast-path-unavailable paths — never throw.
+
+  /**
+   * Walk each path segment via `vfs.lstatSync` and detect whether the
+   * path traverses through (or ends at, when `includeLeaf` is true) a
+   * symlink.
+   *
+   * Returns:
+   *   - `true`  if a symlink was found in the scanned scope. Callers
+   *     should return `null` so `VfsAdapter` falls back to the async
+   *     path, which enforces symlink-escape ACL via
+   *     `resolveAndCheckRead` (VAL-FS-019 semantics).
+   *   - `false` if no symlink was found — safe to use the sync fast
+   *     path.
+   *   - `null`  if any segment could not be `lstatSync`-ed (e.g., the
+   *     path is under a mount, CacheFS fast path is unavailable, or the
+   *     segment does not exist). Callers should also return `null` to
+   *     force the async fallback, which handles these cases cleanly.
+   *
+   * Without this scan, a symlink INSIDE an allowed prefix whose target
+   * escapes every allowed prefix (e.g., `/shared/link-to-other-scoop`
+   * → `/scoops/other-scoop`) would let callers enumerate or read the
+   * escape target through the sync shell fast path — the exact
+   * symlink-escape regression VAL-FS-019 guards against on the async
+   * path.
+   */
+  private scanPathForSymlinks(path: string, includeLeaf: boolean): boolean | null {
+    const normalized = normalizePath(path);
+    if (normalized === '/') return false;
+    const segs = normalized.slice(1).split('/');
+    const limit = includeLeaf ? segs.length : segs.length - 1;
+    let current = '';
+    for (let i = 0; i < limit; i++) {
+      current = current + '/' + segs[i];
+      const s = this.vfs.lstatSync(current);
+      if (s === null) {
+        // Segment missing OR fast path unavailable — force async fallback
+        // so the caller uses the safe async code path.
+        return null;
+      }
+      if (s.type === 'symlink') return true;
+    }
+    return false;
+  }
+
+  /**
+   * Synchronous stat (follows symlinks) — VfsAdapter fast path.
+   * Returns null for disallowed paths (matches VirtualFS null semantics
+   * so the adapter can fall back to the async path cleanly).
+   *
+   * Also returns null when the path traverses (or ends at) any symlink
+   * — the async `stat()` path will then resolve + ACL-check the
+   * canonical path through `resolveAndCheckRead` (VAL-FS-019).
+   */
+  statSync(path: string): Stats | null {
+    if (!this.isAllowedStrict(path)) return null;
+    // Scan ancestors AND leaf: `statSync` follows symlinks (via
+    // `resolveSymlinksSync`), so a symlink anywhere in the path can
+    // escape the ACL. If any is found, force async fallback.
+    const scan = this.scanPathForSymlinks(path, true);
+    if (scan !== false) return null;
+    return this.vfs.statSync(path);
+  }
+
+  /**
+   * Synchronous lstat (does NOT follow symlinks) — VfsAdapter fast path.
+   * Returns null for disallowed paths.
+   *
+   * `lstat` does not follow the leaf symlink, so the leaf being a
+   * symlink is safe. However, ancestors ARE followed by CacheFS's
+   * internal `_lookup`, so an ancestor symlink escaping the ACL would
+   * still leak the resolved node. Scan ancestors only.
+   */
+  lstatSync(path: string): Stats | null {
+    if (!this.isAllowed(path)) return null;
+    const scan = this.scanPathForSymlinks(path, false);
+    if (scan !== false) return null;
+    return this.vfs.lstatSync(path);
+  }
+
+  /**
+   * Synchronous readDir — VfsAdapter fast path.
+   *
+   * - Disallowed paths: return `null` (so the adapter falls back to the
+   *   async `readDir`, which itself returns `[]` for disallowed paths).
+   * - Strictly-allowed paths: delegate to the VFS fast path, but only
+   *   after verifying no symlink in the path could make it escape the
+   *   ACL (VAL-FS-019 parity). If a symlink is detected anywhere in the
+   *   path (ancestor or leaf), return `null` to force async fallback —
+   *   the async `readDir` uses `resolveAndCheckRead` to reject escape
+   *   targets.
+   * - Parent-only-allowed paths (e.g. `/`, `/scoops`): filter the
+   *   returned entries to those whose child path is allowed, mirroring
+   *   the async `readDir`.
+   */
+  readDirSync(path: string): DirEntry[] | null {
+    if (!this.isAllowed(path)) return null;
+    // `readDir` follows symlinks in the directory path (CacheFS.readdir
+    // uses _lookup with follow=true), so a symlink anywhere in the
+    // path — ancestor or leaf — can escape the ACL. Scan full path.
+    const scan = this.scanPathForSymlinks(path, true);
+    if (scan !== false) return null;
+    const fast = this.vfs.readDirSync(path);
+    if (fast === null) return null;
+    if (this.isAllowedStrict(path)) return fast;
+    // Parent dir — apply the same ACL filter as the async readDir.
+    const base = normalizePath(path);
+    return fast.filter((e) => {
+      const child = base === '/' ? `/${e.name}` : `${base}/${e.name}`;
+      return this.isAllowed(child);
+    });
+  }
+
+  /**
+   * Canonical path resolution — VfsAdapter contract.
+   *
+   * Resolves symlinks through the underlying VFS. If the resolved path
+   * escapes every allowed prefix, throws `ENOENT` (consistent with
+   * VAL-FS-019 symlink-escape semantics).
+   */
+  async realpath(path: string): Promise<string> {
+    let resolved: string;
+    try {
+      resolved = await this.vfs.realpath(path);
+    } catch (err) {
+      if (err instanceof FsError) throw err;
+      throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
+    }
+    if (!this.isAllowedStrict(resolved)) {
+      throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
+    }
+    return resolved;
+  }
+
   async exists(path: string): Promise<boolean> {
     if (!this.isAllowed(path)) return false;
     if (this.isAllowedStrict(path)) {
@@ -362,7 +504,34 @@ export class RestrictedFS {
     if (!this.isAllowed(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
-    return this.vfs.lstat(path);
+    // Resolve the PARENT directory only — `lstat` must NOT follow the leaf
+    // symlink (regression: lstat on a valid in-sandbox symlink must still
+    // return Stats with type === 'symlink'). But LightningFS follows
+    // ancestor symlinks during lstat, so an escape symlink anywhere in the
+    // path can leak sibling-scoop metadata through the async fallback
+    // `VfsAdapter.lstat()` hits when the sync fast path returns null.
+    //
+    // Mirrors the parent-resolution pattern used in writeFile / mkdir /
+    // symlink. See VAL-FS-019 parity.
+    const normalized = normalizePath(path);
+    const dir = this.vfs.dirname(normalized);
+    const base = this.vfs.basename(normalized);
+    let resolvedDir: string;
+    if (dir === normalized) {
+      // Root — no parent to resolve.
+      resolvedDir = dir;
+    } else {
+      try {
+        resolvedDir = await this.vfs.realpath(dir);
+      } catch {
+        throw new FsError('ENOENT', 'no such file or directory', normalized);
+      }
+    }
+    const resolved = resolvedDir === '/' ? `/${base}` : `${resolvedDir}/${base}`;
+    if (!this.isAllowed(resolved)) {
+      throw new FsError('ENOENT', 'no such file or directory', normalized);
+    }
+    return this.vfs.lstat(resolved);
   }
 
   // ── Watcher operations ──────────────────────────────────────────────
