@@ -495,6 +495,14 @@ export class Orchestrator {
     this.messageQueues.delete(jid);
     this.lastAgentTimestamp.delete(jid);
     this.scoopResponseBuffer.delete(jid);
+    // Defensive observer cleanup — subscribers are expected to call their
+    // unsubscribe, but if they never get the chance (uncaught exception
+    // before `finally`, bridge crash mid-spawn, etc.) the set would
+    // otherwise linger and could fire against stale handlers if the jid
+    // were ever reused. Dropping the whole key is safe because every
+    // legitimate observer for this scoop is about to lose its relevance
+    // anyway: the scoop's context has been destroyed.
+    this.scoopObservers.delete(jid);
     log.info('Scoop unregistered', { jid });
   }
 
@@ -860,6 +868,11 @@ export class Orchestrator {
       context.dispose();
       this.contexts.delete(jid);
       this.tabs.delete(jid);
+      // Drop any lingering per-scoop observers alongside the context so
+      // the shutdown / reset paths (which call us directly, bypassing
+      // `unregisterScoop`) also reclaim them. See the matching delete
+      // in `unregisterScoop` for the rationale.
+      this.scoopObservers.delete(jid);
       log.info('Scoop context destroyed', { jid });
     }
   }

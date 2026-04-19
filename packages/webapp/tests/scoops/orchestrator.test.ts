@@ -818,3 +818,133 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
     expect(captured).toHaveLength(0);
   });
 });
+
+describe('Orchestrator observer cleanup on scoop teardown', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await sharedFs?.dispose();
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  interface OrchestratorObserverInternals {
+    scoopObservers: Map<string, Set<unknown>>;
+    dispatchScoopEvent(jid: string, event: 'onSendMessage', text: string): void;
+  }
+
+  it('drops lingering observers when unregisterScoop runs', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_observer_leak_1',
+      name: 'observer-leak',
+      folder: 'observer-leak-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'observer-leak-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const handler = vi.fn();
+    // Subscribe but "forget" to unsubscribe — the production pathway
+    // that matters is a crash/exception preventing the bridge's
+    // `finally` from running. We skip the `unsubscribe()` return value
+    // on purpose.
+    orch.observeScoop(scoop.jid, { onSendMessage: handler });
+
+    const internals = orch as unknown as OrchestratorObserverInternals;
+    expect(internals.scoopObservers.has(scoop.jid)).toBe(true);
+
+    await orch.unregisterScoop(scoop.jid);
+
+    expect(internals.scoopObservers.has(scoop.jid)).toBe(false);
+
+    // A post-teardown dispatch must NOT reach the lingering handler.
+    internals.dispatchScoopEvent(scoop.jid, 'onSendMessage', 'post-teardown text');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('drops observers when destroyScoopTab runs standalone (shutdown / reset paths)', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_observer_leak_2',
+      name: 'observer-leak-2',
+      folder: 'observer-leak-2-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'observer-leak-2-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const handler = vi.fn();
+    orch.observeScoop(scoop.jid, { onSendMessage: handler });
+
+    const internals = orch as unknown as OrchestratorObserverInternals;
+    expect(internals.scoopObservers.has(scoop.jid)).toBe(true);
+
+    await orch.destroyScoopTab(scoop.jid);
+
+    expect(internals.scoopObservers.has(scoop.jid)).toBe(false);
+    internals.dispatchScoopEvent(scoop.jid, 'onSendMessage', 'post-teardown text');
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
