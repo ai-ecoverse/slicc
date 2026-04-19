@@ -161,6 +161,7 @@ export class ScoopContext {
         env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
         browserAPI: browser,
         jshDiscoveryFs: this.skillsFs ? effectiveSkillsFs : undefined,
+        allowedCommands: this.scoop.config?.allowedCommands,
       });
       log.info('WasmShell initialized', { folder: this.scoop.folder });
       const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
