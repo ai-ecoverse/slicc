@@ -6,7 +6,7 @@
  */
 
 import type { ToolDefinition } from '../core/types.js';
-import type { RegisteredScoop } from './types.js';
+import { CURRENT_SCOOP_CONFIG_VERSION, type RegisteredScoop } from './types.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('scoop-management-tools');
@@ -200,6 +200,14 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               .slice(0, 50) + '-scoop';
 
           try {
+            // Every scoop created through the tool gets the standard sandbox:
+            // read-only access to `/workspace/` so it can see the cone's
+            // skills. The orchestrator itself does not inject any defaults —
+            // keeping the default at the tool layer means the `ScoopConfig`
+            // surface stays pure-replace (what you set is what you get).
+            // Stamping `configSchemaVersion` tells the orchestrator this
+            // record was created with explicit config and its `visiblePaths`
+            // value is authoritative — no compat migration on restore.
             const newScoop = await onScoopScoop({
               name,
               folder,
@@ -209,7 +217,11 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               requiresTrigger: true,
               assistantLabel: folder,
               addedAt: new Date().toISOString(),
-              config: model ? { modelId: model } : undefined,
+              config: {
+                ...(model ? { modelId: model } : {}),
+                visiblePaths: ['/workspace/'],
+              },
+              configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
             });
 
             log.info('Scoop created', { name, folder });

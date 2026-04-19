@@ -9,7 +9,13 @@
  * - Owns a single shared VirtualFS instance
  */
 
-import type { RegisteredScoop, ChannelMessage, ScoopTabState, ScheduledTask } from './types.js';
+import {
+  CURRENT_SCOOP_CONFIG_VERSION,
+  type RegisteredScoop,
+  type ChannelMessage,
+  type ScoopTabState,
+  type ScheduledTask,
+} from './types.js';
 import * as db from './db.js';
 import { createLogger } from '../core/logger.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
@@ -118,6 +124,7 @@ export class Orchestrator {
         scoop.requiresTrigger = false;
         scoop.assistantLabel = scoop.assistantLabel || 'sliccy';
       }
+      this.migrateScoopConfig(scoop);
       this.scoops.set(scoop.jid, scoop);
       this.messageQueues.set(scoop.jid, []);
 
@@ -161,6 +168,39 @@ export class Orchestrator {
 
     // Start polling for pending messages
     this.startMessageLoop();
+  }
+
+  /**
+   * One-shot in-memory compat migration for `ScoopConfig`. Mutates the scoop
+   * record in place so the rest of the runtime sees the normalized shape;
+   * the DB copy stays legacy until some other operation happens to call
+   * `db.saveScoop` (e.g. a user-initiated scoop update). That's fine — this
+   * migration is idempotent and cheap, so re-running it on every boot until
+   * the record gets rewritten is a non-issue.
+   *
+   * Gated on {@link RegisteredScoop.configSchemaVersion} rather than a truthy
+   * check on individual fields, so a record explicitly saved with
+   * `visiblePaths: undefined` (or an empty array) under the current schema
+   * keeps that authoritative value — "no read-only paths" stays "no read-only
+   * paths." Only records that predate a field get the historical default
+   * filled in.
+   *
+   * Cones have no `ScoopConfig` path surface at all; they ignore the version.
+   */
+  private migrateScoopConfig(scoop: RegisteredScoop): void {
+    if (scoop.isCone) return;
+    const version = scoop.configSchemaVersion ?? 0;
+    if (version >= CURRENT_SCOOP_CONFIG_VERSION) return;
+
+    if (version < 1) {
+      // Pre-visiblePaths era: default to the historical `/workspace/` read
+      // access so skills stay visible after restart.
+      scoop.config = {
+        ...scoop.config,
+        visiblePaths: scoop.config?.visiblePaths ?? ['/workspace/'],
+      };
+    }
+    scoop.configSchemaVersion = CURRENT_SCOOP_CONFIG_VERSION;
   }
 
   /** Ensure root directory structure exists on the shared FS */
@@ -501,10 +541,17 @@ export class Orchestrator {
 
     const contextId = `scoop-${scoop.folder}-${Date.now()}`;
 
-    // Create the appropriate filesystem for this scoop
+    // Create the appropriate filesystem for this scoop.
+    // Cone gets unrestricted access; non-cone scoops use a RestrictedFS whose
+    // read-only prefixes come straight from config (pure replace — defaults
+    // live in `scoop_scoop` and in the restore backfill, not here).
     const fs = scoop.isCone
-      ? this.sharedFs // Cone gets unrestricted access
-      : new RestrictedFS(this.sharedFs, [`/scoops/${scoop.folder}/`, '/shared/'], ['/workspace/']);
+      ? this.sharedFs
+      : new RestrictedFS(
+          this.sharedFs,
+          [`/scoops/${scoop.folder}/`, '/shared/'],
+          scoop.config?.visiblePaths ? [...scoop.config.visiblePaths] : []
+        );
 
     // Create the scoop context with full callbacks
     const contextCallbacks: ScoopContextCallbacks = {

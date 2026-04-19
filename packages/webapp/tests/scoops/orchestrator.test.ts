@@ -5,10 +5,16 @@
  * Uses the DB layer directly to verify message persistence and routing.
  */
 
-import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
-import { initDB, saveScoop, getMessagesForScoop, clearAllMessages } from '../../src/scoops/db.js';
-import { SCOOP_IDLE_TIMEOUT_MS } from '../../src/scoops/orchestrator.js';
+import {
+  initDB,
+  saveScoop,
+  getMessagesForScoop,
+  clearAllMessages,
+  getAllScoops,
+} from '../../src/scoops/db.js';
+import { Orchestrator, SCOOP_IDLE_TIMEOUT_MS } from '../../src/scoops/orchestrator.js';
 import type { RegisteredScoop, ChannelMessage } from '../../src/scoops/types.js';
 
 // Test helpers — we can't instantiate a full Orchestrator (needs VirtualFS, DOM, etc.)
@@ -418,5 +424,182 @@ describe('Scoop idle detection', () => {
     // Verify it does NOT show up in the scoop's messages
     const scoopMessages = await getMessagesForScoop(testScoop.jid);
     expect(scoopMessages).toHaveLength(0);
+  });
+});
+
+describe('Orchestrator session-restore compat for visiblePaths', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    // TaskScheduler.start() calls window.setInterval; vitest runs in node.
+    // Expose a minimal shim so orchestrator.init() can boot, remembering the
+    // prior value so afterAll can restore it (vitest may share a worker
+    // across test files and we don't want to leak a globalThis.window shim).
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    // Fresh DB state — clear any scoops from previous tests so we control
+    // exactly what gets hydrated.
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+  });
+
+  afterEach(async () => {
+    // Stop the scheduler's poll timer AND dispose the shared VirtualFS so
+    // BroadcastChannel / IndexedDB handles don't leak across test runs.
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await sharedFs?.dispose();
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  async function initOrchestrator(): Promise<Orchestrator> {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+    return orch;
+  }
+
+  it('backfills visiblePaths = ["/workspace/"] for truly-legacy non-cone scoops (no configSchemaVersion)', async () => {
+    const legacy: RegisteredScoop = {
+      jid: 'scoop_legacy_1',
+      name: 'legacy',
+      folder: 'legacy-scoop',
+      trigger: '@legacy-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'legacy-scoop',
+      addedAt: new Date().toISOString(),
+      // Deliberately no `config` and no `configSchemaVersion` — mirrors a
+      // scoop saved before the path-config fields existed.
+    };
+    await saveScoop(legacy);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_legacy_1');
+    expect(restored?.config?.visiblePaths).toEqual(['/workspace/']);
+    expect(restored?.configSchemaVersion).toBe(1);
+  });
+
+  it('preserves an explicitly-set visiblePaths under the current schema version', async () => {
+    const configured: RegisteredScoop = {
+      jid: 'scoop_configured_1',
+      name: 'configured',
+      folder: 'configured-scoop',
+      trigger: '@configured-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'configured-scoop',
+      addedAt: new Date().toISOString(),
+      config: { visiblePaths: ['/custom/'] },
+      configSchemaVersion: 1,
+    };
+    await saveScoop(configured);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_configured_1');
+    expect(restored?.config?.visiblePaths).toEqual(['/custom/']);
+  });
+
+  it('preserves an explicit undefined visiblePaths on a current-schema record (no silent backfill)', async () => {
+    // A scoop created deliberately with no read-only paths under the new
+    // schema must keep that contract — the migration only fires for truly
+    // legacy records (versions below the current schema).
+    const strict: RegisteredScoop = {
+      jid: 'scoop_strict_1',
+      name: 'strict',
+      folder: 'strict-scoop',
+      trigger: '@strict-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'strict-scoop',
+      addedAt: new Date().toISOString(),
+      config: { modelId: 'claude-sonnet-4-6' }, // has config, no visiblePaths
+      configSchemaVersion: 1,
+    };
+    await saveScoop(strict);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_strict_1');
+    expect(restored?.config?.visiblePaths).toBeUndefined();
+    expect(restored?.configSchemaVersion).toBe(1);
+  });
+
+  it('preserves an explicit empty-array visiblePaths across restart', async () => {
+    const strict: RegisteredScoop = {
+      jid: 'scoop_empty_1',
+      name: 'empty',
+      folder: 'empty-scoop',
+      trigger: '@empty-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'empty-scoop',
+      addedAt: new Date().toISOString(),
+      config: { visiblePaths: [] },
+      configSchemaVersion: 1,
+    };
+    await saveScoop(strict);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('scoop_empty_1');
+    expect(restored?.config?.visiblePaths).toEqual([]);
+  });
+
+  it('does not touch cone records (cones ignore visiblePaths)', async () => {
+    const legacyCone: RegisteredScoop = {
+      jid: 'cone_legacy_1',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: new Date().toISOString(),
+    };
+    await saveScoop(legacyCone);
+
+    const o = await initOrchestrator();
+    const restored = o.getScoop('cone_legacy_1');
+    expect(restored?.config?.visiblePaths).toBeUndefined();
+    // Cones never get a schema stamp — they have no path-config surface.
+    expect(restored?.configSchemaVersion).toBeUndefined();
   });
 });
