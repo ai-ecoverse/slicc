@@ -60,6 +60,14 @@ describe('scoop_scoop tool — config defaults', () => {
     expect(created.config?.modelId).toBe('claude-sonnet-4-6');
   });
 
+  it('injects writablePaths scoped to the new scoop folder plus /shared/', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'hero-block' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.writablePaths).toEqual([`/scoops/${created.folder}/`, '/shared/']);
+  });
+
   it('passes an isCone=false scoop with a sanitized folder', async () => {
     const { tool, onScoopScoop } = findScoopScoopTool();
     await tool.execute({ name: 'Hero Block #1' });

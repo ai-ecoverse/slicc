@@ -200,6 +200,15 @@ export class Orchestrator {
         visiblePaths: scoop.config?.visiblePaths ?? ['/workspace/'],
       };
     }
+    if (version < 2) {
+      // Pre-writablePaths era: default to the historical writable set so
+      // existing scoops keep being able to write to their own sandbox and
+      // to `/shared/`.
+      scoop.config = {
+        ...scoop.config,
+        writablePaths: scoop.config?.writablePaths ?? [`/scoops/${scoop.folder}/`, '/shared/'],
+      };
+    }
     scoop.configSchemaVersion = CURRENT_SCOOP_CONFIG_VERSION;
   }
 
@@ -543,13 +552,14 @@ export class Orchestrator {
 
     // Create the appropriate filesystem for this scoop.
     // Cone gets unrestricted access; non-cone scoops use a RestrictedFS whose
-    // read-only prefixes come straight from config (pure replace — defaults
-    // live in `scoop_scoop` and in the restore backfill, not here).
+    // read-only and read-write prefixes come straight from config (pure
+    // replace — defaults live in `scoop_scoop` and in the restore backfill,
+    // not here).
     const fs = scoop.isCone
       ? this.sharedFs
       : new RestrictedFS(
           this.sharedFs,
-          [`/scoops/${scoop.folder}/`, '/shared/'],
+          scoop.config?.writablePaths ? [...scoop.config.writablePaths] : [],
           scoop.config?.visiblePaths ? [...scoop.config.visiblePaths] : []
         );
 
