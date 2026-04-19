@@ -312,7 +312,14 @@ export function createAgentBridge(
       try {
         await sharedFs.rm(scratchFolder, { recursive: true });
       } catch (err) {
-        log.warn('scratch folder cleanup failed', { folder, error: errText(err) });
+        // ENOENT is expected when registerScoop rolled back before the
+        // scratch folder was ever created (ScoopContext.init() creates it
+        // on first write). Don't pollute logs with that case — surface
+        // anything else (EACCES, EBUSY, etc.) since it could indicate a
+        // real cleanup failure.
+        if (!isFsErrorCode(err, 'ENOENT')) {
+          log.warn('scratch folder cleanup failed', { folder, error: errText(err) });
+        }
       }
       if (sessionStore) {
         try {
@@ -571,4 +578,18 @@ function normalizeRwPrefix(path: string): string {
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Narrow test: is this an FsError (or any error-like object) whose POSIX
+ * error code matches `expected`? `FsError` exposes `.code` directly; for
+ * future cross-package interop we also accept any object with a `code`
+ * property (some runtimes wrap FsError into a plain value before it
+ * propagates). Non-string codes are rejected so a numeric errno from
+ * Node won't accidentally match.
+ */
+function isFsErrorCode(err: unknown, expected: string): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === 'string' && code === expected;
 }
