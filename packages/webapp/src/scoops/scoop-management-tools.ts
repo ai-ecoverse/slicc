@@ -187,7 +187,7 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               type: 'array',
               items: { type: 'string' },
               description:
-                'VFS paths the scoop can READ (not write). Pure replace — what you set is what you get. Omit to use the default ["/workspace/"] which exposes the shared skills tree. Pass [] for a scoop that reads nothing. Trailing slash recommended (e.g. "/shared/data/").',
+                'VFS paths the scoop can READ (not write). Pure replace — what you set is what you get. Omit to use the default ["/workspace/"] which exposes the shared skills tree. Pass [] for no extra read-only paths. Note: the scoop\'s writablePaths are always readable too, so a true read-nothing sandbox also requires writablePaths: []. Mounts remain readable regardless. Trailing slash recommended (e.g. "/shared/data/").',
             },
             writablePaths: {
               type: 'array',
