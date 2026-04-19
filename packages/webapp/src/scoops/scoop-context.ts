@@ -746,7 +746,12 @@ export class ScoopContext {
       }
     }
 
-    // Create default CLAUDE.md if missing
+    // Create default CLAUDE.md if missing. Best-effort: scoops with
+    // pure-replace `writablePaths: []` (or no overlap with the memory
+    // path) have no writable location for this file, and that's a
+    // legitimate configuration — a read-only / audit-style scoop
+    // simply runs without a persisted memory file. Swallowing the
+    // EACCES keeps init on the happy path for zero-write sandboxes.
     const memoryPath = this.scoop.isCone
       ? '/workspace/CLAUDE.md'
       : `/scoops/${this.scoop.folder}/CLAUDE.md`;
@@ -765,7 +770,19 @@ Created: ${new Date().toISOString()}
 ## Context
 (Add important context here)
 `;
-      await this.fs.writeFile(memoryPath, defaultMemory);
+      try {
+        await this.fs.writeFile(memoryPath, defaultMemory);
+      } catch (err) {
+        const code = (err as { code?: string })?.code;
+        if (code === 'EACCES') {
+          log.debug('Skipping default memory write (sandbox is read-only)', {
+            folder: this.scoop.folder,
+            path: memoryPath,
+          });
+        } else {
+          throw err;
+        }
+      }
     }
   }
 
