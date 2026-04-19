@@ -110,24 +110,26 @@ describe('createAgentBridge — config construction', () => {
     const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
     const { fs: sharedFs } = makeMockSharedFs();
     const bridge = createAgentBridge(orchestrator, sharedFs, null, {
-      generateUid: () => 'fixed12',
+      generateName: () => 'exuberant-lavender',
       resolveModel: (id) => id,
     });
 
-    scripts.set('agent_fixed12', (obs) => {
+    scripts.set('agent_exuberant_lavender', (obs) => {
       obs.onSendMessage?.('hi');
     });
     await bridge.spawn(BASE_OPTS);
 
     expect(registerCalls).toHaveLength(1);
     const scoop = registerCalls[0];
-    expect(scoop.jid).toBe('agent_fixed12');
-    expect(scoop.folder).toBe('agent-fixed12');
+    expect(scoop.jid).toBe('agent_exuberant_lavender');
+    expect(scoop.folder).toBe('agent-exuberant-lavender');
+    expect(scoop.folder).toMatch(/^agent-[a-z]+-[a-z]+$/);
+    expect(scoop.jid).toMatch(/^agent_[a-z]+_[a-z]+$/);
     expect(scoop.isCone).toBe(false);
     expect(scoop.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
     expect(scoop.config).toEqual({
       visiblePaths: ['/workspace/'],
-      writablePaths: ['/workspace/', '/shared/', '/scoops/agent-fixed12/'],
+      writablePaths: ['/workspace/', '/shared/', '/scoops/agent-exuberant-lavender/'],
       allowedCommands: ['*'],
     });
   });
@@ -135,8 +137,10 @@ describe('createAgentBridge — config construction', () => {
   it('normalizes cwd to a trailing-slash prefix', async () => {
     const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
-    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
 
     await bridge.spawn({ ...BASE_OPTS, cwd: '/scoops/some-scoop' });
 
@@ -146,12 +150,109 @@ describe('createAgentBridge — config construction', () => {
   it('forwards allowedCommands verbatim', async () => {
     const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
-    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
 
     await bridge.spawn({ ...BASE_OPTS, allowedCommands: ['echo', 'cat'] });
 
     expect(registerCalls[0].config?.allowedCommands).toEqual(['echo', 'cat']);
+  });
+});
+
+describe('createAgentBridge — name generation', () => {
+  it('defaults to an <adjective>-<flavor> token when no generator is injected', async () => {
+    const { orchestrator, registerCalls, scripts, observers } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null);
+    // We don't know the jid in advance — drive the script through the
+    // observer subscription as it fires.
+    (orchestrator.sendPrompt as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      // Fire a minimal success event through every observer so the
+      // spawn completes cleanly.
+      for (const set of observers.values()) {
+        for (const obs of set) {
+          obs.onSendMessage?.('done');
+        }
+      }
+    });
+    void scripts; // unused in this test
+
+    const result = await bridge.spawn(BASE_OPTS);
+
+    expect(result.exitCode).toBe(0);
+    expect(registerCalls).toHaveLength(1);
+    const scoop = registerCalls[0];
+    expect(scoop.folder).toMatch(/^agent-[a-z]+-[a-z]+$/);
+    expect(scoop.jid).toMatch(/^agent_[a-z]+_[a-z]+$/);
+  });
+
+  it('retries the name generator when the first pick collides with an existing jid', async () => {
+    const { orchestrator, registerCalls, scripts, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    // Seed a fake collision: a previously-registered agent scoop with the
+    // jid the first pick would produce.
+    knownScoops.push({
+      jid: 'agent_cozy_vanilla',
+      name: 'agent-cozy-vanilla',
+      folder: 'agent-cozy-vanilla',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'agent-cozy-vanilla',
+      addedAt: '2026-04-19T00:00:00Z',
+    });
+
+    const picks = ['cozy-vanilla', 'sunny-mango'];
+    let callIdx = 0;
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => picks[callIdx++] ?? 'fallback-fallback',
+    });
+    scripts.set('agent_sunny_mango', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn(BASE_OPTS);
+
+    expect(callIdx).toBe(2); // one collision, one fresh pick
+    expect(registerCalls[0].folder).toBe('agent-sunny-mango');
+    expect(registerCalls[0].jid).toBe('agent_sunny_mango');
+  });
+
+  it('falls back to the hex uid generator after eight consecutive collisions', async () => {
+    const { orchestrator, registerCalls, scripts, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    // Seed a collision for the one name the generator will ever return.
+    knownScoops.push({
+      jid: 'agent_cozy_vanilla',
+      name: 'agent-cozy-vanilla',
+      folder: 'agent-cozy-vanilla',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'agent-cozy-vanilla',
+      addedAt: '2026-04-19T00:00:00Z',
+    });
+
+    let nameCalls = 0;
+    let uidCalls = 0;
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => {
+        nameCalls++;
+        return 'cozy-vanilla'; // always collides
+      },
+      generateUid: () => {
+        uidCalls++;
+        return 'deadbeef';
+      },
+    });
+    scripts.set('agent_deadbeef', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn(BASE_OPTS);
+
+    expect(nameCalls).toBe(8);
+    expect(uidCalls).toBe(1);
+    expect(registerCalls[0].folder).toBe('agent-deadbeef');
+    expect(registerCalls[0].jid).toBe('agent_deadbeef');
   });
 });
 
@@ -160,10 +261,10 @@ describe('createAgentBridge — model resolution', () => {
     const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();
     const bridge = createAgentBridge(orchestrator, fs, null, {
-      generateUid: () => 'u',
+      generateName: () => 'jolly-mint',
       resolveModel: (id) => id,
     });
-    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
 
     await bridge.spawn({ ...BASE_OPTS, modelId: 'claude-sonnet-4-6' });
 
@@ -174,7 +275,7 @@ describe('createAgentBridge — model resolution', () => {
     const { orchestrator, registerCalls } = makeMockOrchestrator();
     const { fs, rmCalls } = makeMockSharedFs();
     const bridge = createAgentBridge(orchestrator, fs, null, {
-      generateUid: () => 'u',
+      generateName: () => 'jolly-mint',
       resolveModel: () => null,
     });
 
@@ -202,10 +303,10 @@ describe('createAgentBridge — model resolution', () => {
       configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
     });
     const bridge = createAgentBridge(orchestrator, fs, null, {
-      generateUid: () => 'u',
+      generateName: () => 'jolly-mint',
       resolveModel: (id) => id,
     });
-    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
 
     await bridge.spawn({ ...BASE_OPTS, parentJid: 'scoop_parent' });
 
@@ -227,8 +328,10 @@ describe('createAgentBridge — model resolution', () => {
       assistantLabel: 'sliccy',
       addedAt: '2026-04-19T00:00:00Z',
     });
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
-    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
 
     await bridge.spawn({ ...BASE_OPTS, parentJid: 'cone_1' });
 
@@ -240,8 +343,10 @@ describe('createAgentBridge — output capture', () => {
   it('returns the last send_message as finalText', async () => {
     const { orchestrator, scripts } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
-    scripts.set('agent_u', (obs) => {
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => {
       obs.onSendMessage?.('first');
       obs.onSendMessage?.('second');
       obs.onSendMessage?.('third');
@@ -256,8 +361,10 @@ describe('createAgentBridge — output capture', () => {
   it('falls back to the assistant response buffer when no send_message fires', async () => {
     const { orchestrator, scripts } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
-    scripts.set('agent_u', (obs) => {
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => {
       obs.onResponse?.('hello ', true);
       obs.onResponse?.('world', true);
     });
@@ -271,8 +378,10 @@ describe('createAgentBridge — output capture', () => {
   it('non-partial onResponse replaces the buffer (non-streaming providers)', async () => {
     const { orchestrator, scripts } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
-    scripts.set('agent_u', (obs) => {
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => {
       obs.onResponse?.('streaming text', true);
       // Then a non-partial with the full text — mirrors pi-ai for
       // non-streaming providers. Must REPLACE, not append.
@@ -287,8 +396,10 @@ describe('createAgentBridge — output capture', () => {
   it('returns an empty string when the scoop produces nothing', async () => {
     const { orchestrator, scripts } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
-    scripts.set('agent_u', () => undefined);
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', () => undefined);
 
     const result = await bridge.spawn(BASE_OPTS);
 
@@ -301,8 +412,10 @@ describe('createAgentBridge — error handling', () => {
   it('promotes onError to exitCode 1 with the error text', async () => {
     const { orchestrator, scripts } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
-    scripts.set('agent_u', (obs) => {
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => {
       obs.onError?.('pi-ai stream aborted');
     });
 
@@ -315,8 +428,10 @@ describe('createAgentBridge — error handling', () => {
   it("keeps the first specific error over a later 'Agent not initialized' follow-up", async () => {
     const { orchestrator, scripts } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
-    scripts.set('agent_u', (obs) => {
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => {
       obs.onError?.('No API key configured for provider "anthropic"');
       obs.onError?.('Agent not initialized');
     });
@@ -333,7 +448,9 @@ describe('createAgentBridge — error handling', () => {
       throw new Error('boom');
     });
     const { fs } = makeMockSharedFs();
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
 
     const result = await bridge.spawn(BASE_OPTS);
 
@@ -347,15 +464,17 @@ describe('createAgentBridge — error handling', () => {
       throw new Error('init failed');
     });
     const { fs, rmCalls } = makeMockSharedFs();
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
 
     const result = await bridge.spawn(BASE_OPTS);
 
     expect(result.exitCode).toBe(1);
     expect(result.finalText).toBe('init failed');
     // Cleanup still runs — unregisterScoop is safe against unknown jids.
-    expect(unregisterCalls).toContain('agent_u');
-    expect(rmCalls).toContain('/scoops/agent-u');
+    expect(unregisterCalls).toContain('agent_jolly_mint');
+    expect(rmCalls).toContain('/scoops/agent-jolly-mint');
   });
 });
 
@@ -363,37 +482,43 @@ describe('createAgentBridge — cleanup', () => {
   it('unregisters the scoop and removes the scratch folder on success', async () => {
     const { orchestrator, unregisterCalls, scripts } = makeMockOrchestrator();
     const { fs, rmCalls } = makeMockSharedFs();
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
-    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
 
     await bridge.spawn(BASE_OPTS);
 
-    expect(unregisterCalls).toEqual(['agent_u']);
-    expect(rmCalls).toEqual(['/scoops/agent-u']);
+    expect(unregisterCalls).toEqual(['agent_jolly_mint']);
+    expect(rmCalls).toEqual(['/scoops/agent-jolly-mint']);
   });
 
   it('cleanup runs even when the scoop errors out', async () => {
     const { orchestrator, unregisterCalls, scripts } = makeMockOrchestrator();
     const { fs, rmCalls } = makeMockSharedFs();
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
-    scripts.set('agent_u', (obs) => obs.onError?.('stream error'));
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onError?.('stream error'));
 
     await bridge.spawn(BASE_OPTS);
 
-    expect(unregisterCalls).toEqual(['agent_u']);
-    expect(rmCalls).toEqual(['/scoops/agent-u']);
+    expect(unregisterCalls).toEqual(['agent_jolly_mint']);
+    expect(rmCalls).toEqual(['/scoops/agent-jolly-mint']);
   });
 
   it('unsubscribes the observer after the run so subsequent events are dropped', async () => {
     const { orchestrator, observers, scripts } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();
-    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
-    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
 
     await bridge.spawn(BASE_OPTS);
 
     // After the run, no observer should remain subscribed for this jid.
-    expect(observers.has('agent_u')).toBe(false);
+    expect(observers.has('agent_jolly_mint')).toBe(false);
   });
 
   it('deletes the sessionStore entry when one is provided', async () => {
@@ -406,13 +531,13 @@ describe('createAgentBridge — cleanup', () => {
       }),
     } as unknown as import('../../src/core/session.js').SessionStore;
     const bridge = createAgentBridge(orchestrator, fs, sessionStore, {
-      generateUid: () => 'u',
+      generateName: () => 'jolly-mint',
     });
-    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
 
     await bridge.spawn(BASE_OPTS);
 
-    expect(deleteCalls).toEqual(['agent_u']);
+    expect(deleteCalls).toEqual(['agent_jolly_mint']);
   });
 });
 
