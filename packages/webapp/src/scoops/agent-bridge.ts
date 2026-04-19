@@ -231,6 +231,11 @@ export function createAgentBridge(
       addedAt: new Date().toISOString(),
       config: scoopConfig,
       configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+      // Ephemeral scoops: we already drain send_message / response via
+      // `observeScoop` below, so the orchestrator's default cone-notify
+      // side effect would only duplicate that work and bill an extra cone
+      // turn. See `RegisteredScoop.notifyOnComplete` for details.
+      notifyOnComplete: false,
     };
 
     // Observer state. The orchestrator's per-scoop observer fires these

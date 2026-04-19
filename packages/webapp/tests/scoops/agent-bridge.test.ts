@@ -127,6 +127,9 @@ describe('createAgentBridge — config construction', () => {
     expect(scoop.jid).toMatch(/^agent_[a-z]+_[a-z]+$/);
     expect(scoop.isCone).toBe(false);
     expect(scoop.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
+    // Ephemeral agent scoops must opt out of the orchestrator's cone-notify
+    // side effect; the bridge drains responses via `observeScoop` instead.
+    expect(scoop.notifyOnComplete).toBe(false);
     expect(scoop.config).toEqual({
       visiblePaths: ['/workspace/'],
       writablePaths: ['/workspace/', '/shared/', '/scoops/agent-exuberant-lavender/'],

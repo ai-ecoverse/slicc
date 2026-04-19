@@ -48,6 +48,20 @@ export interface RegisteredScoop {
    * explicit `undefined`/empty values stay authoritative.
    */
   configSchemaVersion?: number;
+  /**
+   * When `false`, suppresses the orchestrator's cone-notify side effect
+   * that fires when this scoop reaches the terminal `ready` status after
+   * processing a prompt. Default (`undefined` / `true`) preserves the
+   * historical behavior: the cone receives a `scoop-notify` message with
+   * the scoop's last response, triggering a cone turn.
+   *
+   * Set to `false` for ephemeral, self-contained invocations (e.g. scoops
+   * spawned through the `agent` shell command) where the caller already
+   * drains the scoop's output via an `observeScoop` subscription and does
+   * NOT want the completion to bill an extra cone turn. Not persisted —
+   * ephemeral scoops are unregistered at the end of their run.
+   */
+  notifyOnComplete?: boolean;
 }
 
 /** Per-scoop configuration */
