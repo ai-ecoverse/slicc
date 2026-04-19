@@ -289,6 +289,24 @@ export function createAgentCommand(options: AgentCommandOptions = {}): Command {
       };
     }
 
+    // Sandbox-escape guard: when the invoking shell is a scoop, `ctx.fs` is a
+    // RestrictedFS whose `stat` intentionally succeeds on sandbox *parents*
+    // (so the shell can probe PATH and traverse toward allowed prefixes).
+    // Without this check a scoop could pass `/scoops` as `<cwd>` and the
+    // orchestrator bridge would happily grant it a writable prefix covering
+    // every sibling scoop. Require `cwd` to be writable by the caller before
+    // forwarding to the bridge. Terminal shells wrap an unrestricted
+    // VirtualFS (via `VfsAdapter.canWrite`, which returns `true`), so this
+    // predicate is a no-op for top-level invocations.
+    const fsWithCanWrite = ctx.fs as unknown as { canWrite?: (p: string) => boolean };
+    if (typeof fsWithCanWrite.canWrite === 'function' && !fsWithCanWrite.canWrite(resolvedCwd)) {
+      return {
+        stdout: '',
+        stderr: `agent: cwd not writable: ${cwdArg}\n`,
+        exitCode: 1,
+      };
+    }
+
     const bridge = getBridge();
     if (!bridge) {
       return {

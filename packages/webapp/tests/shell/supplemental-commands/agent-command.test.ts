@@ -20,10 +20,17 @@ interface MockFsOptions {
   stat?: IFileSystem['stat'];
   /** Override the default `exists` implementation. */
   exists?: IFileSystem['exists'];
+  /**
+   * Override the default `canWrite` implementation. Optional because the
+   * agent command feature-detects this method; when omitted, the mock
+   * behaves like an unrestricted filesystem (always writable) — matching
+   * the terminal-shell case where `VfsAdapter` wraps a plain `VirtualFS`.
+   */
+  canWrite?: (path: string) => boolean;
 }
 
 function createMockCtx(cwd = '/home', fsOptions: MockFsOptions = {}) {
-  const fs: Partial<IFileSystem> = {
+  const fs: Partial<IFileSystem> & { canWrite: (path: string) => boolean } = {
     resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
     exists:
       fsOptions.exists ??
@@ -40,9 +47,10 @@ function createMockCtx(cwd = '/home', fsOptions: MockFsOptions = {}) {
         size: 0,
         mtime: new Date(0),
       })),
+    canWrite: fsOptions.canWrite ?? (() => true),
   };
   return {
-    fs: fs as IFileSystem,
+    fs: fs as unknown as IFileSystem,
     cwd,
     env: new Map<string, string>(),
     stdin: '',
@@ -306,6 +314,65 @@ describe('agent command', () => {
       expect(result.exitCode).toBe(0);
       expect(spawn).toHaveBeenCalledOnce();
       expect(spawn.mock.calls[0][0].cwd).toBe('/home');
+    });
+  });
+
+  describe('cwd writability validation (sandbox-escape guard)', () => {
+    it('errors when fs.canWrite returns false and does not call bridge', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const ctx = createMockCtx('/scoops/agent-foo', {
+        canWrite: (path) => path.startsWith('/scoops/agent-foo'),
+      });
+      const result = await createAgentCommand().execute(['/scoops', '*', 'p'], ctx);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('not writable');
+      expect(result.stderr).toContain('/scoops');
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('succeeds when fs.canWrite returns true for the resolved cwd', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'ok', exitCode: 0 });
+      installBridge(spawn);
+      const canWrite = vi.fn().mockReturnValue(true);
+      const ctx = createMockCtx('/scoops/agent-foo', { canWrite });
+      const result = await createAgentCommand().execute(['/scoops/agent-foo/sub', '*', 'p'], ctx);
+      expect(result.exitCode).toBe(0);
+      expect(canWrite).toHaveBeenCalledWith('/scoops/agent-foo/sub');
+      expect(spawn).toHaveBeenCalledOnce();
+    });
+
+    it('skips the writability check when fs.canWrite is absent (terminal shell case)', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'ok', exitCode: 0 });
+      installBridge(spawn);
+      // Build a ctx whose fs object has NO canWrite method at all — models
+      // a hypothetical IFileSystem impl that pre-dates the feature. The
+      // command should feature-detect and fall through without erroring.
+      const ctx = createMockCtx('/home');
+      delete (ctx.fs as unknown as { canWrite?: unknown }).canWrite;
+      const result = await createAgentCommand().execute(['/anywhere', '*', 'p'], ctx);
+      expect(result.exitCode).toBe(0);
+      expect(spawn).toHaveBeenCalledOnce();
+    });
+
+    it('writability check runs AFTER the existence/directory check', async () => {
+      // If cwd does not exist, stat fails first and we get "not found" —
+      // canWrite must never even be consulted.
+      const canWrite = vi.fn().mockReturnValue(true);
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const ctx = createMockCtx('/home', {
+        stat: async () => {
+          throw new Error('ENOENT');
+        },
+        canWrite,
+      });
+      const result = await createAgentCommand().execute(['/does/not/exist', '*', 'p'], ctx);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/not found/);
+      expect(canWrite).not.toHaveBeenCalled();
+      expect(bridge).not.toHaveBeenCalled();
     });
   });
 
