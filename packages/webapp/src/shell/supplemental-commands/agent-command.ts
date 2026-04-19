@@ -12,6 +12,7 @@ interface AgentSpawnOptions {
   prompt: string;
   modelId?: string;
   parentJid?: string;
+  visiblePaths?: string[];
 }
 
 /** Options accepted by {@link createAgentCommand}. */
@@ -53,14 +54,21 @@ Arguments:
   <prompt>            Prompt forwarded verbatim to the scoop.
 
 Options:
-  --model <id>    Override the model id used by the spawned scoop. Defaults
-                  to inheriting the parent's model.
-  -h, --help      Show this help message and exit.
+  --model <id>            Override the model id used by the spawned scoop.
+                          Defaults to inheriting the parent's model.
+  --read-only <paths>     Comma-separated VFS paths exposed read-only to the
+                          spawned scoop (visiblePaths). Pure replace — when
+                          set, the default ["/workspace/"] is dropped. Pass
+                          an explicit list if you want /workspace/ included
+                          (e.g. "/workspace/,/shared/assets/"). Each entry
+                          is normalized to a trailing slash.
+  -h, --help              Show this help message and exit.
 
 Examples:
   agent . "*" "say hello in one word"
   agent /home ls,wc,find "how many files do I have in my home directory"
   agent --model claude-haiku-4-5 . "*" "summarize files in this directory"
+  agent --read-only /workspace/,/shared/assets/ . "*" "review the docs"
 `;
 
 interface ParsedArgs {
@@ -69,6 +77,7 @@ interface ParsedArgs {
   allowedCommandsRaw?: string;
   prompt?: string;
   modelId?: string;
+  visiblePaths?: string[];
   error?: string;
 }
 
@@ -87,6 +96,7 @@ function parseArgs(args: string[]): ParsedArgs {
   const positionals: string[] = [];
   let help = false;
   let modelId: string | undefined;
+  let visiblePaths: string[] | undefined;
 
   let i = 0;
   while (i < args.length) {
@@ -124,6 +134,27 @@ function parseArgs(args: string[]): ParsedArgs {
       continue;
     }
 
+    if (arg === '--read-only') {
+      const next = args[i + 1];
+      if (next === undefined) {
+        return { help: false, error: 'agent: --read-only requires a value' };
+      }
+      // A flag-looking value is rejected (e.g., `--read-only --help`).
+      if (next.length > 0 && next.startsWith('-')) {
+        return { help: false, error: 'agent: --read-only requires a value' };
+      }
+      if (next === '') {
+        return { help: false, error: 'agent: --read-only requires a non-empty value' };
+      }
+      const parsed = parseReadOnlyPaths(next);
+      if (parsed.length === 0) {
+        return { help: false, error: 'agent: --read-only requires a non-empty value' };
+      }
+      visiblePaths = parsed;
+      i += 2;
+      continue;
+    }
+
     // Any other leading-dash token in a non-prompt slot is an unknown flag.
     if (arg.length > 0 && arg.startsWith('-')) {
       return { help: false, error: `agent: unknown flag '${arg}'` };
@@ -147,7 +178,20 @@ function parseArgs(args: string[]): ParsedArgs {
   }
 
   const [cwd, allowedCommandsRaw, prompt] = positionals;
-  return { help: false, cwd, allowedCommandsRaw, prompt, modelId };
+  return { help: false, cwd, allowedCommandsRaw, prompt, modelId, visiblePaths };
+}
+
+/**
+ * Parse a `--read-only` value into an array of VFS path prefixes. Entries are
+ * comma-separated, trimmed of surrounding whitespace, and empty entries are
+ * dropped. Paths are forwarded verbatim otherwise — the bridge normalizes them
+ * to trailing-slash prefixes before handing them to `RestrictedFS`.
+ */
+function parseReadOnlyPaths(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
 }
 
 function resolveCwd(cwdArg: string, ctxCwd: string): string {
@@ -261,6 +305,9 @@ export function createAgentCommand(options: AgentCommandOptions = {}): Command {
     };
     if (parsed.modelId !== undefined) {
       spawnOptions.modelId = parsed.modelId;
+    }
+    if (parsed.visiblePaths !== undefined) {
+      spawnOptions.visiblePaths = parsed.visiblePaths;
     }
     // Forward the parent scoop's JID when available so the bridge can
     // inherit the parent's model id (see `AgentSpawnOptions.parentJid` in
