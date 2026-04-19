@@ -68,6 +68,19 @@ export interface AgentSpawnOptions {
    * missing ones before forwarding to the orchestrator.
    */
   visiblePaths?: string[];
+  /**
+   * The invoking shell's cwd (`ctx.cwd` in just-bash) at the moment the
+   * caller ran `agent`. When `visiblePaths` is NOT provided, the bridge
+   * unions this path into the default read-only roots so the spawned
+   * scoop can READ the directory it was launched from without also
+   * gaining write access there (unless the first positional `cwd`
+   * already grants write inside it). Ignored when `visiblePaths` IS
+   * provided — `--read-only` opts the caller out of the implicit add
+   * since pure-replace otherwise wouldn't actually be pure-replace.
+   *
+   * Must be an absolute path. Normalized to a trailing-slash prefix.
+   */
+  invokingCwd?: string;
 }
 
 /** Result returned by {@link AgentBridge.spawn}. */
@@ -203,17 +216,28 @@ export function createAgentBridge(
     // prefix (trailing slash required by the prefix-match semantics).
     const cwdPrefix = normalizeRwPrefix(options.cwd);
 
-    // Resolve visiblePaths: explicit list (pure replace — mirrors
-    // scoop_scoop semantics) or the historical default `/workspace/`.
-    // Each user-supplied entry is normalized to a trailing-slash prefix.
-    const visiblePaths =
-      options.visiblePaths !== undefined
-        ? options.visiblePaths.map(normalizeRwPrefix)
-        : ['/workspace/'];
+    // Resolve visiblePaths:
+    //   - Explicit `--read-only` list → pure replace (no implicit
+    //     `invokingCwd` add). Mirrors `scoop_scoop` semantics exactly;
+    //     the user is opting out of the default.
+    //   - No `--read-only` → union of the historical default
+    //     `['/workspace/']` with the caller's invokingCwd (when present
+    //     and not already covered by the default), so the spawned scoop
+    //     can READ the directory it was launched from. De-duped on the
+    //     normalized trailing-slash prefix so repeating callers don't
+    //     bloat the list.
+    const visiblePaths = resolveVisiblePaths(options);
+
+    // Resolve writablePaths: the positional cwd and /shared/ plus the
+    // scoop's own scratch folder (historical), AND `/tmp/` — an always-on
+    // ambient scratch root. `/tmp/` is NOT reachable via any flag; it's
+    // present here unconditionally so agents always have a writable
+    // temp-file location without the caller having to opt in.
+    const writablePaths = dedupePrefixes([cwdPrefix, '/shared/', `${scratchFolder}/`, '/tmp/']);
 
     const scoopConfig: NonNullable<RegisteredScoop['config']> = {
       visiblePaths,
-      writablePaths: [cwdPrefix, '/shared/', `${scratchFolder}/`],
+      writablePaths,
       allowedCommands: options.allowedCommands,
     };
     if (effectiveModelId) {
@@ -231,6 +255,11 @@ export function createAgentBridge(
       addedAt: new Date().toISOString(),
       config: scoopConfig,
       configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+      // Ephemeral scoops: we already drain send_message / response via
+      // `observeScoop` below, so the orchestrator's default cone-notify
+      // side effect would only duplicate that work and bill an extra cone
+      // turn. See `RegisteredScoop.notifyOnComplete` for details.
+      notifyOnComplete: false,
     };
 
     // Observer state. The orchestrator's per-scoop observer fires these
@@ -307,7 +336,14 @@ export function createAgentBridge(
       try {
         await sharedFs.rm(scratchFolder, { recursive: true });
       } catch (err) {
-        log.warn('scratch folder cleanup failed', { folder, error: errText(err) });
+        // ENOENT is expected when registerScoop rolled back before the
+        // scratch folder was ever created (ScoopContext.init() creates it
+        // on first write). Don't pollute logs with that case — surface
+        // anything else (EACCES, EBUSY, etc.) since it could indicate a
+        // real cleanup failure.
+        if (!isFsErrorCode(err, 'ENOENT')) {
+          log.warn('scratch folder cleanup failed', { folder, error: errText(err) });
+        }
       }
       if (sessionStore) {
         try {
@@ -564,6 +600,60 @@ function normalizeRwPrefix(path: string): string {
   return normalized.endsWith('/') ? normalized : `${normalized}/`;
 }
 
+/**
+ * Compute the visiblePaths list from spawn options.
+ *
+ * - `--read-only` set (any value, including `[]`): pure replace. The
+ *   caller explicitly opted out of BOTH the default `/workspace/` AND
+ *   the implicit `invokingCwd` add — we don't fight that.
+ * - `--read-only` absent: return the default `/workspace/` unioned with
+ *   the invoking shell's `ctx.cwd` (when provided), so agents launched
+ *   from anywhere on the VFS can still READ the directory they were
+ *   spawned from. De-duped on the normalized trailing-slash form.
+ */
+function resolveVisiblePaths(options: AgentSpawnOptions): string[] {
+  if (options.visiblePaths !== undefined) {
+    return options.visiblePaths.map(normalizeRwPrefix);
+  }
+  const base = ['/workspace/'];
+  if (options.invokingCwd && options.invokingCwd.length > 0) {
+    base.push(normalizeRwPrefix(options.invokingCwd));
+  }
+  return dedupePrefixes(base);
+}
+
+/**
+ * De-duplicate a list of VFS prefixes, preserving first-seen order.
+ * Compares strings verbatim — callers must have already normalized each
+ * entry to the trailing-slash form (see {@link normalizeRwPrefix}) so
+ * `/foo` and `/foo/` don't survive as separate entries.
+ */
+function dedupePrefixes(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const p of paths) {
+    if (!seen.has(p)) {
+      seen.add(p);
+      result.push(p);
+    }
+  }
+  return result;
+}
+
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Narrow test: is this an FsError (or any error-like object) whose POSIX
+ * error code matches `expected`? `FsError` exposes `.code` directly; for
+ * future cross-package interop we also accept any object with a `code`
+ * property (some runtimes wrap FsError into a plain value before it
+ * propagates). Non-string codes are rejected so a numeric errno from
+ * Node won't accidentally match.
+ */
+function isFsErrorCode(err: unknown, expected: string): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === 'string' && code === expected;
 }

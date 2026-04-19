@@ -17,6 +17,7 @@ import type { Orchestrator, ScoopObserver } from '../../src/scoops/orchestrator.
 import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 import { CURRENT_SCOOP_CONFIG_VERSION } from '../../src/scoops/types.js';
+import { FsError } from '../../src/fs/types.js';
 
 /**
  * Observer-driven mock orchestrator. Each `sendPrompt` call drives the
@@ -89,11 +90,15 @@ function makeMockOrchestrator(): {
   };
 }
 
-function makeMockSharedFs(): { fs: VirtualFS; rmCalls: string[] } {
+function makeMockSharedFs(options?: {
+  /** Throw from `rm`. Takes the path so the caller can pick a matching error. */
+  rm?: (path: string) => Promise<void>;
+}): { fs: VirtualFS; rmCalls: string[] } {
   const rmCalls: string[] = [];
   const mock: Partial<VirtualFS> = {
     rm: vi.fn(async (path: string) => {
       rmCalls.push(path);
+      if (options?.rm) await options.rm(path);
     }) as unknown as VirtualFS['rm'],
   };
   return { fs: mock as unknown as VirtualFS, rmCalls };
@@ -127,9 +132,12 @@ describe('createAgentBridge — config construction', () => {
     expect(scoop.jid).toMatch(/^agent_[a-z]+_[a-z]+$/);
     expect(scoop.isCone).toBe(false);
     expect(scoop.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
+    // Ephemeral agent scoops must opt out of the orchestrator's cone-notify
+    // side effect; the bridge drains responses via `observeScoop` instead.
+    expect(scoop.notifyOnComplete).toBe(false);
     expect(scoop.config).toEqual({
       visiblePaths: ['/workspace/'],
-      writablePaths: ['/workspace/', '/shared/', '/scoops/agent-exuberant-lavender/'],
+      writablePaths: ['/workspace/', '/shared/', '/scoops/agent-exuberant-lavender/', '/tmp/'],
       allowedCommands: ['*'],
     });
   });
@@ -220,6 +228,132 @@ describe('createAgentBridge — config construction', () => {
     await bridge.spawn({ ...BASE_OPTS, visiblePaths: ['/workspace/'] });
 
     expect(registerCalls[0].config?.visiblePaths).toEqual(['/workspace/']);
+  });
+
+  it('unions invokingCwd into the default visiblePaths when --read-only is absent', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, invokingCwd: '/home/user' });
+
+    expect(registerCalls[0].config?.visiblePaths).toEqual(['/workspace/', '/home/user/']);
+  });
+
+  it('de-dupes invokingCwd against the /workspace/ default when they match', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, invokingCwd: '/workspace' });
+
+    expect(registerCalls[0].config?.visiblePaths).toEqual(['/workspace/']);
+  });
+
+  it('normalizes invokingCwd to a trailing-slash prefix', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, invokingCwd: '/home/user' });
+
+    // The second entry is the normalized invokingCwd — no pre-existing
+    // trailing slash, but the bridge adds one.
+    expect(registerCalls[0].config?.visiblePaths?.[1]).toBe('/home/user/');
+  });
+
+  it('ignores invokingCwd when an explicit --read-only list is set (pure-replace wins)', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({
+      ...BASE_OPTS,
+      invokingCwd: '/home/user',
+      visiblePaths: ['/custom/'],
+    });
+
+    // --read-only pure-replace: neither /workspace/ nor invokingCwd leak
+    // into the final list.
+    expect(registerCalls[0].config?.visiblePaths).toEqual(['/custom/']);
+  });
+
+  it('ignores invokingCwd when visiblePaths is explicitly an empty list', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({
+      ...BASE_OPTS,
+      invokingCwd: '/home/user',
+      visiblePaths: [],
+    });
+
+    expect(registerCalls[0].config?.visiblePaths).toEqual([]);
+  });
+
+  it('ignores empty-string invokingCwd (terminal shell sometimes starts without one)', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, invokingCwd: '' });
+
+    expect(registerCalls[0].config?.visiblePaths).toEqual(['/workspace/']);
+  });
+
+  it('always includes /tmp/ in writablePaths — unchangeable by any spawn option', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({
+      ...BASE_OPTS,
+      visiblePaths: ['/anything/'],
+      invokingCwd: '/anywhere',
+      allowedCommands: ['ls'],
+    });
+
+    expect(registerCalls[0].config?.writablePaths).toContain('/tmp/');
+  });
+
+  it('does not duplicate /tmp/ when cwd == /tmp (prefix-normalized equality)', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, cwd: '/tmp' });
+
+    const tmpCount = (registerCalls[0].config?.writablePaths ?? []).filter(
+      (p) => p === '/tmp/'
+    ).length;
+    expect(tmpCount).toBe(1);
+  });
+
+  it('writablePaths baseline (cwd=/workspace) is [cwd, /shared/, scratch, /tmp/]', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn(BASE_OPTS);
+
+    expect(registerCalls[0].config?.writablePaths).toEqual([
+      '/workspace/',
+      '/shared/',
+      '/scoops/agent-jolly-mint/',
+      '/tmp/',
+    ]);
   });
 });
 
@@ -600,6 +734,60 @@ describe('createAgentBridge — cleanup', () => {
     await bridge.spawn(BASE_OPTS);
 
     expect(deleteCalls).toEqual(['agent_jolly_mint']);
+  });
+
+  it('silently swallows ENOENT from scratch-folder rm (registerScoop rolled back)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { orchestrator, unregisterCalls } = makeMockOrchestrator();
+    // Make registerScoop throw so the scratch folder never existed.
+    (orchestrator.registerScoop as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      throw new Error('init failed');
+    });
+    const { fs, rmCalls } = makeMockSharedFs({
+      rm: async (path) => {
+        throw new FsError('ENOENT', 'no such file or directory', path);
+      },
+    });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+
+    const result = await bridge.spawn(BASE_OPTS);
+
+    // Result still surfaces the real init error.
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toBe('init failed');
+    // Cleanup ran…
+    expect(unregisterCalls).toContain('agent_jolly_mint');
+    expect(rmCalls).toContain('/scoops/agent-jolly-mint');
+    // …but no scratch-folder warning was emitted for the ENOENT.
+    const scratchWarnings = warnSpy.mock.calls.filter((c) =>
+      String(c.join(' ')).includes('scratch folder cleanup failed')
+    );
+    expect(scratchWarnings).toHaveLength(0);
+    warnSpy.mockRestore();
+  });
+
+  it('still warns when scratch-folder rm fails with a non-ENOENT code', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs({
+      rm: async (path) => {
+        throw new FsError('EACCES', 'permission denied', path);
+      },
+    });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn(BASE_OPTS);
+
+    const scratchWarnings = warnSpy.mock.calls.filter((c) =>
+      String(c.join(' ')).includes('scratch folder cleanup failed')
+    );
+    expect(scratchWarnings.length).toBeGreaterThan(0);
+    warnSpy.mockRestore();
   });
 });
 
