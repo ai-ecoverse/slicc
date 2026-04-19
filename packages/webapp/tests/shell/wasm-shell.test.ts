@@ -400,6 +400,10 @@ describe('WasmShell command allow-list', () => {
     });
   });
 
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
   it('registers all commands when allowedCommands is omitted (default)', async () => {
     const shell = new WasmShell({ fs });
 
@@ -506,5 +510,38 @@ describe('WasmShell command allow-list', () => {
     expect(listing.stdout).toContain('ls');
     // `cat` exists in just-bash but was not allowed — it must not appear.
     expect(listing.stdout.split(/\s+/).filter((w) => w === 'cat')).toHaveLength(0);
+  });
+
+  it('blocks network commands (curl, wget) that just-bash auto-registers when fetch is set', async () => {
+    // just-bash's constructor unconditionally registers every network command
+    // when `fetch` or `network` is provided, regardless of `BashOptions.commands`.
+    // `WasmShell` always provides `fetch`, so without post-construction cleanup
+    // a scoop with `allowedCommands: ['echo']` could still run `curl`. This
+    // test guards the cleanup in `WasmShell`'s constructor. See Codex review
+    // of #433.
+    const shell = new WasmShell({ fs, allowedCommands: ['echo'] });
+
+    const curl = await shell.executeCommand('curl http://example.com');
+    expect(curl.exitCode).toBe(127);
+    expect(curl.stderr).toMatch(/curl/);
+    expect(curl.stderr).toMatch(/not found/i);
+
+    const wget = await shell.executeCommand('wget http://example.com');
+    expect(wget.exitCode).toBe(127);
+    expect(wget.stderr).toMatch(/wget/);
+    expect(wget.stderr).toMatch(/not found/i);
+  });
+
+  it('keeps network commands available when they are on the allow-list', async () => {
+    // Inverse of the above — when a network command IS allowed, the cleanup
+    // must not remove it. We don't try to actually fetch (would need a real
+    // network); it's enough that the command name is recognized at dispatch.
+    const shell = new WasmShell({ fs, allowedCommands: ['curl'] });
+
+    const result = await shell.executeCommand('curl');
+    // curl with no args exits with usage error (2) — NOT 127. If cleanup
+    // accidentally removed it, we'd see 127 / "command not found" instead.
+    expect(result.exitCode).not.toBe(127);
+    expect(result.stderr).not.toMatch(/not found/i);
   });
 });
