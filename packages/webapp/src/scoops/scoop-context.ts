@@ -162,6 +162,10 @@ export class ScoopContext {
         browserAPI: browser,
         jshDiscoveryFs: this.skillsFs ? effectiveSkillsFs : undefined,
         allowedCommands: this.scoop.config?.allowedCommands,
+        // Forward this scoop's jid so the `agent` supplemental command can
+        // tell the AgentBridge which scoop is the parent of any nested
+        // `agent <cwd> ... <prompt>` invocation — used for model inheritance.
+        getParentJid: () => this.scoop.jid,
       });
       log.info('WasmShell initialized', { folder: this.scoop.folder });
       const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
