@@ -1146,12 +1146,27 @@ export class Orchestrator {
       }
     }
 
+    // Calculate active time based on 15-minute intervals
+    const timestamps = assistantMsgs.map((m) => m.timestamp).sort((a, b) => a - b);
+    const firstActivity = timestamps[0];
+    const lastActivity = timestamps[timestamps.length - 1];
+
+    // Round activity time to 15-minute intervals
+    const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+    const timespanMs = lastActivity - firstActivity;
+    // Calculate number of 15-minute intervals, rounding up (at least 1 interval if there's any activity)
+    const intervals = Math.max(1, Math.ceil(timespanMs / FIFTEEN_MINUTES_MS));
+    const activeTimeMs = intervals * FIFTEEN_MINUTES_MS;
+
     return {
       name: scoop.assistantLabel,
       type: scoop.isCone ? 'cone' : 'scoop',
       model: topModel,
       usage: aggregated,
       turns: assistantMsgs.length,
+      firstActivity,
+      lastActivity,
+      activeTimeMs,
     };
   }
 
