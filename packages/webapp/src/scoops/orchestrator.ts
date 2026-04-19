@@ -68,6 +68,27 @@ export interface AssistantConfig {
   triggerPattern: RegExp;
 }
 
+/**
+ * Per-scoop event observer. Subscribed via {@link Orchestrator.observeScoop}
+ * so a caller can react to events on a single scoop's lifecycle without
+ * reading the orchestrator's top-level callbacks (which fanout events from
+ * every scoop).
+ *
+ * Used by the `agent` shell command's bridge to block a bash invocation
+ * until a spawned sub-scoop reaches terminal status and to capture the
+ * scoop's `send_message` payloads along the way.
+ *
+ * All handlers are optional — subscribers install only the ones they need.
+ * Exceptions thrown from a handler are caught and logged; they do not
+ * disrupt the orchestrator's own callback chain.
+ */
+export interface ScoopObserver {
+  onStatusChange?: (status: ScoopTabState['status']) => void;
+  onSendMessage?: (text: string) => void;
+  onResponse?: (text: string, isPartial: boolean) => void;
+  onError?: (error: string) => void;
+}
+
 export class Orchestrator {
   private scoops: Map<string, RegisteredScoop> = new Map();
   private tabs: Map<string, ScoopTabState> = new Map();
@@ -90,6 +111,13 @@ export class Orchestrator {
   private idleTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   /** Preserves cost data for scoops that have been dropped. */
   private droppedScoopCosts: ScoopCostData[] = [];
+  /**
+   * Per-scoop event observers. The `agent` shell command (`agent-bridge.ts`)
+   * uses this to await a sub-scoop's completion without having to own its
+   * own `ScoopContext`: it subscribes, calls `sendPrompt`, and watches for
+   * status / send_message / error events on the one jid it cares about.
+   */
+  private scoopObservers: Map<string, Set<ScoopObserver>> = new Map();
 
   constructor(
     container: HTMLElement,
@@ -272,6 +300,16 @@ export class Orchestrator {
     return this.sharedFs;
   }
 
+  /**
+   * Get the orchestrator's SessionStore, if initialized. Used by
+   * {@link createAgentBridge} to clean up any stored session entry for an
+   * ephemeral `agent`-spawned scoop. Returns `null` before `init()`
+   * resolves.
+   */
+  getSessionStore(): SessionStore | null {
+    return this.sessionStore;
+  }
+
   /** Set the LickManager for guarding scoop removal against active licks */
   setLickManager(lickManager: LickManager): void {
     this.lickManager = lickManager;
@@ -300,6 +338,109 @@ export class Orchestrator {
    *  On failure, rolls back the in-memory and on-disk scoop records so the
    *  caller doesn't see a half-registered scoop, and rethrows so the caller
    *  can surface the error. */
+  /**
+   * Subscribe to events for a single scoop. Returns an unsubscribe function
+   * that MUST be called when the caller is done observing — the observer
+   * set holds strong references and leaks otherwise.
+   *
+   * Observer handlers run AFTER the orchestrator's top-level
+   * {@link OrchestratorCallbacks}, so subscribing never interferes with the
+   * normal event flow. Exceptions in a handler are caught and logged.
+   */
+  observeScoop(jid: string, observer: ScoopObserver): () => void {
+    let set = this.scoopObservers.get(jid);
+    if (!set) {
+      set = new Set();
+      this.scoopObservers.set(jid, set);
+    }
+    set.add(observer);
+    return () => {
+      const s = this.scoopObservers.get(jid);
+      if (!s) return;
+      s.delete(observer);
+      if (s.size === 0) this.scoopObservers.delete(jid);
+    };
+  }
+
+  /**
+   * Scoop-completion side effect: forward the scoop's buffered response
+   * to the cone as a `scoop-notify` message so the cone's agent can
+   * react. Always clears the response buffer (bounded memory) regardless
+   * of whether a notify was actually sent.
+   *
+   * Suppressed entirely when `RegisteredScoop.notifyOnComplete === false`.
+   * Ephemeral scoops spawned via the `agent` supplemental shell command
+   * set that flag because the caller already drains output through an
+   * `observeScoop` subscription — the extra cone turn would be both
+   * duplicative and billed as a second API call for what the user
+   * intended as a self-contained shell invocation.
+   *
+   * Extracted from the scoop's `onStatusChange` callback so tests can
+   * exercise the gate without standing up a full ScoopContext.
+   */
+  private maybeNotifyConeOnScoopComplete(jid: string): void {
+    const scoop = this.scoops.get(jid);
+    if (!scoop || scoop.isCone) return;
+
+    const responseText = this.scoopResponseBuffer.get(jid);
+    this.scoopResponseBuffer.delete(jid);
+    if (!responseText) return;
+    if (scoop.notifyOnComplete === false) return;
+
+    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+    if (!cone) return;
+
+    const summary =
+      responseText.length > 2000 ? responseText.slice(0, 2000) + '\n... (truncated)' : responseText;
+    const notifyMsg: ChannelMessage = {
+      id: `scoop-done-${jid}-${Date.now()}`,
+      chatJid: cone.jid,
+      senderId: scoop.folder,
+      senderName: scoop.assistantLabel,
+      content: `[@${scoop.assistantLabel} completed]:\n${summary}`,
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'scoop-notify',
+    };
+    log.info('Routing scoop completion to cone', {
+      scoop: scoop.folder,
+      responseLength: responseText.length,
+    });
+    this.handleMessage(notifyMsg).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error('Failed to route scoop completion to cone', {
+        scoop: scoop.folder,
+        error: msg,
+      });
+      this.callbacks.onError(
+        cone.jid,
+        `Scoop ${scoop.folder} completed but notification failed: ${msg}`
+      );
+    });
+  }
+
+  private dispatchScoopEvent<K extends keyof ScoopObserver>(
+    jid: string,
+    event: K,
+    ...args: Parameters<NonNullable<ScoopObserver[K]>>
+  ): void {
+    const observers = this.scoopObservers.get(jid);
+    if (!observers) return;
+    for (const o of observers) {
+      const handler = o[event];
+      if (!handler) continue;
+      try {
+        (handler as (...a: unknown[]) => void)(...(args as unknown[]));
+      } catch (err) {
+        log.warn('scoop observer threw', {
+          jid,
+          event,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
   async registerScoop(scoop: RegisteredScoop): Promise<void> {
     await db.saveScoop(scoop);
     this.scoops.set(scoop.jid, scoop);
@@ -354,6 +495,14 @@ export class Orchestrator {
     this.messageQueues.delete(jid);
     this.lastAgentTimestamp.delete(jid);
     this.scoopResponseBuffer.delete(jid);
+    // Defensive observer cleanup — subscribers are expected to call their
+    // unsubscribe, but if they never get the chance (uncaught exception
+    // before `finally`, bridge crash mid-spawn, etc.) the set would
+    // otherwise linger and could fire against stale handlers if the jid
+    // were ever reused. Dropping the whole key is safe because every
+    // legitimate observer for this scoop is about to lose its relevance
+    // anyway: the scoop's context has been destroyed.
+    this.scoopObservers.delete(jid);
     log.info('Scoop unregistered', { jid });
   }
 
@@ -569,6 +718,7 @@ export class Orchestrator {
         if (!this.scoops.has(jid)) return;
 
         this.callbacks.onResponse(jid, text, isPartial);
+        this.dispatchScoopEvent(jid, 'onResponse', text, isPartial);
         // Accumulate response text for routing back to cone.
         // Accumulate both partial (streaming deltas) and full (non-streaming) responses,
         // since models that don't stream emit isPartial=false with the full text.
@@ -606,6 +756,8 @@ export class Orchestrator {
         }
         this.callbacks.onError(jid, error);
         this.callbacks.onStatusChange(jid, 'error');
+        this.dispatchScoopEvent(jid, 'onError', error);
+        this.dispatchScoopEvent(jid, 'onStatusChange', 'error');
       },
       onStatusChange: (status) => {
         if (!this.scoops.has(jid)) return;
@@ -617,46 +769,12 @@ export class Orchestrator {
           this.tabs.set(jid, tab);
         }
         this.callbacks.onStatusChange(jid, status);
+        this.dispatchScoopEvent(jid, 'onStatusChange', status);
 
         // When a non-cone scoop finishes, route its response to the cone
         // so the cone's agent can react (e.g., move files, report to user).
         if (status === 'ready' && !scoop.isCone) {
-          const responseText = this.scoopResponseBuffer.get(jid);
-          this.scoopResponseBuffer.delete(jid);
-          if (responseText) {
-            const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-            if (cone) {
-              const summary =
-                responseText.length > 2000
-                  ? responseText.slice(0, 2000) + '\n... (truncated)'
-                  : responseText;
-              const notifyMsg: ChannelMessage = {
-                id: `scoop-done-${jid}-${Date.now()}`,
-                chatJid: cone.jid,
-                senderId: scoop.folder,
-                senderName: scoop.assistantLabel,
-                content: `[@${scoop.assistantLabel} completed]:\n${summary}`,
-                timestamp: new Date().toISOString(),
-                fromAssistant: false,
-                channel: 'scoop-notify',
-              };
-              log.info('Routing scoop completion to cone', {
-                scoop: scoop.folder,
-                responseLength: responseText.length,
-              });
-              this.handleMessage(notifyMsg).catch((err) => {
-                const msg = err instanceof Error ? err.message : String(err);
-                log.error('Failed to route scoop completion to cone', {
-                  scoop: scoop.folder,
-                  error: msg,
-                });
-                this.callbacks.onError(
-                  cone.jid,
-                  `Scoop ${scoop.folder} completed but notification failed: ${msg}`
-                );
-              });
-            }
-          }
+          this.maybeNotifyConeOnScoopComplete(jid);
         }
       },
       onToolStart: (toolName, toolInput) => {
@@ -673,7 +791,12 @@ export class Orchestrator {
       },
       // NanoClaw tools callbacks
       onSendMessage: (text, sender) => {
-        this.callbacks.onSendMessage(jid, `${sender ? `[${sender}] ` : ''}${text}`);
+        const prefixed = `${sender ? `[${sender}] ` : ''}${text}`;
+        this.callbacks.onSendMessage(jid, prefixed);
+        // Observer gets the raw payload (not the sender-prefixed form) so the
+        // `agent` shell command can surface the scoop's send_message text
+        // verbatim for stdout.
+        this.dispatchScoopEvent(jid, 'onSendMessage', text);
       },
       getScoops: () => this.getScoops(),
       getScoopTabState: scoop.isCone ? (jid: string) => this.tabs.get(jid) : undefined,
@@ -725,6 +848,7 @@ export class Orchestrator {
       initTab.status = 'ready';
       this.tabs.set(jid, initTab);
       this.callbacks.onStatusChange(jid, 'ready');
+      this.dispatchScoopEvent(jid, 'onStatusChange', 'ready');
     }
 
     // Start idle timer for non-cone scoops
@@ -744,6 +868,11 @@ export class Orchestrator {
       context.dispose();
       this.contexts.delete(jid);
       this.tabs.delete(jid);
+      // Drop any lingering per-scoop observers alongside the context so
+      // the shutdown / reset paths (which call us directly, bypassing
+      // `unregisterScoop`) also reclaim them. See the matching delete
+      // in `unregisterScoop` for the rationale.
+      this.scoopObservers.delete(jid);
       log.info('Scoop context destroyed', { jid });
     }
   }
@@ -844,6 +973,7 @@ export class Orchestrator {
       tab.lastActivity = new Date().toISOString();
       this.tabs.set(jid, tab);
       this.callbacks.onStatusChange(jid, 'processing');
+      this.dispatchScoopEvent(jid, 'onStatusChange', 'processing');
     }
 
     log.debug('Prompt sent to scoop', { jid, textLength: text.length });

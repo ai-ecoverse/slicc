@@ -269,6 +269,14 @@ export interface WasmShellOptions {
    * through the same registry.
    */
   allowedCommands?: readonly string[];
+  /**
+   * Returns the JID of the scoop whose shell this is, when running inside
+   * a scoop context. Forwarded to the `agent` supplemental command so it
+   * can tell the AgentBridge which scoop is the parent (for model
+   * inheritance). Returns `undefined` for standalone / terminal-panel
+   * shells that have no scoop owner.
+   */
+  getParentJid?: () => string | undefined;
 }
 
 type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
@@ -372,6 +380,7 @@ export class WasmShell {
       fs: options.fs,
       scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
+      getParentJid: options.getParentJid,
     });
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();

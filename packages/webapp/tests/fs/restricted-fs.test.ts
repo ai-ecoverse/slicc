@@ -393,4 +393,29 @@ describe('RestrictedFS', () => {
       restricted.rename('/scoops/andy-scoop/escape.txt', '/root-escape.txt')
     ).rejects.toThrow('EACCES');
   });
+
+  describe('canWrite predicate', () => {
+    it('returns true for paths inside a writable prefix', () => {
+      expect(restricted.canWrite('/scoops/andy-scoop/file.txt')).toBe(true);
+      expect(restricted.canWrite('/scoops/andy-scoop')).toBe(true);
+      expect(restricted.canWrite('/shared/data.txt')).toBe(true);
+    });
+
+    it('returns false for paths outside any writable prefix', () => {
+      // Sibling scoop — the exact sandbox-escape case Item B guards.
+      expect(restricted.canWrite('/scoops/other-scoop')).toBe(false);
+      expect(restricted.canWrite('/scoops/other-scoop/secret.txt')).toBe(false);
+      // Parent dir of the sandbox — `stat` would succeed on this path, but
+      // it must NOT be writable.
+      expect(restricted.canWrite('/scoops')).toBe(false);
+      expect(restricted.canWrite('/')).toBe(false);
+      expect(restricted.canWrite('/root-file.txt')).toBe(false);
+    });
+
+    it('returns false for read-only prefixes', () => {
+      const readOnly = new RestrictedFS(vfs, ['/scoops/andy-scoop/'], ['/workspace/']);
+      expect(readOnly.canWrite('/workspace/foo.txt')).toBe(false);
+      expect(readOnly.canWrite('/scoops/andy-scoop/foo.txt')).toBe(true);
+    });
+  });
 });
