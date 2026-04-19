@@ -70,11 +70,13 @@ export interface ScoopConfig {
   visiblePaths?: readonly string[];
   /**
    * VFS paths this scoop can READ AND WRITE. Pure replace — when
-   * `undefined` the scoop gets no writable paths at all (reads are still
-   * governed by `visiblePaths`). The `scoop_scoop` tool injects the
-   * standard `['/scoops/<folder>/', '/shared/']` default so existing
-   * agent-facing behavior is preserved. Cone scoops ignore this field —
-   * they always use an unrestricted filesystem.
+   * `undefined` the scoop gets no writable paths at all. Read access is
+   * the union of `writablePaths` and `visiblePaths` (RestrictedFS
+   * surfaces both as readable); write access is limited to
+   * `writablePaths`. The `scoop_scoop` tool injects the standard
+   * `['/scoops/<folder>/', '/shared/']` default so existing agent-facing
+   * behavior is preserved. Cone scoops ignore this field — they always
+   * use an unrestricted filesystem.
    */
   writablePaths?: readonly string[];
   /**
