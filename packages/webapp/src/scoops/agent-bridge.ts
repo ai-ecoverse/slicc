@@ -82,7 +82,20 @@ export interface AgentBridge {
 
 /** Testability seams. Production defaults are used when unset. */
 export interface AgentBridgeDeps {
-  /** Override the uid generator (for deterministic tests). */
+  /**
+   * Override the name generator (for deterministic tests). Returns a
+   * single token like `exuberant-lavender` — the bridge then derives the
+   * folder (`agent-<name>`) and jid (`agent_<name_with_underscores>`).
+   * Default picks a random `<adjective>-<flavor>` pair from the built-in
+   * pools.
+   */
+  generateName?: () => string;
+  /**
+   * Override the fallback uid generator (hex). Only used when the name
+   * generator produces repeated collisions against the orchestrator's
+   * existing jids. Kept as a deterministic seam for tests that want to
+   * force the fallback path.
+   */
   generateUid?: () => string;
   /**
    * Validate a model id. Returns the input on success, null when unknown.
@@ -106,9 +119,9 @@ export const AGENT_SPAWN_REQUEST_TYPE = 'agent-spawn-request';
 /**
  * Create an {@link AgentBridge} bound to an orchestrator + shared VFS.
  *
- * `sharedFs` is used only for the scratch-folder cleanup (`/scoops/<uid>/`);
- * the orchestrator builds the scoop's `RestrictedFS` itself from
- * `scoop.config`.
+ * `sharedFs` is used only for the scratch-folder cleanup
+ * (`/scoops/agent-<adjective>-<flavor>/`); the orchestrator builds the
+ * scoop's `RestrictedFS` itself from `scoop.config`.
  */
 export function createAgentBridge(
   orchestrator: Orchestrator,
@@ -116,8 +129,26 @@ export function createAgentBridge(
   sessionStore: SessionStore | null | undefined = null,
   deps: AgentBridgeDeps = {}
 ): AgentBridge {
+  const generateName = deps.generateName ?? defaultGenerateName;
   const generateUid = deps.generateUid ?? defaultGenerateUid;
   const resolveModel = deps.resolveModel ?? defaultResolveModel;
+
+  /**
+   * Pick a fresh `<adjective>-<flavor>` that doesn't collide with any
+   * currently-registered scoop jid. If we get unlucky eight times in a
+   * row, fall back to the hex uid generator so we never infinite-loop.
+   */
+  function pickFreshNameToken(): string {
+    const MAX_TRIES = 8;
+    for (let i = 0; i < MAX_TRIES; i++) {
+      const candidate = generateName();
+      const candidateJid = `agent_${tokenToJid(candidate)}`;
+      if (!orchestrator.getScoops().some((s) => s.jid === candidateJid)) {
+        return candidate;
+      }
+    }
+    return generateUid();
+  }
 
   /**
    * Look up the parent scoop by jid in the orchestrator registry and return
@@ -151,9 +182,12 @@ export function createAgentBridge(
     // then falls back to the UI selection via `resolveCurrentModel`).
     const effectiveModelId = requestedModelId ?? resolveParentModelId(options.parentJid) ?? '';
 
-    const uid = generateUid();
-    const folder = `agent-${uid}`;
-    const jid = `agent_${uid}`;
+    // Friendly `<adjective>-<flavor>` naming (on-brand with the ice-cream
+    // vocabulary). Folder uses dashes; jid uses underscores. Falls back
+    // to the old hex uid if we hit eight consecutive collisions.
+    const nameToken = pickFreshNameToken();
+    const folder = `agent-${nameToken}`;
+    const jid = `agent_${tokenToJid(nameToken)}`;
     const scratchFolder = `/scoops/${folder}`;
 
     // Normalize the caller-supplied cwd into a RestrictedFS-compatible
@@ -379,6 +413,116 @@ function defaultGenerateUid(): string {
     return g.crypto.randomUUID().replace(/-/g, '').slice(0, 12);
   }
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Playful adjectives. Keep this list single-word and all-lowercase — the
+ * bridge joins with a dash (folder) or underscore (jid), so anything
+ * weirder than `[a-z]+` would break the naming predicate assumed by
+ * callers (tests regex on `/^agent-[a-z]+-[a-z]+$/`).
+ */
+const AGENT_ADJECTIVES: readonly string[] = [
+  'amber',
+  'bouncy',
+  'breezy',
+  'bubbly',
+  'cheeky',
+  'chilly',
+  'cozy',
+  'dapper',
+  'dreamy',
+  'eager',
+  'exuberant',
+  'fluffy',
+  'frosty',
+  'gentle',
+  'giddy',
+  'glossy',
+  'jolly',
+  'lucky',
+  'mellow',
+  'merry',
+  'nimble',
+  'plucky',
+  'quirky',
+  'salty',
+  'sleepy',
+  'snappy',
+  'sparkly',
+  'spiffy',
+  'sunny',
+  'sweet',
+  'toasty',
+  'velvety',
+  'whimsy',
+  'zesty',
+];
+
+/**
+ * Ice-cream flavors. Single-word only (see {@link AGENT_ADJECTIVES}); a
+ * multi-word flavor like `rocky-road` would produce
+ * `agent-adjective-rocky-road` which breaks the two-token regex.
+ */
+const AGENT_FLAVORS: readonly string[] = [
+  'blueberry',
+  'butterscotch',
+  'caramel',
+  'cherry',
+  'chocolate',
+  'cinnamon',
+  'coconut',
+  'coffee',
+  'cookies',
+  'custard',
+  'espresso',
+  'fudge',
+  'gelato',
+  'hazelnut',
+  'honeycomb',
+  'lavender',
+  'lemon',
+  'mango',
+  'maple',
+  'marzipan',
+  'matcha',
+  'mint',
+  'mocha',
+  'neapolitan',
+  'nougat',
+  'peach',
+  'pecan',
+  'pistachio',
+  'praline',
+  'raspberry',
+  'sherbet',
+  'sorbet',
+  'stracciatella',
+  'strawberry',
+  'tiramisu',
+  'toffee',
+  'vanilla',
+];
+
+/**
+ * Pick a random `<adjective>-<flavor>` pair. Adjective × flavor gives
+ * hundreds of combinations (currently 34 × 37 = 1258), so collisions
+ * inside a single run are vanishingly unlikely — but the bridge still
+ * retries up to eight times and falls back to a hex uid just in case.
+ */
+function defaultGenerateName(): string {
+  const adjective = AGENT_ADJECTIVES[Math.floor(Math.random() * AGENT_ADJECTIVES.length)];
+  const flavor = AGENT_FLAVORS[Math.floor(Math.random() * AGENT_FLAVORS.length)];
+  return `${adjective}-${flavor}`;
+}
+
+/**
+ * Convert a name token to its jid-compatible form. Folders use dashes
+ * (`agent-exuberant-lavender`) and jids use underscores
+ * (`agent_exuberant_lavender`). Hex-uid fallback tokens pass through
+ * unchanged because they contain neither.
+ */
+function tokenToJid(token: string): string {
+  return token.replace(/-/g, '_');
 }
 
 /**
