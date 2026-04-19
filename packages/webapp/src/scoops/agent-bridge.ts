@@ -59,6 +59,15 @@ export interface AgentSpawnOptions {
    * for model inheritance. Omitted for top-level terminal invocations.
    */
   parentJid?: string;
+  /**
+   * Optional read-only VFS roots exposed to the spawned scoop
+   * (`visiblePaths` in `ScoopConfig`). Pure replace semantics: when
+   * provided, this list entirely supplants the default `['/workspace/']`.
+   * Pass `[]` for no extra read-only roots (writablePaths remain readable).
+   * Each entry should end with a trailing slash; the bridge normalizes
+   * missing ones before forwarding to the orchestrator.
+   */
+  visiblePaths?: string[];
 }
 
 /** Result returned by {@link AgentBridge.spawn}. */
@@ -160,8 +169,16 @@ export function createAgentBridge(
     // prefix (trailing slash required by the prefix-match semantics).
     const cwdPrefix = normalizeRwPrefix(options.cwd);
 
+    // Resolve visiblePaths: explicit list (pure replace — mirrors
+    // scoop_scoop semantics) or the historical default `/workspace/`.
+    // Each user-supplied entry is normalized to a trailing-slash prefix.
+    const visiblePaths =
+      options.visiblePaths !== undefined
+        ? options.visiblePaths.map(normalizeRwPrefix)
+        : ['/workspace/'];
+
     const scoopConfig: NonNullable<RegisteredScoop['config']> = {
-      visiblePaths: ['/workspace/'],
+      visiblePaths,
       writablePaths: [cwdPrefix, '/shared/', `${scratchFolder}/`],
       allowedCommands: options.allowedCommands,
     };

@@ -7,6 +7,7 @@ interface SpawnArgs {
   allowedCommands: string[];
   prompt: string;
   modelId?: string;
+  visiblePaths?: string[];
 }
 
 interface SpawnResult {
@@ -487,6 +488,158 @@ describe('agent command', () => {
         createMockCtx()
       );
       expect(spawn.mock.calls[0][0].modelId).toBe('WeIrD-Model_ID.42');
+    });
+  });
+
+  describe('--read-only flag', () => {
+    it('parses a comma-separated list into visiblePaths', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--read-only', '/foo/,/bar/', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/foo/', '/bar/']);
+    });
+
+    it('trims whitespace around each entry', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--read-only', '/foo/, /bar/ , /baz/', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/foo/', '/bar/', '/baz/']);
+    });
+
+    it('parses a single path into a one-element array', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--read-only', '/workspace/', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/workspace/']);
+    });
+
+    it('does NOT pass visiblePaths when --read-only is absent', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].visiblePaths).toBeUndefined();
+    });
+
+    it('accepts --read-only in the first position', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['--read-only', '/foo/', '.', '*', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/foo/']);
+    });
+
+    it('accepts --read-only in the middle position', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '--read-only', '/foo/', '*', 'p'], createMockCtx());
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/foo/']);
+    });
+
+    it('accepts --read-only after the positional args', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(['.', '*', 'p', '--read-only', '/foo/'], createMockCtx());
+      expect(spawn.mock.calls[0][0].visiblePaths).toEqual(['/foo/']);
+    });
+
+    it('combines with --model regardless of flag order', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--model', 'claude-haiku-4-5', '--read-only', '/foo/,/bar/', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0]).toMatchObject({
+        cwd: '/home',
+        allowedCommands: ['*'],
+        prompt: 'p',
+        modelId: 'claude-haiku-4-5',
+        visiblePaths: ['/foo/', '/bar/'],
+      });
+    });
+
+    it('combines with --model when the flags are swapped', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--read-only', '/foo/,/bar/', '--model', 'claude-haiku-4-5', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0]).toMatchObject({
+        cwd: '/home',
+        allowedCommands: ['*'],
+        prompt: 'p',
+        modelId: 'claude-haiku-4-5',
+        visiblePaths: ['/foo/', '/bar/'],
+      });
+    });
+
+    it('combines with --model when both flags come after the positional args', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['.', '*', 'p', '--read-only', '/foo/', '--model', 'claude-haiku-4-5'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0]).toMatchObject({
+        cwd: '/home',
+        prompt: 'p',
+        modelId: 'claude-haiku-4-5',
+        visiblePaths: ['/foo/'],
+      });
+    });
+
+    it('errors when --read-only has no value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['--read-only'], createMockCtx());
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--read-only/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --read-only has a flag-looking value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--read-only', '--help', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--read-only/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --read-only value is an empty string', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--read-only', '', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--read-only/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('errors when --read-only value parses to an empty list (commas and whitespace only)', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--read-only', ' , , ', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toMatch(/--read-only/);
+      expect(bridge).not.toHaveBeenCalled();
     });
   });
 

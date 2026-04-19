@@ -153,6 +153,68 @@ describe('createAgentBridge — config construction', () => {
 
     expect(registerCalls[0].config?.allowedCommands).toEqual(['echo', 'cat']);
   });
+
+  it('defaults visiblePaths to ["/workspace/"] when the option is absent', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn(BASE_OPTS);
+
+    expect(registerCalls[0].config?.visiblePaths).toEqual(['/workspace/']);
+  });
+
+  it('passes an explicit visiblePaths list through pure-replace (no merge with /workspace/)', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, visiblePaths: ['/foo/'] });
+
+    expect(registerCalls[0].config?.visiblePaths).toEqual(['/foo/']);
+  });
+
+  it('passes visiblePaths: [] through as an empty read-only root list', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, visiblePaths: [] });
+
+    expect(registerCalls[0].config?.visiblePaths).toEqual([]);
+  });
+
+  it('normalizes each visiblePaths entry to a trailing-slash prefix', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({
+      ...BASE_OPTS,
+      visiblePaths: ['/workspace', '/shared/assets/', '/docs'],
+    });
+
+    expect(registerCalls[0].config?.visiblePaths).toEqual([
+      '/workspace/',
+      '/shared/assets/',
+      '/docs/',
+    ]);
+  });
+
+  it('preserves existing visiblePaths already ending in a slash without doubling it', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, visiblePaths: ['/workspace/'] });
+
+    expect(registerCalls[0].config?.visiblePaths).toEqual(['/workspace/']);
+  });
 });
 
 describe('createAgentBridge — model resolution', () => {
