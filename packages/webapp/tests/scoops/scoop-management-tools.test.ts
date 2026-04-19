@@ -84,4 +84,86 @@ describe('scoop_scoop tool — config defaults', () => {
     const created = onScoopScoop.mock.calls[0][0];
     expect(created.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
   });
+
+  // ── LLM-facing sandbox parameters (#443) ────────────────────────────
+
+  it('forwards caller-provided visiblePaths verbatim (pure replace)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'narrow', visiblePaths: ['/shared/docs/', '/mnt/context/'] });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.visiblePaths).toEqual(['/shared/docs/', '/mnt/context/']);
+  });
+
+  it('accepts an empty visiblePaths array — read-nothing is explicit', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'blind', visiblePaths: [] });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    // Empty array must survive — NOT silently backfilled with the default.
+    expect(created.config?.visiblePaths).toEqual([]);
+  });
+
+  it('forwards caller-provided writablePaths verbatim (pure replace)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({
+      name: 'scratch',
+      writablePaths: ['/scoops/scratch-scoop/', '/tmp/'],
+    });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.writablePaths).toEqual(['/scoops/scratch-scoop/', '/tmp/']);
+  });
+
+  it('accepts an empty writablePaths array — read-only scoop', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'read-only', writablePaths: [] });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.writablePaths).toEqual([]);
+  });
+
+  it('forwards caller-provided allowedCommands verbatim', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({
+      name: 'text-processor',
+      allowedCommands: ['echo', 'cat', 'grep', 'sort'],
+    });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.allowedCommands).toEqual(['echo', 'cat', 'grep', 'sort']);
+  });
+
+  it('omits allowedCommands from config when the caller does not set it (unrestricted default)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'default' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    // `undefined` tells the orchestrator+WasmShell "no restriction".
+    // We deliberately don't stamp `['*']` here — omission is the canonical
+    // "unrestricted" form across the stack.
+    expect(created.config?.allowedCommands).toBeUndefined();
+  });
+
+  it('passes all three sandbox params through together with a model and prompt', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    const result = await tool.execute({
+      name: 'combined',
+      model: 'claude-sonnet-4-6',
+      prompt: 'task',
+      visiblePaths: ['/workspace/skills/'],
+      writablePaths: ['/scoops/combined-scoop/'],
+      allowedCommands: ['echo'],
+    });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config).toEqual({
+      modelId: 'claude-sonnet-4-6',
+      visiblePaths: ['/workspace/skills/'],
+      writablePaths: ['/scoops/combined-scoop/'],
+      allowedCommands: ['echo'],
+    });
+    expect(created.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
+    expect(result.isError).toBeUndefined();
+  });
 });
