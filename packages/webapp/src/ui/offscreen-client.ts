@@ -111,15 +111,23 @@ export class OffscreenClient {
     return this.scoopStatuses.get(jid) === 'processing';
   }
 
-  /** Called by ScoopsPanel.createCone(). Adds optimistically so the UI
-   *  updates immediately, then sends to offscreen. The real scoop (with a
-   *  different JID) replaces the optimistic one when scoop-created arrives. */
+  /** Bootstrap the cone. Only called once per session when no cone exists on
+   *  disk. Non-cone scoops are created inside the offscreen orchestrator by
+   *  the agent's `scoop_scoop` tool — never through this path. Adds
+   *  optimistically so the UI updates immediately, then sends to offscreen.
+   *  The real scoop (with a different JID) replaces the optimistic one when
+   *  `scoop-created` arrives. */
   async registerScoop(scoop: RegisteredScoop): Promise<void> {
+    if (!scoop.isCone) {
+      throw new Error(
+        'OffscreenClient.registerScoop is cone-only; use scoop_scoop for non-cone scoops'
+      );
+    }
     if (!this.scoops.find((s) => s.name === scoop.name)) {
       this.scoops.push(scoop);
       this.scoopStatuses.set(scoop.jid, 'initializing');
     }
-    this.send({ type: 'scoop-create', name: scoop.name, isCone: scoop.isCone });
+    this.send({ type: 'cone-create', name: scoop.name });
   }
 
   /** Called by ScoopsPanel delete button. */
