@@ -404,6 +404,31 @@ export class WasmShell {
       customCommands,
     });
 
+    // Network-command post-registration cleanup (Codex P1 on #433).
+    //
+    // just-bash's `BashOptions.commands` filter controls only the non-network
+    // built-ins. When `fetch` (or `network`) is set, just-bash unconditionally
+    // registers EVERY name from `getNetworkCommandNames()` regardless of
+    // `commands` — see `Bash` constructor in just-bash's bundle:
+    //   `if (t.fetch || t.network) for (let i of U0()) this.registerCommand(i);`
+    // We always pass `fetch` (via `createProxiedFetch()`), so without this
+    // cleanup a scoop with `allowedCommands: ['echo']` could still execute
+    // `curl`, `wget`, etc. — defeating the per-scoop isolation guarantee.
+    //
+    // Delete the disallowed network commands from the already-populated
+    // registry. Reaches into `Bash`'s private `commands: Map` via cast; the
+    // property name is stable across versions and tests below guard the
+    // behavior, but the upstream ergonomics here are what warrants the
+    // comment.
+    if (this.allowedCommands !== null) {
+      const bashInternals = this.bash as unknown as { commands: Map<string, unknown> };
+      for (const name of getNetworkCommandNames()) {
+        if (!this.isCommandAllowed(name)) {
+          bashInternals.commands.delete(name);
+        }
+      }
+    }
+
     // Wire up /usr/bin virtual directory with all registered command names
     const customCommandNames = customCommands.map((c) => c.name);
     const registeredBuiltinNames = allowedBuiltinNames ?? [
