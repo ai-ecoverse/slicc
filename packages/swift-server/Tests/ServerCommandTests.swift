@@ -134,7 +134,7 @@ final class ServerCommandTests: XCTestCase {
     }
 
     func testResolveServePortUsesPortEnvironmentAsPreferredPort() async throws {
-        let resolvedPort = try await ServerCommand.resolveServePort(from: ["PORT": "5710"]) { startingFrom in
+        let resolvedPort = try await ServerCommand.resolveServePort(from: ["PORT": "5710"]) { startingFrom, _ in
             XCTAssertEqual(startingFrom, 5710)
             return 5800
         }
@@ -143,7 +143,7 @@ final class ServerCommandTests: XCTestCase {
     }
 
     func testResolveServePortFallsBackToResolverWhenPortEnvironmentMissing() async throws {
-        let resolvedPort = try await ServerCommand.resolveServePort(from: [:]) { startingFrom in
+        let resolvedPort = try await ServerCommand.resolveServePort(from: [:]) { startingFrom, _ in
             XCTAssertEqual(startingFrom, ServerCommand.defaultServePort)
             return 5800
         }
@@ -152,11 +152,34 @@ final class ServerCommandTests: XCTestCase {
     }
 
     func testResolveServePortFallsBackToResolverWhenPortEnvironmentInvalid() async throws {
-        let resolvedPort = try await ServerCommand.resolveServePort(from: ["PORT": "70000"]) { startingFrom in
+        let resolvedPort = try await ServerCommand.resolveServePort(from: ["PORT": "70000"]) { startingFrom, _ in
             XCTAssertEqual(startingFrom, ServerCommand.defaultServePort)
             return 5801
         }
 
         XCTAssertEqual(resolvedPort, 5801)
+    }
+
+    func testResolveServePortRequestsStrictModeWhenPortEnvironmentIsExplicit() async throws {
+        var observedStrict: Bool?
+        let resolvedPort = try await ServerCommand.resolveServePort(from: ["PORT": "5710"]) { startingFrom, strict in
+            observedStrict = strict
+            XCTAssertEqual(startingFrom, 5710)
+            return startingFrom
+        }
+
+        XCTAssertEqual(resolvedPort, 5710)
+        XCTAssertEqual(observedStrict, true)
+    }
+
+    func testResolveServePortKeepsPermissiveModeWhenPortEnvironmentMissing() async throws {
+        var observedStrict: Bool?
+        let resolvedPort = try await ServerCommand.resolveServePort(from: [:]) { startingFrom, strict in
+            observedStrict = strict
+            return startingFrom
+        }
+
+        XCTAssertEqual(resolvedPort, ServerCommand.defaultServePort)
+        XCTAssertEqual(observedStrict, false)
     }
 }

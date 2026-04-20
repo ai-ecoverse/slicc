@@ -427,10 +427,20 @@ extension ServerCommand {
 
     static func resolveServePort(
         from environment: [String: String],
-        resolveAvailablePort: (Int) async throws -> Int = findAvailablePort(startingFrom:)
+        resolveAvailablePort: (Int, Bool) async throws -> Int = { preferred, strict in
+            try await findAvailablePort(startingFrom: preferred, strict: strict)
+        }
     ) async throws -> Int {
-        let preferredPort = preferredServePort(from: environment) ?? defaultServePort
-        return try await resolveAvailablePort(preferredPort)
+        // If the launcher or operator explicitly set PORT=..., respect it
+        // strictly — silently binding a neighbouring port would break the
+        // contract with whoever told us which port to use and leave Chrome
+        // pointed at a dead origin. When PORT is not set, fall back to the
+        // permissive walking behaviour so `slicc-server` still starts on a
+        // free neighbour if 5710 is casually in use.
+        if let explicit = preferredServePort(from: environment) {
+            return try await resolveAvailablePort(explicit, true)
+        }
+        return try await resolveAvailablePort(defaultServePort, false)
     }
 
     static func preferredServePort(from environment: [String: String]) -> Int? {

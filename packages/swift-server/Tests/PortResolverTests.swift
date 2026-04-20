@@ -20,6 +20,29 @@ final class PortResolverTests: XCTestCase {
         XCTAssertGreaterThan(resolvedPort, reserved.port)
     }
 
+    func testStrictModeThrowsWhenPreferredPortIsOccupied() async throws {
+        let reserved = try makeReservedSocket()
+        defer { close(reserved.fd) }
+
+        do {
+            let resolved = try await findAvailablePort(startingFrom: reserved.port, strict: true)
+            XCTFail("expected preferredPortUnavailable but got port \(resolved)")
+        } catch PortResolverError.preferredPortUnavailable(let port) {
+            XCTAssertEqual(port, reserved.port)
+        } catch {
+            XCTFail("expected preferredPortUnavailable but got \(error)")
+        }
+    }
+
+    func testStrictModeReturnsPreferredPortWhenItIsFree() async throws {
+        let reserved = try makeReservedSocket()
+        let freePort = reserved.port
+        close(reserved.fd)
+
+        let resolvedPort = try await findAvailablePort(startingFrom: freePort, strict: true)
+        XCTAssertEqual(resolvedPort, freePort)
+    }
+
     private func makeReservedSocket() throws -> (fd: Int32, port: Int) {
         let socket = try makeListeningSocket(port: 0)
         return socket

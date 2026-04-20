@@ -54,6 +54,14 @@ enum ChromeLauncherError: LocalizedError, Sendable {
     case chromeExitedBeforeReportingPort(Int32)
     case timedOutWaitingForPort(TimeInterval)
     case cdpUnavailable(Int)
+    /// A Chrome instance was already listening on the requested CDP port
+    /// when we tried to launch our own. Spawning a second Chrome with the
+    /// same user-data-dir would have made the new process hand its URL
+    /// off to the existing one and exit 0 immediately, producing the
+    /// misleading `chromeExitedBeforeReportingPort` error. Fail fast
+    /// instead so the caller (launcher / supervisor / user) can clean
+    /// the orphan up.
+    case chromeAlreadyRunning(port: Int, browser: String?)
 
     var errorDescription: String? {
         switch self {
@@ -67,6 +75,9 @@ enum ChromeLauncherError: LocalizedError, Sendable {
             return "Timed out waiting for Chrome CDP port (\(Int(timeout * 1000))ms)."
         case .cdpUnavailable(let port):
             return "Chrome CDP endpoint did not become ready on port \(port)."
+        case .chromeAlreadyRunning(let port, let browser):
+            let tail = browser.map { " (\($0))" } ?? ""
+            return "A Chrome instance is already running on CDP port \(port)\(tail). Quit it before starting slicc-server again."
         }
     }
 }
@@ -162,6 +173,17 @@ struct ChromeLauncher: Sendable {
         }
         guard fileExists(executable) else {
             throw ChromeLauncherError.invalidChromeExecutable(executable)
+        }
+
+        // Fail fast if another Chrome is already listening on the requested
+        // CDP port. Spawning our own Chrome with the same user-data-dir in
+        // that situation is a trap: the new process hands its URL off to
+        // the existing instance via Chrome's single-instance IPC, then
+        // exits 0 — and the caller sees the misleading "Chrome exited
+        // before reporting its CDP port" error.
+        if let existing = await probeExistingChrome(cdpPort: config.cdpPort) {
+            logger.warning("Chrome already on CDP port \(config.cdpPort): \(existing)")
+            throw ChromeLauncherError.chromeAlreadyRunning(port: config.cdpPort, browser: existing)
         }
 
         let process = processFactory()
@@ -338,6 +360,46 @@ struct ChromeLauncher: Sendable {
             return nil
         }
         return value
+    }
+
+    static func extractBrowserIdentifier(from data: Data) -> String? {
+        guard let jsonObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let browser = jsonObject["Browser"] as? String, !browser.isEmpty {
+            return browser
+        }
+        return nil
+    }
+
+    /// Issue a single `/json/version` probe against the requested CDP
+    /// port. Returns the Browser identifier (e.g. "Chrome/147.0.7727.101")
+    /// if a real CDP endpoint answered, or `nil` if nothing is there / it
+    /// isn't a CDP-shaped response.
+    ///
+    /// Kept internal (non-`private`) so tests can exercise it via the
+    /// injected `fetchData`.
+    func probeExistingChrome(cdpPort: Int) async -> String? {
+        guard let versionURL = URL(string: "http://127.0.0.1:\(cdpPort)/json/version") else {
+            return nil
+        }
+        do {
+            let (data, response) = try await fetchData(versionURL)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                return nil
+            }
+            // Require both the Browser field and a CDP websocket URL so we
+            // don't misidentify some other HTTP service squatting on the
+            // port.
+            guard Self.extractWebSocketDebuggerURL(from: data) != nil else {
+                return nil
+            }
+            return Self.extractBrowserIdentifier(from: data)
+        } catch {
+            logger.debug("CDP pre-flight probe failed: \(error.localizedDescription)")
+            return nil
+        }
     }
 }
 
