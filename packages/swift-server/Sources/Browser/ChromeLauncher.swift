@@ -104,8 +104,17 @@ struct ChromeLauncher: Sendable {
             FileManager.default.homeDirectoryForCurrentUser.path
         },
         processFactory: @escaping @Sendable () -> Process = { Process() },
-        fetchData: @escaping @Sendable (URL) async throws -> (Data, URLResponse) = {
-            try await URLSession.shared.data(from: $0)
+        fetchData: @escaping @Sendable (URL) async throws -> (Data, URLResponse) = { url in
+            // Bound every internal HTTP probe (CDP pre-flight, waitForCDP)
+            // with an explicit 2 s request timeout. Without this the default
+            // URLSession.shared request timeout of ~60 s can stall Chrome
+            // launch for a full minute when something is listening on the
+            // CDP port but hung at the HTTP layer — well past our own
+            // launchTimeout budget.
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 2
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            return try await URLSession.shared.data(for: request)
         }
     ) {
         self.logger = logger
