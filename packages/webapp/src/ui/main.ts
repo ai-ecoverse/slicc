@@ -81,6 +81,7 @@ import {
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
+import { recoverMounts, formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
 
 const log = createLogger('main');
 
@@ -1451,7 +1452,28 @@ async function main(): Promise<void> {
               : isNavigate
                 ? 'Navigate Event'
                 : 'Cron Event';
-      const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
+      let content: string | null = null;
+      if (isSessionReload) {
+        const body = event.body as
+          | {
+              reason?: string;
+              mounts?: Array<{ path: string; dirName: string }>;
+            }
+          | null
+          | undefined;
+        if (body?.reason === 'mount-recovery') {
+          content = formatMountRecoveryPrompt(body.mounts ?? []);
+          if (content === null) {
+            // Nothing actually needs recovery — drop the lick instead of
+            // pestering the cone with an empty notification.
+            log.debug('Dropping session-reload lick with empty mount-recovery list');
+            return;
+          }
+        }
+      }
+      if (content === null) {
+        content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
+      }
 
       const msg: ChannelMessage = {
         id: msgId,
@@ -1522,41 +1544,24 @@ async function main(): Promise<void> {
   })();
 
   // ── Restore persisted mounts from IndexedDB ──────────────────────────
+  // See `fs/mount-recovery.ts` for why some reloads require recovery and
+  // some don't (short version: Chrome only retains readwrite permission
+  // within a tab's active session, so a full restart drops every handle
+  // back to `prompt`). The `session-reload` lick is only emitted when at
+  // least one handle actually needs re-authorization.
   if (sharedFs) {
     getAllMountEntries()
       .then(async (entries) => {
         if (entries.length === 0) return;
-        const needsRemount: Array<{ path: string; dirName: string }> = [];
-        for (const { path, handle } of entries) {
-          try {
-            if (!('queryPermission' in handle)) {
-              needsRemount.push({ path, dirName: handle.name });
-              continue;
-            }
-            const perm = await (
-              handle as unknown as {
-                queryPermission: (desc: { mode: string }) => Promise<string>;
-              }
-            ).queryPermission({ mode: 'readwrite' });
-            if (perm === 'granted') {
-              await sharedFs.mount(path, handle);
-              log.info('Restored mount from previous session', { path, name: handle.name });
-            } else {
-              needsRemount.push({ path, dirName: handle.name });
-            }
-          } catch {
-            needsRemount.push({ path, dirName: handle.name });
-          }
-        }
-        if (needsRemount.length > 0) {
-          const event: LickEvent = {
-            type: 'session-reload',
-            targetScoop: undefined,
-            timestamp: new Date().toISOString(),
-            body: { reason: 'mount-recovery', mounts: needsRemount },
-          };
-          routeLickToScoop(event);
-        }
+        const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
+        if (needsRecovery.length === 0) return;
+        const event: LickEvent = {
+          type: 'session-reload',
+          targetScoop: undefined,
+          timestamp: new Date().toISOString(),
+          body: { reason: 'mount-recovery', mounts: needsRecovery },
+        };
+        routeLickToScoop(event);
       })
       .catch((err) => log.warn('Failed to restore persisted mounts', err));
   }
