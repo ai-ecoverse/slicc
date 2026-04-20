@@ -375,10 +375,22 @@ private final class ChromeOutputMonitor: @unchecked Sendable {
 
     private func startReading() {
         stdout.readabilityHandler = { [weak self] handle in
-            self?.consumeStdout(handle.availableData)
+            let data = handle.availableData
+            // Detach synchronously on EOF: if `self` has already been released,
+            // the async hop inside `consumeStdout` becomes a no-op and the
+            // handler would otherwise stay armed, busy-looping on the
+            // NSFileHandle.fd_monitoring queue.
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+            }
+            self?.consumeStdout(data)
         }
         stderr.readabilityHandler = { [weak self] handle in
-            self?.consumeStderr(handle.availableData)
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+            }
+            self?.consumeStderr(data)
         }
     }
 
