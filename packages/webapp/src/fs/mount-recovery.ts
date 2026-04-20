@@ -121,10 +121,42 @@ export async function recoverMounts(
 }
 
 /**
+ * POSIX single-quote shell quoting. Wraps `value` in `'…'` and escapes
+ * any embedded single quotes as `'\''`. The result is a single argv
+ * token, safe to paste after `mount ` regardless of spaces, globs, or
+ * shell metacharacters in the path (e.g. `/mnt/My Project`, `It's`).
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Wrap `value` in a Markdown inline-code span. Newlines (illegal in
+ * inline code) collapse to spaces. If the value contains backticks, the
+ * delimiter grows to the smallest run that cannot collide with the
+ * content, per CommonMark §6.1, so `path`s like `` `weird` `` still
+ * render correctly in any downstream renderer.
+ */
+export function mdInlineCode(value: string): string {
+  const collapsed = value.replace(/\r\n|[\r\n]/g, ' ');
+  const runs = collapsed.match(/`+/g);
+  const delimLen = runs ? Math.max(...runs.map((r) => r.length)) + 1 : 1;
+  const delim = '`'.repeat(delimLen);
+  const needsPad = collapsed.startsWith('`') || collapsed.endsWith('`');
+  const body = needsPad ? ` ${collapsed} ` : collapsed;
+  return `${delim}${body}${delim}`;
+}
+
+/**
  * Build a natural-language prompt for the cone describing mount points
  * that lost their permission on reload. The prompt is self-contained:
  * it tells the cone to inform the user and offer the exact `mount`
  * commands needed to re-authorize.
+ *
+ * Mount paths are shell-quoted in command suggestions so paths with
+ * spaces or metacharacters parse as a single argv token, and they are
+ * embedded in Markdown inline code with a delimiter that survives
+ * embedded backticks or newlines.
  *
  * Returns `null` when there is nothing to report — callers should treat
  * a `null` result as "do not emit a lick".
@@ -133,10 +165,10 @@ export function formatMountRecoveryPrompt(mounts: MountRecoveryEntry[]): string 
   if (!Array.isArray(mounts) || mounts.length === 0) return null;
 
   const listLines = mounts.map(({ path, dirName }) => {
-    const origin = dirName ? ` (previously mounted from \`${dirName}\`)` : '';
-    return `- \`${path}\`${origin}`;
+    const origin = dirName ? ` (previously mounted from ${mdInlineCode(dirName)})` : '';
+    return `- ${mdInlineCode(path)}${origin}`;
   });
-  const mountCmds = mounts.map(({ path }) => `    mount ${path}`);
+  const mountCmds = mounts.map(({ path }) => `    mount ${shellQuote(path)}`);
 
   const noun = mounts.length === 1 ? 'mount point' : 'mount points';
   const pronoun = mounts.length === 1 ? 'it' : 'them';
@@ -152,6 +184,6 @@ export function formatMountRecoveryPrompt(mounts: MountRecoveryEntry[]): string 
     '',
     ...mountCmds,
     '',
-    'If the user no longer needs a mount, run `mount unmount <path>` instead to clear the stale entry.',
+    'If the user no longer needs a mount, run `mount unmount <path>` (with the path shell-quoted the same way) to clear the stale entry instead.',
   ].join('\n');
 }

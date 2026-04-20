@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   recoverMounts,
   formatMountRecoveryPrompt,
+  mdInlineCode,
+  shellQuote,
   type MountRecoveryFS,
 } from '../../src/fs/mount-recovery.js';
 import type { MountEntry } from '../../src/fs/mount-table-store.js';
@@ -161,9 +163,9 @@ describe('formatMountRecoveryPrompt', () => {
     expect(prompt).not.toBeNull();
     expect(prompt).toContain('Mount recovery required');
     expect(prompt).toContain('1 mount point');
-    expect(prompt).toContain('/workspace/my-project');
+    expect(prompt).toContain('`/workspace/my-project`');
     expect(prompt).toContain('previously mounted from `my-project`');
-    expect(prompt).toContain('mount /workspace/my-project');
+    expect(prompt).toContain("mount '/workspace/my-project'");
     expect(prompt).toContain('mount unmount');
   });
 
@@ -174,8 +176,8 @@ describe('formatMountRecoveryPrompt', () => {
     ]);
     expect(prompt).not.toBeNull();
     expect(prompt).toContain('2 mount points');
-    expect(prompt).toContain('mount /workspace/a');
-    expect(prompt).toContain('mount /workspace/b');
+    expect(prompt).toContain("mount '/workspace/a'");
+    expect(prompt).toContain("mount '/workspace/b'");
   });
 
   it('omits the original directory name when it is unknown', () => {
@@ -183,5 +185,88 @@ describe('formatMountRecoveryPrompt', () => {
     expect(prompt).not.toBeNull();
     expect(prompt).not.toContain('previously mounted');
     expect(prompt).toContain('/mnt/data');
+  });
+
+  it('shell-quotes mount paths containing spaces so they parse as one argv token', () => {
+    const prompt = formatMountRecoveryPrompt([{ path: '/mnt/My Project', dirName: 'My Project' }]);
+    expect(prompt).not.toBeNull();
+    // The command must keep the path as a single argv token.
+    expect(prompt).toContain("mount '/mnt/My Project'");
+    // And must NOT emit the unsafe, whitespace-splitting form.
+    expect(prompt).not.toMatch(/^ {4}mount \/mnt\/My Project$/m);
+  });
+
+  it('escapes single quotes inside shell-quoted mount paths', () => {
+    const prompt = formatMountRecoveryPrompt([{ path: "/mnt/It's Work", dirName: "It's Work" }]);
+    expect(prompt).not.toBeNull();
+    // POSIX single-quote escape: close, escape, reopen.
+    expect(prompt).toContain("mount '/mnt/It'\\''s Work'");
+  });
+
+  it('uses a wider backtick delimiter when a value contains backticks', () => {
+    const prompt = formatMountRecoveryPrompt([{ path: '/mnt/weird`path', dirName: 'weird`dir' }]);
+    expect(prompt).not.toBeNull();
+    // Embedded `s force a `` … `` inline code fence so markdown stays valid.
+    expect(prompt).toContain('``/mnt/weird`path``');
+    expect(prompt).toContain('``weird`dir``');
+  });
+
+  it('collapses newlines inside Markdown inline code so the bullet renders on one line', () => {
+    const prompt = formatMountRecoveryPrompt([
+      { path: '/mnt/line1\nline2', dirName: 'weird\r\nname' },
+    ]);
+    expect(prompt).not.toBeNull();
+    // Inline code must not straddle a newline (CommonMark forbids it).
+    expect(prompt).toContain('`/mnt/line1 line2`');
+    expect(prompt).toContain('`weird name`');
+    // The indented shell command is a code block, not inline code, so the
+    // POSIX-correct single-quote form still preserves the real newline
+    // there — callers treat the path as opaque, we don't rewrite it.
+  });
+});
+
+describe('shellQuote', () => {
+  it('wraps plain values in single quotes', () => {
+    expect(shellQuote('/workspace/app')).toBe("'/workspace/app'");
+  });
+
+  it('preserves spaces inside the quoted form', () => {
+    expect(shellQuote('/mnt/My Project')).toBe("'/mnt/My Project'");
+  });
+
+  it('escapes embedded single quotes using the POSIX close-reopen trick', () => {
+    expect(shellQuote("It's")).toBe("'It'\\''s'");
+  });
+
+  it('handles strings with only single quotes', () => {
+    expect(shellQuote("'")).toBe("''\\'''");
+  });
+
+  it('handles empty strings', () => {
+    expect(shellQuote('')).toBe("''");
+  });
+});
+
+describe('mdInlineCode', () => {
+  it('wraps plain values in single backticks', () => {
+    expect(mdInlineCode('/workspace/app')).toBe('`/workspace/app`');
+  });
+
+  it('uses a longer delimiter when the value contains a backtick', () => {
+    expect(mdInlineCode('a`b')).toBe('``a`b``');
+  });
+
+  it('uses a still-longer delimiter when the value contains a run of backticks', () => {
+    expect(mdInlineCode('a``b')).toBe('```a``b```');
+  });
+
+  it('pads leading/trailing backticks with a space so CommonMark parses cleanly', () => {
+    expect(mdInlineCode('`leading')).toBe('`` `leading ``');
+    expect(mdInlineCode('trailing`')).toBe('`` trailing` ``');
+  });
+
+  it('collapses CR/LF to a single space', () => {
+    expect(mdInlineCode('line1\nline2')).toBe('`line1 line2`');
+    expect(mdInlineCode('a\r\nb')).toBe('`a b`');
   });
 });
