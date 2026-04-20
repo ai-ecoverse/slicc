@@ -337,10 +337,16 @@
     0 4px 16px 0 rgba(0, 0, 0, 0.12);
 }
 .chat__textarea {
-  flex: 1;
+  /* Let the inline height set by JS control the textarea's size.
+     Using flex:1 here would make the flex distribution override our
+     inline height and pin the textarea to the wrapper's min-height. */
+  flex: 0 0 auto;
   resize: none;
   min-height: 18px;
-  max-height: 120px;
+  /* JS sets height dynamically up to 30% of the chat panel height;
+     this max-height is a fallback cap when JS has not yet run. */
+  max-height: 30vh;
+  overflow-y: auto;
   padding: 0;
   border: none;
   background: transparent;
@@ -356,11 +362,14 @@
   color: var(--s2-content-tertiary);
 }
 
-/* Action bar — bottom row of prompt bar */
+/* Action bar — bottom row of prompt bar.
+   margin-top: auto pins this to the bottom of the flex column so the
+   wrapper's min-height still shows an empty-state gap above the bar. */
 .chat__action-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  margin-top: auto;
   flex-shrink: 0;
 }
 .chat__action-bar-left {

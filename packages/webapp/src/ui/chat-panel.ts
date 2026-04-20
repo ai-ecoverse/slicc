@@ -424,9 +424,7 @@ export class ChatPanel {
     });
 
     this.textarea.addEventListener('input', () => {
-      // Auto-resize textarea
-      this.textarea.style.height = 'auto';
-      this.textarea.style.height = Math.min(this.textarea.scrollHeight, 120) + 'px';
+      this.adjustTextareaHeight();
     });
 
     this.sendBtn.addEventListener('click', () => this.sendMessage());
@@ -446,8 +444,7 @@ export class ChatPanel {
     this.voiceInput = new VoiceInput({
       onTranscript: (text, _isFinal) => {
         this.textarea.value = text;
-        this.textarea.style.height = 'auto';
-        this.textarea.style.height = Math.min(this.textarea.scrollHeight, 120) + 'px';
+        this.adjustTextareaHeight();
       },
       onStateChange: (state) => {
         if (state === 'error') {
@@ -508,6 +505,30 @@ export class ChatPanel {
     }
   }
 
+  /**
+   * Grow the textarea to fit its content, up to 30% of the chat panel's
+   * available height. Falls back to 30% of the window height when the
+   * panel hasn't laid out yet (e.g. first input before layout).
+   */
+  private adjustTextareaHeight(): void {
+    const panelHeight =
+      this.container.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 0) || 0;
+    const maxHeight = Math.max(18, Math.floor(panelHeight * 0.3));
+    this.textarea.style.height = 'auto';
+    // Cache scrollHeight once — it's layout-dependent and reading it twice
+    // would force an extra reflow.
+    const scrollHeight = this.textarea.scrollHeight;
+    const next = Math.min(scrollHeight, maxHeight);
+    this.textarea.style.height = next + 'px';
+    this.textarea.style.overflowY = scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }
+
+  /** Reset the textarea back to a single row after submit or clear. */
+  private resetTextareaHeight(): void {
+    this.textarea.style.height = 'auto';
+    this.textarea.style.overflowY = 'hidden';
+  }
+
   private sendMessage(): void {
     const text = this.textarea.value.trim();
     if (!text) return;
@@ -528,9 +549,9 @@ export class ChatPanel {
     this.appendMessageEl(msg);
     this.persistSession();
 
-    // Clear input
+    // Clear input and shrink back to a single row
     this.textarea.value = '';
-    this.textarea.style.height = 'auto';
+    this.resetTextareaHeight();
 
     // Only lock input if not already streaming (first message triggers streaming)
     if (!this.isStreaming) {
