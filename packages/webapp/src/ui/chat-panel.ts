@@ -6,12 +6,7 @@
  */
 
 import type { AgentHandle, AgentEvent, ChatMessage, ToolCall } from './types.js';
-import {
-  renderAssistantMessageContent,
-  renderMessageContent,
-  renderToolInput,
-  escapeHtml,
-} from './message-renderer.js';
+import { renderAssistantMessageContent, renderMessageContent } from './message-renderer.js';
 import { SessionStore } from './session-store.js';
 import { createLogger } from '../core/logger.js';
 import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
@@ -21,6 +16,7 @@ import {
   type InlineSprinkleInstance,
 } from './inline-sprinkle.js';
 import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
+import { getToolDescriptor, createToolIcon, createToolBody, toolStatus } from './tool-call-view.js';
 import {
   getAllAvailableModels,
   getSelectedModelId,
@@ -34,28 +30,6 @@ const log = createLogger('chat-panel');
 /** Generate a simple unique ID. */
 function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-/** Tool icons — compact text abbreviations instead of emojis */
-const TOOL_ICONS: Record<string, string> = {
-  bash: '$',
-  browser: 'B',
-  read_file: 'R',
-  write_file: 'W',
-  edit_file: 'E',
-  javascript: 'JS',
-  delegate_to_scoop: 'D',
-  send_message: 'M',
-  schedule_task: 'T',
-  list_scoops: 'LS',
-  list_tasks: 'LT',
-  register_scoop: 'RS',
-  update_global_memory: 'GM',
-};
-
-/** Get icon for a tool */
-function getToolIcon(toolName: string): string {
-  return TOOL_ICONS[toolName] ?? '?';
 }
 
 function renderChatMessageContent(msg: ChatMessage): string {
@@ -1074,10 +1048,14 @@ export class ChatPanel {
         break;
       }
     }
+    // Last real user turn — licks and delegation frames don't count.
+    // Tool calls in earlier messages render with a muted status dot.
+    const lastRealUserIdx = this.findLastRealUserIdx();
     for (let i = 0; i < this.messages.length; i++) {
       const msg = this.messages[i];
       const showLabel = this.shouldShowLabel(msg, prevRole, prevTimestamp);
-      const el = this.createMessageEl(msg, showLabel, i === lastAssistantIdx);
+      const stale = lastRealUserIdx > i;
+      const el = this.createMessageEl(msg, showLabel, i === lastAssistantIdx, stale);
       this.messagesInner.appendChild(el);
       prevRole = msg.role;
       prevTimestamp = msg.timestamp;
@@ -1096,6 +1074,13 @@ export class ChatPanel {
     const prev = this.messages.length >= 2 ? this.messages[this.messages.length - 2] : null;
     const showLabel = this.shouldShowLabel(msg, prev?.role ?? null, prev?.timestamp ?? 0);
     const isLastAssistant = msg.role === 'assistant';
+    // If this new message is itself a real user turn, any previously-
+    // rendered tool calls should become stale — retint them now.
+    if (this.isRealUserTurn(msg)) {
+      this.messagesInner
+        .querySelectorAll('.tool-call')
+        .forEach((el) => el.classList.add('tool-call--stale'));
+    }
     const el = this.createMessageEl(msg, showLabel, isLastAssistant);
     this.messagesInner.appendChild(el);
     this.scrollToBottom();
@@ -1138,16 +1123,34 @@ export class ChatPanel {
         }
         isLastAssistant = idx === lastIdx;
       }
-      const newEl = this.createMessageEl(msg, showLabel, isLastAssistant);
+      const stale = this.findLastRealUserIdx() > idx;
+      const newEl = this.createMessageEl(msg, showLabel, isLastAssistant, stale);
       existing.replaceWith(newEl);
     }
     this.scrollToBottom();
   }
 
+  /** A plain user turn — not a lick and not a cone delegation frame. */
+  private isRealUserTurn(msg: ChatMessage): boolean {
+    if (msg.role !== 'user') return false;
+    if (msg.source === 'lick') return false;
+    if (msg.source === 'delegation' || msg.channel === 'delegation') return false;
+    return true;
+  }
+
+  /** Index of the most recent real user turn, or -1 if none. */
+  private findLastRealUserIdx(): number {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.isRealUserTurn(this.messages[i])) return i;
+    }
+    return -1;
+  }
+
   private createMessageEl(
     msg: ChatMessage,
     showLabel = true,
-    isLastAssistant = false
+    isLastAssistant = false,
+    stale = false
   ): HTMLElement {
     // Licks (webhook/cron) get their own compact style like tool calls
     const isLick =
@@ -1282,7 +1285,7 @@ export class ChatPanel {
     // Tool calls rendered outside the message bubble for compact display
     if (msg.toolCalls) {
       for (const tc of msg.toolCalls) {
-        wrapper.appendChild(this.createToolCallEl(tc));
+        wrapper.appendChild(this.createToolCallEl(tc, stale));
       }
     }
 
@@ -1378,73 +1381,46 @@ export class ChatPanel {
     return el;
   }
 
-  private createToolCallEl(tc: ToolCall): HTMLElement {
-    const icon = getToolIcon(tc.name);
+  private createToolCallEl(tc: ToolCall, stale = false): HTMLElement {
+    const desc = getToolDescriptor(tc.name);
+    const status = toolStatus(tc);
 
     // Use <details> for collapsible behavior - collapsed by default, expand on hover/click
     const el = document.createElement('details');
-    el.className = 'tool-call';
+    el.className = `tool-call tool-call--${status}${stale ? ' tool-call--stale' : ''}`;
 
-    // Summary shows icon and tool name
     const summary = document.createElement('summary');
     summary.className = 'tool-call__header';
-    summary.innerHTML = `<span class="tool-call__icon"><svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span> <span class="tool-call__name">${escapeHtml(tc.name)}</span>`;
 
-    // Add brief input preview to summary
-    if (tc.input !== undefined) {
+    const iconWrap = document.createElement('span');
+    iconWrap.className = 'tool-call__icon';
+    iconWrap.appendChild(createToolIcon(tc.name));
+    summary.appendChild(iconWrap);
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'tool-call__name';
+    nameEl.textContent = desc.title;
+    summary.appendChild(nameEl);
+
+    const previewText = desc.preview(tc.input);
+    if (previewText) {
       const preview = document.createElement('span');
       preview.className = 'tool-call__preview';
-      const inputStr = typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input);
-      preview.textContent = inputStr.slice(0, 40) + (inputStr.length > 40 ? '...' : '');
+      preview.textContent = previewText;
       summary.appendChild(preview);
     }
 
-    // Status indicator — text-based
     const statusEl = document.createElement('span');
-    if (tc.result === undefined) {
-      statusEl.className = 'tool-call__status tool-call__status--running';
-    } else if (tc.isError) {
-      statusEl.className = 'tool-call__status tool-call__status--error';
-      statusEl.textContent = 'failed';
-    } else {
-      statusEl.className = 'tool-call__status tool-call__status--success';
-      statusEl.textContent = '\u2713'; // ✓
-    }
+    statusEl.className = `tool-call__status tool-call__status--${status}`;
+    statusEl.setAttribute('aria-label', status);
     summary.appendChild(statusEl);
 
     el.appendChild(summary);
 
-    // Details content (shown on expand)
     const details = document.createElement('div');
     details.className = 'tool-call__details';
+    details.appendChild(createToolBody(tc));
 
-    if (tc.input !== undefined) {
-      const inputEl = document.createElement('div');
-      inputEl.className = 'tool-call__input';
-      const inputLabel = document.createElement('div');
-      inputLabel.className = 'tool-call__label';
-      inputLabel.textContent = 'Input:';
-      inputEl.appendChild(inputLabel);
-      const inputCode = document.createElement('pre');
-      inputCode.innerHTML = renderToolInput(tc.input);
-      inputEl.appendChild(inputCode);
-      details.appendChild(inputEl);
-    }
-
-    if (tc.result !== undefined) {
-      const resultEl = document.createElement('div');
-      resultEl.className = `tool-call__result${tc.isError ? ' tool-call__result--error' : ''}`;
-      const resultLabel = document.createElement('div');
-      resultLabel.className = 'tool-call__label';
-      resultLabel.textContent = tc.isError ? 'Error:' : 'Result:';
-      resultEl.appendChild(resultLabel);
-      const resultPre = document.createElement('pre');
-      resultPre.textContent = tc.result;
-      resultEl.appendChild(resultPre);
-      details.appendChild(resultEl);
-    }
-
-    // Render screenshot thumbnail from transient data (not persisted in messages)
     const screenshotUrl = tc._screenshotDataUrl;
     if (screenshotUrl) {
       const imgEl = document.createElement('img');
