@@ -54,6 +54,7 @@ describe('bedrock-camp built-in provider', () => {
 
     const payloads: unknown[] = [];
     const models: unknown[] = [];
+    const argCounts: number[] = [];
     const stream = streamSimpleBedrockCamp(
       {
         id: 'anthropic.claude-sonnet-4-6',
@@ -61,6 +62,7 @@ describe('bedrock-camp built-in provider', () => {
         api: 'bedrock-camp-converse',
         baseUrl: 'https://bedrock-runtime.us-west-2.amazonaws.com',
         maxTokens: 200000,
+        input: ['text', 'image'],
         cost: {
           input: 0,
           output: 0,
@@ -73,10 +75,10 @@ describe('bedrock-camp built-in provider', () => {
       } as any,
       {
         apiKey: 'ABSK-test',
-        onPayload(payload, model) {
-          expect(arguments).toHaveLength(2);
-          payloads.push(payload);
-          models.push(model);
+        onPayload(...args: unknown[]) {
+          argCounts.push(args.length);
+          payloads.push(args[0]);
+          models.push(args[1]);
         },
       }
     );
@@ -99,6 +101,7 @@ describe('bedrock-camp built-in provider', () => {
     );
     expect(payloads).toHaveLength(1);
     expect(models).toHaveLength(1);
+    expect(argCounts).toEqual([2]);
     expect(models[0]).toMatchObject({
       id: 'anthropic.claude-sonnet-4-6',
       api: 'bedrock-camp-converse',
