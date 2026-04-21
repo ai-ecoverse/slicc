@@ -87,7 +87,7 @@
   padding: 0 16px;
   border: 1px solid var(--s2-gray-200); /* Figma: #e1e1e1 */
   border-radius: var(--s2-radius-xl); /* 16px — Figma "static white" button */
-  background: var(--s2-gray-50); /* Figma: transparent-white/800 — theme-aware elevated surface */
+  background: var(--s2-gray-50); /* Figma-inspired light neutral button surface */
   color: var(--s2-gray-800); /* Figma: #292929 */
   font-size: var(--s2-font-size-100);
   font-weight: 700; /* Figma: Bold */
@@ -193,11 +193,11 @@
 }
 .sprinkle-badge--informative {
   background: var(--s2-informative);
-  color: var(--s2-gray-25);
+  color: #fff; /* Fixed white: gray-25 inverts to dark in dark mode, failing AA on blue (3.60) */
 }
 .sprinkle-badge--accent {
   background: var(--s2-accent);
-  color: var(--s2-gray-25);
+  color: #fff; /* Fixed white: gray-25 inverts to dark in dark mode, failing AA on blue (3.60) */
 }
 /* Subtle fills — Figma pastel backgrounds with dark text */
 .sprinkle-badge--subtle {
