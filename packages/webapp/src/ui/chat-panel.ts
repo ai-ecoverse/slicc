@@ -17,6 +17,7 @@ import {
 } from './inline-sprinkle.js';
 import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
 import { getToolDescriptor, createToolIcon, createToolBody, toolStatus } from './tool-call-view.js';
+import { getLickDescriptor, createLickIcon, parseLickContent } from './lick-view.js';
 import {
   getAllAvailableModels,
   getSelectedModelId,
@@ -1338,44 +1339,44 @@ export class ChatPanel {
     return row;
   }
 
-  /** Create a lick element (webhook/cron event) styled like tool calls */
+  /** Create a lick element (webhook/cron/sprinkle/...) styled as an
+   *  incoming bubble — right-aligned like user messages, icon on the
+   *  right side, collapsed preview carries the canonical event name. */
   private createLickEl(msg: ChatMessage): HTMLElement {
+    const desc = getLickDescriptor(msg);
+    const { preview, body } = parseLickContent(msg.content);
+
     const el = document.createElement('details');
-    el.className = 'lick';
+    el.className = `lick lick--${msg.channel ?? 'event'}`;
 
-    const channelType =
-      msg.channel === 'webhook'
-        ? 'Webhook'
-        : msg.channel === 'cron'
-          ? 'Cron'
-          : msg.channel === 'fswatch'
-            ? 'File Watch'
-            : msg.channel === 'navigate'
-              ? 'Navigate'
-              : 'Event';
-
-    // Summary shows tongue emoji and type
     const summary = document.createElement('summary');
     summary.className = 'lick__header';
-    summary.innerHTML = `<span class="lick__icon">E</span> <span class="lick__type">${channelType}</span>`;
 
-    // Add brief preview
-    const preview = document.createElement('span');
-    preview.className = 'lick__preview';
-    // Extract a meaningful preview from the content
-    const contentPreview = msg.content
-      .replace(/\[Webhook Event:.*?\]\n```json\n?/s, '')
-      .slice(0, 50);
-    preview.textContent =
-      contentPreview.replace(/\n/g, ' ') + (contentPreview.length >= 50 ? '...' : '');
-    summary.appendChild(preview);
+    const label = document.createElement('span');
+    label.className = 'lick__type';
+    label.textContent = desc.label;
+    summary.appendChild(label);
+
+    if (preview) {
+      const previewEl = document.createElement('span');
+      previewEl.className = 'lick__preview';
+      previewEl.textContent = preview;
+      summary.appendChild(previewEl);
+    }
+
+    const iconWrap = document.createElement('span');
+    iconWrap.className = 'lick__icon';
+    iconWrap.appendChild(createLickIcon(msg));
+    summary.appendChild(iconWrap);
 
     el.appendChild(summary);
 
-    // Details content
+    // Expanded body — render the remainder (sans the `[Xyz Event: name]`
+    // header) as markdown. Payload JSON stays as a raw fenced code block
+    // because the shape isn't fixed and we don't want to alter it.
     const details = document.createElement('div');
     details.className = 'lick__details';
-    details.innerHTML = renderMessageContent(msg.content);
+    details.innerHTML = renderMessageContent(body);
     el.appendChild(details);
 
     return el;

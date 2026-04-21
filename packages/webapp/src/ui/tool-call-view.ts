@@ -400,7 +400,10 @@ function renderEditBody(tc: ToolCall): HTMLElement {
   for (const line of newLines) {
     rows.push(`<span class="tool-call__diff-add">+ ${escapeHtml(line)}</span>`);
   }
-  diff.innerHTML = rows.join('\n');
+  // Block-level children stack on their own — joining with '\n' in a
+  // `pre` would add a visible blank line between the deletion and
+  // addition groups.
+  diff.innerHTML = rows.join('');
   body.appendChild(diff);
 
   if (tc.result !== undefined) {

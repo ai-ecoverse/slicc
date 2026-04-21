@@ -228,9 +228,8 @@
 }
 .tool-call__diff {
   margin: 0;
-  padding: 10px 12px;
-  border-radius: var(--s2-radius-s);
-  background: var(--s2-bg-sunken);
+  padding: 0;
+  background: transparent;
   font-family: var(--s2-font-mono);
   font-size: var(--s2-font-size-75);
   line-height: 1.55;
@@ -238,22 +237,21 @@
   word-break: break-word;
   max-height: 320px;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
+  overflow-x: hidden;
 }
-.tool-call__diff-del {
+.tool-call__diff-del,
+.tool-call__diff-add {
   display: block;
   padding: 1px 6px;
-  margin: 0 -6px;
   border-radius: 2px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tool-call__diff-del {
   background: color-mix(in oklch, var(--s2-negative) 15%, transparent);
   color: var(--s2-negative);
 }
 .tool-call__diff-add {
-  display: block;
-  padding: 1px 6px;
-  margin: 0 -6px;
-  border-radius: 2px;
   background: color-mix(in oklch, var(--s2-positive) 18%, transparent);
   color: var(--s2-positive);
 }
@@ -272,23 +270,34 @@
   border-color: var(--slicc-cone);
 }
 
+.tool-call__ui {
+  margin-top: 8px;
+}
+
 /* ================================================================== */
-/* Licks (webhook/cron events) — unchanged                             */
+/* Licks (webhook/cron/sprinkle/fswatch/navigate/session-reload)      */
+/* Render as an incoming bubble: right-aligned like user messages,    */
+/* max-width mirrored, icon anchored to the right.                    */
 /* ================================================================== */
 .lick {
   padding: 0;
+  align-self: flex-end;
+  width: 100%;
+  max-width: 560px;
   font-size: var(--s2-font-size-75);
-  margin-left: 20px;
 }
 .lick summary {
   list-style: none;
   cursor: pointer;
-  padding: 2px var(--s2-spacing-75);
+  padding: 8px 12px;
   display: flex;
   align-items: center;
-  gap: var(--s2-spacing-50);
-  border-radius: var(--s2-radius-default);
-  color: var(--s2-content-tertiary);
+  gap: 8px;
+  flex-direction: row;
+  border-radius: 10px;
+  background: var(--s2-bg-layer-1);
+  color: var(--s2-content-secondary);
+  border: 1px solid var(--s2-border-subtle);
   transition: background var(--s2-transition-default);
 }
 .lick summary:hover {
@@ -300,51 +309,83 @@
 .lick__header {
   display: flex;
   align-items: center;
-  gap: var(--s2-spacing-50);
+  gap: 8px;
   cursor: pointer;
-}
-.lick__icon {
-  font-size: 10px;
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--s2-radius-s);
-  background: var(--s2-gray-200);
-  flex-shrink: 0;
-  font-weight: 700;
-  color: var(--s2-content-secondary);
+  width: 100%;
+  justify-content: flex-start;
 }
 .lick__type {
   color: var(--s2-content-secondary);
   font-weight: 500;
+  font-size: var(--s2-font-size-75);
+  flex-shrink: 0;
 }
 .lick__preview {
   color: var(--s2-content-tertiary);
-  font-size: var(--s2-font-size-50);
-  margin-left: var(--s2-spacing-50);
+  font-size: var(--s2-font-size-75);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 300px;
+  min-width: 0;
+  flex: 1;
   font-family: var(--s2-font-mono);
 }
-.tool-call__ui {
-  margin-top: 8px;
+.lick__icon {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--s2-content-secondary);
+  order: 99;
+}
+.lick__icon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 .lick__details {
-  padding: var(--s2-spacing-50) var(--s2-spacing-75) var(--s2-spacing-75) 22px;
-  margin-top: 2px;
-  border-left: 2px solid var(--s2-border-subtle);
-  margin-left: var(--s2-spacing-75);
-  font-size: var(--s2-font-size-75);
-  color: var(--s2-content-secondary);
-}
-.lick__details pre {
-  background: var(--s2-bg-sunken);
-  padding: var(--s2-spacing-75);
+  margin-top: 6px;
+  padding: 12px 14px;
   border-radius: var(--s2-radius-s);
-  font-size: var(--s2-font-size-50);
+  background: var(--s2-bg-sunken);
+  color: var(--s2-content-secondary);
+  font-size: var(--s2-font-size-75);
+  line-height: 1.55;
+  word-break: break-word;
+}
+.lick__details > *:first-child {
+  margin-top: 0;
+}
+.lick__details > *:last-child {
+  margin-bottom: 0;
+}
+/* Markdown prose — the reset in base.css strips list padding, which
+ * clips bullets against the container edge. Restore enough gutter so
+ * `-` bullets sit inside the padded frame. */
+.lick__details p,
+.lick__details ul,
+.lick__details ol {
+  margin: 0.5em 0;
+}
+.lick__details ul,
+.lick__details ol {
+  padding-left: 1.4em;
+}
+/* The enclosing .lick__details already carries the container look —
+ * letting the code block draw its own frame creates a "box inside a
+ * box" feel. Strip its chrome and let the content breathe. */
+.lick__details pre {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font-size: var(--s2-font-size-75);
+  font-family: var(--s2-font-mono);
   overflow-x: auto;
+  max-height: 320px;
+  overflow-y: auto;
+  white-space: pre;
 }
