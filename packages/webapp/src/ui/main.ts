@@ -101,6 +101,37 @@ const LICK_CHANNELS: ReadonlySet<string> = new Set<LickChannel>([
   'navigate',
 ]);
 
+/** True when the current URL requests the design-time UI fixture
+ *  (`?ui-fixture=1`). Accepts `1`, `true`, and the bare presence of the key
+ *  so both `?ui-fixture` and `?ui-fixture=1` work for quick toggling. */
+function isUIFixtureRequested(): boolean {
+  try {
+    const raw = new URLSearchParams(window.location.search).get('ui-fixture');
+    if (raw === null) return false;
+    return raw === '' || raw === '1' || raw.toLowerCase() === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/** Load the design-time UI fixture into the chat panel.
+ *
+ * Writes messages to a dedicated `session-ui-fixture` session id so the
+ * fixture survives reloads without touching real scoop storage. Real
+ * scoops remain selectable in the sidebar — clicking one switches away
+ * and saves any fixture state under its own session id. */
+async function loadUIFixtureIntoChat(chatPanel: {
+  switchToContext: (id: string, readOnly: boolean, scoopName?: string) => Promise<void>;
+  loadMessages: (msgs: ChatMessage[]) => void;
+}): Promise<void> {
+  const [{ createChatFixture, FIXTURE_SESSION_ID, FIXTURE_SCOOP_NAME }] = await Promise.all([
+    import('./chat-fixture.js'),
+  ]);
+  await chatPanel.switchToContext(FIXTURE_SESSION_ID, true, FIXTURE_SCOOP_NAME);
+  chatPanel.loadMessages(createChatFixture());
+  log.info('Loaded UI fixture session for design iteration');
+}
+
 /** Store a directory handle for later mount during onboarding completion. */
 async function storePendingMount(handle: FileSystemDirectoryHandle): Promise<void> {
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -715,6 +746,13 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   client.requestState();
 
   log.info('Extension UI connected to offscreen agent engine');
+
+  // `?ui-fixture=1` — same design-time override as the CLI path, but run
+  // last so the normal extension boot (state sync, scoop selection) has
+  // populated the sidebar before we overwrite the chat view.
+  if (isUIFixtureRequested()) {
+    await loadUIFixtureIntoChat(layout.panels.chat);
+  }
 
   // Initialize operational telemetry (fire-and-forget)
   initTelemetry().catch(() => {});
@@ -1977,6 +2015,14 @@ async function main(): Promise<void> {
     orchestrator.createScoopTab(selectedScoop.jid);
     // Trigger scoop select to properly load the chat context
     await handleScoopSelect(selectedScoop);
+  }
+
+  // `?ui-fixture=1` — design-time override: replace the live chat context
+  // with a synthetic session covering every message UI variant. Runs after
+  // the normal scoop select so real scoops stay listed in the sidebar and
+  // clicking one cleanly exits fixture mode.
+  if (isUIFixtureRequested()) {
+    await loadUIFixtureIntoChat(layout.panels.chat);
   }
 
   if (runtimeMode === 'standalone' || runtimeMode === 'electron-overlay') {
