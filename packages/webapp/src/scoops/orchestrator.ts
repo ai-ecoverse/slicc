@@ -825,12 +825,15 @@ export class Orchestrator {
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),
     };
 
+    // Cone gets unrestricted skillsFs for full compatibility skill discovery.
+    // Scoops use their RestrictedFS (passed as `fs`) so skill discovery is
+    // bounded by their ACLs — no expensive BFS over the entire VFS.
     const context = new ScoopContext(
       scoop,
       contextCallbacks,
       fs,
       this.sessionStore ?? undefined,
-      this.sharedFs ?? undefined
+      scoop.isCone ? (this.sharedFs ?? undefined) : undefined
     );
 
     this.contexts.set(jid, context);
