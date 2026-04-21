@@ -252,13 +252,15 @@ function injectIntoHead(html, injection) {
 }
 
 // ── Helper: build a self-contained bridge script for nested iframe ─
-function buildNestedBridgeScript(savedState, savedStorage, name) {
+function buildNestedBridgeScript(savedState, savedStorage, name, isLight) {
   var stateJson, storageJson, nameJson;
   try { stateJson = JSON.stringify(savedState || null); } catch(e) { stateJson = 'null'; }
   try { storageJson = JSON.stringify(savedStorage || {}); } catch(e) { storageJson = '{}'; }
   try { nameJson = JSON.stringify(name); } catch(e) { nameJson = '""'; }
+  var isLightLit = isLight ? 'true' : 'false';
 
   return '(function() {' +
+    'try { if (' + isLightLit + ') document.documentElement.classList.add("theme-light"); } catch(e) {}' +
     'window.__slicc_sd = ' + storageJson + ';' +
     'window.__slicc_storage = {' +
       'getItem: function(key) { var v = window.__slicc_sd[key]; return v === undefined ? null : v; },' +
@@ -336,6 +338,8 @@ function buildNestedBridgeScript(savedState, savedStorage, name) {
       'if (!msg || !msg.type) return;' +
       'if (msg.type === "sprinkle-update") {' +
         'window.__slicc_listeners.forEach(function(cb) { try { cb(msg.data); } catch(err) {} });' +
+      '} else if (msg.type === "slicc-theme") {' +
+        'document.documentElement.classList.toggle("theme-light", !!msg.isLight);' +
       '} else if (msg.id && _cbs[msg.id]) {' +
         'var cb = _cbs[msg.id]; delete _cbs[msg.id]; cb(msg);' +
       '}' +
@@ -350,7 +354,19 @@ addEventListener('message', function(e) {
   var msg = e.data;
   if (!msg || !msg.type) return;
 
+  if (msg.type === 'slicc-theme') {
+    document.documentElement.classList.toggle('theme-light', !!msg.isLight);
+    if (window.__slicc_childIframe && window.__slicc_childIframe.contentWindow) {
+      window.__slicc_childIframe.contentWindow.postMessage(msg, '*');
+    }
+    return;
+  }
+
   if (msg.type === 'sprinkle-render') {
+    // Apply initial theme class so CSS variables resolve correctly on first paint.
+    if (typeof msg.isLight === 'boolean') {
+      document.documentElement.classList.toggle('theme-light', msg.isLight);
+    }
     window.__slicc_name = msg.name || '';
     window.__slicc_state = msg.savedState || null;
 
@@ -367,7 +383,7 @@ addEventListener('message', function(e) {
       // The sandbox is CSP-exempt, so the nested iframe's inline scripts
       // execute freely. We inject bridge + localStorage polyfill into
       // the full document HTML, then relay messages between parent and child.
-      var bridgeScript = buildNestedBridgeScript(msg.savedState, msg.savedStorage, msg.name || '');
+      var bridgeScript = buildNestedBridgeScript(msg.savedState, msg.savedStorage, msg.name || '', !!msg.isLight);
       var themeTag = msg.themeCSS ? '<style>' + msg.themeCSS + '</style>' : '';
       // Escape </script> sequences in inlined bundles to prevent premature tag termination
       function escapeForScript(code) { return code.replace(/<\/script/gi, '<\\/script'); }

@@ -537,7 +537,7 @@
   border: none;
   border-radius: 50%;
   background: var(--s2-gray-800);
-  color: #fff;
+  color: var(--s2-gray-25);
   font-size: 14px;
   cursor: pointer;
   display: flex;

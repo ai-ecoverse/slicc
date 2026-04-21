@@ -7,6 +7,7 @@
  */
 
 import { collectThemeCSS } from './sprinkle-renderer.js';
+import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
 
@@ -23,6 +24,11 @@ const BRIDGE_SCRIPT = `(function() {
     parent.postMessage({ type: 'inline-sprinkle-height',
       height: document.documentElement.scrollHeight }, '*');
   }
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'slicc-theme') {
+      document.documentElement.classList.toggle('theme-light', !!e.data.isLight);
+    }
+  });
   window.addEventListener('load', function() {
     reportHeight();
     new ResizeObserver(reportHeight).observe(document.body);
@@ -58,16 +64,18 @@ export function mountInlineSprinkle(
   onLick: (action: string, data: unknown) => void
 ): InlineSprinkleInstance {
   const themeCSS = collectThemeCSS();
+  const htmlClass = isThemeLight() ? ' class="theme-light"' : '';
 
   const srcdoc = `<!DOCTYPE html>
-<html><head>
+<html${htmlClass}><head>
 <meta charset="utf-8">
 <style>${themeCSS}</style>
 <style>html,body{margin:0;padding:0;overflow:hidden;background:transparent;box-sizing:border-box}
 *,*::before,*::after{box-sizing:inherit}
 body{font-family:var(--s2-font-family, sans-serif);font-size:13px;color:var(--s2-content-default)}</style>
 <style>.sprinkle-inline{padding:var(--s2-spacing-100) 0}
-.sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px;box-shadow:none;background:var(--s2-bg-elevated)}
+.sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px;box-shadow:none}
+.sprinkle-inline .sprinkle-btn:not([class*="sprinkle-btn--"]){background:var(--s2-bg-elevated)}
 .sprinkle-inline .sprinkle-card{box-shadow:none;margin:0}
 .sprinkle-inline .sprinkle-action-card{margin:0;width:100%}
 .sprinkle-inline .sprinkle-action-card .sprinkle-table{width:100%}
@@ -115,6 +123,9 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
   iframe.style.cssText = 'width:100%;border:none;overflow:hidden;display:block;';
   iframe.srcdoc = srcdoc;
   container.appendChild(iframe);
+  iframe.addEventListener('load', () => registerSprinkleWindow(iframe.contentWindow), {
+    once: true,
+  });
 
   const messageHandler = (event: MessageEvent) => {
     if (event.source !== iframe.contentWindow) return;
@@ -132,6 +143,7 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
   return {
     dispose() {
       window.removeEventListener('message', messageHandler);
+      unregisterSprinkleWindow(iframe.contentWindow);
       iframe.remove();
     },
   };
@@ -206,7 +218,11 @@ function mountInlineSprinkleExtension(
   iframe.addEventListener(
     'load',
     () => {
-      iframe.contentWindow?.postMessage({ type: 'inline-sprinkle-render', srcdoc }, '*');
+      registerSprinkleWindow(iframe.contentWindow);
+      iframe.contentWindow?.postMessage(
+        { type: 'inline-sprinkle-render', srcdoc, isLight: isThemeLight() },
+        '*'
+      );
     },
     { once: true }
   );
@@ -214,6 +230,7 @@ function mountInlineSprinkleExtension(
   return {
     dispose() {
       window.removeEventListener('message', messageHandler);
+      unregisterSprinkleWindow(iframe.contentWindow);
       iframe.remove();
     },
   };
