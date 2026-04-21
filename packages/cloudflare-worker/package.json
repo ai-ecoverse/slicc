@@ -9,7 +9,7 @@
     "dev": "npx wrangler dev --config wrangler.jsonc"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "4.20260420.1",
+    "@cloudflare/workers-types": "4.20260421.1",
     "wrangler": "4.84.0"
   }
 }
