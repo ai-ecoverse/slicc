@@ -69,6 +69,25 @@ describe('createChatFixture', () => {
     expect(withScreenshot.length).toBeGreaterThan(0);
   });
 
+  it('covers every scoop-management tool from scoop-management-tools.ts', () => {
+    // Keep this list in sync with the tool names registered in
+    // packages/webapp/src/scoops/scoop-management-tools.ts. If you add
+    // or rename a scoop-management tool, extend both the fixture and
+    // this assertion so the design harness stays comprehensive.
+    const requiredTools = [
+      'send_message',
+      'feed_scoop',
+      'list_scoops',
+      'scoop_scoop',
+      'drop_scoop',
+      'update_global_memory',
+    ];
+    const toolNames = new Set(msgs.flatMap((m) => (m.toolCalls ?? []).map((tc) => tc.name)));
+    for (const name of requiredTools) {
+      expect(toolNames.has(name), `fixture is missing a ${name} tool call`).toBe(true);
+    }
+  });
+
   it('includes a streaming (live) assistant message', () => {
     expect(msgs.some((m) => m.role === 'assistant' && m.isStreaming === true)).toBe(true);
   });

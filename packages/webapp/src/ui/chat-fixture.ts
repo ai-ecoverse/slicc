@@ -153,6 +153,93 @@ export function createChatFixture(): ChatMessage[] {
     ],
   });
 
+  // ── 3b. Cone-only scoop management tools ──────────────────────────
+  // Covers every tool in scoops/scoop-management-tools.ts so styling
+  // changes to the tool-call widget can be judged against realistic
+  // scoop-wrangling flows, not only file/bash operations.
+  const toolCallListScoops: ToolCall = {
+    id: 'fx-tc-list-scoops',
+    name: 'list_scoops',
+    input: {},
+    result:
+      'Registered scoops:\n' +
+      '- sliccy (cone) [CONE] — ready (since Jan 1, 9:58 AM)\n' +
+      '- Hero Block (hero-block-scoop) — ready (since Jan 1, 9:59 AM)\n' +
+      '- Install Doc Writer (install-doc-writer-scoop) — idle',
+  };
+  const toolCallScoopScoop: ToolCall = {
+    id: 'fx-tc-scoop-scoop',
+    name: 'scoop_scoop',
+    input: {
+      name: 'Release Notes',
+      model: 'claude-sonnet-4-6',
+      prompt: 'Draft release notes for v0.3.2 using the merged PR titles from the last 7 days.',
+      visiblePaths: ['/workspace/', '/shared/releases/'],
+      writablePaths: ['/scoops/release-notes-scoop/', '/shared/releases/'],
+    },
+    result:
+      'Scoop "Release Notes" created as "release-notes-scoop" and task sent. It is now working on it.',
+  };
+  const toolCallScoopScoopError: ToolCall = {
+    id: 'fx-tc-scoop-scoop-err',
+    name: 'scoop_scoop',
+    input: { name: 'Release Notes' },
+    result: 'Failed to create scoop: a scoop named "release-notes-scoop" already exists.',
+    isError: true,
+  };
+  const toolCallFeedScoop: ToolCall = {
+    id: 'fx-tc-feed',
+    name: 'feed_scoop',
+    input: {
+      scoop_name: 'hero-block-scoop',
+      prompt:
+        'Update the hero block to use the new gradient background defined in /shared/tokens/brand.css. ' +
+        'Preserve the existing copy. Run the snapshot tests when done.',
+    },
+    result: 'Task sent to hero-block-scoop. You will be notified when it completes.',
+  };
+  const toolCallSendMessage: ToolCall = {
+    id: 'fx-tc-send',
+    name: 'send_message',
+    input: {
+      text: 'Checkpoint: finished the CSS token pass, starting on the test snapshots.',
+      sender: 'hero-block-scoop',
+    },
+    result: 'Message sent.',
+  };
+  const toolCallDropScoop: ToolCall = {
+    id: 'fx-tc-drop',
+    name: 'drop_scoop',
+    input: { scoop_name: 'install-doc-writer-scoop' },
+    result: 'Scoop "Install Doc Writer" (install-doc-writer-scoop) has been dropped.',
+  };
+  const toolCallUpdateGlobalMemory: ToolCall = {
+    id: 'fx-tc-memory',
+    name: 'update_global_memory',
+    input: {
+      content:
+        '# Global Memory\n\n- Brand colors now live in /shared/tokens/brand.css\n' +
+        '- Release notes ship on Wednesdays\n',
+    },
+    result: 'Global memory updated successfully.',
+  };
+
+  messages.push({
+    id: 'fx-assistant-scoop-mgmt',
+    role: 'assistant',
+    content: 'Spinning up the scoops I need and handing out the work.',
+    timestamp: tsAt(3),
+    toolCalls: [
+      toolCallListScoops,
+      toolCallScoopScoop,
+      toolCallScoopScoopError,
+      toolCallFeedScoop,
+      toolCallSendMessage,
+      toolCallDropScoop,
+      toolCallUpdateGlobalMemory,
+    ],
+  });
+
   // ── 4. Delegation from cone ────────────────────────────────────────
   messages.push({
     id: 'fx-delegation-1',
