@@ -272,7 +272,6 @@ export class ScoopsPanel {
         // Icon wrapper — 40px for cone
         const iconWrap = document.createElement('div');
         iconWrap.className = 'scoop-icon-wrap scoop-icon-wrap--cone';
-        iconWrap.style.background = coneBg;
         iconWrap.style.width = '40px';
         iconWrap.style.height = '40px';
 
@@ -413,7 +412,6 @@ export class ScoopsPanel {
       // Icon wrapper
       const iconWrap = document.createElement('div');
       iconWrap.className = 'scoop-icon-wrap';
-      iconWrap.style.background = iconBg;
 
       // Whimsical scoop icon (organic blob from asset SVGs)
       const svg = document.createElementNS(ns, 'svg');
@@ -709,7 +707,8 @@ export class ScoopsPanel {
         opacity: 1;
       }
       .scoop-item.selected .scoop-icon-wrap {
-        background: var(--scoop-accent-bg, #efe4f8);
+        background: transparent;
+        border-width: 3px;
       }
 
       /* Fade idle scoops */
@@ -731,6 +730,9 @@ export class ScoopsPanel {
         align-items: center;
         justify-content: center;
         position: relative;
+        background: transparent;
+        box-sizing: border-box;
+        border: 2px solid var(--scoop-accent, currentColor);
       }
       .scoop-icon-wrap svg {
         width: 18px; height: 18px;
