@@ -267,6 +267,14 @@ describe('playwright-cli goto', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
   });
+
+  it('accepts --tab with space separator', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['goto', 'https://other.com', '--tab', 'tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Navigated to https://other.com');
+    expect(browser.navigate).toHaveBeenCalledWith('https://other.com');
+  });
 });
 
 describe('playwright-cli snapshot', () => {

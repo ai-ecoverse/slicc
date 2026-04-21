@@ -1556,16 +1556,42 @@ Commands:
 Aliases: ${aliases.join(', ')}`;
 }
 
-/** Parse --key=value flags from args, returning remaining positional args + flags. */
+/** Flags that accept a value when specified with a space (e.g. --tab <id> or --tab=<id>). */
+const VALUE_FLAGS = new Set([
+  'tab',
+  'filename',
+  'max-width',
+  'runtime',
+  'timeout',
+  'filter',
+  'output',
+  'start',
+  'return',
+  'teleport-start',
+  'teleport-return',
+  'teleport-runtime',
+  'domain',
+  'path',
+  'expires',
+]);
+
+/** Parse --key=value and --key value flags from args, returning remaining positional args + flags. */
 function parseFlags(args: string[]): { positional: string[]; flags: Record<string, string> } {
   const positional: string[] = [];
   const flags: Record<string, string> = {};
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg.startsWith('--') && arg.includes('=')) {
       const eq = arg.indexOf('=');
       flags[arg.slice(2, eq)] = arg.slice(eq + 1);
     } else if (arg.startsWith('--')) {
-      flags[arg.slice(2)] = 'true';
+      const flagName = arg.slice(2);
+      // Check if this flag expects a value and the next arg is not a flag
+      if (VALUE_FLAGS.has(flagName) && i + 1 < args.length && !args[i + 1].startsWith('--')) {
+        flags[flagName] = args[++i];
+      } else {
+        flags[flagName] = 'true';
+      }
     } else {
       positional.push(arg);
     }
