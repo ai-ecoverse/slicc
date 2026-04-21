@@ -88,6 +88,19 @@ const log = createLogger('main');
 const PENDING_MOUNT_DB = 'slicc-pending-mount';
 const PENDING_MOUNT_KEY = 'pendingMount';
 
+/** Lick channels — kept in sync with LickEvent.type in scoops/lick-manager.ts.
+ *  Used when routing history-replayed messages so they render as licks
+ *  instead of plain user bubbles. */
+type LickChannel = 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate';
+const LICK_CHANNELS: ReadonlySet<string> = new Set<LickChannel>([
+  'webhook',
+  'cron',
+  'sprinkle',
+  'fswatch',
+  'session-reload',
+  'navigate',
+]);
+
 /** Store a directory handle for later mount during onboarding completion. */
 async function storePendingMount(handle: FileSystemDirectoryHandle): Promise<void> {
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -1486,21 +1499,31 @@ async function main(): Promise<void> {
         channel,
       };
 
+      const lickTs = Date.now();
       getBuffer(resolvedTarget.jid).push({
         id: msgId,
         role: 'user',
         content,
-        timestamp: Date.now(),
+        timestamp: lickTs,
         source: 'lick',
         channel,
       });
 
       if (selectedScoop?.jid === resolvedTarget.jid) {
-        layout.panels.chat.addLickMessage(
-          msgId,
+        layout.panels.chat.addLickMessage(msgId, content, channel as LickChannel, lickTs);
+      } else {
+        // Non-selected target: persist directly to the target scoop's
+        // SessionStore so a reload's first-select can render this lick
+        // as a lick widget (not a plain user bubble from the DB fallback).
+        const targetSessionId = resolvedTarget.isCone
+          ? 'session-cone'
+          : `session-${resolvedTarget.folder}`;
+        void layout.panels.chat.persistLickToSession(targetSessionId, {
+          id: msgId,
           content,
-          channel as 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate'
-        );
+          channel: channel as LickChannel,
+          timestamp: lickTs,
+        });
       }
 
       log.info('Routing lick to scoop', {
@@ -1881,12 +1904,20 @@ async function main(): Promise<void> {
         const messages = await orchestrator.getMessagesForScoop(scoop.jid);
         for (const msg of messages) {
           // Determine the proper role and source for display
-          const isLick = msg.channel === 'webhook' || msg.channel === 'cron';
+          const isLick = LICK_CHANNELS.has(msg.channel ?? '');
           const isDelegation = msg.channel === 'delegation';
 
           if (isLick) {
-            // Lick events - show as incoming with tongue emoji
-            layout.panels.chat.addUserMessage(msg.content);
+            // Preserve lick metadata (source/channel/timestamp) so the chat
+            // renders licks as their distinctive collapsible widget instead
+            // of a plain "You" bubble. Covers every lick channel, including
+            // sprinkle/navigate/fswatch/session-reload.
+            layout.panels.chat.addLickMessage(
+              msg.id,
+              msg.content,
+              msg.channel as LickChannel,
+              new Date(msg.timestamp).getTime()
+            );
           } else if (isDelegation) {
             // Delegation from cone - show as incoming instructions
             layout.panels.chat.addUserMessage(`**[Instructions from sliccy]**\n\n${msg.content}`);

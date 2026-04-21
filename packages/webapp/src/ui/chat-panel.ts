@@ -196,6 +196,52 @@ export class ChatPanel {
     }
   }
 
+  /** Persist a lick message into an arbitrary session (by id).
+   *
+   * Used by `routeLickToScoop` when the lick arrives for a scoop that isn't
+   * currently selected: we still want the next reload's first-select to
+   * render the lick as a lick widget, not as a plain user bubble loaded from
+   * orchestrator DB. Safe to call concurrently with the panel's own saves —
+   * writes are scoped to the non-selected session id so there's no overlap.
+   */
+  async persistLickToSession(
+    sessionId: string,
+    lick: {
+      id: string;
+      content: string;
+      channel: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate';
+      timestamp: number;
+    }
+  ): Promise<void> {
+    try {
+      const existing = await this.sessionStore.load(sessionId);
+      const messages = existing?.messages ?? [];
+      if (messages.some((m) => m.id === lick.id)) return; // already there
+      const msg: ChatMessage = {
+        id: lick.id,
+        role: 'user',
+        content: lick.content,
+        timestamp: lick.timestamp,
+        source: 'lick',
+        channel: lick.channel,
+      };
+      // Insert in timestamp order so the persisted history stays monotonic.
+      let insertAt = messages.length;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].timestamp <= lick.timestamp) {
+          insertAt = i + 1;
+          break;
+        }
+        insertAt = i;
+      }
+      messages.splice(insertAt, 0, msg);
+      await this.sessionStore.saveMessages(sessionId, messages);
+    } catch {
+      // Persistence errors are non-fatal — the orchestrator DB remains
+      // authoritative and will backfill via the DB fallback on next open.
+    }
+  }
+
   /** Lock/unlock input based on external processing state (e.g., cone auto-activated by scoop notification). */
   setProcessing(busy: boolean): void {
     if (busy) {
@@ -218,22 +264,47 @@ export class ChatPanel {
     this.persistSession();
   }
 
-  /** Add a lick message (webhook/cron/sprinkle event). */
+  /** Add a lick message (webhook/cron/sprinkle event).
+   *
+   * Pass `timestamp` when replaying from history so ordering is preserved.
+   * Omit it (defaults to `Date.now()`) for live events. History replays
+   * insert the message in timestamp order so backfill doesn't break the
+   * chronological flow; live events append.
+   */
   addLickMessage(
     id: string,
     content: string,
-    channel: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate'
+    channel: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate',
+    timestamp?: number
   ): void {
+    const ts = timestamp ?? Date.now();
+    // Ignore duplicate id (can happen when merging live buffer + DB fallback).
+    if (this.messages.some((m) => m.id === id)) return;
     const msg: ChatMessage = {
       id,
       role: 'user',
       content,
-      timestamp: Date.now(),
+      timestamp: ts,
       source: 'lick',
       channel,
     };
-    this.messages.push(msg);
-    this.appendMessageEl(msg);
+
+    // Find the correct insertion index so history-replay stays ordered.
+    let insertAt = this.messages.length;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i].timestamp <= ts) {
+        insertAt = i + 1;
+        break;
+      }
+      insertAt = i;
+    }
+    if (insertAt === this.messages.length) {
+      this.messages.push(msg);
+      this.appendMessageEl(msg);
+    } else {
+      this.messages.splice(insertAt, 0, msg);
+      this.renderMessages();
+    }
     this.persistSession();
   }
 
