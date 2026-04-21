@@ -87,7 +87,7 @@
   padding: 0 16px;
   border: 1px solid var(--s2-gray-200); /* Figma: #e1e1e1 */
   border-radius: var(--s2-radius-xl); /* 16px — Figma "static white" button */
-  background: rgba(255, 255, 255, 0.85); /* Figma: transparent-white/800 */
+  background: var(--s2-gray-50); /* Figma-inspired light neutral button surface */
   color: var(--s2-gray-800); /* Figma: #292929 */
   font-size: var(--s2-font-size-100);
   font-weight: 700; /* Figma: Bold */
@@ -100,7 +100,7 @@
     transform var(--s2-transition-default);
 }
 .sprinkle-btn:hover {
-  background: rgba(255, 255, 255, 1);
+  background: var(--s2-gray-100);
 }
 .sprinkle-btn:active {
   transform: scale(0.98);
@@ -117,7 +117,7 @@
 /* Primary/Accent — Figma: pill, blue fill */
 .sprinkle-btn--primary {
   background: var(--s2-accent);
-  color: var(--s2-gray-25);
+  color: #fff; /* Fixed white for contrast on accent across themes */
   border-color: transparent;
   border-radius: var(--s2-radius-pill);
   box-shadow: none;
@@ -131,12 +131,12 @@
 }
 /* Secondary — Figma: 16px radius, border, white bg */
 .sprinkle-btn--secondary {
-  background: rgba(255, 255, 255, 0.85);
+  background: var(--s2-gray-50);
   border-color: var(--s2-gray-200);
   color: var(--s2-gray-800);
 }
 .sprinkle-btn--secondary:hover {
-  background: rgba(255, 255, 255, 1);
+  background: var(--s2-gray-100);
 }
 /* Negative — red fill, pill */
 .sprinkle-btn--negative {
@@ -193,11 +193,11 @@
 }
 .sprinkle-badge--informative {
   background: var(--s2-informative);
-  color: var(--s2-gray-25);
+  color: #fff; /* Fixed white: gray-25 inverts to dark in dark mode, failing AA on blue (3.60) */
 }
 .sprinkle-badge--accent {
   background: var(--s2-accent);
-  color: var(--s2-gray-25);
+  color: #fff; /* Fixed white: gray-25 inverts to dark in dark mode, failing AA on blue (3.60) */
 }
 /* Subtle fills — Figma pastel backgrounds with dark text */
 .sprinkle-badge--subtle {

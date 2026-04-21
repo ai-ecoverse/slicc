@@ -56,14 +56,14 @@
   border-color: transparent;
 }
 .mini-tabs__tab--active {
-  color: #fff;
+  color: var(--s2-gray-25);
   background: var(--s2-gray-800);
   border-color: var(--s2-gray-800);
 }
 .mini-tabs__tab--active:hover {
   background: var(--s2-gray-800);
   border-color: var(--s2-gray-800);
-  color: #fff;
+  color: var(--s2-gray-25);
 }
 .mini-tabs__tab-badge {
   display: inline-flex;
@@ -80,8 +80,8 @@
   line-height: 1;
 }
 .mini-tabs__tab--active .mini-tabs__tab-badge {
-  background: color-mix(in srgb, #fff 18%, transparent);
-  color: #fff;
+  background: color-mix(in srgb, var(--s2-gray-25) 18%, transparent);
+  color: var(--s2-gray-25);
 }
 .mini-tabs__tab:focus-visible {
   outline: 2px solid var(--s2-accent);
@@ -125,11 +125,11 @@
 }
 .mini-tabs__tab--icon.mini-tabs__tab--active {
   background: var(--s2-gray-800);
-  color: #fff;
+  color: var(--s2-gray-25);
 }
 .mini-tabs__tab--icon.mini-tabs__tab--active:hover {
   background: var(--s2-gray-800);
-  color: #fff;
+  color: var(--s2-gray-25);
 }
 
 /* Dimmed state — panel not yet opened */

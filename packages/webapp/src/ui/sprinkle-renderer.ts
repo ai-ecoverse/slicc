@@ -8,6 +8,7 @@
  */
 
 import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';
+import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 
 declare global {
   interface Window {
@@ -78,6 +79,7 @@ export class SprinkleRenderer {
         () => {
           clearTimeout(timer);
           console.log('[sprinkle-renderer] iframe loaded, contentWindow:', !!iframe.contentWindow);
+          registerSprinkleWindow(iframe.contentWindow);
           resolve();
         },
         { once: true }
@@ -306,6 +308,7 @@ export class SprinkleRenderer {
         editorScript,
         diffScript,
         lucideScript,
+        isLight: isThemeLight(),
       },
       '*'
     );
@@ -341,6 +344,8 @@ export class SprinkleRenderer {
       if (window.slicc) window.slicc.name = _sprinkleName;
     } else if (msg.type === 'sprinkle-update') {
       _updateListeners.forEach(function(cb) { try { cb(msg.data); } catch(e) { console.error(e); } });
+    } else if (msg.type === 'slicc-theme') {
+      document.documentElement.classList.toggle('theme-light', !!msg.isLight);
     } else if (msg.id && _callbacks[msg.id]) {
       var cb = _callbacks[msg.id];
       delete _callbacks[msg.id];
@@ -443,7 +448,10 @@ export class SprinkleRenderer {
     const diffTag = content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '';
     // Always inject Lucide icons for sprinkles
     const lucideTag = '<script src="/lucide-icons.js"></script>';
-    const injection = bridgeScript + themeTag + editorTag + diffTag + lucideTag;
+    // Bootstrap the current theme class on <html> so CSS vars resolve correctly
+    // before any content paints. Runs synchronously inside the iframe.
+    const themeBootstrap = `<script>(function(){try{if(${isThemeLight() ? 'true' : 'false'})document.documentElement.classList.add('theme-light');}catch(e){}})();</script>`;
+    const injection = themeBootstrap + bridgeScript + themeTag + editorTag + diffTag + lucideTag;
 
     // Inject bridge script + theme CSS after <head> tag, or before first <script> if no <head>
     let modified: string;
@@ -483,6 +491,8 @@ export class SprinkleRenderer {
         'load',
         () => {
           clearTimeout(timer);
+          // Register with theme broadcaster so prefers-color-scheme changes flip CSS vars live
+          registerSprinkleWindow(iframe.contentWindow);
           // Send init message with name and saved state
           const savedState = this.bridge.getState();
           iframe.contentWindow?.postMessage(
@@ -720,6 +730,7 @@ export class SprinkleRenderer {
       this.messageHandler = null;
     }
     if (this.iframe) {
+      unregisterSprinkleWindow(this.iframe.contentWindow);
       this.iframe.remove();
       this.iframe = null;
     }
@@ -781,29 +792,45 @@ function resolveUrls(cssText: string, baseHref: string): string {
   });
 }
 
-/** Collect CSS custom properties, @font-face rules, and sprinkle component rules from the parent page. */
+/**
+ * Collect @font-face rules, theme rule bodies (:root + :root.theme-light
+ * + .theme-light descendants), and sprinkle component rules from the
+ * parent page. Theme rules are emitted verbatim — not snapshotted —
+ * so toggling `.theme-light` on the iframe's <html> swaps the variable
+ * set in lockstep with the parent.
+ */
 export function collectThemeCSS(): string {
   if (typeof getComputedStyle !== 'function') return '';
-  const rootStyles = getComputedStyle(document.documentElement);
-  const cssVars: string[] = [];
   const fontFaceRules: string[] = [];
+  const themeRules: string[] = [];
   const sprinkleRules: string[] = [];
   const baseHref = location.href;
+  const isThemeSelector = (sel: string): boolean =>
+    sel === ':root' ||
+    sel === ':root.theme-light' ||
+    sel.startsWith('.theme-light ') ||
+    sel === '.theme-light' ||
+    // Handle comma-joined selectors where any part matches.
+    sel.split(',').some((s) => {
+      const t = s.trim();
+      return (
+        t === ':root' ||
+        t === ':root.theme-light' ||
+        t.startsWith('.theme-light ') ||
+        t === '.theme-light'
+      );
+    });
   for (const sheet of document.styleSheets) {
     try {
       for (const rule of sheet.cssRules) {
         if (rule instanceof CSSFontFaceRule) {
           fontFaceRules.push(resolveUrls(rule.cssText, baseHref));
         } else if (rule instanceof CSSStyleRule) {
-          if (rule.selectorText === ':root') {
-            for (let i = 0; i < rule.style.length; i++) {
-              const prop = rule.style[i];
-              if (prop.startsWith('--')) {
-                cssVars.push(`${prop}: ${rootStyles.getPropertyValue(prop)};`);
-              }
-            }
+          const sel = rule.selectorText;
+          if (isThemeSelector(sel)) {
+            themeRules.push(rule.cssText);
           }
-          if (rule.selectorText.includes('.sprinkle-') || rule.selectorText.includes('.fill')) {
+          if (sel.includes('.sprinkle-') || sel.includes('.fill')) {
             sprinkleRules.push(rule.cssText);
           }
         }
@@ -812,9 +839,5 @@ export function collectThemeCSS(): string {
       /* cross-origin sheet, skip */
     }
   }
-  return (
-    fontFaceRules.join('\n') +
-    (cssVars.length > 0 ? `\n:root { ${cssVars.join(' ')} }\n` : '\n') +
-    sprinkleRules.join('\n')
-  );
+  return fontFaceRules.join('\n') + '\n' + themeRules.join('\n') + '\n' + sprinkleRules.join('\n');
 }
