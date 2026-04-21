@@ -88,6 +88,53 @@ const log = createLogger('main');
 const PENDING_MOUNT_DB = 'slicc-pending-mount';
 const PENDING_MOUNT_KEY = 'pendingMount';
 
+/** Lick channels — kept in sync with LickEvent.type in scoops/lick-manager.ts.
+ *  Used when routing history-replayed messages so they render as licks
+ *  instead of plain user bubbles. */
+type LickChannel = 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate';
+const LICK_CHANNELS: ReadonlySet<LickChannel> = new Set<LickChannel>([
+  'webhook',
+  'cron',
+  'sprinkle',
+  'fswatch',
+  'session-reload',
+  'navigate',
+]);
+function isLickChannel(channel: string | null | undefined): channel is LickChannel {
+  return channel !== null && channel !== undefined && LICK_CHANNELS.has(channel as LickChannel);
+}
+
+/** True when the current URL requests the design-time UI fixture
+ *  (`?ui-fixture=1`). Accepts `1`, `true`, and the bare presence of the key
+ *  so both `?ui-fixture` and `?ui-fixture=1` work for quick toggling. */
+function isUIFixtureRequested(): boolean {
+  try {
+    const raw = new URLSearchParams(window.location.search).get('ui-fixture');
+    if (raw === null) return false;
+    return raw === '' || raw === '1' || raw.toLowerCase() === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/** Load the design-time UI fixture into the chat panel.
+ *
+ * Writes messages to a dedicated `session-ui-fixture` session id so the
+ * fixture survives reloads without touching real scoop storage. Real
+ * scoops remain selectable in the sidebar — clicking one switches away
+ * and saves any fixture state under its own session id. */
+async function loadUIFixtureIntoChat(chatPanel: {
+  switchToContext: (id: string, readOnly: boolean, scoopName?: string) => Promise<void>;
+  loadMessages: (msgs: ChatMessage[]) => void;
+}): Promise<void> {
+  const [{ createChatFixture, FIXTURE_SESSION_ID, FIXTURE_SCOOP_NAME }] = await Promise.all([
+    import('./chat-fixture.js'),
+  ]);
+  await chatPanel.switchToContext(FIXTURE_SESSION_ID, true, FIXTURE_SCOOP_NAME);
+  chatPanel.loadMessages(createChatFixture());
+  log.info('Loaded UI fixture session for design iteration');
+}
+
 /** Store a directory handle for later mount during onboarding completion. */
 async function storePendingMount(handle: FileSystemDirectoryHandle): Promise<void> {
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -702,6 +749,13 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   client.requestState();
 
   log.info('Extension UI connected to offscreen agent engine');
+
+  // `?ui-fixture=1` — same design-time override as the CLI path, but run
+  // last so the normal extension boot (state sync, scoop selection) has
+  // populated the sidebar before we overwrite the chat view.
+  if (isUIFixtureRequested()) {
+    await loadUIFixtureIntoChat(layout.panels.chat);
+  }
 
   // Initialize operational telemetry (fire-and-forget)
   initTelemetry().catch(() => {});
@@ -1486,21 +1540,31 @@ async function main(): Promise<void> {
         channel,
       };
 
+      const lickTs = Date.now();
       getBuffer(resolvedTarget.jid).push({
         id: msgId,
         role: 'user',
         content,
-        timestamp: Date.now(),
+        timestamp: lickTs,
         source: 'lick',
         channel,
       });
 
       if (selectedScoop?.jid === resolvedTarget.jid) {
-        layout.panels.chat.addLickMessage(
-          msgId,
+        layout.panels.chat.addLickMessage(msgId, content, channel, lickTs);
+      } else {
+        // Non-selected target: persist directly to the target scoop's
+        // SessionStore so a reload's first-select can render this lick
+        // as a lick widget (not a plain user bubble from the DB fallback).
+        const targetSessionId = resolvedTarget.isCone
+          ? 'session-cone'
+          : `session-${resolvedTarget.folder}`;
+        void layout.panels.chat.persistLickToSession(targetSessionId, {
+          id: msgId,
           content,
-          channel as 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate'
-        );
+          channel,
+          timestamp: lickTs,
+        });
       }
 
       log.info('Routing lick to scoop', {
@@ -1881,12 +1945,19 @@ async function main(): Promise<void> {
         const messages = await orchestrator.getMessagesForScoop(scoop.jid);
         for (const msg of messages) {
           // Determine the proper role and source for display
-          const isLick = msg.channel === 'webhook' || msg.channel === 'cron';
           const isDelegation = msg.channel === 'delegation';
 
-          if (isLick) {
-            // Lick events - show as incoming with tongue emoji
-            layout.panels.chat.addUserMessage(msg.content);
+          if (isLickChannel(msg.channel)) {
+            // Preserve lick metadata (source/channel/timestamp) so the chat
+            // renders licks as their distinctive collapsible widget instead
+            // of a plain "You" bubble. Covers every lick channel, including
+            // sprinkle/navigate/fswatch/session-reload.
+            layout.panels.chat.addLickMessage(
+              msg.id,
+              msg.content,
+              msg.channel,
+              new Date(msg.timestamp).getTime()
+            );
           } else if (isDelegation) {
             // Delegation from cone - show as incoming instructions
             layout.panels.chat.addUserMessage(`**[Instructions from sliccy]**\n\n${msg.content}`);
@@ -1946,6 +2017,14 @@ async function main(): Promise<void> {
     orchestrator.createScoopTab(selectedScoop.jid);
     // Trigger scoop select to properly load the chat context
     await handleScoopSelect(selectedScoop);
+  }
+
+  // `?ui-fixture=1` — design-time override: replace the live chat context
+  // with a synthetic session covering every message UI variant. Runs after
+  // the normal scoop select so real scoops stay listed in the sidebar and
+  // clicking one cleanly exits fixture mode.
+  if (isUIFixtureRequested()) {
+    await loadUIFixtureIntoChat(layout.panels.chat);
   }
 
   if (runtimeMode === 'standalone' || runtimeMode === 'electron-overlay') {
