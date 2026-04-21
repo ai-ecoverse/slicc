@@ -281,6 +281,8 @@ export class ScoopsPanel {
 
         // Set accent color as CSS custom properties for border styling
         coneItem.style.setProperty('--scoop-accent', coneOutline);
+        // Solid-fill color for light mode (see .theme-light overrides in CSS)
+        coneItem.style.setProperty('--scoop-bg', coneColor);
 
         // Icon wrapper — 40px for cone
         const iconWrap = document.createElement('div');
@@ -420,6 +422,8 @@ export class ScoopsPanel {
 
       // Set accent color as CSS custom properties for border styling
       item.style.setProperty('--scoop-accent', iconOutline);
+      // Solid-fill color for light mode (see .theme-light overrides in CSS)
+      item.style.setProperty('--scoop-bg', iconColor);
 
       // Icon wrapper
       const iconWrap = document.createElement('div');
@@ -748,6 +752,18 @@ export class ScoopsPanel {
       }
       .scoop-icon-wrap svg {
         width: 18px; height: 18px;
+      }
+
+      /* Light mode keeps the legacy solid-fill look (pale tinted bg, no outline ring).
+         The wrapper bg is a lightened version of the scoop base color so the
+         SVG (filled with the base color + darker outline) remains distinct. */
+      :root.theme-light .scoop-icon-wrap {
+        background: color-mix(in oklab, var(--scoop-bg, transparent) 35%, #ffffff);
+        border: none;
+      }
+      :root.theme-light .scoop-item.selected .scoop-icon-wrap {
+        background: color-mix(in oklab, var(--scoop-bg, transparent) 35%, #ffffff);
+        border: none;
       }
 
       /* Hide info/actions in rail mode — shown via tooltip */
