@@ -125,7 +125,13 @@ export class SprinkleManager {
       throw new Error(`Sprinkle not found: ${name}`);
     }
 
-    const content = (await this.fs.readFile(sprinkle.path, { encoding: 'utf-8' })) as string;
+    const rawContent = await this.fs.readFile(sprinkle.path, { encoding: 'utf-8' });
+    if (rawContent === undefined || rawContent === null) {
+      throw new Error(
+        `Failed to read sprinkle content: ${sprinkle.path} (file may be corrupted or missing)`
+      );
+    }
+    const content = rawContent as string;
     const container = document.createElement('div');
     container.className = 'sprinkle-panel';
     container.style.cssText =
