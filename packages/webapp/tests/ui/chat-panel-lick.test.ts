@@ -171,4 +171,33 @@ describe('ChatPanel.persistLickToSession', () => {
     expect(session!.messages).toHaveLength(1);
     expect(session!.messages[0].content).toBe('a');
   });
+
+  it('serializes concurrent writes to the same session so no event is clobbered', async () => {
+    const sid = `persist-concurrent-${testCounter}`;
+    // Fire a burst of overlapping writes (simulating bursty fswatch/webhook
+    // traffic). Each call shares the same load→save cycle; without the
+    // per-session queue the final save would win and drop earlier events.
+    await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        panel.persistLickToSession(sid, {
+          id: `burst-${i}`,
+          content: `burst ${i}`,
+          channel: 'fswatch',
+          timestamp: 1000 + i,
+        })
+      )
+    );
+
+    const store = new SessionStore();
+    await store.init();
+    const session = await store.load(sid);
+    expect(session).not.toBeNull();
+    expect(session!.messages).toHaveLength(10);
+    expect(session!.messages.map((m) => m.id).sort()).toEqual(
+      Array.from({ length: 10 }, (_, i) => `burst-${i}`).sort()
+    );
+    // Timestamps stayed monotonic across the serialized writes.
+    const ts = session!.messages.map((m) => m.timestamp);
+    expect(ts).toEqual([...ts].sort((a, b) => a - b));
+  });
 });

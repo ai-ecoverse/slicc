@@ -92,7 +92,7 @@ const PENDING_MOUNT_KEY = 'pendingMount';
  *  Used when routing history-replayed messages so they render as licks
  *  instead of plain user bubbles. */
 type LickChannel = 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate';
-const LICK_CHANNELS: ReadonlySet<string> = new Set<LickChannel>([
+const LICK_CHANNELS: ReadonlySet<LickChannel> = new Set<LickChannel>([
   'webhook',
   'cron',
   'sprinkle',
@@ -100,6 +100,9 @@ const LICK_CHANNELS: ReadonlySet<string> = new Set<LickChannel>([
   'session-reload',
   'navigate',
 ]);
+function isLickChannel(channel: string | null | undefined): channel is LickChannel {
+  return channel !== null && channel !== undefined && LICK_CHANNELS.has(channel as LickChannel);
+}
 
 /** True when the current URL requests the design-time UI fixture
  *  (`?ui-fixture=1`). Accepts `1`, `true`, and the bare presence of the key
@@ -1548,7 +1551,7 @@ async function main(): Promise<void> {
       });
 
       if (selectedScoop?.jid === resolvedTarget.jid) {
-        layout.panels.chat.addLickMessage(msgId, content, channel as LickChannel, lickTs);
+        layout.panels.chat.addLickMessage(msgId, content, channel, lickTs);
       } else {
         // Non-selected target: persist directly to the target scoop's
         // SessionStore so a reload's first-select can render this lick
@@ -1559,7 +1562,7 @@ async function main(): Promise<void> {
         void layout.panels.chat.persistLickToSession(targetSessionId, {
           id: msgId,
           content,
-          channel: channel as LickChannel,
+          channel,
           timestamp: lickTs,
         });
       }
@@ -1942,10 +1945,9 @@ async function main(): Promise<void> {
         const messages = await orchestrator.getMessagesForScoop(scoop.jid);
         for (const msg of messages) {
           // Determine the proper role and source for display
-          const isLick = LICK_CHANNELS.has(msg.channel ?? '');
           const isDelegation = msg.channel === 'delegation';
 
-          if (isLick) {
+          if (isLickChannel(msg.channel)) {
             // Preserve lick metadata (source/channel/timestamp) so the chat
             // renders licks as their distinctive collapsible widget instead
             // of a plain "You" bubble. Covers every lick channel, including
@@ -1953,7 +1955,7 @@ async function main(): Promise<void> {
             layout.panels.chat.addLickMessage(
               msg.id,
               msg.content,
-              msg.channel as LickChannel,
+              msg.channel,
               new Date(msg.timestamp).getTime()
             );
           } else if (isDelegation) {

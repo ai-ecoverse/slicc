@@ -71,6 +71,10 @@ export class ChatPanel {
   public onInlineSprinkleLick?: (action: string, data: unknown) => void;
   private modelSelectorEl!: HTMLElement;
   public onModelChange?: (modelId: string) => void;
+  // Per-sessionId write queue for `persistLickToSession`. Chains concurrent
+  // load→mutate→save cycles behind the previous in-flight call so bursty
+  // licks (e.g. fswatch) for a non-selected scoop can't clobber each other.
+  private lickPersistQueues = new Map<string, Promise<void>>();
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -178,8 +182,38 @@ export class ChatPanel {
    * render the lick as a lick widget, not as a plain user bubble loaded from
    * orchestrator DB. Safe to call concurrently with the panel's own saves —
    * writes are scoped to the non-selected session id so there's no overlap.
+   *
+   * Per-sessionId writes are serialized via `lickPersistQueues` so bursty
+   * channels (fswatch, rapid webhook fanout) can't interleave their
+   * load→mutate→save cycles and clobber each other.
    */
   async persistLickToSession(
+    sessionId: string,
+    lick: {
+      id: string;
+      content: string;
+      channel: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate';
+      timestamp: number;
+    }
+  ): Promise<void> {
+    const prior = this.lickPersistQueues.get(sessionId) ?? Promise.resolve();
+    const next = prior
+      .catch(() => {
+        /* swallow upstream errors so this write still runs */
+      })
+      .then(() => this.writeLickToSession(sessionId, lick));
+    this.lickPersistQueues.set(sessionId, next);
+    // Evict the entry once it settles if no newer write has queued behind it,
+    // to keep the map bounded across long-lived panels.
+    void next.finally(() => {
+      if (this.lickPersistQueues.get(sessionId) === next) {
+        this.lickPersistQueues.delete(sessionId);
+      }
+    });
+    return next;
+  }
+
+  private async writeLickToSession(
     sessionId: string,
     lick: {
       id: string;
