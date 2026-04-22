@@ -131,7 +131,8 @@ export class SprinkleManager {
         `Failed to read sprinkle content: ${sprinkle.path} (file may be corrupted or missing)`
       );
     }
-    const content = rawContent as string;
+    const content =
+      typeof rawContent === 'string' ? rawContent : new TextDecoder('utf-8').decode(rawContent);
     const container = document.createElement('div');
     container.className = 'sprinkle-panel';
     container.style.cssText =

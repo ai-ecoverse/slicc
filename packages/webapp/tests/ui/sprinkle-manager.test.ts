@@ -63,4 +63,19 @@ describe('SprinkleManager', () => {
   it('sendToSprinkle does not throw for closed sprinkle', () => {
     expect(() => mgr.sendToSprinkle('unknown', {})).not.toThrow();
   });
+
+  it('open throws descriptive error when file content is undefined', async () => {
+    await vfs.writeFile('/shared/sprinkles/broken/broken.shtml', '<title>Broken</title><div/>');
+    await mgr.refresh();
+
+    // Mock readFile to return undefined (simulating VFS corruption)
+    const originalReadFile = vfs.readFile.bind(vfs);
+    vfs.readFile = vi.fn().mockResolvedValue(undefined) as typeof vfs.readFile;
+
+    await expect(mgr.open('broken')).rejects.toThrow(
+      'Failed to read sprinkle content: /shared/sprinkles/broken/broken.shtml'
+    );
+
+    vfs.readFile = originalReadFile;
+  });
 });
