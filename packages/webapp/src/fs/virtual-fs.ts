@@ -23,6 +23,7 @@ import { FsError } from './types.js';
 import { normalizePath, splitPath, joinPath } from './path-utils.js';
 import type { FsWatcher } from './fs-watcher.js';
 import { saveMountEntry, removeMountEntry, clearMountEntries } from './mount-table-store.js';
+import { MountIndex } from './mount-index.js';
 
 /** Maximum number of symlink hops before throwing ELOOP. */
 const MAX_SYMLINK_DEPTH = 10;
@@ -44,6 +45,8 @@ export class VirtualFS {
   private readonly dbName: string;
   /** BroadcastChannel for syncing mount registrations across VFS instances with the same dbName. */
   private mountSyncChannel: BroadcastChannel | null = null;
+  /** Index of files in mounted directories for fast discovery. */
+  private mountIndex = new MountIndex();
 
   private constructor(dbName: string, wipe: boolean) {
     this.dbName = dbName;
@@ -380,6 +383,8 @@ export class VirtualFS {
       /* EEXIST is fine */
     }
     this.mountPoints.set(normalized, handle);
+    // Start async indexing for fast file discovery
+    this.mountIndex.registerMount(normalized, handle);
     try {
       this.mountSyncChannel?.postMessage({ type: 'mount', path: normalized, handle });
     } catch {
@@ -398,6 +403,7 @@ export class VirtualFS {
   async unmount(absolutePath: string): Promise<void> {
     const normalized = normalizePath(absolutePath);
     this.mountPoints.delete(normalized);
+    this.mountIndex.unregisterMount(normalized);
     try {
       this.mountSyncChannel?.postMessage({ type: 'unmount', path: normalized });
     } catch {
@@ -415,6 +421,26 @@ export class VirtualFS {
   /** Return the list of currently active mount paths. */
   listMounts(): string[] {
     return [...this.mountPoints.keys()];
+  }
+
+  /**
+   * Get the mount index for fast file discovery in mounted directories.
+   * Returns undefined if mount indexing is not available.
+   */
+  getMountIndex(): MountIndex {
+    return this.mountIndex;
+  }
+
+  /**
+   * Re-index a mounted directory. Use after external changes.
+   * @throws Error if the path is not a mount point
+   */
+  async refreshMount(mountPath: string): Promise<void> {
+    const normalized = normalizePath(mountPath);
+    if (!this.mountPoints.has(normalized)) {
+      throw new FsError('ENOENT', 'not a mount point', normalized);
+    }
+    await this.mountIndex.refreshMount(normalized);
   }
 
   /**
@@ -582,6 +608,10 @@ export class VirtualFS {
           entryType: 'file',
         },
       ]);
+      // Update mount index for fast discovery
+      if (!wasExisting) {
+        this.mountIndex.notifyWrite(normalized);
+      }
       return;
     }
     // Resolve symlinks before writing
@@ -761,6 +791,8 @@ export class VirtualFS {
         throw this.convertFsaError(err, normalized);
       }
       this.watcher?.notify([{ type: 'delete', path: normalized, entryType }]);
+      // Update mount index
+      this.mountIndex.notifyDelete(normalized);
       return;
     }
     try {
@@ -900,6 +932,8 @@ export class VirtualFS {
       { type: 'delete', path: normalizedOld, entryType },
       { type: 'create', path: normalizedNew, entryType },
     ]);
+    // Update mount index if paths are under mounts
+    this.mountIndex.notifyRename(normalizedOld, normalizedNew);
   }
 
   /**
@@ -914,9 +948,52 @@ export class VirtualFS {
   /**
    * Recursively walk a directory tree, yielding all file paths.
    * Follows symlinks to directories but tracks visited real paths to avoid infinite loops.
+   *
+   * For mounted directories with a ready index, uses the fast path (O(n) iteration
+   * over cached file list). Falls back to slow recursive readDir otherwise.
    */
   async *walk(path: string, _visited?: Set<string>): AsyncGenerator<string> {
     const normalized = normalizePath(path);
+
+    // Fast path optimization: only check mounts at the top-level call (when _visited is undefined)
+    // to avoid repeated mount lookups on every recursive iteration.
+    if (_visited === undefined && this.mountPoints.size > 0) {
+      // Find the most specific mount that owns this path (longest mount path wins)
+      let owningMount: string | null = null;
+      for (const mountPath of this.mountPoints.keys()) {
+        if (normalized === mountPath || normalized.startsWith(mountPath + '/')) {
+          if (!owningMount || mountPath.length > owningMount.length) {
+            owningMount = mountPath;
+          }
+        }
+      }
+
+      if (owningMount) {
+        // Check for nested mounts under the walk path — if any exist, use slow path
+        // so we properly traverse into each nested mount
+        const hasNestedMounts = [...this.mountPoints.keys()].some(
+          (mp) => mp !== owningMount && mp.startsWith(normalized + '/')
+        );
+
+        if (!hasNestedMounts && this.mountIndex.isReady(owningMount)) {
+          // Use the indexed file list — filter to paths under `normalized`
+          const prefix = normalized === '/' ? '/' : normalized + '/';
+          const files = this.mountIndex.getFiles(
+            owningMount,
+            (p) => p === normalized || p.startsWith(prefix)
+          );
+          if (files) {
+            for (const filePath of files) {
+              yield filePath;
+            }
+            return;
+          }
+        }
+        // Path is under a mount but can't use fast path — fall through to slow path
+      }
+    }
+
+    // Slow path: recursive readDir
     const visited = _visited ?? new Set<string>();
 
     // Track the real path to detect symlink loops

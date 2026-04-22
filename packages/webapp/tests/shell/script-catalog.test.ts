@@ -235,6 +235,8 @@ describe('ScriptCatalog', () => {
     expect((await catalog.getJshCommands()).get('one')).toBe('/mnt/repo/one.jsh');
 
     mounted.setFile('two.jsh', 'console.log("two");');
+    // External changes require mount refresh to update the index
+    await vfs.refreshMount('/mnt/repo');
     expect((await catalog.getJshCommands()).get('two')).toBe('/mnt/repo/two.jsh');
   });
 
@@ -255,6 +257,8 @@ describe('ScriptCatalog', () => {
     expect((await catalog.getJshCommands()).get('one')).toBe('/workspace/repo/one.jsh');
 
     mounted.setFile('two.jsh', 'console.log("two");');
+    // External changes require mount refresh to update the index
+    await vfs.refreshMount('/workspace/repo');
     expect((await catalog.getJshCommands()).get('two')).toBe('/workspace/repo/two.jsh');
   });
 
@@ -276,6 +280,9 @@ describe('ScriptCatalog', () => {
     ]);
 
     mounted.setFile('login.example.com.bsh', 'console.log("example");');
+    // External changes (via mock handle, not VirtualFS) require a mount refresh
+    // to update the MountIndex. This simulates running `mount refresh /workspace/repo`.
+    await vfs.refreshMount('/workspace/repo');
     expect((await catalog.getBshEntries()).map((entry) => entry.path)).toEqual([
       '/workspace/repo/-.okta.com.bsh',
       '/workspace/repo/login.example.com.bsh',
