@@ -23,6 +23,7 @@ import { FsError } from './types.js';
 import { normalizePath, splitPath, joinPath } from './path-utils.js';
 import type { FsWatcher } from './fs-watcher.js';
 import { saveMountEntry, removeMountEntry, clearMountEntries } from './mount-table-store.js';
+import { MountIndex } from './mount-index.js';
 
 /** Maximum number of symlink hops before throwing ELOOP. */
 const MAX_SYMLINK_DEPTH = 10;
@@ -44,6 +45,8 @@ export class VirtualFS {
   private readonly dbName: string;
   /** BroadcastChannel for syncing mount registrations across VFS instances with the same dbName. */
   private mountSyncChannel: BroadcastChannel | null = null;
+  /** Index of files in mounted directories for fast discovery. */
+  private mountIndex = new MountIndex();
 
   private constructor(dbName: string, wipe: boolean) {
     this.dbName = dbName;
@@ -64,9 +67,12 @@ export class VirtualFS {
           const { type, path, handle } = event.data ?? {};
           if (type === 'mount' && typeof path === 'string' && handle) {
             this.mountPoints.set(path, handle);
+            // Register with MountIndex so peer instances also get fast walks
+            this.mountIndex.registerMount(path, handle);
             this.watcher?.notify([{ type: 'modify', path, entryType: 'directory' }]);
           } else if (type === 'unmount' && typeof path === 'string') {
             this.mountPoints.delete(path);
+            this.mountIndex.unregisterMount(path);
             this.watcher?.notify([{ type: 'modify', path, entryType: 'directory' }]);
           }
         };
@@ -122,6 +128,7 @@ export class VirtualFS {
     this.mountSyncChannel = null;
     this.watcher?.dispose();
     this.watcher = null;
+    this.mountIndex.dispose();
 
     const pfs = this.lfs as any;
 
@@ -380,6 +387,8 @@ export class VirtualFS {
       /* EEXIST is fine */
     }
     this.mountPoints.set(normalized, handle);
+    // Start async indexing for fast file discovery
+    this.mountIndex.registerMount(normalized, handle);
     try {
       this.mountSyncChannel?.postMessage({ type: 'mount', path: normalized, handle });
     } catch {
@@ -398,6 +407,7 @@ export class VirtualFS {
   async unmount(absolutePath: string): Promise<void> {
     const normalized = normalizePath(absolutePath);
     this.mountPoints.delete(normalized);
+    this.mountIndex.unregisterMount(normalized);
     try {
       this.mountSyncChannel?.postMessage({ type: 'unmount', path: normalized });
     } catch {
@@ -418,6 +428,25 @@ export class VirtualFS {
   }
 
   /**
+   * Get the mount index for fast file discovery in mounted directories.
+   */
+  getMountIndex(): MountIndex {
+    return this.mountIndex;
+  }
+
+  /**
+   * Re-index a mounted directory. Use after external changes.
+   * @throws Error if the path is not a mount point
+   */
+  async refreshMount(mountPath: string): Promise<void> {
+    const normalized = normalizePath(mountPath);
+    if (!this.mountPoints.has(normalized)) {
+      throw new FsError('ENOENT', 'not a mount point', normalized);
+    }
+    await this.mountIndex.refreshMount(normalized);
+  }
+
+  /**
    * Check whether an absolute path is under any active mount point.
    * Non-allocating (iterates the mount map directly) — safe to call on a hot
    * path such as the per-operation check in the isomorphic-git fs adapter.
@@ -431,12 +460,12 @@ export class VirtualFS {
 
   /**
    * Find the mount point that owns `path`.
-   * Returns the handle and the path segments relative to the mount root,
+   * Returns the mount path, handle, and the path segments relative to the mount root,
    * or null if the path is not under any mount.
    */
   private findMount(
     path: string
-  ): { handle: FileSystemDirectoryHandle; relParts: string[] } | null {
+  ): { path: string; handle: FileSystemDirectoryHandle; relParts: string[] } | null {
     let bestMatch: { mountPath: string; handle: FileSystemDirectoryHandle } | null = null;
 
     for (const [mountPath, handle] of this.mountPoints) {
@@ -450,10 +479,11 @@ export class VirtualFS {
     if (!bestMatch) return null;
 
     if (path === bestMatch.mountPath) {
-      return { handle: bestMatch.handle, relParts: [] };
+      return { path: bestMatch.mountPath, handle: bestMatch.handle, relParts: [] };
     }
 
     return {
+      path: bestMatch.mountPath,
       handle: bestMatch.handle,
       relParts: path
         .slice(bestMatch.mountPath.length + 1)
@@ -582,6 +612,8 @@ export class VirtualFS {
           entryType: 'file',
         },
       ]);
+      // Update mount index for fast discovery (idempotent, safe to call always)
+      this.mountIndex.notifyWrite(normalized);
       return;
     }
     // Resolve symlinks before writing
@@ -629,6 +661,27 @@ export class VirtualFS {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
     if (mount) {
+      // Fast path: use MountIndex if available
+      const indexedEntries = this.mountIndex.getDirectoryEntries(mount.path, normalized);
+      if (indexedEntries !== undefined) {
+        const entries = new Map<string, DirEntry>();
+        for (const entry of indexedEntries) {
+          entries.set(entry.name, { name: entry.name, type: entry.type });
+        }
+        // Also include nested mount points as virtual directories
+        const childPrefix = normalized === '/' ? '/' : `${normalized}/`;
+        for (const mountPath of this.mountPoints.keys()) {
+          if (mountPath === normalized || !mountPath.startsWith(childPrefix)) continue;
+          const relPath = mountPath.slice(childPrefix.length);
+          if (!relPath || relPath.includes('/')) continue;
+          if (!entries.has(relPath)) {
+            entries.set(relPath, { name: relPath, type: 'directory' });
+          }
+        }
+        return [...entries.values()];
+      }
+
+      // Slow path: iterate over FSA handle
       try {
         const dirHandle =
           mount.relParts.length === 0
@@ -761,6 +814,8 @@ export class VirtualFS {
         throw this.convertFsaError(err, normalized);
       }
       this.watcher?.notify([{ type: 'delete', path: normalized, entryType }]);
+      // Update mount index
+      this.mountIndex.notifyDelete(normalized);
       return;
     }
     try {
@@ -900,6 +955,8 @@ export class VirtualFS {
       { type: 'delete', path: normalizedOld, entryType },
       { type: 'create', path: normalizedNew, entryType },
     ]);
+    // Update mount index if paths are under mounts
+    this.mountIndex.notifyRename(normalizedOld, normalizedNew);
   }
 
   /**
@@ -914,9 +971,37 @@ export class VirtualFS {
   /**
    * Recursively walk a directory tree, yielding all file paths.
    * Follows symlinks to directories but tracks visited real paths to avoid infinite loops.
+   *
+   * For mounted directories with a ready index, uses the fast path (O(n) iteration
+   * over cached file list). Falls back to slow recursive readDir otherwise.
    */
   async *walk(path: string, _visited?: Set<string>): AsyncGenerator<string> {
     const normalized = normalizePath(path);
+
+    // Fast path: check if this path is exactly a mount point with a ready index.
+    // We check on every call (including recursive) so that walking from '/' can
+    // switch to indexed iteration when it enters a mounted subtree.
+    // Only use fast path when:
+    // 1. The path IS the mount point (not a subdirectory of it)
+    // 2. The mount's index is ready
+    // 3. There are no nested mounts under this path
+    if (this.mountPoints.size > 0 && this.mountPoints.has(normalized)) {
+      const hasNestedMounts = [...this.mountPoints.keys()].some(
+        (mp) => mp !== normalized && mp.startsWith(normalized + '/')
+      );
+
+      if (!hasNestedMounts && this.mountIndex.isReady(normalized)) {
+        const files = this.mountIndex.getFiles(normalized);
+        if (files) {
+          for (const filePath of files) {
+            yield filePath;
+          }
+          return;
+        }
+      }
+    }
+
+    // Slow path: recursive readDir
     const visited = _visited ?? new Set<string>();
 
     // Track the real path to detect symlink loops
