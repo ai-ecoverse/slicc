@@ -6,7 +6,17 @@
  * chat panel just consumes descriptors. All helpers are pure.
  */
 
-import { Webhook, CalendarClock, Sparkles, FolderSync, Compass, RotateCcw, Bell } from 'lucide';
+import {
+  Webhook,
+  CalendarClock,
+  Sparkles,
+  FolderSync,
+  Compass,
+  RotateCcw,
+  Bell,
+  IceCream,
+  Hourglass,
+} from 'lucide';
 import type { ChatMessage } from './types.js';
 
 type IconNode = [tag: string, attrs: Record<string, string | number>][];
@@ -49,6 +59,14 @@ const DESCRIPTORS: Record<string, LickDescriptor> = {
     icon: RotateCcw as unknown as IconNode,
     label: 'reload',
   },
+  'scoop-notify': {
+    icon: IceCream as unknown as IconNode,
+    label: 'scoop',
+  },
+  'scoop-idle': {
+    icon: Hourglass as unknown as IconNode,
+    label: 'idle',
+  },
 };
 
 export function getLickDescriptor(msg: ChatMessage): LickDescriptor {
@@ -61,6 +79,12 @@ export function getLickDescriptor(msg: ChatMessage): LickDescriptor {
  *  trailing code-fence opener so we can strip both cleanly. */
 const HEADER_RE = /^\[([^\]:]+?)(?:\s+Event)?:\s*([^\]]+?)\]\s*\n?/;
 
+/** Matches the `[@name completed]:` / `[@name idle]:` header that the
+ *  orchestrator writes for scoop lifecycle licks. Captures the scoop
+ *  label + keyword so the collapsed row surfaces "name completed"
+ *  instead of the first body line. */
+const SCOOP_HEADER_RE = /^\[@([^\]]+?)\s+(completed|idle)\]\s*:?\s*\n?/;
+
 export interface ParsedLick {
   /** Human-readable event name (e.g. "github-push", "daily-digest",
    *  full URL for navigate). Used for the collapsed row preview. */
@@ -71,8 +95,17 @@ export interface ParsedLick {
 }
 
 /** Parse a lick message's content into { preview, body }. Falls back to
- *  the first non-empty line if the expected header pattern is missing. */
+ *  the first non-empty line if the expected header pattern is missing.
+ *  Recognizes both the generic `[Xyz Event: name]` header and the
+ *  scoop-specific `[@name completed]` / `[@name idle]` headers. */
 export function parseLickContent(content: string): ParsedLick {
+  const scoopMatch = SCOOP_HEADER_RE.exec(content);
+  if (scoopMatch) {
+    return {
+      preview: `${scoopMatch[1].trim()} ${scoopMatch[2]}`,
+      body: content.slice(scoopMatch[0].length).replace(/^\s+/, ''),
+    };
+  }
   const match = HEADER_RE.exec(content);
   if (match) {
     return {

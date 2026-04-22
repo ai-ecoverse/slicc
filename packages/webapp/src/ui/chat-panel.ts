@@ -39,6 +39,26 @@ function renderChatMessageContent(msg: ChatMessage): string {
     : renderMessageContent(msg.content);
 }
 
+/** Channels that should render with the compact lick-style UI. Kept in
+ *  sync with LICK_CHANNELS in ui/main.ts. Includes `scoop-notify` and
+ *  `scoop-idle` so cone-facing scoop lifecycle messages get the same
+ *  treatment as webhook/cron events — same persistence path, same
+ *  collapsible widget, same "always show label" rule. */
+const LICK_CHANNEL_SET: ReadonlySet<string> = new Set([
+  'webhook',
+  'cron',
+  'sprinkle',
+  'fswatch',
+  'session-reload',
+  'navigate',
+  'scoop-notify',
+  'scoop-idle',
+]);
+
+function isLickChannel(channel: string | null | undefined): boolean {
+  return channel != null && LICK_CHANNEL_SET.has(channel);
+}
+
 export class ChatPanel {
   private container: HTMLElement;
   private messagesEl!: HTMLElement;
@@ -192,7 +212,15 @@ export class ChatPanel {
     lick: {
       id: string;
       content: string;
-      channel: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate';
+      channel:
+        | 'webhook'
+        | 'cron'
+        | 'sprinkle'
+        | 'fswatch'
+        | 'session-reload'
+        | 'navigate'
+        | 'scoop-notify'
+        | 'scoop-idle';
       timestamp: number;
     }
   ): Promise<void> {
@@ -218,7 +246,15 @@ export class ChatPanel {
     lick: {
       id: string;
       content: string;
-      channel: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate';
+      channel:
+        | 'webhook'
+        | 'cron'
+        | 'sprinkle'
+        | 'fswatch'
+        | 'session-reload'
+        | 'navigate'
+        | 'scoop-notify'
+        | 'scoop-idle';
       timestamp: number;
     }
   ): Promise<void> {
@@ -283,7 +319,15 @@ export class ChatPanel {
   addLickMessage(
     id: string,
     content: string,
-    channel: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate',
+    channel:
+      | 'webhook'
+      | 'cron'
+      | 'sprinkle'
+      | 'fswatch'
+      | 'session-reload'
+      | 'navigate'
+      | 'scoop-notify'
+      | 'scoop-idle',
     timestamp?: number
   ): void {
     const ts = timestamp ?? Date.now();
@@ -1128,7 +1172,7 @@ export class ChatPanel {
     prevTimestamp: number
   ): boolean {
     // Always show label for lick messages
-    if (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') return true;
+    if (msg.source === 'lick' || isLickChannel(msg.channel)) return true;
     // Show label if role changed
     if (msg.role !== prevRole) return true;
     // Show label if >2 min gap
@@ -1187,12 +1231,10 @@ export class ChatPanel {
     isLastAssistant = false,
     stale = false
   ): HTMLElement {
-    // Licks (webhook/cron) get their own compact style like tool calls
-    const isLick =
-      msg.source === 'lick' ||
-      msg.channel === 'webhook' ||
-      msg.channel === 'cron' ||
-      msg.channel === 'fswatch';
+    // Licks (webhook/cron/etc. and scoop-notify/scoop-idle) get their own
+    // compact style like tool calls. Using isLickChannel keeps this check
+    // aligned with the canonical lick channel list in main.ts.
+    const isLick = msg.source === 'lick' || isLickChannel(msg.channel);
     if (isLick) {
       const wrapper = document.createElement('div');
       wrapper.className = 'msg-group';
@@ -1265,11 +1307,7 @@ export class ChatPanel {
 
     // For lick messages in cone view, wrap content in collapsible
     const isLickInCone =
-      (msg.source === 'lick' ||
-        msg.channel === 'webhook' ||
-        msg.channel === 'cron' ||
-        msg.channel === 'fswatch') &&
-      this.sessionId === 'session-cone';
+      (msg.source === 'lick' || isLickChannel(msg.channel)) && this.sessionId === 'session-cone';
     // For scoop messages in cone view, wrap in collapsible
     const isScoopInCone =
       msg.source &&
