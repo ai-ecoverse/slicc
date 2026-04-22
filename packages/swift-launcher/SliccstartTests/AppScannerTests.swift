@@ -2,7 +2,7 @@ import XCTest
 @testable import Sliccstart
 
 final class AppScannerTests: XCTestCase {
-    func testKnownChromiumBrowserBundleIdsIncludeSupportedChannels() {
+    func testKnownChromiumBrowserBundleIdsMatchCanonicalSet() {
         let knownBundleIds = Set(AppTarget.knownChromiumBrowsers.map(\.bundleId))
 
         let expectedBundleIds: Set<String> = [
