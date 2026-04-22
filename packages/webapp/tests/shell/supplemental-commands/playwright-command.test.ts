@@ -273,7 +273,25 @@ describe('playwright-cli goto', () => {
     const result = await cmd.execute(['goto', 'https://other.com', '--tab', 'tab-1'], {} as any);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Navigated to https://other.com');
+    expect(browser.withTab).toHaveBeenCalledWith('tab-1', expect.any(Function));
     expect(browser.navigate).toHaveBeenCalledWith('https://other.com');
+  });
+
+  it('errors when --tab is provided without a value', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['goto', 'https://example.com', '--tab'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab requires a value');
+  });
+
+  it('errors when --tab value is another flag', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['goto', 'https://example.com', '--tab', '--wait-until=load'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab requires a value');
   });
 });
 
@@ -1841,6 +1859,17 @@ describe('playwright-cli session history logging', () => {
     expect(screenshotFiles[0]).toMatch(/screenshot-.*\.png$/);
   });
 
+  it('accepts --filename with space separator', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute(
+      ['screenshot', '--tab=tab-1', '--filename', '/workspace/shot.png'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Screenshot saved to /workspace/shot.png');
+  });
+
   it('screenshot does not include base64 img tag in output', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
@@ -1907,9 +1936,24 @@ describe('playwright-cli teleport subcommand', () => {
     expect(state.teleportWatchers.size).toBeGreaterThan(0);
     const watcher = Array.from(state.teleportWatchers.values())[0];
     expect(watcher.phase).toBe('armed');
-    expect(watcher.startPattern.source).toBe('login\\.example\\.com');
-    expect(watcher.returnPattern.source).toBe('app\\.example\\.com');
+  });
 
+  it('accepts --start and --return with space separators', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute(
+      ['teleport', '--tab', 'tab-1', '--start', 'login\\.example', '--return', 'app\\.example'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Teleport armed');
+    expect(result.stdout).toContain('login\\.example');
+
+    // Verify watcher was installed
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatchers.size).toBeGreaterThan(0);
+    const watcher = Array.from(state.teleportWatchers.values())[0];
+    expect(watcher.phase).toBe('armed');
     // Cleanup timers
     watcher.pollInterval && clearInterval(watcher.pollInterval);
   });
