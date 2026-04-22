@@ -60,9 +60,9 @@ export class MountCommands {
         const state = mountIndex.getState(m);
         if (!state) return m;
         if (state.status === 'ready') {
-          return `${m} (indexed: ${state.indexed} files)`;
+          return `${m} (indexed: ${state.indexed} entries)`;
         } else if (state.status === 'indexing') {
-          return `${m} (indexing: ${state.indexed} files...)`;
+          return `${m} (indexing: ${state.indexed} entries...)`;
         } else if (state.status === 'error') {
           return `${m} (index error: ${state.error})`;
         }

@@ -67,9 +67,12 @@ export class VirtualFS {
           const { type, path, handle } = event.data ?? {};
           if (type === 'mount' && typeof path === 'string' && handle) {
             this.mountPoints.set(path, handle);
+            // Register with MountIndex so peer instances also get fast walks
+            this.mountIndex.registerMount(path, handle);
             this.watcher?.notify([{ type: 'modify', path, entryType: 'directory' }]);
           } else if (type === 'unmount' && typeof path === 'string') {
             this.mountPoints.delete(path);
+            this.mountIndex.unregisterMount(path);
             this.watcher?.notify([{ type: 'modify', path, entryType: 'directory' }]);
           }
         };
@@ -125,6 +128,7 @@ export class VirtualFS {
     this.mountSyncChannel = null;
     this.watcher?.dispose();
     this.watcher = null;
+    this.mountIndex.dispose();
 
     const pfs = this.lfs as any;
 
@@ -425,7 +429,6 @@ export class VirtualFS {
 
   /**
    * Get the mount index for fast file discovery in mounted directories.
-   * Returns undefined if mount indexing is not available.
    */
   getMountIndex(): MountIndex {
     return this.mountIndex;
@@ -608,10 +611,8 @@ export class VirtualFS {
           entryType: 'file',
         },
       ]);
-      // Update mount index for fast discovery
-      if (!wasExisting) {
-        this.mountIndex.notifyWrite(normalized);
-      }
+      // Update mount index for fast discovery (idempotent, safe to call always)
+      this.mountIndex.notifyWrite(normalized);
       return;
     }
     // Resolve symlinks before writing
@@ -955,41 +956,26 @@ export class VirtualFS {
   async *walk(path: string, _visited?: Set<string>): AsyncGenerator<string> {
     const normalized = normalizePath(path);
 
-    // Fast path optimization: only check mounts at the top-level call (when _visited is undefined)
-    // to avoid repeated mount lookups on every recursive iteration.
-    if (_visited === undefined && this.mountPoints.size > 0) {
-      // Find the most specific mount that owns this path (longest mount path wins)
-      let owningMount: string | null = null;
-      for (const mountPath of this.mountPoints.keys()) {
-        if (normalized === mountPath || normalized.startsWith(mountPath + '/')) {
-          if (!owningMount || mountPath.length > owningMount.length) {
-            owningMount = mountPath;
-          }
-        }
-      }
+    // Fast path: check if this path is exactly a mount point with a ready index.
+    // We check on every call (including recursive) so that walking from '/' can
+    // switch to indexed iteration when it enters a mounted subtree.
+    // Only use fast path when:
+    // 1. The path IS the mount point (not a subdirectory of it)
+    // 2. The mount's index is ready
+    // 3. There are no nested mounts under this path
+    if (this.mountPoints.size > 0 && this.mountPoints.has(normalized)) {
+      const hasNestedMounts = [...this.mountPoints.keys()].some(
+        (mp) => mp !== normalized && mp.startsWith(normalized + '/')
+      );
 
-      if (owningMount) {
-        // Check for nested mounts under the walk path — if any exist, use slow path
-        // so we properly traverse into each nested mount
-        const hasNestedMounts = [...this.mountPoints.keys()].some(
-          (mp) => mp !== owningMount && mp.startsWith(normalized + '/')
-        );
-
-        if (!hasNestedMounts && this.mountIndex.isReady(owningMount)) {
-          // Use the indexed file list — filter to paths under `normalized`
-          const prefix = normalized === '/' ? '/' : normalized + '/';
-          const files = this.mountIndex.getFiles(
-            owningMount,
-            (p) => p === normalized || p.startsWith(prefix)
-          );
-          if (files) {
-            for (const filePath of files) {
-              yield filePath;
-            }
-            return;
+      if (!hasNestedMounts && this.mountIndex.isReady(normalized)) {
+        const files = this.mountIndex.getFiles(normalized);
+        if (files) {
+          for (const filePath of files) {
+            yield filePath;
           }
+          return;
         }
-        // Path is under a mount but can't use fast path — fall through to slow path
       }
     }
 

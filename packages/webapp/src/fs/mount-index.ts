@@ -133,6 +133,18 @@ export class MountIndex {
   }
 
   /**
+   * Dispose of all mounts and cancel any in-flight indexing.
+   * Call this when the VirtualFS is disposed to avoid resource leaks.
+   */
+  dispose(): void {
+    for (const data of this.mounts.values()) {
+      data.abortController?.abort();
+    }
+    this.mounts.clear();
+    this.listeners.clear();
+  }
+
+  /**
    * Get the indexing state for a mount.
    */
   getState(mountPath: string): MountIndexState | undefined {
@@ -278,13 +290,17 @@ export class MountIndex {
   /**
    * Find which mount (if any) contains an absolute path.
    */
+  /** Find the most specific mount that owns this path (longest prefix wins). */
   private findMountForPath(absolutePath: string): string | undefined {
+    let bestMatch: string | undefined;
     for (const mountPath of this.mounts.keys()) {
       if (absolutePath === mountPath || absolutePath.startsWith(mountPath + '/')) {
-        return mountPath;
+        if (!bestMatch || mountPath.length > bestMatch.length) {
+          bestMatch = mountPath;
+        }
       }
     }
-    return undefined;
+    return bestMatch;
   }
 
   private notifyListeners(): void {
