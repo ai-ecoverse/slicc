@@ -1556,16 +1556,47 @@ Commands:
 Aliases: ${aliases.join(', ')}`;
 }
 
-/** Parse --key=value flags from args, returning remaining positional args + flags. */
+/** Flags that accept a value when specified with a space (e.g. --tab <id> or --tab=<id>). */
+const VALUE_FLAGS = new Set([
+  'tab',
+  'filename',
+  'max-width',
+  'runtime',
+  'timeout',
+  'filter',
+  'output',
+  'start',
+  'return',
+  'teleport-start',
+  'teleport-return',
+  'teleport-runtime',
+  'domain',
+  'path',
+  'expires',
+]);
+
+/** Parse --key=value and --key value flags from args, returning remaining positional args + flags.
+ *  Throws an error if a VALUE_FLAG is provided without a value. */
 function parseFlags(args: string[]): { positional: string[]; flags: Record<string, string> } {
   const positional: string[] = [];
   const flags: Record<string, string> = {};
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg.startsWith('--') && arg.includes('=')) {
       const eq = arg.indexOf('=');
       flags[arg.slice(2, eq)] = arg.slice(eq + 1);
     } else if (arg.startsWith('--')) {
-      flags[arg.slice(2)] = 'true';
+      const flagName = arg.slice(2);
+      // Check if this flag expects a value
+      if (VALUE_FLAGS.has(flagName)) {
+        if (i + 1 < args.length && !args[i + 1].startsWith('--')) {
+          flags[flagName] = args[++i];
+        } else {
+          throw new Error(`--${flagName} requires a value`);
+        }
+      } else {
+        flags[flagName] = 'true';
+      }
     } else {
       positional.push(arg);
     }
@@ -1609,7 +1640,15 @@ export function createPlaywrightCommand(
 
     const subcommand = args[0];
     const subArgs = args.slice(1);
-    const { positional, flags } = parseFlags(subArgs);
+
+    let positional: string[];
+    let flags: Record<string, string>;
+    try {
+      ({ positional, flags } = parseFlags(subArgs));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { stdout: '', stderr: `${name} ${subcommand}: ${msg}\n`, exitCode: 1 };
+    }
 
     // Note: Per-tab teleport blocking is now handled within command handlers
     // via requireTab() -> browser.withTab() serialization
