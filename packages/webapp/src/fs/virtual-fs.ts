@@ -460,12 +460,12 @@ export class VirtualFS {
 
   /**
    * Find the mount point that owns `path`.
-   * Returns the handle and the path segments relative to the mount root,
+   * Returns the mount path, handle, and the path segments relative to the mount root,
    * or null if the path is not under any mount.
    */
   private findMount(
     path: string
-  ): { handle: FileSystemDirectoryHandle; relParts: string[] } | null {
+  ): { path: string; handle: FileSystemDirectoryHandle; relParts: string[] } | null {
     let bestMatch: { mountPath: string; handle: FileSystemDirectoryHandle } | null = null;
 
     for (const [mountPath, handle] of this.mountPoints) {
@@ -479,10 +479,11 @@ export class VirtualFS {
     if (!bestMatch) return null;
 
     if (path === bestMatch.mountPath) {
-      return { handle: bestMatch.handle, relParts: [] };
+      return { path: bestMatch.mountPath, handle: bestMatch.handle, relParts: [] };
     }
 
     return {
+      path: bestMatch.mountPath,
       handle: bestMatch.handle,
       relParts: path
         .slice(bestMatch.mountPath.length + 1)
@@ -660,6 +661,27 @@ export class VirtualFS {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
     if (mount) {
+      // Fast path: use MountIndex if available
+      const indexedEntries = this.mountIndex.getDirectoryEntries(mount.path, normalized);
+      if (indexedEntries !== undefined) {
+        const entries = new Map<string, DirEntry>();
+        for (const entry of indexedEntries) {
+          entries.set(entry.name, { name: entry.name, type: entry.type });
+        }
+        // Also include nested mount points as virtual directories
+        const childPrefix = normalized === '/' ? '/' : `${normalized}/`;
+        for (const mountPath of this.mountPoints.keys()) {
+          if (mountPath === normalized || !mountPath.startsWith(childPrefix)) continue;
+          const relPath = mountPath.slice(childPrefix.length);
+          if (!relPath || relPath.includes('/')) continue;
+          if (!entries.has(relPath)) {
+            entries.set(relPath, { name: relPath, type: 'directory' });
+          }
+        }
+        return [...entries.values()];
+      }
+
+      // Slow path: iterate over FSA handle
       try {
         const dirHandle =
           mount.relParts.length === 0

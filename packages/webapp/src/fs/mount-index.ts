@@ -175,6 +175,43 @@ export class MountIndex {
   }
 
   /**
+   * Get directory entries (immediate children) for a path within a mount.
+   * Returns undefined if the index is not ready (caller should use slow path).
+   */
+  getDirectoryEntries(
+    mountPath: string,
+    dirPath: string
+  ): Array<{ name: string; type: 'file' | 'directory' }> | undefined {
+    const data = this.mounts.get(mountPath);
+    if (!data || data.state.status !== 'ready') {
+      return undefined;
+    }
+
+    const prefix = dirPath === '/' ? '/' : dirPath + '/';
+    const entries = new Map<string, 'file' | 'directory'>();
+
+    // Find all files that are immediate children of dirPath
+    for (const path of data.files) {
+      if (!path.startsWith(prefix)) continue;
+      const rest = path.slice(prefix.length);
+      if (!rest.includes('/')) {
+        entries.set(rest, 'file');
+      }
+    }
+
+    // Find all directories that are immediate children of dirPath
+    for (const path of data.directories) {
+      if (!path.startsWith(prefix)) continue;
+      const rest = path.slice(prefix.length);
+      if (!rest.includes('/')) {
+        entries.set(rest, 'directory');
+      }
+    }
+
+    return [...entries.entries()].map(([name, type]) => ({ name, type }));
+  }
+
+  /**
    * Check if a path exists in the index.
    * Returns undefined if the index is not ready.
    */
