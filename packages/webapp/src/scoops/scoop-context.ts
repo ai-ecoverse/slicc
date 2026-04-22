@@ -81,8 +81,13 @@ export interface ScoopContextCallbacks {
   onDropScoop?: (scoopJid: string) => Promise<void>;
   /** Mute scoops so their completions are not forwarded to the cone (cone only). */
   onMuteScoops?: (jids: readonly string[]) => void;
-  /** Unmute scoops; flushes any stashed completion to the cone (cone only). */
-  onUnmuteScoops?: (jids: readonly string[]) => void;
+  /** Unmute scoops; returns any stashed completions so the caller can
+   *  fold them into its tool result (cone only). */
+  onUnmuteScoops?: (
+    jids: readonly string[]
+  ) => Promise<
+    Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
+  >;
   /** Wait for a batch of scoops to complete (cone only). */
   onWaitForScoops?: (
     jids: readonly string[],

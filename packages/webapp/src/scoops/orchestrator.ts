@@ -665,14 +665,35 @@ export class Orchestrator {
   }
 
   /**
-   * Unmute a set of scoops. If a scoop has a pending completion stashed
-   * while it was muted, the full response is flushed to the cone
-   * immediately via the same artifact-persist + notify flow used for a
-   * never-muted scoop — preserving the observed contract that
-   * `scoop_mute` suspends delivery, not discards it.
+   * Unmute a set of scoops and return any completions that were stashed
+   * while they were muted. The caller — `scoop_unmute` — folds the
+   * summaries (plus each scoop's VFS notification path) into the tool
+   * result so the cone consumes them in the current turn. Crucially we
+   * do NOT fire `onIncomingMessage` or `handleMessage` here: re-firing
+   * would generate a fresh scoop-notify lick + a new cone turn, which
+   * is exactly what `scoop_mute` was called to avoid.
+   *
+   * The full response text is still persisted to the VFS artifact
+   * directory so the cone can read the unabridged output the same way
+   * it would for a never-muted scoop; the returned `summary` is a
+   * truncated view suitable for inlining into the tool result.
+   *
+   * Idempotent w.r.t. scoops that were never muted or had no pending
+   * completion — they are removed from the mute set and produce no
+   * entry in the result.
    */
-  unmuteScoops(jids: readonly string[]): void {
-    const flushes: Array<Promise<void>> = [];
+  async unmuteScoops(
+    jids: readonly string[]
+  ): Promise<
+    Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
+  > {
+    const consumed: Array<{
+      jid: string;
+      summary: string;
+      timestamp: string;
+      notificationPath: string | null;
+    }> = [];
+    const artifactWrites: Array<Promise<void>> = [];
     for (const jid of jids) {
       this.mutedScoops.delete(jid);
       const pending = this.pendingCompletions.get(jid);
@@ -680,20 +701,33 @@ export class Orchestrator {
       this.pendingCompletions.delete(jid);
       const scoop = this.scoops.get(jid);
       if (!scoop || scoop.isCone) continue;
-      flushes.push(
-        this.deliverCompletionToCone(scoop, pending.responseText).catch((err) => {
-          log.warn('unmute flush failed', {
-            jid,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        })
+      const summary =
+        pending.responseText.length > 20000
+          ? pending.responseText.slice(0, 20000) + '\n... (truncated)'
+          : pending.responseText;
+      const entry: {
+        jid: string;
+        summary: string;
+        timestamp: string;
+        notificationPath: string | null;
+      } = { jid, summary, timestamp: pending.timestamp, notificationPath: null };
+      consumed.push(entry);
+      artifactWrites.push(
+        this.writeScoopCompletionArtifact(scoop, pending.responseText)
+          .then((path) => {
+            entry.notificationPath = path;
+          })
+          .catch((err) => {
+            log.warn('unmute artifact persist failed', {
+              jid,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          })
       );
     }
-    log.info('Scoops unmuted', { count: jids.length });
-    // Fire-and-forget: the tool result returns immediately so the cone
-    // can finish its turn while the flushed notifications flow into its
-    // message queue in the background.
-    void Promise.all(flushes);
+    await Promise.all(artifactWrites);
+    log.info('Scoops unmuted', { count: jids.length, consumed: consumed.length });
+    return consumed;
   }
 
   /** Test / debug helper: returns whether the given jid is currently muted. */

@@ -1299,7 +1299,11 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     maybeNotifyConeOnScoopComplete(jid: string): Promise<void>;
     handleMessage(msg: ChannelMessage): Promise<void>;
     muteScoops(jids: readonly string[]): void;
-    unmuteScoops(jids: readonly string[]): void;
+    unmuteScoops(
+      jids: readonly string[]
+    ): Promise<
+      Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
+    >;
     mutedScoops: Set<string>;
     pendingCompletions: Map<string, { responseText: string; timestamp: string }>;
     completionWaiters: Map<string, Array<(s: string | null) => void>>;
@@ -1366,7 +1370,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     expect(incoming[0].msg.content).toContain('scoop output');
   });
 
-  it('muteScoops stashes the completion and unmuteScoops flushes it to the cone', async () => {
+  it('muteScoops stashes the completion and unmuteScoops returns it WITHOUT firing new events', async () => {
     const scoop: RegisteredScoop = {
       jid: 'scoop_mute_1',
       name: 'mute-scoop',
@@ -1404,16 +1408,53 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     expect(incoming).toHaveLength(0);
     expect(priv.pendingCompletions.has(scoop.jid)).toBe(true);
 
-    priv.unmuteScoops([scoop.jid]);
-    // unmuteScoops fires flushes in the background — wait for microtasks
-    // to drain so the async deliverCompletionToCone completes.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    const consumed = await priv.unmuteScoops([scoop.jid]);
 
-    // Unmute flushes the stashed summary as a fresh scoop-notify.
-    expect(incoming).toHaveLength(1);
-    expect(incoming[0].channel).toBe('scoop-notify');
-    expect(incoming[0].content).toContain('muted output');
+    // Unmute returns the stashed summary for the caller (scoop_unmute
+    // tool) to fold into its result — it must NOT re-fire the lick as
+    // a fresh scoop-notify (which would trigger another cone turn, the
+    // very thing scoop_mute was called to avoid).
+    expect(consumed).toHaveLength(1);
+    expect(consumed[0].jid).toBe(scoop.jid);
+    expect(consumed[0].summary).toBe('muted output');
+    // The full response is still persisted to the artifact dir so the
+    // cone can read it on demand via the returned path.
+    expect(consumed[0].notificationPath).toMatch(/^\/shared\/scoop-notifications\/.+\.md$/);
+    expect(incoming).toHaveLength(0);
     expect(priv.pendingCompletions.has(scoop.jid)).toBe(false);
+    expect(priv.mutedScoops.has(scoop.jid)).toBe(false);
+  });
+
+  it('unmuteScoops returns an empty list for scoops without stashed completions', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_unmute_noop_1',
+      name: 'unmute-noop',
+      folder: 'unmute-noop-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'unmute-noop-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith(() => {})
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    priv.muteScoops([scoop.jid]);
+    const consumed = priv.unmuteScoops([scoop.jid]);
+    expect(consumed).toHaveLength(0);
     expect(priv.mutedScoops.has(scoop.jid)).toBe(false);
   });
 

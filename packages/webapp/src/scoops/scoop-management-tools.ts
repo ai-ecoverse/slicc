@@ -25,8 +25,14 @@ export interface ScoopManagementToolsConfig {
   getGlobalMemory?: () => Promise<string>;
   /** Mute a list of scoops so their completions are suppressed (cone only). */
   onMuteScoops?: (jids: readonly string[]) => void;
-  /** Unmute scoops; delivers any stashed completion to the cone (cone only). */
-  onUnmuteScoops?: (jids: readonly string[]) => void;
+  /** Unmute scoops and return any stashed completions so the tool can
+   *  fold them into its result instead of re-firing them as new lick
+   *  events (cone only). */
+  onUnmuteScoops?: (
+    jids: readonly string[]
+  ) => Promise<
+    Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
+  >;
   /** Block until a list of scoops completes (or timeout). Returns each scoop's
    *  captured summary (or null on timeout). Cone only. */
   onWaitForScoops?: (
@@ -410,13 +416,17 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
       });
     }
 
-    // Cone only: scoop_unmute — resume notifications. Any completion that
-    // landed while the scoop was muted is delivered to the cone now.
+    // Cone only: scoop_unmute — resume notifications AND claim any
+    // completion that landed while the scoop was muted. The stashed
+    // summaries are returned in THIS tool's result so the cone can read
+    // them in the current turn; they are NOT re-fired as fresh
+    // scoop-notify events (which would generate a new cone turn and
+    // defeat the whole point of muting in the first place).
     if (onUnmuteScoops) {
       tools.push({
         name: 'scoop_unmute',
         description:
-          'Resume scoop→cone notifications for the given scoops. If any scoop finished while it was muted, its stashed completion is delivered to the cone immediately.',
+          'Resume scoop→cone notifications for the given scoops. Any completion that landed while a scoop was muted is returned in this tool result (NOT dispatched as a new cone turn), so you can read all stashed summaries in the current turn. Scoops with no stashed completion are simply unmuted.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -440,11 +450,31 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               isError: true,
             };
           }
-          onUnmuteScoops(resolved.map((s) => s.jid));
-          log.info('Scoops unmuted', { names: resolved.map((s) => s.folder) });
-          const unmuted = resolved.map((s) => s.folder).join(', ');
+          const jids = resolved.map((s) => s.jid);
+          const jidToFolder = new Map(resolved.map((s) => [s.jid, s.folder]));
+          const consumed = await onUnmuteScoops(jids);
+          log.info('Scoops unmuted', {
+            names: resolved.map((s) => s.folder),
+            stashedCount: consumed.length,
+          });
+
+          const unmutedFolders = resolved.map((s) => s.folder).join(', ');
           const warn = unknown.length > 0 ? ` (unknown: ${unknown.join(', ')})` : '';
-          return { content: `Unmuted: ${unmuted}${warn}` };
+          const lines: string[] = [`Unmuted: ${unmutedFolders}${warn}`];
+          if (consumed.length === 0) {
+            lines.push('No stashed completions.');
+          } else {
+            lines.push('', 'Stashed completions:');
+            for (const entry of consumed) {
+              const folder = jidToFolder.get(entry.jid) ?? entry.jid;
+              lines.push(`--- ${folder} ---`);
+              if (entry.notificationPath) {
+                lines.push(`VFS path: ${entry.notificationPath}`);
+              }
+              lines.push(entry.summary);
+            }
+          }
+          return { content: lines.join('\n') };
         },
       });
     }
