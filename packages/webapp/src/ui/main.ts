@@ -25,6 +25,7 @@ import { getApiKey, showProviderSettings, applyProviderDefaults } from './provid
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
+import { isLickChannel, type LickChannel } from './lick-channels.js';
 import { createLogger } from '../core/index.js';
 import type { VirtualFS } from '../fs/index.js';
 import { installSkillFromDrop } from '../skills/install-from-drop.js';
@@ -87,35 +88,6 @@ const log = createLogger('main');
 
 const PENDING_MOUNT_DB = 'slicc-pending-mount';
 const PENDING_MOUNT_KEY = 'pendingMount';
-
-/** Lick channels — kept in sync with LickEvent.type in scoops/lick-manager.ts.
- *  Used when routing history-replayed messages so they render as licks
- *  instead of plain user bubbles. The `scoop-notify` and `scoop-idle`
- *  channels are synthetic licks emitted by the orchestrator when a scoop
- *  completes or stays idle — same visual treatment as external licks
- *  keeps the cone's chat history coherent. */
-type LickChannel =
-  | 'webhook'
-  | 'cron'
-  | 'sprinkle'
-  | 'fswatch'
-  | 'session-reload'
-  | 'navigate'
-  | 'scoop-notify'
-  | 'scoop-idle';
-const LICK_CHANNELS: ReadonlySet<LickChannel> = new Set<LickChannel>([
-  'webhook',
-  'cron',
-  'sprinkle',
-  'fswatch',
-  'session-reload',
-  'navigate',
-  'scoop-notify',
-  'scoop-idle',
-]);
-function isLickChannel(channel: string | null | undefined): channel is LickChannel {
-  return channel !== null && channel !== undefined && LICK_CHANNELS.has(channel as LickChannel);
-}
 
 /** True when the current URL requests the design-time UI fixture
  *  (`?ui-fixture=1`). Accepts `1`, `true`, and the bare presence of the key

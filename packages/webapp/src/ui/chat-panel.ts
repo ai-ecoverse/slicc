@@ -18,6 +18,7 @@ import {
 import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
 import { getToolDescriptor, createToolIcon, createToolBody, toolStatus } from './tool-call-view.js';
 import { getLickDescriptor, createLickIcon, parseLickContent } from './lick-view.js';
+import { isLickChannel, type LickChannel } from './lick-channels.js';
 import {
   getAllAvailableModels,
   getSelectedModelId,
@@ -37,26 +38,6 @@ function renderChatMessageContent(msg: ChatMessage): string {
   return msg.role === 'assistant'
     ? renderAssistantMessageContent(msg.content)
     : renderMessageContent(msg.content);
-}
-
-/** Channels that should render with the compact lick-style UI. Kept in
- *  sync with LICK_CHANNELS in ui/main.ts. Includes `scoop-notify` and
- *  `scoop-idle` so cone-facing scoop lifecycle messages get the same
- *  treatment as webhook/cron events — same persistence path, same
- *  collapsible widget, same "always show label" rule. */
-const LICK_CHANNEL_SET: ReadonlySet<string> = new Set([
-  'webhook',
-  'cron',
-  'sprinkle',
-  'fswatch',
-  'session-reload',
-  'navigate',
-  'scoop-notify',
-  'scoop-idle',
-]);
-
-function isLickChannel(channel: string | null | undefined): boolean {
-  return channel != null && LICK_CHANNEL_SET.has(channel);
 }
 
 export class ChatPanel {
@@ -212,15 +193,7 @@ export class ChatPanel {
     lick: {
       id: string;
       content: string;
-      channel:
-        | 'webhook'
-        | 'cron'
-        | 'sprinkle'
-        | 'fswatch'
-        | 'session-reload'
-        | 'navigate'
-        | 'scoop-notify'
-        | 'scoop-idle';
+      channel: LickChannel;
       timestamp: number;
     }
   ): Promise<void> {
@@ -246,15 +219,7 @@ export class ChatPanel {
     lick: {
       id: string;
       content: string;
-      channel:
-        | 'webhook'
-        | 'cron'
-        | 'sprinkle'
-        | 'fswatch'
-        | 'session-reload'
-        | 'navigate'
-        | 'scoop-notify'
-        | 'scoop-idle';
+      channel: LickChannel;
       timestamp: number;
     }
   ): Promise<void> {
@@ -316,20 +281,7 @@ export class ChatPanel {
    * insert the message in timestamp order so backfill doesn't break the
    * chronological flow; live events append.
    */
-  addLickMessage(
-    id: string,
-    content: string,
-    channel:
-      | 'webhook'
-      | 'cron'
-      | 'sprinkle'
-      | 'fswatch'
-      | 'session-reload'
-      | 'navigate'
-      | 'scoop-notify'
-      | 'scoop-idle',
-    timestamp?: number
-  ): void {
+  addLickMessage(id: string, content: string, channel: LickChannel, timestamp?: number): void {
     const ts = timestamp ?? Date.now();
     // Ignore duplicate id (can happen when merging live buffer + DB fallback).
     if (this.messages.some((m) => m.id === id)) return;

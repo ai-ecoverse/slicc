@@ -154,10 +154,12 @@ export class Orchestrator {
   private pendingCompletions: Map<string, { responseText: string; timestamp: string }> = new Map();
   /**
    * One-shot resolvers for `scoop_wait` calls. Each waiter observes a
-   * single scoop's next completion; the orchestrator fires every registered
-   * waiter in insertion order and clears the list. On scoop unregister or
-   * orchestrator shutdown the remaining waiters are resolved with `null`
-   * so the `scoop_wait` promise cannot stall forever.
+   * single scoop's next completion; the orchestrator fires every
+   * registered waiter in insertion order and clears the list. On
+   * scoop unregister (`unregisterScoop`) or orchestrator shutdown
+   * (`shutdown`) any remaining waiters are resolved with `null` so a
+   * `scoop_wait` promise cannot stall forever if the scoop goes away
+   * mid-wait.
    */
   private completionWaiters: Map<string, Array<(summary: string | null) => void>> = new Map();
 
@@ -760,12 +762,23 @@ export class Orchestrator {
   ): Promise<Array<{ jid: string; summary: string | null; timedOut: boolean }>> {
     if (jids.length === 0) return [];
 
+    // Dedupe the input up-front. Without this, a duplicate jid would
+    // register TWO waiters against the same scoop; on completion the
+    // first waiter would claim the summary and set `results`, but the
+    // second would early-return from its `results.has(jid)` guard
+    // WITHOUT calling `resolve()`, stalling `Promise.all(promises)`
+    // forever (or until the optional timeout fires). Dedupe removes
+    // the failure mode entirely and keeps the per-jid result shape
+    // intact — the returned array still has one entry per requested
+    // jid because we re-materialize it from `results` at the end.
+    const uniqueJids = Array.from(new Set(jids));
+
     const results = new Map<string, { summary: string | null; timedOut: boolean }>();
     // Remember which jids we're adding to the mute set; those are the
     // only ones we should unmute afterwards so a pre-existing scoop_mute
     // survives the wait.
     const muteAdded: string[] = [];
-    for (const jid of jids) {
+    for (const jid of uniqueJids) {
       if (!this.mutedScoops.has(jid)) {
         this.mutedScoops.add(jid);
         muteAdded.push(jid);
@@ -780,7 +793,7 @@ export class Orchestrator {
     // via the artifact file the unmute/normal path would have written
     // (the waiter path skips that write because the cone sees the
     // content inline via the tool result).
-    for (const jid of jids) {
+    for (const jid of uniqueJids) {
       const pending = this.pendingCompletions.get(jid);
       if (pending) {
         this.pendingCompletions.delete(jid);
@@ -792,7 +805,7 @@ export class Orchestrator {
       }
     }
 
-    const missing = jids.filter((jid) => !results.has(jid));
+    const missing = uniqueJids.filter((jid) => !results.has(jid));
     // Filter to scoops we actually have registered; otherwise the waiter
     // would never resolve. An unknown jid is reported as timed-out so the
     // caller can see which targets weren't found.
@@ -827,7 +840,13 @@ export class Orchestrator {
     let timer: ReturnType<typeof setTimeout> | null = null;
     try {
       if (promises.length > 0) {
-        if (timeoutMs != null && timeoutMs > 0) {
+        // `timeoutMs === 0` is an EXPLICIT immediate timeout (the caller
+        // asked for "no waiting, tell me who's already done"). Only
+        // `undefined`/`null` means "wait indefinitely". Treating 0 as
+        // "no timeout" — which the previous `timeoutMs > 0` guard did —
+        // could stall the cone turn forever when a scoop never
+        // completes, exactly the opposite of what the caller asked for.
+        if (timeoutMs != null && timeoutMs >= 0) {
           await Promise.race([
             Promise.all(promises),
             new Promise<void>((resolve) => {
@@ -1736,6 +1755,27 @@ export class Orchestrator {
     // Stop the scheduler
     this.scheduler?.stop();
     this.scheduler = null;
+
+    // Drain any outstanding `scoop_wait` waiters so their promises
+    // resolve instead of hanging past shutdown. Each waiter is resolved
+    // with `null` (the timeout sentinel) — this mirrors the cleanup
+    // `unregisterScoop` performs when a scoop is removed mid-wait.
+    // Mute/pending state is cleared afterwards so a re-initialized
+    // orchestrator starts from a clean slate.
+    for (const waiters of this.completionWaiters.values()) {
+      for (const w of waiters) {
+        try {
+          w(null);
+        } catch (err) {
+          log.warn('completion waiter threw during shutdown', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+    this.completionWaiters.clear();
+    this.mutedScoops.clear();
+    this.pendingCompletions.clear();
 
     for (const jid of this.contexts.keys()) {
       await this.destroyScoopTab(jid);
