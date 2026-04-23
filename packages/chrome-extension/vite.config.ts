@@ -203,6 +203,8 @@ export default defineConfig(({ mode }) => ({
         );
         copyFileSync(resolve(__dirname, 'voice-popup.html'), resolve(outDir, 'voice-popup.html'));
         copyFileSync(resolve(__dirname, 'voice-popup.js'), resolve(outDir, 'voice-popup.js'));
+        copyFileSync(resolve(__dirname, 'mount-popup.html'), resolve(outDir, 'mount-popup.html'));
+        copyFileSync(resolve(__dirname, 'mount-popup.js'), resolve(outDir, 'mount-popup.js'));
 
         // Copy logo files for extension icons and header
         const logosSrc = resolve(__dirname, '../assets/logos');

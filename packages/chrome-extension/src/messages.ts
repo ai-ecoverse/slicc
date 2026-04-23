@@ -102,6 +102,13 @@ export interface ReloadSkillsMsg {
   type: 'reload-skills';
 }
 
+export interface ToolUIActionMsg {
+  type: 'tool-ui-action';
+  requestId: string;
+  action: string;
+  data?: unknown;
+}
+
 export type PanelToOffscreenMessage =
   | UserMessageMsg
   | ConeCreateMsg
@@ -117,7 +124,8 @@ export type PanelToOffscreenMessage =
   | PanelCdpCommandMsg
   | OAuthRequestMsg
   | SprinkleLickMsg
-  | ReloadSkillsMsg;
+  | ReloadSkillsMsg
+  | ToolUIActionMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)
@@ -126,12 +134,21 @@ export type PanelToOffscreenMessage =
 export interface AgentEventMsg {
   type: 'agent-event';
   scoopJid: string;
-  eventType: 'text_delta' | 'tool_start' | 'tool_end' | 'turn_end' | 'response_done';
+  eventType:
+    | 'text_delta'
+    | 'tool_start'
+    | 'tool_end'
+    | 'turn_end'
+    | 'response_done'
+    | 'tool_ui'
+    | 'tool_ui_done';
   text?: string;
   toolName?: string;
   toolInput?: unknown;
   toolResult?: string;
   isError?: boolean;
+  requestId?: string;
+  html?: string;
 }
 
 export interface ScoopStatusMsg {

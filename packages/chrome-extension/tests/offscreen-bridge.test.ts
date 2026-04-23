@@ -35,16 +35,23 @@ const mockChrome = {
 (globalThis as any).chrome = mockChrome;
 
 // Mock SessionStore module via hoisted to get type safety
-const { mockSessionStore } = vi.hoisted(() => ({
+const { mockSessionStore, mockHandleAction } = vi.hoisted(() => ({
   mockSessionStore: vi.fn(function (this: any) {
     this.init = vi.fn().mockResolvedValue(undefined);
     this.saveMessages = vi.fn().mockResolvedValue(undefined);
     this.delete = vi.fn().mockResolvedValue(undefined);
   }),
+  mockHandleAction: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../webapp/src/ui/session-store.js', () => ({
   SessionStore: mockSessionStore,
+}));
+
+vi.mock('../../webapp/src/tools/tool-ui.js', () => ({
+  toolUIRegistry: {
+    handleAction: mockHandleAction,
+  },
 }));
 
 const { OffscreenBridge } = await import('../src/offscreen-bridge.js');
@@ -325,6 +332,40 @@ describe('OffscreenBridge createCallbacks', () => {
 
     expect(responseDone).toBeDefined();
     expect(responseDone.scoopJid).toBe(targetJid);
+  });
+
+  it('onToolUI emits agent-event with tool_ui eventType', () => {
+    callbacks.onToolUI!('cone_1', 'bash', 'req-123', '<div>Mount?</div>');
+
+    expect(sentMessages).toContainEqual(
+      expect.objectContaining({
+        source: 'offscreen',
+        payload: expect.objectContaining({
+          type: 'agent-event',
+          scoopJid: 'cone_1',
+          eventType: 'tool_ui',
+          toolName: 'bash',
+          requestId: 'req-123',
+          html: '<div>Mount?</div>',
+        }),
+      })
+    );
+  });
+
+  it('onToolUIDone emits agent-event with tool_ui_done eventType', () => {
+    callbacks.onToolUIDone!('cone_1', 'req-123');
+
+    expect(sentMessages).toContainEqual(
+      expect.objectContaining({
+        source: 'offscreen',
+        payload: expect.objectContaining({
+          type: 'agent-event',
+          scoopJid: 'cone_1',
+          eventType: 'tool_ui_done',
+          requestId: 'req-123',
+        }),
+      })
+    );
   });
 });
 
@@ -778,5 +819,23 @@ describe('OffscreenBridge handlePanelMessage', () => {
     expect(response).toBeDefined();
     expect(response.payload.id).toBe(77);
     expect(response.payload.error).toBe('Tab not found');
+  });
+
+  it('tool-ui-action relays to toolUIRegistry.handleAction', async () => {
+    mockHandleAction.mockClear();
+
+    simulatePanelMessage({
+      type: 'tool-ui-action',
+      requestId: 'req-456',
+      action: 'approve',
+      data: { handleInIdb: true, idbKey: 'pendingMount:req-456', dirName: 'mydir' },
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockHandleAction).toHaveBeenCalledWith('req-456', {
+      action: 'approve',
+      data: { handleInIdb: true, idbKey: 'pendingMount:req-456', dirName: 'mydir' },
+    });
   });
 });

@@ -131,13 +131,28 @@ export class MountCommands {
             <div class="sprinkle-action-card__body">The agent wants to mount a local directory at <code>${escapeHtml(targetPath)}</code>. This will give the agent read/write access to files in the directory you select.</div>
             <div class="sprinkle-action-card__actions">
               <button class="sprinkle-btn sprinkle-btn--secondary" data-action="deny">Deny</button>
-              <button class="sprinkle-btn sprinkle-btn--primary" data-action="approve">Select directory</button>
+              <button class="sprinkle-btn sprinkle-btn--primary" data-action="approve" data-picker="directory">Select directory</button>
             </div>
           </div>
         `,
-        onAction: async (action) => {
+        onAction: async (action, data) => {
           if (action === 'approve') {
-            // This runs with user gesture context!
+            const d = data as Record<string, unknown> | undefined;
+
+            if (d?.handleInIdb && typeof d.idbKey === 'string') {
+              try {
+                const handle = await loadAndClearPendingHandle(d.idbKey);
+                if (!handle) return { error: 'No directory handle found in storage' };
+                await reactivateHandle(handle);
+                return { approved: true, handle };
+              } catch (err: unknown) {
+                return { error: err instanceof Error ? err.message : String(err) };
+              }
+            }
+
+            if (d?.cancelled) return { cancelled: true };
+            if (d?.error) return { error: String(d.error) };
+
             try {
               const handle = await (
                 window as Window &
@@ -181,8 +196,40 @@ export class MountCommands {
       }
 
       dirHandle = res.handle;
+    } else if (typeof chrome !== 'undefined' && !!chrome?.runtime?.id) {
+      // Extension terminal: picker must run in popup window so macOS TCC
+      // dialogs render properly (side panel can't host them → renderer crash)
+      try {
+        const result = await openMountPickerPopup();
+        if (result.cancelled) {
+          return { stdout: '', stderr: 'mount: cancelled', exitCode: 1 };
+        }
+        if (result.error) {
+          return { stdout: '', stderr: `mount: ${result.error}`, exitCode: 1 };
+        }
+        if (result.handleInIdb && typeof result.idbKey === 'string') {
+          const handle = await loadAndClearPendingHandle(result.idbKey);
+          if (!handle) {
+            return {
+              stdout: '',
+              stderr: 'mount: no directory handle found in storage',
+              exitCode: 1,
+            };
+          }
+          await reactivateHandle(handle);
+          dirHandle = handle;
+        } else {
+          return { stdout: '', stderr: 'mount: unexpected popup result', exitCode: 1 };
+        }
+      } catch (err: unknown) {
+        return {
+          stdout: '',
+          stderr: `mount: ${err instanceof Error ? err.message : String(err)}`,
+          exitCode: 1,
+        };
+      }
     } else {
-      // Terminal/interactive: direct picker (has user gesture)
+      // CLI/standalone: direct picker (TCC dialogs work in regular page context)
       try {
         dirHandle = await (
           window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
@@ -254,4 +301,81 @@ export class MountCommands {
       exitCode: 0,
     };
   }
+}
+
+async function reactivateHandle(handle: FileSystemDirectoryHandle): Promise<void> {
+  type HandleWithPermission = FileSystemDirectoryHandle & {
+    requestPermission?: (opts: { mode: string }) => Promise<string>;
+  };
+  const h = handle as HandleWithPermission;
+  if (h.requestPermission) {
+    const state = await h.requestPermission({ mode: 'readwrite' });
+    if (state !== 'granted') {
+      throw new Error(`Permission denied for "${handle.name}" (${state})`);
+    }
+  }
+}
+
+function openMountPickerPopup(): Promise<Record<string, unknown>> {
+  const popupRequestId = `mount-${Date.now().toString(36)}`;
+  return new Promise((resolve) => {
+    const url = chrome.runtime.getURL(
+      `mount-popup.html?requestId=${encodeURIComponent(popupRequestId)}`
+    );
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      chrome.runtime.onMessage.removeListener(listener);
+    };
+
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve({ cancelled: true });
+    }, 60_000);
+
+    const listener = (msg: unknown) => {
+      const m = msg as Record<string, unknown>;
+      if (!m || m.source !== 'mount-popup' || m.requestId !== popupRequestId) return;
+      cleanup();
+      resolve(m);
+    };
+    chrome.runtime.onMessage.addListener(listener);
+
+    chrome.windows
+      .create({ url, type: 'popup', width: 400, height: 100, focused: true })
+      .catch(() => {
+        cleanup();
+        resolve({ error: 'Failed to open directory picker window' });
+      });
+  });
+}
+
+async function loadAndClearPendingHandle(
+  idbKey: string
+): Promise<FileSystemDirectoryHandle | null> {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const req = indexedDB.open('slicc-pending-mount', 1);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains('handles')) {
+        req.result.createObjectStore('handles');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  const tx = db.transaction('handles', 'readwrite');
+  const store = tx.objectStore('handles');
+  const getReq = store.get(idbKey);
+  const deleteReq = store.delete(idbKey);
+  deleteReq.onerror = () => {
+    console.warn('[mount] Failed to delete pending handle from IDB', idbKey, deleteReq.error);
+  };
+  const handle = await new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
+    tx.oncomplete = () => resolve(getReq.result ?? null);
+    getReq.onerror = () => reject(getReq.error ?? new Error('IDB get failed'));
+    tx.onerror = () => reject(tx.error ?? new Error('IDB transaction failed'));
+    tx.onabort = () => reject(tx.error ?? new Error('IDB transaction aborted'));
+  });
+  db.close();
+  return handle;
 }

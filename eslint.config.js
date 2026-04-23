@@ -122,7 +122,11 @@ export default tseslint.config(
   },
   {
     // Browser extension files - Browser + chrome globals
-    files: ['packages/chrome-extension/voice-popup.js', 'packages/chrome-extension/src/**/*.ts'],
+    files: [
+      'packages/chrome-extension/voice-popup.js',
+      'packages/chrome-extension/mount-popup.js',
+      'packages/chrome-extension/src/**/*.ts',
+    ],
     languageOptions: {
       globals: {
         ...globals.browser,
