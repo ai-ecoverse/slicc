@@ -131,13 +131,27 @@ export class MountCommands {
             <div class="sprinkle-action-card__body">The agent wants to mount a local directory at <code>${escapeHtml(targetPath)}</code>. This will give the agent read/write access to files in the directory you select.</div>
             <div class="sprinkle-action-card__actions">
               <button class="sprinkle-btn sprinkle-btn--secondary" data-action="deny">Deny</button>
-              <button class="sprinkle-btn sprinkle-btn--primary" data-action="approve">Select directory</button>
+              <button class="sprinkle-btn sprinkle-btn--primary" data-action="approve" data-picker="directory">Select directory</button>
             </div>
           </div>
         `,
-        onAction: async (action) => {
+        onAction: async (action, data) => {
           if (action === 'approve') {
-            // This runs with user gesture context!
+            const d = data as Record<string, unknown> | undefined;
+
+            if (d?.handleInIdb && typeof d.idbKey === 'string') {
+              try {
+                const handle = await loadAndClearPendingHandle(d.idbKey);
+                if (!handle) return { error: 'No directory handle found in storage' };
+                return { approved: true, handle };
+              } catch (err: unknown) {
+                return { error: err instanceof Error ? err.message : String(err) };
+              }
+            }
+
+            if (d?.cancelled) return { cancelled: true };
+            if (d?.error) return { error: String(d.error) };
+
             try {
               const handle = await (
                 window as Window &
@@ -254,4 +268,32 @@ export class MountCommands {
       exitCode: 0,
     };
   }
+}
+
+async function loadAndClearPendingHandle(
+  idbKey: string
+): Promise<FileSystemDirectoryHandle | null> {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const req = indexedDB.open('slicc-pending-mount', 1);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains('handles')) {
+        req.result.createObjectStore('handles');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  const tx = db.transaction('handles', 'readwrite');
+  const store = tx.objectStore('handles');
+  const handle = await new Promise<FileSystemDirectoryHandle | null>((resolve) => {
+    const req = store.get(idbKey);
+    req.onsuccess = () => resolve(req.result ?? null);
+    req.onerror = () => resolve(null);
+  });
+  store.delete(idbKey);
+  await new Promise<void>((resolve) => {
+    tx.oncomplete = () => resolve();
+  });
+  db.close();
+  return handle;
 }
