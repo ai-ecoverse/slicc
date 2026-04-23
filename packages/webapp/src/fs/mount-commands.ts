@@ -195,38 +195,8 @@ export class MountCommands {
       }
 
       dirHandle = res.handle;
-    } else if (typeof chrome !== 'undefined' && !!chrome?.runtime?.id) {
-      // Extension terminal: use popup window for TCC dialog compatibility
-      try {
-        const result = await openMountPickerPopup();
-        if (result.cancelled) {
-          return { stdout: '', stderr: 'mount: cancelled', exitCode: 1 };
-        }
-        if (result.error) {
-          return { stdout: '', stderr: `mount: ${result.error}`, exitCode: 1 };
-        }
-        if (result.handleInIdb && typeof result.idbKey === 'string') {
-          const handle = await loadAndClearPendingHandle(result.idbKey);
-          if (!handle) {
-            return {
-              stdout: '',
-              stderr: 'mount: no directory handle found in storage',
-              exitCode: 1,
-            };
-          }
-          dirHandle = handle;
-        } else {
-          return { stdout: '', stderr: 'mount: unexpected popup result', exitCode: 1 };
-        }
-      } catch (err: unknown) {
-        return {
-          stdout: '',
-          stderr: `mount: ${err instanceof Error ? err.message : String(err)}`,
-          exitCode: 1,
-        };
-      }
     } else {
-      // CLI/standalone: direct picker (has user gesture, TCC dialogs work)
+      // Terminal/interactive: direct picker (has user gesture from Enter key)
       try {
         dirHandle = await (
           window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
@@ -298,40 +268,6 @@ export class MountCommands {
       exitCode: 0,
     };
   }
-}
-
-function openMountPickerPopup(): Promise<Record<string, unknown>> {
-  const popupRequestId = `mount-${Date.now().toString(36)}`;
-  return new Promise((resolve) => {
-    const url = chrome.runtime.getURL(
-      `mount-popup.html?requestId=${encodeURIComponent(popupRequestId)}`
-    );
-
-    const cleanup = () => {
-      clearTimeout(timer);
-      chrome.runtime.onMessage.removeListener(listener);
-    };
-
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve({ cancelled: true });
-    }, 60_000);
-
-    const listener = (msg: unknown) => {
-      const m = msg as Record<string, unknown>;
-      if (!m || m.source !== 'mount-popup' || m.requestId !== popupRequestId) return;
-      cleanup();
-      resolve(m);
-    };
-    chrome.runtime.onMessage.addListener(listener);
-
-    chrome.windows
-      .create({ url, type: 'popup', width: 400, height: 100, focused: true })
-      .catch(() => {
-        cleanup();
-        resolve({ error: 'Failed to open directory picker window' });
-      });
-  });
 }
 
 async function loadAndClearPendingHandle(
