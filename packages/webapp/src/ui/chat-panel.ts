@@ -1398,32 +1398,38 @@ export class ChatPanel {
       link.setAttribute('aria-disabled', busy ? 'true' : 'false');
     };
 
-    // Detect extension mode once — extension uses chrome.identity and does
-    // not need a prewarmed popup (and window.open there returns null anyway).
-    const isExtensionRuntime =
-      typeof chrome !== 'undefined' && !!(chrome as { runtime?: { id?: string } })?.runtime?.id;
+    /**
+     * Render an inline fallback anchor when the browser's popup blocker
+     * rejects `window.open`. A user click on a real `<a target="_blank">`
+     * counts as a fresh user gesture, so the browser will open the
+     * authorize URL. The OAuth callback page still postMessages back to
+     * `window.opener` on success, and the launcher is still listening —
+     * no extra plumbing required.
+     */
+    const showPopupBlockedFallback = (authorizeUrl: string) => {
+      status.textContent = '';
+      const msg = document.createElement('span');
+      msg.textContent = 'Your browser blocked the popup. ';
+      const openLink = document.createElement('a');
+      openLink.href = authorizeUrl;
+      openLink.target = '_blank';
+      // We deliberately DO NOT set rel="noopener" so the OAuth callback
+      // page can postMessage back through `window.opener`.
+      openLink.rel = 'opener';
+      openLink.textContent = 'Open the login page';
+      openLink.className = 'msg__auth-action-link';
+      status.appendChild(msg);
+      status.appendChild(openLink);
+      // Don't hold the "Log in again" button busy while we wait for the
+      // user to click the fallback link.
+      setBusy(false);
+    };
 
     link.addEventListener('click', async (e) => {
       e.preventDefault();
       if (link.disabled) return;
       setBusy(true);
       status.textContent = 'Opening login window…';
-
-      // Pre-open a placeholder popup SYNCHRONOUSLY inside this user-gesture
-      // click handler. The provider's onOAuthLogin does async config work
-      // (fetch proxy config, etc.) before calling the launcher — by that
-      // point Chrome has expired the user-activation from this click and
-      // window.open would be popup-blocked. Reusing the already-open
-      // placeholder via popup.location.href bypasses the blocker.
-      const prewarmedPopup = isExtensionRuntime
-        ? null
-        : window.open('about:blank', '_blank', 'width=500,height=700,popup=yes');
-      if (!isExtensionRuntime && !prewarmedPopup) {
-        status.textContent =
-          'Your browser blocked the login popup. Please allow popups from this site and try again.';
-        setBusy(false);
-        return;
-      }
 
       try {
         // Lazy-load to keep the chat panel bundle free of the provider
@@ -1433,25 +1439,17 @@ export class ChatPanel {
         const cfg = getRegisteredProviderConfig(meta.providerId);
         if (!cfg?.onOAuthLogin) {
           status.textContent = `Provider ${meta.providerId} does not support re-authentication here.`;
-          try {
-            prewarmedPopup?.close();
-          } catch {
-            /* best-effort */
-          }
           return;
         }
-        const launcher = createOAuthLauncher(prewarmedPopup);
+        const launcher = createOAuthLauncher({
+          onPopupBlocked: showPopupBlockedFallback,
+        });
         await cfg.onOAuthLogin(launcher, () => {
           status.textContent = 'Logged in.';
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         status.textContent = `Login failed: ${msg}`;
-        try {
-          prewarmedPopup?.close();
-        } catch {
-          /* best-effort */
-        }
       } finally {
         setBusy(false);
       }

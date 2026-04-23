@@ -244,47 +244,44 @@ describe('createOAuthLauncher', () => {
     vi.stubGlobal('location', { pathname: '/', search: '' });
   });
 
-  it('reuses a prewarmed placeholder popup instead of calling window.open again', async () => {
-    // Prevents popup-blocker blocks for providers that await async config
-    // work before calling the launcher — the caller opens `about:blank`
-    // inside the user-gesture click handler and hands that handle here.
-    const prewarmed = {
-      closed: false,
-      close: vi.fn(),
-      location: { href: 'about:blank' },
-    } as unknown as Window;
-    const launcher = createOAuthLauncher(prewarmed);
+  it('invokes onPopupBlocked with the authorize URL when window.open returns null', async () => {
+    // Covers the popup-blocker path: we still attempt window.open, but
+    // when the browser refuses we surface the URL to the caller so the
+    // UI can render a clickable fallback link. The launcher keeps
+    // listening for the OAuth callback.
+    mockWindow.open.mockReturnValueOnce(null);
+    const onPopupBlocked = vi.fn();
+    const launcher = createOAuthLauncher({ onPopupBlocked });
     const promise = launcher('https://idp.example.com/authorize?client_id=test');
 
-    fireMessage({
-      type: 'oauth-callback',
-      redirectUrl: 'http://localhost:5710/auth/callback#access_token=prewarmed',
-    });
-
-    const result = await promise;
-    expect(mockWindow.open).not.toHaveBeenCalled();
-    expect((prewarmed as unknown as { location: { href: string } }).location.href).toBe(
-      'https://idp.example.com/authorize?client_id=test'
+    expect(mockWindow.open).toHaveBeenCalledWith(
+      'https://idp.example.com/authorize?client_id=test',
+      '_blank',
+      'width=500,height=700,popup=yes'
     );
-    expect(result).toBe('http://localhost:5710/auth/callback#access_token=prewarmed');
-  });
+    expect(onPopupBlocked).toHaveBeenCalledWith('https://idp.example.com/authorize?client_id=test');
 
-  it('falls back to window.open when the prewarmed popup has been closed', async () => {
-    const prewarmed = {
-      closed: true,
-      close: vi.fn(),
-      location: { href: 'about:blank' },
-    } as unknown as Window;
-    const launcher = createOAuthLauncher(prewarmed);
-    const promise = launcher('https://idp.example.com/authorize');
-
+    // Simulate the user clicking the fallback link, OAuth completes,
+    // postMessage back — the still-pending promise resolves.
     fireMessage({
       type: 'oauth-callback',
       redirectUrl: 'http://localhost:5710/auth/callback#access_token=fallback',
     });
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#access_token=fallback');
+  });
 
+  it('does not invoke onPopupBlocked when window.open succeeds', async () => {
+    const onPopupBlocked = vi.fn();
+    const launcher = createOAuthLauncher({ onPopupBlocked });
+    const promise = launcher('https://idp.example.com/authorize');
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#access_token=ok',
+    });
     await promise;
-    expect(mockWindow.open).toHaveBeenCalled();
+    expect(onPopupBlocked).not.toHaveBeenCalled();
   });
 
   it('does not resolve twice on duplicate callbacks', async () => {

@@ -14,21 +14,27 @@ import type { OAuthLauncher } from './types.js';
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
 
 /**
+ * Optional hooks on the CLI launcher. `onPopupBlocked` is called with the
+ * authorize URL when `window.open` returns null (popup blocker, a missing
+ * user gesture, etc.). The callback lets the UI surface a clickable link
+ * the user can activate themselves — a fresh click counts as a new user
+ * gesture, so the browser will honor it. The returned promise keeps
+ * listening for the OAuth callback until the user either completes the
+ * flow via that link or the 2-minute timeout elapses.
+ */
+export interface OAuthLauncherOptions {
+  onPopupBlocked?: (authorizeUrl: string) => void;
+}
+
+/**
  * Create an OAuthLauncher appropriate for the current runtime.
  *
- * `prewarmedPopup` is an optional window handle the caller opened synchronously
- * inside a user gesture (e.g. a click handler). Chrome suppresses popups
- * whose `window.open` runs after any `await`, so providers that do async
- * config work before calling the launcher would otherwise get blocked by
- * the popup blocker. The caller opens `about:blank` up-front; we navigate
- * it to the authorize URL here once the provider has built the URL.
- *
- * Only used in CLI mode — the extension path uses `chrome.identity.launchWebAuthFlow`
- * which has no popup-blocker constraint.
+ * The extension path uses `chrome.identity.launchWebAuthFlow` which has
+ * no popup-blocker constraint; `options` is ignored there.
  */
-export function createOAuthLauncher(prewarmedPopup?: Window | null): OAuthLauncher {
+export function createOAuthLauncher(options: OAuthLauncherOptions = {}): OAuthLauncher {
   if (isExtension) return launchOAuthExtension;
-  return (authorizeUrl: string) => launchOAuthCli(authorizeUrl, prewarmedPopup ?? null);
+  return (authorizeUrl: string) => launchOAuthCli(authorizeUrl, options);
 }
 
 /**
@@ -42,25 +48,24 @@ export function createOAuthLauncher(prewarmedPopup?: Window | null): OAuthLaunch
  */
 async function launchOAuthCli(
   authorizeUrl: string,
-  prewarmedPopup: Window | null
+  options: OAuthLauncherOptions
 ): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
-    // If the caller pre-opened a placeholder window inside a user gesture,
-    // navigate it instead of calling window.open again (which would be
-    // popup-blocked because we've lost user-activation across awaits).
-    let popup: Window | null;
-    if (prewarmedPopup && !prewarmedPopup.closed) {
+    // Try the popup normally. If the browser declined to open it (blocked
+    // by the popup blocker or user activation expired across awaits), fire
+    // `onPopupBlocked` so the UI can render a fallback link. We keep the
+    // promise pending; when the user clicks that link the postMessage /
+    // server-polling channels below will still resolve us.
+    const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
+    if (!popup) {
       try {
-        prewarmedPopup.location.href = authorizeUrl;
-        popup = prewarmedPopup;
-      } catch {
-        // Some environments throw on cross-origin assignment — fall
-        // back to opening a fresh window, which may be blocked but
-        // is at least not a silent no-op.
-        popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
+        options.onPopupBlocked?.(authorizeUrl);
+      } catch (err) {
+        console.warn(
+          '[oauth-service] onPopupBlocked handler threw:',
+          err instanceof Error ? err.message : String(err)
+        );
       }
-    } else {
-      popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
     }
 
     let resolved = false;
