@@ -1365,12 +1365,75 @@ async function main() {
         resolve();
       });
 
+      // The slicc UI runs inside the Chrome instance it's debugging, so
+      // Chrome's Network domain reports every CDP frame back through the
+      // same socket as `Network.webSocketFrameReceived` /
+      // `Network.webSocketFrameSent` events whose `payloadData` embeds
+      // the prior frame's bytes — a self-amplifying feedback loop that,
+      // left alone, drives per-frame sizes past V8's ~512 MiB string
+      // limit and crashes node-server with `ERR_STRING_TOO_LONG`. It
+      // also starves the browser's own debugger UI (the classic
+      // "debugger paused in another window" freeze) because the CDP
+      // event stream fills up with self-referential noise instead of
+      // the events DevTools actually needs.
+      //
+      // Peek at the raw bytes and skip the runaway event types once
+      // they exceed a small sniffing threshold. Legitimate CDP payloads
+      // we care about (screenshots, DOM snapshots, large tool results)
+      // are never `Network.webSocketFrame*` messages, so filtering by
+      // method is far safer than a blanket size cap that would also
+      // drop genuine large events.
+      const CDP_PROXY_INSPECT_BYTES = 256 * 1024;
+      const CDP_PROXY_HARD_FRAME_CAP = 64 * 1024 * 1024;
+      const loopEventPrefixes = [
+        '{"method":"Network.webSocketFrameReceived"',
+        '{"method":"Network.webSocketFrameSent"',
+      ];
+
+      /**
+       * Normalise the `ws` library's polymorphic message payload into a
+       * single Buffer we can safely peek at and forward. Without this,
+       * a later `String(data)` would coerce an `ArrayBuffer` to
+       * `"[object ArrayBuffer]"` and a `Buffer[]` to comma-joined
+       * stringified fragments, corrupting the CDP frame.
+       */
+      const toBuffer = (data: unknown): Buffer => {
+        if (Buffer.isBuffer(data)) return data;
+        if (data instanceof ArrayBuffer) return Buffer.from(data);
+        if (Array.isArray(data)) return Buffer.concat(data as Buffer[]);
+        // Rare fallback — string frames in text mode. Keep bytes faithful.
+        return Buffer.from(String(data));
+      };
+
       chromeWs.on('message', (data) => {
-        const preview = String(data).slice(0, 200);
+        const buf = toBuffer(data);
+        const byteLen = buf.length;
+
+        // Peek at the first 256 KiB only — enough to identify the event
+        // type cheaply without stringifying the whole runaway buffer.
+        const head = buf.subarray(0, CDP_PROXY_INSPECT_BYTES).toString();
+
+        if (loopEventPrefixes.some((p) => head.startsWith(p))) {
+          const msg = `[cdp-proxy] Dropping Chrome feedback-loop event (${byteLen} bytes, ${head.slice(1, 60)}…)`;
+          if (cdpDedup.shouldLog(msg)) console.debug(msg);
+          return;
+        }
+
+        // Hard safety net — still refuse anything that would blow past
+        // V8's string length limit (buf.toString throws ERR_STRING_TOO_LONG
+        // for any frame larger than ~512 MiB).
+        if (byteLen > CDP_PROXY_HARD_FRAME_CAP) {
+          const msg = `[cdp-proxy] Dropping oversized Chrome→Client frame (${byteLen} bytes)`;
+          if (cdpDedup.shouldLog(msg)) console.debug(msg);
+          return;
+        }
+
+        const str = buf.toString();
+        const preview = str.slice(0, 200);
         const msg = `[cdp-proxy] Chrome→Client: ${preview}`;
         if (cdpDedup.shouldLog(msg)) console.debug(msg);
         if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
-          activeClientWs.send(String(data));
+          activeClientWs.send(str);
         }
       });
 
