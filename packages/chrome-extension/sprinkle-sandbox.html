@@ -385,7 +385,7 @@ addEventListener('message', function(e) {
       // the full document HTML, then relay messages between parent and child.
       var bridgeScript = buildNestedBridgeScript(msg.savedState, msg.savedStorage, msg.name || '', !!msg.isLight);
       var themeTag = msg.themeCSS ? '<style>' + msg.themeCSS + '</style>' : '';
-      // Escape </script> sequences in inlined bundles to prevent premature tag termination
+      // Escape closing script tags in inlined bundles to prevent premature tag termination
       function escapeForScript(code) { return code.replace(/<\/script/gi, '<\\/script'); }
       var editorTag = msg.editorScript ? '<script>' + escapeForScript(msg.editorScript) + '<\/script>' : '';
       var diffTag = msg.diffScript ? '<script>' + escapeForScript(msg.diffScript) + '<\/script>' : '';
