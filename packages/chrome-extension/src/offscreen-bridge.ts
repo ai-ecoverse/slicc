@@ -596,7 +596,17 @@ export class OffscreenBridge {
 
       case 'tool-ui-action': {
         const { requestId, action, data } = msg as import('./messages.js').ToolUIActionMsg;
-        await toolUIRegistry.handleAction(requestId, { action, data });
+        try {
+          await toolUIRegistry.handleAction(requestId, { action, data });
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.error('[offscreen-bridge] Tool UI action failed', {
+            requestId,
+            action,
+            error: errMsg,
+          });
+          toolUIRegistry.cancel(requestId, `Action failed: ${errMsg}`);
+        }
         break;
       }
     }

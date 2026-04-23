@@ -291,9 +291,10 @@ async function loadAndClearPendingHandle(
     console.warn('[mount] Failed to delete pending handle from IDB', idbKey, deleteReq.error);
   };
   const handle = await new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
-    getReq.onsuccess = () => resolve(getReq.result ?? null);
+    tx.oncomplete = () => resolve(getReq.result ?? null);
     getReq.onerror = () => reject(getReq.error ?? new Error('IDB get failed'));
     tx.onerror = () => reject(tx.error ?? new Error('IDB transaction failed'));
+    tx.onabort = () => reject(tx.error ?? new Error('IDB transaction aborted'));
   });
   db.close();
   return handle;
