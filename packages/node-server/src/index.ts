@@ -1365,12 +1365,39 @@ async function main() {
         resolve();
       });
 
+      // Drop frames larger than this upstream limit instead of forwarding
+      // them. With `maxPayload: 0` the ws library no longer closes the
+      // socket when Chrome's CDP feedback loop (see the constructor
+      // comment above) blows past the default 100 MiB cap, but we still
+      // have to stop the runaway before `String(data)` hits V8's ~512 MiB
+      // maxStringLength and crashes the whole node-server process with
+      // `ERR_STRING_TOO_LONG`. 16 MiB is generous for any legitimate CDP
+      // event we care about (screenshots, DOM snapshots, large responses)
+      // while cheaply cutting the runaway Network.webSocketFrame* chain.
+      const CDP_PROXY_MAX_FRAME_BYTES = 16 * 1024 * 1024;
+
       chromeWs.on('message', (data) => {
-        const preview = String(data).slice(0, 200);
+        // Buffer | ArrayBuffer | Buffer[] — compute a conservative byte length
+        // without stringifying (the runaway payload we're defending against
+        // can easily exceed V8's string length limit).
+        let byteLen: number;
+        if (Buffer.isBuffer(data)) byteLen = data.length;
+        else if (data instanceof ArrayBuffer) byteLen = data.byteLength;
+        else if (Array.isArray(data)) byteLen = data.reduce((n, b) => n + b.length, 0);
+        else byteLen = 0;
+
+        if (byteLen > CDP_PROXY_MAX_FRAME_BYTES) {
+          const msg = `[cdp-proxy] Dropping oversized Chrome→Client frame (${byteLen} bytes > ${CDP_PROXY_MAX_FRAME_BYTES})`;
+          if (cdpDedup.shouldLog(msg)) console.debug(msg);
+          return;
+        }
+
+        const str = String(data);
+        const preview = str.slice(0, 200);
         const msg = `[cdp-proxy] Chrome→Client: ${preview}`;
         if (cdpDedup.shouldLog(msg)) console.debug(msg);
         if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
-          activeClientWs.send(String(data));
+          activeClientWs.send(str);
         }
       });
 
