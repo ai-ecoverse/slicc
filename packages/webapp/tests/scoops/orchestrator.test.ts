@@ -153,7 +153,11 @@ describe('Orchestrator Message Routing (DB-level)', () => {
         chatJid: cone.jid,
         senderId: testScoop.folder,
         senderName: testScoop.assistantLabel,
-        content: `[@${testScoop.assistantLabel} completed]:\nDownloaded 15 images`,
+        content:
+          `[@${testScoop.assistantLabel} completed]\n` +
+          `VFS path: /shared/scoop-notifications/test-scoop.md\n` +
+          `Total lines: 1\n` +
+          `Preview (up to 1000 chars):\nDownloaded 15 images`,
         fromAssistant: false,
         channel: 'scoop-notify',
       });
@@ -170,7 +174,11 @@ describe('Orchestrator Message Routing (DB-level)', () => {
       const notifyMsg = makeMessage({
         chatJid: cone.jid,
         channel: 'scoop-notify',
-        content: '[@test-scoop completed]: done',
+        content:
+          '[@test-scoop completed]\n' +
+          'VFS path: /shared/scoop-notifications/test-scoop.md\n' +
+          'Total lines: 1\n' +
+          'Preview (up to 1000 chars):\ndone',
       });
       await saveMessage(notifyMsg);
 
@@ -262,7 +270,11 @@ describe('Orchestrator Message Routing (DB-level)', () => {
       // Completion notification contains @test-scoop — must NOT loop back
       const notifyMsg = makeMessage({
         chatJid: cone.jid,
-        content: '[@test-scoop completed]: I finished downloading',
+        content:
+          '[@test-scoop completed]\n' +
+          'VFS path: /shared/scoop-notifications/test-scoop.md\n' +
+          'Total lines: 1\n' +
+          'Preview (up to 1000 chars):\nI finished downloading',
         channel: 'scoop-notify',
       });
       await saveMessage(notifyMsg);
@@ -474,6 +486,7 @@ describe('Orchestrator session-restore compat for path config', () => {
     // BroadcastChannel / IndexedDB handles don't leak across test runs.
     const sharedFs = orch?.getSharedFS();
     await orch?.shutdown();
+    await new Promise((resolve) => setTimeout(resolve, 600));
     await sharedFs?.dispose();
   });
 
@@ -679,6 +692,7 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
   afterEach(async () => {
     const sharedFs = orch?.getSharedFS();
     await orch?.shutdown();
+    await new Promise((resolve) => setTimeout(resolve, 600));
     await sharedFs?.dispose();
   });
 
@@ -709,16 +723,19 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
    * a full `ScoopContext` through an agent loop, which is what the
    * production code path uses to reach this method.
    *
-   * We ALSO stub out `handleMessage` per-test so the fire-and-forget
-   * notify path is fully in-memory and doesn't touch LightningFS —
-   * otherwise afterEach's VFS dispose can race the 500ms LightningFS
-   * deactivation timer and produce "Cannot read properties of null
-   * (reading 'deactivate')" unhandled rejections.
+   * We stub out `handleMessage` per-test so the completion path only
+   * writes the artifact file and never queues a real message save.
    */
   interface OrchestratorPrivate {
     scoopResponseBuffer: Map<string, string>;
-    maybeNotifyConeOnScoopComplete(jid: string): void;
+    maybeNotifyConeOnScoopComplete(jid: string): Promise<void>;
     handleMessage(msg: ChannelMessage): Promise<void>;
+  }
+
+  function extractVfsPath(content: string): string {
+    const match = content.match(/^VFS path: (.+)$/m);
+    expect(match).not.toBeNull();
+    return match![1];
   }
 
   it('writes a scoop-notify to the cone when notifyOnComplete is unset (default)', async () => {
@@ -743,18 +760,21 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
       captured.push(msg);
     };
 
-    priv.scoopResponseBuffer.set(notifyingScoop.jid, 'all done');
-    priv.maybeNotifyConeOnScoopComplete(notifyingScoop.jid);
+    const responseText = 'all done\nwith details';
+    priv.scoopResponseBuffer.set(notifyingScoop.jid, responseText);
+    await priv.maybeNotifyConeOnScoopComplete(notifyingScoop.jid);
 
-    // handleMessage is invoked synchronously inside the method (the
-    // `.catch(...)` chain it wires up is not awaited, but the call itself
-    // runs before the method returns), so the stub sees the payload
-    // immediately.
     expect(captured).toHaveLength(1);
     expect(captured[0].channel).toBe('scoop-notify');
     expect(captured[0].chatJid).toBe(cone.jid);
-    expect(captured[0].content).toContain('all done');
+    expect(captured[0].content).toContain('VFS path: /shared/scoop-notifications/');
+    expect(captured[0].content).toContain('Total lines: 2');
+    expect(captured[0].content).toContain(responseText);
     expect(captured[0].senderId).toBe(notifyingScoop.folder);
+    const sharedFs = o.getSharedFS()!;
+    const artifactPath = extractVfsPath(captured[0].content);
+    const stored = await sharedFs.readFile(artifactPath, { encoding: 'utf-8' });
+    expect(stored).toBe(responseText);
     // Buffer cleared on fire.
     expect(priv.scoopResponseBuffer.has(notifyingScoop.jid)).toBe(false);
   });
@@ -782,7 +802,7 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
     };
 
     priv.scoopResponseBuffer.set(ephemeralScoop.jid, 'final ephemeral output');
-    priv.maybeNotifyConeOnScoopComplete(ephemeralScoop.jid);
+    await priv.maybeNotifyConeOnScoopComplete(ephemeralScoop.jid);
 
     expect(captured).toHaveLength(0);
     // Buffer still cleared so memory stays bounded even when the notify
@@ -812,14 +832,14 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
     };
 
     // No response buffer entry — scoop said nothing.
-    priv.maybeNotifyConeOnScoopComplete(notifyingScoop.jid);
+    await priv.maybeNotifyConeOnScoopComplete(notifyingScoop.jid);
 
     // Even with notifyOnComplete default, empty output => no notify sent.
     expect(captured).toHaveLength(0);
   });
 });
 
-describe('Orchestrator scoop-notify truncation', () => {
+describe('Orchestrator scoop-notify file artifacts', () => {
   let orch: Orchestrator;
   let priorWindow: unknown;
   let windowWasShimmed = false;
@@ -856,6 +876,7 @@ describe('Orchestrator scoop-notify truncation', () => {
   afterEach(async () => {
     const sharedFs = orch?.getSharedFS();
     await orch?.shutdown();
+    await new Promise((resolve) => setTimeout(resolve, 600));
     await sharedFs?.dispose();
   });
 
@@ -872,11 +893,17 @@ describe('Orchestrator scoop-notify truncation', () => {
 
   interface OrchestratorPrivate {
     scoopResponseBuffer: Map<string, string>;
-    maybeNotifyConeOnScoopComplete(jid: string): void;
+    maybeNotifyConeOnScoopComplete(jid: string): Promise<void>;
     handleMessage(msg: ChannelMessage): Promise<void>;
   }
 
-  it('truncates scoop response >20000 chars and appends truncation marker', async () => {
+  function extractVfsPath(content: string): string {
+    const match = content.match(/^VFS path: (.+)$/m);
+    expect(match).not.toBeNull();
+    return match![1];
+  }
+
+  it('writes the full response to VFS and sends only a 1000-char preview to the cone', async () => {
     const scoop: RegisteredScoop = {
       jid: 'scoop_truncate_test_1',
       name: 'truncate-test',
@@ -903,22 +930,27 @@ describe('Orchestrator scoop-notify truncation', () => {
       captured.push(msg);
     };
 
-    // Create a response that exceeds 20000 chars
-    const longResponse = 'x'.repeat(25000);
+    const preview = 'a'.repeat(1000);
+    const hiddenMarker = 'SECOND-LINE-HIDDEN-FROM-PREVIEW';
+    const longResponse = `${preview}\n${hiddenMarker}\nthird line`;
     priv.scoopResponseBuffer.set(scoop.jid, longResponse);
-    priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+    await priv.maybeNotifyConeOnScoopComplete(scoop.jid);
 
     expect(captured).toHaveLength(1);
     expect(captured[0].channel).toBe('scoop-notify');
-    // The content includes the prefix "[@truncate-test-scoop completed]:\n" plus truncated text
-    expect(captured[0].content).toContain('\n... (truncated)');
-    // Verify actual truncation: prefix + 20000 chars + truncation marker
-    const prefix = `[@${scoop.assistantLabel} completed]:\n`;
-    const expectedContent = prefix + longResponse.slice(0, 20000) + '\n... (truncated)';
-    expect(captured[0].content).toBe(expectedContent);
+    expect(captured[0].content).toContain(`[@${scoop.assistantLabel} completed]`);
+    expect(captured[0].content).toContain('VFS path: /shared/scoop-notifications/');
+    expect(captured[0].content).toContain('Total lines: 3');
+    expect(captured[0].content).toContain(preview);
+    expect(captured[0].content).not.toContain(hiddenMarker);
+
+    const sharedFs = orch.getSharedFS()!;
+    const artifactPath = extractVfsPath(captured[0].content);
+    const stored = await sharedFs.readFile(artifactPath, { encoding: 'utf-8' });
+    expect(stored).toBe(longResponse);
   });
 
-  it('does not truncate scoop response <=20000 chars', async () => {
+  it('includes the full short response in the preview metadata', async () => {
     const scoop: RegisteredScoop = {
       jid: 'scoop_no_truncate_test_1',
       name: 'no-truncate-test',
@@ -945,54 +977,20 @@ describe('Orchestrator scoop-notify truncation', () => {
       captured.push(msg);
     };
 
-    // Create a response exactly at the limit
-    const exactLimitResponse = 'y'.repeat(20000);
-    priv.scoopResponseBuffer.set(scoop.jid, exactLimitResponse);
-    priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+    const shortResponse = 'Short completion message\nwith two lines';
+    priv.scoopResponseBuffer.set(scoop.jid, shortResponse);
+    await priv.maybeNotifyConeOnScoopComplete(scoop.jid);
 
     expect(captured).toHaveLength(1);
     expect(captured[0].channel).toBe('scoop-notify');
-    // Should NOT be truncated
-    expect(captured[0].content).not.toContain('(truncated)');
-    const prefix = `[@${scoop.assistantLabel} completed]:\n`;
-    expect(captured[0].content).toBe(prefix + exactLimitResponse);
-  });
+    expect(captured[0].content).toContain(`[@${scoop.assistantLabel} completed]`);
+    expect(captured[0].content).toContain('Total lines: 2');
+    expect(captured[0].content).toContain(shortResponse);
 
-  it('forwards short responses unmodified', async () => {
-    const scoop: RegisteredScoop = {
-      jid: 'scoop_short_test_1',
-      name: 'short-test',
-      folder: 'short-test-scoop',
-      isCone: false,
-      type: 'scoop',
-      requiresTrigger: false,
-      assistantLabel: 'short-test-scoop',
-      addedAt: new Date().toISOString(),
-      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
-    };
-    await saveScoop(scoop);
-
-    const container =
-      typeof document !== 'undefined'
-        ? document.createElement('div')
-        : ({ appendChild: () => {} } as unknown as HTMLElement);
-    orch = new Orchestrator(container, noopCallbacks());
-    await orch.init();
-
-    const priv = orch as unknown as OrchestratorPrivate;
-    const captured: ChannelMessage[] = [];
-    priv.handleMessage = async (msg) => {
-      captured.push(msg);
-    };
-
-    const shortResponse = 'Short completion message';
-    priv.scoopResponseBuffer.set(scoop.jid, shortResponse);
-    priv.maybeNotifyConeOnScoopComplete(scoop.jid);
-
-    expect(captured).toHaveLength(1);
-    expect(captured[0].content).not.toContain('(truncated)');
-    const prefix = `[@${scoop.assistantLabel} completed]:\n`;
-    expect(captured[0].content).toBe(prefix + shortResponse);
+    const sharedFs = orch.getSharedFS()!;
+    const artifactPath = extractVfsPath(captured[0].content);
+    const stored = await sharedFs.readFile(artifactPath, { encoding: 'utf-8' });
+    expect(stored).toBe(shortResponse);
   });
 });
 
@@ -1032,6 +1030,7 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
   afterEach(async () => {
     const sharedFs = orch?.getSharedFS();
     await orch?.shutdown();
+    await new Promise((resolve) => setTimeout(resolve, 600));
     await sharedFs?.dispose();
   });
 

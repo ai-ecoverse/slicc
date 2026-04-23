@@ -830,9 +830,9 @@ Use the **delegate_to_scoop** tool to send work to scoops. IMPORTANT:
 - If the user says "do the same" or references earlier work, YOU must expand that into explicit instructions
 - Use **list_scoops** first to see available scoop names
 
-**You will automatically receive a notification when a scoop finishes.** The notification contains their full response.
+**You will automatically receive a notification when a scoop finishes.** The notification includes a VFS path to the full output, the total line count, and the first 1000 characters.
 You do NOT need to schedule polling tasks or check for completion markers — just delegate and wait. You will be
-prompted again with the scoop's results when they are done. Then you can act on those results (move files, etc.).
+prompted again when they are done, and you can decide whether to inspect the saved file before acting on the result.
 `
     : `
 You are a scoop with restricted filesystem access:

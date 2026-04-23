@@ -338,7 +338,8 @@ User input in chat → ChatPanel.sendMessage()
           → results
           → back to agent loop
     → Scoop completes
-      → Orchestrator notification
+      → Orchestrator writes full output to /shared/scoop-notifications/
+      → Orchestrator notification (path + preview + line count)
         → Cone's message queue
         → Cone processes completion
 ```
@@ -353,9 +354,10 @@ Cone executes feed_scoop tool
         → Tool calls
         → Scoop processes independently
     → Scoop completes
-      → Orchestrator notification
+      → Orchestrator writes full output to /shared/scoop-notifications/
+      → Orchestrator notification (path + preview + line count)
         → Cone's message queue
-        → Cone receives result
+        → Cone decides whether to read the file or act on the preview
 ```
 
 ### Lick (Event) Flow

@@ -37,6 +37,13 @@ const log = createLogger('orchestrator');
 
 /** Time in ms to wait before notifying cone that a scoop hasn't started work. */
 export const SCOOP_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
+const SCOOP_NOTIFICATION_DIR = '/shared/scoop-notifications';
+const SCOOP_NOTIFICATION_PREVIEW_CHARS = 1000;
+
+function countTextLines(text: string): number {
+  if (text.length === 0) return 0;
+  return text.replace(/\r\n/g, '\n').split('\n').length;
+}
 
 export interface OrchestratorCallbacks {
   /** Called when a scoop sends a response */
@@ -364,9 +371,11 @@ export class Orchestrator {
 
   /**
    * Scoop-completion side effect: forward the scoop's buffered response
-   * to the cone as a `scoop-notify` message so the cone's agent can
-   * react. Always clears the response buffer (bounded memory) regardless
-   * of whether a notify was actually sent.
+   * to the cone as a `scoop-notify` message that points at a VFS file
+   * containing the full output, so the cone can decide whether to read
+   * the file or act on the preview alone. Always clears the response
+   * buffer (bounded memory) regardless of whether a notify was actually
+   * sent.
    *
    * Suppressed entirely when `RegisteredScoop.notifyOnComplete === false`.
    * Ephemeral scoops spawned via the `agent` supplemental shell command
@@ -378,7 +387,7 @@ export class Orchestrator {
    * Extracted from the scoop's `onStatusChange` callback so tests can
    * exercise the gate without standing up a full ScoopContext.
    */
-  private maybeNotifyConeOnScoopComplete(jid: string): void {
+  private async maybeNotifyConeOnScoopComplete(jid: string): Promise<void> {
     const scoop = this.scoops.get(jid);
     if (!scoop || scoop.isCone) return;
 
@@ -390,25 +399,33 @@ export class Orchestrator {
     const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
     if (!cone) return;
 
-    const summary =
-      responseText.length > 20000
-        ? responseText.slice(0, 20000) + '\n... (truncated)'
-        : responseText;
-    const notifyMsg: ChannelMessage = {
-      id: `scoop-done-${jid}-${Date.now()}`,
-      chatJid: cone.jid,
-      senderId: scoop.folder,
-      senderName: scoop.assistantLabel,
-      content: `[@${scoop.assistantLabel} completed]:\n${summary}`,
-      timestamp: new Date().toISOString(),
-      fromAssistant: false,
-      channel: 'scoop-notify',
-    };
-    log.info('Routing scoop completion to cone', {
-      scoop: scoop.folder,
-      responseLength: responseText.length,
-    });
-    this.handleMessage(notifyMsg).catch((err) => {
+    try {
+      const notificationPath = await this.writeScoopCompletionArtifact(scoop, responseText);
+      const lineCount = countTextLines(responseText);
+      const preview = responseText.slice(0, SCOOP_NOTIFICATION_PREVIEW_CHARS);
+      const notifyMsg: ChannelMessage = {
+        id: `scoop-done-${jid}-${Date.now()}`,
+        chatJid: cone.jid,
+        senderId: scoop.folder,
+        senderName: scoop.assistantLabel,
+        content: this.formatScoopCompletionNotification(
+          scoop.assistantLabel,
+          notificationPath,
+          lineCount,
+          preview
+        ),
+        timestamp: new Date().toISOString(),
+        fromAssistant: false,
+        channel: 'scoop-notify',
+      };
+      log.info('Routing scoop completion to cone', {
+        scoop: scoop.folder,
+        responseLength: responseText.length,
+        lineCount,
+        notificationPath,
+      });
+      await this.handleMessage(notifyMsg);
+    } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error('Failed to route scoop completion to cone', {
         scoop: scoop.folder,
@@ -418,7 +435,37 @@ export class Orchestrator {
         cone.jid,
         `Scoop ${scoop.folder} completed but notification failed: ${msg}`
       );
-    });
+    }
+  }
+
+  private async writeScoopCompletionArtifact(
+    scoop: RegisteredScoop,
+    responseText: string
+  ): Promise<string> {
+    if (!this.sharedFs) throw new Error('Shared filesystem not initialized');
+
+    await this.sharedFs.mkdir(SCOOP_NOTIFICATION_DIR, { recursive: true });
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const path = `${SCOOP_NOTIFICATION_DIR}/${timestamp}-${scoop.folder}-${suffix}.md`;
+    await this.sharedFs.writeFile(path, responseText);
+    return path;
+  }
+
+  private formatScoopCompletionNotification(
+    assistantLabel: string,
+    notificationPath: string,
+    lineCount: number,
+    preview: string
+  ): string {
+    return [
+      `[@${assistantLabel} completed]`,
+      `VFS path: ${notificationPath}`,
+      `Total lines: ${lineCount}`,
+      `Preview (up to ${SCOOP_NOTIFICATION_PREVIEW_CHARS} chars):`,
+      preview,
+    ].join('\n');
   }
 
   private dispatchScoopEvent<K extends keyof ScoopObserver>(
@@ -774,9 +821,9 @@ export class Orchestrator {
         this.dispatchScoopEvent(jid, 'onStatusChange', status);
 
         // When a non-cone scoop finishes, route its response to the cone
-        // so the cone's agent can react (e.g., move files, report to user).
+        // with a VFS path + preview so the cone can decide how to follow up.
         if (status === 'ready' && !scoop.isCone) {
-          this.maybeNotifyConeOnScoopComplete(jid);
+          void this.maybeNotifyConeOnScoopComplete(jid);
         }
       },
       onToolStart: (toolName, toolInput) => {
