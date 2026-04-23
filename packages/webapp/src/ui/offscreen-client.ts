@@ -346,6 +346,35 @@ export class OffscreenClient {
         break;
       }
 
+      case 'tool_ui': {
+        let msgId = this.currentMessageId.get(msg.scoopJid);
+        if (!msgId) {
+          msgId = `scoop-${msg.scoopJid}-${uid()}`;
+          this.currentMessageId.set(msg.scoopJid, msgId);
+          this.emitToUI({ type: 'message_start', messageId: msgId });
+        }
+        this.emitToUI({
+          type: 'tool_ui',
+          messageId: msgId,
+          toolName: msg.toolName ?? '',
+          requestId: msg.requestId ?? '',
+          html: msg.html ?? '',
+        });
+        break;
+      }
+
+      case 'tool_ui_done': {
+        const msgId = this.currentMessageId.get(msg.scoopJid);
+        if (msgId) {
+          this.emitToUI({
+            type: 'tool_ui_done',
+            messageId: msgId,
+            requestId: msg.requestId ?? '',
+          });
+        }
+        break;
+      }
+
       case 'response_done': {
         const msgId = this.currentMessageId.get(msg.scoopJid);
         if (msgId) {
