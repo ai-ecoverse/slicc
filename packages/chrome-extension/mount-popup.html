@@ -8,17 +8,36 @@
         background: #1a1a2e;
         color: #e0e0e0;
         margin: 0;
-        padding: 16px 20px;
+        padding: 20px;
         user-select: none;
-        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+      }
+      .btn {
+        padding: 10px 24px;
+        border-radius: 8px;
+        border: none;
+        background: #3562ff;
+        color: #fff;
+        font-family: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .btn:hover {
+        background: #4a75ff;
       }
       .label {
         font-size: 13px;
+        text-align: center;
       }
     </style>
   </head>
   <body>
-    <div class="label" id="label">Selecting directory...</div>
+    <button class="btn" id="pickBtn" onclick="pickDirectory()">Select directory</button>
+    <div class="label" id="label" style="display: none">Opening picker...</div>
     <script>
       var PENDING_MOUNT_DB = 'slicc-pending-mount';
       var requestId = new URLSearchParams(location.search).get('requestId') || '';
@@ -52,9 +71,12 @@
         });
       }
 
-      async function run() {
+      async function pickDirectory() {
+        document.getElementById('pickBtn').style.display = 'none';
+        document.getElementById('label').style.display = '';
         try {
           var handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+          document.getElementById('label').textContent = 'Storing handle...';
           var idbKey = 'pendingMount:' + requestId;
           var db = await openDb();
           var tx = db.transaction('handles', 'readwrite');
@@ -96,8 +118,6 @@
         }
         window.close();
       }
-
-      run();
     </script>
   </body>
 </html>
