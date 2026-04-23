@@ -31,6 +31,8 @@ function openDb() {
 }
 
 async function pickDirectory() {
+  document.getElementById('pickBtn').style.display = 'none';
+  document.getElementById('label').style.display = '';
   try {
     const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
     const idbKey = 'pendingMount:' + requestId;
@@ -75,4 +77,4 @@ async function pickDirectory() {
   window.close();
 }
 
-pickDirectory();
+document.getElementById('pickBtn').addEventListener('click', pickDirectory);
