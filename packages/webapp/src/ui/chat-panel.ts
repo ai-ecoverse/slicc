@@ -5,7 +5,7 @@
  * Connects to an AgentHandle for sending messages and receiving events.
  */
 
-import type { AgentHandle, AgentEvent, ChatMessage, ToolCall } from './types.js';
+import type { AgentHandle, AgentEvent, ChatMessage, ToolCall, AuthErrorMeta } from './types.js';
 import { renderAssistantMessageContent, renderMessageContent } from './message-renderer.js';
 import { SessionStore } from './session-store.js';
 import { createLogger } from '../core/logger.js';
@@ -670,7 +670,7 @@ export class ChatPanel {
         this.handleTurnEnd(event.messageId);
         break;
       case 'error':
-        this.handleError(event.error);
+        this.handleError(event.error, event.authAction);
         break;
       case 'screenshot':
         break;
@@ -846,9 +846,28 @@ export class ChatPanel {
     this.persistSession();
   }
 
-  private handleError(error: string): void {
+  private handleError(error: string, authAction?: AuthErrorMeta): void {
     this.setStreamingState(false);
     this.currentStreamId = null;
+
+    // Auth errors are a distinct surface — always a fresh assistant
+    // message with an inline "Log in again" action attached. Piggy-
+    // backing on a streaming bubble would bury the actionable link in
+    // the middle of content and lose the per-message `authAction`
+    // metadata needed to re-render the button on session reload.
+    if (authAction) {
+      const msg: ChatMessage = {
+        id: uid(),
+        role: 'assistant',
+        content: `**Error:** ${error}`,
+        timestamp: Date.now(),
+        authAction,
+      };
+      this.messages.push(msg);
+      this.appendMessageEl(msg);
+      this.persistSession();
+      return;
+    }
 
     // If we have an active assistant message, append the error
     const lastMsg = this.messages[this.messages.length - 1];
@@ -1317,6 +1336,14 @@ export class ChatPanel {
       wrapper.appendChild(el);
     }
 
+    // Auth-failure action: inline "Log in again" link that restarts the
+    // provider's OAuth flow without forcing a trip to Settings. Rendered
+    // for messages persisted with an `authAction` so a page reload still
+    // surfaces the affordance rather than a dead-string error bubble.
+    if (msg.authAction) {
+      wrapper.appendChild(this.createAuthActionRow(msg.authAction));
+    }
+
     // Tool calls rendered outside the message bubble for compact display
     if (msg.toolCalls) {
       for (const tc of msg.toolCalls) {
@@ -1336,6 +1363,60 @@ export class ChatPanel {
     }
 
     return wrapper;
+  }
+
+  /**
+   * Build the inline auth-action row shown under an AuthError bubble.
+   * The visible "log in again" text is the link; clicking it invokes
+   * the same code path the Settings dialog uses when the user presses
+   * "Re-login", so success/failure feedback and token handling stay
+   * consistent across entry points.
+   */
+  private createAuthActionRow(meta: AuthErrorMeta): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'msg__auth-action';
+
+    const link = document.createElement('a');
+    link.href = '#';
+    link.className = 'msg__auth-action-link';
+    link.textContent = 'Log in again';
+    link.setAttribute('role', 'button');
+    link.setAttribute('data-provider-id', meta.providerId);
+    link.setAttribute('data-action', 'reauth');
+
+    const status = document.createElement('span');
+    status.className = 'msg__auth-action-status';
+
+    link.addEventListener('click', async (e) => {
+      e.preventDefault();
+      if (link.classList.contains('msg__auth-action-link--busy')) return;
+      link.classList.add('msg__auth-action-link--busy');
+      status.textContent = 'Opening login window…';
+      try {
+        // Lazy-load to keep the chat panel bundle free of the provider
+        // registry + OAuth launcher when no auth action has fired.
+        const { getRegisteredProviderConfig } = await import('../providers/index.js');
+        const { createOAuthLauncher } = await import('../providers/oauth-service.js');
+        const cfg = getRegisteredProviderConfig(meta.providerId);
+        if (!cfg?.onOAuthLogin) {
+          status.textContent = `Provider ${meta.providerId} does not support re-authentication here.`;
+          return;
+        }
+        const launcher = createOAuthLauncher();
+        await cfg.onOAuthLogin(launcher, () => {
+          status.textContent = 'Logged in.';
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        status.textContent = `Login failed: ${msg}`;
+      } finally {
+        link.classList.remove('msg__auth-action-link--busy');
+      }
+    });
+
+    row.appendChild(link);
+    row.appendChild(status);
+    return row;
   }
 
   /** Create a UXC feedback row with thumbs up, thumbs down, and copy chat. */

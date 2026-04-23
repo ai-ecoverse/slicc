@@ -19,6 +19,7 @@ import {
 import * as db from './db.js';
 import { createLogger } from '../core/logger.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
+import type { AuthErrorMeta } from '../providers/auth-error.js';
 import { TaskScheduler } from './scheduler.js';
 import { VirtualFS, FsWatcher } from '../fs/index.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
@@ -47,8 +48,10 @@ export interface OrchestratorCallbacks {
   onSendMessage: (targetJid: string, text: string) => void;
   /** Called when scoop status changes */
   onStatusChange: (scoopJid: string, status: ScoopTabState['status']) => void;
-  /** Called on error */
-  onError: (scoopJid: string, error: string) => void;
+  /** Called on error. `meta` is present when the underlying error is an
+   *  `AuthError` (e.g., OAuth session expired) so UI layers can offer
+   *  an inline re-authentication action. */
+  onError: (scoopJid: string, error: string, meta?: AuthErrorMeta) => void;
   /** Get the BrowserAPI used by browser automation commands */
   getBrowserAPI: () => BrowserAPI;
   /** Called when a tool starts executing */
@@ -747,7 +750,7 @@ export class Orchestrator {
         }
         this.callbacks.onResponseDone(jid);
       },
-      onError: (error) => {
+      onError: (error, meta) => {
         if (!this.scoops.has(jid)) return;
 
         const tab = this.tabs.get(jid);
@@ -756,7 +759,7 @@ export class Orchestrator {
           tab.error = error;
           this.tabs.set(jid, tab);
         }
-        this.callbacks.onError(jid, error);
+        this.callbacks.onError(jid, error, meta);
         this.callbacks.onStatusChange(jid, 'error');
         this.dispatchScoopEvent(jid, 'onError', error);
         this.dispatchScoopEvent(jid, 'onStatusChange', 'error');

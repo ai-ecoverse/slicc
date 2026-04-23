@@ -162,6 +162,14 @@ export interface ErrorMsg {
   type: 'error';
   scoopJid: string;
   error: string;
+  /**
+   * Present when the underlying failure is an OAuth/auth error. Forwarded
+   * by the offscreen agent so the side panel can render an inline
+   * "Log in again" affordance instead of a plain error bubble.
+   * Structural (not a class instance) so it survives the
+   * `chrome.runtime` message-channel boundary.
+   */
+  authAction?: { providerId: string; actionHint: 'reauth' };
 }
 
 export interface ScoopCreatedMsg {

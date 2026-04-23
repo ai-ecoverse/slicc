@@ -5,6 +5,9 @@
  * an interface contract here that both sides will converge on.
  */
 
+import type { AuthErrorMeta } from '../providers/auth-error.js';
+export type { AuthErrorMeta } from '../providers/auth-error.js';
+
 // ---------------------------------------------------------------------------
 // Agent interface — the UI's view of the agent core
 // ---------------------------------------------------------------------------
@@ -31,7 +34,13 @@ export type AgentEvent =
   | { type: 'tool_ui'; messageId: string; toolName: string; requestId: string; html: string }
   | { type: 'tool_ui_done'; messageId: string; requestId: string }
   | { type: 'turn_end'; messageId: string }
-  | { type: 'error'; error: string }
+  /**
+   * Agent/provider error. `authAction` is populated when the underlying
+   * failure is an `AuthError` (OAuth session expired / not logged in);
+   * the chat panel uses it to render an inline "Log in again" affordance
+   * instead of a dead-string error bubble.
+   */
+  | { type: 'error'; error: string; authAction?: AuthErrorMeta }
   | { type: 'screenshot'; base64: string; url?: string }
   | { type: 'terminal_output'; text: string };
 
@@ -54,6 +63,13 @@ export interface ChatMessage {
   channel?: string;
   /** True when the message is queued (submitted while the agent is still processing). */
   queued?: boolean;
+  /**
+   * When present, this message is an auth failure rendered with an
+   * inline action affordance (e.g., a "Log in again" link that calls
+   * the provider's OAuth flow). Persisted so re-opening a session
+   * continues to show the link rather than a stale markdown bubble.
+   */
+  authAction?: AuthErrorMeta;
 }
 
 export interface ToolCall {

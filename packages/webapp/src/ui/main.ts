@@ -1090,10 +1090,10 @@ async function main(): Promise<void> {
         }
       }
     },
-    onError: (scoopJid, error) => {
+    onError: (scoopJid, error, authAction) => {
       log.error('Scoop error', { scoopJid, error });
       if (selectedScoop?.jid === scoopJid) {
-        emitToUI({ type: 'error', error });
+        emitToUI({ type: 'error', error, authAction });
       }
     },
     getBrowserAPI: () => browser,

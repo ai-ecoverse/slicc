@@ -156,11 +156,12 @@ export class OffscreenBridge {
         bridge.emitScoopList();
       },
 
-      onError: (scoopJid, error) => {
+      onError: (scoopJid, error, authAction) => {
         bridge.emit({
           type: 'error',
           scoopJid,
           error,
+          authAction,
         } satisfies ErrorMsg);
       },
 

@@ -13,6 +13,7 @@
 import type { RegisteredScoop } from './types.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { RestrictedFS } from '../fs/restricted-fs.js';
+import { type AuthErrorMeta, isAuthError, authErrorMeta } from '../providers/auth-error.js';
 import { WasmShell } from '../shell/index.js';
 import { Agent, adaptTools, createLogger } from '../core/index.js';
 import { createCompactContext } from '../core/context-compaction.js';
@@ -57,7 +58,7 @@ export function isImageProcessingError(msg: string): boolean {
 export interface ScoopContextCallbacks {
   onResponse: (text: string, isPartial: boolean) => void;
   onResponseDone: () => void;
-  onError: (error: string) => void;
+  onError: (error: string, meta?: AuthErrorMeta) => void;
   onStatusChange: (status: 'initializing' | 'ready' | 'processing' | 'error') => void;
   /** Called when a tool starts executing */
   onToolStart?: (toolName: string, toolInput: unknown) => void;
@@ -326,7 +327,11 @@ export class ScoopContext {
       if (!this.disposed) {
         const message = err instanceof Error ? err.message : String(err);
         log.error('Agent error', { folder: this.scoop.folder, error: message });
-        this.callbacks.onError(message);
+        // Preserve AuthError metadata so the UI can render a
+        // direct "Log in again" affordance instead of a dead-string
+        // error bubble — see providers/auth-error.ts.
+        const meta = isAuthError(err) ? authErrorMeta(err) : undefined;
+        this.callbacks.onError(message, meta);
       }
     } finally {
       this.isProcessing = false;

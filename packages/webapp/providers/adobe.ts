@@ -19,6 +19,7 @@
  */
 
 import type { ProviderConfig, OAuthLauncher } from '../src/providers/types.js';
+import { AuthError } from '../src/providers/auth-error.js';
 import {
   registerApiProvider,
   streamAnthropic,
@@ -399,7 +400,9 @@ let renewalInProgress: Promise<string | null> | null = null;
 
 async function getValidAccessToken(): Promise<string> {
   const account = getAdobeAccount();
-  if (!account?.accessToken) throw new Error('Not logged in to Adobe — please log in first');
+  if (!account?.accessToken) {
+    throw new AuthError('adobe', 'Not logged in to Adobe — please log in first');
+  }
 
   // Token still valid (with 60s buffer)
   const expiresIn = (account.tokenExpiresAt ?? 0) - Date.now();
@@ -422,7 +425,7 @@ async function getValidAccessToken(): Promise<string> {
   const refreshedExpiresIn = (refreshedAccount?.tokenExpiresAt ?? 0) - Date.now();
   if (refreshedExpiresIn > 0 && refreshedAccount?.accessToken) return refreshedAccount.accessToken;
 
-  throw new Error('Adobe session expired — please log in again');
+  throw new AuthError('adobe', 'Adobe session expired — please log in again');
 }
 
 function isTokenExpired(): boolean {

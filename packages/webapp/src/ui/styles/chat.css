@@ -644,6 +644,33 @@
   height: 16px;
 }
 
+/* Inline "Log in again" action row shown under an AuthError bubble. */
+.msg__auth-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0 0 0;
+  font-size: 13px;
+  color: var(--s2-content-secondary);
+}
+.msg__auth-action-link {
+  color: var(--s2-accent, #1e66f5);
+  text-decoration: underline;
+  cursor: pointer;
+  font-weight: 500;
+}
+.msg__auth-action-link:hover {
+  text-decoration: none;
+}
+.msg__auth-action-link--busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+.msg__auth-action-status {
+  font-size: 12px;
+  color: var(--s2-content-secondary);
+}
+
 /* UXC: Message link styles for light mode */
 .theme-light .msg__content a {
   color: #1e66f5;

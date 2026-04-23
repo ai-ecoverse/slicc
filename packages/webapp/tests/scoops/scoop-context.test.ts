@@ -404,10 +404,29 @@ describe('ScoopContext prompt queueing', () => {
     await ctx.prompt('first');
 
     expect(prompts).toEqual(['first']);
-    expect(callbacks.onError).toHaveBeenCalledWith('prompt failed');
+    // Second arg is the optional AuthError meta — undefined for a plain Error.
+    expect(callbacks.onError).toHaveBeenCalledWith('prompt failed', undefined);
     // Should return to ready status after error
     const statusCalls = (callbacks.onStatusChange as any).mock.calls;
     expect(statusCalls[statusCalls.length - 1][0]).toBe('ready');
+  });
+
+  it('forwards AuthError metadata so the UI can render a re-auth affordance', async () => {
+    // The UI renders an inline "Log in again" link for auth failures.
+    // The link depends on `providerId` + `actionHint` arriving at
+    // `onError`; without this plumbing the cone would show a dead-
+    // string bubble and the user would have to open Settings.
+    const { AuthError } = await import('../../src/providers/auth-error.js');
+    injectMockAgent(ctx, async () => {
+      throw new AuthError('adobe', 'Adobe session expired — please log in again');
+    });
+
+    await ctx.prompt('hi');
+
+    expect(callbacks.onError).toHaveBeenCalledWith('Adobe session expired — please log in again', {
+      providerId: 'adobe',
+      actionHint: 'reauth',
+    });
   });
 });
 

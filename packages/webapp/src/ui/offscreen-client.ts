@@ -414,7 +414,7 @@ export class OffscreenClient {
 
   private handleError(msg: ErrorMsg): void {
     if (msg.scoopJid === this.selectedScoopJid) {
-      this.emitToUI({ type: 'error', error: msg.error });
+      this.emitToUI({ type: 'error', error: msg.error, authAction: msg.authAction });
     }
   }
 
