@@ -85,6 +85,12 @@ function parseArgs(argv: string[]): LoadTestConfig {
         if (key === 'BEDROCK_MODEL') config.bedrockModelId = val;
       }
       i++;
+    } else if (arg === '--extension' && next) {
+      config.extensionPath = next;
+      i++;
+    } else if (arg === '--extension-url' && next) {
+      config.extensionUrl = next;
+      i++;
     } else if (arg === '--no-wait') {
       config.noWait = true;
     } else if (arg === '--help' || arg === '-h') {
@@ -93,23 +99,8 @@ function parseArgs(argv: string[]): LoadTestConfig {
     }
   }
 
-  // Fall back to env var or default file for sensitive values
-  if (!config.adobeToken) {
-    const tokenFile = process.env['ADOBE_TOKEN_FILE'] ?? '/tmp/adobe-ims-token.txt';
-    try {
-      config.adobeToken = readFileSync(resolve(tokenFile), 'utf-8').trim();
-    } catch {
-      // No token file found — continue without Adobe provider
-    }
-  }
-
-  // Fall back to env vars for Bedrock, then try .env in repo root.
-  // Skip if Adobe token is already set — Adobe takes priority.
-  if (!config.adobeToken && !config.bedrockApiKey && process.env['BEDROCK_API_KEY']) {
-    config.bedrockApiKey = process.env['BEDROCK_API_KEY'];
-    config.bedrockBaseUrl = process.env['BEDROCK_BASE_URL'];
-    config.bedrockModelId = process.env['BEDROCK_MODEL'];
-  }
+  // Load credentials from .env in repo root (single source of truth).
+  // CLI flags override .env values. Adobe takes priority over Bedrock.
   if (!config.adobeToken && !config.bedrockApiKey) {
     try {
       const envContent = readFileSync(resolve(REPO_ROOT, '.env'), 'utf-8');
@@ -117,6 +108,7 @@ function parseArgs(argv: string[]): LoadTestConfig {
         const match = line.match(/^(\w+)=(.+)$/);
         if (!match) continue;
         const [, key, val] = match;
+        if (key === 'ADOBE_TOKEN') config.adobeToken = val;
         if (key === 'BEDROCK_API_KEY') config.bedrockApiKey = val;
         if (key === 'BEDROCK_BASE_URL') config.bedrockBaseUrl = val;
         if (key === 'BEDROCK_MODEL') config.bedrockModelId = val;
@@ -124,6 +116,13 @@ function parseArgs(argv: string[]): LoadTestConfig {
     } catch {
       // No .env file — continue
     }
+  }
+
+  // Adobe takes priority over Bedrock when both are in .env
+  if (config.adobeToken && config.bedrockApiKey) {
+    config.bedrockApiKey = undefined;
+    config.bedrockBaseUrl = undefined;
+    config.bedrockModelId = undefined;
   }
 
   if (!config.prompt && !config.promptsFile) {
@@ -289,6 +288,10 @@ async function main(): Promise<void> {
   console.log('Cleaning previous state...');
   cleanSlate();
   console.log(`Timeout: ${config.timeoutSeconds}s per instance`);
+  if (config.extensionPath) {
+    console.log(`Mode: Extension (${config.extensionPath})`);
+    if (config.extensionUrl) console.log(`URL: ${config.extensionUrl}`);
+  }
   if (config.bedrockApiKey) {
     console.log(`Provider: Bedrock CAMP (model ${config.bedrockModelId ?? 'default'})`);
   } else if (config.adobeToken) {
@@ -310,6 +313,8 @@ async function main(): Promise<void> {
         bedrockApiKey: config.bedrockApiKey,
         bedrockBaseUrl: config.bedrockBaseUrl,
         bedrockModelId: config.bedrockModelId,
+        extensionPath: config.extensionPath,
+        extensionUrl: config.extensionUrl,
       })
     );
   }
@@ -379,8 +384,11 @@ async function main(): Promise<void> {
     });
   }
 
-  // Phase 2: Execute scenario on all ready instances simultaneously
-  console.log(`\nPhase 2: Executing scenario on ${readyCount} instances...\n`);
+  // Phase 2: Execute scenario with random stagger over 30s
+  const rampMs = 30_000;
+  console.log(
+    `\nPhase 2: Executing scenario on ${readyCount} instances (${rampMs / 1000}s random ramp)...\n`
+  );
   const results = await Promise.all(
     controllers.map((c, i) => {
       if (prepareResults[i]?.status === 'rejected') {
@@ -395,7 +403,11 @@ async function main(): Promise<void> {
           error: `Boot failed: ${msg}`,
         }));
       }
-      return c.execute();
+      const delay = Math.floor(Math.random() * rampMs);
+      return new Promise<void>((r) => setTimeout(r, delay)).then(() => {
+        console.log(`Starting instance ${i + 1} (delay ${(delay / 1000).toFixed(1)}s)`);
+        return c.execute();
+      });
     })
   );
 

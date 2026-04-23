@@ -36,12 +36,19 @@ export interface InstanceControllerOptions {
   bedrockApiKey?: string;
   bedrockBaseUrl?: string;
   bedrockModelId?: string;
+  /** Extension mode: path to unpacked extension. */
+  extensionPath?: string;
+  /** Extension mode: URL to navigate to before opening side panel. */
+  extensionUrl?: string;
 }
 
 export class InstanceController {
   private opts: InstanceControllerOptions;
   private serverProcess: ChildProcess | null = null;
   private chromeCdpPort: number | null = null;
+  private extensionId: string | null = null;
+  /** Cached sandbox target ID for fast lick dispatch. */
+  private sandboxTargetId: string | null = null;
   private cdpWs: WebSocket | null = null;
   private cdpIdCounter = 1;
   private cdpCallbacks = new Map<
@@ -63,14 +70,31 @@ export class InstanceController {
     console.log(`[inst-${this.opts.index} :${this.opts.port}] ${msg}`);
   }
 
-  /** Phase 1: Boot server, connect CDP, inject provider, wait for idle. */
+  /** Phase 1: Boot, connect CDP, inject provider, run prepare steps. */
   async prepare(): Promise<void> {
-    await this.boot();
-    if (this.opts.adobeToken || this.opts.bedrockApiKey) {
-      await this.connectAndInjectProvider();
+    if (this.opts.extensionPath) {
+      await this.bootExtension();
     } else {
-      await this.connectAndWaitIdle();
+      await this.boot();
+      if (this.opts.adobeToken || this.opts.bedrockApiKey) {
+        await this.connectAndInjectProvider();
+      } else {
+        await this.connectAndWaitIdle();
+      }
     }
+
+    // Run prepare steps (e.g., upskill, shortcut-migrate)
+    const prepSteps = this.opts.scenario.prepareSteps;
+    if (prepSteps?.length) {
+      this.log(`Running ${prepSteps.length} prepare step(s)...`);
+      this.promptSentAt = Date.now(); // needed for remainingMs()
+      for (let i = 0; i < prepSteps.length; i++) {
+        const step = prepSteps[i]!;
+        this.log(`Prepare ${i + 1}/${prepSteps.length}: ${this.describeStep(step)}`);
+        await this.runStep(step);
+      }
+    }
+
     this.log('READY');
   }
 
@@ -118,6 +142,511 @@ export class InstanceController {
     // The server's CDP proxy pre-connects to Chrome asynchronously.
     // Connecting too early hits a race where chromeWs is null.
     await this.sleep(3000);
+  }
+
+  /**
+   * Extension mode boot: launch Chrome with unpacked extension,
+   * navigate to target URL, open side panel, inject provider,
+   * connect CDP to the side panel target.
+   */
+  private async bootExtension(): Promise<void> {
+    const extPath = this.opts.extensionPath!;
+    const targetUrl = this.opts.extensionUrl ?? 'about:blank';
+    const profileDir = resolve(tmpdir(), `slicc-ext-test-${this.opts.port}`);
+
+    // Clean profile
+    try {
+      execSync(`rm -rf ${JSON.stringify(profileDir)}`, { stdio: 'ignore' });
+      this.log(`Cleaned extension profile: ${profileDir}`);
+    } catch {
+      /* may not exist */
+    }
+
+    // Find Chrome and detect variant
+    const { path: chromePath, branded } = this.findChromeWithVariant();
+    this.log(`Using Chrome: ${chromePath} (${branded ? 'branded' : 'chromium'})`);
+
+    if (branded) {
+      // Branded Chrome (Canary/Stable 137+): two-step pipe dance
+      await this.launchBrandedWithExtension(chromePath, extPath, profileDir, targetUrl);
+    } else {
+      // Chromium: simple --load-extension
+      this.serverProcess = spawn(
+        chromePath,
+        [
+          `--remote-debugging-port=${this.opts.port}`,
+          `--user-data-dir=${profileDir}`,
+          `--load-extension=${resolve(extPath)}`,
+          `--disable-extensions-except=${resolve(extPath)}`,
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--disable-crash-reporter',
+          '--window-size=1920,1080',
+          targetUrl,
+        ],
+        {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          detached: false,
+        }
+      );
+    }
+    this.chromeCdpPort = this.opts.port;
+
+    const verbose = !!process.env['LOAD_TEST_VERBOSE'];
+    const tag = `[inst-${this.opts.index}]`;
+    if (verbose) {
+      this.serverProcess.stdout?.on('data', (chunk: Buffer) => {
+        for (const l of chunk.toString().split('\n').filter(Boolean)) console.log(`${tag} ${l}`);
+      });
+      this.serverProcess.stderr?.on('data', (chunk: Buffer) => {
+        for (const l of chunk.toString().split('\n').filter(Boolean)) console.error(`${tag} ${l}`);
+      });
+    }
+
+    // Wait for CDP to be ready
+    this.log('Waiting for Chrome CDP...');
+    await this.waitForChromeCDP(this.opts.port);
+    this.log('Chrome CDP ready.');
+
+    // Wait for page to load
+    await this.sleep(3000);
+
+    // Open the side panel using cdp-ext-pilot approach
+    // Discover extension ID from targets (skip if already set by pipe dance)
+    if (!this.extensionId) {
+      this.extensionId = await this.discoverExtensionId();
+    }
+    this.log(`Extension ID: ${this.extensionId}`);
+
+    this.log('Opening side panel...');
+    const sidePanelTargetId = await this.openSidePanel();
+    this.log(`Side panel opened: ${sidePanelTargetId}`);
+
+    // Connect CDP to the side panel target
+    const sidePanelWsUrl = await this.getTargetWsUrl(sidePanelTargetId);
+    await this.connectCDPToUrl(sidePanelWsUrl);
+    this.log('CDP connected to side panel.');
+
+    // Inject provider if configured
+    if (this.opts.adobeToken || this.opts.bedrockApiKey) {
+      const { accountJson, selectedModel, providerName } = this.buildProviderAccount();
+      this.log(`Injecting ${providerName} provider...`);
+      await this.cdpEval(`
+        (function() {
+          localStorage.setItem('slicc_accounts', ${JSON.stringify(accountJson)});
+          localStorage.setItem('selected-model', ${JSON.stringify(selectedModel)});
+          return 'injected';
+        })()
+      `);
+
+      // Reload the side panel to pick up provider
+      this.log('Reloading side panel...');
+      await this.cdpEval('window.location.reload()');
+      if (this.cdpWs) {
+        try {
+          this.cdpWs.close();
+        } catch {
+          /* ignore */
+        }
+        this.cdpWs = null;
+      }
+      this.cdpCallbacks.clear();
+      await this.sleep(3000);
+
+      // Reconnect to the side panel (target ID may change after reload)
+      const newSidePanelId = await this.findSidePanelTarget();
+      const newWsUrl = await this.getTargetWsUrl(newSidePanelId);
+      await this.connectCDPToUrl(newWsUrl);
+      this.log('Reconnected to side panel after provider injection.');
+    }
+
+    // Wait for the UI to be ready (dialog dismissed or chat visible)
+    this.log('Waiting for side panel UI ready...');
+    await this.waitForAgentIdle(60_000);
+    this.log('Side panel ready.');
+  }
+
+  /** Find Chrome and detect if it's a branded build (needs pipe dance). */
+  private findChromeWithVariant(): { path: string; branded: boolean } {
+    const candidates: Array<{ path: string; branded: boolean }> = [
+      {
+        path: '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+        branded: true,
+      },
+      { path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', branded: true },
+      { path: '/Applications/Chromium.app/Contents/MacOS/Chromium', branded: false },
+    ];
+    for (const c of candidates) {
+      try {
+        execSync(`test -x ${JSON.stringify(c.path)}`, { stdio: 'ignore' });
+        return c;
+      } catch {
+        /* try next */
+      }
+    }
+    throw new Error('No Chrome or Chromium found');
+  }
+
+  /**
+   * Launch branded Chrome with extension using the pipe dance:
+   * 1. Start with --remote-debugging-pipe, load extension via Extensions.loadUnpacked
+   * 2. Kill, then restart with --remote-debugging-port
+   */
+  private async launchBrandedWithExtension(
+    chromePath: string,
+    extPath: string,
+    profileDir: string,
+    targetUrl: string
+  ): Promise<void> {
+    this.log('Branded Chrome: loading extension via pipe...');
+
+    // Step 1: pipe launch to load extension
+    const child1 = spawn(
+      chromePath,
+      [
+        '--remote-debugging-pipe',
+        '--enable-unsafe-extension-debugging',
+        `--user-data-dir=${profileDir}`,
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--window-size=1920,1080',
+      ],
+      {
+        stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'],
+        detached: false,
+      }
+    );
+
+    const pipeIn = child1.stdio[3] as NodeJS.WritableStream;
+    const pipeOut = child1.stdio[4] as NodeJS.ReadableStream;
+
+    // Send Extensions.loadUnpacked via pipe
+    await new Promise<void>((resolveLoad, rejectLoad) => {
+      child1.on('error', (err) => rejectLoad(new Error(`Chrome failed: ${err.message}`)));
+
+      let buf = Buffer.alloc(0);
+      pipeOut.on('data', (chunk: Buffer) => {
+        buf = Buffer.concat([buf, chunk]);
+        let idx: number;
+        while ((idx = buf.indexOf(0)) !== -1) {
+          const msg = buf.subarray(0, idx).toString();
+          buf = buf.subarray(idx + 1);
+          const parsed = JSON.parse(msg) as {
+            id?: number;
+            result?: { id?: string };
+            error?: { message?: string };
+          };
+          if (parsed.id === 1) {
+            if (parsed.result?.id) {
+              this.extensionId = parsed.result.id;
+              this.log(`Extension loaded: ${parsed.result.id}`);
+              resolveLoad();
+            } else {
+              rejectLoad(new Error(parsed.error?.message ?? 'Failed to load extension'));
+            }
+          }
+        }
+      });
+
+      setTimeout(() => {
+        const cmd =
+          JSON.stringify({
+            id: 1,
+            method: 'Extensions.loadUnpacked',
+            params: { path: resolve(extPath) },
+          }) + '\0';
+        pipeIn.write(cmd);
+      }, 3000);
+
+      setTimeout(() => rejectLoad(new Error('Timed out loading extension via pipe')), 20_000);
+    });
+
+    // Close pipe session and kill first Chrome
+    pipeIn.end();
+    (pipeOut as NodeJS.ReadableStream).destroy();
+    child1.kill();
+    await this.sleep(2000);
+
+    // Step 2: restart with CDP port
+    this.log('Restarting Chrome with CDP port...');
+    this.serverProcess = spawn(
+      chromePath,
+      [
+        `--remote-debugging-port=${this.opts.port}`,
+        `--user-data-dir=${profileDir}`,
+        '--enable-unsafe-extension-debugging',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-crash-reporter',
+        '--window-size=1920,1080',
+        targetUrl,
+      ],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: false,
+      }
+    );
+  }
+
+  /** Wait for Chrome's CDP endpoint to respond. */
+  private async waitForChromeCDP(port: number, maxMs = 30_000): Promise<void> {
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+      this.throwIfAborted();
+      try {
+        const resp = await fetch(`http://127.0.0.1:${port}/json/version`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        if (resp.ok) return;
+      } catch {
+        /* not ready */
+      }
+      await this.sleep(500);
+    }
+    throw new Error(`Chrome CDP not ready after ${maxMs}ms`);
+  }
+
+  /** Discover the extension ID from browser targets. */
+  private async discoverExtensionId(): Promise<string> {
+    const port = this.chromeCdpPort!;
+    const versionResp = await fetch(`http://127.0.0.1:${port}/json/version`);
+    const { webSocketDebuggerUrl } = (await versionResp.json()) as {
+      webSocketDebuggerUrl: string;
+    };
+    const ws = new WebSocket(webSocketDebuggerUrl);
+    await new Promise<void>((r, j) => {
+      ws.on('open', () => r());
+      ws.on('error', j);
+      setTimeout(() => j(new Error('WS timeout')), 5000);
+    });
+
+    return new Promise<string>((resolve, reject) => {
+      ws.send(JSON.stringify({ id: 1, method: 'Target.getTargets' }));
+      const timeout = setTimeout(() => {
+        ws.close();
+        reject(new Error('getTargets timeout'));
+      }, 5000);
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(String(raw)) as {
+          id?: number;
+          result?: {
+            targetInfos?: Array<{ url: string }>;
+          };
+        };
+        if (msg.id === 1) {
+          clearTimeout(timeout);
+          // Find the slicc extension by looking for its service-worker.js
+          for (const t of msg.result?.targetInfos ?? []) {
+            const match = t.url.match(/chrome-extension:\/\/([a-z]{32})\/service-worker\.js/);
+            if (match) {
+              ws.close();
+              resolve(match[1]!);
+              return;
+            }
+          }
+          ws.close();
+          reject(new Error('No extension targets found'));
+        }
+      });
+    });
+  }
+
+  /**
+   * Open the SLICC side panel using the cdp-ext-pilot approach:
+   * 1. Find the extension's content script context on the page
+   * 2. Send chrome.runtime.sendMessage({type: 'open_side_panel'})
+   * 3. Poll Target.getTargets for the side panel target
+   */
+  private async openSidePanel(): Promise<string> {
+    const port = this.chromeCdpPort!;
+
+    // Find the page target
+    const targets = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()) as Array<{
+      type: string;
+      url: string;
+      webSocketDebuggerUrl?: string;
+    }>;
+
+    const page = targets.find(
+      (t) =>
+        t.type === 'page' &&
+        !t.url.startsWith('chrome-extension://') &&
+        !t.url.startsWith('chrome://')
+    );
+    if (!page?.webSocketDebuggerUrl) {
+      throw new Error('No page target found for side panel');
+    }
+
+    // Connect to page, find extension content script context
+    const pageWs = new WebSocket(page.webSocketDebuggerUrl);
+    await new Promise<void>((resolve, reject) => {
+      pageWs.on('open', () => resolve());
+      pageWs.on('error', reject);
+      setTimeout(() => reject(new Error('Page WS timeout')), 5000);
+    });
+
+    let pageId = 1;
+    const pageSend = (method: string, params: Record<string, unknown> = {}) =>
+      new Promise<Record<string, unknown>>((resolve, reject) => {
+        const id = pageId++;
+        const timeout = setTimeout(() => reject(new Error(`${method} timed out`)), 10_000);
+        const handler = (raw: WebSocket.RawData) => {
+          const msg = JSON.parse(String(raw)) as Record<string, unknown>;
+          if (msg.id === id) {
+            pageWs.off('message', handler);
+            clearTimeout(timeout);
+            if (msg.error)
+              reject(new Error(String((msg.error as Record<string, unknown>).message)));
+            else resolve(msg.result as Record<string, unknown>);
+          }
+        };
+        pageWs.on('message', handler);
+        pageWs.send(JSON.stringify({ id, method, params }));
+      });
+
+    // Find extension content script context
+    const extCtxId = await new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pageWs.off('message', handler);
+        reject(new Error('No extension content script context found'));
+      }, 10_000);
+      const handler = (raw: WebSocket.RawData) => {
+        const msg = JSON.parse(String(raw)) as Record<string, unknown>;
+        if (msg.method === 'Runtime.executionContextCreated') {
+          const params = msg.params as { context: { id: number; origin: string } };
+          if (this.extensionId && params.context.origin.includes(this.extensionId)) {
+            pageWs.off('message', handler);
+            clearTimeout(timer);
+            resolve(params.context.id);
+          }
+        }
+      };
+      pageWs.on('message', handler);
+      pageSend('Runtime.enable').catch(reject);
+    });
+
+    // Send open_side_panel message with userGesture
+    await pageSend('Runtime.evaluate', {
+      contextId: extCtxId,
+      expression: 'chrome.runtime.sendMessage({type: "open_side_panel"})',
+      awaitPromise: true,
+      returnByValue: true,
+      userGesture: true,
+    });
+    pageWs.close();
+
+    // Poll for side panel target
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      const id = await this.findSidePanelTarget().catch(() => null);
+      if (id) return id;
+      await this.sleep(500);
+    }
+    throw new Error('Side panel did not appear');
+  }
+
+  /** Find the side panel target ID via browser-level CDP. */
+  private async findSidePanelTarget(): Promise<string> {
+    const port = this.chromeCdpPort!;
+    const versionResp = await fetch(`http://127.0.0.1:${port}/json/version`);
+    const { webSocketDebuggerUrl } = (await versionResp.json()) as {
+      webSocketDebuggerUrl: string;
+    };
+
+    const ws = new WebSocket(webSocketDebuggerUrl);
+    await new Promise<void>((r, j) => {
+      ws.on('open', () => r());
+      ws.on('error', j);
+      setTimeout(() => j(new Error('Browser WS timeout')), 5000);
+    });
+
+    return new Promise<string>((resolve, reject) => {
+      ws.send(JSON.stringify({ id: 1, method: 'Target.getTargets' }));
+      const timeout = setTimeout(() => {
+        ws.close();
+        reject(new Error('getTargets timeout'));
+      }, 5000);
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(String(raw)) as {
+          id?: number;
+          result?: { targetInfos?: Array<{ targetId: string; url: string; type: string }> };
+        };
+        if (msg.id === 1) {
+          clearTimeout(timeout);
+          const panel = msg.result?.targetInfos?.find(
+            (t) =>
+              this.extensionId && t.url.includes(this.extensionId) && t.url.includes('index.html')
+          );
+          ws.close();
+          if (panel) resolve(panel.targetId);
+          else reject(new Error('Side panel target not found'));
+        }
+      });
+    });
+  }
+
+  /** Get a target's WebSocket debugger URL by ID. */
+  private async getTargetWsUrl(targetId: string): Promise<string> {
+    const port = this.chromeCdpPort!;
+    const versionResp = await fetch(`http://127.0.0.1:${port}/json/version`);
+    const { webSocketDebuggerUrl: browserWsUrl } = (await versionResp.json()) as {
+      webSocketDebuggerUrl: string;
+    };
+
+    const ws = new WebSocket(browserWsUrl);
+    await new Promise<void>((r, j) => {
+      ws.on('open', () => r());
+      ws.on('error', j);
+      setTimeout(() => j(new Error('Browser WS timeout')), 5000);
+    });
+
+    return new Promise<string>((resolve, reject) => {
+      ws.send(
+        JSON.stringify({
+          id: 1,
+          method: 'Target.attachToTarget',
+          params: { targetId, flatten: true },
+        })
+      );
+      // For flattened sessions, the WS URL is the browser URL itself
+      // but we need to use the page-level /devtools/page/ URL
+      const timeout = setTimeout(() => {
+        ws.close();
+        reject(new Error('attachToTarget timeout'));
+      }, 5000);
+      ws.on('message', (raw) => {
+        const msg = JSON.parse(String(raw)) as Record<string, unknown>;
+        if (msg.id === 1) {
+          clearTimeout(timeout);
+          ws.close();
+          // Construct the page-level WS URL
+          resolve(`ws://127.0.0.1:${port}/devtools/page/${targetId}`);
+        }
+      });
+    });
+  }
+
+  /** Connect CDP to a specific WebSocket URL (for side panel target). */
+  private connectCDPToUrl(wsUrl: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.cdpWs = new WebSocket(wsUrl);
+
+      const timeout = setTimeout(() => reject(new Error('CDP connection timeout')), 10_000);
+
+      this.cdpWs.on('open', () => {
+        clearTimeout(timeout);
+        this.cdpSend('Runtime.enable', {}).then(() => resolve(), reject);
+      });
+
+      this.cdpWs.on('message', (raw) => {
+        this.handleCdpMessage(String(raw));
+      });
+
+      this.cdpWs.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+    });
   }
 
   private async connectAndWaitIdle(): Promise<void> {
@@ -222,36 +751,49 @@ export class InstanceController {
 
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i]!;
-      const remaining = this.remainingMs();
       this.log(`Step ${i + 1}/${steps.length}: ${this.describeStep(step)}`);
-
-      switch (step.type) {
-        case 'prompt':
-          await this.executePromptStep(step.text, remaining);
-          break;
-        case 'click-sprinkle-button':
-          await this.clickSprinkleButton(step.label, remaining);
-          break;
-        case 'wait-idle':
-          await this.waitForAgentIdle(remaining);
-          break;
-        case 'wait-sprinkle-text':
-          await this.waitForSprinkleText(step.text, remaining);
-          break;
-        case 'browse':
-          try {
-            await this.browseAndRun(step.url, step.script, step.waitMs);
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            this.log(`Browse step failed (non-fatal): ${msg}`);
-          }
-          break;
-      }
+      await this.runStep(step);
     }
 
     this.completedAt = Date.now();
     const secs = ((this.completedAt - this.promptSentAt) / 1000).toFixed(1);
     this.log(`Scenario completed in ${secs}s.`);
+  }
+
+  /** Execute a single scenario step. */
+  private async runStep(step: ScenarioStep): Promise<void> {
+    const remaining = this.remainingMs();
+    switch (step.type) {
+      case 'prompt':
+        await this.executePromptStep(step.text, remaining);
+        break;
+      case 'click-sprinkle-button':
+        await this.clickSprinkleButton(step.label, remaining);
+        break;
+      case 'wait-idle':
+        await this.waitForAgentIdle(remaining);
+        break;
+      case 'wait-sprinkle-text':
+        await this.waitForSprinkleText(step.text, remaining);
+        break;
+      case 'browse':
+        try {
+          await this.browseAndRun(step.url, step.script, step.waitMs);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.log(`Browse step failed (non-fatal): ${msg}`);
+        }
+        break;
+      case 'click-button':
+        await this.clickButton(step.label, remaining);
+        break;
+      case 'wait-text':
+        await this.waitForText(step.text, remaining);
+        break;
+      case 'send-lick':
+        await this.sendLick(step.action, remaining);
+        break;
+    }
   }
 
   /** Convert a simple prompt scenario to steps if no steps are defined. */
@@ -274,6 +816,12 @@ export class InstanceController {
         return `wait for "${step.text}"`;
       case 'browse':
         return `browse ${step.url} + run script`;
+      case 'click-button':
+        return `click button "${step.label}"`;
+      case 'wait-text':
+        return `wait for text "${step.text}"`;
+      case 'send-lick':
+        return `send lick "${step.action}"`;
     }
   }
 
@@ -511,6 +1059,332 @@ export class InstanceController {
       signal: AbortSignal.timeout(3000),
     }).catch(() => {});
     this.log('Tab closed.');
+  }
+
+  /**
+   * Click a button by label text in the current page (side panel or main).
+   * Searches all buttons including inside iframes.
+   */
+  private async clickButton(label: string, maxMs: number): Promise<void> {
+    const deadline = Date.now() + maxMs;
+    const escaped = label.replace(/'/g, "\\'");
+    let pollCount = 0;
+
+    while (Date.now() < deadline) {
+      this.throwIfAborted();
+
+      const result = (await this.cdpEval(`
+        (function() {
+          // Search buttons in main document
+          var buttons = document.querySelectorAll('button');
+          for (var i = 0; i < buttons.length; i++) {
+            if (buttons[i].textContent.trim().indexOf('${escaped}') !== -1) {
+              buttons[i].click();
+              return { clicked: true, text: buttons[i].textContent.trim() };
+            }
+          }
+          // Search inside iframes (sprinkle sandboxes)
+          var iframes = document.querySelectorAll('iframe');
+          for (var j = 0; j < iframes.length; j++) {
+            var doc;
+            try { doc = iframes[j].contentDocument; } catch(e) { continue; }
+            if (!doc) continue;
+            var ibtns = doc.querySelectorAll('button');
+            for (var k = 0; k < ibtns.length; k++) {
+              if (ibtns[k].textContent.trim().indexOf('${escaped}') !== -1) {
+                ibtns[k].click();
+                return { clicked: true, text: ibtns[k].textContent.trim(), iframe: true };
+              }
+            }
+          }
+          return { clicked: false };
+        })()
+      `)) as { clicked: boolean; text?: string; iframe?: boolean } | null;
+
+      if (result?.clicked) {
+        this.log(`Button clicked: "${result.text}"${result.iframe ? ' (in iframe)' : ''}`);
+        return;
+      }
+
+      pollCount++;
+      if (pollCount % 5 === 1) {
+        this.log(`Waiting for button "${label}"...`);
+      }
+      await this.sleep(1000);
+    }
+
+    throw new Error(`Timeout: button "${label}" not found after ${maxMs}ms`);
+  }
+
+  /**
+   * Wait for specific text to appear anywhere in the page (including iframes).
+   * Polls every 3s, logs progress every 30s.
+   */
+  private async waitForText(text: string, maxMs: number): Promise<void> {
+    const deadline = Date.now() + maxMs;
+    const escaped = text.replace(/'/g, "\\'");
+    let lastLogAt = 0;
+
+    while (Date.now() < deadline) {
+      this.throwIfAborted();
+
+      const result = (await this.cdpEval(`
+        (function() {
+          // Check main document
+          var mainText = document.body.textContent || '';
+          if (mainText.indexOf('${escaped}') !== -1) {
+            return { found: true, where: 'main' };
+          }
+          // Check iframes
+          var iframes = document.querySelectorAll('iframe');
+          for (var i = 0; i < iframes.length; i++) {
+            var doc;
+            try { doc = iframes[i].contentDocument; } catch(e) { continue; }
+            if (!doc || !doc.body) continue;
+            var t = doc.body.textContent || '';
+            if (t.indexOf('${escaped}') !== -1) {
+              return { found: true, where: 'iframe-' + i };
+            }
+          }
+          return { found: false };
+        })()
+      `)) as { found: boolean; where?: string } | null;
+
+      if (result?.found) {
+        this.log(`Text "${text}" found in ${result.where}`);
+        return;
+      }
+
+      // Extension mode: also check sandbox targets via browser CDP
+      if (this.opts.extensionPath && this.chromeCdpPort) {
+        const sandboxFound = await this.checkSandboxText(escaped);
+        if (sandboxFound) {
+          this.log(`Text "${text}" found in sandbox`);
+          return;
+        }
+      }
+
+      const now = Date.now();
+      if (now - lastLogAt > 30_000) {
+        lastLogAt = now;
+        const elapsed = Math.round((now - (deadline - maxMs)) / 1000);
+        this.log(`Waiting for "${text}" (${elapsed}s)...`);
+      }
+
+      await this.sleep(3000);
+    }
+
+    throw new Error(`Timeout: text "${text}" not found after ${maxMs}ms`);
+  }
+
+  /**
+   * Send a lick event by dispatching postMessage from the sprinkle sandbox.
+   * The message goes to the parent (side panel) and passes the event.source
+   * check because it originates from the sandbox iframe's contentWindow.
+   *
+   * Polls for the sandbox target to appear (it may not exist yet if the
+   * sprinkle is still loading).
+   */
+  /**
+   * Send a lick event from the sprinkle sandbox.
+   * Caches the sandbox target ID for fast subsequent calls.
+   */
+  private async sendLick(action: string, maxMs: number): Promise<void> {
+    if (!this.chromeCdpPort) {
+      throw new Error('Chrome CDP port not available for sendLick');
+    }
+
+    // Find sandbox target ID — re-discover each time since the sandbox
+    // target is recreated when sprinkles change (e.g., welcome → migration)
+    const t0 = Date.now();
+    this.sandboxTargetId = await this.findSandboxTargetId(maxMs);
+    this.log(`Sandbox found in ${Date.now() - t0}ms`);
+
+    // Connect, attach, send lick — single fast operation
+    const browserWsUrl = await this.getBrowserWsUrl();
+    const browserWs = new WebSocket(browserWsUrl);
+    try {
+      await new Promise<void>((r, j) => {
+        browserWs.on('open', () => r());
+        browserWs.on('error', j);
+        setTimeout(() => j(new Error('WS timeout')), 5000);
+      });
+
+      const { bSend } = this.makeBrowserSender(browserWs);
+
+      const att = await bSend('Target.attachToTarget', {
+        targetId: this.sandboxTargetId,
+        flatten: true,
+      });
+      const sid = (att as { sessionId: string }).sessionId;
+      await bSend('Runtime.enable', {}, sid);
+      await bSend(
+        'Runtime.evaluate',
+        {
+          expression: `parent.postMessage({ type: "sprinkle-lick", action: "${action}", data: null }, "*")`,
+          returnByValue: true,
+        },
+        sid
+      );
+      this.log(`Lick "${action}" sent from sandbox (total ${Date.now() - t0}ms).`);
+    } finally {
+      try {
+        browserWs.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  /** Poll for the sprinkle sandbox target ID. */
+  private async findSandboxTargetId(maxMs: number): Promise<string> {
+    const deadline = Date.now() + maxMs;
+    const browserWsUrl = await this.getBrowserWsUrl();
+
+    while (Date.now() < deadline) {
+      this.throwIfAborted();
+      const browserWs = new WebSocket(browserWsUrl);
+      try {
+        await new Promise<void>((r, j) => {
+          browserWs.on('open', () => r());
+          browserWs.on('error', j);
+          setTimeout(() => j(new Error('WS timeout')), 5000);
+        });
+        const { bSend } = this.makeBrowserSender(browserWs);
+        const targets = (await bSend('Target.getTargets')) as {
+          targetInfos: Array<{ targetId: string; url: string }>;
+        };
+        const sandbox = targets.targetInfos.find((t) => t.url.includes('sprinkle-sandbox.html'));
+        if (sandbox) {
+          browserWs.close();
+          return sandbox.targetId;
+        }
+      } catch {
+        /* retry */
+      } finally {
+        try {
+          browserWs.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      await this.sleep(1000);
+    }
+    throw new Error('Sandbox target not found');
+  }
+
+  /** Create a send helper for a browser-level WebSocket. */
+  private makeBrowserSender(browserWs: WebSocket): {
+    bSend: (
+      method: string,
+      params?: Record<string, unknown>,
+      sessionId?: string
+    ) => Promise<Record<string, unknown>>;
+  } {
+    let bId = 1;
+    const bSend = (method: string, params: Record<string, unknown> = {}, sessionId?: string) => {
+      const id = bId++;
+      return new Promise<Record<string, unknown>>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`${method} timeout`)), 10_000);
+        const handler = (raw: WebSocket.RawData) => {
+          const msg = JSON.parse(String(raw)) as Record<string, unknown>;
+          if (msg.id === id) {
+            browserWs.off('message', handler);
+            clearTimeout(timer);
+            if (msg.error) {
+              const e = msg.error as Record<string, unknown>;
+              reject(new Error(String(e.message ?? 'CDP error')));
+            } else {
+              resolve((msg.result ?? {}) as Record<string, unknown>);
+            }
+          }
+        };
+        browserWs.on('message', handler);
+        const payload: Record<string, unknown> = { id, method, params };
+        if (sessionId) payload.sessionId = sessionId;
+        browserWs.send(JSON.stringify(payload));
+      });
+    };
+    return { bSend };
+  }
+
+  /** Check if text exists in any sprinkle sandbox target. */
+  private async checkSandboxText(escaped: string): Promise<boolean> {
+    let browserWs: WebSocket | null = null;
+    try {
+      const browserWsUrl = await this.getBrowserWsUrl();
+      browserWs = new WebSocket(browserWsUrl);
+      await new Promise<void>((r, j) => {
+        browserWs!.on('open', () => r());
+        browserWs!.on('error', j);
+        setTimeout(() => j(new Error('WS timeout')), 5000);
+      });
+
+      let bId = 1;
+      const bSend = (method: string, params: Record<string, unknown> = {}, sessionId?: string) => {
+        const id = bId++;
+        return new Promise<Record<string, unknown>>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('timeout')), 10_000);
+          const handler = (raw: WebSocket.RawData) => {
+            const msg = JSON.parse(String(raw)) as Record<string, unknown>;
+            if (msg.id === id) {
+              browserWs!.off('message', handler);
+              clearTimeout(timer);
+              resolve((msg.result ?? {}) as Record<string, unknown>);
+            }
+          };
+          browserWs!.on('message', handler);
+          const payload: Record<string, unknown> = { id, method, params };
+          if (sessionId) payload.sessionId = sessionId;
+          browserWs!.send(JSON.stringify(payload));
+        });
+      };
+
+      const targets = (await bSend('Target.getTargets')) as {
+        targetInfos: Array<{ targetId: string; url: string }>;
+      };
+
+      for (const t of targets.targetInfos) {
+        if (!t.url.includes('sprinkle-sandbox.html')) continue;
+        try {
+          const att = await bSend('Target.attachToTarget', {
+            targetId: t.targetId,
+            flatten: true,
+          });
+          const sid = (att as { sessionId: string }).sessionId;
+          await bSend('Runtime.enable', {}, sid);
+          const result = (await bSend(
+            'Runtime.evaluate',
+            {
+              expression: `document.body?.innerText?.includes('${escaped}') || false`,
+              returnByValue: true,
+            },
+            sid
+          )) as { result?: { value?: boolean } };
+          if (result.result?.value) return true;
+        } catch {
+          // sandbox not accessible
+        }
+      }
+    } catch {
+      // browser WS failed
+    } finally {
+      try {
+        browserWs?.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    return false;
+  }
+
+  /** Get the browser-level WebSocket debugger URL. */
+  private async getBrowserWsUrl(): Promise<string> {
+    const resp = await fetch(`http://127.0.0.1:${this.chromeCdpPort}/json/version`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    const json = (await resp.json()) as { webSocketDebuggerUrl: string };
+    return json.webSocketDebuggerUrl;
   }
 
   private async verifyAndReport(): Promise<InstanceResult> {
@@ -833,22 +1707,82 @@ export class InstanceController {
 
   /** Capture a screenshot of the browser page and save to the output dir. */
   private async captureScreenshot(): Promise<void> {
-    if (!this.cdpWs || this.cdpWs.readyState !== WebSocket.OPEN) return;
+    const outDir = resolve(__dirname, 'output');
+    mkdirSync(outDir, { recursive: true });
+    const ts = Date.now();
+    const prefix = `screenshot-inst${this.opts.index}-port${this.opts.port}-${ts}`;
 
-    try {
-      const result = (await this.cdpSend('Page.captureScreenshot', {
-        format: 'png',
-      })) as { data?: string };
-
-      if (result?.data) {
-        const outDir = resolve(__dirname, 'output');
-        mkdirSync(outDir, { recursive: true });
-        const filename = `screenshot-inst${this.opts.index}-port${this.opts.port}-${Date.now()}.png`;
-        writeFileSync(resolve(outDir, filename), Buffer.from(result.data, 'base64'));
-        this.log(`Screenshot saved: ${filename}`);
+    // Side panel / main page screenshot
+    if (this.cdpWs && this.cdpWs.readyState === WebSocket.OPEN) {
+      try {
+        const result = (await this.cdpSend('Page.captureScreenshot', {
+          format: 'png',
+        })) as { data?: string };
+        if (result?.data) {
+          const name = `${prefix}-panel.png`;
+          writeFileSync(resolve(outDir, name), Buffer.from(result.data, 'base64'));
+          this.log(`Screenshot saved: ${name}`);
+        }
+      } catch {
+        this.log('Panel screenshot failed');
       }
-    } catch {
-      this.log('Screenshot capture failed (CDP may be disconnected)');
+    }
+
+    // Extension mode: also capture the page target (full browser tab)
+    if (this.opts.extensionPath && this.chromeCdpPort) {
+      try {
+        const targets = (await (
+          await fetch(`http://127.0.0.1:${this.chromeCdpPort}/json`)
+        ).json()) as Array<{
+          type: string;
+          url: string;
+          webSocketDebuggerUrl?: string;
+        }>;
+        const page = targets.find(
+          (t) =>
+            t.type === 'page' &&
+            !t.url.startsWith('chrome-extension://') &&
+            !t.url.startsWith('chrome://')
+        );
+        if (page?.webSocketDebuggerUrl) {
+          const pageWs = new WebSocket(page.webSocketDebuggerUrl);
+          await new Promise<void>((r, j) => {
+            pageWs.on('open', () => r());
+            pageWs.on('error', j);
+            setTimeout(() => j(new Error('timeout')), 5000);
+          });
+          const result = await new Promise<string | null>((resolve) => {
+            pageWs.send(
+              JSON.stringify({
+                id: 1,
+                method: 'Page.captureScreenshot',
+                params: { format: 'png' },
+              })
+            );
+            const timer = setTimeout(() => {
+              resolve(null);
+            }, 10_000);
+            pageWs.on('message', (raw) => {
+              const msg = JSON.parse(String(raw)) as {
+                id?: number;
+                result?: { data?: string };
+              };
+              if (msg.id === 1) {
+                clearTimeout(timer);
+                resolve(msg.result?.data ?? null);
+              }
+            });
+          });
+          pageWs.close();
+          if (result) {
+            const name = `${prefix}-page.png`;
+            writeFileSync(resolve(outDir, name), Buffer.from(result, 'base64'));
+            this.log(`Page screenshot saved: ${name}`);
+          }
+        }
+      } catch {
+        this.log('Page screenshot failed');
+      }
     }
   }
 

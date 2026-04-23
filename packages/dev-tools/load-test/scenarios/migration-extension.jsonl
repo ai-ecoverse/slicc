@@ -1,0 +1,1 @@
+{"prompt": "migration-extension", "prepareSteps": [{"type": "send-lick", "action": "shortcut-migrate"}, {"type": "wait-text", "text": "Migrate This Page"}], "steps": [{"type": "send-lick", "action": "migrate-page"}, {"type": "wait-text", "text": "Migration Complete"}]}
