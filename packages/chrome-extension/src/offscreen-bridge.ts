@@ -29,6 +29,7 @@ import type {
   IncomingMessageMsg,
 } from './messages.js';
 import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
+import { toolUIRegistry } from '../../../packages/webapp/src/tools/tool-ui.js';
 import type { ChatMessage } from '../../../packages/webapp/src/ui/types.js';
 import type { BrowserAPI } from '../../../packages/webapp/src/cdp/index.js';
 
@@ -209,6 +210,26 @@ export class OffscreenBridge {
           toolName,
           toolResult: result,
           isError,
+        });
+      },
+
+      onToolUI: (scoopJid, toolName, requestId, html) => {
+        bridge.emit({
+          type: 'agent-event',
+          scoopJid,
+          eventType: 'tool_ui',
+          toolName,
+          requestId,
+          html,
+        });
+      },
+
+      onToolUIDone: (scoopJid, requestId) => {
+        bridge.emit({
+          type: 'agent-event',
+          scoopJid,
+          eventType: 'tool_ui_done',
+          requestId,
         });
       },
 
@@ -570,6 +591,12 @@ export class OffscreenBridge {
             error: err instanceof Error ? err.message : String(err),
           } satisfies PanelCdpResponseMsg);
         }
+        break;
+      }
+
+      case 'tool-ui-action': {
+        const { requestId, action, data } = msg as import('./messages.js').ToolUIActionMsg;
+        await toolUIRegistry.handleAction(requestId, { action, data });
         break;
       }
     }
