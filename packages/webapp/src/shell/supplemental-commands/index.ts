@@ -17,8 +17,10 @@ import { createManCommand } from './man-command.js';
 import { createUnzipCommand } from './unzip-command.js';
 import { createWebhookCommand } from './webhook-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
+import { createFsWatchCommand } from './fswatch-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createOAuthTokenCommand } from './oauth-token-command.js';
+import { createSecretCommand } from './secret-command.js';
 import { createRsyncCommand } from './rsync-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
@@ -34,7 +36,9 @@ import { createDebugCommand } from './debug-command.js';
 import { createModelsCommand } from './models-command.js';
 import { createCostCommand } from './cost-command.js';
 import { createNukeCommand } from './nuke-command.js';
+import { createAgentCommand } from './agent-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
+import type { ScriptCatalog } from '../script-catalog.js';
 export type {
   ImgcatCommandOptions as SupplementalCommandOptions,
   MediaPreviewItem,
@@ -45,8 +49,18 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   getJshCommands?: () => Promise<string[]>;
   /** VirtualFS instance for .jsh discovery, `which`, and playwright-cli session files. */
   fs?: VirtualFS;
+  /** Shared script discovery service for `.jsh`/`.bsh` lookup. */
+  scriptCatalog?: ScriptCatalog;
   /** Browser automation backend for playwright-cli aliases. Optional so aliases stay discoverable even without browser support. */
   browserAPI?: BrowserAPI;
+  /**
+   * Returns the JID of the scoop whose shell is about to run a command,
+   * when that shell lives inside a scoop context. Used by the `agent`
+   * command to forward the parent's jid to the AgentBridge for model
+   * inheritance. Returns `undefined` when the shell has no scoop owner
+   * (the terminal panel's standalone WasmShell).
+   */
+  getParentJid?: () => string | undefined;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -65,15 +79,17 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPython3LikeCommand('python'),
     createWebhookCommand(),
     createCrontaskCommand(),
+    createFsWatchCommand(),
     createSprinkleCommand(),
     createPdftkCommand('pdftk'),
     createPdftkCommand('pdf'),
     createConvertCommand('convert'),
     createConvertCommand('magick'),
-    createWhichCommand(options.fs),
+    createWhichCommand({ fs: options.fs, scriptCatalog: options.scriptCatalog }),
     createUnameCommand(),
     createManCommand(),
     createOAuthTokenCommand(),
+    createSecretCommand(),
     createRsyncCommand({ fs: options.fs }),
     createScreencaptureCommand(),
     createPbcopyCommand(),
@@ -86,6 +102,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createModelsCommand(options.fs),
     createCostCommand(),
     createNukeCommand(),
+    createAgentCommand({ getParentJid: options.getParentJid }),
   ];
 
   // Extension-only commands

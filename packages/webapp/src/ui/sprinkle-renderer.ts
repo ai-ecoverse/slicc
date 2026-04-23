@@ -8,6 +8,7 @@
  */
 
 import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';
+import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 
 declare global {
   interface Window {
@@ -28,6 +29,8 @@ export class SprinkleRenderer {
   private bridge: SprinkleBridgeAPI;
   private scripts: HTMLScriptElement[] = [];
   private iframe: HTMLIFrameElement | null = null;
+  private static cachedLucideScript: string | null = null;
+  private static lucideScriptPromise: Promise<string> | null = null;
   private messageHandler: ((event: MessageEvent) => void) | null = null;
 
   constructor(container: HTMLElement, bridge: SprinkleBridgeAPI) {
@@ -76,6 +79,7 @@ export class SprinkleRenderer {
         () => {
           clearTimeout(timer);
           console.log('[sprinkle-renderer] iframe loaded, contentWindow:', !!iframe.contentWindow);
+          registerSprinkleWindow(iframe.contentWindow);
           resolve();
         },
         { once: true }
@@ -105,6 +109,8 @@ export class SprinkleRenderer {
         this.bridge.setState(msg.data);
       } else if (msg.type === 'sprinkle-close') {
         this.bridge.close();
+      } else if (msg.type === 'sprinkle-stop-cone') {
+        this.bridge.stopCone();
       } else if (msg.type === 'sprinkle-storage-set') {
         try {
           localStorage.setItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`, msg.value);
@@ -256,6 +262,40 @@ export class SprinkleRenderer {
 
     // Send content to the sandbox for rendering, including saved state + localStorage
     const savedState = this.bridge.getState();
+
+    // For full-doc sprinkles in extension mode, the nested iframe can't load external
+    // scripts (no allow-same-origin). Fetch custom element bundles and pass inline.
+    let editorScript = '';
+    let diffScript = '';
+    if (fullDoc) {
+      const fetches: Promise<void>[] = [];
+      if (content.includes('<slicc-editor')) {
+        fetches.push(
+          fetch(chrome.runtime.getURL('slicc-editor.js'))
+            .then((r) => (r.ok ? r.text() : ''))
+            .then((t) => {
+              editorScript = t;
+            })
+            .catch(() => {})
+        );
+      }
+      if (content.includes('<slicc-diff')) {
+        fetches.push(
+          fetch(chrome.runtime.getURL('slicc-diff.js'))
+            .then((r) => (r.ok ? r.text() : ''))
+            .then((t) => {
+              diffScript = t;
+            })
+            .catch(() => {})
+        );
+      }
+      await Promise.all(fetches);
+    }
+
+    // Always fetch lucide-icons.js for sprinkles (icons are used in most sprinkles)
+    // Cache the bundle to avoid repeated fetches
+    const lucideScript = await this.getLucideScript();
+
     iframe.contentWindow!.postMessage(
       {
         type: 'sprinkle-render',
@@ -265,6 +305,10 @@ export class SprinkleRenderer {
         savedState,
         savedStorage,
         fullDoc,
+        editorScript,
+        diffScript,
+        lucideScript,
+        isLight: isThemeLight(),
       },
       '*'
     );
@@ -300,6 +344,8 @@ export class SprinkleRenderer {
       if (window.slicc) window.slicc.name = _sprinkleName;
     } else if (msg.type === 'sprinkle-update') {
       _updateListeners.forEach(function(cb) { try { cb(msg.data); } catch(e) { console.error(e); } });
+    } else if (msg.type === 'slicc-theme') {
+      document.documentElement.classList.toggle('theme-light', !!msg.isLight);
     } else if (msg.id && _callbacks[msg.id]) {
       var cb = _callbacks[msg.id];
       delete _callbacks[msg.id];
@@ -379,6 +425,7 @@ export class SprinkleRenderer {
     setState: function(data) { _state = data; parent.postMessage({ type: 'sprinkle-set-state', data: data }, '*'); },
     getState: function() { return _state; },
     close: function() { parent.postMessage({ type: 'sprinkle-close' }, '*'); },
+    stopCone: function() { parent.postMessage({ type: 'sprinkle-stop-cone' }, '*'); },
     name: ''
   };
   window.slicc = api;
@@ -394,7 +441,17 @@ export class SprinkleRenderer {
     const bridgeScript = `<script>${this.generateBridgeScript()}</script>`;
     const themeCSS = this.collectThemeCSS();
     const themeTag = themeCSS ? `<style>${themeCSS}</style>` : '';
-    const injection = bridgeScript + themeTag;
+    // Inject custom element bundles only when the sprinkle uses them
+    const editorTag = content.includes('<slicc-editor')
+      ? '<script src="/slicc-editor.js"></script>'
+      : '';
+    const diffTag = content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '';
+    // Always inject Lucide icons for sprinkles
+    const lucideTag = '<script src="/lucide-icons.js"></script>';
+    // Bootstrap the current theme class on <html> so CSS vars resolve correctly
+    // before any content paints. Runs synchronously inside the iframe.
+    const themeBootstrap = `<script>(function(){try{if(${isThemeLight() ? 'true' : 'false'})document.documentElement.classList.add('theme-light');}catch(e){}})();</script>`;
+    const injection = themeBootstrap + bridgeScript + themeTag + editorTag + diffTag + lucideTag;
 
     // Inject bridge script + theme CSS after <head> tag, or before first <script> if no <head>
     let modified: string;
@@ -434,6 +491,8 @@ export class SprinkleRenderer {
         'load',
         () => {
           clearTimeout(timer);
+          // Register with theme broadcaster so prefers-color-scheme changes flip CSS vars live
+          registerSprinkleWindow(iframe.contentWindow);
           // Send init message with name and saved state
           const savedState = this.bridge.getState();
           iframe.contentWindow?.postMessage(
@@ -467,6 +526,8 @@ export class SprinkleRenderer {
         this.bridge.setState(msg.data);
       } else if (msg.type === 'sprinkle-close') {
         this.bridge.close();
+      } else if (msg.type === 'sprinkle-stop-cone') {
+        this.bridge.stopCone();
       } else if (msg.type === 'sprinkle-readfile') {
         this.bridge.readFile(msg.path).then(
           (fileContent) =>
@@ -589,6 +650,18 @@ export class SprinkleRenderer {
    * CLI mode: render directly in the page DOM (no CSP restrictions).
    */
   private renderInline(content: string, sprinkleName: string): void {
+    // Lazy-load the <slicc-editor> custom element when a sprinkle uses it
+    if (content.includes('<slicc-editor') && !customElements.get('slicc-editor')) {
+      void import('./slicc-editor.js');
+    }
+    if (content.includes('<slicc-diff') && !customElements.get('slicc-diff')) {
+      // Load via script tag (not Vite import) so the IIFE bundle includes
+      // @pierre/diffs' web-components.js which isn't in the package exports map.
+      const s = document.createElement('script');
+      s.src = '/slicc-diff.js';
+      document.head.appendChild(s);
+    }
+
     // Ensure the global sprinkle registry exists
     if (!window.__slicc_sprinkles) window.__slicc_sprinkles = {};
     window.__slicc_sprinkles[sprinkleName] = this.bridge;
@@ -657,6 +730,7 @@ export class SprinkleRenderer {
       this.messageHandler = null;
     }
     if (this.iframe) {
+      unregisterSprinkleWindow(this.iframe.contentWindow);
       this.iframe.remove();
       this.iframe = null;
     }
@@ -669,6 +743,40 @@ export class SprinkleRenderer {
     if (window.__slicc_sprinkles) {
       delete window.__slicc_sprinkles[this.bridge.name];
     }
+  }
+
+  /**
+   * Get Lucide icons bundle, using cache to avoid repeated fetches.
+   * Returns empty string if bundle is unavailable.
+   */
+  private async getLucideScript(): Promise<string> {
+    // Return cached value if available
+    if (SprinkleRenderer.cachedLucideScript !== null) {
+      return SprinkleRenderer.cachedLucideScript;
+    }
+
+    // If a fetch is already in progress, wait for it
+    if (SprinkleRenderer.lucideScriptPromise !== null) {
+      return SprinkleRenderer.lucideScriptPromise;
+    }
+
+    // Start new fetch and cache the promise
+    SprinkleRenderer.lucideScriptPromise = (async () => {
+      try {
+        const resp = await fetch(chrome.runtime.getURL('lucide-icons.js'));
+        if (resp.ok) {
+          const text = await resp.text();
+          SprinkleRenderer.cachedLucideScript = text;
+          return text;
+        }
+      } catch {
+        // Lucide unavailable — sprinkle will render without icons
+      }
+      SprinkleRenderer.cachedLucideScript = '';
+      return '';
+    })();
+
+    return SprinkleRenderer.lucideScriptPromise;
   }
 }
 
@@ -684,29 +792,45 @@ function resolveUrls(cssText: string, baseHref: string): string {
   });
 }
 
-/** Collect CSS custom properties, @font-face rules, and sprinkle component rules from the parent page. */
+/**
+ * Collect @font-face rules, theme rule bodies (:root + :root.theme-light
+ * + .theme-light descendants), and sprinkle component rules from the
+ * parent page. Theme rules are emitted verbatim — not snapshotted —
+ * so toggling `.theme-light` on the iframe's <html> swaps the variable
+ * set in lockstep with the parent.
+ */
 export function collectThemeCSS(): string {
   if (typeof getComputedStyle !== 'function') return '';
-  const rootStyles = getComputedStyle(document.documentElement);
-  const cssVars: string[] = [];
   const fontFaceRules: string[] = [];
+  const themeRules: string[] = [];
   const sprinkleRules: string[] = [];
   const baseHref = location.href;
+  const isThemeSelector = (sel: string): boolean =>
+    sel === ':root' ||
+    sel === ':root.theme-light' ||
+    sel.startsWith('.theme-light ') ||
+    sel === '.theme-light' ||
+    // Handle comma-joined selectors where any part matches.
+    sel.split(',').some((s) => {
+      const t = s.trim();
+      return (
+        t === ':root' ||
+        t === ':root.theme-light' ||
+        t.startsWith('.theme-light ') ||
+        t === '.theme-light'
+      );
+    });
   for (const sheet of document.styleSheets) {
     try {
       for (const rule of sheet.cssRules) {
         if (rule instanceof CSSFontFaceRule) {
           fontFaceRules.push(resolveUrls(rule.cssText, baseHref));
         } else if (rule instanceof CSSStyleRule) {
-          if (rule.selectorText === ':root') {
-            for (let i = 0; i < rule.style.length; i++) {
-              const prop = rule.style[i];
-              if (prop.startsWith('--')) {
-                cssVars.push(`${prop}: ${rootStyles.getPropertyValue(prop)};`);
-              }
-            }
+          const sel = rule.selectorText;
+          if (isThemeSelector(sel)) {
+            themeRules.push(rule.cssText);
           }
-          if (rule.selectorText.includes('.sprinkle-') || rule.selectorText.includes('.fill')) {
+          if (sel.includes('.sprinkle-') || sel.includes('.fill')) {
             sprinkleRules.push(rule.cssText);
           }
         }
@@ -715,9 +839,5 @@ export function collectThemeCSS(): string {
       /* cross-origin sheet, skip */
     }
   }
-  return (
-    fontFaceRules.join('\n') +
-    (cssVars.length > 0 ? `\n:root { ${cssVars.join(' ')} }\n` : '\n') +
-    sprinkleRules.join('\n')
-  );
+  return fontFaceRules.join('\n') + '\n' + themeRules.join('\n') + '\n' + sprinkleRules.join('\n');
 }

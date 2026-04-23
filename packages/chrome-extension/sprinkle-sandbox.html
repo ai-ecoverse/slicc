@@ -5,6 +5,9 @@
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: auto; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 </style>
+<script src="slicc-editor.js"></script>
+<script src="slicc-diff.js"></script>
+<script src="lucide-icons.js"></script>
 <script>
 /**
  * Sprinkle Sandbox — CSP-exempt page for rendering .shtml sprinkles
@@ -223,6 +226,9 @@ window.slicc = {
   close: function() {
     parent.postMessage({ type: 'sprinkle-close' }, '*');
   },
+  stopCone: function() {
+    parent.postMessage({ type: 'sprinkle-stop-cone' }, '*');
+  },
 };
 window.bridge = window.slicc;
 
@@ -246,13 +252,15 @@ function injectIntoHead(html, injection) {
 }
 
 // ── Helper: build a self-contained bridge script for nested iframe ─
-function buildNestedBridgeScript(savedState, savedStorage, name) {
+function buildNestedBridgeScript(savedState, savedStorage, name, isLight) {
   var stateJson, storageJson, nameJson;
   try { stateJson = JSON.stringify(savedState || null); } catch(e) { stateJson = 'null'; }
   try { storageJson = JSON.stringify(savedStorage || {}); } catch(e) { storageJson = '{}'; }
   try { nameJson = JSON.stringify(name); } catch(e) { nameJson = '""'; }
+  var isLightLit = isLight ? 'true' : 'false';
 
   return '(function() {' +
+    'try { if (' + isLightLit + ') document.documentElement.classList.add("theme-light"); } catch(e) {}' +
     'window.__slicc_sd = ' + storageJson + ';' +
     'window.__slicc_storage = {' +
       'getItem: function(key) { var v = window.__slicc_sd[key]; return v === undefined ? null : v; },' +
@@ -321,7 +329,8 @@ function buildNestedBridgeScript(savedState, savedStorage, name) {
       'setState: function(data) { window.__slicc_state = data; parent.postMessage({ type: "sprinkle-set-state", data: data }, "*"); },' +
       'getState: function() { return window.__slicc_state; },' +
       'open: function(path, opts) { parent.postMessage({ type: "sprinkle-open", path: path, projectRoot: opts && opts.projectRoot || null }, "*"); },' +
-      'close: function() { parent.postMessage({ type: "sprinkle-close" }, "*"); }' +
+      'close: function() { parent.postMessage({ type: "sprinkle-close" }, "*"); },' +
+      'stopCone: function() { parent.postMessage({ type: "sprinkle-stop-cone" }, "*"); }' +
     '};' +
     'window.bridge = window.slicc;' +
     'addEventListener("message", function(e) {' +
@@ -329,6 +338,8 @@ function buildNestedBridgeScript(savedState, savedStorage, name) {
       'if (!msg || !msg.type) return;' +
       'if (msg.type === "sprinkle-update") {' +
         'window.__slicc_listeners.forEach(function(cb) { try { cb(msg.data); } catch(err) {} });' +
+      '} else if (msg.type === "slicc-theme") {' +
+        'document.documentElement.classList.toggle("theme-light", !!msg.isLight);' +
       '} else if (msg.id && _cbs[msg.id]) {' +
         'var cb = _cbs[msg.id]; delete _cbs[msg.id]; cb(msg);' +
       '}' +
@@ -343,7 +354,19 @@ addEventListener('message', function(e) {
   var msg = e.data;
   if (!msg || !msg.type) return;
 
+  if (msg.type === 'slicc-theme') {
+    document.documentElement.classList.toggle('theme-light', !!msg.isLight);
+    if (window.__slicc_childIframe && window.__slicc_childIframe.contentWindow) {
+      window.__slicc_childIframe.contentWindow.postMessage(msg, '*');
+    }
+    return;
+  }
+
   if (msg.type === 'sprinkle-render') {
+    // Apply initial theme class so CSS variables resolve correctly on first paint.
+    if (typeof msg.isLight === 'boolean') {
+      document.documentElement.classList.toggle('theme-light', msg.isLight);
+    }
     window.__slicc_name = msg.name || '';
     window.__slicc_state = msg.savedState || null;
 
@@ -360,9 +383,14 @@ addEventListener('message', function(e) {
       // The sandbox is CSP-exempt, so the nested iframe's inline scripts
       // execute freely. We inject bridge + localStorage polyfill into
       // the full document HTML, then relay messages between parent and child.
-      var bridgeScript = buildNestedBridgeScript(msg.savedState, msg.savedStorage, msg.name || '');
+      var bridgeScript = buildNestedBridgeScript(msg.savedState, msg.savedStorage, msg.name || '', !!msg.isLight);
       var themeTag = msg.themeCSS ? '<style>' + msg.themeCSS + '</style>' : '';
-      var injection = '<script>' + bridgeScript + '<\/script>' + themeTag;
+      // Escape </script> sequences in inlined bundles to prevent premature tag termination
+      function escapeForScript(code) { return code.replace(/<\/script/gi, '<\\/script'); }
+      var editorTag = msg.editorScript ? '<script>' + escapeForScript(msg.editorScript) + '<\/script>' : '';
+      var diffTag = msg.diffScript ? '<script>' + escapeForScript(msg.diffScript) + '<\/script>' : '';
+      var lucideTag = msg.lucideScript ? '<script>' + escapeForScript(msg.lucideScript) + '<\/script>' : '';
+      var injection = '<script>' + bridgeScript + '<\/script>' + themeTag + editorTag + diffTag + lucideTag;
       var modifiedHtml = injectIntoHead(msg.content, injection);
 
       while (document.body.firstChild) document.body.removeChild(document.body.firstChild);
@@ -394,6 +422,22 @@ addEventListener('message', function(e) {
       for (var i = 0; i < fills.length; i++) {
         var v = parseFloat(fills[i].getAttribute('data-value') || '0');
         if (v >= 0 && v <= 100) fills[i].style.width = v + '%';
+      }
+
+      // Lazy-load custom element bundles before executing sprinkle scripts.
+      // Uses synchronous script injection so elements are registered before use.
+      var contentStr = msg.content || '';
+      if (contentStr.indexOf('<slicc-editor') !== -1 && !customElements.get('slicc-editor')) {
+        var edScript = document.createElement('script');
+        edScript.src = 'slicc-editor.js';
+        edScript.async = false;
+        document.head.appendChild(edScript);
+      }
+      if (contentStr.indexOf('<slicc-diff') !== -1 && !customElements.get('slicc-diff')) {
+        var dfScript = document.createElement('script');
+        dfScript.src = 'slicc-diff.js';
+        dfScript.async = false;
+        document.head.appendChild(dfScript);
       }
 
       // Execute scripts (sandbox is CSP-exempt)
@@ -453,7 +497,7 @@ addEventListener('message', function(e) {
   // Relay bridge messages FROM the nested child iframe TO the extension page.
   if (window.__slicc_childIframe && e.source === window.__slicc_childIframe.contentWindow) {
     var bridgeTypes = [
-      'sprinkle-lick', 'sprinkle-set-state', 'sprinkle-close',
+      'sprinkle-lick', 'sprinkle-set-state', 'sprinkle-close', 'sprinkle-stop-cone',
       'sprinkle-open', 'sprinkle-readfile',
       'sprinkle-writefile', 'sprinkle-readdir', 'sprinkle-exists',
       'sprinkle-stat', 'sprinkle-mkdir', 'sprinkle-rm',

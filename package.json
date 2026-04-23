@@ -44,6 +44,8 @@
     "start:extension": "npm run build -w @slicc/chrome-extension && npm run dev -- --profile=extension",
     "lint": "prettier --write . && eslint . --fix",
     "package:release": "node dist/node-server/release-package.js",
+    "publish:chrome": "node dist/node-server/publish-chrome-web-store.js",
+    "publish:worker": "echo \"$CLOUDFLARE_TURN_API_TOKEN\" | npx wrangler secret put CLOUDFLARE_TURN_API_TOKEN --config packages/cloudflare-worker/wrangler.jsonc && npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc && MAX_ATTEMPTS=6; for attempt in $(seq 1 \"$MAX_ATTEMPTS\"); do if npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/deployed.test.ts; then exit 0; fi; if [ \"$attempt\" -eq \"$MAX_ATTEMPTS\" ]; then echo \"Deployed smoke test failed after $MAX_ATTEMPTS attempts\"; exit 1; fi; echo \"Deployed smoke test failed on attempt $attempt; waiting for edge propagation before retrying...\"; sleep 15; done",
     "prepare": "husky"
   },
   "dependencies": {
@@ -61,17 +63,17 @@
     "@semantic-release/release-notes-generator": "14.1.0",
     "@types/node": "^24.0.0",
     "esbuild": "0.28.0",
-    "eslint": "10.2.0",
+    "eslint": "10.2.1",
     "eslint-config-prettier": "10.1.8",
-    "globals": "17.4.0",
+    "globals": "17.5.0",
     "husky": "9.1.7",
     "lint-staged": "16.4.0",
-    "prettier": "3.8.2",
+    "prettier": "3.8.3",
     "semantic-release": "25.0.3",
     "typescript": "^6.0.0",
-    "typescript-eslint": "8.58.1",
-    "vite": "8.0.8",
-    "vitest": "4.1.4"
+    "typescript-eslint": "8.59.0",
+    "vite": "8.0.10",
+    "vitest": "4.1.5"
   },
   "lint-staged": {
     "**/*.{ts,js,mjs}": [

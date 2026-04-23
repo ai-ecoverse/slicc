@@ -9,6 +9,12 @@
 
 import { BrowserAPI, OffscreenCdpProxy } from '../../../packages/webapp/src/cdp/index.js';
 import { Orchestrator } from '../../../packages/webapp/src/scoops/index.js';
+import {
+  AGENT_SPAWN_REQUEST_TYPE,
+  publishAgentBridge,
+  type AgentSpawnOptions,
+  type AgentSpawnResult,
+} from '../../../packages/webapp/src/scoops/agent-bridge.js';
 import { LeaderTrayManager } from '../../../packages/webapp/src/scoops/tray-leader.js';
 import {
   hasStoredTrayJoinUrl,
@@ -68,6 +74,53 @@ async function init(): Promise<void> {
   await orchestrator.init();
   console.log('[slicc-offscreen] Orchestrator initialized');
 
+  // Publish the real AgentBridge on globalThis.__slicc_agent so the
+  // offscreen WasmShell's `agent` supplemental command can spawn scoops
+  // directly. The side panel's `agent` command talks to this same bridge
+  // via a proxy — see the AGENT_SPAWN_REQUEST_TYPE handler below.
+  {
+    const sharedFs = orchestrator.getSharedFS();
+    if (sharedFs) {
+      publishAgentBridge(orchestrator, sharedFs, orchestrator.getSessionStore());
+    } else {
+      log.warn('AgentBridge not published — orchestrator.getSharedFS() returned null');
+    }
+  }
+
+  // Route agent-spawn requests from the side-panel proxy
+  // (see publishAgentBridgeProxy) into this realm's real bridge.
+  chrome.runtime.onMessage.addListener(
+    (message: unknown, _sender, sendResponse: (response: unknown) => void) => {
+      if (!isExtensionMessage(message)) return false;
+      if (message.source !== 'panel') return false;
+      const payload = message.payload as { type: string; options?: AgentSpawnOptions };
+      if (payload.type !== AGENT_SPAWN_REQUEST_TYPE) return false;
+
+      const options = payload.options;
+      if (!options) {
+        sendResponse({ ok: false, error: 'agent-spawn-request: missing options' });
+        return true;
+      }
+
+      const bridge = (globalThis as Record<string, unknown>).__slicc_agent as
+        | { spawn: (opts: AgentSpawnOptions) => Promise<AgentSpawnResult> }
+        | undefined;
+      if (!bridge || typeof bridge.spawn !== 'function') {
+        sendResponse({ ok: false, error: 'agent-spawn-request: bridge not published' });
+        return true;
+      }
+
+      bridge
+        .spawn(options)
+        .then((result) => sendResponse({ ok: true, result }))
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          sendResponse({ ok: false, error: msg });
+        });
+      return true; // keep the message channel open for the async response
+    }
+  );
+
   // Register session costs provider for the `cost` shell command (offscreen agent shell)
   const { registerSessionCostsProvider } =
     await import('../../../packages/webapp/src/shell/supplemental-commands/cost-command.js');
@@ -108,19 +161,33 @@ async function init(): Promise<void> {
   lickManager.setEventHandler((event) => {
     const isWebhook = event.type === 'webhook';
     const isSprinkle = event.type === 'sprinkle';
+    const isFsWatch = event.type === 'fswatch';
+    const isNavigate = event.type === 'navigate';
     const eventName = isWebhook
       ? event.webhookName
       : isSprinkle
         ? event.sprinkleName
-        : event.cronName;
-    const eventId = isWebhook ? event.webhookId : isSprinkle ? event.sprinkleName : event.cronId;
+        : isFsWatch
+          ? (event as any).fswatchName
+          : isNavigate
+            ? (event as any).navigateUrl
+            : event.cronName;
+    const eventId = isWebhook
+      ? event.webhookId
+      : isSprinkle
+        ? event.sprinkleName
+        : isFsWatch
+          ? (event as any).fswatchId
+          : isNavigate
+            ? (event as any).navigateUrl
+            : event.cronId;
     const channel = event.type;
 
     const scoops = orchestrator.getScoops();
     let resolvedTarget: (typeof scoops)[number] | undefined;
 
-    if (isSprinkle || !event.targetScoop) {
-      // Sprinkle licks and untargeted cron/webhook events → cone
+    if (!event.targetScoop) {
+      // Untargeted events → cone
       resolvedTarget = scoops.find((s) => s.isCone);
     } else {
       resolvedTarget = scoops.find(
@@ -133,7 +200,15 @@ async function init(): Promise<void> {
 
     if (resolvedTarget) {
       const msgId = `${channel}-${eventId}-${Date.now()}`;
-      const eventLabel = isWebhook ? 'Webhook Event' : isSprinkle ? 'Sprinkle Event' : 'Cron Event';
+      const eventLabel = isWebhook
+        ? 'Webhook Event'
+        : isSprinkle
+          ? 'Sprinkle Event'
+          : isFsWatch
+            ? 'File Watch Event'
+            : isNavigate
+              ? 'Navigate Event'
+              : 'Cron Event';
       const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
 
       const channelMsg: import('../../../packages/webapp/src/scoops/types.js').ChannelMessage = {
@@ -160,6 +235,27 @@ async function init(): Promise<void> {
   const { startLickManagerHost } = await import('./lick-manager-proxy.js');
   startLickManagerHost(lickManager);
   console.log('[slicc-offscreen] LickManager initialized (host + proxy)');
+
+  // Listen for navigate-lick events forwarded from the service worker's
+  // chrome.webRequest observer and emit them as lick events.
+  chrome.runtime.onMessage.addListener((message: unknown) => {
+    if (!isExtensionMessage(message) || message.source !== 'service-worker') return false;
+    const payload = message.payload as { type?: string };
+    if (payload?.type !== 'navigate-lick') return false;
+    const navMsg = payload as import('./messages.js').NavigateLickMsg;
+    lickManager.emitEvent({
+      type: 'navigate',
+      navigateUrl: navMsg.url,
+      targetScoop: undefined,
+      timestamp: new Date().toISOString(),
+      body: {
+        url: navMsg.url,
+        sliccHeader: navMsg.sliccHeader,
+        title: navMsg.title,
+      },
+    });
+    return false;
+  });
 
   // Ensure cone exists
   const allScoops = orchestrator.getScoops();
@@ -302,12 +398,27 @@ async function init(): Promise<void> {
   if (sharedFs) {
     try {
       const { BshWatchdog } = await import('../../../packages/webapp/src/shell/bsh-watchdog.js');
+      const { ScriptCatalog } =
+        await import('../../../packages/webapp/src/shell/script-catalog.js');
+      const scriptCatalog = new ScriptCatalog({
+        jshFs: sharedFs,
+        bshFs: sharedFs,
+        watcher: sharedFs.getWatcher(),
+      });
       const bshWatchdog = new BshWatchdog({
         browserAPI: browser,
+        scriptCatalog,
         fs: sharedFs,
       });
       void bshWatchdog.start();
-      window.addEventListener('beforeunload', () => bshWatchdog.stop(), { once: true });
+      window.addEventListener(
+        'beforeunload',
+        () => {
+          bshWatchdog.stop();
+          scriptCatalog.dispose();
+        },
+        { once: true }
+      );
       console.log('[slicc-offscreen] BSH navigation watchdog started');
     } catch (e) {
       log.warn('Failed to start BSH watchdog in offscreen', e);

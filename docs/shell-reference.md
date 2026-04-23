@@ -42,6 +42,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **debug**                                   | `debug-command.ts`         | Toggle Terminal/Memory tabs in extension mode                                                                                               | `debug on`, `debug off`, no args = show state; extension-only (not registered in CLI)                                                       |
 | **cost**                                    | `cost-command.ts`          | Show session cost breakdown per scoop/cone                                                                                                  | `--json`, `-h`                                                                                                                              |
 | **models**                                  | `models-command.ts`        | List available LLM models with pricing and benchmarks                                                                                       | `--all`, `--json`, `--provider <id>`, `--refresh`                                                                                           |
+| **secret**                                  | `secret-command.ts`        | Manage secrets (API keys, tokens) with domain-scoped injection                                                                              | `list`, `set <name>`, `delete <name>`, `test <name> <url>`                                                                                  |
 | **git**                                     | (isomorphic-git)           | Full git support                                                                                                                            | `git clone`, `git commit`, `git push`, etc.                                                                                                 |
 
 **Example usage**:
@@ -155,6 +156,8 @@ Then: / (full filesystem scan)
 
 Rule: First basename wins (no conflicts)
 ```
+
+`script-catalog.ts` is the shared lookup layer used by `WasmShell`, `which`, and browser-script matching. When an `FsWatcher` is present it caches discovery results and clears them on filesystem changes; mounted directories bypass the cache because external edits inside File System Access mounts are not observable through the watcher.
 
 **Execution**: Via `jsh-executor.ts` (dual-mode):
 
@@ -592,6 +595,15 @@ console.log(files);
 
 # Schedule a task
 crontask add "cleanup" "0 3 * * 0" cleaner-scoop "Remove old files from /tmp"
+
+# List configured secrets (names + domains, never values)
+secret list
+
+# Check if a secret would be injected for a URL
+secret test GITHUB_TOKEN https://api.github.com/repos/foo/bar
+
+# Show instructions for adding a new secret
+secret set API_KEY
 ```
 
 ---
@@ -603,4 +615,4 @@ crontask add "cleanup" "0 3 * * 0" cleaner-scoop "Remove old files from /tmp"
 - **JSH executor**: `packages/webapp/src/shell/jsh-executor.ts`
 - **Binary cache**: `packages/webapp/src/shell/binary-cache.ts`
 - **Argument parser**: `packages/webapp/src/shell/parse-shell-args.ts`
-- **Discovery**: `packages/webapp/src/shell/jsh-discovery.ts`
+- **Discovery**: `packages/webapp/src/shell/script-catalog.ts`, `packages/webapp/src/shell/jsh-discovery.ts`

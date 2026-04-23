@@ -40,17 +40,101 @@ export const config: ProviderConfig = {
   requiresBaseUrl: true,
   baseUrlPlaceholder: 'https://bedrock-runtime.us-west-2.amazonaws.com',
   baseUrlDescription: 'Bedrock runtime endpoint from CAMP portal',
-  requiresModelSelection: true,
   defaultModelId: 'claude-sonnet-4-6',
 };
+
+// Picker filter: keep only Claude 4.x on an inference-profile prefix that
+// is reachable from the configured endpoint region.
+//
+// 1. Inference profile (us./eu./global./apac.) — bare anthropic.* 400s with
+//    "on-demand throughput isn't supported".
+// 2. Claude 4.x only — older Claude 3.x are weaker at resisting prompt
+//    injection; non-Claude Bedrock models (Nova, Llama, Writer, …) are
+//    similarly risky, and DeepSeek R1 specifically 400s on toolConfig
+//    ("This model doesn't support tool use") which breaks the agent loop.
+// 3. Region must match the endpoint — e.g. `eu.*` IDs 400 with "invalid
+//    model identifier" when sent to a `us-*` runtime, and vice versa.
+//    `global.*` works anywhere.
+const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac)\./;
+const BEDROCK_CAMP_CLAUDE_4_RE = /\.anthropic\.claude-(opus|sonnet|haiku)-4/;
+const BEDROCK_RUNTIME_HOST_RE = /bedrock-runtime\.([a-z0-9-]+)\.amazonaws\.com/i;
+
+export function bedrockCampRegionFromBaseUrl(baseUrl: string | null | undefined): string | null {
+  if (!baseUrl) return null;
+  return baseUrl.match(BEDROCK_RUNTIME_HOST_RE)?.[1] ?? null;
+}
+
+function profileMatchesRegion(prefix: string, region: string): boolean {
+  if (prefix === 'global') return true;
+  if (prefix === 'us') return region.startsWith('us-');
+  if (prefix === 'eu') return region.startsWith('eu-');
+  if (prefix === 'apac') return region.startsWith('ap-');
+  return false;
+}
+
+export function isBedrockCampCompatible(model: { id: string }, region?: string | null): boolean {
+  if (!BEDROCK_CAMP_INFERENCE_PROFILE_RE.test(model.id)) return false;
+  if (!BEDROCK_CAMP_CLAUDE_4_RE.test(model.id)) return false;
+  if (!region) return true; // no endpoint configured yet — stay permissive
+  const prefix = model.id.split('.', 1)[0];
+  return profileMatchesRegion(prefix, region);
+}
+
+// Models not yet in pi-ai's amazon-bedrock registry that CAMP already serves.
+// Opus 4.7 shape mirrors 4.6 until pi-ai regenerates. Caller must dedupe
+// against the registry — once pi-ai ships these IDs, the dedup drops them
+// and this function becomes a no-op that can be removed.
+export function getBedrockCampExtraModels(): Model<Api>[] {
+  const shared: Omit<Model<Api>, 'id' | 'name'> = {
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    contextWindow: 1_000_000,
+    maxTokens: 128_000,
+    baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+    api: 'bedrock-converse-stream' as Api,
+    provider: 'amazon-bedrock' as Model<Api>['provider'],
+  };
+  return [
+    { ...shared, id: 'us.anthropic.claude-opus-4-7', name: 'Claude Opus 4.7 (US)' },
+    { ...shared, id: 'global.anthropic.claude-opus-4-7', name: 'Claude Opus 4.7 (Global)' },
+  ];
+}
+
+// Opus 4.7 returns 400 "temperature is deprecated for this model" when the
+// param is set. Keep temperature for every other model.
+function supportsTemperature(modelId: string): boolean {
+  return !modelId.includes('claude-opus-4-7');
+}
 
 // Extension detection
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
 
-interface BedrockCampOptions extends StreamOptions {
+type BedrockCampOnPayload =
+  | ((payload: unknown) => void)
+  | ((payload: unknown, model: Model<Api>) => void);
+
+interface BedrockCampOptions extends Omit<StreamOptions, 'onPayload'> {
+  onPayload?: BedrockCampOnPayload;
   toolChoice?: 'auto' | 'any' | 'none' | { type: 'tool'; name: string };
   reasoning?: ThinkingLevel;
   thinkingBudgets?: ThinkingBudgets;
+}
+
+type BedrockCampSimpleOptions = Omit<SimpleStreamOptions, 'onPayload'> & {
+  onPayload?: BedrockCampOnPayload;
+};
+
+function notifyPayload(
+  onPayload: BedrockCampOnPayload | undefined,
+  payload: unknown,
+  model: Model<Api>
+): void {
+  if (!onPayload) return;
+  // Bedrock CAMP callers inspect both the serialized payload and the resolved
+  // model. Plain StreamOptions callbacks remain valid because extra arguments
+  // are ignored in JavaScript.
+  (onPayload as (payload: unknown, model: Model<Api>) => void)(payload, model);
 }
 
 // ── Message conversion ──────────────────────────────────────────────
@@ -435,14 +519,15 @@ export const streamBedrockCamp = (
       if (!baseUrl) throw new Error('Base URL is required for Bedrock CAMP');
 
       // Build request body (Converse API format)
+      const inferenceConfig: Record<string, unknown> = { maxTokens: options.maxTokens };
+      if (supportsTemperature(model.id)) {
+        inferenceConfig.temperature = options.temperature;
+      }
       const body: any = {
         modelId: model.id,
         messages: convertMessages(context, model),
         system: buildSystemPrompt(context.systemPrompt, model),
-        inferenceConfig: {
-          maxTokens: options.maxTokens,
-          temperature: options.temperature,
-        },
+        inferenceConfig,
         toolConfig: convertToolConfig(context.tools, options.toolChoice),
         additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
       };
@@ -452,10 +537,10 @@ export const streamBedrockCamp = (
       if (!body.toolConfig) delete body.toolConfig;
       if (!body.additionalModelRequestFields) delete body.additionalModelRequestFields;
 
-      options?.onPayload?.(body, model);
+      notifyPayload(options.onPayload, body, model);
 
       // Build URL: POST {baseUrl}/model/{modelId}/converse
-      const targetUrl = `${baseUrl.replace(/\/$/, '')}/model/${encodeURIComponent(model.id)}/converse`;
+      const targetUrl = `${baseUrl.replace(/\/$/, '')}/model/${model.id}/converse`;
 
       // Route through CORS proxy in CLI mode, direct in extension mode
       const fetchUrl = isExtension ? targetUrl : '/api/fetch-proxy';
@@ -507,9 +592,18 @@ export const streamBedrockCamp = (
 export const streamSimpleBedrockCamp = (
   model: Model<Api>,
   context: Context,
-  options?: SimpleStreamOptions
+  options?: BedrockCampSimpleOptions
 ): AssistantMessageEventStream => {
-  const base = buildBaseOptions(model, options, undefined);
+  const base = buildBaseOptions(
+    model,
+    options && {
+      ...options,
+      onPayload: options.onPayload
+        ? (payload) => notifyPayload(options.onPayload, payload, model)
+        : undefined,
+    },
+    undefined
+  );
   if (!options?.reasoning) {
     return streamBedrockCamp(model, context, { ...base, reasoning: undefined });
   }

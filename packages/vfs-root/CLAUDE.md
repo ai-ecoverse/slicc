@@ -36,9 +36,10 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 
 ## External Handoffs
 
-- Browser handoffs use `https://www.sliccy.ai/handoff#...` URLs and, after approval, arrive in the cone as normal user messages.
-- The agent-facing handoff note belongs in `packages/vfs-root/shared/CLAUDE.md`, because that file is bundled into `/shared/CLAUDE.md` inside the runtime.
-- When handoff behavior changes, keep this package guide, `packages/vfs-root/shared/CLAUDE.md`, and `docs/slicc-handoff.md` aligned.
+- Mechanism: `x-slicc` response header on main-frame document responses → `navigate` lick → cone approval card.
+- Agent-facing flow: `packages/vfs-root/workspace/skills/handoff/SKILL.md` (bundled to `/workspace/skills/handoff/SKILL.md`) and the trigger line in `shared/CLAUDE.md` (bundled to `/shared/CLAUDE.md`).
+- Protocol reference: `docs/slicc-handoff.md`.
+- When handoff behavior changes, keep the skill, `shared/CLAUDE.md`, and `docs/slicc-handoff.md` aligned — do not duplicate their content here.
 
 ## Important Distinction
 

@@ -12,6 +12,7 @@ import FS from '@isomorphic-git/lightning-fs';
 import type {
   DirEntry,
   Encoding,
+  EntryType,
   FileContent,
   MkdirOptions,
   ReadFileOptions,
@@ -19,7 +20,13 @@ import type {
   Stats,
 } from './types.js';
 import { FsError } from './types.js';
-import { normalizePath, splitPath } from './path-utils.js';
+import { normalizePath, splitPath, joinPath } from './path-utils.js';
+import type { FsWatcher } from './fs-watcher.js';
+import { saveMountEntry, removeMountEntry, clearMountEntries } from './mount-table-store.js';
+import { MountIndex } from './mount-index.js';
+
+/** Maximum number of symlink hops before throwing ELOOP. */
+const MAX_SYMLINK_DEPTH = 10;
 
 export interface VirtualFsOptions {
   /** Database name for LightningFS IndexedDB storage. */
@@ -30,18 +37,49 @@ export interface VirtualFsOptions {
 
 export class VirtualFS {
   private lfs: FS.PromisifiedFS;
+  private rawFs: FS;
   private _ready: Promise<void>;
   /** Map from absolute mount path → FileSystemDirectoryHandle (File System Access API). */
   private mountPoints = new Map<string, FileSystemDirectoryHandle>();
+  private watcher: FsWatcher | null = null;
+  private readonly dbName: string;
+  /** BroadcastChannel for syncing mount registrations across VFS instances with the same dbName. */
+  private mountSyncChannel: BroadcastChannel | null = null;
+  /** Index of files in mounted directories for fast discovery. */
+  private mountIndex = new MountIndex();
 
   private constructor(dbName: string, wipe: boolean) {
+    this.dbName = dbName;
     const fs = new FS(dbName, { wipe });
+    this.rawFs = fs;
     this.lfs = fs.promises;
     // LightningFS initializes asynchronously; wait for first stat to complete
     this._ready = this.lfs
       .stat('/')
       .then(() => {})
       .catch(() => {});
+
+    // Set up BroadcastChannel for mount point synchronization
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        this.mountSyncChannel = new BroadcastChannel(`vfs-mount-sync:${dbName}`);
+        this.mountSyncChannel.onmessage = (event: MessageEvent) => {
+          const { type, path, handle } = event.data ?? {};
+          if (type === 'mount' && typeof path === 'string' && handle) {
+            this.mountPoints.set(path, handle);
+            // Register with MountIndex so peer instances also get fast walks
+            this.mountIndex.registerMount(path, handle);
+            this.watcher?.notify([{ type: 'modify', path, entryType: 'directory' }]);
+          } else if (type === 'unmount' && typeof path === 'string') {
+            this.mountPoints.delete(path);
+            this.mountIndex.unregisterMount(path);
+            this.watcher?.notify([{ type: 'modify', path, entryType: 'directory' }]);
+          }
+        };
+      } catch {
+        // BroadcastChannel may fail in some contexts — mount sync is best-effort
+      }
+    }
   }
 
   /** Create a VirtualFS instance. */
@@ -50,6 +88,9 @@ export class VirtualFS {
     const wipe = options?.wipe ?? false;
     const vfs = new VirtualFS(dbName, wipe);
     await vfs._ready;
+    if (wipe) {
+      await clearMountEntries().catch(() => {});
+    }
     return vfs;
   }
 
@@ -58,7 +99,249 @@ export class VirtualFS {
     return this.lfs;
   }
 
+  /**
+   * Writability predicate — the unrestricted VirtualFS has no ACL, so every
+   * path is writable. Exists to mirror {@link RestrictedFS.canWrite} so
+   * callers (e.g., the `agent` shell command) can duck-type across both
+   * without checking which instance they hold.
+   */
+  canWrite(_path: string): boolean {
+    return true;
+  }
+
+  /** Attach a file system watcher for change notifications. */
+  setWatcher(watcher: FsWatcher | null): void {
+    this.watcher = watcher;
+  }
+
+  /** Get the attached watcher, or null. */
+  getWatcher(): FsWatcher | null {
+    return this.watcher;
+  }
+
+  /**
+   * Close the underlying IndexedDB connection and release resources.
+   * Must be called when the VirtualFS instance is no longer needed (e.g., in test cleanup).
+   */
+  async dispose(): Promise<void> {
+    this.mountSyncChannel?.close();
+    this.mountSyncChannel = null;
+    this.watcher?.dispose();
+    this.watcher = null;
+    this.mountIndex.dispose();
+
+    const pfs = this.lfs as any;
+
+    // 1. Cancel any pending deactivation timeout
+    if (pfs._deactivationTimeout) {
+      clearTimeout(pfs._deactivationTimeout);
+      pfs._deactivationTimeout = null;
+    }
+
+    // 2. Wait for any pending operations to complete
+    if (pfs._operations?.size > 0) {
+      await pfs._gracefulShutdown?.();
+    }
+
+    // 3. Cancel the debounced saveSuperblock timer in DefaultBackend
+    if (pfs._backend?.saveSuperblock?.cancel) {
+      pfs._backend.saveSuperblock.cancel();
+    }
+
+    // 4. Flush pending writes then deactivate (closes IDB via IdbBackend.close())
+    if (pfs._backend) {
+      try {
+        if (pfs._backend.flush) await pfs._backend.flush();
+      } catch {
+        /* may fail if not activated */
+      }
+      if (pfs._backend.deactivate) {
+        await pfs._backend.deactivate();
+      }
+    }
+
+    // 5. Null out retained references so the entire LFS tree can be GC'd
+    pfs._backend = null;
+    pfs._activationPromise = null;
+    pfs._deactivationPromise = null;
+    pfs._initPromise = null;
+
+    // 6. Delete the IndexedDB database to free memory (critical for fake-indexeddb in tests)
+    if (typeof indexedDB !== 'undefined' && indexedDB.deleteDatabase) {
+      try {
+        const req = indexedDB.deleteDatabase(this.dbName);
+        await new Promise<void>((resolve, reject) => {
+          req.onsuccess = () => resolve();
+          req.onerror = () => reject(req.error);
+        });
+      } catch {
+        // Best effort — may fail if IndexedDB is not available
+      }
+    }
+  }
+
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Synchronous fast-path: direct CacheFS access for non-mounted paths
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Access the LightningFS in-memory CacheFS tree directly.
+   * Returns null if the cache is not activated or the internal structure
+   * doesn't match expectations (e.g. after a LightningFS upgrade).
+   *
+   * The CacheFS tree is a nested Map where:
+   * - Key 0 (STAT) holds { mode, type, size, ino, mtimeMs }
+   * - String keys are child entry names mapping to sub-Maps
+   *
+   * This is a private LightningFS internal. The `cachefs-internals` test
+   * suite validates the structure so upgrades that break it are caught.
+   */
+  private getCacheFS(): any | null {
+    try {
+      const cache = (this.lfs as any)._backend?._cache;
+      if (cache?.activated && cache._root instanceof Map) return cache;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Synchronous readDir for non-mounted LightningFS paths.
+   * Returns null if the path is under a mount or the CacheFS fast path is
+   * unavailable — callers must fall back to the async `readDir()`.
+   */
+  readDirSync(path: string): DirEntry[] | null {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) return null;
+    const cache = this.getCacheFS();
+    if (!cache) return null;
+    try {
+      // CacheFS.readdir follows symlinks in the path (via _lookup with follow=true)
+      const names: string[] = cache.readdir(normalized);
+      const entries: DirEntry[] = [];
+      for (const name of names) {
+        const childPath = normalized === '/' ? `/${name}` : `${normalized}/${name}`;
+        try {
+          // lstat does NOT follow the leaf symlink — gives us the entry's own type
+          const stat = cache.lstat(childPath);
+          const type: EntryType =
+            stat.type === 'symlink' ? 'symlink' : stat.type === 'dir' ? 'directory' : 'file';
+          entries.push({ name, type });
+        } catch {
+          // Skip entries we can't stat (shouldn't happen in CacheFS)
+        }
+      }
+      return entries;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Synchronous stat (follows symlinks) for non-mounted LightningFS paths.
+   * Returns null if the path is under a mount, the CacheFS fast path is
+   * unavailable, or the symlink target is in a mounted tree.
+   *
+   * Enforces MAX_SYMLINK_DEPTH to stay consistent with the async realpath().
+   * CacheFS._lookup follows symlinks internally without a depth limit, so we
+   * manually resolve symlinks with a hop counter before calling stat.
+   */
+  statSync(path: string): Stats | null {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) return null;
+    const cache = this.getCacheFS();
+    if (!cache) return null;
+    try {
+      // Manually resolve symlinks with a depth limit matching the async path.
+      const resolved = this.resolveSymlinksSync(cache, normalized);
+      if (resolved === null) return null;
+      const s = cache.lstat(resolved);
+      // After full resolution, result should be file or dir, not symlink.
+      return {
+        type: s.type === 'dir' ? 'directory' : 'file',
+        size: s.size ?? 0,
+        mtime: s.mtimeMs ?? Date.now(),
+        ctime: s.mtimeMs ?? Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Synchronously resolve all symlinks in a path using CacheFS, with a hop
+   * limit matching MAX_SYMLINK_DEPTH. Returns null if the limit is exceeded
+   * or the target is unresolvable (e.g. in a mount).
+   *
+   * Uses a shared mutable counter so that hops accumulate across recursive
+   * calls (matching the async realpath behavior).
+   */
+  private resolveSymlinksSync(
+    cache: any,
+    path: string,
+    hops: { count: number } = { count: 0 }
+  ): string | null {
+    const parts = path.split('/').filter(Boolean);
+    let resolved = '/';
+    for (const part of parts) {
+      resolved = resolved === '/' ? `/${part}` : `${resolved}/${part}`;
+      try {
+        const s = cache.lstat(resolved);
+        if (s.type === 'symlink') {
+          if (++hops.count > MAX_SYMLINK_DEPTH) return null;
+          const target = s.target;
+          if (target.startsWith('/')) {
+            resolved = normalizePath(target);
+          } else {
+            const { dir } = splitPath(resolved);
+            resolved = normalizePath(joinPath(dir, target));
+          }
+          // Recursively resolve — shared hops object accumulates across calls
+          const full = this.resolveSymlinksSync(cache, resolved, hops);
+          if (full === null) return null;
+          resolved = full;
+        }
+      } catch {
+        return null;
+      }
+    }
+    return resolved;
+  }
+
+  /**
+   * Synchronous lstat (does NOT follow symlinks) for non-mounted paths.
+   * Returns null if the fast path is unavailable.
+   */
+  lstatSync(path: string): Stats | null {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) return null;
+    const cache = this.getCacheFS();
+    if (!cache) return null;
+    try {
+      const s = cache.lstat(normalized);
+      if (s.type === 'symlink') {
+        return {
+          type: 'symlink',
+          size: s.size ?? 0,
+          mtime: s.mtimeMs ?? Date.now(),
+          ctime: s.mtimeMs ?? Date.now(),
+          isSymlink: true,
+          symlinkTarget: s.target,
+        };
+      }
+      return {
+        type: s.type === 'dir' ? 'directory' : 'file',
+        size: s.size ?? 0,
+        mtime: s.mtimeMs ?? Date.now(),
+        ctime: s.mtimeMs ?? Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   // File System Access API mount support
   // ---------------------------------------------------------------------------
 
@@ -72,6 +355,29 @@ export class VirtualFS {
    */
   async mount(absolutePath: string, handle: FileSystemDirectoryHandle): Promise<void> {
     const normalized = normalizePath(absolutePath);
+    if (this.mountPoints.has(normalized)) {
+      throw new FsError('EEXIST', 'mount point is already mounted', normalized);
+    }
+
+    try {
+      const existing = await this.lstat(normalized);
+      if (existing.type !== 'directory') {
+        throw new FsError('ENOTDIR', 'mount point must be a directory', normalized);
+      }
+      const entries = await this.readDir(normalized);
+      if (entries.length > 0) {
+        throw new FsError(
+          'ENOTEMPTY',
+          'mount point must be empty to avoid shadowing existing files',
+          normalized
+        );
+      }
+    } catch (err) {
+      if (!(err instanceof FsError) || err.code !== 'ENOENT') {
+        throw err;
+      }
+    }
+
     // Ensure parent dirs exist in LFS, then create placeholder for mount root
     const { dir } = splitPath(normalized);
     if (dir !== '/') await this.mkdir(dir, { recursive: true });
@@ -81,11 +387,39 @@ export class VirtualFS {
       /* EEXIST is fine */
     }
     this.mountPoints.set(normalized, handle);
+    // Start async indexing for fast file discovery
+    this.mountIndex.registerMount(normalized, handle);
+    try {
+      this.mountSyncChannel?.postMessage({ type: 'mount', path: normalized, handle });
+    } catch {
+      /* Best-effort sync: local mount is already registered */
+    }
+    this.watcher?.notify([{ type: 'modify', path: normalized, entryType: 'directory' }]);
+    // Persist to IndexedDB (best-effort)
+    try {
+      await saveMountEntry(normalized, handle);
+    } catch {
+      /* best-effort persistence */
+    }
   }
 
   /** Remove a mount point (the LFS placeholder directory is left in place). */
-  unmount(absolutePath: string): void {
-    this.mountPoints.delete(normalizePath(absolutePath));
+  async unmount(absolutePath: string): Promise<void> {
+    const normalized = normalizePath(absolutePath);
+    this.mountPoints.delete(normalized);
+    this.mountIndex.unregisterMount(normalized);
+    try {
+      this.mountSyncChannel?.postMessage({ type: 'unmount', path: normalized });
+    } catch {
+      /* best-effort sync */
+    }
+    this.watcher?.notify([{ type: 'modify', path: normalized, entryType: 'directory' }]);
+    // Remove from IndexedDB (best-effort)
+    try {
+      await removeMountEntry(normalized);
+    } catch {
+      /* best-effort persistence */
+    }
   }
 
   /** Return the list of currently active mount paths. */
@@ -94,26 +428,68 @@ export class VirtualFS {
   }
 
   /**
+   * Get the mount index for fast file discovery in mounted directories.
+   */
+  getMountIndex(): MountIndex {
+    return this.mountIndex;
+  }
+
+  /**
+   * Re-index a mounted directory. Use after external changes.
+   * @throws Error if the path is not a mount point
+   */
+  async refreshMount(mountPath: string): Promise<void> {
+    const normalized = normalizePath(mountPath);
+    if (!this.mountPoints.has(normalized)) {
+      throw new FsError('ENOENT', 'not a mount point', normalized);
+    }
+    await this.mountIndex.refreshMount(normalized);
+  }
+
+  /**
+   * Check whether an absolute path is under any active mount point.
+   * Non-allocating (iterates the mount map directly) — safe to call on a hot
+   * path such as the per-operation check in the isomorphic-git fs adapter.
+   */
+  isPathUnderMount(path: string): boolean {
+    for (const mountPath of this.mountPoints.keys()) {
+      if (path === mountPath || path.startsWith(mountPath + '/')) return true;
+    }
+    return false;
+  }
+
+  /**
    * Find the mount point that owns `path`.
-   * Returns the handle and the path segments relative to the mount root,
+   * Returns the mount path, handle, and the path segments relative to the mount root,
    * or null if the path is not under any mount.
    */
   private findMount(
     path: string
-  ): { handle: FileSystemDirectoryHandle; relParts: string[] } | null {
+  ): { path: string; handle: FileSystemDirectoryHandle; relParts: string[] } | null {
+    let bestMatch: { mountPath: string; handle: FileSystemDirectoryHandle } | null = null;
+
     for (const [mountPath, handle] of this.mountPoints) {
-      if (path === mountPath) return { handle, relParts: [] };
-      if (path.startsWith(mountPath + '/')) {
-        return {
-          handle,
-          relParts: path
-            .slice(mountPath.length + 1)
-            .split('/')
-            .filter(Boolean),
-        };
+      const isMatch = path === mountPath || path.startsWith(mountPath + '/');
+      if (!isMatch) continue;
+      if (!bestMatch || mountPath.length > bestMatch.mountPath.length) {
+        bestMatch = { mountPath, handle };
       }
     }
-    return null;
+
+    if (!bestMatch) return null;
+
+    if (path === bestMatch.mountPath) {
+      return { path: bestMatch.mountPath, handle: bestMatch.handle, relParts: [] };
+    }
+
+    return {
+      path: bestMatch.mountPath,
+      handle: bestMatch.handle,
+      relParts: path
+        .slice(bestMatch.mountPath.length + 1)
+        .split('/')
+        .filter(Boolean),
+    };
   }
 
   /** Navigate to a nested sub-directory within a FileSystemDirectoryHandle. */
@@ -147,6 +523,13 @@ export class VirtualFS {
         return new FsError('ENOENT', 'no such file or directory', path);
       if (err.name === 'TypeMismatchError') return new FsError('ENOTDIR', 'not a directory', path);
       if (err.name === 'NotAllowedError') return new FsError('EINVAL', 'permission denied', path);
+      // FSA throws InvalidModificationError from removeEntry() when the target
+      // is a non-empty directory and `recursive` was not requested. Surface
+      // that as ENOTEMPTY so callers (notably isomorphic-git's checkout/reset
+      // cleanup path) can tolerate untracked files the same way they do on
+      // the LightningFS-backed path.
+      if (err.name === 'InvalidModificationError')
+        return new FsError('ENOTEMPTY', 'directory not empty', path);
     }
     return new FsError('EINVAL', err instanceof Error ? err.message : String(err), path);
   }
@@ -170,12 +553,14 @@ export class VirtualFS {
         throw this.convertFsaError(err, normalized);
       }
     }
+    // Resolve symlinks before reading
+    const resolved = await this.resolveSymlinks(normalized);
     try {
       const encoding = options?.encoding ?? 'utf-8';
       if (encoding === 'utf-8') {
-        return await this.lfs.readFile(normalized, { encoding: 'utf8' });
+        return await this.lfs.readFile(resolved, { encoding: 'utf8' });
       } else {
-        return await this.lfs.readFile(normalized);
+        return await this.lfs.readFile(resolved);
       }
     } catch (err) {
       throw this.convertError(err, normalized);
@@ -196,34 +581,76 @@ export class VirtualFS {
     const mount = this.findMount(normalized);
     if (mount) {
       if (mount.relParts.length === 0) throw new FsError('EISDIR', 'is a directory', normalized);
+      let wasExisting = false;
+      try {
+        await this.stat(normalized);
+        wasExisting = true;
+      } catch {
+        /* file doesn't exist yet */
+      }
       try {
         const fh = await VirtualFS.fsaGetFile(mount.handle, mount.relParts, true);
         const writable = await fh.createWritable();
+        // Preserve byteOffset/byteLength: pooled Buffer instances share a
+        // backing ArrayBuffer with other allocations, so `content.buffer`
+        // alone would write the whole pool.
         const data =
           typeof content === 'string'
             ? new TextEncoder().encode(content)
-            : new Uint8Array(
-                content instanceof Uint8Array
-                  ? (content.buffer as ArrayBuffer)
-                  : (content as ArrayBuffer)
-              );
+            : content instanceof Uint8Array
+              ? new Uint8Array(content.buffer, content.byteOffset, content.byteLength)
+              : new Uint8Array(content as ArrayBuffer);
         await writable.write(data as unknown as FileSystemWriteChunkType);
         await writable.close();
       } catch (err) {
         throw this.convertFsaError(err, normalized);
       }
+      this.watcher?.notify([
+        {
+          type: wasExisting ? 'modify' : 'create',
+          path: normalized,
+          entryType: 'file',
+        },
+      ]);
+      // Update mount index for fast discovery (idempotent, safe to call always)
+      this.mountIndex.notifyWrite(normalized);
       return;
     }
+    // Resolve symlinks before writing
+    let resolved: string;
+    try {
+      resolved = await this.resolveSymlinks(normalized);
+    } catch {
+      // Path doesn't exist yet — that's fine for new files, use the original path
+      resolved = normalized;
+    }
+    // Check existence before write to determine create vs modify.
+    // Use lfs.stat() directly instead of this.exists() to avoid extra
+    // symlink-resolution IDB round-trips that leave pending LFS background ops.
+    let wasExisting = false;
+    try {
+      await this.lfs.stat(resolved);
+      wasExisting = true;
+    } catch {
+      /* file doesn't exist yet */
+    }
     // Ensure parent directory exists
-    const { dir } = splitPath(normalized);
+    const { dir } = splitPath(resolved);
     if (dir !== '/') {
       await this.mkdir(dir, { recursive: true });
     }
     try {
-      await this.lfs.writeFile(normalized, content);
+      await this.lfs.writeFile(resolved, content);
     } catch (err) {
       throw this.convertError(err, normalized);
     }
+    this.watcher?.notify([
+      {
+        type: wasExisting ? 'modify' : 'create',
+        path: resolved,
+        entryType: 'file',
+      },
+    ]);
   }
 
   /**
@@ -234,33 +661,70 @@ export class VirtualFS {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
     if (mount) {
+      // Fast path: use MountIndex if available
+      const indexedEntries = this.mountIndex.getDirectoryEntries(mount.path, normalized);
+      if (indexedEntries !== undefined) {
+        const entries = new Map<string, DirEntry>();
+        for (const entry of indexedEntries) {
+          entries.set(entry.name, { name: entry.name, type: entry.type });
+        }
+        // Also include nested mount points as virtual directories
+        const childPrefix = normalized === '/' ? '/' : `${normalized}/`;
+        for (const mountPath of this.mountPoints.keys()) {
+          if (mountPath === normalized || !mountPath.startsWith(childPrefix)) continue;
+          const relPath = mountPath.slice(childPrefix.length);
+          if (!relPath || relPath.includes('/')) continue;
+          if (!entries.has(relPath)) {
+            entries.set(relPath, { name: relPath, type: 'directory' });
+          }
+        }
+        return [...entries.values()];
+      }
+
+      // Slow path: iterate over FSA handle
       try {
         const dirHandle =
           mount.relParts.length === 0
             ? mount.handle
             : await VirtualFS.fsaNavDir(mount.handle, mount.relParts);
-        const entries: DirEntry[] = [];
+        const entries = new Map<string, DirEntry>();
         for await (const [name, handle] of dirHandle as unknown as AsyncIterable<
           [string, FileSystemHandle]
         >) {
-          entries.push({ name, type: handle.kind === 'directory' ? 'directory' : 'file' });
+          entries.set(name, { name, type: handle.kind === 'directory' ? 'directory' : 'file' });
         }
-        return entries;
+
+        const childPrefix = normalized === '/' ? '/' : `${normalized}/`;
+        for (const mountPath of this.mountPoints.keys()) {
+          if (mountPath === normalized || !mountPath.startsWith(childPrefix)) continue;
+          const relPath = mountPath.slice(childPrefix.length);
+          if (!relPath || relPath.includes('/')) continue;
+          if (!entries.has(relPath)) {
+            entries.set(relPath, { name: relPath, type: 'directory' });
+          }
+        }
+        return [...entries.values()];
       } catch (err) {
         throw this.convertFsaError(err, normalized);
       }
     }
+    // Resolve symlinks in the directory path itself
+    const resolved = await this.resolveSymlinks(normalized);
     try {
-      const names = await this.lfs.readdir(normalized);
+      const names = await this.lfs.readdir(resolved);
       const entries: DirEntry[] = [];
       for (const name of names) {
-        const childPath = normalized === '/' ? `/${name}` : `${normalized}/${name}`;
+        const childPath = resolved === '/' ? `/${name}` : `${resolved}/${name}`;
         try {
-          const stat = await this.lfs.stat(childPath);
-          entries.push({
-            name,
-            type: stat.isDirectory() ? 'directory' : 'file',
-          });
+          const s = await this.lfs.lstat(childPath);
+          if (s.isSymbolicLink()) {
+            entries.push({ name, type: 'symlink' });
+          } else {
+            entries.push({
+              name,
+              type: s.isDirectory() ? 'directory' : 'file',
+            });
+          }
         } catch {
           // Skip entries we can't stat
         }
@@ -284,7 +748,11 @@ export class VirtualFS {
     if (mount) {
       if (mount.relParts.length === 0) return; // mount root placeholder already exists
       try {
+        const existed = await this.exists(normalized);
         await VirtualFS.fsaNavDir(mount.handle, mount.relParts, true);
+        if (!existed) {
+          this.watcher?.notify([{ type: 'create', path: normalized, entryType: 'directory' }]);
+        }
       } catch (err) {
         throw this.convertFsaError(err, normalized);
       }
@@ -312,6 +780,7 @@ export class VirtualFS {
       } catch (err) {
         throw this.convertError(err, normalized);
       }
+      this.watcher?.notify([{ type: 'create', path: normalized, entryType: 'directory' }]);
     }
   }
 
@@ -327,6 +796,12 @@ export class VirtualFS {
       if (mount.relParts.length === 0) {
         throw new FsError('EINVAL', 'cannot remove a mount point — use unmount', normalized);
       }
+      let entryType: EntryType | undefined;
+      try {
+        entryType = (await this.stat(normalized)).type;
+      } catch {
+        /* best effort */
+      }
       try {
         const parentParts = mount.relParts.slice(0, -1);
         const name = mount.relParts[mount.relParts.length - 1];
@@ -338,11 +813,18 @@ export class VirtualFS {
       } catch (err) {
         throw this.convertFsaError(err, normalized);
       }
+      this.watcher?.notify([{ type: 'delete', path: normalized, entryType }]);
+      // Update mount index
+      this.mountIndex.notifyDelete(normalized);
       return;
     }
     try {
-      const stat = await this.lfs.stat(normalized);
-      if (stat.isDirectory()) {
+      // Use lstat to detect symlinks — if it's a symlink, just unlink it
+      // (don't follow the link or recurse into a target directory)
+      const s = await this.lfs.lstat(normalized);
+      if (s.isSymbolicLink()) {
+        await this.lfs.unlink(normalized);
+      } else if (s.isDirectory()) {
         if (options?.recursive) {
           await this.rmRecursive(normalized);
         } else {
@@ -354,6 +836,7 @@ export class VirtualFS {
     } catch (err) {
       throw this.convertError(err, normalized);
     }
+    this.watcher?.notify([{ type: 'delete', path: normalized }]);
   }
 
   private async rmRecursive(path: string): Promise<void> {
@@ -407,13 +890,15 @@ export class VirtualFS {
         throw this.convertFsaError(err, normalized);
       }
     }
+    // Resolve symlinks before stat — stat follows symlinks
+    const resolved = await this.resolveSymlinks(normalized);
     try {
-      const stat = await this.lfs.stat(normalized);
+      const s = await this.lfs.stat(resolved);
       return {
-        type: stat.isDirectory() ? 'directory' : 'file',
-        size: stat.size,
-        mtime: stat.mtimeMs,
-        ctime: stat.ctimeMs,
+        type: s.isDirectory() ? 'directory' : 'file',
+        size: s.size,
+        mtime: s.mtimeMs,
+        ctime: s.ctimeMs,
       };
     } catch (err) {
       throw this.convertError(err, normalized);
@@ -434,10 +919,17 @@ export class VirtualFS {
       }
     }
     try {
-      await this.lfs.stat(normalized);
+      // Try following symlinks first (stat follows them)
+      await this.stat(normalized);
       return true;
     } catch {
-      return false;
+      // If stat fails (e.g., dangling symlink), check if the link itself exists
+      try {
+        await this.lfs.lstat(normalized);
+        return true;
+      } catch {
+        return false;
+      }
     }
   }
 
@@ -448,11 +940,23 @@ export class VirtualFS {
   async rename(oldPath: string, newPath: string): Promise<void> {
     const normalizedOld = normalizePath(oldPath);
     const normalizedNew = normalizePath(newPath);
+    let entryType: EntryType | undefined;
+    try {
+      entryType = (await this.lstat(normalizedOld)).type;
+    } catch {
+      /* best effort */
+    }
     try {
       await this.lfs.rename(normalizedOld, normalizedNew);
     } catch (err) {
       throw this.convertError(err, normalizedOld);
     }
+    this.watcher?.notify([
+      { type: 'delete', path: normalizedOld, entryType },
+      { type: 'create', path: normalizedNew, entryType },
+    ]);
+    // Update mount index if paths are under mounts
+    this.mountIndex.notifyRename(normalizedOld, normalizedNew);
   }
 
   /**
@@ -466,17 +970,70 @@ export class VirtualFS {
 
   /**
    * Recursively walk a directory tree, yielding all file paths.
+   * Follows symlinks to directories but tracks visited real paths to avoid infinite loops.
+   *
+   * For mounted directories with a ready index, uses the fast path (O(n) iteration
+   * over cached file list). Falls back to slow recursive readDir otherwise.
    */
-  async *walk(path: string): AsyncGenerator<string> {
+  async *walk(path: string, _visited?: Set<string>): AsyncGenerator<string> {
     const normalized = normalizePath(path);
+
+    // Fast path: check if this path is exactly a mount point with a ready index.
+    // We check on every call (including recursive) so that walking from '/' can
+    // switch to indexed iteration when it enters a mounted subtree.
+    // Only use fast path when:
+    // 1. The path IS the mount point (not a subdirectory of it)
+    // 2. The mount's index is ready
+    // 3. There are no nested mounts under this path
+    if (this.mountPoints.size > 0 && this.mountPoints.has(normalized)) {
+      const hasNestedMounts = [...this.mountPoints.keys()].some(
+        (mp) => mp !== normalized && mp.startsWith(normalized + '/')
+      );
+
+      if (!hasNestedMounts && this.mountIndex.isReady(normalized)) {
+        const files = this.mountIndex.getFiles(normalized);
+        if (files) {
+          for (const filePath of files) {
+            yield filePath;
+          }
+          return;
+        }
+      }
+    }
+
+    // Slow path: recursive readDir
+    const visited = _visited ?? new Set<string>();
+
+    // Track the real path to detect symlink loops
+    let realPath: string;
+    try {
+      realPath = await this.realpath(normalized);
+    } catch {
+      realPath = normalized;
+    }
+    if (visited.has(realPath)) return; // Avoid infinite loops
+    visited.add(realPath);
+
     const entries = await this.readDir(normalized);
 
     for (const entry of entries) {
       const childPath = normalized === '/' ? `/${entry.name}` : `${normalized}/${entry.name}`;
       if (entry.type === 'file') {
         yield childPath;
+      } else if (entry.type === 'symlink') {
+        // Determine if symlink points to a file or directory
+        try {
+          const targetStat = await this.stat(childPath);
+          if (targetStat.type === 'file') {
+            yield childPath;
+          } else if (targetStat.type === 'directory') {
+            yield* this.walk(childPath, visited);
+          }
+        } catch {
+          // Dangling symlink — skip
+        }
       } else {
-        yield* this.walk(childPath);
+        yield* this.walk(childPath, visited);
       }
     }
   }
@@ -508,6 +1065,139 @@ export class VirtualFS {
     return splitPath(normalizePath(path)).base;
   }
 
+  // ---------------------------------------------------------------------------
+  // Symlink support
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Create a symbolic link at `linkPath` pointing to `target`.
+   * Target can be absolute or relative (relative to the directory containing the link).
+   * @throws FsError EEXIST if linkPath already exists
+   */
+  async symlink(target: string, linkPath: string): Promise<void> {
+    const normalizedLinkPath = normalizePath(linkPath);
+    const mount = this.findMount(normalizedLinkPath);
+    if (mount) {
+      throw new FsError(
+        'EINVAL',
+        'symlinks not supported on mounted filesystems',
+        normalizedLinkPath
+      );
+    }
+    // Ensure parent directory exists
+    const { dir } = splitPath(normalizedLinkPath);
+    if (dir !== '/') {
+      await this.mkdir(dir, { recursive: true });
+    }
+    try {
+      await this.lfs.symlink(target, normalizedLinkPath);
+    } catch (err) {
+      throw this.convertError(err, normalizedLinkPath);
+    }
+    this.watcher?.notify([{ type: 'create', path: normalizedLinkPath, entryType: 'symlink' }]);
+  }
+
+  /**
+   * Read the target of a symbolic link without following it.
+   * @throws FsError ENOENT if path doesn't exist, EINVAL if path is not a symlink
+   */
+  async readlink(path: string): Promise<string> {
+    const normalized = normalizePath(path);
+    try {
+      return await this.lfs.readlink(normalized);
+    } catch (err) {
+      throw this.convertError(err, normalized);
+    }
+  }
+
+  /**
+   * Stat a path without following symlinks.
+   * If the path is a symlink, returns type: 'symlink' with isSymlink and symlinkTarget set.
+   */
+  async lstat(path: string): Promise<Stats> {
+    const normalized = normalizePath(path);
+    const mount = this.findMount(normalized);
+    if (mount) {
+      // Mount points don't support symlinks — fall through to regular stat
+      return this.stat(normalized);
+    }
+    try {
+      const s = await this.lfs.lstat(normalized);
+      if (s.isSymbolicLink()) {
+        const target = await this.lfs.readlink(normalized);
+        return {
+          type: 'symlink',
+          size: s.size,
+          mtime: s.mtimeMs,
+          ctime: s.ctimeMs,
+          isSymlink: true,
+          symlinkTarget: target,
+        };
+      }
+      return {
+        type: s.isDirectory() ? 'directory' : 'file',
+        size: s.size,
+        mtime: s.mtimeMs,
+        ctime: s.ctimeMs,
+      };
+    } catch (err) {
+      throw this.convertError(err, normalized);
+    }
+  }
+
+  /**
+   * Resolve all symlinks in a path to produce the final canonical path.
+   * @throws FsError ELOOP if more than MAX_SYMLINK_DEPTH symlinks are encountered
+   */
+  async realpath(path: string, _hops = 0): Promise<string> {
+    const normalized = normalizePath(path);
+    const mount = this.findMount(normalized);
+    if (mount) return normalized; // Mount paths are already real
+
+    const parts = normalized.split('/').filter(Boolean);
+    let resolved = '/';
+    let hops = _hops;
+
+    for (const part of parts) {
+      resolved = resolved === '/' ? `/${part}` : `${resolved}/${part}`;
+      try {
+        const s = await this.lfs.lstat(resolved);
+        if (s.isSymbolicLink()) {
+          if (++hops > MAX_SYMLINK_DEPTH) {
+            throw new FsError('ELOOP', 'too many levels of symbolic links', path);
+          }
+          const target = await this.lfs.readlink(resolved);
+          if (target.startsWith('/')) {
+            // Absolute symlink — restart resolution from the target
+            resolved = normalizePath(target);
+          } else {
+            // Relative symlink — resolve relative to the link's parent directory
+            const { dir } = splitPath(resolved);
+            resolved = normalizePath(joinPath(dir, target));
+          }
+          // The resolved path itself may contain more symlinks — resolve it fully
+          resolved = await this.realpath(resolved, hops);
+        }
+      } catch (err) {
+        if (err instanceof FsError) throw err;
+        throw this.convertError(err, resolved);
+      }
+    }
+
+    return resolved;
+  }
+
+  /**
+   * Internal helper: resolve symlinks in a path before an operation.
+   * Used by readFile, writeFile, stat, etc. to follow symlinks transparently.
+   * Only applies to LFS-backed paths (mount points are returned as-is).
+   */
+  private async resolveSymlinks(path: string): Promise<string> {
+    const mount = this.findMount(path);
+    if (mount) return path; // Mount points don't have symlinks
+    return this.realpath(path);
+  }
+
   /**
    * Convert LightningFS errors to FsError.
    */
@@ -528,6 +1218,9 @@ export class VirtualFS {
     }
     if (msg.includes('ENOTEMPTY')) {
       return new FsError('ENOTEMPTY', 'directory not empty', path);
+    }
+    if (msg.includes('ELOOP')) {
+      return new FsError('ELOOP', 'too many levels of symbolic links', path);
     }
     // Default to EINVAL for unknown errors
     return new FsError('EINVAL', msg, path);

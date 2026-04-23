@@ -44,7 +44,6 @@ describe('OffscreenClient', () => {
     onScoopCreated: vi.fn(),
     onScoopListUpdate: vi.fn(),
     onIncomingMessage: vi.fn(),
-    onPendingHandoffsChange: vi.fn(),
   };
 
   beforeEach(() => {
@@ -215,27 +214,6 @@ describe('OffscreenClient', () => {
     expect(envelope.payload.type).toBe('clear-chat');
   });
 
-  it('requests pending handoffs from the service worker', () => {
-    client.requestPendingHandoffs();
-
-    const envelope = sentMessages[0] as { payload: any };
-    expect(envelope.payload.type).toBe('handoff-list-request');
-  });
-
-  it('sends accept and dismiss actions for pending handoffs', () => {
-    client.acceptPendingHandoff('handoff-1');
-    client.dismissPendingHandoff('handoff-2');
-
-    expect((sentMessages[0] as any).payload).toEqual({
-      type: 'handoff-accept',
-      handoffId: 'handoff-1',
-    });
-    expect((sentMessages[1] as any).payload).toEqual({
-      type: 'handoff-dismiss',
-      handoffId: 'handoff-2',
-    });
-  });
-
   it('ignores messages from non-offscreen sources', () => {
     client.selectedScoopJid = 'cone_123';
     const handle = client.createAgentHandle();
@@ -253,42 +231,37 @@ describe('OffscreenClient', () => {
     expect(events.length).toBe(0);
   });
 
-  it('handles pending handoff lists from the service worker', () => {
-    simulateMessage('service-worker', {
-      type: 'handoff-pending-list',
-      handoffs: [
-        {
-          handoffId: 'handoff-1',
-          sourceUrl: 'https://www.sliccy.ai/handoff#abc',
-          receivedAt: new Date().toISOString(),
-          payload: { instruction: 'Continue this task in SLICC.' },
-        },
-      ],
-    });
-
-    expect(callbacks.onPendingHandoffsChange).toHaveBeenCalledWith([
-      expect.objectContaining({
-        handoffId: 'handoff-1',
-        payload: expect.objectContaining({ instruction: 'Continue this task in SLICC.' }),
-      }),
-    ]);
-  });
-
   it('registerScoop sends scoop-create message', () => {
     client.registerScoop({
       jid: 'temp',
-      name: 'Test',
-      folder: 'test-scoop',
-      isCone: false,
-      type: 'scoop',
-      requiresTrigger: true,
-      assistantLabel: 'test-scoop',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
       addedAt: '',
     });
     const envelope = sentMessages[0] as { payload: any };
-    expect(envelope.payload.type).toBe('scoop-create');
-    expect(envelope.payload.name).toBe('Test');
-    expect(envelope.payload.isCone).toBe(false);
+    expect(envelope.payload.type).toBe('cone-create');
+    expect(envelope.payload.name).toBe('Cone');
+    // No `isCone` on the wire — the bridge handler knows this path is cone-only.
+    expect(envelope.payload.isCone).toBeUndefined();
+  });
+
+  it('registerScoop rejects when called with a non-cone scoop', async () => {
+    await expect(
+      client.registerScoop({
+        jid: 'temp',
+        name: 'Rogue',
+        folder: 'rogue-scoop',
+        isCone: false,
+        type: 'scoop',
+        requiresTrigger: true,
+        assistantLabel: 'rogue-scoop',
+        addedAt: '',
+      })
+    ).rejects.toThrow(/cone-only/i);
   });
 
   it('unregisterScoop sends scoop-drop and removes locally', () => {

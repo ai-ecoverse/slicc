@@ -33,7 +33,7 @@ Type `commands` in the terminal for the full list. Key commands:
 
 - **skill list/info/read** — inspect skills; `skill install/uninstall` manages native packages
 - **upskill** — install from GitHub (`upskill owner/repo`) or ClawHub (`upskill clawhub:name`)
-- **webhook/crontask** — set up licks (external event triggers)
+- **webhook/crontask/fswatch** — set up licks (external event triggers, file change watchers)
 - **sprinkle** — manage sprinkles: `list`, `open`, `close`, `send`, `chat`
 - **oauth-token** — get OAuth access token for a provider
 - **cost** — show session cost breakdown (tokens, cache, cost per cone/scoop)
@@ -55,8 +55,10 @@ Type `commands` in the terminal for the full list. Key commands:
 Virtual filesystem stored in IndexedDB, survives tab closes and refreshes. Mount local directories:
 
 ```
-mount /workspace/myproject
+mount /mnt/myproject
 ```
+
+Use an empty mount point. Mounting over existing files is blocked so built-in skills and scripts stay discoverable. `ln -s` the mounted files into the place where you need them.
 
 ## Capabilities
 

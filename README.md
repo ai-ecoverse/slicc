@@ -52,11 +52,11 @@ SLICC is for you if:
 
 - **Launch an agent from the CLI and let it work in the browser it controls.** Start one command, open the workspace, and give the agent shell tools, files, and live browser access in one place.
 - **Automate repetitive workflows in authenticated web apps.** Use browser automation, page inspection, screenshots, storage access, and scripted tab control where your logged-in browser session already has the context.
-- **Hand work off from another coding agent into your live browser session.** Open a `https://www.sliccy.ai/handoff#...` URL and let the extension queue an approval prompt inside SLICC.
+- **Hand work off from another coding agent into your live browser session.** Open any URL whose response carries an `x-slicc` header (the tray-hub `/handoff?msg=...` endpoint is a convenience) and SLICC prompts you to approve the action inside the Chat tab.
 - **Solve technical tasks with practical tools.** Reach for `bash`, `git`, `grep`, `node`, `python`, previews, and browser automation when the job is bigger than text generation.
 - **Delegate parallel work to scoops.** Split tasks into isolated sub-agents with their own sandboxes and context, then let the main agent coordinate the results.
 - **Turn one-off wins into reusable workflows.** Package behavior as skills, build interactive sprinkles, and react to external events with webhooks and cron-driven licks.
-- **Mount your local file system.** By default, SLICC is confined to your browser. But you can ask it to mount folders from your local file system, so it can read and write from there.
+- **Mount your local file system.** By default, SLICC is confined to your browser. But you can ask it to mount folders from your local file system, so it can read and write from there. Mount into an empty path such as `/mnt/myproject` so you do not hide existing skills or scripts.
 
 ## Getting started
 
@@ -155,6 +155,12 @@ To use SLICC, you need an LLM provider. SLICC is very much a BYOT (bring your ow
 
 The other providers are in YMMV territory. Please file an issue if you find them working or broken.
 
+## Secrets
+
+SLICC can safely manage API keys, tokens, and credentials with domain-scoped injection. The agent never sees real secret values — only masked placeholders — and secrets are only injected into requests destined for authorized domains. This protects against prompt-injection attacks that try to exfiltrate credentials.
+
+See [docs/secrets.md](docs/secrets.md) for setup instructions.
+
 ## Related projects and lineage
 
 SLICC is part of the [AI Ecoverse](https://github.com/ai-ecoverse), a growing set of AI-native tools and workflows. Its distinctive angle is simple: browser-native, practical, and job-oriented.
@@ -173,5 +179,6 @@ If you want to go deeper, the detailed docs live here:
 - [Architecture](docs/architecture.md)
 - [Testing](docs/testing.md)
 - [Shell reference](docs/shell-reference.md)
+- [Secrets](docs/secrets.md)
 - [Adding features](docs/adding-features.md)
 - [Electron notes](docs/electron.md)

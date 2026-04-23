@@ -8,11 +8,12 @@
 
 import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
-import type { VirtualFS } from '../fs/index.js';
+import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
-import type { BashExecResult, SecureFetch, Command } from 'just-bash';
+import type { BashExecResult, SecureFetch, Command, CommandName } from 'just-bash';
 import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
+import { getFetchBodyBytes } from './fetch-body.js';
 import { GitCommands } from '../git/git-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
@@ -22,15 +23,37 @@ import {
   createUpskillCommand,
 } from './supplemental-commands/upskill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
-import { discoverJshCommands, type JshDiscoveryFS } from './jsh-discovery.js';
+import type { BshDiscoveryFS } from './bsh-discovery.js';
+import type { JshDiscoveryFS } from './jsh-discovery.js';
 import { executeJshFile, executeJsCode } from './jsh-executor.js';
 import { parseShellArgs } from './parse-shell-args.js';
+import { ScriptCatalog } from './script-catalog.js';
 import { trackShellCommand } from '../ui/telemetry.js';
 
 function basename(path: string): string {
   const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
   const slash = trimmed.lastIndexOf('/');
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+}
+
+interface WatcherAwareFs {
+  getWatcher?(): FsWatcher | null;
+}
+
+interface UnderlyingFsProvider {
+  getUnderlyingFS?(): unknown;
+}
+
+function getFsWatcher(fs: unknown): FsWatcher | null {
+  if (fs && typeof (fs as WatcherAwareFs).getWatcher === 'function') {
+    return (fs as WatcherAwareFs).getWatcher?.() ?? null;
+  }
+
+  if (fs && typeof (fs as UnderlyingFsProvider).getUnderlyingFS === 'function') {
+    return getFsWatcher((fs as UnderlyingFsProvider).getUnderlyingFS?.());
+  }
+
+  return null;
 }
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
@@ -50,42 +73,37 @@ export function isTextContentType(contentType: string): boolean {
 }
 
 /**
- * Read a fetch Response body as a string, preserving binary data.
+ * Read a fetch Response body as raw bytes.
  *
- * For text content types, uses resp.text() (proper UTF-8 decoding).
- * For binary content types, reads as arrayBuffer and decodes as latin1
- * (ISO-8859-1) so every byte maps 1:1 to a codepoint 0-255. This
- * preserves binary data through just-bash's string-typed FetchResult.body.
+ * For binary content types, also cache a latin1-keyed copy so older
+ * string-based write paths can still recover the original bytes without
+ * corruption.
  */
-async function readResponseBody(resp: Response, url?: string): Promise<string> {
+async function readResponseBody(resp: Response, url?: string): Promise<Uint8Array> {
   const contentType = resp.headers.get('content-type') ?? '';
-  const isText = isTextContentType(contentType);
-  if (isText) {
-    return resp.text();
-  }
-  // Binary: read raw bytes and encode as latin1 string for just-bash's
-  // string-typed FetchResult.body. Also cache the original bytes so
-  // VfsAdapter.writeFile can bypass string encoding entirely.
   const buf = await resp.arrayBuffer();
   const bytes = new Uint8Array(buf);
-  const latin1 = new TextDecoder('iso-8859-1').decode(buf);
-  cacheBinaryBody(latin1, bytes);
-  // Also cache by URL so commands like upskill can retrieve by URL
-  if (url) {
-    cacheBinaryByUrl(url, bytes);
+  if (!isTextContentType(contentType)) {
+    let byteKey = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      byteKey += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    cacheBinaryBody(byteKey, bytes);
+    if (url) {
+      cacheBinaryByUrl(url, bytes);
+    }
   }
-  return latin1;
+  return bytes;
 }
 
 /**
  * Create a SecureFetch that routes requests through the CLI server's
  * /api/fetch-proxy endpoint, bypassing browser CORS restrictions.
  * In extension mode, uses direct fetch (CORS bypass via host_permissions).
- * Uses just-bash 2.11.7's custom `fetch` option so curl gets a fresh,
+ * Uses just-bash's custom `fetch` option so curl gets a fresh,
  * stateless fetch per invocation (fixes the multi-curl-in-loop bug).
  *
- * Binary responses (images, archives, etc.) are encoded as latin1 strings
- * to preserve byte fidelity through just-bash's string-typed FetchResult.
+ * Binary responses are preserved as raw bytes.
  */
 // Convert Headers or Record<string, string> to a plain Record<string, string>.
 function headersToRecord(
@@ -111,9 +129,8 @@ function prepareRequestBody(
   if (!body) return undefined;
   const ct = headers?.['Content-Type'] ?? headers?.['content-type'] ?? '';
   if (ct.includes('multipart/form-data')) {
-    const bytes = new Uint8Array(body.length);
-    for (let i = 0; i < body.length; i++) bytes[i] = body.charCodeAt(i);
-    return bytes;
+    const bytes = getFetchBodyBytes(body) as Uint8Array<ArrayBuffer>;
+    return new Blob([bytes]);
   }
   return body;
 }
@@ -238,7 +255,33 @@ export interface WasmShellOptions {
   browserAPI?: BrowserAPI;
   /** Optional: FS to use for .jsh discovery (defaults to fs). Useful for scoops where skill loading uses unrestricted VFS but the shell uses RestrictedFS. */
   jshDiscoveryFs?: JshDiscoveryFS;
+  /** Optional: FS to use for .bsh discovery (defaults to fs). */
+  bshDiscoveryFs?: BshDiscoveryFS;
+  /** Optional shared script catalog. When omitted, WasmShell creates and owns one. */
+  scriptCatalog?: ScriptCatalog;
+  /**
+   * Optional command allow-list. When omitted (or when the list contains `'*'`),
+   * every built-in, custom, and `.jsh` command is available — the default. When
+   * provided, only command heads whose names appear in the list are registered
+   * on the underlying Bash instance; anything else fails at dispatch with
+   * "command not found" (exit code 127), including inside pipelines, subshells,
+   * and command substitution, because just-bash resolves every simple command
+   * through the same registry.
+   */
+  allowedCommands?: readonly string[];
+  /**
+   * Returns the JID of the scoop whose shell this is, when running inside
+   * a scoop context. Forwarded to the `agent` supplemental command so it
+   * can tell the AgentBridge which scoop is the parent (for model
+   * inheritance). Returns `undefined` for standalone / terminal-panel
+   * shells that have no scoop owner.
+   */
+  getParentJid?: () => string | undefined;
 }
+
+type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
+  signal?: AbortSignal;
+};
 
 export class WasmShell {
   private bash: Bash;
@@ -266,9 +309,26 @@ export class WasmShell {
   private cwd: string;
   /** Set of all built-in + custom command names (for shadowing protection). */
   private builtinCommandNames: Set<string>;
+  /**
+   * Allow-list of command names. `null` means unrestricted — every command is
+   * permitted. Otherwise only names in the set may be registered or executed.
+   */
+  private readonly allowedCommands: ReadonlySet<string> | null;
+  private readonly scriptCatalog: ScriptCatalog;
+  private readonly ownsScriptCatalog: boolean;
+  /** Maps .jsh command names to their registered script paths (for staleness detection). */
+  private registeredJshCommands = new Map<string, string>();
+  /** Promise for the currently in-flight jsh sync, so callers can await it. */
+  private jshSyncInflight: Promise<void> | null = null;
+  /** Set when a sync is requested while one is already in-flight. */
+  private jshSyncDirty = false;
 
   constructor(private options: WasmShellOptions) {
     this.vfsAdapter = new VfsAdapter(options.fs);
+    this.allowedCommands =
+      options.allowedCommands && !options.allowedCommands.includes('*')
+        ? new Set(options.allowedCommands)
+        : null;
     const initialCwd = options.cwd ?? '/';
     const initialEnv: Record<string, string> = {
       HOME: '/',
@@ -289,44 +349,214 @@ export class WasmShell {
     // Initialize mount commands with VirtualFS
     this.mountCommands = new MountCommands({ fs: options.fs });
 
+    const scriptDiscoveryFs = options.jshDiscoveryFs ?? options.fs;
+    const bshDiscoveryFs = options.bshDiscoveryFs ?? options.fs;
+    const scriptWatcher = getFsWatcher(scriptDiscoveryFs) ?? getFsWatcher(bshDiscoveryFs);
+    this.scriptCatalog =
+      options.scriptCatalog ??
+      new ScriptCatalog({
+        jshFs: scriptDiscoveryFs,
+        bshFs: bshDiscoveryFs,
+        watcher: scriptWatcher,
+      });
+    this.ownsScriptCatalog = !options.scriptCatalog;
+
+    // When .jsh files change on disk, re-sync registered commands
+    if (scriptWatcher) {
+      scriptWatcher.watch(
+        '/',
+        (path) => path.endsWith('.jsh'),
+        () => {
+          void this.syncJshCommands().catch(() => undefined);
+        }
+      );
+    }
+
     // Create custom commands for just-bash
     const gitCommand = this.createGitCustomCommand();
     const supplementalCommands = createSupplementalCommands({
       onMediaPreview: async (items) => this.renderMediaPreview(items),
       getJshCommands: () => this.getJshCommandNames(),
       fs: options.fs,
+      scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
+      getParentJid: options.getParentJid,
     });
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();
 
-    const customCommands = [
+    const allCustomCommands = [
       gitCommand,
       mountCommand,
       createSkillCommand(options.fs),
       createUpskillCommand(options.fs, fetchFn),
       ...supplementalCommands,
     ];
+    const customCommands = allCustomCommands.filter((c) => this.isCommandAllowed(c.name));
+
+    // When restricted, pass `commands:` so just-bash only registers allow-listed
+    // built-ins. When unrestricted, leave it undefined to get the full default set.
+    const allBuiltinNames = [
+      ...getCommandNames(),
+      ...getNetworkCommandNames(),
+    ] as readonly CommandName[];
+    const allowedBuiltinNames: CommandName[] | undefined = this.allowedCommands
+      ? allBuiltinNames.filter((n) => this.isCommandAllowed(n))
+      : undefined;
 
     this.bash = new Bash({
       fs: this.vfsAdapter,
       cwd: initialCwd,
       env: initialEnv,
       fetch: fetchFn,
+      commands: allowedBuiltinNames,
       customCommands,
     });
 
+    // Network-command post-registration cleanup (Codex P1 on #433).
+    //
+    // just-bash's `BashOptions.commands` filter controls only the non-network
+    // built-ins. When `fetch` (or `network`) is set, just-bash unconditionally
+    // registers EVERY name from `getNetworkCommandNames()` regardless of
+    // `commands` — see `Bash` constructor in just-bash's bundle:
+    //   `if (t.fetch || t.network) for (let i of U0()) this.registerCommand(i);`
+    // We always pass `fetch` (via `createProxiedFetch()`), so without this
+    // cleanup a scoop with `allowedCommands: ['echo']` could still execute
+    // `curl`, `wget`, etc. — defeating the per-scoop isolation guarantee.
+    //
+    // Delete the disallowed network commands from the already-populated
+    // registry. Reaches into `Bash`'s private `commands: Map` via cast; the
+    // property name is stable across versions and tests below guard the
+    // behavior, but the upstream ergonomics here are what warrants the
+    // comment.
+    if (this.allowedCommands !== null) {
+      const bashInternals = this.bash as unknown as { commands: Map<string, unknown> };
+      for (const name of getNetworkCommandNames()) {
+        if (!this.isCommandAllowed(name)) {
+          bashInternals.commands.delete(name);
+        }
+      }
+    }
+
     // Wire up /usr/bin virtual directory with all registered command names
     const customCommandNames = customCommands.map((c) => c.name);
-    this.builtinCommandNames = new Set([
+    const registeredBuiltinNames = allowedBuiltinNames ?? [
       ...getCommandNames(),
       ...getNetworkCommandNames(),
-      ...customCommandNames,
-    ]);
+    ];
+    this.builtinCommandNames = new Set([...registeredBuiltinNames, ...customCommandNames]);
     this.vfsAdapter.setRegisteredCommandsFn(() => [...this.builtinCommandNames]);
 
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
+
+    // Kick off initial .jsh registration (async, non-blocking)
+    void this.syncJshCommands().catch(() => undefined);
+  }
+
+  /** True when `name` is registrable/executable under the current allow-list. */
+  private isCommandAllowed(name: string): boolean {
+    return this.allowedCommands === null || this.allowedCommands.has(name);
+  }
+
+  /**
+   * Discover .jsh commands and register any new ones as just-bash custom commands.
+   * This makes .jsh scripts work inside pipelines, subshells, and command substitution —
+   * not just as top-level commands caught by the exit-code-127 fallback.
+   */
+  async syncJshCommands(): Promise<void> {
+    if (this.jshSyncInflight) {
+      // Another sync is running — mark dirty so it re-runs when done.
+      this.jshSyncDirty = true;
+      return this.jshSyncInflight;
+    }
+    this.jshSyncInflight = this.doSyncJshCommands();
+    return this.jshSyncInflight;
+  }
+
+  private async doSyncJshCommands(): Promise<void> {
+    try {
+      const jshMap = await this.scriptCatalog.getJshCommands();
+      const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
+
+      for (const [name, scriptPath] of jshMap) {
+        // Skip commands blocked by the allow-list.
+        if (!this.isCommandAllowed(name)) continue;
+
+        // Never shadow built-in or custom commands
+        if (this.builtinCommandNames.has(name) && !this.registeredJshCommands.has(name)) {
+          continue;
+        }
+
+        // Skip if already registered with the same path (no change)
+        if (this.registeredJshCommands.get(name) === scriptPath) continue;
+
+        // Register (or re-register if the path changed) as a just-bash custom
+        // command. The execute closure resolves the script path at call-time via
+        // the catalog so it stays current even if a later sync hasn't fired yet.
+        const catalog = this.scriptCatalog;
+        const shell = this;
+        const cmdName = name;
+
+        const command: Command = {
+          name,
+          async execute(args: string[], ctx) {
+            // Resolve the current script path from the catalog at call-time
+            // so we always read the latest version, even if the file moved.
+            const currentMap = await catalog.getJshCommands();
+            const currentPath = currentMap.get(cmdName);
+            if (!currentPath) {
+              return {
+                stdout: '',
+                stderr: `jsh: command '${cmdName}' no longer exists\n`,
+                exitCode: 127,
+              };
+            }
+
+            let code: string;
+            try {
+              const raw = await discoveryFs.readFile(currentPath, { encoding: 'utf-8' });
+              code = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+            } catch {
+              return {
+                stdout: '',
+                stderr: `jsh: cannot read script '${currentPath}'\n`,
+                exitCode: 127,
+              };
+            }
+
+            const argv = ['node', currentPath, ...args];
+            // When running as a custom command inside just-bash, ctx.exec is always
+            // provided by the interpreter. Fall back to bash.exec for safety.
+            const execFn: typeof ctx.exec =
+              ctx.exec ??
+              ((cmd, opts) =>
+                shell.bash.exec(cmd, {
+                  env: Object.fromEntries(ctx.env),
+                  cwd: opts?.cwd ?? ctx.cwd,
+                }));
+            return executeJsCode(code, argv, {
+              fs: ctx.fs,
+              cwd: ctx.cwd,
+              env: ctx.env,
+              stdin: ctx.stdin,
+              exec: execFn,
+            });
+          },
+        };
+
+        this.bash.registerCommand(command);
+        this.registeredJshCommands.set(name, scriptPath);
+        this.builtinCommandNames.add(name);
+      }
+    } finally {
+      this.jshSyncInflight = null;
+      // If another sync was requested while we were running, re-run.
+      if (this.jshSyncDirty) {
+        this.jshSyncDirty = false;
+        void this.syncJshCommands().catch(() => undefined);
+      }
+    }
   }
 
   /** Create a custom git command for just-bash. */
@@ -367,28 +597,31 @@ export class WasmShell {
     return this.cwd;
   }
 
+  /** Get the shared script catalog used for `.jsh`/`.bsh` discovery. */
+  getScriptCatalog(): ScriptCatalog {
+    return this.scriptCatalog;
+  }
+
   /** Get a copy of the environment. */
   getEnv(): Record<string, string> {
     return { ...this.lastEnv };
   }
 
-  /** Discover .jsh commands from VFS (fresh scan each call, no caching), filtering out built-in command names. */
+  /** Get discovered .jsh commands from the shared script catalog, filtering out built-in names. */
   private async getFilteredJshCommands(): Promise<Map<string, string>> {
-    const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
-    const all = await discoverJshCommands(discoveryFs);
+    const all = await this.scriptCatalog.getJshCommands();
     const filtered = new Map<string, string>();
     for (const [name, path] of all) {
-      if (!this.builtinCommandNames.has(name)) {
-        filtered.set(name, path);
-      }
+      if (this.builtinCommandNames.has(name)) continue;
+      if (!this.isCommandAllowed(name)) continue;
+      filtered.set(name, path);
     }
     return filtered;
   }
 
   /** Get currently discovered .jsh command names. */
   async getJshCommandNames(): Promise<string[]> {
-    const jshMap = await this.getFilteredJshCommands();
-    return [...jshMap.keys()];
+    return [...(await this.getFilteredJshCommands()).keys()];
   }
 
   /**
@@ -447,11 +680,15 @@ export class WasmShell {
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
     trackShellCommand(commandName);
 
-    const result = await this.bash.exec(command, {
+    // just-bash's published ExecOptions type does not yet expose AbortSignal,
+    // but WasmShell still forwards it so external callers and terminal Ctrl+C
+    // keep a consistent cancellation path as the shell runtime evolves.
+    const execOptions: BashExecOptionsWithSignal = {
       env: this.lastEnv,
       cwd: this.cwd,
       signal: signal ?? this.execAbort?.signal,
-    });
+    };
+    const result = await this.bash.exec(command, execOptions);
     // Persist state for next call
     if (result.env) {
       this.lastEnv = { ...result.env };
@@ -463,7 +700,12 @@ export class WasmShell {
     // If bash returned 127 (command not found), try .jsh fallback
     if (result.exitCode === 127) {
       const jshResult = await this.tryJshFallback(command);
-      if (jshResult) return jshResult;
+      if (jshResult) {
+        // A .jsh command was found but wasn't registered — re-sync so it's
+        // available as a first-class bash command for future pipelines/subshells.
+        void this.syncJshCommands().catch(() => undefined);
+        return jshResult;
+      }
     }
 
     return result;
@@ -703,6 +945,9 @@ export class WasmShell {
     this.fitAddon = null;
     this.terminalHost = null;
     this.previewHost = null;
+    if (this.ownsScriptCatalog) {
+      this.scriptCatalog.dispose();
+    }
   }
 
   private showPrompt(): void {

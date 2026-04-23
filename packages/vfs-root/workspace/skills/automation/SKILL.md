@@ -45,6 +45,38 @@ This is a sandboxed browser-based VFS. Many standard tools don't exist.
 - **No long-running servers**: `serve` and `open` handle previewing
 - **No package managers**: No `apt`, `npm install`, `pip install`
 
+## File System Watching
+
+`fswatch` monitors VFS file changes and delivers events as licks to scoops.
+
+```bash
+# Watch for markdown changes, route to a scoop
+fswatch create --path /workspace --pattern "*.md" --scoop doc-watcher --name md-changes
+
+# Watch without targeting a scoop (routes to cone)
+fswatch create --path /workspace/src --pattern "*.ts"
+
+# List active watchers
+fswatch list
+
+# Remove a watcher
+fswatch delete fsw-1
+```
+
+Events include the change type (`create`, `modify`, `delete`) and the file path.
+
+## Symlinks
+
+The VFS supports symbolic links:
+
+```bash
+ln -s /workspace/skills /workspace/skill-link    # Create symlink
+readlink /workspace/skill-link                    # Read link target
+ls -la /workspace/                                # Shows symlinks with -> target
+```
+
+Symlinks work transparently — `cat`, `readFile`, `writeFile` etc. follow symlinks automatically.
+
 ## Onboarding
 
 When you receive a `[Sprinkle Event: welcome]` with `onboarding-complete`, read `/workspace/skills/welcome/SKILL.md` and follow its instructions.

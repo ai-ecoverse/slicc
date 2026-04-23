@@ -6,7 +6,7 @@
  */
 
 import type { ToolDefinition } from '../core/types.js';
-import type { RegisteredScoop } from './types.js';
+import { CURRENT_SCOOP_CONFIG_VERSION, type RegisteredScoop } from './types.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('scoop-management-tools');
@@ -165,7 +165,7 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
       tools.push({
         name: 'scoop_scoop',
         description:
-          'Create a new scoop. Optionally specify a model and/or a prompt. If prompt is provided, the scoop starts working immediately after creation (no separate feed_scoop needed).',
+          'Create a new scoop. Optionally specify a model, a prompt, and per-scoop sandbox shape (visible/writable paths + command allow-list). If prompt is provided, the scoop starts working immediately after creation (no separate feed_scoop needed).',
         inputSchema: {
           type: 'object',
           properties: {
@@ -183,6 +183,24 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               description:
                 'Task prompt for the scoop. If provided, the scoop starts working immediately after creation.',
             },
+            visiblePaths: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'VFS paths the scoop can READ (not write). Pure replace — what you set is what you get. Omit to use the default ["/workspace/"] which exposes the shared skills tree. Pass [] for no extra read-only paths. Note: the scoop\'s writablePaths are always readable too, so a true read-nothing sandbox also requires writablePaths: []. Mounts remain readable regardless. Trailing slash recommended (e.g. "/shared/data/").',
+            },
+            writablePaths: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'VFS paths the scoop can READ AND WRITE. Pure replace. Omit to use the default ["/scoops/<folder>/", "/shared/"] which gives the scoop its own sandbox plus shared space. Pass [] to block all writes. Trailing slash recommended.',
+            },
+            allowedCommands: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'Shell command allow-list. Omit for unrestricted access to every built-in, custom, and .jsh command (the default). Pass a list of command names to restrict the scoop\'s shell — e.g. ["echo","cat","grep"] for a read-only text-processing scoop. Pass ["*"] for explicit unrestricted. Applies to pipelines, substitutions, and network commands too.',
+            },
           },
           required: ['name'],
         },
@@ -191,7 +209,17 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
             name,
             model,
             prompt: taskPrompt,
-          } = input as { name: string; model?: string; prompt?: string };
+            visiblePaths,
+            writablePaths,
+            allowedCommands,
+          } = input as {
+            name: string;
+            model?: string;
+            prompt?: string;
+            visiblePaths?: string[];
+            writablePaths?: string[];
+            allowedCommands?: string[];
+          };
           const folder =
             name
               .toLowerCase()
@@ -200,6 +228,12 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               .slice(0, 50) + '-scoop';
 
           try {
+            // Scoop sandbox shape — the cone can override any of these three
+            // via tool input. Defaults are applied here (not in the
+            // orchestrator) so the `ScoopConfig` surface stays pure-replace:
+            // what you set is what you get. Stamping `configSchemaVersion`
+            // tells the orchestrator this record has explicit config and
+            // skips the compat migration on restore.
             const newScoop = await onScoopScoop({
               name,
               folder,
@@ -209,19 +243,41 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               requiresTrigger: true,
               assistantLabel: folder,
               addedAt: new Date().toISOString(),
-              config: model ? { modelId: model } : undefined,
+              config: {
+                ...(model ? { modelId: model } : {}),
+                visiblePaths: visiblePaths ?? ['/workspace/'],
+                writablePaths: writablePaths ?? [`/scoops/${folder}/`, '/shared/'],
+                ...(allowedCommands ? { allowedCommands } : {}),
+              },
+              configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
             });
 
             log.info('Scoop created', { name, folder });
 
-            // If prompt provided, feed immediately (fire-and-forget)
+            // If prompt provided, feed immediately and await the delegate
+            // call so setup failures (e.g. db.saveMessage) surface to the
+            // cone instead of being logged after a success response.
+            // onFeedScoop → delegateToScoop awaits only the persistence +
+            // prompt dispatch; the scoop's agent loop still runs
+            // fire-and-forget in the background, so this doesn't block on
+            // the LLM turn. The scoop's context is already initialized by
+            // the time onScoopScoop resolves (orchestrator.registerScoop
+            // awaits createScoopTab), so the prompt won't race init either.
             if (taskPrompt && onFeedScoop) {
-              onFeedScoop(newScoop.jid, taskPrompt).catch((err) => {
+              try {
+                await onFeedScoop(newScoop.jid, taskPrompt);
+              } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 log.error('Auto-feed failed', { name, error: msg });
-              });
+                return {
+                  content:
+                    `Scoop "${name}" created as "${folder}" but the initial task could not be sent: ${msg}. ` +
+                    `Use feed_scoop to retry.`,
+                  isError: true,
+                };
+              }
               return {
-                content: `Scoop "${name}" created as "${folder}" and task sent. It will start working as soon as initialization completes.`,
+                content: `Scoop "${name}" created as "${folder}" and task sent. It is now working on it.`,
               };
             }
 

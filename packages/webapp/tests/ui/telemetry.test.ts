@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 
 const mockSampleRUM = vi.fn();
 
@@ -22,6 +22,10 @@ const mockLocalStorage = {
 };
 
 vi.stubGlobal('localStorage', mockLocalStorage);
+
+afterAll(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('telemetry', () => {
   beforeEach(() => {

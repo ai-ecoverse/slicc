@@ -59,6 +59,9 @@ struct ServerCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Path to static UI files (dist/ui)")
     var staticRoot: String?
 
+    @Option(name: .long, help: "Path to secrets .env file")
+    var envFile: String?
+
     mutating func run() async throws {
         let config = ServerConfig.resolve(from: self)
         let logLevel = Self.loggerLevel(from: config.logLevel)
@@ -145,7 +148,9 @@ struct ServerCommand: AsyncParsableCommand {
                 logger: Logger(label: "slicc.static-files")
             )
         )
-        registerAPIRoutes(router: router, lickSystem: lickSystem, config: config, httpClient: httpClient)
+        let envFileSecrets: [Secret] = config.envFileURL.flatMap { Self.parseEnvFileSecrets(at: $0) } ?? []
+        let secretInjector = SecretInjector(sessionId: UUID().uuidString, envFileSecrets: envFileSecrets)
+        registerAPIRoutes(router: router, lickSystem: lickSystem, config: config, httpClient: httpClient, secretInjector: secretInjector)
 
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
         await cdpProxy.install(on: wsRouter, cdpPort: cdpPort)
@@ -276,6 +281,8 @@ struct ServerConfig: Sendable, Equatable {
     let logDirectoryURL: URL?
     let prompt: String?
     let staticRoot: String?
+    let envFile: String?
+    let envFileURL: URL?
 
     static func resolve(from command: ServerCommand) -> ServerConfig {
         resolve(from: command, arguments: ProcessInfo.processInfo.arguments)
@@ -293,6 +300,7 @@ struct ServerConfig: Sendable, Equatable {
         let normalizedLogDir = normalizedText(command.logDir)
         let normalizedPrompt = normalizedText(command.prompt)
         let normalizedStaticRoot = normalizedText(command.staticRoot)
+        let normalizedEnvFile = normalizedText(command.envFile)
 
         let positiveCdpPort = command.cdpPort > 0 ? command.cdpPort : defaultCliCdpPort
         let resolvedElectron = command.electron || normalizedElectronApp != nil
@@ -322,7 +330,9 @@ struct ServerConfig: Sendable, Equatable {
             logDir: normalizedLogDir,
             logDirectoryURL: resolvedFileURL(from: normalizedLogDir),
             prompt: normalizedPrompt,
-            staticRoot: normalizedStaticRoot
+            staticRoot: normalizedStaticRoot,
+            envFile: normalizedEnvFile,
+            envFileURL: resolvedFileURL(from: normalizedEnvFile)
         )
     }
 
@@ -610,5 +620,56 @@ extension ServerCommand {
 
     struct ParsedTrayJoinURL {
         let joinURL: String
+    }
+
+    /// Parse a .env file into `[Secret]` entries.
+    ///
+    /// Expects KEY=VALUE lines and KEY_DOMAINS=domain1,domain2 lines.
+    /// Keys without a matching _DOMAINS entry are skipped.
+    static func parseEnvFileSecrets(at url: URL) -> [Secret]? {
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
+            return nil
+        }
+
+        let domainsSuffix = "_DOMAINS"
+        var entries: [(key: String, value: String)] = []
+
+        for raw in content.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+
+            guard let eqIndex = line.firstIndex(of: "=") else { continue }
+            let key = line[line.startIndex..<eqIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+            var value = line[line.index(after: eqIndex)...].trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Strip matching quotes
+            if (value.hasPrefix("\"") && value.hasSuffix("\""))
+                || (value.hasPrefix("'") && value.hasSuffix("'")) {
+                value = String(value.dropFirst().dropLast())
+            }
+
+            if !key.isEmpty {
+                entries.append((key: key, value: value))
+            }
+        }
+
+        var secrets: [Secret] = []
+        for entry in entries {
+            if entry.key.hasSuffix(domainsSuffix) { continue }
+
+            let domainsKey = entry.key + domainsSuffix
+            guard let domainsEntry = entries.first(where: { $0.key == domainsKey }) else { continue }
+
+            let domains = domainsEntry.value
+                .components(separatedBy: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+
+            if !domains.isEmpty {
+                secrets.append(Secret(name: entry.key, value: entry.value, domains: domains))
+            }
+        }
+
+        return secrets
     }
 }

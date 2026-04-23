@@ -24,6 +24,10 @@ export default defineConfig(({ mode }) => ({
   },
   resolve: {
     alias: {
+      // The pinned isomorphic-git package resolves "." to index.cjs, and that
+      // CJS entry imports Node crypto. Force the browser-safe ESM entry
+      // instead.
+      'isomorphic-git': resolve(repoRoot, 'node_modules/isomorphic-git/index.js'),
       'node:zlib': resolve(__dirname, '../webapp/src/shims/empty.ts'),
       'node:module': resolve(__dirname, '../webapp/src/shims/empty.ts'),
       stream: resolve(__dirname, '../webapp/src/shims/stream.ts'),
@@ -119,6 +123,56 @@ export default defineConfig(({ mode }) => ({
           target: 'esnext',
           minify: true,
           define: { __DEV__: 'false', global: 'globalThis' },
+        });
+      },
+    },
+    {
+      name: 'build-slicc-editor',
+      async closeBundle() {
+        const esbuild = await import('esbuild');
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, '../webapp/src/ui/slicc-editor-entry.ts')],
+          bundle: true,
+          outfile: resolve(repoRoot, 'dist/extension/slicc-editor.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+        // Also build lucide-icons.js for sprinkles
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, '../webapp/src/ui/lucide-icons.ts')],
+          bundle: true,
+          outfile: resolve(repoRoot, 'dist/extension/lucide-icons.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+      },
+    },
+    {
+      name: 'build-slicc-diff',
+      async closeBundle() {
+        const esbuild = await import('esbuild');
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, '../webapp/src/ui/slicc-diff-entry.ts')],
+          bundle: true,
+          outfile: resolve(repoRoot, 'dist/extension/slicc-diff.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+          plugins: [
+            {
+              name: 'resolve-pierre-diffs-internals',
+              setup(build) {
+                build.onResolve({ filter: /^@pierre\/diffs\/dist\// }, (args) => ({
+                  path: resolve(repoRoot, 'node_modules', args.path.replace(/\.js$/, '') + '.js'),
+                }));
+              },
+            },
+          ],
         });
       },
     },

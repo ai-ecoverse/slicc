@@ -1464,3 +1464,109 @@ describe('ScoopContext.reloadSkills', () => {
     await expect(ctx.reloadSkills()).resolves.toBeUndefined();
   });
 });
+
+describe('ScoopContext dispose', () => {
+  let ctx: ScoopContext;
+  let callbacks: ScoopContextCallbacks;
+
+  beforeEach(() => {
+    callbacks = createMockCallbacks();
+    ctx = new ScoopContext(testScoop, callbacks, {} as any);
+  });
+
+  it('aborts agent and clears queues on dispose', () => {
+    injectMockAgent(ctx, async () => {});
+    const agent = (ctx as any).agent;
+
+    ctx.dispose();
+
+    expect(agent.abort).toHaveBeenCalled();
+    expect(agent.clearAllQueues).toHaveBeenCalled();
+    expect((ctx as any).agent).toBeNull();
+  });
+
+  it('suppresses status callbacks after dispose', async () => {
+    let resolvePrompt!: () => void;
+    const promptStarted = new Promise<void>((r) => {
+      resolvePrompt = r;
+    });
+    let resolveBlock!: () => void;
+    const blockPrompt = new Promise<void>((r) => {
+      resolveBlock = r;
+    });
+
+    injectMockAgent(ctx, async () => {
+      resolvePrompt();
+      await blockPrompt;
+    });
+
+    const promptPromise = ctx.prompt('hello');
+    await promptStarted;
+
+    ctx.dispose();
+
+    resolveBlock();
+    await promptPromise;
+
+    const statusCalls = (callbacks.onStatusChange as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[0]
+    );
+    expect(statusCalls).toContain('processing');
+    const afterProcessing = statusCalls.slice(statusCalls.indexOf('processing') + 1);
+    expect(afterProcessing).not.toContain('ready');
+  });
+
+  it('suppresses error callbacks from aborted prompt', async () => {
+    let resolvePrompt!: () => void;
+    const promptStarted = new Promise<void>((r) => {
+      resolvePrompt = r;
+    });
+
+    injectMockAgent(ctx, async () => {
+      resolvePrompt();
+      throw new Error('aborted');
+    });
+
+    const promptPromise = ctx.prompt('hello');
+    await promptStarted;
+
+    (callbacks.onError as ReturnType<typeof vi.fn>).mockClear();
+
+    ctx.dispose();
+    await promptPromise;
+
+    expect(callbacks.onError).not.toHaveBeenCalled();
+  });
+
+  it('suppresses agent event callbacks after dispose', () => {
+    // Add optional tool callbacks so we can assert they're not called
+    callbacks.onToolStart = vi.fn();
+    callbacks.onToolEnd = vi.fn();
+    ctx = new ScoopContext(testScoop, callbacks, {} as never);
+    injectMockAgent(ctx, async () => {});
+
+    ctx.dispose();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing private method for testing
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+
+    handler({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'hi' } });
+    handler({ type: 'tool_execution_start', toolName: 'bash', args: {} });
+    handler({
+      type: 'tool_execution_end',
+      toolName: 'bash',
+      result: { content: [] },
+      isError: false,
+    });
+    handler({ type: 'turn_end' });
+    handler({
+      type: 'agent_end',
+      messages: [{ role: 'user', content: 'hello', timestamp: Date.now() }],
+    });
+
+    expect(callbacks.onResponse).not.toHaveBeenCalled();
+    expect(callbacks.onToolStart).not.toHaveBeenCalled();
+    expect(callbacks.onToolEnd).not.toHaveBeenCalled();
+    expect(callbacks.onResponseDone).not.toHaveBeenCalled();
+  });
+});

@@ -20,6 +20,12 @@ export interface ScoopCostData {
     };
   };
   turns: number;
+  /** Timestamp (ms) of first assistant message */
+  firstActivity?: number;
+  /** Timestamp (ms) of last assistant message */
+  lastActivity?: number;
+  /** Total active time in milliseconds (rounded to 15-minute intervals) */
+  activeTimeMs?: number;
 }
 
 let sessionCostsProvider: (() => ScoopCostData[] | Promise<ScoopCostData[]>) | null = null;
@@ -46,12 +52,22 @@ Options:
 `;
 }
 
-function fmtNum(n: number): string {
-  return n.toLocaleString('en-US');
+function fmtMTok(tokens: number): string {
+  const mtok = tokens / 1_000_000;
+  if (mtok < 0.01) return '<0.01';
+  return mtok.toFixed(2);
 }
 
 function fmtCost(n: number): string {
   return `$${n.toFixed(2)}`;
+}
+
+function fmtHourlyRate(cost: number, activeTimeMs?: number): string {
+  if (!activeTimeMs || activeTimeMs === 0) return '-';
+  const hours = activeTimeMs / (1000 * 60 * 60);
+  if (hours === 0) return '-';
+  const hourlyRate = cost / hours;
+  return `$${hourlyRate.toFixed(2)}`;
 }
 
 function truncModel(model: string, maxLen: number): string {
@@ -63,10 +79,25 @@ function formatTable(data: ScoopCostData[]): string {
   const lines: string[] = [];
   lines.push('Session Cost Breakdown:\n');
 
+  // Fixed column widths
+  const COL_AGENT = 16;
+  const COL_MODEL = 18;
+  const COL_MTOK = 15; // "  0.01 /   0.03"
+  const COL_CACHE = 15;
+  const COL_COST = 10;
+  const COL_HOURLY = 10;
+
   const hdr =
-    '  Agent              Model                    Tokens (in/out)    Cache (r/w)       Cost';
-  const sep =
-    '  ─────────────────────────────────────────────────────────────────────────────────────────';
+    '  ' +
+    'Agent'.padEnd(COL_AGENT) +
+    'Model'.padEnd(COL_MODEL) +
+    'MTok (in/out)'.padEnd(COL_MTOK) +
+    'Cache (r/w)'.padEnd(COL_CACHE) +
+    'Cost'.padStart(COL_COST) +
+    '$/hour'.padStart(COL_HOURLY);
+
+  const totalWidth = 2 + COL_AGENT + COL_MODEL + COL_MTOK + COL_CACHE + COL_COST + COL_HOURLY;
+  const sep = '  ' + '─'.repeat(totalWidth - 2);
 
   lines.push(hdr);
   lines.push(sep);
@@ -78,16 +109,20 @@ function formatTable(data: ScoopCostData[]): string {
     totCost = 0;
 
   for (const d of data) {
-    const label = d.type === 'cone' ? `${d.name} (cone)` : `${d.name} (scoop)`;
-    const agent = label.padEnd(19);
-    const model = truncModel(d.model, 24).padEnd(24);
-    const tokens = `${fmtNum(d.usage.input)} / ${fmtNum(d.usage.output)}`;
-    const tokenCol = tokens.padEnd(18);
-    const cache = `${fmtNum(d.usage.cacheRead)} / ${fmtNum(d.usage.cacheWrite)}`;
-    const cacheCol = cache.padEnd(17);
-    const cost = fmtCost(d.usage.cost.total);
+    const agent = d.name.padEnd(COL_AGENT);
+    const model = truncModel(d.model, COL_MODEL).padEnd(COL_MODEL);
+    const tokens =
+      `${fmtMTok(d.usage.input).padStart(5)} / ${fmtMTok(d.usage.output).padStart(5)}`.padEnd(
+        COL_MTOK
+      );
+    const cache =
+      `${fmtMTok(d.usage.cacheRead).padStart(5)} / ${fmtMTok(d.usage.cacheWrite).padStart(5)}`.padEnd(
+        COL_CACHE
+      );
+    const cost = fmtCost(d.usage.cost.total).padStart(COL_COST);
+    const hourly = fmtHourlyRate(d.usage.cost.total, d.activeTimeMs).padStart(COL_HOURLY);
 
-    lines.push(`  ${agent} ${model} ${tokenCol} ${cacheCol} ${cost}`);
+    lines.push(`  ${agent}${model}${tokens}${cache}${cost}${hourly}`);
 
     totIn += d.usage.input;
     totOut += d.usage.output;
@@ -98,13 +133,18 @@ function formatTable(data: ScoopCostData[]): string {
 
   lines.push(sep);
 
-  const totalAgent = 'Total'.padEnd(19);
-  const totalModel = ''.padEnd(24);
-  const totalTokens = `${fmtNum(totIn)} / ${fmtNum(totOut)}`.padEnd(18);
-  const totalCache = `${fmtNum(totCR)} / ${fmtNum(totCW)}`.padEnd(17);
-  const totalCost = fmtCost(totCost);
+  const totalAgent = 'Total'.padEnd(COL_AGENT);
+  const totalModel = ''.padEnd(COL_MODEL);
+  const totalTokens = `${fmtMTok(totIn).padStart(5)} / ${fmtMTok(totOut).padStart(5)}`.padEnd(
+    COL_MTOK
+  );
+  const totalCache = `${fmtMTok(totCR).padStart(5)} / ${fmtMTok(totCW).padStart(5)}`.padEnd(
+    COL_CACHE
+  );
+  const totalCost = fmtCost(totCost).padStart(COL_COST);
+  const totalHourly = ''.padStart(COL_HOURLY);
 
-  lines.push(`  ${totalAgent} ${totalModel} ${totalTokens} ${totalCache} ${totalCost}`);
+  lines.push(`  ${totalAgent}${totalModel}${totalTokens}${totalCache}${totalCost}${totalHourly}`);
 
   return lines.join('\n') + '\n';
 }

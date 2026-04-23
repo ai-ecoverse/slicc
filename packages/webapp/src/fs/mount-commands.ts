@@ -55,7 +55,41 @@ export class MountCommands {
     if (sub === 'list' || sub === '-l') {
       const mounts = this.options.fs.listMounts();
       if (mounts.length === 0) return { stdout: 'No active mounts\n', stderr: '', exitCode: 0 };
-      return { stdout: mounts.map((m) => m).join('\n') + '\n', stderr: '', exitCode: 0 };
+      const mountIndex = this.options.fs.getMountIndex();
+      const lines = mounts.map((m) => {
+        const state = mountIndex.getState(m);
+        if (!state) return m;
+        if (state.status === 'ready') {
+          return `${m} (indexed: ${state.indexed} entries)`;
+        } else if (state.status === 'indexing') {
+          return `${m} (indexing: ${state.indexed} entries...)`;
+        } else if (state.status === 'error') {
+          return `${m} (index error: ${state.error})`;
+        }
+        return `${m} (pending index)`;
+      });
+      return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+    }
+
+    // refresh <path> - re-index a mounted directory
+    if (sub === 'refresh') {
+      const target = args[1];
+      if (!target) return { stdout: '', stderr: 'mount refresh: path required', exitCode: 1 };
+      const targetPath = target.startsWith('/') ? target : `${cwd.replace(/\/$/, '')}/${target}`;
+      try {
+        await this.options.fs.refreshMount(targetPath);
+        return {
+          stdout: `Re-indexed ${targetPath}\n`,
+          stderr: '',
+          exitCode: 0,
+        };
+      } catch (err) {
+        return {
+          stdout: '',
+          stderr: `mount refresh: ${err instanceof Error ? err.message : String(err)}`,
+          exitCode: 1,
+        };
+      }
     }
 
     // mount <target-path>
@@ -168,7 +202,10 @@ export class MountCommands {
     try {
       await this.options.fs.mount(targetPath, dirHandle);
       return {
-        stdout: `Mounted '${dirHandle.name}' → ${targetPath} (live bridge — reads and writes go to the real filesystem)\n`,
+        stdout:
+          `Mounted '${dirHandle.name}' → ${targetPath}\n` +
+          `Indexing in background for fast file discovery.\n` +
+          `Note: External changes are not auto-detected — use 'mount refresh ${targetPath}' after modifying files outside the browser.\n`,
         stderr: '',
         exitCode: 0,
       };
@@ -188,23 +225,30 @@ export class MountCommands {
           'Usage: mount <target-path>',
           '       mount unmount <path>',
           '       mount list',
+          '       mount refresh <path>',
           '',
           'Transparently bridge a real filesystem directory into the virtual filesystem.',
           'Opens a directory picker; all reads and writes under <target-path> go directly',
           'to the real directory — no copying occurs. Changes are immediately visible on',
-          'both sides.',
+          'both sides. Mount points must be empty so existing VFS files are not hidden.',
+          '',
+          'Upon mounting, files are indexed asynchronously for fast discovery. External',
+          'changes (made outside the browser) are NOT automatically detected — use',
+          '`mount refresh` to re-index after external modifications.',
           '',
           'Arguments:',
           '  <target-path>  Mount point in the virtual filesystem (required).',
           '',
           'Sub-commands:',
-          '  unmount <path>  Remove a mount point',
-          '  list            Show active mount points',
+          '  unmount <path>   Remove a mount point',
+          '  list             Show active mount points and index status',
+          '  refresh <path>   Re-index a mount after external changes',
           '',
           'Examples:',
-          '  mount /workspace/myapp   # Mount selected dir at /workspace/myapp',
-          '  mount list               # Show active mounts',
-          '  mount unmount /workspace/myapp',
+          '  mount /mnt/myapp           # Mount selected dir at /mnt/myapp',
+          '  mount list                 # Show active mounts with index status',
+          '  mount refresh /mnt/myapp   # Re-index after external changes',
+          '  mount unmount /mnt/myapp',
         ].join('\n') + '\n',
       stderr: '',
       exitCode: 0,

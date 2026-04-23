@@ -16,6 +16,11 @@ import {
   shouldIncludeProvider,
 } from '../providers/index.js';
 import type { ProviderConfig } from '../providers/index.js';
+import {
+  isBedrockCampCompatible,
+  getBedrockCampExtraModels,
+  bedrockCampRegionFromBaseUrl,
+} from '../providers/built-in/bedrock-camp.js';
 
 export type { ProviderConfig } from '../providers/index.js';
 
@@ -50,7 +55,8 @@ export interface Account {
   providerId: string;
   apiKey: string;
   baseUrl?: string;
-  modelId?: string;
+  deployment?: string;
+  apiVersion?: string;
   // OAuth fields (used by OAuth providers)
   accessToken?: string;
   refreshToken?: string;
@@ -121,15 +127,21 @@ function applyModelMetadata(
 // Get models for a provider
 export function getProviderModels(providerId: string): Model<Api>[] {
   try {
-    // Bedrock CAMP uses Amazon Bedrock models with custom API
+    // Bedrock CAMP uses Amazon Bedrock models with custom API.
+    // Filter to inference-profile-prefixed Claude 4.x whose region matches
+    // the configured endpoint (eu.* against us-* 400s "invalid model
+    // identifier"), and inject models missing from pi-ai's registry (e.g.
+    // opus-4.7). Dedupe by ID so extras auto-drop when pi-ai ships them.
     if (providerId === 'bedrock-camp') {
-      const bedrockModels = getModelsDynamic('amazon-bedrock');
-      // Filter to selected model if one is configured
-      const selectedModelId = getModelIdForProvider('bedrock-camp');
-      const filtered = selectedModelId
-        ? bedrockModels.filter((m) => m.id === selectedModelId)
-        : bedrockModels;
-      return (filtered.length > 0 ? filtered : bedrockModels).map((m) => ({
+      const region = bedrockCampRegionFromBaseUrl(getBaseUrlForProvider('bedrock-camp'));
+      const bedrockModels = getModelsDynamic('amazon-bedrock').filter((m) =>
+        isBedrockCampCompatible(m, region)
+      );
+      const existingIds = new Set(bedrockModels.map((m) => m.id));
+      const extras = getBedrockCampExtraModels().filter(
+        (m) => isBedrockCampCompatible(m, region) && !existingIds.has(m.id)
+      );
+      return [...bedrockModels, ...extras].map((m) => ({
         ...m,
         api: 'bedrock-camp-converse' as Api,
         provider: 'bedrock-camp',
@@ -337,18 +349,16 @@ export function addAccount(
   providerId: string,
   apiKey: string,
   baseUrl?: string,
-  modelId?: string
+  deployment?: string,
+  apiVersion?: string
 ): void {
   const accounts = getAccounts().filter((a) => a.providerId !== providerId);
   const entry: Account = { providerId, apiKey };
   if (baseUrl) entry.baseUrl = baseUrl;
-  if (modelId) entry.modelId = modelId;
+  if (deployment) entry.deployment = deployment;
+  if (apiVersion) entry.apiVersion = apiVersion;
   accounts.push(entry);
   saveAccounts(accounts);
-}
-
-export function getModelIdForProvider(providerId: string): string | undefined {
-  return getAccounts().find((a) => a.providerId === providerId)?.modelId;
 }
 
 export function removeAccount(providerId: string): void {
@@ -389,6 +399,14 @@ export function getApiKeyForProvider(providerId: string): string | null {
 
 export function getBaseUrlForProvider(providerId: string): string | null {
   return getAccounts().find((a) => a.providerId === providerId)?.baseUrl ?? null;
+}
+
+export function getDeploymentForProvider(providerId: string): string | null {
+  return getAccounts().find((a) => a.providerId === providerId)?.deployment ?? null;
+}
+
+export function getApiVersionForProvider(providerId: string): string | null {
+  return getAccounts().find((a) => a.providerId === providerId)?.apiVersion ?? null;
 }
 
 // --- Selected model (format: "providerId:modelId") ---
@@ -1028,28 +1046,55 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       dialog.appendChild(baseUrlSection);
 
-      // Model selector section (shown for providers with requiresModelSelection)
-      const modelSection = document.createElement('div');
-      modelSection.style.display = 'none';
+      // Deployment section (shown for providers with requiresDeployment)
+      const deploymentSection = document.createElement('div');
+      deploymentSection.style.display = 'none';
 
-      const modelLabel = document.createElement('div');
-      modelLabel.className = 'dialog__desc';
-      modelLabel.textContent = 'Model:';
-      modelSection.appendChild(modelLabel);
+      const deploymentLabel = document.createElement('div');
+      deploymentLabel.className = 'dialog__desc';
+      deploymentLabel.textContent = 'Deployment:';
+      deploymentSection.appendChild(deploymentLabel);
 
-      const modelSelect = document.createElement('select');
-      modelSelect.className = 'dialog__input';
-      modelSelect.style.marginBottom = '16px';
-      modelSection.appendChild(modelSelect);
+      const deploymentInput = document.createElement('input');
+      deploymentInput.className = 'dialog__input';
+      deploymentInput.type = 'text';
+      deploymentInput.autocomplete = 'off';
+      deploymentInput.spellcheck = false;
+      if (isEdit && editing.deployment) deploymentInput.value = editing.deployment;
+      deploymentSection.appendChild(deploymentInput);
 
-      const modelDesc = document.createElement('div');
-      modelDesc.className = 'dialog__desc';
-      modelDesc.style.cssText =
+      const deploymentDesc = document.createElement('div');
+      deploymentDesc.className = 'dialog__desc';
+      deploymentDesc.style.cssText =
         'font-size: 11px; color: var(--s2-content-secondary); margin-top: -12px; margin-bottom: 16px;';
-      modelDesc.textContent = 'Select the model available in your deployment';
-      modelSection.appendChild(modelDesc);
+      deploymentSection.appendChild(deploymentDesc);
 
-      dialog.appendChild(modelSection);
+      dialog.appendChild(deploymentSection);
+
+      // API version section (shown for providers with requiresApiVersion)
+      const apiVersionSection = document.createElement('div');
+      apiVersionSection.style.display = 'none';
+
+      const apiVersionLabel = document.createElement('div');
+      apiVersionLabel.className = 'dialog__desc';
+      apiVersionLabel.textContent = 'API Version:';
+      apiVersionSection.appendChild(apiVersionLabel);
+
+      const apiVersionInput = document.createElement('input');
+      apiVersionInput.className = 'dialog__input';
+      apiVersionInput.type = 'text';
+      apiVersionInput.autocomplete = 'off';
+      apiVersionInput.spellcheck = false;
+      if (isEdit && editing.apiVersion) apiVersionInput.value = editing.apiVersion;
+      apiVersionSection.appendChild(apiVersionInput);
+
+      const apiVersionDesc = document.createElement('div');
+      apiVersionDesc.className = 'dialog__desc';
+      apiVersionDesc.style.cssText =
+        'font-size: 11px; color: var(--s2-content-secondary); margin-top: -12px; margin-bottom: 16px;';
+      apiVersionSection.appendChild(apiVersionDesc);
+
+      dialog.appendChild(apiVersionSection);
 
       // Error message area
       const errorEl = document.createElement('div');
@@ -1091,30 +1136,25 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           saveBtn.style.display = '';
         }
 
-        // Model selector (shown when requiresModelSelection is set)
-        if (providerConfig.requiresModelSelection) {
-          modelSection.style.display = '';
-          modelSelect.innerHTML = '';
-          const sourceProvider = pid === 'bedrock-camp' ? 'amazon-bedrock' : pid;
-          const models = getModelsDynamic(sourceProvider);
-          for (const m of models) {
-            const opt = document.createElement('option');
-            opt.value = m.id;
-            opt.textContent = m.name || m.id;
-            modelSelect.appendChild(opt);
-          }
-          // Pre-select if editing
-          if (isEdit && editing.modelId) {
-            modelSelect.value = editing.modelId;
-          } else if (providerConfig.defaultModelId) {
-            // Try to match the default model by substring
-            const defaultMatch = models.find((m) =>
-              m.id.toLowerCase().includes(providerConfig.defaultModelId!.toLowerCase())
-            );
-            if (defaultMatch) modelSelect.value = defaultMatch.id;
-          }
+        // Deployment field
+        if (providerConfig.requiresDeployment) {
+          deploymentSection.style.display = '';
+          deploymentInput.placeholder = providerConfig.deploymentPlaceholder || 'deployment-name';
+          deploymentDesc.textContent = providerConfig.deploymentDescription || '';
         } else {
-          modelSection.style.display = 'none';
+          deploymentSection.style.display = 'none';
+        }
+
+        // API version field
+        if (providerConfig.requiresApiVersion) {
+          apiVersionSection.style.display = '';
+          if (!apiVersionInput.value && providerConfig.apiVersionDefault) {
+            apiVersionInput.value = providerConfig.apiVersionDefault;
+          }
+          apiVersionInput.placeholder = providerConfig.apiVersionDefault || 'api-version';
+          apiVersionDesc.textContent = providerConfig.apiVersionDescription || '';
+        } else {
+          apiVersionSection.style.display = 'none';
         }
       }
 
@@ -1143,14 +1183,19 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           return;
         }
 
-        const selectedModelId = config.requiresModelSelection
-          ? modelSelect.value || undefined
-          : undefined;
+        if (config.requiresDeployment && !deploymentInput.value.trim()) {
+          errorEl.textContent = 'Deployment name is required for this provider.';
+          errorEl.style.display = '';
+          deploymentInput.focus();
+          return;
+        }
+
         addAccount(
           pid,
           apiKeyInput.value.trim(),
           baseUrlInput.value.trim() || undefined,
-          selectedModelId
+          deploymentInput.value.trim() || undefined,
+          apiVersionInput.value.trim() || undefined
         );
 
         renderAccountsList();
@@ -1163,6 +1208,8 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
       };
       apiKeyInput.addEventListener('keydown', handleEnter);
       baseUrlInput.addEventListener('keydown', handleEnter);
+      deploymentInput.addEventListener('keydown', handleEnter);
+      apiVersionInput.addEventListener('keydown', handleEnter);
 
       dialog.appendChild(saveBtn);
 

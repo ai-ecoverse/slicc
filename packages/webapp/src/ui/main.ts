@@ -33,8 +33,9 @@ import { findDroppedSkillTransferFile, hasDroppedFiles } from './skill-drop.js';
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
 import '../providers/index.js';
-import { BrowserAPI } from '../cdp/index.js';
+import { BrowserAPI, NavigationWatcher } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
+import { publishAgentBridge } from '../scoops/agent-bridge.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import {
@@ -79,14 +80,60 @@ import {
 } from '../shell/supplemental-commands/playwright-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
-import { formatAcceptedHandoffMessage } from './accepted-handoff-message.js';
-import { StandaloneHandoffWatcher } from './standalone-handoff-watcher.js';
-import type { PendingHandoff } from '../../../chrome-extension/src/messages.js';
+import { getAllMountEntries } from '../fs/mount-table-store.js';
+import { recoverMounts, formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
 
 const log = createLogger('main');
 
 const PENDING_MOUNT_DB = 'slicc-pending-mount';
 const PENDING_MOUNT_KEY = 'pendingMount';
+
+/** Lick channels — kept in sync with LickEvent.type in scoops/lick-manager.ts.
+ *  Used when routing history-replayed messages so they render as licks
+ *  instead of plain user bubbles. */
+type LickChannel = 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate';
+const LICK_CHANNELS: ReadonlySet<LickChannel> = new Set<LickChannel>([
+  'webhook',
+  'cron',
+  'sprinkle',
+  'fswatch',
+  'session-reload',
+  'navigate',
+]);
+function isLickChannel(channel: string | null | undefined): channel is LickChannel {
+  return channel !== null && channel !== undefined && LICK_CHANNELS.has(channel as LickChannel);
+}
+
+/** True when the current URL requests the design-time UI fixture
+ *  (`?ui-fixture=1`). Accepts `1`, `true`, and the bare presence of the key
+ *  so both `?ui-fixture` and `?ui-fixture=1` work for quick toggling. */
+function isUIFixtureRequested(): boolean {
+  try {
+    const raw = new URLSearchParams(window.location.search).get('ui-fixture');
+    if (raw === null) return false;
+    return raw === '' || raw === '1' || raw.toLowerCase() === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/** Load the design-time UI fixture into the chat panel.
+ *
+ * Writes messages to a dedicated `session-ui-fixture` session id so the
+ * fixture survives reloads without touching real scoop storage. Real
+ * scoops remain selectable in the sidebar — clicking one switches away
+ * and saves any fixture state under its own session id. */
+async function loadUIFixtureIntoChat(chatPanel: {
+  switchToContext: (id: string, readOnly: boolean, scoopName?: string) => Promise<void>;
+  loadMessages: (msgs: ChatMessage[]) => void;
+}): Promise<void> {
+  const [{ createChatFixture, FIXTURE_SESSION_ID, FIXTURE_SCOOP_NAME }] = await Promise.all([
+    import('./chat-fixture.js'),
+  ]);
+  await chatPanel.switchToContext(FIXTURE_SESSION_ID, true, FIXTURE_SCOOP_NAME);
+  chatPanel.loadMessages(createChatFixture());
+  log.info('Loaded UI fixture session for design iteration');
+}
 
 /** Store a directory handle for later mount during onboarding completion. */
 async function storePendingMount(handle: FileSystemDirectoryHandle): Promise<void> {
@@ -277,12 +324,19 @@ function registerSkillDropInstall(
 async function mainExtension(app: HTMLElement): Promise<void> {
   const { OffscreenClient } = await import('./offscreen-client.js');
   const { VirtualFS } = await import('../fs/index.js');
+  const { publishAgentBridgeProxy } = await import('../scoops/agent-bridge.js');
 
   const layout = new Layout(app, true);
   // Expose debug tab toggle for the shell `debug` command
   (window as unknown as Record<string, unknown>).__slicc_debug_tabs = (show: boolean) =>
     layout.setDebugTabs(show);
   await layout.panels.chat.initSession('session-cone');
+
+  // Publish the AgentBridge proxy on the panel realm's globalThis. The
+  // real bridge lives in the offscreen document (`publishAgentBridge` in
+  // `offscreen.ts`); the proxy forwards spawn requests through
+  // chrome.runtime.sendMessage and awaits the offscreen response.
+  publishAgentBridgeProxy();
 
   let selectedScoop: RegisteredScoop | null = null;
 
@@ -324,10 +378,16 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   try {
     const { WasmShell } = await import('../shell/index.js');
     const { PanelCdpProxy, BrowserAPI: BrowserAPIClass } = await import('../cdp/index.js');
+    const { fetchSecretEnvVars } = await import('../core/secret-env.js');
     const panelCdp = new PanelCdpProxy();
     await panelCdp.connect();
     const panelBrowser = new BrowserAPIClass(panelCdp);
-    const shell = new WasmShell({ fs: localFs, browserAPI: panelBrowser });
+    const secretEnv = await fetchSecretEnvVars();
+    const shell = new WasmShell({
+      fs: localFs,
+      browserAPI: panelBrowser,
+      env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
+    });
     await layout.panels.terminal.mountShell(shell);
     log.info('Terminal mounted with shared VFS and BrowserAPI (CDP proxy)');
   } catch (e) {
@@ -360,10 +420,6 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // Uses `client` which is assigned right after construction.
   let client!: InstanceType<typeof OffscreenClient>;
   let knownScoopFolders = new Set<string>();
-  const syncPendingHandoffs = (handoffs: PendingHandoff[]) => {
-    layout.setPendingHandoffCount(handoffs.length);
-    layout.panels.chat.setPendingHandoffs(handoffs);
-  };
 
   const selectScoop = async (scoop: RegisteredScoop) => {
     selectedScoop = scoop;
@@ -439,7 +495,6 @@ async function mainExtension(app: HTMLElement): Promise<void> {
         layout.panels.chat.addUserMessage(content);
       }
     },
-    onPendingHandoffsChange: syncPendingHandoffs,
     onReady: async () => {
       try {
         log.info('Offscreen engine ready, scoop count:', client.getScoops().length);
@@ -478,27 +533,6 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // Wire agent handle
   const agentHandle = client.createAgentHandle();
   layout.panels.chat.setAgent(agentHandle);
-  layout.panels.chat.setPendingHandoffActions({
-    onAccept: async (handoff) => {
-      const cone = client.getScoops().find((s) => s.isCone);
-      if (!cone) {
-        log.warn('Cannot accept handoff without a cone scoop', { handoffId: handoff.handoffId });
-        return;
-      }
-
-      await selectScoop(cone);
-      layout.setActiveTab('chat');
-      agentHandle.sendMessage(
-        formatAcceptedHandoffMessage(handoff),
-        `handoff-${handoff.handoffId}`
-      );
-      client.acceptPendingHandoff(handoff.handoffId);
-    },
-    onDismiss: (handoff) => {
-      client.dismissPendingHandoff(handoff.handoffId);
-    },
-  });
-  client.requestPendingHandoffs();
 
   // Wire panels — OffscreenClient implements the Orchestrator methods
   // that ScoopsPanel, ScoopSwitcher, and MemoryPanel need
@@ -589,13 +623,19 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           }
           return; // Don't forward to orchestrator
         }
-        client.sendSprinkleLick(event.sprinkleName!, event.body);
+        client.sendSprinkleLick(event.sprinkleName!, event.body, event.targetScoop);
       }
     },
     {
       addSprinkle: (name, title, element, zone) =>
         layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
       removeSprinkle: (name) => layout.removeSprinkle(name),
+    },
+    () => {
+      const cone = client.getScoops().find((s) => s.isCone);
+      if (cone) {
+        client.stopScoop(cone.jid);
+      }
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
@@ -710,6 +750,13 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   log.info('Extension UI connected to offscreen agent engine');
 
+  // `?ui-fixture=1` — same design-time override as the CLI path, but run
+  // last so the normal extension boot (state sync, scoop selection) has
+  // populated the sidebar before we overwrite the chat view.
+  if (isUIFixtureRequested()) {
+    await loadUIFixtureIntoChat(layout.panels.chat);
+  }
+
   // Initialize operational telemetry (fire-and-forget)
   initTelemetry().catch(() => {});
 }
@@ -718,7 +765,75 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 // CLI mode — direct Orchestrator in this page (unchanged)
 // ---------------------------------------------------------------------------
 
+// ── Main-thread freeze watchdog ──────────────────────────────────────
+// Uses a Worker that pings the main thread every 2s. If the main thread
+// doesn't pong within 5s, the worker logs a warning. When the main thread
+// recovers, it captures a performance timeline and console.trace().
+function startFreezeWatchdog(): void {
+  // Extension CSP blocks blob: workers; skip in extension mode.
+  // The extension offscreen document is a separate process anyway,
+  // so a frozen sprinkle in the panel won't block the agent.
+  if (typeof chrome !== 'undefined' && !!chrome?.runtime?.id) return;
+
+  const workerCode = `
+    let lastPong = Date.now();
+    let frozen = false;
+    setInterval(() => {
+      postMessage({ type: 'ping' });
+      const elapsed = Date.now() - lastPong;
+      if (elapsed > 5000 && !frozen) {
+        frozen = true;
+        postMessage({ type: 'freeze-detected', elapsed });
+      }
+    }, 2000);
+    self.onmessage = (e) => {
+      if (e.data.type === 'pong') {
+        lastPong = Date.now();
+        if (frozen) {
+          frozen = false;
+          postMessage({ type: 'freeze-recovered' });
+        }
+      }
+    };
+  `;
+  const blob = new Blob([workerCode], { type: 'application/javascript' });
+  const blobUrl = URL.createObjectURL(blob);
+  const worker = new Worker(blobUrl);
+  URL.revokeObjectURL(blobUrl);
+
+  worker.onmessage = (e) => {
+    if (e.data.type === 'ping') {
+      worker.postMessage({ type: 'pong' });
+    } else if (e.data.type === 'freeze-detected') {
+      // This won't fire until the main thread unblocks, but the worker detected it via postMessage
+      console.error(
+        `[freeze-watchdog] Main thread blocked for ${e.data.elapsed}ms — capturing trace on recovery`
+      );
+    } else if (e.data.type === 'freeze-recovered') {
+      console.error('[freeze-watchdog] Main thread recovered. Stack trace at recovery point:');
+      console.trace('[freeze-watchdog] recovery stack');
+      // Also dump long-task entries
+      const longTasks = performance.getEntriesByType('longtask');
+      if (longTasks.length > 0) {
+        console.error(
+          '[freeze-watchdog] Long tasks:',
+          longTasks.map((t) => ({ duration: t.duration, startTime: t.startTime, name: t.name }))
+        );
+      }
+    }
+  };
+
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      worker.terminate();
+    },
+    { once: true }
+  );
+}
+
 async function main(): Promise<void> {
+  startFreezeWatchdog();
   initTheme();
   initTooltips();
 
@@ -825,10 +940,6 @@ async function main(): Promise<void> {
 
   // Initialize the BrowserAPI (CLI mode only — extension uses CDP proxy in offscreen)
   const browser = new BrowserAPI();
-  const syncPendingHandoffs = (handoffs: PendingHandoff[]) => {
-    layout.setPendingHandoffCount(handoffs.length);
-    layout.panels.chat.setPendingHandoffs(handoffs);
-  };
 
   // Event system for UI
   const eventListeners = new Set<(event: UIAgentEvent) => void>();
@@ -1071,6 +1182,20 @@ async function main(): Promise<void> {
   layout.panels.memory.setOrchestrator(orchestrator);
   layout.setScoopSwitcherOrchestrator?.(orchestrator);
 
+  // Publish the AgentBridge on globalThis.__slicc_agent so the `agent`
+  // supplemental shell command can spawn sub-scoops from any bash
+  // invocation (terminal panel OR a scoop's bash tool). Must happen AFTER
+  // orchestrator.init() resolves so sharedFs is available, and BEFORE any
+  // WasmShell registers its supplemental commands.
+  {
+    const sharedFs = orchestrator.getSharedFS();
+    if (sharedFs) {
+      publishAgentBridge(orchestrator, sharedFs, orchestrator.getSessionStore());
+    } else {
+      log.warn('AgentBridge not published — orchestrator.getSharedFS() returned null');
+    }
+  }
+
   // Wire shared FS to file browser and terminal
   const sharedFs = orchestrator.getSharedFS();
   if (sharedFs) {
@@ -1115,7 +1240,13 @@ async function main(): Promise<void> {
 
     try {
       const { WasmShell } = await import('../shell/index.js');
-      const shell = new WasmShell({ fs: sharedFs, browserAPI: browser });
+      const { fetchSecretEnvVars } = await import('../core/secret-env.js');
+      const secretEnv = await fetchSecretEnvVars();
+      const shell = new WasmShell({
+        fs: sharedFs,
+        browserAPI: browser,
+        env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
+      });
       await layout.panels.terminal.mountShell(shell);
       log.info('Terminal mounted with shared VFS');
 
@@ -1124,6 +1255,7 @@ async function main(): Promise<void> {
         const { BshWatchdog } = await import('../shell/bsh-watchdog.js');
         const bshWatchdog = new BshWatchdog({
           browserAPI: browser,
+          scriptCatalog: shell.getScriptCatalog(),
           fs: sharedFs,
         });
         void bshWatchdog.start();
@@ -1143,7 +1275,7 @@ async function main(): Promise<void> {
   if (allowProviderlessTrayJoin) {
     log.info('Skipping local cone bootstrap while joining a tray without a configured provider');
   } else if (!hasCone) {
-    const cone = await layout.panels.scoops.createScoop('Cone', true);
+    const cone = await layout.panels.scoops.createCone();
     selectedScoop = cone;
     log.info('Created cone');
   } else {
@@ -1171,7 +1303,6 @@ async function main(): Promise<void> {
   // Mutable reference to leader sync — set when tray leader mode is active.
   // Used by coneAgentHandle to broadcast user messages to followers.
   let leaderSyncRef: LeaderSyncManager | null = null;
-  let standaloneHandoffWatcher: StandaloneHandoffWatcher | null = null;
 
   // Build the cone agent handle — all user input routes through orchestrator
   const coneAgentHandle: AgentHandle = {
@@ -1226,31 +1357,6 @@ async function main(): Promise<void> {
   };
 
   layout.panels.chat.setAgent(coneAgentHandle);
-  layout.panels.chat.setPendingHandoffActions({
-    onAccept: async (handoff) => {
-      const cone = orchestrator.getScoops().find((s) => s.isCone);
-      if (!cone) {
-        log.warn('Cannot accept handoff without a cone scoop', { handoffId: handoff.handoffId });
-        return;
-      }
-
-      await handleScoopSelect(cone);
-      layout.setActiveTab('chat');
-      coneAgentHandle.sendMessage(
-        formatAcceptedHandoffMessage(handoff),
-        `handoff-${handoff.handoffId}`
-      );
-
-      const cleared = standaloneHandoffWatcher?.clearHandoff(handoff.handoffId);
-      if (!cleared) return;
-      await Promise.allSettled(cleared.targetIds.map((targetId) => browser.closePage(targetId)));
-    },
-    onDismiss: async (handoff) => {
-      const cleared = standaloneHandoffWatcher?.clearHandoff(handoff.handoffId);
-      if (!cleared) return;
-      await Promise.allSettled(cleared.targetIds.map((targetId) => browser.closePage(targetId)));
-    },
-  });
 
   // Wire delete callback for queued messages
   layout.panels.chat.setDeleteQueuedMessageCallback((messageId: string) => {
@@ -1286,12 +1392,31 @@ async function main(): Promise<void> {
   const routeLickToScoop = (event: LickEvent) => {
     const isWebhook = event.type === 'webhook';
     const isSprinkle = event.type === 'sprinkle';
+    const isFsWatch = event.type === 'fswatch';
+    const isSessionReload = event.type === 'session-reload';
+    const isNavigate = event.type === 'navigate';
     const eventName = isWebhook
       ? event.webhookName
       : isSprinkle
         ? event.sprinkleName
-        : event.cronName;
-    const eventId = isWebhook ? event.webhookId : isSprinkle ? event.sprinkleName : event.cronId;
+        : isFsWatch
+          ? event.fswatchName
+          : isSessionReload
+            ? 'session-reload'
+            : isNavigate
+              ? event.navigateUrl
+              : event.cronName;
+    const eventId = isWebhook
+      ? event.webhookId
+      : isSprinkle
+        ? event.sprinkleName
+        : isFsWatch
+          ? event.fswatchId
+          : isSessionReload
+            ? 'session-reload'
+            : isNavigate
+              ? event.navigateUrl
+              : event.cronId;
     const channel = event.type;
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
@@ -1351,13 +1476,13 @@ async function main(): Promise<void> {
     }
 
     // Determine the target:
-    // - Sprinkle licks and untargeted events default to cone
-    // - Webhook/cron licks use explicit targetScoop if set
+    // - Events with explicit targetScoop route to that scoop
+    // - Untargeted events default to cone
     const scoops = orchestrator.getScoops();
     let resolvedTarget: RegisteredScoop | undefined;
 
-    if (isSprinkle || !event.targetScoop) {
-      // Sprinkle licks + untargeted cron/webhook events → cone
+    if (!event.targetScoop) {
+      // Untargeted events → cone
       resolvedTarget = scoops.find((s) => s.isCone);
     } else {
       resolvedTarget = scoops.find(
@@ -1370,8 +1495,39 @@ async function main(): Promise<void> {
 
     if (resolvedTarget) {
       const msgId = `${channel}-${eventId}-${Date.now()}`;
-      const eventLabel = isWebhook ? 'Webhook Event' : isSprinkle ? 'Sprinkle Event' : 'Cron Event';
-      const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
+      const eventLabel = isWebhook
+        ? 'Webhook Event'
+        : isSprinkle
+          ? 'Sprinkle Event'
+          : isFsWatch
+            ? 'File Watch Event'
+            : isSessionReload
+              ? 'Session Reload'
+              : isNavigate
+                ? 'Navigate Event'
+                : 'Cron Event';
+      let content: string | null = null;
+      if (isSessionReload) {
+        const body = event.body as
+          | {
+              reason?: string;
+              mounts?: Array<{ path: string; dirName: string }>;
+            }
+          | null
+          | undefined;
+        if (body?.reason === 'mount-recovery') {
+          content = formatMountRecoveryPrompt(body.mounts ?? []);
+          if (content === null) {
+            // Nothing actually needs recovery — drop the lick instead of
+            // pestering the cone with an empty notification.
+            log.debug('Dropping session-reload lick with empty mount-recovery list');
+            return;
+          }
+        }
+      }
+      if (content === null) {
+        content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
+      }
 
       const msg: ChannelMessage = {
         id: msgId,
@@ -1384,21 +1540,31 @@ async function main(): Promise<void> {
         channel,
       };
 
+      const lickTs = Date.now();
       getBuffer(resolvedTarget.jid).push({
         id: msgId,
         role: 'user',
         content,
-        timestamp: Date.now(),
+        timestamp: lickTs,
         source: 'lick',
         channel,
       });
 
       if (selectedScoop?.jid === resolvedTarget.jid) {
-        layout.panels.chat.addLickMessage(
-          msgId,
+        layout.panels.chat.addLickMessage(msgId, content, channel, lickTs);
+      } else {
+        // Non-selected target: persist directly to the target scoop's
+        // SessionStore so a reload's first-select can render this lick
+        // as a lick widget (not a plain user bubble from the DB fallback).
+        const targetSessionId = resolvedTarget.isCone
+          ? 'session-cone'
+          : `session-${resolvedTarget.folder}`;
+        void layout.panels.chat.persistLickToSession(targetSessionId, {
+          id: msgId,
           content,
-          channel as 'webhook' | 'cron' | 'sprinkle'
-        );
+          channel,
+          timestamp: lickTs,
+        });
       }
 
       log.info('Routing lick to scoop', {
@@ -1413,6 +1579,56 @@ async function main(): Promise<void> {
   };
 
   lickManager.setEventHandler(routeLickToScoop);
+
+  // ── Navigation watcher: emit 'navigate' licks for main-frame responses
+  // that carry an x-slicc header. ──────────────────────────────────────
+  const navigationWatcher = new NavigationWatcher(browser.getTransport(), (navEvent) => {
+    lickManager.emitEvent({
+      type: 'navigate',
+      navigateUrl: navEvent.url,
+      targetScoop: undefined,
+      timestamp: new Date().toISOString(),
+      body: {
+        url: navEvent.url,
+        sliccHeader: navEvent.sliccHeader,
+        title: navEvent.title,
+      },
+    });
+  });
+  (async () => {
+    try {
+      await browser.connect();
+      await navigationWatcher.start();
+      log.info('Navigation watcher started');
+    } catch (err) {
+      log.warn('Failed to start navigation watcher', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  })();
+
+  // ── Restore persisted mounts from IndexedDB ──────────────────────────
+  // See `fs/mount-recovery.ts` for why some reloads require recovery and
+  // some don't (short version: Chrome only retains readwrite permission
+  // within a tab's active session, so a full restart drops every handle
+  // back to `prompt`). The `session-reload` lick is only emitted when at
+  // least one handle actually needs re-authorization.
+  if (sharedFs) {
+    getAllMountEntries()
+      .then(async (entries) => {
+        if (entries.length === 0) return;
+        const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
+        if (needsRecovery.length === 0) return;
+        const event: LickEvent = {
+          type: 'session-reload',
+          targetScoop: undefined,
+          timestamp: new Date().toISOString(),
+          body: { reason: 'mount-recovery', mounts: needsRecovery },
+        };
+        routeLickToScoop(event);
+      })
+      .catch((err) => log.warn('Failed to restore persisted mounts', err));
+  }
 
   // Wire inline sprinkle lick callback — routes to cone as a sprinkle lick event
   layout.panels.chat.onInlineSprinkleLick = (action: string, data: unknown) => {
@@ -1429,11 +1645,26 @@ async function main(): Promise<void> {
   // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
   let sprinkleManager: SprinkleManager | null = null;
   if (sharedFs) {
-    sprinkleManager = new SprinkleManager(sharedFs, routeLickToScoop, {
-      addSprinkle: (name, title, element, zone) =>
-        layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
-      removeSprinkle: (name) => layout.removeSprinkle(name),
-    });
+    sprinkleManager = new SprinkleManager(
+      sharedFs,
+      routeLickToScoop,
+      {
+        addSprinkle: (name, title, element, zone) =>
+          layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
+        removeSprinkle: (name) => layout.removeSprinkle(name),
+      },
+      () => {
+        const cone = orchestrator.getScoops().find((s) => s.isCone);
+        if (cone) {
+          orchestrator.stopScoop(cone.jid);
+          orchestrator.clearQueuedMessages(cone.jid).catch((err) => {
+            log.error('Failed to clear queued messages on sprinkle stopCone', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
+      }
+    );
     // Expose for open command, sprinkle shell command, and E2E/demo scripts
     (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
     (window as unknown as Record<string, unknown>).__slicc_reloadSkills = () =>
@@ -1607,12 +1838,27 @@ async function main(): Promise<void> {
           );
         }
 
-        // Handle handoff injected via local API
-        if (data.type === 'handoff_event' && standaloneHandoffWatcher) {
-          standaloneHandoffWatcher.injectHandoff(
-            data.payload as PendingHandoff['payload'],
-            data.sourceUrl as string | undefined
-          );
+        // Handle handoffs injected via POST /api/handoff. This is the
+        // profile-independent fallback: the CDP navigation-watcher only
+        // sees tabs in the SLICC-controlled Chrome profile, so external
+        // tools running elsewhere post here instead.
+        if (data.type === 'navigate_event') {
+          const sliccHeader = typeof data.sliccHeader === 'string' ? data.sliccHeader : '';
+          const navUrl = typeof data.url === 'string' && data.url.length > 0 ? data.url : '';
+          if (sliccHeader && navUrl) {
+            lickManager.emitEvent({
+              type: 'navigate',
+              navigateUrl: navUrl,
+              targetScoop: undefined,
+              timestamp:
+                typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString(),
+              body: {
+                url: navUrl,
+                sliccHeader,
+                title: typeof data.title === 'string' ? data.title : undefined,
+              },
+            });
+          }
         }
       } catch (err) {
         log.error('Failed to process lick message', {
@@ -1640,10 +1886,18 @@ async function main(): Promise<void> {
     orchestrator.updateModel();
   };
 
+  // Track which scoops have been selected at least once this runtime.
+  // The first select per scoop must load from SessionStore — the in-memory
+  // buffer may contain boot-time lick events (e.g. mount-recovery from PR #325)
+  // pushed before the UI rendered, and loadMessages(buffer) would wipe the
+  // restored history by replacing this.messages with just the lick.
+  const selectedOnceThisRuntime = new Set<string>();
+
   // Wire clear chat to also clear orchestrator messages + buffers
   layout.onClearChat = async () => {
     await orchestrator.clearAllMessages();
     scoopMessageBuffers.clear();
+    selectedOnceThisRuntime.clear();
   };
 
   layout.onClearFilesystem = async () => {
@@ -1660,20 +1914,30 @@ async function main(): Promise<void> {
     layout.panels.memory.setSelectedScoop(scoop.jid);
     layout.panels.scoops.setSelectedJid(scoop.jid);
 
-    // Switch chat context. Load from per-scoop message buffer (has full tool call detail)
-    // falling back to SessionStore, then orchestrator DB.
+    // Switch chat context.
+    // - First select per scoop (this runtime): load from SessionStore, then
+    //   fall back to orchestrator DB. The in-memory buffer is ignored here
+    //   because boot-time licks pushed to it before the UI rendered, and
+    //   loadMessages(buffer) would replace restored history with just the lick.
+    // - Subsequent selects: prefer the buffer, which carries transient detail
+    //   (screenshots, streamed tool calls) not in SessionStore.
     const contextId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
     const buffer = scoopMessageBuffers.get(scoop.jid);
+    const isFirstSelect = !selectedOnceThisRuntime.has(scoop.jid);
 
     // Pass scoop name for non-cone contexts
     const scoopName = scoop.isCone ? undefined : scoop.name;
 
-    if (buffer && buffer.length > 0) {
-      // Load from in-memory buffer (has tool calls captured during this session)
+    if (!isFirstSelect && buffer && buffer.length > 0) {
+      // Mid-session switch: the buffer carries transient detail (screenshots)
+      // not in SessionStore, so prefer it over the persisted view. The buffer
+      // was seeded with the canonical history on first-select, so it contains
+      // prior-runtime messages in addition to runtime-only events.
       await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
       layout.panels.chat.loadMessages(buffer);
     } else {
-      // No buffer — load from SessionStore (persisted from previous sessions)
+      // First select, or no buffer — load from SessionStore (persisted from
+      // previous sessions), then fall back to orchestrator DB if nothing there.
       await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
 
       // If still empty, fall back to orchestrator DB (simple text, no tool calls)
@@ -1681,33 +1945,22 @@ async function main(): Promise<void> {
         const messages = await orchestrator.getMessagesForScoop(scoop.jid);
         for (const msg of messages) {
           // Determine the proper role and source for display
-          const isLick = msg.channel === 'webhook' || msg.channel === 'cron';
           const isDelegation = msg.channel === 'delegation';
 
-          if (isLick) {
-            // Lick events - show as incoming with tongue emoji
-            const chatMsg: ChatMessage = {
-              id: msg.id,
-              role: 'user',
-              content: msg.content,
-              timestamp: new Date(msg.timestamp).getTime(),
-              source: 'lick',
-              channel: msg.channel,
-            };
-            getBuffer(scoop.jid).push(chatMsg);
-            layout.panels.chat.addUserMessage(msg.content);
+          if (isLickChannel(msg.channel)) {
+            // Preserve lick metadata (source/channel/timestamp) so the chat
+            // renders licks as their distinctive collapsible widget instead
+            // of a plain "You" bubble. Covers every lick channel, including
+            // sprinkle/navigate/fswatch/session-reload.
+            layout.panels.chat.addLickMessage(
+              msg.id,
+              msg.content,
+              msg.channel,
+              new Date(msg.timestamp).getTime()
+            );
           } else if (isDelegation) {
             // Delegation from cone - show as incoming instructions
-            const chatMsg: ChatMessage = {
-              id: msg.id,
-              role: 'user',
-              content: `**[Instructions from sliccy]**\n\n${msg.content}`,
-              timestamp: new Date(msg.timestamp).getTime(),
-              source: 'delegation',
-              channel: 'delegation',
-            };
-            getBuffer(scoop.jid).push(chatMsg);
-            layout.panels.chat.addUserMessage(chatMsg.content);
+            layout.panels.chat.addUserMessage(`**[Instructions from sliccy]**\n\n${msg.content}`);
           } else if (msg.fromAssistant) {
             // Scoop's own response
             emitToUI({ type: 'message_start', messageId: msg.id });
@@ -1718,6 +1971,33 @@ async function main(): Promise<void> {
           }
         }
       }
+
+      // Merge the canonical view with any runtime-only buffer entries.
+      //
+      // Context: the buffer accumulates orchestrator events (streamed content,
+      // tool calls, delegations, licks) regardless of whether this scoop was
+      // selected. For scoops the cone delegates to, the buffer can hold rich
+      // transient detail (including tool-call results with screenshots) that
+      // was never written to SessionStore — we don't want to drop it on the
+      // first open.
+      //
+      // At the same time, a later switch back to this scoop will take the
+      // buffer branch above and call loadMessages(buffer), which replaces
+      // this.messages wholesale. So the buffer needs to carry the full
+      // history too, not just what arrived during this runtime.
+      //
+      // Solution: rebuild the buffer as [canonical + runtime-only entries],
+      // deduped by id. If there were runtime-only entries, also surface them
+      // in the chat view now so the first open isn't missing them.
+      const canonical = layout.panels.chat.getMessages();
+      const canonicalIds = new Set(canonical.map((m) => m.id));
+      const buf = getBuffer(scoop.jid);
+      const runtimeOnly = buf.filter((m) => !canonicalIds.has(m.id));
+      buf.length = 0;
+      buf.push(...canonical, ...runtimeOnly);
+      if (runtimeOnly.length > 0) {
+        layout.panels.chat.loadMessages(buf);
+      }
     }
 
     // If switching back to cone and it's currently processing (e.g., handling
@@ -1726,6 +2006,8 @@ async function main(): Promise<void> {
     if (scoop.isCone && orchestrator.isProcessing(scoop.jid)) {
       layout.panels.chat.setProcessing(true);
     }
+
+    selectedOnceThisRuntime.add(scoop.jid);
   };
 
   layout.onScoopSelect = handleScoopSelect;
@@ -1737,9 +2019,13 @@ async function main(): Promise<void> {
     await handleScoopSelect(selectedScoop);
   }
 
-  standaloneHandoffWatcher = new StandaloneHandoffWatcher({
-    onPendingHandoffsChange: syncPendingHandoffs,
-  });
+  // `?ui-fixture=1` — design-time override: replace the live chat context
+  // with a synthetic session covering every message UI variant. Runs after
+  // the normal scoop select so real scoops stay listed in the sidebar and
+  // clicking one cleanly exits fixture mode.
+  if (isUIFixtureRequested()) {
+    await loadUIFixtureIntoChat(layout.panels.chat);
+  }
 
   if (runtimeMode === 'standalone' || runtimeMode === 'electron-overlay') {
     const runtimeConfig = await fetchRuntimeConfig();

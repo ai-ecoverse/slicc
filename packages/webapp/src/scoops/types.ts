@@ -6,6 +6,18 @@
  * and restricted filesystem access.
  */
 
+/**
+ * Current `ScoopConfig` schema generation. Bumped whenever a new field is
+ * introduced that demands a compat backfill for records saved before it
+ * existed. Scoops created today are stamped with this value; the orchestrator
+ * runs one-shot migrations for any record whose version is strictly lower
+ * and never touches records already at the current version.
+ *
+ * - `1`: `visiblePaths` is authoritative (may be an explicit empty list).
+ * - `2`: `writablePaths` is authoritative (may be an explicit empty list).
+ */
+export const CURRENT_SCOOP_CONFIG_VERSION = 2;
+
 /** Registered scoop metadata */
 export interface RegisteredScoop {
   /** Unique identifier */
@@ -28,6 +40,28 @@ export interface RegisteredScoop {
   addedAt: string;
   /** Scoop-specific config */
   config?: ScoopConfig;
+  /**
+   * Generation of `ScoopConfig` that produced this record. `undefined` means
+   * "truly legacy" — a record saved before any of the path-config fields
+   * existed. The orchestrator migrates up to {@link CURRENT_SCOOP_CONFIG_VERSION}
+   * on restore; records already at the current version are left alone so
+   * explicit `undefined`/empty values stay authoritative.
+   */
+  configSchemaVersion?: number;
+  /**
+   * When `false`, suppresses the orchestrator's cone-notify side effect
+   * that fires when this scoop reaches the terminal `ready` status after
+   * processing a prompt. Default (`undefined` / `true`) preserves the
+   * historical behavior: the cone receives a `scoop-notify` message with
+   * the scoop's last response, triggering a cone turn.
+   *
+   * Set to `false` for ephemeral, self-contained invocations (e.g. scoops
+   * spawned through the `agent` shell command) where the caller already
+   * drains the scoop's output via an `observeScoop` subscription and does
+   * NOT want the completion to bill an extra cone turn. Not persisted —
+   * ephemeral scoops are unregistered at the end of their run.
+   */
+  notifyOnComplete?: boolean;
 }
 
 /** Per-scoop configuration */
@@ -40,6 +74,32 @@ export interface ScoopConfig {
   assistantName?: string;
   /** Model ID override (e.g., "claude-sonnet-4-20250514"). Uses globally selected model if not set. */
   modelId?: string;
+  /**
+   * VFS paths this scoop can READ (but not write). Pure replace — when
+   * `undefined` the scoop gets no read-only paths at all. The `scoop_scoop`
+   * tool injects the standard `['/workspace/']` default when creating scoops
+   * so existing agent-facing behavior is preserved. Cone scoops ignore this
+   * field — they always use an unrestricted filesystem.
+   */
+  visiblePaths?: readonly string[];
+  /**
+   * VFS paths this scoop can READ AND WRITE. Pure replace — when
+   * `undefined` the scoop gets no writable paths at all. Read access is
+   * the union of `writablePaths` and `visiblePaths` (RestrictedFS
+   * surfaces both as readable); write access is limited to
+   * `writablePaths`. The `scoop_scoop` tool injects the standard
+   * `['/scoops/<folder>/', '/shared/']` default so existing agent-facing
+   * behavior is preserved. Cone scoops ignore this field — they always
+   * use an unrestricted filesystem.
+   */
+  writablePaths?: readonly string[];
+  /**
+   * Shell command allow-list. When omitted (or when it contains `'*'`), every
+   * built-in, custom, and `.jsh` command is available — the default. Otherwise
+   * only commands whose names appear in the list can execute inside this
+   * scoop's shell, including through pipelines and substitution.
+   */
+  allowedCommands?: readonly string[];
 }
 
 /** Message from any channel */

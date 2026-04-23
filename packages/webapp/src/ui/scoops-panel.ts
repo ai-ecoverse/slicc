@@ -31,22 +31,190 @@ export class ScoopsPanel {
   private scoopStatuses: Map<string, ScoopTabState['status']> = new Map();
   private expanded = false;
 
+  // Roaming eyes state
+  private eyesEl: HTMLElement | null = null;
+  private hoveredJid: string | null = null;
+  private lastProcessingJid: string | null = null;
+  private coneJid: string | null = null;
+  private leftPupilGroup: SVGGElement | null = null;
+  private rightPupilGroup: SVGGElement | null = null;
+  private eyesSvg: SVGSVGElement | null = null;
+  private mouseMoveBound: ((e: MouseEvent) => void) | null = null;
+
   constructor(container: HTMLElement, callbacks: ScoopsPanelCallbacks) {
     this.container = container;
     this.callbacks = callbacks;
     this.render();
   }
 
+  /** Clean up listeners and DOM elements */
+  dispose(): void {
+    if (this.mouseMoveBound) {
+      document.removeEventListener('mousemove', this.mouseMoveBound);
+      this.mouseMoveBound = null;
+    }
+    this.eyesEl?.remove();
+    this.eyesEl = null;
+    this.eyesSvg = null;
+    this.leftPupilGroup = null;
+    this.rightPupilGroup = null;
+    document.querySelectorAll('.scoop-fixed-tooltip').forEach((t) => t.remove());
+  }
+
   /** Toggle the nav rail expanded/collapsed state */
   toggleExpanded(): void {
     this.expanded = !this.expanded;
     this.container.classList.toggle('layout__scoops--expanded', this.expanded);
-    // Update hamburger icon
-    const hamburger = this.container.querySelector('.scoops-hamburger');
-    if (hamburger) {
-      hamburger.innerHTML = this.expanded
-        ? '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M9.86241 16.4551C9.66612 16.4551 9.46886 16.3779 9.32237 16.2246L3.83507 10.5215C3.5548 10.2315 3.5548 9.77247 3.83507 9.48243L9.33507 3.76563C9.62218 3.4668 10.0978 3.45801 10.3946 3.74512C10.6935 4.03223 10.7032 4.50684 10.4151 4.80469L5.41613 10.002L10.4025 15.1855C10.6906 15.4834 10.6808 15.958 10.382 16.2451C10.2374 16.3857 10.0499 16.4551 9.86241 16.4551Z"/><path d="M15.6124 16.4551C15.4161 16.4551 15.2189 16.3779 15.0724 16.2246L9.58507 10.5215C9.3048 10.2315 9.3048 9.77247 9.58507 9.48243L15.0851 3.76563C15.3722 3.4668 15.8478 3.45801 16.1446 3.74512C16.4435 4.03223 16.4532 4.50684 16.1652 4.80469L11.1661 10.002L16.1525 15.1855C16.4406 15.4834 16.4308 15.958 16.132 16.2451C15.9874 16.3857 15.7999 16.4551 15.6124 16.4551Z"/></svg>'
-        : '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M9.61805 16.2451C9.31922 15.958 9.30945 15.4834 9.59754 15.1855L14.5839 10.002L9.58485 4.80469C9.29677 4.50684 9.30653 4.03223 9.60536 3.74512C9.90223 3.45801 10.3778 3.4668 10.6649 3.76563L16.1649 9.48243C16.4452 9.77247 16.4452 10.2315 16.1649 10.5215L10.6776 16.2246C10.5311 16.3779 10.3339 16.4551 10.1376 16.4551C9.95008 16.4551 9.76258 16.3857 9.61805 16.2451Z"/><path d="M3.86805 16.2451C3.56922 15.958 3.55945 15.4834 3.84754 15.1855L8.83387 10.002L3.83485 4.80469C3.54677 4.50684 3.55653 4.03223 3.85536 3.74512C4.15223 3.45801 4.62782 3.4668 4.91493 3.76563L10.4149 9.48243C10.6952 9.77247 10.6952 10.2315 10.4149 10.5215L4.92763 16.2246C4.78114 16.3779 4.58388 16.4551 4.38759 16.4551C4.20008 16.4551 4.01258 16.3857 3.86805 16.2451Z"/></svg>';
+  }
+
+  // Eye geometry constants (in SVG viewBox units 0 0 200 100)
+  private static readonly LEFT_EYE = { cx: 55, cy: 50, r: 38 };
+  private static readonly RIGHT_EYE = { cx: 145, cy: 50, r: 38 };
+  private static readonly PUPIL_R = 18;
+  private static readonly MAX_OFFSET = 16; // how far pupil can move from eye center
+
+  /** Create the roaming eyes overlay element */
+  private createEyesEl(): HTMLElement {
+    const ns = 'http://www.w3.org/2000/svg';
+    const el = document.createElement('div');
+    el.className = 'scoop-eyes';
+
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 200 100');
+    svg.setAttribute('width', '100%');
+    svg.setAttribute('height', '100%');
+
+    const { LEFT_EYE, RIGHT_EYE, PUPIL_R } = ScoopsPanel;
+
+    // Helper: create one eye (white circle + pupil group with highlight)
+    const makeEye = (eye: { cx: number; cy: number; r: number }) => {
+      // White sclera
+      const sclera = document.createElementNS(ns, 'circle');
+      sclera.setAttribute('cx', String(eye.cx));
+      sclera.setAttribute('cy', String(eye.cy));
+      sclera.setAttribute('r', String(eye.r));
+      sclera.setAttribute('fill', '#fff');
+      sclera.setAttribute('stroke', '#000');
+      sclera.setAttribute('stroke-width', '4');
+      svg.appendChild(sclera);
+
+      // Pupil group — translated as a unit to follow mouse
+      const g = document.createElementNS(ns, 'g');
+
+      // Black pupil circle (drawn at origin, group is translated)
+      const pupil = document.createElementNS(ns, 'circle');
+      pupil.setAttribute('cx', String(eye.cx));
+      pupil.setAttribute('cy', String(eye.cy));
+      pupil.setAttribute('r', String(PUPIL_R));
+      pupil.setAttribute('fill', '#000');
+      g.appendChild(pupil);
+
+      // White crescent highlight (half-moon light reflection)
+      // A smaller white circle offset to the upper-left of the pupil
+      const highlight = document.createElementNS(ns, 'circle');
+      highlight.setAttribute('cx', String(eye.cx - PUPIL_R * 0.3));
+      highlight.setAttribute('cy', String(eye.cy - PUPIL_R * 0.35));
+      highlight.setAttribute('r', String(PUPIL_R * 0.4));
+      highlight.setAttribute('fill', '#fff');
+      g.appendChild(highlight);
+
+      svg.appendChild(g);
+      return g;
+    };
+
+    this.leftPupilGroup = makeEye(LEFT_EYE);
+    this.rightPupilGroup = makeEye(RIGHT_EYE);
+
+    el.appendChild(svg);
+    this.eyesSvg = svg;
+
+    // Start tracking mouse
+    if (!this.mouseMoveBound) {
+      this.mouseMoveBound = (e: MouseEvent) => this.onMouseMove(e);
+      document.addEventListener('mousemove', this.mouseMoveBound);
+    }
+
+    return el;
+  }
+
+  /** Map a screen-space mouse position to a pupil offset within the eye */
+  private onMouseMove(e: MouseEvent): void {
+    if (!this.eyesSvg || !this.leftPupilGroup || !this.rightPupilGroup) return;
+
+    const svgRect = this.eyesSvg.getBoundingClientRect();
+    if (svgRect.width === 0 || svgRect.height === 0) return;
+
+    // Convert mouse coords to SVG viewBox space
+    const scaleX = 200 / svgRect.width;
+    const scaleY = 100 / svgRect.height;
+    const mx = (e.clientX - svgRect.left) * scaleX;
+    const my = (e.clientY - svgRect.top) * scaleY;
+
+    const { LEFT_EYE, RIGHT_EYE, MAX_OFFSET } = ScoopsPanel;
+
+    this.positionPupilGroup(this.leftPupilGroup, LEFT_EYE.cx, LEFT_EYE.cy, mx, my, MAX_OFFSET);
+    this.positionPupilGroup(this.rightPupilGroup, RIGHT_EYE.cx, RIGHT_EYE.cy, mx, my, MAX_OFFSET);
+  }
+
+  private positionPupilGroup(
+    group: SVGGElement,
+    eyeCx: number,
+    eyeCy: number,
+    mx: number,
+    my: number,
+    maxOffset: number
+  ): void {
+    const dx = mx - eyeCx;
+    const dy = my - eyeCy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const clamp = Math.min(dist, maxOffset);
+    const tx = dist > 0 ? (dx / dist) * clamp : 0;
+    const ty = dist > 0 ? (dy / dist) * clamp : 0;
+    group.setAttribute('transform', `translate(${tx},${ty})`);
+  }
+
+  /** Determine which jid should currently have the eyes */
+  private resolveEyesOwner(): string | null {
+    // Priority 1: hover (verify element still exists in DOM)
+    if (this.hoveredJid && this.hasScoopItem(this.hoveredJid)) return this.hoveredJid;
+    // Priority 2: most recently processing scoop/cone
+    if (this.lastProcessingJid) {
+      const status = this.scoopStatuses.get(this.lastProcessingJid);
+      if (status === 'processing' && this.hasScoopItem(this.lastProcessingJid))
+        return this.lastProcessingJid;
+    }
+    // Priority 3: any currently processing
+    for (const [jid, status] of this.scoopStatuses) {
+      if (status === 'processing' && this.hasScoopItem(jid)) {
+        this.lastProcessingJid = jid;
+        return jid;
+      }
+    }
+    // Default: cone
+    return this.coneJid;
+  }
+
+  /** Check if a scoop-item element exists for the given jid */
+  private hasScoopItem(jid: string): boolean {
+    return !!this.container.querySelector(`.scoop-item[data-jid="${CSS.escape(jid)}"]`);
+  }
+
+  /** Move the eyes element to the icon-wrap of the given jid */
+  private moveEyes(): void {
+    if (!this.eyesEl) {
+      this.eyesEl = this.createEyesEl();
+    }
+    const targetJid = this.resolveEyesOwner();
+    if (!targetJid) return;
+
+    const item = this.container.querySelector(`.scoop-item[data-jid="${CSS.escape(targetJid)}"]`);
+    if (!item) return;
+    const iconWrap = item.querySelector('.scoop-icon-wrap');
+    if (!iconWrap) return;
+
+    // Only move if not already parented there
+    if (this.eyesEl.parentElement !== iconWrap) {
+      iconWrap.appendChild(this.eyesEl);
     }
   }
 
@@ -59,6 +227,9 @@ export class ScoopsPanel {
   /** Update scoop status */
   updateScoopStatus(jid: string, status: ScoopTabState['status']): void {
     this.scoopStatuses.set(jid, status);
+    if (status === 'processing') {
+      this.lastProcessingJid = jid;
+    }
     this.refreshScoops();
   }
 
@@ -74,8 +245,21 @@ export class ScoopsPanel {
     const scoops = allScoops.filter((s) => !s.isCone);
 
     const ns = 'http://www.w3.org/2000/svg';
-    const SCOOP_COLORS = ['#e8457a', '#f08c5a', '#9b6dd7', '#42b8a0', '#d4953e'];
-    const SCOOP_BG_COLORS = ['#fde4ec', '#fef0e4', '#efe4f8', '#e0f5ef', '#fef3e0'];
+    // Canonical scoop colors from logo-editor.html (base, dark outline)
+    const SCOOP_PALETTE = [
+      { base: '#FFB6C1', outline: '#B97B88' }, // Strawberry (pink)
+      { base: '#98FB98', outline: '#65AC65' }, // Mint (green)
+      { base: '#87CEEB', outline: '#5591AC' }, // Blueberry (blue)
+      { base: '#DDA0DD', outline: '#9F649F' }, // Grape (plum)
+      { base: '#F0E68C', outline: '#A9A059' }, // Vanilla (khaki)
+      { base: '#FFD700', outline: '#B89700' }, // Mango (gold)
+      { base: '#FFA07A', outline: '#B86E50' }, // Peach (salmon)
+      { base: '#DEB887', outline: '#9F8260' }, // Caramel (burlywood)
+      { base: '#F08080', outline: '#AC5656' }, // Cherry (coral)
+      { base: '#E0BBE4', outline: '#A085A4' }, // Lavender
+    ];
+    const SCOOP_COLORS = SCOOP_PALETTE.map((c) => c.base);
+    const SCOOP_OUTLINES = SCOOP_PALETTE.map((c) => c.outline);
 
     // --- Cone header (fixed, not scrollable) ---
     const coneHeaderEl = this.container.querySelector('.scoop-cone-header');
@@ -83,38 +267,51 @@ export class ScoopsPanel {
       while (coneHeaderEl.firstChild) coneHeaderEl.removeChild(coneHeaderEl.firstChild);
 
       if (cone) {
+        this.coneJid = cone.jid;
         const coneStatus = this.scoopStatuses.get(cone.jid) ?? 'inactive';
         const isConeSelected = cone.jid === this.selectedScoopJid;
-        const coneColor = '#e07030';
-        const coneBg = '#fef0e0';
+        const coneColor = '#D2691E'; // Cone base (chocolate)
+        const coneOutline = '#8B4513'; // Cone outline (saddle brown)
+        const coneWaffle = '#E8A75C'; // Waffle crosshatch (lighter brown)
 
         const coneItem = document.createElement('div');
         coneItem.className = `scoop-item scoop-item--cone ${isConeSelected ? 'selected' : ''} status-${coneStatus}`;
         coneItem.dataset.jid = cone.jid;
         coneItem.setAttribute('aria-label', cone.assistantLabel);
 
-        // Set accent color as CSS custom properties for selected styling
-        coneItem.style.setProperty('--scoop-accent', coneColor);
-        coneItem.style.setProperty('--scoop-accent-bg', coneBg);
+        // Set accent color as CSS custom properties for border styling
+        coneItem.style.setProperty('--scoop-accent', coneOutline);
+        // Solid-fill color for light mode (see .theme-light overrides in CSS)
+        coneItem.style.setProperty('--scoop-bg', coneColor);
 
         // Icon wrapper — 40px for cone
         const iconWrap = document.createElement('div');
         iconWrap.className = 'scoop-icon-wrap scoop-icon-wrap--cone';
-        iconWrap.style.background = coneBg;
         iconWrap.style.width = '40px';
         iconWrap.style.height = '40px';
 
+        // Whimsical cone icon (from asset SVGs)
         const svg = document.createElementNS(ns, 'svg');
         svg.setAttribute('width', '24');
         svg.setAttribute('height', '24');
-        svg.setAttribute('fill', coneColor);
-        svg.setAttribute('viewBox', '100 195 230 235');
-        const p1 = document.createElementNS(ns, 'path');
-        p1.setAttribute(
-          'd',
-          'M331.2,128.8c1.6-4.8,2.4-11.2,2.4-16.8c0-20.8-12.8-40-31.2-48.8c-8-36-47.2-63.2-92.8-63.2c-48,0-88,29.6-93.6,68.8C102.4,79.2,94.4,95.2,94.4,112c0,4.8,0.8,9.6,1.6,13.6c-7.2,9.6-10.4,20.8-10.4,32C85.6,180,100,200,120,208l85.6,212.8c1.6,3.2,4,4.8,7.2,4.8s6.4-1.6,7.2-4.8L305.6,208c20-8,34.4-27.2,34.4-50.4C340,147.2,336.8,136.8,331.2,128.8z M139.2,216l-1.6-3.2h0.8c1.6,0,2.4,0,4,0L139.2,216z M145.6,232.8l23.2-24.8c4.8,6.4,11.2,11.2,18.4,14.4l12,12l-28.8,30.4l-20.8-22.4L145.6,232.8z M210.4,246.4l28.8,30.4L210.4,308l-28.8-31.2L210.4,246.4z M168.8,289.6l1.6-1.6l28.8,32l-12.8,13.6L168.8,289.6z M212,396.8l-18.4-46.4l16.8-18.4l19.2,21.6L212,396.8z M236.8,336l-15.2-16.8l28.8-31.2l4,4L236.8,336z M250.4,264.8l-28.8-30.4l11.2-12c8-3.2,14.4-8,19.2-14.4l25.6,27.2L250.4,264.8z M284,218.4l-6.4-6.4c2.4,0,4.8,0.8,8,0.8h0.8L284,218.4z M285.6,196c-9.6,0-19.2-4-26.4-11.2c-1.6-1.6-4.8-2.4-7.2-2.4c-2.4,0.8-4.8,2.4-5.6,4.8c-6.4,13.6-20,23.2-35.2,23.2c-14.4,0-28-8.8-34.4-21.6c-0.8-2.4-3.2-4-5.6-4.8c-0.8,0-0.8,0-1.6,0c-1.6,0-4,0.8-5.6,2.4c-7.2,6.4-16,9.6-25.6,9.6c-20.8,0-38.4-16.8-38.4-38.4c0-9.6,3.2-18.4,9.6-24.8c1.6-2.4,2.4-5.6,1.6-8c-1.6-4-2.4-8.8-2.4-12.8c0-12.8,6.4-24.8,17.6-32c2.4-1.6,3.2-4,4-6.4c2.4-32,36.8-57.6,78.4-57.6c39.2,0,72.8,23.2,77.6,54.4c0.8,3.2,2.4,5.6,4.8,6.4c15.2,5.6,24.8,20,24.8,36c0,4.8-0.8,10.4-3.2,15.2c-0.8,2.4-0.8,5.6,0.8,8c4.8,6.4,8,14.4,8,23.2C323.2,179.2,306.4,196,285.6,196z'
-        );
-        svg.appendChild(p1);
+        svg.setAttribute('viewBox', '70 330 440 570');
+        svg.innerHTML =
+          `<path d="M108.22,414.88l189.84,460.03c1.36,3.3,6.09,3.16,7.25-.22l159.34-463.34c.87-2.53-1.03-5.16-3.7-5.13l-349.18,3.32c-2.74.03-4.59,2.82-3.55,5.35Z" fill="${coneColor}" stroke="${coneOutline}" stroke-linejoin="round" stroke-width="20"/>` +
+          `<path d="M261.93,482.48h0c15.03-15.03,4.46-40.72-16.79-40.83h0c-21.37-.11-32.14,25.72-17.03,40.83h0c9.34,9.34,24.48,9.34,33.82,0Z" fill="${coneWaffle}"/>` +
+          `<path d="M384.85,527.49l-51.82,51.82c-2.24,2.24-2.24,5.86,0,8.1l55.71,55.71c2.24,2.24,5.86,2.24,8.1,0h0c.62-.62,1.08-1.36,1.37-2.19l26.52-77.11c.71-2.07.18-4.36-1.37-5.91l-30.41-30.41c-2.24-2.24-5.86-2.24-8.1,0Z" fill="${coneWaffle}"/>` +
+          `<rect x="274.59" y="463.59" width="84.73" height="95.66" rx="42.36" ry="42.36" transform="translate(-268.79 373.91) rotate(-45)" fill="${coneWaffle}"/>` +
+          `<rect x="291.06" y="603.84" width="72.24" height="90.24" rx="36.12" ry="36.12" transform="translate(-363.06 421.43) rotate(-45)" fill="${coneWaffle}"/>` +
+          `<path d="M371.7,684.58l-25.94,25.94c-2.24,2.24-2.24,5.86,0,8.1l12.67,12.67c2.99,2.99,8.09,1.82,9.46-2.19l13.28-38.61c1.97-5.74-5.17-10.2-9.46-5.91Z" fill="${coneWaffle}"/>` +
+          `<path d="M159.42,564.14l2.73,6.83c1.52,3.82,6.46,4.83,9.37,1.93l2.05-2.05c2.24-2.24,2.24-5.86,0-8.1l-4.78-4.78c-4.4-4.4-11.67.39-9.37,6.17Z" fill="${coneWaffle}"/>` +
+          `<path d="M243.92,633.11l-48.65-48.65c-5.24-5.24-13.74-5.24-18.99,0h0c-3.8,3.8-4.97,9.49-2.98,14.47l27.77,69.54c3.58,8.95,15.14,11.33,21.96,4.51l20.89-20.89c5.24-5.24,5.24-13.74,0-18.99Z" fill="${coneWaffle}"/>` +
+          `<path d="M211.32,533.1h0c14.11-14.11,14.11-36.98,0-51.08l-34.94-34.94c-.72-.72-.72-1.89,0-2.62h0c1.16-1.16.34-3.15-1.3-3.16l-11.23-.06c-25.62-.13-43.23,25.72-33.73,49.51l5.37,13.45c1.82,4.55,4.54,8.68,8,12.15l16.74,16.74c14.11,14.11,36.98,14.11,51.08,0Z" fill="${coneWaffle}"/>` +
+          `<path d="M263.74,792.53h0c-5.69,5.69-7.45,14.23-4.46,21.71l22.5,56.36c6.92,17.34,31.68,16.74,37.75-.92l8.66-25.2c2.5-7.28.64-15.35-4.8-20.79l-31.17-31.17c-7.87-7.87-20.62-7.87-28.48,0Z" fill="${coneWaffle}"/>` +
+          `<path d="M392.94,503.07l40.81-40.81c2.24-2.24,5.86-2.24,8.1,0l.06.06c2.24,2.24,2.24,5.86,0,8.1l-40.81,40.81c-2.24,2.24-2.24,5.86,0,8.1l22.48,22.48c2.99,2.99,8.09,1.82,9.46-2.19l30.71-89.32c1.27-3.71-1.47-7.57-5.39-7.59l-120.63-.6c-5.11-.03-7.69,6.16-4.08,9.77l51.18,51.18c2.24,2.24,5.86,2.24,8.1,0Z" fill="${coneWaffle}"/>` +
+          `<rect x="217.18" y="527.25" width="72.24" height="95.66" rx="36.12" ry="36.12" transform="translate(-332.45 347.55) rotate(-45)" fill="${coneWaffle}"/>` +
+          `<path d="M350.28,739.46h0c-9.24-9.24-24.22-9.24-33.46,0l-13.94,13.94c-9.24,9.24-9.24,24.22,0,33.46l6.81,6.81c12.37,12.37,33.42,7.5,39.1-9.04l7.13-20.75c2.94-8.55.75-18.03-5.64-24.42Z" fill="${coneWaffle}"/>` +
+          `<path d="M234.18,749.12l13.2,33.06c1.52,3.82,6.46,4.83,9.37,1.93l9.93-9.93c2.24-2.24,2.24-5.86,0-8.1l-23.13-23.13c-4.4-4.4-11.67.39-9.37,6.17Z" fill="${coneWaffle}"/>` +
+          `<rect x="236.26" y="661.25" width="67.04" height="90.24" rx="33.52" ry="33.52" transform="translate(-420.46 397.65) rotate(-45)" fill="${coneWaffle}"/>` +
+          `<ellipse cx="288.37" cy="404.38" rx="182.34" ry="67.01" fill="${coneColor}" stroke="${coneOutline}" stroke-miterlimit="10" stroke-width="20"/>`;
         iconWrap.appendChild(svg);
 
         // Status dot on cone
@@ -160,6 +357,16 @@ export class ScoopsPanel {
 
         coneItem.addEventListener('click', () => this.selectScoop(cone));
 
+        // Eyes hover tracking
+        coneItem.addEventListener('mouseenter', () => {
+          this.hoveredJid = cone.jid;
+          this.moveEyes();
+        });
+        coneItem.addEventListener('mouseleave', () => {
+          if (this.hoveredJid === cone.jid) this.hoveredJid = null;
+          this.moveEyes();
+        });
+
         // Collapsed-mode tooltip
         const label = cone.assistantLabel;
         coneItem.addEventListener('mouseenter', () => {
@@ -194,6 +401,7 @@ export class ScoopsPanel {
     if (scoops.length === 0) {
       // Still notify even if no scoops
       this.callbacks.onScoopsChanged?.(allScoops);
+      this.moveEyes();
       return;
     }
 
@@ -202,7 +410,7 @@ export class ScoopsPanel {
       const status = this.scoopStatuses.get(scoop.jid) ?? 'inactive';
       const isSelected = scoop.jid === this.selectedScoopJid;
       const iconColor = SCOOP_COLORS[i % SCOOP_COLORS.length];
-      const iconBg = SCOOP_BG_COLORS[i % SCOOP_BG_COLORS.length];
+      const iconOutline = SCOOP_OUTLINES[i % SCOOP_OUTLINES.length];
 
       const item = document.createElement('div');
       item.className = `scoop-item ${isSelected ? 'selected' : ''} status-${status}`;
@@ -212,25 +420,28 @@ export class ScoopsPanel {
       const displayName = scoop.assistantLabel.replace(/-scoop$/, '');
       item.setAttribute('aria-label', displayName);
 
-      // Set accent color as CSS custom properties for selected styling
-      item.style.setProperty('--scoop-accent', iconColor);
-      item.style.setProperty('--scoop-accent-bg', iconBg);
+      // Set accent color as CSS custom properties for border styling
+      item.style.setProperty('--scoop-accent', iconOutline);
+      // Solid-fill color for light mode (see .theme-light overrides in CSS)
+      item.style.setProperty('--scoop-bg', iconColor);
 
       // Icon wrapper
       const iconWrap = document.createElement('div');
       iconWrap.className = 'scoop-icon-wrap';
-      iconWrap.style.background = iconBg;
 
+      // Whimsical scoop icon (organic blob from asset SVGs)
       const svg = document.createElementNS(ns, 'svg');
       svg.setAttribute('width', '20');
       svg.setAttribute('height', '20');
-      svg.setAttribute('fill', iconColor);
-      svg.setAttribute('viewBox', '70 0 290 210');
+      svg.setAttribute('viewBox', '0 0 580 470');
       const sp1 = document.createElementNS(ns, 'path');
       sp1.setAttribute(
         'd',
-        'M331.2,128.8c1.6-4.8,2.4-11.2,2.4-16.8c0-20.8-12.8-40-31.2-48.8c-8-36-47.2-63.2-92.8-63.2c-48,0-88,29.6-93.6,68.8C102.4,79.2,94.4,95.2,94.4,112c0,4.8,0.8,9.6,1.6,13.6c-7.2,9.6-10.4,20.8-10.4,32C85.6,180,100,200,120,208l85.6,212.8c1.6,3.2,4,4.8,7.2,4.8s6.4-1.6,7.2-4.8L305.6,208c20-8,34.4-27.2,34.4-50.4C340,147.2,336.8,136.8,331.2,128.8z M285.6,196c-9.6,0-19.2-4-26.4-11.2c-1.6-1.6-4.8-2.4-7.2-2.4c-2.4,0.8-4.8,2.4-5.6,4.8c-6.4,13.6-20,23.2-35.2,23.2c-14.4,0-28-8.8-34.4-21.6c-0.8-2.4-3.2-4-5.6-4.8c-0.8,0-0.8,0-1.6,0c-1.6,0-4,0.8-5.6,2.4c-7.2,6.4-16,9.6-25.6,9.6c-20.8,0-38.4-16.8-38.4-38.4c0-9.6,3.2-18.4,9.6-24.8c1.6-2.4,2.4-5.6,1.6-8c-1.6-4-2.4-8.8-2.4-12.8c0-12.8,6.4-24.8,17.6-32c2.4-1.6,3.2-4,4-6.4c2.4-32,36.8-57.6,78.4-57.6c39.2,0,72.8,23.2,77.6,54.4c0.8,3.2,2.4,5.6,4.8,6.4c15.2,5.6,24.8,20,24.8,36c0,4.8-0.8,10.4-3.2,15.2c-0.8,2.4-0.8,5.6,0.8,8c4.8,6.4,8,14.4,8,23.2C323.2,179.2,306.4,196,285.6,196z'
+        'M566.75,340.67c0-29.85-12.97-56.87-33.96-76.47,4.8-9.98,7.44-20.71,7.44-31.9,0-38.29-30.62-71.33-74.92-86.77.33-3.07.51-6.17.51-9.3,0-69.72-84.29-126.24-188.26-126.24s-188.26,56.52-188.26,126.24c0,4,.29,7.95.83,11.86-34.94,15.4-58.48,44.25-58.48,77.34,0,18.21,7.15,35.15,19.39,49.26-25.1,19.88-41.05,49.47-41.05,82.54,0,59.85,52.15,108.37,116.49,108.37,10.83,0,21.3-1.4,31.26-3.98,31.42,41.91,83.55,69.34,142.55,69.34,64.73,0,121.2-33,151.11-81.94,63.8-.57,115.34-48.85,115.34-108.34Z'
       );
+      sp1.setAttribute('fill', iconColor);
+      sp1.setAttribute('stroke', iconOutline);
+      sp1.setAttribute('stroke-width', '20');
       svg.appendChild(sp1);
       iconWrap.appendChild(svg);
 
@@ -282,6 +493,16 @@ export class ScoopsPanel {
         this.selectScoop(scoop);
       });
 
+      // Eyes hover tracking
+      item.addEventListener('mouseenter', () => {
+        this.hoveredJid = scoop.jid;
+        this.moveEyes();
+      });
+      item.addEventListener('mouseleave', () => {
+        if (this.hoveredJid === scoop.jid) this.hoveredJid = null;
+        this.moveEyes();
+      });
+
       // Collapsed-mode tooltip
       item.addEventListener('mouseenter', () => {
         if (this.expanded) return;
@@ -307,6 +528,9 @@ export class ScoopsPanel {
 
     // Notify listeners of scoop list change
     this.callbacks.onScoopsChanged?.(allScoops);
+
+    // Position roaming eyes
+    this.moveEyes();
   }
 
   /** Select a scoop */
@@ -378,43 +602,32 @@ export class ScoopsPanel {
     log.info('Scoop deleted', { jid, name: scoop.name });
   }
 
-  /** Create a new scoop */
-  async createScoop(name: string, isCone = false): Promise<RegisteredScoop> {
+  /**
+   * Bootstrap the cone. Only ever used once, from `main.ts`, when the
+   * orchestrator starts with no existing cone on disk. Non-cone scoops come
+   * exclusively from the agent's `scoop_scoop` tool.
+   */
+  async createCone(name = 'Cone'): Promise<RegisteredScoop> {
     if (!this.orchestrator) {
       throw new Error('Orchestrator not set');
     }
 
-    const folder = isCone ? 'cone' : this.sanitizeFolderName(name) + '-scoop';
-    const jid = isCone ? `cone_${Date.now()}` : `scoop_${folder}_${Date.now()}`;
-
     const scoop: RegisteredScoop = {
-      jid,
+      jid: `cone_${Date.now()}`,
       name,
-      folder,
-      trigger: isCone ? undefined : `@${folder}`,
-      requiresTrigger: !isCone,
-      isCone,
-      type: isCone ? 'cone' : 'scoop',
-      assistantLabel: isCone ? 'sliccy' : folder,
+      folder: 'cone',
+      requiresTrigger: false,
+      isCone: true,
+      type: 'cone',
+      assistantLabel: 'sliccy',
       addedAt: new Date().toISOString(),
     };
 
     await this.orchestrator.registerScoop(scoop);
     this.refreshScoops();
 
-    log.info('Scoop created', { jid, name, isCone });
+    log.info('Cone created', { jid: scoop.jid, name });
     return scoop;
-  }
-
-  /** Sanitize a name into a valid folder name */
-  private sanitizeFolderName(name: string): string {
-    return (
-      name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 50) || 'scoop'
-    );
   }
 
   /** Render the panel as an icon-only nav rail (UXC design). */
@@ -424,17 +637,6 @@ export class ScoopsPanel {
 
     const panel = document.createElement('div');
     panel.className = 'scoops-panel';
-
-    // Hamburger toggle at top
-    const hamburger = document.createElement('button');
-    hamburger.className = 'scoops-hamburger';
-    hamburger.dataset.tooltip = 'Toggle navigation';
-    hamburger.dataset.tooltipPos = 'right';
-    hamburger.setAttribute('aria-label', 'Toggle navigation');
-    hamburger.innerHTML =
-      '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M9.61805 16.2451C9.31922 15.958 9.30945 15.4834 9.59754 15.1855L14.5839 10.002L9.58485 4.80469C9.29677 4.50684 9.30653 4.03223 9.60536 3.74512C9.90223 3.45801 10.3778 3.4668 10.6649 3.76563L16.1649 9.48243C16.4452 9.77247 16.4452 10.2315 16.1649 10.5215L10.6776 16.2246C10.5311 16.3779 10.3339 16.4551 10.1376 16.4551C9.95008 16.4551 9.76258 16.3857 9.61805 16.2451Z"/><path d="M3.86805 16.2451C3.56922 15.958 3.55945 15.4834 3.84754 15.1855L8.83387 10.002L3.83485 4.80469C3.54677 4.50684 3.55653 4.03223 3.85536 3.74512C4.15223 3.45801 4.62782 3.4668 4.91493 3.76563L10.4149 9.48243C10.6952 9.77247 10.6952 10.2315 10.4149 10.5215L4.92763 16.2246C4.78114 16.3779 4.58388 16.4551 4.38759 16.4551C4.20008 16.4551 4.01258 16.3857 3.86805 16.2451Z"/></svg>';
-    hamburger.addEventListener('click', () => this.toggleExpanded());
-    panel.appendChild(hamburger);
 
     // Cone header — fixed above scrollable list
     const coneHeader = document.createElement('div');
@@ -460,24 +662,6 @@ export class ScoopsPanel {
         padding: 12px 4px 12px 8px;
         gap: 8px;
         overflow: visible;
-      }
-
-      /* Hamburger toggle */
-      .scoops-hamburger {
-        width: 24px; height: 24px;
-        margin-left: 5px;
-        border: none; background: transparent;
-        color: var(--s2-content-secondary);
-        border-radius: 8px;
-        cursor: pointer;
-        display: flex;
-        align-items: center; justify-content: center;
-        flex-shrink: 0;
-        transition: background 130ms ease, color 130ms ease;
-      }
-      .scoops-hamburger:hover {
-        background: var(--s2-bg-elevated);
-        color: var(--s2-content-default);
       }
 
       /* Cone header — fixed above scrollable list */
@@ -539,7 +723,8 @@ export class ScoopsPanel {
         opacity: 1;
       }
       .scoop-item.selected .scoop-icon-wrap {
-        background: var(--scoop-accent-bg, #efe4f8);
+        background: transparent;
+        border-width: 3px;
       }
 
       /* Fade idle scoops */
@@ -561,9 +746,24 @@ export class ScoopsPanel {
         align-items: center;
         justify-content: center;
         position: relative;
+        background: transparent;
+        box-sizing: border-box;
+        border: 2px solid var(--scoop-accent, currentColor);
       }
       .scoop-icon-wrap svg {
         width: 18px; height: 18px;
+      }
+
+      /* Light mode keeps the legacy solid-fill look (pale tinted bg, no outline ring).
+         The wrapper bg is a lightened version of the scoop base color so the
+         SVG (filled with the base color + darker outline) remains distinct. */
+      :root.theme-light .scoop-icon-wrap {
+        background: color-mix(in oklab, var(--scoop-bg, transparent) 35%, #ffffff);
+        border: none;
+      }
+      :root.theme-light .scoop-item.selected .scoop-icon-wrap {
+        background: color-mix(in oklab, var(--scoop-bg, transparent) 35%, #ffffff);
+        border: none;
       }
 
       /* Hide info/actions in rail mode — shown via tooltip */
@@ -698,6 +898,23 @@ export class ScoopsPanel {
       .scoop-dot--processing { background: var(--s2-notice); }
       .scoop-dot--ready { background: var(--s2-positive); }
       .scoop-dot--error { background: var(--s2-negative); }
+
+      /* Roaming eyes overlay */
+      .scoop-eyes {
+        position: absolute;
+        top: 22%;
+        left: 24%;
+        width: 70%;
+        height: 45%;
+        pointer-events: none;
+        z-index: 2;
+      }
+      .scoop-icon-wrap--cone .scoop-eyes {
+        top: -2%;
+        left: 25.5%;
+        width: 64%;
+        height: 44%;
+      }
 
       /* Footer — pinned to bottom of nav rail */
       .scoops-footer {

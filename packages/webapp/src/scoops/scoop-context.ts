@@ -41,6 +41,7 @@ import {
   type ScoopManagementToolsConfig,
 } from './scoop-management-tools.js';
 import { getAdobeSessionId } from './llm-session-id.js';
+import { fetchSecretEnvVars } from '../core/secret-env.js';
 
 const log = createLogger('scoop-context');
 
@@ -95,6 +96,7 @@ export class ScoopContext {
   private agent: Agent | null = null;
   private status: 'initializing' | 'ready' | 'processing' | 'error' = 'initializing';
   private isProcessing = false;
+  private disposed = false;
   private didStreamDeltas = false;
   private unsubscribe: (() => void) | null = null;
 
@@ -155,12 +157,22 @@ export class ScoopContext {
 
       const effectiveSkillsFs = (this.skillsFs ?? this.fs) as VirtualFS;
 
+      // Fetch masked secret values from the server to populate shell environment.
+      // Real values never leave the server — only deterministic masked values are used.
+      const secretEnv = await fetchSecretEnvVars();
+
       // Pass effectiveSkillsFs for JSH discovery so scoops can find .jsh files from all loaded skills
       this.shell = new WasmShell({
         fs: this.fs as VirtualFS,
         cwd,
+        env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
         browserAPI: browser,
         jshDiscoveryFs: this.skillsFs ? effectiveSkillsFs : undefined,
+        allowedCommands: this.scoop.config?.allowedCommands,
+        // Forward this scoop's jid so the `agent` supplemental command can
+        // tell the AgentBridge which scoop is the parent of any nested
+        // `agent <cwd> ... <prompt>` invocation — used for model inheritance.
+        getParentJid: () => this.scoop.jid,
       });
       log.info('WasmShell initialized', { folder: this.scoop.folder });
       const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
@@ -272,6 +284,9 @@ export class ScoopContext {
         });
       };
 
+      // Guard: dispose() may have run while init() was awaiting above.
+      if (this.disposed) return;
+
       this.agent = new Agent({
         initialState: {
           model,
@@ -290,6 +305,7 @@ export class ScoopContext {
       this.setStatus('ready');
       log.info('ScoopContext initialized', { folder: this.scoop.folder, toolCount: tools.length });
     } catch (err) {
+      if (this.disposed) return;
       const message = err instanceof Error ? err.message : String(err);
       log.error('ScoopContext init failed', { folder: this.scoop.folder, error: message });
       this.setStatus('error');
@@ -329,9 +345,11 @@ export class ScoopContext {
     try {
       await this.agent.prompt(text);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.error('Agent error', { folder: this.scoop.folder, error: message });
-      this.callbacks.onError(message);
+      if (!this.disposed) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error('Agent error', { folder: this.scoop.folder, error: message });
+        this.callbacks.onError(message);
+      }
     } finally {
       this.isProcessing = false;
       this.setStatus('ready');
@@ -413,6 +431,9 @@ export class ScoopContext {
 
   /** Cleanup */
   dispose(): void {
+    this.disposed = true;
+    this.agent?.clearAllQueues?.();
+    this.agent?.abort?.();
     this.unsubscribe?.();
     this.shell?.dispose();
     this.agent = null;
@@ -421,11 +442,13 @@ export class ScoopContext {
   }
 
   private setStatus(status: 'initializing' | 'ready' | 'processing' | 'error'): void {
+    if (this.disposed) return;
     this.status = status;
     this.callbacks.onStatusChange(status);
   }
 
   private handleAgentEvent(event: CoreAgentEvent): void {
+    if (this.disposed) return;
     switch (event.type) {
       case 'message_update': {
         const ame = event.assistantMessageEvent as AssistantMessageEvent;
@@ -749,7 +772,12 @@ export class ScoopContext {
       }
     }
 
-    // Create default CLAUDE.md if missing
+    // Create default CLAUDE.md if missing. Best-effort: scoops with
+    // pure-replace `writablePaths: []` (or no overlap with the memory
+    // path) have no writable location for this file, and that's a
+    // legitimate configuration — a read-only / audit-style scoop
+    // simply runs without a persisted memory file. Swallowing the
+    // EACCES keeps init on the happy path for zero-write sandboxes.
     const memoryPath = this.scoop.isCone
       ? '/workspace/CLAUDE.md'
       : `/scoops/${this.scoop.folder}/CLAUDE.md`;
@@ -768,7 +796,19 @@ Created: ${new Date().toISOString()}
 ## Context
 (Add important context here)
 `;
-      await this.fs.writeFile(memoryPath, defaultMemory);
+      try {
+        await this.fs.writeFile(memoryPath, defaultMemory);
+      } catch (err) {
+        const code = (err as { code?: string })?.code;
+        if (code === 'EACCES') {
+          log.debug('Skipping default memory write (sandbox is read-only)', {
+            folder: this.scoop.folder,
+            path: memoryPath,
+          });
+        } else {
+          throw err;
+        }
+      }
     }
   }
 

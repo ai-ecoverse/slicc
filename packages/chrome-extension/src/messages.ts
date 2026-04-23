@@ -7,23 +7,6 @@
 
 import type { ScoopTabState } from './types.js';
 
-export interface GenericHandoffPayload {
-  title?: string;
-  instruction: string;
-  urls?: string[];
-  context?: string;
-  acceptanceCriteria?: string[];
-  notes?: string;
-}
-
-export interface PendingHandoff {
-  handoffId: string;
-  sourceUrl: string;
-  sourceTabId?: number;
-  payload: GenericHandoffPayload;
-  receivedAt: string;
-}
-
 // ---------------------------------------------------------------------------
 // Side Panel → Offscreen (via service worker relay)
 // ---------------------------------------------------------------------------
@@ -35,10 +18,15 @@ export interface UserMessageMsg {
   messageId: string;
 }
 
-export interface ScoopCreateMsg {
-  type: 'scoop-create';
+/**
+ * Panel → offscreen: bootstrap the cone. Sent exactly once per side-panel
+ * session when no cone exists on disk yet. Non-cone scoops are created by
+ * the agent's `scoop_scoop` tool inside the offscreen orchestrator, not
+ * through this message.
+ */
+export interface ConeCreateMsg {
+  type: 'cone-create';
   name: string;
-  isCone: boolean;
 }
 
 export interface ScoopFeedMsg {
@@ -105,6 +93,8 @@ export interface SprinkleLickMsg {
   type: 'sprinkle-lick';
   sprinkleName: string;
   body: unknown;
+  /** Optional target scoop for routed sprinkle lick events. */
+  targetScoop?: string;
 }
 
 /** Request skill reload after upskill install. */
@@ -112,23 +102,9 @@ export interface ReloadSkillsMsg {
   type: 'reload-skills';
 }
 
-export interface HandoffListRequestMsg {
-  type: 'handoff-list-request';
-}
-
-export interface HandoffAcceptMsg {
-  type: 'handoff-accept';
-  handoffId: string;
-}
-
-export interface HandoffDismissMsg {
-  type: 'handoff-dismiss';
-  handoffId: string;
-}
-
 export type PanelToOffscreenMessage =
   | UserMessageMsg
-  | ScoopCreateMsg
+  | ConeCreateMsg
   | ScoopFeedMsg
   | ScoopDropMsg
   | AbortMsg
@@ -141,10 +117,7 @@ export type PanelToOffscreenMessage =
   | PanelCdpCommandMsg
   | OAuthRequestMsg
   | SprinkleLickMsg
-  | ReloadSkillsMsg
-  | HandoffListRequestMsg
-  | HandoffAcceptMsg
-  | HandoffDismissMsg;
+  | ReloadSkillsMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)
@@ -231,9 +204,16 @@ export interface OAuthResultMsg {
   redirectUrl?: string;
 }
 
-export interface HandoffPendingListMsg {
-  type: 'handoff-pending-list';
-  handoffs: PendingHandoff[];
+/**
+ * Service worker → offscreen: a main-frame document response in some tab
+ * carried an `x-slicc` header. Emitted by the webRequest observer.
+ */
+export interface NavigateLickMsg {
+  type: 'navigate-lick';
+  url: string;
+  sliccHeader: string;
+  title?: string;
+  tabId?: number;
 }
 
 export type OffscreenToPanelMessage =
@@ -339,7 +319,7 @@ export interface PanelEnvelope {
 
 export interface ServiceWorkerEnvelope {
   source: 'service-worker';
-  payload: CdpProxyMessage | TraySocketEventMessage | OAuthResultMsg | HandoffPendingListMsg;
+  payload: CdpProxyMessage | TraySocketEventMessage | OAuthResultMsg | NavigateLickMsg;
 }
 
 export type ExtensionMessage = OffscreenEnvelope | PanelEnvelope | ServiceWorkerEnvelope;

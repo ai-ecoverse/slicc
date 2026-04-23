@@ -9,12 +9,18 @@
  * - Owns a single shared VirtualFS instance
  */
 
-import type { RegisteredScoop, ChannelMessage, ScoopTabState, ScheduledTask } from './types.js';
+import {
+  CURRENT_SCOOP_CONFIG_VERSION,
+  type RegisteredScoop,
+  type ChannelMessage,
+  type ScoopTabState,
+  type ScheduledTask,
+} from './types.js';
 import * as db from './db.js';
 import { createLogger } from '../core/logger.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
 import { TaskScheduler } from './scheduler.js';
-import { VirtualFS } from '../fs/index.js';
+import { VirtualFS, FsWatcher } from '../fs/index.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
@@ -62,6 +68,27 @@ export interface AssistantConfig {
   triggerPattern: RegExp;
 }
 
+/**
+ * Per-scoop event observer. Subscribed via {@link Orchestrator.observeScoop}
+ * so a caller can react to events on a single scoop's lifecycle without
+ * reading the orchestrator's top-level callbacks (which fanout events from
+ * every scoop).
+ *
+ * Used by the `agent` shell command's bridge to block a bash invocation
+ * until a spawned sub-scoop reaches terminal status and to capture the
+ * scoop's `send_message` payloads along the way.
+ *
+ * All handlers are optional — subscribers install only the ones they need.
+ * Exceptions thrown from a handler are caught and logged; they do not
+ * disrupt the orchestrator's own callback chain.
+ */
+export interface ScoopObserver {
+  onStatusChange?: (status: ScoopTabState['status']) => void;
+  onSendMessage?: (text: string) => void;
+  onResponse?: (text: string, isPartial: boolean) => void;
+  onError?: (error: string) => void;
+}
+
 export class Orchestrator {
   private scoops: Map<string, RegisteredScoop> = new Map();
   private tabs: Map<string, ScoopTabState> = new Map();
@@ -79,8 +106,18 @@ export class Orchestrator {
   private scoopResponseBuffer: Map<string, string> = new Map();
   private lickManager: LickManager | null = null;
   private sessionStore: SessionStore | null = null;
+  private fsWatcher: FsWatcher | null = null;
   /** Tracks idle timers for scoops that haven't started work after becoming ready. */
   private idleTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  /** Preserves cost data for scoops that have been dropped. */
+  private droppedScoopCosts: ScoopCostData[] = [];
+  /**
+   * Per-scoop event observers. The `agent` shell command (`agent-bridge.ts`)
+   * uses this to await a sub-scoop's completion without having to own its
+   * own `ScoopContext`: it subscribes, calls `sendPrompt`, and watches for
+   * status / send_message / error events on the one jid it cares about.
+   */
+  private scoopObservers: Map<string, Set<ScoopObserver>> = new Map();
 
   constructor(
     container: HTMLElement,
@@ -99,6 +136,11 @@ export class Orchestrator {
     // Create the single shared VirtualFS
     this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs' });
     this.sessionStore = new SessionStore();
+
+    // Create and attach file system watcher
+    this.fsWatcher = new FsWatcher();
+    this.sharedFs.setWatcher(this.fsWatcher);
+    (globalThis as any).__slicc_fs_watcher = this.fsWatcher;
     await this.ensureRootStructure();
 
     const savedScoops = await db.getAllScoops();
@@ -110,6 +152,7 @@ export class Orchestrator {
         scoop.requiresTrigger = false;
         scoop.assistantLabel = scoop.assistantLabel || 'sliccy';
       }
+      this.migrateScoopConfig(scoop);
       this.scoops.set(scoop.jid, scoop);
       this.messageQueues.set(scoop.jid, []);
 
@@ -153,6 +196,48 @@ export class Orchestrator {
 
     // Start polling for pending messages
     this.startMessageLoop();
+  }
+
+  /**
+   * One-shot in-memory compat migration for `ScoopConfig`. Mutates the scoop
+   * record in place so the rest of the runtime sees the normalized shape;
+   * the DB copy stays legacy until some other operation happens to call
+   * `db.saveScoop` (e.g. a user-initiated scoop update). That's fine — this
+   * migration is idempotent and cheap, so re-running it on every boot until
+   * the record gets rewritten is a non-issue.
+   *
+   * Gated on {@link RegisteredScoop.configSchemaVersion} rather than a truthy
+   * check on individual fields, so a record explicitly saved with
+   * `visiblePaths: undefined` (or an empty array) under the current schema
+   * keeps that authoritative value — "no read-only paths" stays "no read-only
+   * paths." Only records that predate a field get the historical default
+   * filled in.
+   *
+   * Cones have no `ScoopConfig` path surface at all; they ignore the version.
+   */
+  private migrateScoopConfig(scoop: RegisteredScoop): void {
+    if (scoop.isCone) return;
+    const version = scoop.configSchemaVersion ?? 0;
+    if (version >= CURRENT_SCOOP_CONFIG_VERSION) return;
+
+    if (version < 1) {
+      // Pre-visiblePaths era: default to the historical `/workspace/` read
+      // access so skills stay visible after restart.
+      scoop.config = {
+        ...scoop.config,
+        visiblePaths: scoop.config?.visiblePaths ?? ['/workspace/'],
+      };
+    }
+    if (version < 2) {
+      // Pre-writablePaths era: default to the historical writable set so
+      // existing scoops keep being able to write to their own sandbox and
+      // to `/shared/`.
+      scoop.config = {
+        ...scoop.config,
+        writablePaths: scoop.config?.writablePaths ?? [`/scoops/${scoop.folder}/`, '/shared/'],
+      };
+    }
+    scoop.configSchemaVersion = CURRENT_SCOOP_CONFIG_VERSION;
   }
 
   /** Ensure root directory structure exists on the shared FS */
@@ -215,25 +300,175 @@ export class Orchestrator {
     return this.sharedFs;
   }
 
+  /**
+   * Get the orchestrator's SessionStore, if initialized. Used by
+   * {@link createAgentBridge} to clean up any stored session entry for an
+   * ephemeral `agent`-spawned scoop. Returns `null` before `init()`
+   * resolves.
+   */
+  getSessionStore(): SessionStore | null {
+    return this.sessionStore;
+  }
+
   /** Set the LickManager for guarding scoop removal against active licks */
   setLickManager(lickManager: LickManager): void {
     this.lickManager = lickManager;
+    (globalThis as any).__slicc_lick_handler = (event: any) => {
+      this.lickManager?.emitEvent(event);
+    };
   }
 
-  /** Register a new scoop. Initialization is non-blocking — the scoop
-   *  starts as 'initializing' and becomes 'ready' in the background.
-   *  `sendPrompt` already handles this by waiting for 'ready' status. */
+  /** Register a new scoop and wait until its tab/context has been registered
+   *  before returning. Does NOT guarantee successful initialization:
+   *  `ScoopContext.init()` can handle failures internally and leave the tab
+   *  in 'error' state while `createScoopTab` still resolves. The guarantee
+   *  here is that by the time this resolves, the tab/context entry exists in
+   *  `this.contexts` / `this.tabs` (ready or error).
+   *
+   *  Awaiting createScoopTab (rather than firing-and-forgetting it) is what
+   *  prevents a race with the caller's immediate follow-up sendPrompt.
+   *  `scoop_scoop` with an initial prompt fires `onFeedScoop` the moment
+   *  this resolves: if the tab had not yet been registered in `this.contexts`
+   *  / `this.tabs`, sendPrompt would call createScoopTab itself, and both
+   *  calls would race past the `this.contexts.has(jid)` early-return guard
+   *  (the guard only catches duplicates once `contexts.set` has run, which
+   *  happens partway through the function). The losing context ends up
+   *  orphaned and the initial prompt is silently dropped. See issue #440.
+   *
+   *  On failure, rolls back the in-memory and on-disk scoop records so the
+   *  caller doesn't see a half-registered scoop, and rethrows so the caller
+   *  can surface the error. */
+  /**
+   * Subscribe to events for a single scoop. Returns an unsubscribe function
+   * that MUST be called when the caller is done observing — the observer
+   * set holds strong references and leaks otherwise.
+   *
+   * Observer handlers run AFTER the orchestrator's top-level
+   * {@link OrchestratorCallbacks}, so subscribing never interferes with the
+   * normal event flow. Exceptions in a handler are caught and logged.
+   */
+  observeScoop(jid: string, observer: ScoopObserver): () => void {
+    let set = this.scoopObservers.get(jid);
+    if (!set) {
+      set = new Set();
+      this.scoopObservers.set(jid, set);
+    }
+    set.add(observer);
+    return () => {
+      const s = this.scoopObservers.get(jid);
+      if (!s) return;
+      s.delete(observer);
+      if (s.size === 0) this.scoopObservers.delete(jid);
+    };
+  }
+
+  /**
+   * Scoop-completion side effect: forward the scoop's buffered response
+   * to the cone as a `scoop-notify` message so the cone's agent can
+   * react. Always clears the response buffer (bounded memory) regardless
+   * of whether a notify was actually sent.
+   *
+   * Suppressed entirely when `RegisteredScoop.notifyOnComplete === false`.
+   * Ephemeral scoops spawned via the `agent` supplemental shell command
+   * set that flag because the caller already drains output through an
+   * `observeScoop` subscription — the extra cone turn would be both
+   * duplicative and billed as a second API call for what the user
+   * intended as a self-contained shell invocation.
+   *
+   * Extracted from the scoop's `onStatusChange` callback so tests can
+   * exercise the gate without standing up a full ScoopContext.
+   */
+  private maybeNotifyConeOnScoopComplete(jid: string): void {
+    const scoop = this.scoops.get(jid);
+    if (!scoop || scoop.isCone) return;
+
+    const responseText = this.scoopResponseBuffer.get(jid);
+    this.scoopResponseBuffer.delete(jid);
+    if (!responseText) return;
+    if (scoop.notifyOnComplete === false) return;
+
+    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+    if (!cone) return;
+
+    const summary =
+      responseText.length > 20000
+        ? responseText.slice(0, 20000) + '\n... (truncated)'
+        : responseText;
+    const notifyMsg: ChannelMessage = {
+      id: `scoop-done-${jid}-${Date.now()}`,
+      chatJid: cone.jid,
+      senderId: scoop.folder,
+      senderName: scoop.assistantLabel,
+      content: `[@${scoop.assistantLabel} completed]:\n${summary}`,
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'scoop-notify',
+    };
+    log.info('Routing scoop completion to cone', {
+      scoop: scoop.folder,
+      responseLength: responseText.length,
+    });
+    this.handleMessage(notifyMsg).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error('Failed to route scoop completion to cone', {
+        scoop: scoop.folder,
+        error: msg,
+      });
+      this.callbacks.onError(
+        cone.jid,
+        `Scoop ${scoop.folder} completed but notification failed: ${msg}`
+      );
+    });
+  }
+
+  private dispatchScoopEvent<K extends keyof ScoopObserver>(
+    jid: string,
+    event: K,
+    ...args: Parameters<NonNullable<ScoopObserver[K]>>
+  ): void {
+    const observers = this.scoopObservers.get(jid);
+    if (!observers) return;
+    for (const o of observers) {
+      const handler = o[event];
+      if (!handler) continue;
+      try {
+        (handler as (...a: unknown[]) => void)(...(args as unknown[]));
+      } catch (err) {
+        log.warn('scoop observer threw', {
+          jid,
+          event,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
   async registerScoop(scoop: RegisteredScoop): Promise<void> {
     await db.saveScoop(scoop);
     this.scoops.set(scoop.jid, scoop);
     this.messageQueues.set(scoop.jid, []);
     log.info('Scoop registered', { jid: scoop.jid, name: scoop.name });
-
-    // Fire-and-forget: init runs in background. sendPrompt waits if needed.
-    this.createScoopTab(scoop.jid).catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error('Scoop init failed', { jid: scoop.jid, error: msg });
-    });
+    try {
+      await this.createScoopTab(scoop.jid);
+    } catch (err) {
+      log.error('Scoop init failed', {
+        jid: scoop.jid,
+        name: scoop.name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // Best-effort rollback — leave no half-registered scoop behind.
+      await this.destroyScoopTab(scoop.jid).catch(() => {});
+      this.scoops.delete(scoop.jid);
+      this.messageQueues.delete(scoop.jid);
+      await db.deleteScoop(scoop.jid).catch((rollbackErr) => {
+        log.warn('Failed to rollback scoop registration', {
+          jid: scoop.jid,
+          name: scoop.name,
+          error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+        });
+      });
+      throw err;
+    }
   }
 
   /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */
@@ -245,6 +480,9 @@ export class Orchestrator {
       const err = buildActiveLicksError(scoop.folder, webhooks, cronTasks);
       if (err) throw err;
     }
+
+    // Snapshot cost data before destroying context
+    this.snapshotScoopCost(jid);
 
     this.clearIdleTimer(jid);
     await this.destroyScoopTab(jid);
@@ -258,6 +496,15 @@ export class Orchestrator {
     this.scoops.delete(jid);
     this.messageQueues.delete(jid);
     this.lastAgentTimestamp.delete(jid);
+    this.scoopResponseBuffer.delete(jid);
+    // Defensive observer cleanup — subscribers are expected to call their
+    // unsubscribe, but if they never get the chance (uncaught exception
+    // before `finally`, bridge crash mid-spawn, etc.) the set would
+    // otherwise linger and could fire against stale handlers if the jid
+    // were ever reused. Dropping the whole key is safe because every
+    // legitimate observer for this scoop is about to lose its relevance
+    // anyway: the scoop's context has been destroyed.
+    this.scoopObservers.delete(jid);
     log.info('Scoop unregistered', { jid });
   }
 
@@ -281,6 +528,9 @@ export class Orchestrator {
     }
     // Re-create the VFS with wipe: true
     this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs', wipe: true });
+    if (this.fsWatcher) {
+      this.sharedFs.setWatcher(this.fsWatcher);
+    }
     await this.ensureRootStructure();
     await this.ensureGlobalMemory();
     await createDefaultSkills(this.sharedFs).catch((err) => {
@@ -288,6 +538,7 @@ export class Orchestrator {
         error: err instanceof Error ? err.message : String(err),
       });
     });
+    this.droppedScoopCosts = [];
     log.info('Filesystem reset and defaults re-seeded');
   }
 
@@ -309,6 +560,7 @@ export class Orchestrator {
     for (const jid of this.scoops.keys()) {
       this.messageQueues.set(jid, []);
     }
+    this.droppedScoopCosts = [];
     log.info('All messages cleared');
   }
 
@@ -382,8 +634,12 @@ export class Orchestrator {
     }
 
     // Check trigger requirement using the scoop's own trigger
-    // Bypass trigger check for lick messages (webhook/cron - they're explicitly routed to this scoop)
-    const isLick = message.channel === 'webhook' || message.channel === 'cron';
+    // Bypass trigger check for lick messages — they're explicitly routed to this scoop
+    const isLick =
+      message.channel === 'webhook' ||
+      message.channel === 'cron' ||
+      message.channel === 'fswatch' ||
+      message.channel === 'sprinkle';
     if (!scoop.isCone && scoop.requiresTrigger && scoop.trigger && !isLick) {
       if (!message.content.includes(scoop.trigger)) {
         log.info('routeToScoop: trigger not found in content', {
@@ -445,15 +701,26 @@ export class Orchestrator {
 
     const contextId = `scoop-${scoop.folder}-${Date.now()}`;
 
-    // Create the appropriate filesystem for this scoop
+    // Create the appropriate filesystem for this scoop.
+    // Cone gets unrestricted access; non-cone scoops use a RestrictedFS whose
+    // read-only and read-write prefixes come straight from config (pure
+    // replace — defaults live in `scoop_scoop` and in the restore backfill,
+    // not here).
     const fs = scoop.isCone
-      ? this.sharedFs // Cone gets unrestricted access
-      : new RestrictedFS(this.sharedFs, [`/scoops/${scoop.folder}/`, '/shared/'], ['/workspace/']);
+      ? this.sharedFs
+      : new RestrictedFS(
+          this.sharedFs,
+          scoop.config?.writablePaths ? [...scoop.config.writablePaths] : [],
+          scoop.config?.visiblePaths ? [...scoop.config.visiblePaths] : []
+        );
 
     // Create the scoop context with full callbacks
     const contextCallbacks: ScoopContextCallbacks = {
       onResponse: (text, isPartial) => {
+        if (!this.scoops.has(jid)) return;
+
         this.callbacks.onResponse(jid, text, isPartial);
+        this.dispatchScoopEvent(jid, 'onResponse', text, isPartial);
         // Accumulate response text for routing back to cone.
         // Accumulate both partial (streaming deltas) and full (non-streaming) responses,
         // since models that don't stream emit isPartial=false with the full text.
@@ -468,6 +735,8 @@ export class Orchestrator {
         }
       },
       onResponseDone: () => {
+        if (!this.scoops.has(jid)) return;
+
         // Per-turn callback — DON'T set tab to 'ready' here.
         // The tab stays 'processing' until prompt() resolves (setStatus('ready') in finally).
         // This prevents the message queue from dequeuing during multi-turn.
@@ -479,6 +748,8 @@ export class Orchestrator {
         this.callbacks.onResponseDone(jid);
       },
       onError: (error) => {
+        if (!this.scoops.has(jid)) return;
+
         const tab = this.tabs.get(jid);
         if (tab) {
           tab.status = 'error';
@@ -487,8 +758,12 @@ export class Orchestrator {
         }
         this.callbacks.onError(jid, error);
         this.callbacks.onStatusChange(jid, 'error');
+        this.dispatchScoopEvent(jid, 'onError', error);
+        this.dispatchScoopEvent(jid, 'onStatusChange', 'error');
       },
       onStatusChange: (status) => {
+        if (!this.scoops.has(jid)) return;
+
         const tab = this.tabs.get(jid);
         if (tab) {
           tab.status = status;
@@ -496,46 +771,12 @@ export class Orchestrator {
           this.tabs.set(jid, tab);
         }
         this.callbacks.onStatusChange(jid, status);
+        this.dispatchScoopEvent(jid, 'onStatusChange', status);
 
         // When a non-cone scoop finishes, route its response to the cone
         // so the cone's agent can react (e.g., move files, report to user).
         if (status === 'ready' && !scoop.isCone) {
-          const responseText = this.scoopResponseBuffer.get(jid);
-          this.scoopResponseBuffer.delete(jid);
-          if (responseText) {
-            const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
-            if (cone) {
-              const summary =
-                responseText.length > 2000
-                  ? responseText.slice(0, 2000) + '\n... (truncated)'
-                  : responseText;
-              const notifyMsg: ChannelMessage = {
-                id: `scoop-done-${jid}-${Date.now()}`,
-                chatJid: cone.jid,
-                senderId: scoop.folder,
-                senderName: scoop.assistantLabel,
-                content: `[@${scoop.assistantLabel} completed]:\n${summary}`,
-                timestamp: new Date().toISOString(),
-                fromAssistant: false,
-                channel: 'scoop-notify',
-              };
-              log.info('Routing scoop completion to cone', {
-                scoop: scoop.folder,
-                responseLength: responseText.length,
-              });
-              this.handleMessage(notifyMsg).catch((err) => {
-                const msg = err instanceof Error ? err.message : String(err);
-                log.error('Failed to route scoop completion to cone', {
-                  scoop: scoop.folder,
-                  error: msg,
-                });
-                this.callbacks.onError(
-                  cone.jid,
-                  `Scoop ${scoop.folder} completed but notification failed: ${msg}`
-                );
-              });
-            }
-          }
+          this.maybeNotifyConeOnScoopComplete(jid);
         }
       },
       onToolStart: (toolName, toolInput) => {
@@ -552,7 +793,12 @@ export class Orchestrator {
       },
       // NanoClaw tools callbacks
       onSendMessage: (text, sender) => {
-        this.callbacks.onSendMessage(jid, `${sender ? `[${sender}] ` : ''}${text}`);
+        const prefixed = `${sender ? `[${sender}] ` : ''}${text}`;
+        this.callbacks.onSendMessage(jid, prefixed);
+        // Observer gets the raw payload (not the sender-prefixed form) so the
+        // `agent` shell command can surface the scoop's send_message text
+        // verbatim for stdout.
+        this.dispatchScoopEvent(jid, 'onSendMessage', text);
       },
       getScoops: () => this.getScoops(),
       getScoopTabState: scoop.isCone ? (jid: string) => this.tabs.get(jid) : undefined,
@@ -606,6 +852,7 @@ export class Orchestrator {
       initTab.status = 'ready';
       this.tabs.set(jid, initTab);
       this.callbacks.onStatusChange(jid, 'ready');
+      this.dispatchScoopEvent(jid, 'onStatusChange', 'ready');
     }
 
     // Start idle timer for non-cone scoops
@@ -625,6 +872,11 @@ export class Orchestrator {
       context.dispose();
       this.contexts.delete(jid);
       this.tabs.delete(jid);
+      // Drop any lingering per-scoop observers alongside the context so
+      // the shutdown / reset paths (which call us directly, bypassing
+      // `unregisterScoop`) also reclaim them. See the matching delete
+      // in `unregisterScoop` for the rationale.
+      this.scoopObservers.delete(jid);
       log.info('Scoop context destroyed', { jid });
     }
   }
@@ -725,6 +977,7 @@ export class Orchestrator {
       tab.lastActivity = new Date().toISOString();
       this.tabs.set(jid, tab);
       this.callbacks.onStatusChange(jid, 'processing');
+      this.dispatchScoopEvent(jid, 'onStatusChange', 'processing');
     }
 
     log.debug('Prompt sent to scoop', { jid, textLength: text.length });
@@ -857,56 +1110,90 @@ export class Orchestrator {
     }
   }
 
-  /** Collect cost data from all scoops for the `cost` shell command. */
+  /** Build cost data for a single scoop from its context's messages. Returns null if no usage. */
+  private buildScoopCost(scoop: RegisteredScoop, context: ScoopContext): ScoopCostData | null {
+    const messages = context.getAgentMessages();
+    const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
+    if (assistantMsgs.length === 0) return null;
+
+    const aggregated = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const modelCounts = new Map<string, number>();
+    for (const msg of assistantMsgs) {
+      aggregated.input += msg.usage.input;
+      aggregated.output += msg.usage.output;
+      aggregated.cacheRead += msg.usage.cacheRead;
+      aggregated.cacheWrite += msg.usage.cacheWrite;
+      aggregated.totalTokens += msg.usage.totalTokens;
+      aggregated.cost.input += msg.usage.cost.input;
+      aggregated.cost.output += msg.usage.cost.output;
+      aggregated.cost.cacheRead += msg.usage.cost.cacheRead;
+      aggregated.cost.cacheWrite += msg.usage.cost.cacheWrite;
+      aggregated.cost.total += msg.usage.cost.total;
+      modelCounts.set(msg.model, (modelCounts.get(msg.model) ?? 0) + 1);
+    }
+
+    let topModel = '';
+    let topCount = 0;
+    for (const [model, count] of modelCounts) {
+      if (count > topCount) {
+        topModel = model;
+        topCount = count;
+      }
+    }
+
+    // Calculate active time based on 15-minute intervals
+    const timestamps = assistantMsgs.map((m) => m.timestamp).sort((a, b) => a - b);
+    const firstActivity = timestamps[0];
+    const lastActivity = timestamps[timestamps.length - 1];
+
+    // Round activity time to 15-minute intervals
+    const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
+    const timespanMs = lastActivity - firstActivity;
+    // Calculate number of 15-minute intervals, rounding up (at least 1 interval if there's any activity)
+    const intervals = Math.max(1, Math.ceil(timespanMs / FIFTEEN_MINUTES_MS));
+    const activeTimeMs = intervals * FIFTEEN_MINUTES_MS;
+
+    return {
+      name: scoop.assistantLabel,
+      type: scoop.isCone ? 'cone' : 'scoop',
+      model: topModel,
+      usage: aggregated,
+      turns: assistantMsgs.length,
+      firstActivity,
+      lastActivity,
+      activeTimeMs,
+    };
+  }
+
+  /** Snapshot a scoop's cost data before it is destroyed. */
+  private snapshotScoopCost(jid: string): void {
+    const scoop = this.scoops.get(jid);
+    const context = this.contexts.get(jid);
+    if (!scoop || !context) return;
+    const costData = this.buildScoopCost(scoop, context);
+    if (costData) {
+      this.droppedScoopCosts.push(costData);
+    }
+  }
+
+  /** Collect cost data from all active and dropped scoops for the `cost` shell command. */
   getSessionCosts(): ScoopCostData[] {
     const results: ScoopCostData[] = [];
     for (const scoop of this.scoops.values()) {
       const context = this.contexts.get(scoop.jid);
       if (!context) continue;
-      const messages = context.getAgentMessages();
-      const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
-      if (assistantMsgs.length === 0) continue;
-
-      const aggregated = {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      };
-      const modelCounts = new Map<string, number>();
-      for (const msg of assistantMsgs) {
-        aggregated.input += msg.usage.input;
-        aggregated.output += msg.usage.output;
-        aggregated.cacheRead += msg.usage.cacheRead;
-        aggregated.cacheWrite += msg.usage.cacheWrite;
-        aggregated.totalTokens += msg.usage.totalTokens;
-        aggregated.cost.input += msg.usage.cost.input;
-        aggregated.cost.output += msg.usage.cost.output;
-        aggregated.cost.cacheRead += msg.usage.cost.cacheRead;
-        aggregated.cost.cacheWrite += msg.usage.cost.cacheWrite;
-        aggregated.cost.total += msg.usage.cost.total;
-        modelCounts.set(msg.model, (modelCounts.get(msg.model) ?? 0) + 1);
-      }
-
-      let topModel = '';
-      let topCount = 0;
-      for (const [model, count] of modelCounts) {
-        if (count > topCount) {
-          topModel = model;
-          topCount = count;
-        }
-      }
-
-      results.push({
-        name: scoop.assistantLabel,
-        type: scoop.isCone ? 'cone' : 'scoop',
-        model: topModel,
-        usage: aggregated,
-        turns: assistantMsgs.length,
-      });
+      const costData = this.buildScoopCost(scoop, context);
+      if (costData) results.push(costData);
     }
+    // Include costs from scoops that were dropped during this session
+    results.push(...this.droppedScoopCosts);
     return results;
   }
 

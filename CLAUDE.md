@@ -54,9 +54,10 @@ For runtime-specific commands, use the nearest guide:
 
 In this repo, phrases like `handoff to slicc` or `move this to slicc` mean:
 
-- build a structured JSON payload with `instruction` plus optional `title`, `urls`, `context`, `acceptanceCriteria`, and `notes`
-- base64url-encode that JSON into the fragment of `https://www.sliccy.ai/handoff#...`
-- open that URL in the local browser so the SLICC extension can detect it and show an approval prompt
+- compose a verb-prefixed instruction: `handoff:<free text>` or `upskill:<github url>`
+- open `https://www.sliccy.ai/handoff?msg=<urlencoded>` in the local browser
+- the cloudflare-worker serves that URL with an `x-slicc: <msg>` response header
+- SLICC observes the header on main-frame navigations via a `navigate` lick and shows an approval prompt to the user
 
 Prefer the helper in `.agents/skills/slicc-handoff/scripts/slicc-handoff` when it exists.
 
@@ -147,11 +148,11 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 ### Key Subsystems
 
-**Orchestrator** (`packages/webapp/src/scoops/orchestrator.ts`): Creates/destroys scoops, routes messages, manages VFS. Cone delegates via `feed_scoop` — scoops get complete self-contained prompts (no access to cone's conversation).
+**Orchestrator** (`packages/webapp/src/scoops/orchestrator.ts`): Creates/destroys scoops, routes messages, manages VFS. Cone delegates via `feed_scoop` — scoops get complete self-contained prompts (no access to cone's conversation). Exposes `observeScoop(jid, handler)` for per-scoop event taps (observers are dropped defensively on both `unregisterScoop` and `destroyScoopTab`). `agent-bridge.ts` publishes `globalThis.__slicc_agent` — the shell-facing surface used by the `agent` supplemental command to spawn ephemeral one-shot sub-scoops with `notifyOnComplete: false` (no cone turn on completion). Extension float proxies the bridge from the side panel to the offscreen agent engine via `chrome.runtime` messages.
 
 **VirtualFS** (`packages/webapp/src/fs/`): POSIX-like async FS backed by LightningFS (IndexedDB). `RestrictedFS` wraps it with path ACLs for scoops. `FsError` carries POSIX error codes.
 
-**Shell** (`packages/webapp/src/shell/`): WasmShell wraps just-bash 2.11.7 (WASM). 78+ commands including `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `convert`, `pdftk`, `skill`, `upskill`, `webhook`, `crontask`, `mount`, `oauth-token`, `debug`. Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`. **Two shell contexts in extension mode**: side panel has its own WasmShell (mounted in terminal tab), offscreen document has the agent's WasmShell (runs bash tool calls). Commands that affect the UI must handle both — use `window.__slicc_*` hooks for direct calls (panel) and `chrome.runtime.sendMessage` relay for offscreen→panel communication.
+**Shell** (`packages/webapp/src/shell/`): WasmShell wraps just-bash 2.11.7 (WASM). 78+ commands including `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `convert`, `pdftk`, `skill`, `upskill`, `webhook`, `crontask`, `mount`, `oauth-token`, `debug`, `agent` (spawn a one-shot sub-scoop via AgentBridge — shell surface for scoop delegation from any float). Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`. **Two shell contexts in extension mode**: side panel has its own WasmShell (mounted in terminal tab), offscreen document has the agent's WasmShell (runs bash tool calls). Commands that affect the UI must handle both — use `window.__slicc_*` hooks for direct calls (panel) and `chrome.runtime.sendMessage` relay for offscreen→panel communication.
 
 **CDP** (`packages/webapp/src/cdp/`): `CDPTransport` interface with WebSocket (CLI) and `chrome.debugger` (extension) implementations. `BrowserAPI` provides Playwright-style API (listPages, navigate, screenshot, evaluate, click, etc.). Screenshots normalize DPR to 1.
 

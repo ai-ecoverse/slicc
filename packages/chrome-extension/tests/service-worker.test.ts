@@ -115,6 +115,11 @@ function createChromeMock() {
       launchWebAuthFlow: vi.fn(),
       getRedirectURL: vi.fn(),
     },
+    webRequest: {
+      onHeadersReceived: {
+        addListener: vi.fn(),
+      },
+    },
   };
 }
 

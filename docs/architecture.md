@@ -110,16 +110,18 @@
 
 ### packages/webapp/src/shell/ — Shell & Terminal
 
-| File                       | Purpose                                                                                                                             |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `wasm-shell.ts`            | WasmShell class; just-bash interpreter + xterm.js terminal + command registration (VfsAdapter bridges to VirtualFS)                 |
-| `index.ts`                 | Re-exports                                                                                                                          |
-| `vfs-adapter.ts`           | Implements just-bash IFileSystem interface, bridges just-bash ↔ VirtualFS                                                           |
-| `binary-cache.ts`          | Caches binary responses (Uint8Array) to preserve byte fidelity through VFS writes                                                   |
-| `jsh-discovery.ts`         | Scans VFS for `*.jsh` files; returns `Map<name, path>` with priority roots (`/workspace/skills/`) scanned first                     |
-| `jsh-executor.ts`          | Executes `.jsh` files with Node-like globals (process, console, fs bridge); dual-mode (AsyncFunction CLI, sandbox iframe extension) |
-| `parse-shell-args.ts`      | Shell-like argument parser (double/single quotes, backslash escapes)                                                                |
-| `supplemental-commands.ts` | Re-exports all supplemental command factories                                                                                       |
+| File                       | Purpose                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `wasm-shell.ts`            | WasmShell class; just-bash interpreter + xterm.js terminal + command registration (VfsAdapter bridges to VirtualFS)                   |
+| `index.ts`                 | Re-exports                                                                                                                            |
+| `vfs-adapter.ts`           | Implements just-bash IFileSystem interface, bridges just-bash ↔ VirtualFS                                                             |
+| `binary-cache.ts`          | Caches binary responses (Uint8Array) to preserve byte fidelity through VFS writes                                                     |
+| `script-catalog.ts`        | Shared `.jsh`/`.bsh` discovery cache; invalidated by `FsWatcher`, bypasses cache for mounted roots where external edits are invisible |
+| `jsh-discovery.ts`         | Scans VFS for `*.jsh` files; returns `Map<name, path>` with priority roots (`/workspace/skills/`) scanned first                       |
+| `bsh-discovery.ts`         | Scans `/workspace` and `/shared` for `*.bsh` browser helpers and parses hostname / `@match` metadata                                  |
+| `jsh-executor.ts`          | Executes `.jsh` files with Node-like globals (process, console, fs bridge); dual-mode (AsyncFunction CLI, sandbox iframe extension)   |
+| `parse-shell-args.ts`      | Shell-like argument parser (double/single quotes, backslash escapes)                                                                  |
+| `supplemental-commands.ts` | Re-exports all supplemental command factories                                                                                         |
 
 ### packages/webapp/src/shell/supplemental-commands/ — Custom Shell Commands
 
@@ -359,7 +361,7 @@ Cone executes feed_scoop tool
 ### Lick (Event) Flow
 
 ```
-External webhook POST / scheduled cron task fires
+External webhook POST / scheduled cron task / fswatch change fires
   → LickManager receives event in IndexedDB
     → dispatch() routes to target scoop
       → ScoopContext processes lick
@@ -404,6 +406,47 @@ Scoop removal / app clear
 | `slicc-groups`         | 3       | scoops, messages, sessions, tasks, state, webhooks, crontasks | Orchestrator data (scoops, messages, tasks)                                                                                                                    |
 | `agent-sessions`       | 1       | sessions                                                      | Core agent session history: persisted `SessionData` (`AgentMessage[]` + config + timestamps) per scoop, keyed by JID; loaded on scoop init, saved on agent_end |
 | `slicc-fs-global`      | 1       | config                                                        | Git global config storage                                                                                                                                      |
+
+## Secrets & Secret Injection
+
+SLICC prevents the agent from seeing or exfiltrating real secret values (API keys, tokens, credentials). Secrets are stored server-side and injected at the fetch-proxy boundary, scoped to authorized domains only.
+
+### Masking Engine
+
+Each secret is masked using `HMAC-SHA256(session_id + secret_name, secret_value)`. The result is format-preserving — known prefixes like `ghp_`, `sk-`, `AKIA` are kept, and the hash portion matches the original value's length and character set. Masks are deterministic within a session (the agent can compare values) but differ across sessions (no lookup-table attacks).
+
+### Scrubbing Pipeline
+
+Real secret values are scrubbed at every output boundary before reaching the agent:
+
+1. **Shell environment** — env vars contain masked values, not real ones
+2. **Tool output** — all `bash`, `read_file`, and other tool results are scanned for real values and replaced with masks
+3. **Fetch proxy (outbound)** — masked values in request headers are unmasked if the domain matches; 403 if not. Masked values in request bodies are unmasked for matching domains and passed through unchanged otherwise
+4. **Fetch proxy (inbound)** — response bodies and headers are scanned for real values and replaced with masks
+5. **Chat messages** — user-typed real values are scrubbed before entering the agent conversation
+
+### Storage Backends
+
+| Backend        | Runtime                     | Storage                                                        | Encryption                           |
+| -------------- | --------------------------- | -------------------------------------------------------------- | ------------------------------------ |
+| macOS Keychain | swift-server                | `SecItemAdd`/`SecItemCopyMatching`, service `ai.sliccy.slicc`  | Login keychain (encrypted at rest)   |
+| `.env` file    | node-server (all platforms) | `~/.slicc/secrets.env`, `KEY=VALUE` + `KEY_DOMAINS=...` format | Filesystem permissions (`chmod 600`) |
+
+Both implement the same `SecretStore` interface: `get(name)`, `set(name, value, config)`, `delete(name)`, `list()`.
+
+File path resolution: `--env-file <path>` CLI flag → `SLICC_SECRETS_FILE` env var → `~/.slicc/secrets.env`.
+
+### Key Source Files
+
+| File                                                                | Purpose                                                        |
+| ------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `packages/node-server/src/secrets/`                                 | Node `.env` SecretStore, masking engine, domain matching       |
+| `packages/swift-server/Sources/`                                    | Swift Keychain SecretStore, masking engine                     |
+| `packages/node-server/src/index.ts`                                 | Fetch proxy secret injection (node-server)                     |
+| `packages/webapp/src/shell/supplemental-commands/secret-command.ts` | `secret` shell command                                         |
+| `packages/webapp/src/scoops/scoop-context.ts`                       | Shell env population with masked values, tool output scrubbing |
+
+See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 
 ## File-Finding Guide
 

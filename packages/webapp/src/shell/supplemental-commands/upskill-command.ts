@@ -6,6 +6,7 @@ import type { DiscoveredSkill } from '../../skills/types.js';
 import { SLICC_DIR, STATE_FILE } from '../../skills/constants.js';
 import { unzipSync } from 'fflate';
 import { consumeCachedBinaryByUrl } from '../binary-cache.js';
+import { decodeFetchBody, getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
 
 // ClawHub uses a Convex backend - this is the actual API endpoint
 const CLAWHUB_API = 'https://wry-manatee-359.convex.site/api/v1';
@@ -324,10 +325,11 @@ function getHeader(headers: Record<string, string> | undefined, name: string): s
   return undefined;
 }
 
-function getGitHubErrorDetail(body: string): string | undefined {
-  if (!body) return undefined;
+function getGitHubErrorDetail(body: Uint8Array | string): string | undefined {
+  const text = decodeFetchBody(body);
+  if (!text) return undefined;
   try {
-    const parsed = JSON.parse(body) as GitHubErrorBody;
+    const parsed = JSON.parse(text) as GitHubErrorBody;
     if (typeof parsed.message === 'string' && parsed.message.trim()) {
       return parsed.message.trim();
     }
@@ -335,7 +337,7 @@ function getGitHubErrorDetail(body: string): string | undefined {
     // Not JSON — fall back to a trimmed text preview.
   }
 
-  const trimmed = body.trim();
+  const trimmed = text.trim();
   if (!trimmed) return undefined;
   return trimmed.slice(0, 200);
 }
@@ -546,7 +548,7 @@ async function fetchClawHubResults(
     headers: { Accept: 'application/json' },
   });
   if (response.status !== 200) throw new Error(`ClawHub returned HTTP ${response.status}`);
-  const data = JSON.parse(response.body) as ClawHubSearchResponse;
+  const data = parseFetchJson<ClawHubSearchResponse>(response.body);
   if (!data.results) return [];
   return data.results.map((r) => ({
     name: r.slug,
@@ -579,7 +581,7 @@ async function fetchTesslResults(
     headers: { Accept: 'application/json' },
   });
   if (response.status !== 200) throw new Error(`Tessl returned HTTP ${response.status}`);
-  const data = JSON.parse(response.body) as TesslSearchResponse;
+  const data = parseFetchJson<TesslSearchResponse>(response.body);
   if (!data.data) return [];
 
   // Filter to skills only (exclude tiles), deduplicate by sourceUrl
@@ -751,20 +753,8 @@ async function installFromClawHub(
 
     // Try to get cached binary data by URL first (most reliable - bypasses string encoding issues)
     let zipBytes = consumeCachedBinaryByUrl(downloadUrl);
-    let badCharIdx = -1;
-    let badCharCode = 0;
-
     if (!zipBytes) {
-      // Fallback: Convert latin1 string to bytes - each char code maps directly to a byte
-      zipBytes = new Uint8Array(downloadResponse.body.length);
-      for (let i = 0; i < downloadResponse.body.length; i++) {
-        const code = downloadResponse.body.charCodeAt(i);
-        if (code > 255 && badCharIdx < 0) {
-          badCharIdx = i;
-          badCharCode = code;
-        }
-        zipBytes[i] = code & 0xff; // Mask to byte range
-      }
+      zipBytes = getFetchBodyBytes(downloadResponse.body);
     }
 
     // Unzip the bundle
@@ -777,10 +767,9 @@ async function installFromClawHub(
       const hexPreview = Array.from(zipBytes.slice(0, 20))
         .map((b) => b.toString(16).padStart(2, '0'))
         .join(' ');
-      const badCharInfo = badCharIdx >= 0 ? `\nBad char at ${badCharIdx}: code ${badCharCode}` : '';
       return {
         stdout: '',
-        stderr: `upskill: failed to unzip: ${msg}\nContent-Type: ${contentType}\nBody: ${downloadResponse.body.length} chars\nHex: ${hexPreview}${badCharInfo}\n`,
+        stderr: `upskill: failed to unzip: ${msg}\nContent-Type: ${contentType}\nBody: ${zipBytes.length} bytes\nHex: ${hexPreview}\n`,
         exitCode: 1,
       };
     }
@@ -921,7 +910,7 @@ async function resolveTesslRef(
   if (response.status !== 200) {
     return { error: `Tessl search failed (HTTP ${response.status})` };
   }
-  const data = JSON.parse(response.body) as TesslSearchResponse;
+  const data = parseFetchJson<TesslSearchResponse>(response.body);
   // Find exact name match among skills
   const match = data.data?.find((item) => item.type === 'skill' && item.attributes.name === name);
   if (!match) {
@@ -967,10 +956,7 @@ async function fetchRepoZip(
 
   let zipBytes = consumeCachedBinaryByUrl(url);
   if (!zipBytes) {
-    zipBytes = new Uint8Array(response.body.length);
-    for (let i = 0; i < response.body.length; i++) {
-      zipBytes[i] = response.body.charCodeAt(i) & 0xff;
-    }
+    zipBytes = getFetchBodyBytes(response.body);
   }
 
   try {
@@ -1051,7 +1037,7 @@ async function listGitHubSkills(
       );
     }
 
-    const contents = JSON.parse(response.body) as GitHubContent[];
+    const contents = parseFetchJson<GitHubContent[]>(response.body);
 
     for (const item of contents) {
       if (item.type === 'file' && item.name === 'SKILL.md') {
@@ -1166,7 +1152,7 @@ async function installFromGitHub(
       };
     }
 
-    const contents = JSON.parse(response.body) as GitHubContent[];
+    const contents = parseFetchJson<GitHubContent[]>(response.body);
 
     await fs.mkdir(destDir, { recursive: true });
 
@@ -1190,7 +1176,7 @@ async function installFromGitHub(
               formatGitHubFailure(subResponse, `${owner}/${repo}/${item.path}`, github.hasToken)
             );
           }
-          const subContents = JSON.parse(subResponse.body) as GitHubContent[];
+          const subContents = parseFetchJson<GitHubContent[]>(subResponse.body);
           await fs.mkdir(`${destBase}/${item.name}`, { recursive: true });
           await downloadDir(subContents, `${destBase}/${item.name}`);
         }
@@ -1414,7 +1400,7 @@ async function handleRecommendations(
         if (response.status !== 200) {
           throw new Error(`HTTP ${response.status}`);
         }
-        const data = JSON.parse(response.body) as { data: RemoteCatalogRow[] };
+        const data = parseFetchJson<{ data: RemoteCatalogRow[] }>(response.body);
         return parseRemoteCatalog(data.data);
       })(),
       getInstalledSkillNames(fs),
@@ -1509,10 +1495,25 @@ async function handleRecommendations(
           let skillPath: string;
           let skillName: string;
 
+          // Resolution strategy:
+          // 1. If src.skill is provided, use it to look up in index
+          // 2. If src.skill is missing but src.path is provided, use path directly (explicit path takes precedence)
+          // 3. If neither src.skill nor src.path, fall back to looking up rec.entry.name in index
+          // 4. If none of the above work, error
+
           if (src.skill) {
-            // Look up skill in precomputed index
+            // Explicit skill field - look up in index
             const indexedPath = skillIndex.get(src.skill);
-            if (!indexedPath) {
+            if (indexedPath) {
+              skillPath = indexedPath;
+              skillName = src.skill;
+            } else if (src.path) {
+              // Skill not found in index, but explicit path provided
+              const normalizedPath = src.path.replace(/^\/|\/$/g, '');
+              skillPath = normalizedPath;
+              skillName = src.skill;
+            } else {
+              // Explicit skill field but not found and no path
               const error = `skill "${src.skill}" not found in ${repoKey}`;
               results.push({
                 ok: false,
@@ -1520,7 +1521,6 @@ async function handleRecommendations(
                 error,
               });
               completedSkills++;
-              const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
               const eta =
                 completedSkills < totalSkills
                   ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
@@ -1528,13 +1528,33 @@ async function handleRecommendations(
               output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: ${error}${eta}\n`;
               continue;
             }
-            skillPath = indexedPath;
-            skillName = src.skill;
-          } else {
-            // Use the path directly — the catalog entry name is the skill name
-            const normalizedPath = src.path ? src.path.replace(/^\/|\/$/g, '') : '';
+          } else if (src.path) {
+            // No explicit skill field, but explicit path provided - use path directly
+            const normalizedPath = src.path.replace(/^\/|\/$/g, '');
             skillPath = normalizedPath;
             skillName = rec.entry.name;
+          } else {
+            // No skill field and no path - try looking up name in index as fallback
+            const indexedPath = skillIndex.get(rec.entry.name);
+            if (indexedPath) {
+              skillPath = indexedPath;
+              skillName = rec.entry.name;
+            } else {
+              // Fallback failed - no way to resolve
+              const error = `skill "${rec.entry.name}" not found in ${repoKey} and no explicit path provided`;
+              results.push({
+                ok: false,
+                name: rec.entry.name,
+                error,
+              });
+              completedSkills++;
+              const eta =
+                completedSkills < totalSkills
+                  ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
+                  : '';
+              output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: ${error}${eta}\n`;
+              continue;
+            }
           }
 
           const skillStart = Date.now();

@@ -9,6 +9,7 @@ describe('SprinkleBridge', () => {
   let lickHandlerMock: ReturnType<typeof vi.fn>;
   let closeHandler: (name: string) => void;
   let closeHandlerMock: ReturnType<typeof vi.fn>;
+  let stopConeHandlerMock: ReturnType<typeof vi.fn>;
   let mockFs: VirtualFS;
 
   beforeEach(() => {
@@ -16,6 +17,7 @@ describe('SprinkleBridge', () => {
     lickHandler = lickHandlerMock as unknown as (event: LickEvent) => void;
     closeHandlerMock = vi.fn();
     closeHandler = closeHandlerMock as unknown as (name: string) => void;
+    stopConeHandlerMock = vi.fn();
     mockFs = {
       readFile: vi.fn().mockResolvedValue('file content'),
       writeFile: vi.fn().mockResolvedValue(undefined),
@@ -28,7 +30,7 @@ describe('SprinkleBridge', () => {
       mkdir: vi.fn().mockResolvedValue(undefined),
       rm: vi.fn().mockResolvedValue(undefined),
     } as unknown as VirtualFS;
-    bridge = new SprinkleBridge(mockFs, lickHandler, closeHandler);
+    bridge = new SprinkleBridge(mockFs, lickHandler, closeHandler, stopConeHandlerMock);
   });
 
   it('creates an API with the sprinkle name', () => {
@@ -121,19 +123,24 @@ describe('SprinkleBridge', () => {
   });
 
   it('on/off registers and removes update listeners', () => {
+    vi.useFakeTimers();
     const api = bridge.createAPI('test-sprinkle');
     const cb = vi.fn();
 
     api.on('update', cb);
     bridge.pushUpdate('test-sprinkle', { status: 'done' });
+    vi.runAllTimers();
     expect(cb).toHaveBeenCalledWith({ status: 'done' });
 
     api.off('update', cb);
     bridge.pushUpdate('test-sprinkle', { status: 'again' });
+    vi.runAllTimers();
     expect(cb).toHaveBeenCalledTimes(1); // not called again
+    vi.useRealTimers();
   });
 
   it('pushUpdate only fires for the correct sprinkle', () => {
+    vi.useFakeTimers();
     const api1 = bridge.createAPI('sprinkle-a');
     const api2 = bridge.createAPI('sprinkle-b');
     const cb1 = vi.fn();
@@ -143,21 +150,27 @@ describe('SprinkleBridge', () => {
     api2.on('update', cb2);
 
     bridge.pushUpdate('sprinkle-a', 'data-a');
+    vi.runAllTimers();
     expect(cb1).toHaveBeenCalledWith('data-a');
     expect(cb2).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it('removeSprinkle cleans up all listeners for that sprinkle', () => {
+    vi.useFakeTimers();
     const api = bridge.createAPI('test-sprinkle');
     const cb = vi.fn();
     api.on('update', cb);
 
     bridge.removeSprinkle('test-sprinkle');
     bridge.pushUpdate('test-sprinkle', 'data');
+    vi.runAllTimers();
     expect(cb).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it('listener errors are silently caught', () => {
+    vi.useFakeTimers();
     const api = bridge.createAPI('test-sprinkle');
     const bad = vi.fn(() => {
       throw new Error('boom');
@@ -168,6 +181,14 @@ describe('SprinkleBridge', () => {
     api.on('update', good);
 
     expect(() => bridge.pushUpdate('test-sprinkle', 'data')).not.toThrow();
+    vi.runAllTimers();
     expect(good).toHaveBeenCalledWith('data');
+    vi.useRealTimers();
+  });
+
+  it('stopCone() calls the stop-cone handler', () => {
+    const api = bridge.createAPI('test-sprinkle');
+    api.stopCone();
+    expect(stopConeHandlerMock).toHaveBeenCalledTimes(1);
   });
 });
