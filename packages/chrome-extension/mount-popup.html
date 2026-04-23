@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+  <head>
+    <title>slicc mount</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #1a1a2e;
+        color: #e0e0e0;
+        margin: 0;
+        padding: 16px 20px;
+        user-select: none;
+        overflow: hidden;
+      }
+      .label {
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="label" id="label">Selecting directory...</div>
+    <script>
+      var PENDING_MOUNT_DB = 'slicc-pending-mount';
+      var requestId = new URLSearchParams(location.search).get('requestId') || '';
+
+      function send(msg) {
+        try {
+          chrome.runtime.sendMessage(msg, function () {
+            if (chrome.runtime.lastError) {
+              /* no receiver */
+            }
+          });
+        } catch (e) {
+          /* context invalidated */
+        }
+      }
+
+      function openDb() {
+        return new Promise(function (resolve, reject) {
+          var req = indexedDB.open(PENDING_MOUNT_DB, 1);
+          req.onupgradeneeded = function () {
+            if (!req.result.objectStoreNames.contains('handles')) {
+              req.result.createObjectStore('handles');
+            }
+          };
+          req.onsuccess = function () {
+            resolve(req.result);
+          };
+          req.onerror = function () {
+            reject(req.error);
+          };
+        });
+      }
+
+      async function run() {
+        try {
+          var handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+          var idbKey = 'pendingMount:' + requestId;
+          var db = await openDb();
+          var tx = db.transaction('handles', 'readwrite');
+          tx.objectStore('handles').put(handle, idbKey);
+          await new Promise(function (resolve, reject) {
+            tx.oncomplete = resolve;
+            tx.onerror = function () {
+              reject(tx.error);
+            };
+          });
+          db.close();
+          send({
+            source: 'mount-popup',
+            type: 'mount-result',
+            requestId: requestId,
+            handleInIdb: true,
+            idbKey: idbKey,
+            dirName: handle.name,
+          });
+        } catch (err) {
+          if (err && err.name === 'AbortError') {
+            send({
+              source: 'mount-popup',
+              type: 'mount-result',
+              requestId: requestId,
+              cancelled: true,
+            });
+          } else {
+            send({
+              source: 'mount-popup',
+              type: 'mount-result',
+              requestId: requestId,
+              error: err ? err.message || String(err) : 'Unknown error',
+            });
+          }
+        }
+        window.close();
+      }
+
+      run();
+    </script>
+  </body>
+</html>

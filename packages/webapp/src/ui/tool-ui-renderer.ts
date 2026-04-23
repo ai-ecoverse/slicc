@@ -142,44 +142,7 @@ export class ToolUIRenderer {
     let actionData = data;
 
     if (picker === 'directory') {
-      try {
-        type ShowDirPicker = (opts?: object) => Promise<FileSystemDirectoryHandle>;
-        const w = window as Window & typeof globalThis & { showDirectoryPicker?: ShowDirPicker };
-        if (!w.showDirectoryPicker) {
-          actionData = { error: 'showDirectoryPicker not available' };
-        } else {
-          const handle = await w.showDirectoryPicker({ mode: 'readwrite' });
-          await verifyDirectoryAccess(handle);
-          const idbKey = `pendingMount:${this.requestId}`;
-          const db = await openPendingMountDb();
-          const tx = db.transaction('handles', 'readwrite');
-          try {
-            tx.objectStore('handles').put(handle, idbKey);
-          } catch (putErr: unknown) {
-            db.close();
-            throw putErr;
-          }
-          await new Promise<void>((resolve, reject) => {
-            tx.oncomplete = () => {
-              log.info('Directory handle stored for offscreen retrieval', { idbKey });
-              resolve();
-            };
-            tx.onerror = () => reject(tx.error ?? new Error('IDB transaction failed'));
-            tx.onabort = () => reject(tx.error ?? new Error('IDB transaction aborted'));
-          });
-          db.close();
-          actionData = { handleInIdb: true, idbKey, dirName: handle.name };
-        }
-      } catch (err: unknown) {
-        const isAbort =
-          (err instanceof Error && err.name === 'AbortError') ||
-          (err instanceof DOMException && err.name === 'AbortError');
-        if (isAbort) {
-          actionData = { cancelled: true };
-        } else {
-          actionData = { error: err instanceof Error ? err.message : String(err) };
-        }
-      }
+      actionData = await openMountPopup(this.requestId);
     }
 
     chrome.runtime
@@ -219,44 +182,26 @@ export class ToolUIRenderer {
   }
 }
 
-async function verifyDirectoryAccess(handle: FileSystemDirectoryHandle): Promise<void> {
-  try {
-    await handle.getFileHandle('.slicc-access-probe', { create: false });
-  } catch (err: unknown) {
-    if (err instanceof Error && err.name === 'NotFoundError') return;
-    throw new Error(
-      `Cannot access "${handle.name}" — the browser may not have permission to read this folder. ` +
-        `Choose a subfolder or a different directory.`
+function openMountPopup(requestId: string): Promise<Record<string, unknown>> {
+  return new Promise((resolve) => {
+    const url = chrome.runtime.getURL(
+      `mount-popup.html?requestId=${encodeURIComponent(requestId)}`
     );
-  }
-}
 
-const PENDING_MOUNT_DB = 'slicc-pending-mount';
+    const listener = (msg: unknown) => {
+      const m = msg as Record<string, unknown>;
+      if (!m || m.source !== 'mount-popup' || m.requestId !== requestId) return;
+      chrome.runtime.onMessage.removeListener(listener);
+      resolve(m);
+    };
+    chrome.runtime.onMessage.addListener(listener);
 
-function openPendingMountDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(PENDING_MOUNT_DB, 1);
-    req.onupgradeneeded = () => {
-      if (!req.result.objectStoreNames.contains('handles')) {
-        req.result.createObjectStore('handles');
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => {
-      log.error('Failed to open pending mount database', {
-        db: PENDING_MOUNT_DB,
-        error: req.error?.message ?? 'unknown',
+    chrome.windows
+      .create({ url, type: 'popup', width: 400, height: 100, focused: true })
+      .catch(() => {
+        chrome.runtime.onMessage.removeListener(listener);
+        resolve({ error: 'Failed to open directory picker window' });
       });
-      reject(req.error ?? new Error('Failed to open pending mount database'));
-    };
-    req.onblocked = () => {
-      log.warn('Pending mount database blocked by another connection', {
-        db: PENDING_MOUNT_DB,
-      });
-      reject(
-        new Error('Mount storage is locked by another tab — close other SLICC tabs and retry')
-      );
-    };
   });
 }
 
