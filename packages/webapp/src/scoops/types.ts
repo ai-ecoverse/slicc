@@ -52,8 +52,9 @@ export interface RegisteredScoop {
    * When `false`, suppresses the orchestrator's cone-notify side effect
    * that fires when this scoop reaches the terminal `ready` status after
    * processing a prompt. Default (`undefined` / `true`) preserves the
-   * historical behavior: the cone receives a `scoop-notify` message with
-   * the scoop's last response, triggering a cone turn.
+   * default behavior: the cone receives a `scoop-notify` message with a
+   * VFS path to the scoop's full output, a 1000-character preview, and
+   * the total line count, triggering a cone turn.
    *
    * Set to `false` for ephemeral, self-contained invocations (e.g. scoops
    * spawned through the `agent` shell command) where the caller already

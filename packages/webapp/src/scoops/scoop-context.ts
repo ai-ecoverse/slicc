@@ -24,7 +24,7 @@ import type {
   TextContent,
   Model,
 } from '../core/index.js';
-import { isContextOverflow } from '@mariozechner/pi-ai';
+import { isContextOverflow, streamSimple } from '@mariozechner/pi-ai';
 import type { AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
 import type { SessionStore } from '../core/session.js';
 import { createFileTools, createBashTool } from '../tools/index.js';
@@ -40,6 +40,7 @@ import {
   createScoopManagementTools,
   type ScoopManagementToolsConfig,
 } from './scoop-management-tools.js';
+import { getAdobeSessionId } from './llm-session-id.js';
 import { fetchSecretEnvVars } from '../core/secret-env.js';
 
 const log = createLogger('scoop-context');
@@ -79,6 +80,20 @@ export interface ScoopContextCallbacks {
   onScoopScoop?: (scoop: Omit<RegisteredScoop, 'jid'>) => Promise<RegisteredScoop>;
   /** Drop/remove a scoop (cone only) */
   onDropScoop?: (scoopJid: string) => Promise<void>;
+  /** Mute scoops so their completions are not forwarded to the cone (cone only). */
+  onMuteScoops?: (jids: readonly string[]) => void;
+  /** Unmute scoops; returns any stashed completions so the caller can
+   *  fold them into its tool result (cone only). */
+  onUnmuteScoops?: (
+    jids: readonly string[]
+  ) => Promise<
+    Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
+  >;
+  /** Wait for a batch of scoops to complete (cone only). */
+  onWaitForScoops?: (
+    jids: readonly string[],
+    timeoutMs?: number
+  ) => Promise<Array<{ jid: string; summary: string | null; timedOut: boolean }>>;
   /** Get global CLAUDE.md content (shared across all scoops) */
   getGlobalMemory: () => Promise<string>;
   /** Update global CLAUDE.md (cone only) */
@@ -103,6 +118,7 @@ export class ScoopContext {
   private sessionId: string;
   private sessionCreatedAt: number = 0;
   private isRecovering: 'overflow' | 'image' | false = false;
+  private coneJid: string | undefined;
 
   private skillsFs: VirtualFS | null = null;
   private skillsDir: string = '/workspace/skills';
@@ -112,13 +128,18 @@ export class ScoopContext {
     callbacks: ScoopContextCallbacks,
     fs: VirtualFS | RestrictedFS,
     sessionStore?: SessionStore,
-    skillsFs?: VirtualFS
+    skillsFs?: VirtualFS,
+    coneJid?: string
   ) {
     this.scoop = scoop;
     this.callbacks = callbacks;
     this.fs = fs;
     this.sessionStore = sessionStore ?? null;
     this.skillsFs = skillsFs ?? null;
+    this.coneJid = coneJid;
+    // Internal persistence key — stable across days/restarts so saved
+    // conversations can be restored by `SessionStore.load`. The outgoing
+    // Adobe `X-Session-Id` is computed separately in `init()`.
     this.sessionId = scoop.jid;
   }
 
@@ -179,6 +200,9 @@ export class ScoopContext {
         onFeedScoop: this.callbacks.onFeedScoop,
         onScoopScoop: this.callbacks.onScoopScoop,
         onDropScoop: this.callbacks.onDropScoop,
+        onMuteScoops: this.callbacks.onMuteScoops,
+        onUnmuteScoops: this.callbacks.onUnmuteScoops,
+        onWaitForScoops: this.callbacks.onWaitForScoops,
         onSetGlobalMemory: this.callbacks.setGlobalMemory,
         getGlobalMemory: this.callbacks.getGlobalMemory,
       };
@@ -263,6 +287,20 @@ export class ScoopContext {
         getApiKey: () => getApiKey() ?? undefined,
       });
 
+      // Compute the Adobe session identifier once per init. It is a
+      // daily-rotating random UUID for the cone, and `<uuid>/<hash(folder, uuid)>`
+      // for scoops — salted with the UUID so the scoop folder name never
+      // reaches the provider. Only sent as the `X-Session-Id` header for the
+      // Adobe proxy; other providers receive no such header.
+      const adobeSessionId = await getAdobeSessionId(this.scoop, this.coneJid);
+      const streamWithSessionId: typeof streamSimple = (m, ctx, opts) => {
+        if (m.provider !== 'adobe') return streamSimple(m, ctx, opts);
+        return streamSimple(m, ctx, {
+          ...opts,
+          headers: { ...opts?.headers, 'X-Session-Id': adobeSessionId },
+        });
+      };
+
       // Guard: dispose() may have run while init() was awaiting above.
       if (this.disposed) return;
 
@@ -275,6 +313,7 @@ export class ScoopContext {
         },
         getApiKey: () => getApiKey() ?? undefined,
         transformContext: compactFn,
+        streamFn: streamWithSessionId,
       });
 
       // Subscribe to agent events
@@ -830,9 +869,9 @@ Use the **delegate_to_scoop** tool to send work to scoops. IMPORTANT:
 - If the user says "do the same" or references earlier work, YOU must expand that into explicit instructions
 - Use **list_scoops** first to see available scoop names
 
-**You will automatically receive a notification when a scoop finishes.** The notification contains their full response.
+**You will automatically receive a notification when a scoop finishes.** The notification includes a VFS path to the full output, the total line count, and the first 1000 characters.
 You do NOT need to schedule polling tasks or check for completion markers — just delegate and wait. You will be
-prompted again with the scoop's results when they are done. Then you can act on those results (move files, etc.).
+prompted again when they are done, and you can decide whether to inspect the saved file before acting on the result.
 `
     : `
 You are a scoop with restricted filesystem access:

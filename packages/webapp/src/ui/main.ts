@@ -25,6 +25,7 @@ import { getApiKey, showProviderSettings, applyProviderDefaults } from './provid
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
+import { isLickChannel, type LickChannel } from './lick-channels.js';
 import { createLogger } from '../core/index.js';
 import type { VirtualFS } from '../fs/index.js';
 import { installSkillFromDrop } from '../skills/install-from-drop.js';
@@ -87,22 +88,6 @@ const log = createLogger('main');
 
 const PENDING_MOUNT_DB = 'slicc-pending-mount';
 const PENDING_MOUNT_KEY = 'pendingMount';
-
-/** Lick channels — kept in sync with LickEvent.type in scoops/lick-manager.ts.
- *  Used when routing history-replayed messages so they render as licks
- *  instead of plain user bubbles. */
-type LickChannel = 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate';
-const LICK_CHANNELS: ReadonlySet<LickChannel> = new Set<LickChannel>([
-  'webhook',
-  'cron',
-  'sprinkle',
-  'fswatch',
-  'session-reload',
-  'navigate',
-]);
-function isLickChannel(channel: string | null | undefined): channel is LickChannel {
-  return channel !== null && channel !== undefined && LICK_CHANNELS.has(channel as LickChannel);
-}
 
 /** True when the current URL requests the design-time UI fixture
  *  (`?ui-fixture=1`). Accepts `1`, `true`, and the bare presence of the key
@@ -487,6 +472,32 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       }
     },
     onIncomingMessage: (scoopJid, message) => {
+      // Scoop lifecycle licks (scoop-notify / scoop-idle) are forwarded by
+      // the orchestrator for display only — render them as licks in the
+      // cone's chat (and persist to the target session) exactly like
+      // webhook/cron events. This fixes the gap where scoop completions
+      // enqueued for the cone's agent but never appeared in the chat.
+      if (isLickChannel(message.channel)) {
+        const lickTs = new Date(message.timestamp).getTime();
+        const channel = message.channel as LickChannel;
+        if (selectedScoop?.jid === scoopJid) {
+          layout.panels.chat.addLickMessage(message.id, message.content, channel, lickTs);
+        } else {
+          const target = client.getScoops().find((s) => s.jid === scoopJid);
+          const sessionId = target?.isCone
+            ? 'session-cone'
+            : target
+              ? `session-${target.folder}`
+              : `session-${scoopJid}`;
+          void layout.panels.chat.persistLickToSession(sessionId, {
+            id: message.id,
+            content: message.content,
+            channel,
+            timestamp: lickTs,
+          });
+        }
+        return;
+      }
       if (selectedScoop?.jid === scoopJid) {
         const content =
           message.channel === 'delegation'
@@ -1154,6 +1165,41 @@ async function main(): Promise<void> {
       }
     },
     onIncomingMessage: (scoopJid, message) => {
+      // Scoop lifecycle licks (scoop-notify / scoop-idle) get the same
+      // lick widget treatment as webhook/cron events so the user can
+      // see scoop completions in the cone's chat. Also goes through
+      // addLickMessage/persistLickToSession rather than the agent-event
+      // stream so it doesn't collide with a concurrent cone turn.
+      if (isLickChannel(message.channel)) {
+        const lickTs = new Date(message.timestamp).getTime();
+        const channel = message.channel as LickChannel;
+        getBuffer(scoopJid).push({
+          id: message.id,
+          role: 'user',
+          content: message.content,
+          timestamp: lickTs,
+          source: 'lick',
+          channel,
+        });
+        if (selectedScoop?.jid === scoopJid) {
+          layout.panels.chat.addLickMessage(message.id, message.content, channel, lickTs);
+        } else {
+          const target = orchestrator.getScoops().find((s) => s.jid === scoopJid);
+          const sessionId = target?.isCone
+            ? 'session-cone'
+            : target
+              ? `session-${target.folder}`
+              : `session-${scoopJid}`;
+          void layout.panels.chat.persistLickToSession(sessionId, {
+            id: message.id,
+            content: message.content,
+            channel,
+            timestamp: lickTs,
+          });
+        }
+        return;
+      }
+
       // Buffer incoming messages (delegations, etc.) for display
       const chatMsg: ChatMessage = {
         id: message.id,

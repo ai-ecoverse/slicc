@@ -37,6 +37,20 @@ const log = createLogger('orchestrator');
 
 /** Time in ms to wait before notifying cone that a scoop hasn't started work. */
 export const SCOOP_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
+const SCOOP_NOTIFICATION_DIR = '/shared/scoop-notifications';
+const SCOOP_NOTIFICATION_MAX_FILES = 200;
+const SCOOP_NOTIFICATION_PREVIEW_CHARS = 1000;
+
+function countTextLines(text: string): number {
+  const normalized = text.replace(/\r\n?/g, '\n');
+  if (normalized.length === 0) return 0;
+
+  let lines = 1;
+  for (let i = 0; i < normalized.length; i++) {
+    if (normalized[i] === '\n') lines++;
+  }
+  return normalized.endsWith('\n') ? lines - 1 : lines;
+}
 
 export interface OrchestratorCallbacks {
   /** Called when a scoop sends a response */
@@ -118,6 +132,36 @@ export class Orchestrator {
    * status / send_message / error events on the one jid it cares about.
    */
   private scoopObservers: Map<string, Set<ScoopObserver>> = new Map();
+  /**
+   * Scoops whose completion notifications are suppressed. When a scoop in
+   * this set completes, the completion summary is stashed in
+   * {@link pendingCompletions} instead of being forwarded to the cone.
+   * Populated by `scoop_mute` / `scoop_wait`; cleared by `scoop_unmute`
+   * (which also flushes any pending completion) or when `scoop_wait`
+   * resolves (which consumes the pending completion without flushing).
+   */
+  private mutedScoops: Set<string> = new Set();
+  /**
+   * Full response text captured while a scoop was muted, paired with the
+   * timestamp of the completion event. At most one entry per scoop — later
+   * completions overwrite earlier ones so the cone always sees the freshest
+   * output on unmute. Cleared on flush, on `scoop_wait` consumption
+   * (which drains it to a truncated summary string), and on unregister.
+   * The unmute path re-runs the artifact-persist + notify flow on the
+   * stashed `responseText` so a muted scoop's completion still produces a
+   * VFS artifact and a path-based notification just like an unmuted one.
+   */
+  private pendingCompletions: Map<string, { responseText: string; timestamp: string }> = new Map();
+  /**
+   * One-shot resolvers for `scoop_wait` calls. Each waiter observes a
+   * single scoop's next completion; the orchestrator fires every
+   * registered waiter in insertion order and clears the list. On
+   * scoop unregister (`unregisterScoop`) or orchestrator shutdown
+   * (`shutdown`) any remaining waiters are resolved with `null` so a
+   * `scoop_wait` promise cannot stall forever if the scoop goes away
+   * mid-wait.
+   */
+  private completionWaiters: Map<string, Array<(summary: string | null) => void>> = new Map();
 
   constructor(
     container: HTMLElement,
@@ -364,9 +408,11 @@ export class Orchestrator {
 
   /**
    * Scoop-completion side effect: forward the scoop's buffered response
-   * to the cone as a `scoop-notify` message so the cone's agent can
-   * react. Always clears the response buffer (bounded memory) regardless
-   * of whether a notify was actually sent.
+   * to the cone as a `scoop-notify` message that points at a VFS file
+   * containing the full output, so the cone can decide whether to read
+   * the file or act on the preview alone. Always clears the response
+   * buffer (bounded memory) regardless of whether a notify was actually
+   * sent.
    *
    * Suppressed entirely when `RegisteredScoop.notifyOnComplete === false`.
    * Ephemeral scoops spawned via the `agent` supplemental shell command
@@ -375,10 +421,19 @@ export class Orchestrator {
    * duplicative and billed as a second API call for what the user
    * intended as a self-contained shell invocation.
    *
+   * Also participates in the `scoop_mute` / `scoop_wait` surface:
+   * - Any pending {@link completionWaiters} for this scoop are fired
+   *   exclusively — when a `scoop_wait` is registered, the cone is
+   *   intentionally NOT pinged because the waiter's tool result is the
+   *   signal.
+   * - When the scoop is in {@link mutedScoops}, the summary is stashed
+   *   in {@link pendingCompletions} to be flushed on unmute (or consumed
+   *   by a later `scoop_wait`).
+   *
    * Extracted from the scoop's `onStatusChange` callback so tests can
    * exercise the gate without standing up a full ScoopContext.
    */
-  private maybeNotifyConeOnScoopComplete(jid: string): void {
+  private async maybeNotifyConeOnScoopComplete(jid: string): Promise<void> {
     const scoop = this.scoops.get(jid);
     if (!scoop || scoop.isCone) return;
 
@@ -387,28 +442,128 @@ export class Orchestrator {
     if (!responseText) return;
     if (scoop.notifyOnComplete === false) return;
 
+    // Fire any pending scoop_wait resolvers first. A waiter claims the
+    // completion exclusively: the cone does NOT get a scoop-notify
+    // because the waiter's tool result surfaces the summary. Without
+    // this, scoop_wait would double-signal the cone once by tool result
+    // and once by incoming message.
+    const waiters = this.completionWaiters.get(jid);
+    if (waiters && waiters.length > 0) {
+      this.completionWaiters.delete(jid);
+      const waiterSummary =
+        responseText.length > 20000
+          ? responseText.slice(0, 20000) + '\n... (truncated)'
+          : responseText;
+      for (const w of waiters) {
+        try {
+          w(waiterSummary);
+        } catch (err) {
+          log.warn('completion waiter threw', {
+            jid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      return;
+    }
+
+    // Muted scoops stash their full response text for later flush. On
+    // unmute we re-run the full artifact-persist + notify flow so the
+    // cone sees the same VFS-path-based notification shape it would
+    // have gotten for an unmuted scoop.
+    if (this.mutedScoops.has(jid)) {
+      this.pendingCompletions.set(jid, { responseText, timestamp: new Date().toISOString() });
+      log.info('Scoop completion stashed (muted)', {
+        scoop: scoop.folder,
+        responseLength: responseText.length,
+      });
+      return;
+    }
+
+    await this.deliverCompletionToCone(scoop, responseText);
+  }
+
+  /**
+   * Deliver a scoop-completion to the cone as both a UI lick (via
+   * `onIncomingMessage`) and a queued agent-facing message (via
+   * `handleMessage`). Persists the full response text to
+   * `/shared/scoop-notifications/` and surfaces a path + preview so the
+   * cone can decide whether to read the artifact or act on the preview
+   * alone. Extracted so `unmuteScoops` can reuse the same wiring when
+   * flushing a previously stashed completion.
+   */
+  private async deliverCompletionToCone(
+    scoop: RegisteredScoop,
+    responseText: string
+  ): Promise<void> {
     const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
     if (!cone) return;
 
-    const summary =
-      responseText.length > 20000
-        ? responseText.slice(0, 20000) + '\n... (truncated)'
-        : responseText;
+    const lineCount = countTextLines(responseText);
+    const preview = responseText.slice(0, SCOOP_NOTIFICATION_PREVIEW_CHARS);
+    let notifyContent: string;
+    let artifactError: string | null = null;
+    let notificationPath: string | null = null;
+
+    try {
+      notificationPath = await this.writeScoopCompletionArtifact(scoop, responseText);
+      log.info('Routing scoop completion to cone', {
+        scoop: scoop.folder,
+        responseLength: responseText.length,
+        lineCount,
+        notificationPath,
+      });
+    } catch (err) {
+      artifactError = err instanceof Error ? err.message : String(err);
+      log.warn('Failed to persist scoop completion artifact, falling back to inline preview', {
+        scoop: scoop.folder,
+        error: artifactError,
+      });
+    }
+
+    if (artifactError === null) {
+      notifyContent = this.formatScoopCompletionNotification(
+        scoop.assistantLabel,
+        notificationPath ?? 'unavailable',
+        lineCount,
+        preview
+      );
+    } else {
+      notifyContent = this.formatScoopCompletionFallbackNotification(
+        scoop.assistantLabel,
+        lineCount,
+        preview,
+        artifactError
+      );
+    }
+
     const notifyMsg: ChannelMessage = {
-      id: `scoop-done-${jid}-${Date.now()}`,
+      id: `scoop-done-${scoop.jid}-${Date.now()}`,
       chatJid: cone.jid,
       senderId: scoop.folder,
       senderName: scoop.assistantLabel,
-      content: `[@${scoop.assistantLabel} completed]:\n${summary}`,
+      content: notifyContent,
       timestamp: new Date().toISOString(),
       fromAssistant: false,
       channel: 'scoop-notify',
     };
-    log.info('Routing scoop completion to cone', {
-      scoop: scoop.folder,
-      responseLength: responseText.length,
-    });
-    this.handleMessage(notifyMsg).catch((err) => {
+
+    // Fire onIncomingMessage so the UI renders the notify as a lick
+    // widget in the cone's chat. Without this, scoop completions only
+    // flow into the cone's agent queue and never become visible to the
+    // user.
+    try {
+      this.callbacks.onIncomingMessage?.(cone.jid, notifyMsg);
+    } catch (err) {
+      log.warn('onIncomingMessage for scoop-notify threw', {
+        scoop: scoop.folder,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      await this.handleMessage(notifyMsg);
+    } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error('Failed to route scoop completion to cone', {
         scoop: scoop.folder,
@@ -418,6 +573,317 @@ export class Orchestrator {
         cone.jid,
         `Scoop ${scoop.folder} completed but notification failed: ${msg}`
       );
+    }
+  }
+
+  private async writeScoopCompletionArtifact(
+    scoop: RegisteredScoop,
+    responseText: string
+  ): Promise<string> {
+    if (!this.sharedFs) throw new Error('Shared filesystem not initialized');
+
+    await this.sharedFs.mkdir(SCOOP_NOTIFICATION_DIR, { recursive: true });
+    await this.pruneScoopCompletionArtifacts(SCOOP_NOTIFICATION_MAX_FILES - 1);
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const path = `${SCOOP_NOTIFICATION_DIR}/${timestamp}-${scoop.folder}-${suffix}.md`;
+    await this.sharedFs.writeFile(path, responseText);
+    await this.pruneScoopCompletionArtifacts();
+    return path;
+  }
+
+  private async pruneScoopCompletionArtifacts(
+    maxArtifacts: number = SCOOP_NOTIFICATION_MAX_FILES
+  ): Promise<void> {
+    if (!this.sharedFs) return;
+
+    let entries: Awaited<ReturnType<VirtualFS['readDir']>>;
+    try {
+      entries = await this.sharedFs.readDir(SCOOP_NOTIFICATION_DIR);
+    } catch {
+      return;
+    }
+
+    const files = entries
+      .filter((entry) => entry.type === 'file')
+      .map((entry) => entry.name)
+      .sort();
+    const excess = files.length - maxArtifacts;
+    if (excess <= 0) return;
+
+    for (const name of files.slice(0, excess)) {
+      const path = `${SCOOP_NOTIFICATION_DIR}/${name}`;
+      try {
+        await this.sharedFs.rm(path);
+      } catch (err) {
+        log.warn('Failed to prune scoop completion artifact', {
+          path,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  private formatScoopCompletionNotification(
+    assistantLabel: string,
+    notificationPath: string,
+    lineCount: number,
+    preview: string
+  ): string {
+    return [
+      `[@${assistantLabel} completed]`,
+      `VFS path: ${notificationPath}`,
+      `Total lines: ${lineCount}`,
+      `Preview (up to ${SCOOP_NOTIFICATION_PREVIEW_CHARS} chars):`,
+      preview,
+    ].join('\n');
+  }
+
+  private formatScoopCompletionFallbackNotification(
+    assistantLabel: string,
+    lineCount: number,
+    preview: string,
+    artifactError: string
+  ): string {
+    return [
+      `[@${assistantLabel} completed]`,
+      'VFS path: unavailable',
+      `Artifact persistence error: ${artifactError}`,
+      `Total lines: ${lineCount}`,
+      `Preview (up to ${SCOOP_NOTIFICATION_PREVIEW_CHARS} chars):`,
+      preview,
+    ].join('\n');
+  }
+
+  /**
+   * Mute a set of scoops so their completion notifications do NOT reach
+   * the cone until a matching `scoop_unmute` (or `scoop_wait` consumption).
+   * Idempotent — already-muted jids are silently retained.
+   */
+  muteScoops(jids: readonly string[]): void {
+    for (const jid of jids) this.mutedScoops.add(jid);
+    log.info('Scoops muted', { count: jids.length });
+  }
+
+  /**
+   * Unmute a set of scoops and return any completions that were stashed
+   * while they were muted. The caller — `scoop_unmute` — folds the
+   * summaries (plus each scoop's VFS notification path) into the tool
+   * result so the cone consumes them in the current turn. Crucially we
+   * do NOT fire `onIncomingMessage` or `handleMessage` here: re-firing
+   * would generate a fresh scoop-notify lick + a new cone turn, which
+   * is exactly what `scoop_mute` was called to avoid.
+   *
+   * The full response text is still persisted to the VFS artifact
+   * directory so the cone can read the unabridged output the same way
+   * it would for a never-muted scoop; the returned `summary` is a
+   * truncated view suitable for inlining into the tool result.
+   *
+   * Idempotent w.r.t. scoops that were never muted or had no pending
+   * completion — they are removed from the mute set and produce no
+   * entry in the result.
+   */
+  async unmuteScoops(
+    jids: readonly string[]
+  ): Promise<
+    Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
+  > {
+    const consumed: Array<{
+      jid: string;
+      summary: string;
+      timestamp: string;
+      notificationPath: string | null;
+    }> = [];
+    const artifactWrites: Array<Promise<void>> = [];
+    for (const jid of jids) {
+      this.mutedScoops.delete(jid);
+      const pending = this.pendingCompletions.get(jid);
+      if (!pending) continue;
+      this.pendingCompletions.delete(jid);
+      const scoop = this.scoops.get(jid);
+      if (!scoop || scoop.isCone) continue;
+      const summary =
+        pending.responseText.length > 20000
+          ? pending.responseText.slice(0, 20000) + '\n... (truncated)'
+          : pending.responseText;
+      const entry: {
+        jid: string;
+        summary: string;
+        timestamp: string;
+        notificationPath: string | null;
+      } = { jid, summary, timestamp: pending.timestamp, notificationPath: null };
+      consumed.push(entry);
+      artifactWrites.push(
+        this.writeScoopCompletionArtifact(scoop, pending.responseText)
+          .then((path) => {
+            entry.notificationPath = path;
+          })
+          .catch((err) => {
+            log.warn('unmute artifact persist failed', {
+              jid,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          })
+      );
+    }
+    await Promise.all(artifactWrites);
+    log.info('Scoops unmuted', { count: jids.length, consumed: consumed.length });
+    return consumed;
+  }
+
+  /** Test / debug helper: returns whether the given jid is currently muted. */
+  isScoopMuted(jid: string): boolean {
+    return this.mutedScoops.has(jid);
+  }
+
+  /**
+   * Wait until every scoop in `jids` completes its current work, up to
+   * an optional timeout. While waiting, the orchestrator mutes the
+   * target scoops so their completions flow exclusively into the
+   * waiter's result — the cone sees a single tool response instead of
+   * one notify per scoop plus the tool response.
+   *
+   * Completions that were already pending when `waitForScoops` is
+   * called are consumed immediately without firing the cone. After the
+   * wait resolves (or the timeout expires), the scoops are unmuted
+   * WITHOUT flushing any pending completions (the tool call consumed
+   * them). Timed-out scoops remain muted only if they were muted before
+   * the wait — this method never leaves behind a mute state it didn't
+   * own.
+   *
+   * Returns one entry per requested jid with the captured summary (or
+   * `null` on timeout). The shape stays aligned with `scoop_wait`'s
+   * tool result so the caller can format per-scoop output.
+   */
+  async waitForScoops(
+    jids: readonly string[],
+    timeoutMs?: number
+  ): Promise<Array<{ jid: string; summary: string | null; timedOut: boolean }>> {
+    if (jids.length === 0) return [];
+
+    // Dedupe the input up-front. Without this, a duplicate jid would
+    // register TWO waiters against the same scoop; on completion the
+    // first waiter would claim the summary and set `results`, but the
+    // second would early-return from its `results.has(jid)` guard
+    // WITHOUT calling `resolve()`, stalling `Promise.all(promises)`
+    // forever (or until the optional timeout fires). Dedupe removes
+    // the failure mode entirely and keeps the per-jid result shape
+    // intact — the returned array still has one entry per requested
+    // jid because we re-materialize it from `results` at the end.
+    const uniqueJids = Array.from(new Set(jids));
+
+    const results = new Map<string, { summary: string | null; timedOut: boolean }>();
+    // Remember which jids we're adding to the mute set; those are the
+    // only ones we should unmute afterwards so a pre-existing scoop_mute
+    // survives the wait.
+    const muteAdded: string[] = [];
+    for (const jid of uniqueJids) {
+      if (!this.mutedScoops.has(jid)) {
+        this.mutedScoops.add(jid);
+        muteAdded.push(jid);
+      }
+    }
+
+    // Consume already-pending completions. These were stashed while the
+    // scoop was muted (either by an explicit scoop_mute or by this very
+    // wait racing a just-completed scoop) — claim them for the caller
+    // without pinging the cone. The waiter result is a truncated
+    // summary string; the full response text remains in VFS history
+    // via the artifact file the unmute/normal path would have written
+    // (the waiter path skips that write because the cone sees the
+    // content inline via the tool result).
+    for (const jid of uniqueJids) {
+      const pending = this.pendingCompletions.get(jid);
+      if (pending) {
+        this.pendingCompletions.delete(jid);
+        const summary =
+          pending.responseText.length > 20000
+            ? pending.responseText.slice(0, 20000) + '\n... (truncated)'
+            : pending.responseText;
+        results.set(jid, { summary, timedOut: false });
+      }
+    }
+
+    const missing = uniqueJids.filter((jid) => !results.has(jid));
+    // Filter to scoops we actually have registered; otherwise the waiter
+    // would never resolve. An unknown jid is reported as timed-out so the
+    // caller can see which targets weren't found.
+    const resolvable = missing.filter((jid) => this.scoops.has(jid));
+    const unknown = missing.filter((jid) => !this.scoops.has(jid));
+    for (const jid of unknown) {
+      results.set(jid, { summary: null, timedOut: true });
+    }
+
+    // Track each waiter so timeout / cleanup can remove it.
+    const registered: Array<{ jid: string; waiter: (s: string | null) => void }> = [];
+    const promises = resolvable.map(
+      (jid) =>
+        new Promise<void>((resolve) => {
+          const waiter = (summary: string | null) => {
+            // Already resolved guard — the timeout path calls us with
+            // null, but the completion path may race with it.
+            if (results.has(jid)) return;
+            results.set(jid, { summary, timedOut: summary === null });
+            resolve();
+          };
+          registered.push({ jid, waiter });
+          let list = this.completionWaiters.get(jid);
+          if (!list) {
+            list = [];
+            this.completionWaiters.set(jid, list);
+          }
+          list.push(waiter);
+        })
+    );
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      if (promises.length > 0) {
+        // `timeoutMs === 0` is an EXPLICIT immediate timeout (the caller
+        // asked for "no waiting, tell me who's already done"). Only
+        // `undefined`/`null` means "wait indefinitely". Treating 0 as
+        // "no timeout" — which the previous `timeoutMs > 0` guard did —
+        // could stall the cone turn forever when a scoop never
+        // completes, exactly the opposite of what the caller asked for.
+        if (timeoutMs != null && timeoutMs >= 0) {
+          await Promise.race([
+            Promise.all(promises),
+            new Promise<void>((resolve) => {
+              timer = setTimeout(() => resolve(), timeoutMs);
+            }),
+          ]);
+        } else {
+          await Promise.all(promises);
+        }
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+      // Remove any waiters we registered that didn't fire (timeout or
+      // early resolution). Leaving them behind would capture a future
+      // completion and swallow the cone-notify.
+      for (const { jid, waiter } of registered) {
+        const list = this.completionWaiters.get(jid);
+        if (!list) continue;
+        const idx = list.indexOf(waiter);
+        if (idx !== -1) list.splice(idx, 1);
+        if (list.length === 0) this.completionWaiters.delete(jid);
+      }
+      // Unmute only the scoops we muted here — leaves pre-existing
+      // scoop_mute state alone.
+      for (const jid of muteAdded) this.mutedScoops.delete(jid);
+    }
+
+    // Fill in timed-out rows for any resolvable jid that never reported.
+    for (const jid of resolvable) {
+      if (!results.has(jid)) {
+        results.set(jid, { summary: null, timedOut: true });
+      }
+    }
+
+    return jids.map((jid) => {
+      const r = results.get(jid) ?? { summary: null, timedOut: true };
+      return { jid, summary: r.summary, timedOut: r.timedOut };
     });
   }
 
@@ -505,6 +971,25 @@ export class Orchestrator {
     // legitimate observer for this scoop is about to lose its relevance
     // anyway: the scoop's context has been destroyed.
     this.scoopObservers.delete(jid);
+    // Release any scoop_wait resolvers targeting this jid so the wait
+    // doesn't stall on a scoop that no longer exists. They resolve with
+    // null, which the waiter interprets as a timeout row.
+    const waiters = this.completionWaiters.get(jid);
+    if (waiters) {
+      this.completionWaiters.delete(jid);
+      for (const w of waiters) {
+        try {
+          w(null);
+        } catch (err) {
+          log.warn('completion waiter threw on unregister', {
+            jid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+    this.mutedScoops.delete(jid);
+    this.pendingCompletions.delete(jid);
     log.info('Scoop unregistered', { jid });
   }
 
@@ -774,9 +1259,9 @@ export class Orchestrator {
         this.dispatchScoopEvent(jid, 'onStatusChange', status);
 
         // When a non-cone scoop finishes, route its response to the cone
-        // so the cone's agent can react (e.g., move files, report to user).
+        // with a VFS path + preview so the cone can decide how to follow up.
         if (status === 'ready' && !scoop.isCone) {
-          this.maybeNotifyConeOnScoopComplete(jid);
+          void this.maybeNotifyConeOnScoopComplete(jid);
         }
       },
       onToolStart: (toolName, toolInput) => {
@@ -820,17 +1305,24 @@ export class Orchestrator {
             await this.unregisterScoop(scoopJid);
           }
         : undefined,
+      onMuteScoops: scoop.isCone ? (jids) => this.muteScoops(jids) : undefined,
+      onUnmuteScoops: scoop.isCone ? (jids) => this.unmuteScoops(jids) : undefined,
+      onWaitForScoops: scoop.isCone
+        ? (jids, timeoutMs) => this.waitForScoops(jids, timeoutMs)
+        : undefined,
       getGlobalMemory: () => this.getGlobalMemory(),
       setGlobalMemory: scoop.isCone ? (content) => this.setGlobalMemory(content) : undefined,
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),
     };
 
+    const coneJid = Array.from(this.scoops.values()).find((s) => s.isCone)?.jid;
     const context = new ScoopContext(
       scoop,
       contextCallbacks,
       fs,
       this.sessionStore ?? undefined,
-      this.sharedFs ?? undefined
+      this.sharedFs ?? undefined,
+      coneJid
     );
 
     this.contexts.set(jid, context);
@@ -1225,6 +1717,17 @@ export class Orchestrator {
         channel: 'scoop-idle',
       };
       log.info('Scoop idle timeout', { jid, scoop: scoop.folder });
+      // Fire onIncomingMessage so the UI renders the idle notice as a
+      // lick in the cone's chat. handleMessage below still enqueues it
+      // for the cone's agent to react to.
+      try {
+        this.callbacks.onIncomingMessage?.(cone.jid, notifyMsg);
+      } catch (err) {
+        log.warn('onIncomingMessage for scoop-idle threw', {
+          jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       this.handleMessage(notifyMsg).catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
         log.error('Failed to send idle notification', { jid, error: msg });
@@ -1254,6 +1757,27 @@ export class Orchestrator {
     // Stop the scheduler
     this.scheduler?.stop();
     this.scheduler = null;
+
+    // Drain any outstanding `scoop_wait` waiters so their promises
+    // resolve instead of hanging past shutdown. Each waiter is resolved
+    // with `null` (the timeout sentinel) — this mirrors the cleanup
+    // `unregisterScoop` performs when a scoop is removed mid-wait.
+    // Mute/pending state is cleared afterwards so a re-initialized
+    // orchestrator starts from a clean slate.
+    for (const waiters of this.completionWaiters.values()) {
+      for (const w of waiters) {
+        try {
+          w(null);
+        } catch (err) {
+          log.warn('completion waiter threw during shutdown', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+    this.completionWaiters.clear();
+    this.mutedScoops.clear();
+    this.pendingCompletions.clear();
 
     for (const jid of this.contexts.keys()) {
       await this.destroyScoopTab(jid);
