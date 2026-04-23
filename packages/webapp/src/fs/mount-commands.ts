@@ -285,14 +285,12 @@ async function loadAndClearPendingHandle(
   });
   const tx = db.transaction('handles', 'readwrite');
   const store = tx.objectStore('handles');
-  const handle = await new Promise<FileSystemDirectoryHandle | null>((resolve) => {
-    const req = store.get(idbKey);
-    req.onsuccess = () => resolve(req.result ?? null);
-    req.onerror = () => resolve(null);
-  });
+  const getReq = store.get(idbKey);
   store.delete(idbKey);
-  await new Promise<void>((resolve) => {
-    tx.oncomplete = () => resolve();
+  const handle = await new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
+    getReq.onsuccess = () => resolve(getReq.result ?? null);
+    getReq.onerror = () => reject(getReq.error ?? new Error('IDB get failed'));
+    tx.onerror = () => reject(tx.error ?? new Error('IDB transaction failed'));
   });
   db.close();
   return handle;

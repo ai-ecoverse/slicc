@@ -153,8 +153,10 @@ export class ToolUIRenderer {
           const db = await openPendingMountDb();
           const tx = db.transaction('handles', 'readwrite');
           tx.objectStore('handles').put(handle, idbKey);
-          await new Promise<void>((r) => {
-            tx.oncomplete = () => r();
+          await new Promise<void>((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error ?? new Error('IDB transaction failed'));
+            tx.onabort = () => reject(tx.error ?? new Error('IDB transaction aborted'));
           });
           db.close();
           actionData = { handleInIdb: true, idbKey, dirName: handle.name };
@@ -179,10 +181,12 @@ export class ToolUIRenderer {
         },
       })
       .catch((err: unknown) => {
-        log.warn('Failed to relay tool UI action to offscreen', {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log.error('Failed to relay tool UI action to offscreen', {
           requestId: this.requestId,
-          error: err instanceof Error ? err.message : String(err),
+          error: errMsg,
         });
+        toolUIRegistry.cancel(this.requestId, `Relay failed: ${errMsg}`);
       });
   }
 
