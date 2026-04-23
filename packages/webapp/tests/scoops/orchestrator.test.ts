@@ -1244,3 +1244,495 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 });
+
+describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
+  // Confirms the regression fix: when a scoop completes, the orchestrator
+  // must fire `onIncomingMessage` for the cone so the UI can render the
+  // scoop-notify as a lick. Before this fix the notify only flowed into
+  // the cone's agent queue and never surfaced in the chat panel, so the
+  // user saw scoops complete silently.
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    await clearAllMessages();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    // Use the settle helper so any scheduled LightningFS _deactivate
+    // timers are drained before dispose — otherwise the timer fires
+    // after the backend is torn down and Node surfaces an unhandled
+    // "Cannot read properties of null (reading 'deactivate')" rejection.
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  interface OrchestratorPrivate {
+    scoopResponseBuffer: Map<string, string>;
+    maybeNotifyConeOnScoopComplete(jid: string): Promise<void>;
+    handleMessage(msg: ChannelMessage): Promise<void>;
+    muteScoops(jids: readonly string[]): void;
+    unmuteScoops(
+      jids: readonly string[]
+    ): Promise<
+      Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
+    >;
+    mutedScoops: Set<string>;
+    pendingCompletions: Map<string, { responseText: string; timestamp: string }>;
+    completionWaiters: Map<string, Array<(s: string | null) => void>>;
+  }
+
+  function noopCallbacksWith(incomingCapture: (scoopJid: string, msg: ChannelMessage) => void): {
+    onResponse: ReturnType<typeof vi.fn>;
+    onResponseDone: ReturnType<typeof vi.fn>;
+    onSendMessage: ReturnType<typeof vi.fn>;
+    onStatusChange: ReturnType<typeof vi.fn>;
+    onError: ReturnType<typeof vi.fn>;
+    getBrowserAPI: ReturnType<typeof vi.fn>;
+    onIncomingMessage: (scoopJid: string, msg: ChannelMessage) => void;
+  } {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+      onIncomingMessage: incomingCapture,
+    };
+  }
+
+  it('fires onIncomingMessage with the scoop-notify so the UI renders a lick', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_incoming_1',
+      name: 'notify-vis',
+      folder: 'notify-vis-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'notify-vis-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const incoming: Array<{ scoopJid: string; msg: ChannelMessage }> = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((scoopJid, msg) => {
+        incoming.push({ scoopJid, msg });
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {
+      /* suppress LightningFS writes so afterEach dispose doesn't race */
+    };
+
+    priv.scoopResponseBuffer.set(scoop.jid, 'scoop output');
+    await priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0].scoopJid).toBe(cone.jid);
+    expect(incoming[0].msg.channel).toBe('scoop-notify');
+    expect(incoming[0].msg.content).toContain('scoop output');
+  });
+
+  it('muteScoops stashes the completion and unmuteScoops returns it WITHOUT firing new events', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_mute_1',
+      name: 'mute-scoop',
+      folder: 'mute-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'mute-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    priv.muteScoops([scoop.jid]);
+    priv.scoopResponseBuffer.set(scoop.jid, 'muted output');
+    await priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+
+    // Muted: nothing should reach the cone yet.
+    expect(incoming).toHaveLength(0);
+    expect(priv.pendingCompletions.has(scoop.jid)).toBe(true);
+
+    const consumed = await priv.unmuteScoops([scoop.jid]);
+
+    // Unmute returns the stashed summary for the caller (scoop_unmute
+    // tool) to fold into its result — it must NOT re-fire the lick as
+    // a fresh scoop-notify (which would trigger another cone turn, the
+    // very thing scoop_mute was called to avoid).
+    expect(consumed).toHaveLength(1);
+    expect(consumed[0].jid).toBe(scoop.jid);
+    expect(consumed[0].summary).toBe('muted output');
+    // The full response is still persisted to the artifact dir so the
+    // cone can read it on demand via the returned path.
+    expect(consumed[0].notificationPath).toMatch(/^\/shared\/scoop-notifications\/.+\.md$/);
+    expect(incoming).toHaveLength(0);
+    expect(priv.pendingCompletions.has(scoop.jid)).toBe(false);
+    expect(priv.mutedScoops.has(scoop.jid)).toBe(false);
+  });
+
+  it('unmuteScoops returns an empty list for scoops without stashed completions', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_unmute_noop_1',
+      name: 'unmute-noop',
+      folder: 'unmute-noop-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'unmute-noop-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith(() => {})
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    priv.muteScoops([scoop.jid]);
+    const consumed = await priv.unmuteScoops([scoop.jid]);
+    expect(consumed).toHaveLength(0);
+    expect(priv.mutedScoops.has(scoop.jid)).toBe(false);
+  });
+
+  it('waitForScoops resolves with captured summaries and does not ping the cone', async () => {
+    const a: RegisteredScoop = {
+      jid: 'scoop_wait_a',
+      name: 'wait-a',
+      folder: 'wait-a-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'wait-a-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    const b: RegisteredScoop = {
+      ...a,
+      jid: 'scoop_wait_b',
+      folder: 'wait-b-scoop',
+      assistantLabel: 'wait-b-scoop',
+    };
+    await saveScoop(a);
+    await saveScoop(b);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    // Start the wait then complete the scoops.
+    const waitPromise = orch.waitForScoops([a.jid, b.jid], 2000);
+
+    priv.scoopResponseBuffer.set(a.jid, 'result A');
+    await priv.maybeNotifyConeOnScoopComplete(a.jid);
+    priv.scoopResponseBuffer.set(b.jid, 'result B');
+    await priv.maybeNotifyConeOnScoopComplete(b.jid);
+
+    const results = await waitPromise;
+    expect(results).toHaveLength(2);
+    const mapped = new Map(results.map((r) => [r.jid, r]));
+    expect(mapped.get(a.jid)?.summary).toBe('result A');
+    expect(mapped.get(a.jid)?.timedOut).toBe(false);
+    expect(mapped.get(b.jid)?.summary).toBe('result B');
+    expect(mapped.get(b.jid)?.timedOut).toBe(false);
+    // scoop_wait must NOT also ping the cone — otherwise the cone takes
+    // two turns for one coordinated wait.
+    expect(incoming).toHaveLength(0);
+    // After resolution mute is released and nothing stays buffered.
+    expect(priv.mutedScoops.has(a.jid)).toBe(false);
+    expect(priv.mutedScoops.has(b.jid)).toBe(false);
+    expect(priv.pendingCompletions.has(a.jid)).toBe(false);
+    expect(priv.pendingCompletions.has(b.jid)).toBe(false);
+  });
+
+  it('waitForScoops times out scoops that never complete', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_wait_timeout_1',
+      name: 'wait-timeout',
+      folder: 'wait-timeout-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'wait-timeout-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith(() => {})
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    const results = await orch.waitForScoops([scoop.jid], 20);
+    expect(results).toHaveLength(1);
+    expect(results[0].timedOut).toBe(true);
+    expect(results[0].summary).toBeNull();
+    // On timeout the registered waiter must be cleaned up so a later
+    // completion doesn't stall waiting for a list that no longer exists.
+    expect(priv.completionWaiters.has(scoop.jid)).toBe(false);
+    // Mute we added is released on timeout.
+    expect(priv.mutedScoops.has(scoop.jid)).toBe(false);
+  });
+
+  it('waitForScoops consumes an already-pending completion without pinging the cone', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_wait_prepend_1',
+      name: 'wait-prepend',
+      folder: 'wait-prepend-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'wait-prepend-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    // Completion lands while the scoop is muted (as if scoop_mute was
+    // active). Then scoop_wait is invoked — it should claim the stashed
+    // summary and NOT re-fire it through the cone.
+    priv.muteScoops([scoop.jid]);
+    priv.scoopResponseBuffer.set(scoop.jid, 'stashed output');
+    await priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+    expect(priv.pendingCompletions.has(scoop.jid)).toBe(true);
+
+    const results = await orch.waitForScoops([scoop.jid], 50);
+    expect(results[0].summary).toBe('stashed output');
+    expect(results[0].timedOut).toBe(false);
+    expect(incoming).toHaveLength(0);
+    expect(priv.pendingCompletions.has(scoop.jid)).toBe(false);
+  });
+
+  it('waitForScoops dedupes duplicate jids so a single completion resolves all entries', async () => {
+    // Without dedup, the same jid registered twice would leave the
+    // second waiter stuck on its `results.has(jid)` guard (no
+    // `resolve()`) and stall `Promise.all(promises)` indefinitely.
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_wait_dedup_1',
+      name: 'wait-dedup',
+      folder: 'wait-dedup-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'wait-dedup-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith(() => {})
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    const waitPromise = orch.waitForScoops([scoop.jid, scoop.jid]);
+    // Give the micro-tasks a chance to register the waiters.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    priv.scoopResponseBuffer.set(scoop.jid, 'dedup output');
+    priv.maybeNotifyConeOnScoopComplete(scoop.jid);
+    const results = await waitPromise;
+
+    expect(results).toHaveLength(2);
+    expect(results[0].summary).toBe('dedup output');
+    expect(results[1].summary).toBe('dedup output');
+    expect(priv.completionWaiters.has(scoop.jid)).toBe(false);
+  });
+
+  it('waitForScoops treats timeout 0 as immediate (does not hang)', async () => {
+    // timeout_ms === 0 is an explicit "tell me who's already done"
+    // request. The previous `timeoutMs > 0` guard disabled the timer
+    // entirely for 0, so a scoop that never completed would stall
+    // Promise.all forever. This test asserts 0 returns immediately
+    // (with a timed-out entry) instead.
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_wait_zero_1',
+      name: 'wait-zero',
+      folder: 'wait-zero-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'wait-zero-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith(() => {})
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    const started = Date.now();
+    const results = await orch.waitForScoops([scoop.jid], 0);
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeLessThan(100);
+    expect(results[0].timedOut).toBe(true);
+    expect(results[0].summary).toBeNull();
+  });
+
+  it('shutdown drains pending scoop_wait waiters so in-flight calls resolve', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_wait_shutdown_1',
+      name: 'wait-shutdown',
+      folder: 'wait-shutdown-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'wait-shutdown-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    const localOrch = new Orchestrator(
+      container,
+      noopCallbacksWith(() => {})
+    );
+    await localOrch.init();
+
+    const priv = localOrch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    // Pre-seed mute + pending state so shutdown's clear() branches are
+    // exercised, and kick off a long-running waitForScoops that would
+    // hang without shutdown's drain.
+    priv.muteScoops([scoop.jid]);
+    const sharedFs = localOrch.getSharedFS();
+    const waitPromise = localOrch.waitForScoops([scoop.jid]); // no timeout
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(priv.completionWaiters.size).toBeGreaterThan(0);
+
+    await localOrch.shutdown();
+    await sharedFs?.dispose();
+
+    const results = await waitPromise;
+    expect(results[0].summary).toBeNull();
+    expect(results[0].timedOut).toBe(true);
+    expect(priv.completionWaiters.size).toBe(0);
+    expect(priv.mutedScoops.size).toBe(0);
+    expect(priv.pendingCompletions.size).toBe(0);
+
+    // null out the suite-level orch so afterEach doesn't double-shutdown.
+    orch = undefined as unknown as Orchestrator;
+  });
+});

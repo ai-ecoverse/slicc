@@ -23,6 +23,41 @@ export interface ScoopManagementToolsConfig {
   onDropScoop?: (scoopJid: string) => Promise<void>;
   onSetGlobalMemory?: (content: string) => Promise<void>;
   getGlobalMemory?: () => Promise<string>;
+  /** Mute a list of scoops so their completions are suppressed (cone only). */
+  onMuteScoops?: (jids: readonly string[]) => void;
+  /** Unmute scoops and return any stashed completions so the tool can
+   *  fold them into its result instead of re-firing them as new lick
+   *  events (cone only). */
+  onUnmuteScoops?: (
+    jids: readonly string[]
+  ) => Promise<
+    Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
+  >;
+  /** Block until a list of scoops completes (or timeout). Returns each scoop's
+   *  captured summary (or null on timeout). Cone only. */
+  onWaitForScoops?: (
+    jids: readonly string[],
+    timeoutMs?: number
+  ) => Promise<Array<{ jid: string; summary: string | null; timedOut: boolean }>>;
+}
+
+/** Resolve a list of user-supplied scoop names (folder or display name) to
+ *  registered scoop records. Returns the resolved scoops plus any unknown
+ *  names so the tool can surface a helpful error without bailing out on the
+ *  first miss. Cones are rejected — they can't be muted / waited on. */
+function resolveScoopNames(
+  names: readonly string[],
+  getScoops: () => RegisteredScoop[]
+): { resolved: RegisteredScoop[]; unknown: string[] } {
+  const all = getScoops();
+  const resolved: RegisteredScoop[] = [];
+  const unknown: string[] = [];
+  for (const name of names) {
+    const s = all.find((x) => !x.isCone && (x.folder === name || x.name === name));
+    if (s) resolved.push(s);
+    else unknown.push(name);
+  }
+  return { resolved, unknown };
 }
 
 /**
@@ -39,6 +74,9 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
     onDropScoop,
     onSetGlobalMemory,
     getGlobalMemory,
+    onMuteScoops,
+    onUnmuteScoops,
+    onWaitForScoops,
   } = config;
 
   const tools: ToolDefinition[] = [];
@@ -333,6 +371,186 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
             const msg = err instanceof Error ? err.message : String(err);
             return { content: `Failed to drop scoop: ${msg}`, isError: true };
           }
+        },
+      });
+    }
+
+    // Cone only: scoop_mute — suspend completion notifications from the
+    // listed scoops so they don't trigger cone turns while parallel work
+    // is in flight. Completions are stashed and flushed on scoop_unmute.
+    if (onMuteScoops) {
+      tools.push({
+        name: 'scoop_mute',
+        description:
+          "Suspend scoop→cone notifications for the given scoops. While muted, a scoop's completion is stashed and will be delivered to the cone when you call scoop_unmute (or scoop_wait which consumes it). Use this when coordinating parallel work so each scoop's completion does not trigger its own cone turn.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            scoop_names: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'Folder or display names of scoops to mute (e.g., ["writer-scoop", "reviewer-scoop"]).',
+            },
+          },
+          required: ['scoop_names'],
+        },
+        execute: async (input) => {
+          const { scoop_names } = input as { scoop_names: string[] };
+          if (!Array.isArray(scoop_names) || scoop_names.length === 0) {
+            return { content: 'scoop_names must be a non-empty array.', isError: true };
+          }
+          const { resolved, unknown } = resolveScoopNames(scoop_names, getScoops);
+          if (resolved.length === 0) {
+            return {
+              content: `No matching scoops found. Unknown: ${unknown.join(', ')}`,
+              isError: true,
+            };
+          }
+          onMuteScoops(resolved.map((s) => s.jid));
+          log.info('Scoops muted', { names: resolved.map((s) => s.folder) });
+          const muted = resolved.map((s) => s.folder).join(', ');
+          const warn = unknown.length > 0 ? ` (unknown: ${unknown.join(', ')})` : '';
+          return { content: `Muted: ${muted}${warn}` };
+        },
+      });
+    }
+
+    // Cone only: scoop_unmute — resume notifications AND claim any
+    // completion that landed while the scoop was muted. The stashed
+    // summaries are returned in THIS tool's result so the cone can read
+    // them in the current turn; they are NOT re-fired as fresh
+    // scoop-notify events (which would generate a new cone turn and
+    // defeat the whole point of muting in the first place).
+    if (onUnmuteScoops) {
+      tools.push({
+        name: 'scoop_unmute',
+        description:
+          'Resume scoop→cone notifications for the given scoops. Any completion that landed while a scoop was muted is returned in this tool result (NOT dispatched as a new cone turn), so you can read all stashed summaries in the current turn. Scoops with no stashed completion are simply unmuted.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            scoop_names: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Folder or display names of scoops to unmute (e.g., ["writer-scoop"]).',
+            },
+          },
+          required: ['scoop_names'],
+        },
+        execute: async (input) => {
+          const { scoop_names } = input as { scoop_names: string[] };
+          if (!Array.isArray(scoop_names) || scoop_names.length === 0) {
+            return { content: 'scoop_names must be a non-empty array.', isError: true };
+          }
+          const { resolved, unknown } = resolveScoopNames(scoop_names, getScoops);
+          if (resolved.length === 0) {
+            return {
+              content: `No matching scoops found. Unknown: ${unknown.join(', ')}`,
+              isError: true,
+            };
+          }
+          const jids = resolved.map((s) => s.jid);
+          const jidToFolder = new Map(resolved.map((s) => [s.jid, s.folder]));
+          const consumed = await onUnmuteScoops(jids);
+          log.info('Scoops unmuted', {
+            names: resolved.map((s) => s.folder),
+            stashedCount: consumed.length,
+          });
+
+          const unmutedFolders = resolved.map((s) => s.folder).join(', ');
+          const warn = unknown.length > 0 ? ` (unknown: ${unknown.join(', ')})` : '';
+          const lines: string[] = [`Unmuted: ${unmutedFolders}${warn}`];
+          if (consumed.length === 0) {
+            lines.push('No stashed completions.');
+          } else {
+            lines.push('', 'Stashed completions:');
+            for (const entry of consumed) {
+              const folder = jidToFolder.get(entry.jid) ?? entry.jid;
+              lines.push(`--- ${folder} ---`);
+              if (entry.notificationPath) {
+                lines.push(`VFS path: ${entry.notificationPath}`);
+              }
+              lines.push(entry.summary);
+            }
+          }
+          return { content: lines.join('\n') };
+        },
+      });
+    }
+
+    // Cone only: scoop_wait — block until a set of scoops completes, with
+    // an optional timeout. Target scoops are implicitly muted for the
+    // duration so the cone gets a single tool result summarizing all of
+    // them instead of one cone turn per completion.
+    if (onWaitForScoops) {
+      tools.push({
+        name: 'scoop_wait',
+        description:
+          'Block until the given scoops complete or an optional timeout expires. Use this to coordinate parallel work: you feed several scoops, then call scoop_wait to receive all their results in one go without the cone being pinged for each individual completion. Already-completed scoops (including those whose completion arrived while you were processing your previous turn) are returned immediately.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            scoop_names: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'Folder or display names of scoops to wait for (e.g., ["writer-scoop", "reviewer-scoop"]).',
+            },
+            timeout_ms: {
+              type: 'number',
+              description:
+                'Optional timeout in milliseconds. If any listed scoop has not completed by the deadline, it is reported as timed-out in the result and the wait returns. Omit for no timeout.',
+            },
+          },
+          required: ['scoop_names'],
+        },
+        execute: async (input) => {
+          const { scoop_names, timeout_ms } = input as {
+            scoop_names: string[];
+            timeout_ms?: number;
+          };
+          if (!Array.isArray(scoop_names) || scoop_names.length === 0) {
+            return { content: 'scoop_names must be a non-empty array.', isError: true };
+          }
+          if (
+            timeout_ms !== undefined &&
+            (typeof timeout_ms !== 'number' || !Number.isFinite(timeout_ms) || timeout_ms < 0)
+          ) {
+            return {
+              content: 'timeout_ms must be a non-negative finite number (or omitted).',
+              isError: true,
+            };
+          }
+          const { resolved, unknown } = resolveScoopNames(scoop_names, getScoops);
+          if (resolved.length === 0) {
+            return {
+              content: `No matching scoops found. Unknown: ${unknown.join(', ')}`,
+              isError: true,
+            };
+          }
+          const jids = resolved.map((s) => s.jid);
+          const jidToFolder = new Map(resolved.map((s) => [s.jid, s.folder]));
+          const results = await onWaitForScoops(jids, timeout_ms);
+          log.info('Wait completed', {
+            names: resolved.map((s) => s.folder),
+            timeout_ms,
+            timedOut: results.filter((r) => r.timedOut).length,
+          });
+          const lines: string[] = [];
+          if (unknown.length > 0) {
+            lines.push(`Unknown scoops (skipped): ${unknown.join(', ')}`);
+          }
+          for (const r of results) {
+            const folder = jidToFolder.get(r.jid) ?? r.jid;
+            if (r.timedOut) {
+              lines.push(`--- ${folder} (timed out) ---`);
+            } else {
+              lines.push(`--- ${folder} ---`);
+              lines.push(r.summary ?? '(no output)');
+            }
+          }
+          return { content: lines.join('\n') };
         },
       });
     }

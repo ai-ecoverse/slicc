@@ -18,6 +18,7 @@ import {
 import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
 import { getToolDescriptor, createToolIcon, createToolBody, toolStatus } from './tool-call-view.js';
 import { getLickDescriptor, createLickIcon, parseLickContent } from './lick-view.js';
+import { isLickChannel, type LickChannel } from './lick-channels.js';
 import {
   getAllAvailableModels,
   getSelectedModelId,
@@ -192,7 +193,7 @@ export class ChatPanel {
     lick: {
       id: string;
       content: string;
-      channel: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate';
+      channel: LickChannel;
       timestamp: number;
     }
   ): Promise<void> {
@@ -218,7 +219,7 @@ export class ChatPanel {
     lick: {
       id: string;
       content: string;
-      channel: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate';
+      channel: LickChannel;
       timestamp: number;
     }
   ): Promise<void> {
@@ -280,12 +281,7 @@ export class ChatPanel {
    * insert the message in timestamp order so backfill doesn't break the
    * chronological flow; live events append.
    */
-  addLickMessage(
-    id: string,
-    content: string,
-    channel: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate',
-    timestamp?: number
-  ): void {
+  addLickMessage(id: string, content: string, channel: LickChannel, timestamp?: number): void {
     const ts = timestamp ?? Date.now();
     // Ignore duplicate id (can happen when merging live buffer + DB fallback).
     if (this.messages.some((m) => m.id === id)) return;
@@ -1128,7 +1124,7 @@ export class ChatPanel {
     prevTimestamp: number
   ): boolean {
     // Always show label for lick messages
-    if (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') return true;
+    if (msg.source === 'lick' || isLickChannel(msg.channel)) return true;
     // Show label if role changed
     if (msg.role !== prevRole) return true;
     // Show label if >2 min gap
@@ -1187,12 +1183,10 @@ export class ChatPanel {
     isLastAssistant = false,
     stale = false
   ): HTMLElement {
-    // Licks (webhook/cron) get their own compact style like tool calls
-    const isLick =
-      msg.source === 'lick' ||
-      msg.channel === 'webhook' ||
-      msg.channel === 'cron' ||
-      msg.channel === 'fswatch';
+    // Licks (webhook/cron/etc. and scoop-notify/scoop-idle) get their own
+    // compact style like tool calls. Using isLickChannel keeps this check
+    // aligned with the canonical lick channel list in main.ts.
+    const isLick = msg.source === 'lick' || isLickChannel(msg.channel);
     if (isLick) {
       const wrapper = document.createElement('div');
       wrapper.className = 'msg-group';
@@ -1265,11 +1259,7 @@ export class ChatPanel {
 
     // For lick messages in cone view, wrap content in collapsible
     const isLickInCone =
-      (msg.source === 'lick' ||
-        msg.channel === 'webhook' ||
-        msg.channel === 'cron' ||
-        msg.channel === 'fswatch') &&
-      this.sessionId === 'session-cone';
+      (msg.source === 'lick' || isLickChannel(msg.channel)) && this.sessionId === 'session-cone';
     // For scoop messages in cone view, wrap in collapsible
     const isScoopInCone =
       msg.source &&

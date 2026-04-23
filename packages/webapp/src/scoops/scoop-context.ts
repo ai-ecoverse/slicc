@@ -80,6 +80,20 @@ export interface ScoopContextCallbacks {
   onScoopScoop?: (scoop: Omit<RegisteredScoop, 'jid'>) => Promise<RegisteredScoop>;
   /** Drop/remove a scoop (cone only) */
   onDropScoop?: (scoopJid: string) => Promise<void>;
+  /** Mute scoops so their completions are not forwarded to the cone (cone only). */
+  onMuteScoops?: (jids: readonly string[]) => void;
+  /** Unmute scoops; returns any stashed completions so the caller can
+   *  fold them into its tool result (cone only). */
+  onUnmuteScoops?: (
+    jids: readonly string[]
+  ) => Promise<
+    Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
+  >;
+  /** Wait for a batch of scoops to complete (cone only). */
+  onWaitForScoops?: (
+    jids: readonly string[],
+    timeoutMs?: number
+  ) => Promise<Array<{ jid: string; summary: string | null; timedOut: boolean }>>;
   /** Get global CLAUDE.md content (shared across all scoops) */
   getGlobalMemory: () => Promise<string>;
   /** Update global CLAUDE.md (cone only) */
@@ -186,6 +200,9 @@ export class ScoopContext {
         onFeedScoop: this.callbacks.onFeedScoop,
         onScoopScoop: this.callbacks.onScoopScoop,
         onDropScoop: this.callbacks.onDropScoop,
+        onMuteScoops: this.callbacks.onMuteScoops,
+        onUnmuteScoops: this.callbacks.onUnmuteScoops,
+        onWaitForScoops: this.callbacks.onWaitForScoops,
         onSetGlobalMemory: this.callbacks.setGlobalMemory,
         getGlobalMemory: this.callbacks.getGlobalMemory,
       };

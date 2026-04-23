@@ -167,3 +167,161 @@ describe('scoop_scoop tool — config defaults', () => {
     expect(result.isError).toBeUndefined();
   });
 });
+
+describe('scoop_mute / scoop_unmute / scoop_wait tools', () => {
+  const targetScoop: RegisteredScoop = {
+    jid: 'scoop_alpha_1',
+    name: 'alpha',
+    folder: 'alpha-scoop',
+    isCone: false,
+    type: 'scoop',
+    requiresTrigger: true,
+    assistantLabel: 'alpha-scoop',
+    addedAt: new Date().toISOString(),
+  };
+
+  function buildConeTools(
+    options: {
+      unmuteReturns?: Array<{
+        jid: string;
+        summary: string;
+        timestamp: string;
+        notificationPath: string | null;
+      }>;
+    } = {}
+  ) {
+    const onMuteScoops = vi.fn();
+    const onUnmuteScoops = vi.fn(async () => options.unmuteReturns ?? []);
+    const onWaitForScoops = vi.fn(async (jids: readonly string[]) =>
+      jids.map((jid) => ({ jid, summary: `summary-${jid}`, timedOut: false }))
+    );
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, targetScoop],
+      onMuteScoops,
+      onUnmuteScoops,
+      onWaitForScoops,
+    });
+    return { tools, onMuteScoops, onUnmuteScoops, onWaitForScoops };
+  }
+
+  it('scoop_mute forwards resolved jids and reports unknown names', async () => {
+    const { tools, onMuteScoops } = buildConeTools();
+    const tool = tools.find((t) => t.name === 'scoop_mute');
+    expect(tool).toBeDefined();
+
+    const result = await tool!.execute({ scoop_names: ['alpha-scoop', 'ghost'] });
+    expect(onMuteScoops).toHaveBeenCalledWith([targetScoop.jid]);
+    expect(result.content).toContain('Muted: alpha-scoop');
+    expect(result.content).toContain('unknown: ghost');
+  });
+
+  it('scoop_mute rejects an empty list', async () => {
+    const { tools, onMuteScoops } = buildConeTools();
+    const tool = tools.find((t) => t.name === 'scoop_mute');
+    const result = await tool!.execute({ scoop_names: [] });
+    expect(result.isError).toBe(true);
+    expect(onMuteScoops).not.toHaveBeenCalled();
+  });
+
+  it('scoop_mute reports an error when every name is unknown', async () => {
+    const { tools, onMuteScoops } = buildConeTools();
+    const tool = tools.find((t) => t.name === 'scoop_mute');
+    const result = await tool!.execute({ scoop_names: ['missing'] });
+    expect(result.isError).toBe(true);
+    expect(onMuteScoops).not.toHaveBeenCalled();
+  });
+
+  it('scoop_unmute forwards resolved jids and reports no stashed completions when empty', async () => {
+    const { tools, onUnmuteScoops } = buildConeTools();
+    const tool = tools.find((t) => t.name === 'scoop_unmute');
+    expect(tool).toBeDefined();
+
+    const result = await tool!.execute({ scoop_names: ['alpha-scoop'] });
+    expect(onUnmuteScoops).toHaveBeenCalledWith([targetScoop.jid]);
+    expect(result.content).toContain('Unmuted: alpha-scoop');
+    expect(result.content).toContain('No stashed completions');
+  });
+
+  it('scoop_unmute folds stashed completions into the tool result', async () => {
+    // The whole point of scoop_mute/scoop_unmute is that the cone reads
+    // stashed summaries in the CURRENT turn. Returning them in the tool
+    // result (instead of re-firing them as new lick events) is what
+    // makes that possible — otherwise unmute would just re-trigger a
+    // fresh cone turn, defeating the mute.
+    const { tools, onUnmuteScoops } = buildConeTools({
+      unmuteReturns: [
+        {
+          jid: targetScoop.jid,
+          summary: 'scoop wrote hero block',
+          timestamp: '2026-01-01T00:00:00.000Z',
+          notificationPath: '/shared/scoop-notifications/2026-01-01T00-00-00-000Z-alpha.md',
+        },
+      ],
+    });
+    const tool = tools.find((t) => t.name === 'scoop_unmute');
+    const result = await tool!.execute({ scoop_names: ['alpha-scoop'] });
+    expect(onUnmuteScoops).toHaveBeenCalledWith([targetScoop.jid]);
+    expect(result.content).toContain('Unmuted: alpha-scoop');
+    expect(result.content).toContain('Stashed completions');
+    expect(result.content).toContain('--- alpha-scoop ---');
+    expect(result.content).toContain('scoop wrote hero block');
+    expect(result.content).toContain(
+      'VFS path: /shared/scoop-notifications/2026-01-01T00-00-00-000Z-alpha.md'
+    );
+  });
+
+  it('scoop_wait awaits completion and formats per-scoop output', async () => {
+    const { tools, onWaitForScoops } = buildConeTools();
+    const tool = tools.find((t) => t.name === 'scoop_wait');
+    expect(tool).toBeDefined();
+
+    const result = await tool!.execute({ scoop_names: ['alpha-scoop'], timeout_ms: 1000 });
+    expect(onWaitForScoops).toHaveBeenCalledWith([targetScoop.jid], 1000);
+    expect(result.content).toContain('--- alpha-scoop ---');
+    expect(result.content).toContain('summary-scoop_alpha_1');
+  });
+
+  it('scoop_wait marks timed-out scoops distinctly', async () => {
+    const onWaitForScoops = vi.fn(async () => [
+      { jid: targetScoop.jid, summary: null, timedOut: true },
+    ]);
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, targetScoop],
+      onMuteScoops: vi.fn(),
+      onUnmuteScoops: vi.fn(async () => []),
+      onWaitForScoops,
+    });
+    const tool = tools.find((t) => t.name === 'scoop_wait');
+    const result = await tool!.execute({ scoop_names: ['alpha-scoop'], timeout_ms: 10 });
+    expect(result.content).toContain('--- alpha-scoop (timed out) ---');
+  });
+
+  it('scoop_wait rejects non-finite or negative timeouts', async () => {
+    const { tools, onWaitForScoops } = buildConeTools();
+    const tool = tools.find((t) => t.name === 'scoop_wait');
+    const neg = await tool!.execute({ scoop_names: ['alpha-scoop'], timeout_ms: -5 });
+    expect(neg.isError).toBe(true);
+    const nan = await tool!.execute({ scoop_names: ['alpha-scoop'], timeout_ms: Number.NaN });
+    expect(nan.isError).toBe(true);
+    expect(onWaitForScoops).not.toHaveBeenCalled();
+  });
+
+  it('mute/unmute/wait tools are absent on non-cone scoops', async () => {
+    const nonCone: RegisteredScoop = { ...targetScoop, isCone: false, type: 'scoop' };
+    const tools = createScoopManagementTools({
+      scoop: nonCone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, nonCone],
+      onMuteScoops: vi.fn(),
+      onUnmuteScoops: vi.fn(async () => []),
+      onWaitForScoops: vi.fn(async () => []),
+    });
+    expect(tools.find((t) => t.name === 'scoop_mute')).toBeUndefined();
+    expect(tools.find((t) => t.name === 'scoop_unmute')).toBeUndefined();
+    expect(tools.find((t) => t.name === 'scoop_wait')).toBeUndefined();
+  });
+});

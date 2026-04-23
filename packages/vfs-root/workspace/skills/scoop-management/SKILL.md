@@ -120,6 +120,45 @@ agent . '*' 'Summarize the README in one sentence.' --model claude-haiku-4-5
 - The spawned scoop gets its own conversation; it cannot see the caller's history. Pack context into the prompt.
 - `agent` exits with the sub-scoop's exit code; stderr carries bridge errors (validation, model resolution, spawn failures).
 
+## Parallel Orchestration: `scoop_mute` / `scoop_unmute` / `scoop_wait`
+
+By default, every non-ephemeral scoop completion fires a `scoop-notify` event that wakes the cone for a fresh turn. When you fan out N scoops in parallel, that's N extra cone turns whose only job is to acknowledge "scoop X finished" — expensive in tokens and disruptive to the orchestration you actually want to run.
+
+These three cone-only tools let you collapse that fan-out into a single follow-up turn:
+
+- **`scoop_mute({ scoop_names })`** — suspends `scoop-notify` delivery for the listed scoops. A completion that arrives while muted is stashed (full response persisted to `/shared/scoop-notifications/*.md`); it does NOT trigger a cone turn.
+- **`scoop_unmute({ scoop_names })`** — resumes notifications AND returns every stashed completion inline as this tool's result. The cone reads the summaries in the current turn instead of taking one extra turn per scoop.
+- **`scoop_wait({ scoop_names, timeout_ms? })`** — implicitly mutes the listed scoops, blocks until each completes (or times out), and returns all captured summaries as the tool result. Completions that arrived before the call are consumed immediately. `timeout_ms: 0` means "return only the scoops that are already done". Omit `timeout_ms` to wait indefinitely. After the wait resolves, only scoops muted by this call are unmuted — pre-existing `scoop_mute` state survives.
+
+### When to use which
+
+- **Fire-and-forget background work you'll check later** → `scoop_mute` now, do other work, `scoop_unmute` when you want the summaries.
+- **Fan-out with synthesis** (you delegate to several scoops and your next useful step depends on all of them) → `scoop_wait`. One tool call, one cone turn after they all finish.
+- **Single delegation, no parallelism** → don't mute. The default `scoop-notify` path is fine.
+
+### Examples
+
+```
+# Fan-out + synthesize in one extra turn:
+feed_scoop({ scoop_name: "writer-a", prompt: "Draft intro" })
+feed_scoop({ scoop_name: "writer-b", prompt: "Draft outro" })
+scoop_wait({ scoop_names: ["writer-a", "writer-b"], timeout_ms: 600000 })
+# -> tool result contains both summaries; merge them in the next message.
+
+# Start background work, poll non-blockingly:
+scoop_mute({ scoop_names: ["scraper"] })
+feed_scoop({ scoop_name: "scraper", prompt: "Collect URLs from the sitemap" })
+# ... do other work ...
+scoop_unmute({ scoop_names: ["scraper"] })
+# -> tool result either has the stashed summary or reports "No stashed completions".
+```
+
+### Notes
+
+- The full response is always persisted to `/shared/scoop-notifications/<timestamp>-<folder>-<id>.md` (bounded to the 200 most recent artifacts). The summary string in the tool result is truncated at 20 000 characters; read the VFS path when the cone needs the full output.
+- Unknown scoop names in any of the three tools are reported in the result but do not abort the call.
+- Dropping or re-registering a muted scoop is safe: `unregisterScoop` releases any outstanding waiters (they resolve as `timedOut: true`) and clears mute/pending state.
+
 ## Model Selection for Scoops
 
 Use `models --json` to discover available models before creating scoops. The `scoop_scoop` tool accepts a `model` parameter.
