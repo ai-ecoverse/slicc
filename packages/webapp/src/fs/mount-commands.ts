@@ -157,7 +157,7 @@ export class MountCommands {
                 window as Window &
                   typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
               ).showDirectoryPicker({ mode: 'readwrite' });
-              await verifyDirectoryAccess(handle);
+              verifyDirectoryAccess(handle);
               return { approved: true, handle };
             } catch (err: unknown) {
               if (err instanceof Error && err.name === 'AbortError') {
@@ -202,7 +202,7 @@ export class MountCommands {
         dirHandle = await (
           window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
         ).showDirectoryPicker({ mode: 'readwrite' });
-        await verifyDirectoryAccess(dirHandle);
+        verifyDirectoryAccess(dirHandle);
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'AbortError') {
           return { stdout: '', stderr: 'mount: cancelled', exitCode: 1 };
@@ -272,16 +272,21 @@ export class MountCommands {
   }
 }
 
-async function verifyDirectoryAccess(handle: FileSystemDirectoryHandle): Promise<void> {
-  try {
-    const iter = (handle as unknown as AsyncIterable<[string, FileSystemHandle]>)[
-      Symbol.asyncIterator
-    ]();
-    await iter.next();
-  } catch (err: unknown) {
+const MACOS_RESTRICTED_DIRS = new Set([
+  'Desktop',
+  'Documents',
+  'Downloads',
+  'Movies',
+  'Music',
+  'Pictures',
+  'Library',
+]);
+
+function verifyDirectoryAccess(handle: FileSystemDirectoryHandle): void {
+  if (MACOS_RESTRICTED_DIRS.has(handle.name)) {
     throw new Error(
-      `Cannot access "${handle.name}" — macOS may restrict browser access to system folders. ` +
-        `Choose a different directory. (${err instanceof Error ? err.message : String(err)})`
+      `"${handle.name}" is a macOS-protected folder — Chrome will crash if it tries to read it. ` +
+        `Choose a subfolder or a different directory.`
     );
   }
 }
