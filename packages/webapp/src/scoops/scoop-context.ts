@@ -40,6 +40,7 @@ import {
   createScoopManagementTools,
   type ScoopManagementToolsConfig,
 } from './scoop-management-tools.js';
+import { getAdobeSessionId } from './llm-session-id.js';
 
 const log = createLogger('scoop-context');
 
@@ -101,6 +102,7 @@ export class ScoopContext {
   private sessionId: string;
   private sessionCreatedAt: number = 0;
   private isRecovering: 'overflow' | 'image' | false = false;
+  private coneJid: string | undefined;
 
   private skillsFs: VirtualFS | null = null;
   private skillsDir: string = '/workspace/skills';
@@ -118,10 +120,11 @@ export class ScoopContext {
     this.fs = fs;
     this.sessionStore = sessionStore ?? null;
     this.skillsFs = skillsFs ?? null;
-    // Session ID encodes the cone→scoop relationship:
-    //   cone:  "cone_17126…"
-    //   scoop: "cone_17126…/my-task-scoop"
-    this.sessionId = scoop.isCone ? scoop.jid : `${coneJid ?? 'unknown'}/${scoop.folder}`;
+    this.coneJid = coneJid;
+    // Internal persistence key — stable across days/restarts so saved
+    // conversations can be restored by `SessionStore.load`. The outgoing
+    // Adobe `X-Session-Id` is computed separately in `init()`.
+    this.sessionId = scoop.jid;
   }
 
   /** Initialize the scoop's environment */
@@ -255,15 +258,19 @@ export class ScoopContext {
         getApiKey: () => getApiKey() ?? undefined,
       });
 
-      // Wrap the default stream function to inject X-Session-Id on every LLM request.
-      // All pi-ai providers merge options.headers into their HTTP client headers,
-      // so this single wrapper covers Anthropic, OpenAI, Google, Mistral, Bedrock, etc.
-      const sessionId = this.sessionId;
-      const streamWithSessionId: typeof streamSimple = (m, ctx, opts) =>
-        streamSimple(m, ctx, {
+      // Compute the Adobe session identifier once per init. It is a
+      // daily-rotating random UUID for the cone, and `<uuid>/<hash(folder, uuid)>`
+      // for scoops — salted with the UUID so the scoop folder name never
+      // reaches the provider. Only sent as the `X-Session-Id` header for the
+      // Adobe proxy; other providers receive no such header.
+      const adobeSessionId = await getAdobeSessionId(this.scoop, this.coneJid);
+      const streamWithSessionId: typeof streamSimple = (m, ctx, opts) => {
+        if (m.provider !== 'adobe') return streamSimple(m, ctx, opts);
+        return streamSimple(m, ctx, {
           ...opts,
-          headers: { ...opts?.headers, 'X-Session-Id': sessionId },
+          headers: { ...opts?.headers, 'X-Session-Id': adobeSessionId },
         });
+      };
 
       this.agent = new Agent({
         initialState: {
@@ -275,7 +282,6 @@ export class ScoopContext {
         getApiKey: () => getApiKey() ?? undefined,
         transformContext: compactFn,
         streamFn: streamWithSessionId,
-        sessionId,
       });
 
       // Subscribe to agent events

@@ -76,7 +76,9 @@ describe('ScoopContext session persistence', () => {
     const mockStore = { load: vi.fn(), save: vi.fn(), delete: vi.fn() } as any;
     ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore, undefined, 'cone_1');
     expect((ctx as any).sessionStore).toBe(mockStore);
-    expect((ctx as any).sessionId).toBe('cone_1/test-scoop');
+    // Internal persistence key is the scoop's JID — stable across days so
+    // `SessionStore.load` can restore saved conversations.
+    expect((ctx as any).sessionId).toBe(testScoop.jid);
   });
 
   it('works without sessionStore (backwards compatible)', () => {
@@ -95,7 +97,7 @@ describe('ScoopContext session persistence', () => {
 
     expect(mockStore.save).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: 'cone_1/test-scoop',
+        id: testScoop.jid,
         messages,
       })
     );
