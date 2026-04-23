@@ -294,6 +294,16 @@ User clicks "Select directory" [data-action="approve" data-picker="directory"]
 - Add unit test in `packages/chrome-extension/tests/` for the new message types
 - Verify tool-ui-sandbox passes `picker` attribute in action messages
 
+### Implementation Details
+
+**IDB lifecycle** — After the offscreen reads `pendingMount`, delete the entry so a failed subsequent mount doesn't reuse a stale handle. The read-then-delete should be atomic (same transaction).
+
+**Request-scoped IDB keys** — Use `pendingMount:{requestId}` as the IDB key instead of a fixed `pendingMount` string. This avoids races if overlapping tool UIs ever occur and makes cleanup unambiguous. Both sides (side panel writer, offscreen reader) receive `requestId` through the message flow.
+
+**Service worker routing** — The service worker relay in `service-worker.ts` forwards all `{source: 'panel'}` envelopes to the offscreen document without filtering by payload type. No new relay code needed — `tool-ui-action` will route through the existing path. Verify this during implementation.
+
+**Shared DB with welcome flow** — The welcome sprinkle uses DB name `slicc-pending-mount`, version `1`, object store `handles`. Match these exactly. The `onupgradeneeded` handler is idempotent (`createObjectStore` only runs on first open), so both code paths can open the same DB safely.
+
 ### Scope
 
 This fix is specifically for the tool UI bridge in extension mode. The only tool currently using `showToolUIFromContext()` is the mount command, but the relay mechanism is generic — any future tool UI will work across the extension boundary without additional plumbing.
