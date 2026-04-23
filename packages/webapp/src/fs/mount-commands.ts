@@ -143,6 +143,7 @@ export class MountCommands {
               try {
                 const handle = await loadAndClearPendingHandle(d.idbKey);
                 if (!handle) return { error: 'No directory handle found in storage' };
+                await reactivateHandle(handle);
                 return { approved: true, handle };
               } catch (err: unknown) {
                 return { error: err instanceof Error ? err.message : String(err) };
@@ -215,6 +216,7 @@ export class MountCommands {
               exitCode: 1,
             };
           }
+          await reactivateHandle(handle);
           dirHandle = handle;
         } else {
           return { stdout: '', stderr: 'mount: unexpected popup result', exitCode: 1 };
@@ -298,6 +300,19 @@ export class MountCommands {
       stderr: '',
       exitCode: 0,
     };
+  }
+}
+
+async function reactivateHandle(handle: FileSystemDirectoryHandle): Promise<void> {
+  type HandleWithPermission = FileSystemDirectoryHandle & {
+    requestPermission?: (opts: { mode: string }) => Promise<string>;
+  };
+  const h = handle as HandleWithPermission;
+  if (h.requestPermission) {
+    const state = await h.requestPermission({ mode: 'readwrite' });
+    if (state !== 'granted') {
+      throw new Error(`Permission denied for "${handle.name}" (${state})`);
+    }
   }
 }
 
