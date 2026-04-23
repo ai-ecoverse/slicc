@@ -23,6 +23,9 @@ import {
   UserRoundPlus,
   UtensilsCrossed,
   Clock,
+  VolumeX,
+  Volume2,
+  Hourglass,
   Wrench,
 } from 'lucide';
 import type { ToolCall } from './types.js';
@@ -111,6 +114,26 @@ const DESCRIPTORS: Record<string, ToolDescriptor> = {
     icon: Trash2 as unknown as IconNode,
     title: 'drop',
     preview: (input) => getField(input, 'scoop_name') ?? '',
+  },
+  scoop_mute: {
+    icon: VolumeX as unknown as IconNode,
+    title: 'mute',
+    preview: (input) => formatScoopNames(input),
+  },
+  scoop_unmute: {
+    icon: Volume2 as unknown as IconNode,
+    title: 'unmute',
+    preview: (input) => formatScoopNames(input),
+  },
+  scoop_wait: {
+    icon: Hourglass as unknown as IconNode,
+    title: 'wait',
+    preview: (input) => {
+      const names = formatScoopNames(input);
+      const ms = getField(input, 'timeout_ms');
+      if (ms === undefined || ms === '') return names;
+      return names ? `${names} (${ms}ms)` : `${ms}ms`;
+    },
   },
   list_scoops: {
     icon: List as unknown as IconNode,
@@ -206,6 +229,19 @@ function shortValue(input: unknown, max: number): string {
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, max - 1).trimEnd() + '…';
+}
+
+/**
+ * Render a `scoop_names` input as a comma-joined preview. Used by the
+ * scoop_mute / scoop_unmute / scoop_wait tool rows so the user sees
+ * which scoops are being targeted without expanding the call.
+ */
+function formatScoopNames(input: unknown): string {
+  if (!input || typeof input !== 'object') return '';
+  const names = (input as Record<string, unknown>).scoop_names;
+  if (!Array.isArray(names)) return '';
+  const joined = names.filter((n) => typeof n === 'string').join(', ');
+  return truncate(joined, 100);
 }
 
 function iconNodeToSvg(node: IconNode): SVGElement {
