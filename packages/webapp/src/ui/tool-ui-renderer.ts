@@ -152,9 +152,17 @@ export class ToolUIRenderer {
           const idbKey = `pendingMount:${this.requestId}`;
           const db = await openPendingMountDb();
           const tx = db.transaction('handles', 'readwrite');
-          tx.objectStore('handles').put(handle, idbKey);
+          try {
+            tx.objectStore('handles').put(handle, idbKey);
+          } catch (putErr: unknown) {
+            db.close();
+            throw putErr;
+          }
           await new Promise<void>((resolve, reject) => {
-            tx.oncomplete = () => resolve();
+            tx.oncomplete = () => {
+              log.info('Directory handle stored for offscreen retrieval', { idbKey });
+              resolve();
+            };
             tx.onerror = () => reject(tx.error ?? new Error('IDB transaction failed'));
             tx.onabort = () => reject(tx.error ?? new Error('IDB transaction aborted'));
           });
@@ -162,7 +170,10 @@ export class ToolUIRenderer {
           actionData = { handleInIdb: true, idbKey, dirName: handle.name };
         }
       } catch (err: unknown) {
-        if (err instanceof Error && err.name === 'AbortError') {
+        const isAbort =
+          (err instanceof Error && err.name === 'AbortError') ||
+          (err instanceof DOMException && err.name === 'AbortError');
+        if (isAbort) {
           actionData = { cancelled: true };
         } else {
           actionData = { error: err instanceof Error ? err.message : String(err) };
@@ -218,7 +229,21 @@ function openPendingMountDb(): Promise<IDBDatabase> {
       }
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => {
+      log.error('Failed to open pending mount database', {
+        db: PENDING_MOUNT_DB,
+        error: req.error?.message ?? 'unknown',
+      });
+      reject(req.error ?? new Error('Failed to open pending mount database'));
+    };
+    req.onblocked = () => {
+      log.warn('Pending mount database blocked by another connection', {
+        db: PENDING_MOUNT_DB,
+      });
+      reject(
+        new Error('Mount storage is locked by another tab — close other SLICC tabs and retry')
+      );
+    };
   });
 }
 
