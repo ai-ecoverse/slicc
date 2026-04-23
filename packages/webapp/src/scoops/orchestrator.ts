@@ -953,12 +953,14 @@ export class Orchestrator {
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),
     };
 
+    const coneJid = Array.from(this.scoops.values()).find((s) => s.isCone)?.jid;
     const context = new ScoopContext(
       scoop,
       contextCallbacks,
       fs,
       this.sessionStore ?? undefined,
-      this.sharedFs ?? undefined
+      this.sharedFs ?? undefined,
+      coneJid
     );
 
     this.contexts.set(jid, context);

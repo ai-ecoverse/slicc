@@ -74,8 +74,10 @@ describe('ScoopContext session persistence', () => {
 
   it('accepts a sessionStore parameter', () => {
     const mockStore = { load: vi.fn(), save: vi.fn(), delete: vi.fn() } as any;
-    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore, undefined, 'cone_1');
     expect((ctx as any).sessionStore).toBe(mockStore);
+    // Internal persistence key is the scoop's JID — stable across days so
+    // `SessionStore.load` can restore saved conversations.
     expect((ctx as any).sessionId).toBe(testScoop.jid);
   });
 
@@ -86,7 +88,7 @@ describe('ScoopContext session persistence', () => {
 
   it('saves session on agent_end with messages', () => {
     const mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) } as any;
-    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore, undefined, 'cone_1');
     injectMockAgent(ctx, async () => {});
 
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
