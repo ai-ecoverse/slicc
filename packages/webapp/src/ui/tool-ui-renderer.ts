@@ -90,10 +90,7 @@ export class ToolUIRenderer {
 
       if (msg.type === 'tool-ui-action' && msg.id === this.requestId) {
         log.info('Tool UI action received', { id: msg.id, action: msg.action });
-        toolUIRegistry.handleAction(msg.id, {
-          action: msg.action,
-          data: msg.data,
-        });
+        this.relayActionToOffscreen(msg.action, msg.data, msg.picker);
       } else if (msg.type === 'tool-ui-rendered' && msg.id === this.requestId) {
         if (msg.height && this.iframe) {
           this.iframe.style.height = `${Math.max(60, msg.height)}px`;
@@ -137,6 +134,58 @@ export class ToolUIRenderer {
     });
   }
 
+  private async relayActionToOffscreen(
+    action: string,
+    data: unknown,
+    picker?: string
+  ): Promise<void> {
+    let actionData = data;
+
+    if (picker === 'directory') {
+      try {
+        type ShowDirPicker = (opts?: object) => Promise<FileSystemDirectoryHandle>;
+        const w = window as Window & typeof globalThis & { showDirectoryPicker?: ShowDirPicker };
+        if (!w.showDirectoryPicker) {
+          actionData = { error: 'showDirectoryPicker not available' };
+        } else {
+          const handle = await w.showDirectoryPicker({ mode: 'readwrite' });
+          const idbKey = `pendingMount:${this.requestId}`;
+          const db = await openPendingMountDb();
+          const tx = db.transaction('handles', 'readwrite');
+          tx.objectStore('handles').put(handle, idbKey);
+          await new Promise<void>((r) => {
+            tx.oncomplete = () => r();
+          });
+          db.close();
+          actionData = { handleInIdb: true, idbKey, dirName: handle.name };
+        }
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          actionData = { cancelled: true };
+        } else {
+          actionData = { error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+    }
+
+    chrome.runtime
+      .sendMessage({
+        source: 'panel' as const,
+        payload: {
+          type: 'tool-ui-action' as const,
+          requestId: this.requestId,
+          action,
+          data: actionData,
+        },
+      })
+      .catch((err: unknown) => {
+        log.warn('Failed to relay tool UI action to offscreen', {
+          requestId: this.requestId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+  }
+
   /** Clean up */
   dispose(): void {
     if (this.messageHandler) {
@@ -152,6 +201,21 @@ export class ToolUIRenderer {
       this.inlineSprinkle = null;
     }
   }
+}
+
+const PENDING_MOUNT_DB = 'slicc-pending-mount';
+
+function openPendingMountDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(PENDING_MOUNT_DB, 1);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains('handles')) {
+        req.result.createObjectStore('handles');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
 }
 
 /** Map of active renderers by request ID */
