@@ -1193,7 +1193,13 @@ async function main() {
   }
 
   // 4. CDP WebSocket proxy at /cdp
-  //    Use noServer mode so Vite's dev middleware doesn't intercept the upgrade.
+  //    Use noServer mode so Vite's dev middleware doesn't intercept the
+  //    upgrade. Keep the default per-message payload cap on this socket —
+  //    the oversized-message feedback loop we have to defend against
+  //    (see the chromeWs constructor below for the full writeup) is
+  //    purely Chrome-to-proxy, never client-to-proxy, so raising the
+  //    cap here would only widen the DoS surface for anything on
+  //    localhost that can reach ws://127.0.0.1:PORT/cdp.
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (request, socket, head) => {
@@ -1335,7 +1341,17 @@ async function main() {
       }
 
       messageBuffer = [];
-      chromeWs = new WebSocket(url);
+      // Disable the ws library's per-message size cap (default 100 MiB).
+      // The slicc UI runs INSIDE the Chrome instance it's debugging, so
+      // Chrome's Network domain reports every CDP frame — including the
+      // event frames themselves — back to us as `Network.webSocketFrame*`
+      // messages that each embed the prior frame's payload. That produces
+      // an exponential feedback loop which, left unchecked, trips the
+      // default 100 MiB cap and closes the Chrome WebSocket (code 1006).
+      // Without the cap the loop is still bounded by Chrome's own frame
+      // limits, but the proxy no longer dies and later CDP calls like
+      // `Target.getTargets` keep working instead of being DROPPED.
+      chromeWs = new WebSocket(url, { maxPayload: 0 });
 
       chromeWs.on('open', () => {
         console.log('[cdp-proxy] chromeWs open');
