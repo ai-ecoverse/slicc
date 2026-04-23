@@ -149,6 +149,7 @@ export class ToolUIRenderer {
           actionData = { error: 'showDirectoryPicker not available' };
         } else {
           const handle = await w.showDirectoryPicker({ mode: 'readwrite' });
+          await verifyDirectoryAccess(handle);
           const idbKey = `pendingMount:${this.requestId}`;
           const db = await openPendingMountDb();
           const tx = db.transaction('handles', 'readwrite');
@@ -215,6 +216,20 @@ export class ToolUIRenderer {
       this.inlineSprinkle.dispose();
       this.inlineSprinkle = null;
     }
+  }
+}
+
+async function verifyDirectoryAccess(handle: FileSystemDirectoryHandle): Promise<void> {
+  try {
+    const iter = (handle as unknown as AsyncIterable<[string, FileSystemHandle]>)[
+      Symbol.asyncIterator
+    ]();
+    await iter.next();
+  } catch (err: unknown) {
+    throw new Error(
+      `Cannot access "${handle.name}" — macOS may restrict browser access to system folders. ` +
+        `Choose a different directory. (${err instanceof Error ? err.message : String(err)})`
+    );
   }
 }
 
