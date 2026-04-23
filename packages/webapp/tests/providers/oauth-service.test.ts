@@ -244,6 +244,49 @@ describe('createOAuthLauncher', () => {
     vi.stubGlobal('location', { pathname: '/', search: '' });
   });
 
+  it('reuses a prewarmed placeholder popup instead of calling window.open again', async () => {
+    // Prevents popup-blocker blocks for providers that await async config
+    // work before calling the launcher — the caller opens `about:blank`
+    // inside the user-gesture click handler and hands that handle here.
+    const prewarmed = {
+      closed: false,
+      close: vi.fn(),
+      location: { href: 'about:blank' },
+    } as unknown as Window;
+    const launcher = createOAuthLauncher(prewarmed);
+    const promise = launcher('https://idp.example.com/authorize?client_id=test');
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#access_token=prewarmed',
+    });
+
+    const result = await promise;
+    expect(mockWindow.open).not.toHaveBeenCalled();
+    expect((prewarmed as unknown as { location: { href: string } }).location.href).toBe(
+      'https://idp.example.com/authorize?client_id=test'
+    );
+    expect(result).toBe('http://localhost:5710/auth/callback#access_token=prewarmed');
+  });
+
+  it('falls back to window.open when the prewarmed popup has been closed', async () => {
+    const prewarmed = {
+      closed: true,
+      close: vi.fn(),
+      location: { href: 'about:blank' },
+    } as unknown as Window;
+    const launcher = createOAuthLauncher(prewarmed);
+    const promise = launcher('https://idp.example.com/authorize');
+
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#access_token=fallback',
+    });
+
+    await promise;
+    expect(mockWindow.open).toHaveBeenCalled();
+  });
+
   it('does not resolve twice on duplicate callbacks', async () => {
     const launcher = createOAuthLauncher();
     const promise = launcher('https://idp.example.com/authorize');
