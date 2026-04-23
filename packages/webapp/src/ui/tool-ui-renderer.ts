@@ -90,7 +90,13 @@ export class ToolUIRenderer {
 
       if (msg.type === 'tool-ui-action' && msg.id === this.requestId) {
         log.info('Tool UI action received', { id: msg.id, action: msg.action });
-        this.relayActionToOffscreen(msg.action, msg.data, msg.picker);
+        this.relayActionToOffscreen(msg.action, msg.data, msg.picker).catch((err: unknown) => {
+          log.error('relayActionToOffscreen failed', {
+            requestId: this.requestId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          toolUIRegistry.cancel(this.requestId, 'Relay failed');
+        });
       } else if (msg.type === 'tool-ui-rendered' && msg.id === this.requestId) {
         if (msg.height && this.iframe) {
           this.iframe.style.height = `${Math.max(60, msg.height)}px`;
