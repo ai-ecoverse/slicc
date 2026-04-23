@@ -1376,21 +1376,32 @@ export class ChatPanel {
     const row = document.createElement('div');
     row.className = 'msg__auth-action';
 
-    const link = document.createElement('a');
-    link.href = '#';
+    // Use a real <button> so Space/Enter work for keyboard users without
+    // hand-rolling a keydown handler; `<a role="button">` only fires on
+    // click and regresses accessibility.
+    const link = document.createElement('button');
+    link.type = 'button';
     link.className = 'msg__auth-action-link';
     link.textContent = 'Log in again';
-    link.setAttribute('role', 'button');
     link.setAttribute('data-provider-id', meta.providerId);
-    link.setAttribute('data-action', 'reauth');
+    link.setAttribute('data-action', meta.actionHint);
 
     const status = document.createElement('span');
     status.className = 'msg__auth-action-status';
+    // Announce progress to screen readers as the login state transitions.
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+
+    const setBusy = (busy: boolean) => {
+      link.classList.toggle('msg__auth-action-link--busy', busy);
+      link.disabled = busy;
+      link.setAttribute('aria-disabled', busy ? 'true' : 'false');
+    };
 
     link.addEventListener('click', async (e) => {
       e.preventDefault();
-      if (link.classList.contains('msg__auth-action-link--busy')) return;
-      link.classList.add('msg__auth-action-link--busy');
+      if (link.disabled) return;
+      setBusy(true);
       status.textContent = 'Opening login window…';
       try {
         // Lazy-load to keep the chat panel bundle free of the provider
@@ -1410,7 +1421,7 @@ export class ChatPanel {
         const msg = err instanceof Error ? err.message : String(err);
         status.textContent = `Login failed: ${msg}`;
       } finally {
-        link.classList.remove('msg__auth-action-link--busy');
+        setBusy(false);
       }
     });
 

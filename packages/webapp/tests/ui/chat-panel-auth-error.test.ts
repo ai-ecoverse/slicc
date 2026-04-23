@@ -74,6 +74,11 @@ describe('ChatPanel auth-error rendering', () => {
   });
 
   afterEach(() => {
+    // dispose() unsubscribes from the agent, removes the document-level
+    // keydown listener, and tears down the voice input. Without it the
+    // listeners leak across tests and can cause flaky keyboard events
+    // to hit stale panels.
+    panel.dispose();
     container.remove();
   });
 
@@ -88,11 +93,19 @@ describe('ChatPanel auth-error rendering', () => {
 
     const row = container.querySelector('.msg__auth-action');
     expect(row).not.toBeNull();
-    const link = row!.querySelector('.msg__auth-action-link') as HTMLAnchorElement | null;
+    const link = row!.querySelector('.msg__auth-action-link') as HTMLButtonElement | null;
     expect(link).not.toBeNull();
+    expect(link!.tagName).toBe('BUTTON');
+    expect(link!.type).toBe('button');
     expect(link!.textContent).toBe('Log in again');
     expect(link!.getAttribute('data-provider-id')).toBe('adobe');
+    // data-action is driven by meta.actionHint rather than hard-coded,
+    // so future action hints are wired through without further edits.
     expect(link!.getAttribute('data-action')).toBe('reauth');
+    // Status area advertises itself as a live region for screen readers.
+    const status = row!.querySelector('.msg__auth-action-status');
+    expect(status?.getAttribute('role')).toBe('status');
+    expect(status?.getAttribute('aria-live')).toBe('polite');
   });
 
   it('does NOT render the auth-action row for a plain error event', () => {
@@ -134,25 +147,30 @@ describe('ChatPanel auth-error rendering', () => {
       error: 'Adobe session expired — please log in again',
       authAction: { providerId: 'adobe', actionHint: 'reauth' },
     });
-    // Give the async persistSession chain a tick to flush.
-    await new Promise((r) => setTimeout(r, 10));
 
+    // Poll until the async persistSession chain has flushed — avoids
+    // timing-dependent `setTimeout(..., 10)` flakes on slower runners.
     const store = new SessionStore();
     await store.init();
-    const session = await store.load(`auth-err-${counter}`);
-    expect(session).not.toBeNull();
-    const saved = session!.messages.find((m) => m.authAction);
-    expect(saved).toBeDefined();
-    expect(saved!.authAction).toEqual({ providerId: 'adobe', actionHint: 'reauth' });
+    await vi.waitFor(async () => {
+      const session = await store.load(`auth-err-${counter}`);
+      expect(session).not.toBeNull();
+      const saved = session!.messages.find((m) => m.authAction);
+      expect(saved).toBeDefined();
+      expect(saved!.authAction).toEqual({ providerId: 'adobe', actionHint: 'reauth' });
+    });
 
     // Simulate a reload by creating a fresh panel on the same session id.
+    // Dispose the original first so its keydown listener + agent
+    // subscription don't linger across the reload boundary.
+    panel.dispose();
     container.remove();
     container = document.createElement('div');
     document.body.appendChild(container);
-    const reloaded = new ChatPanel(container);
-    await reloaded.initSession(`auth-err-${counter}`);
+    panel = new ChatPanel(container);
+    await panel.initSession(`auth-err-${counter}`);
 
-    const link = container.querySelector('.msg__auth-action-link') as HTMLAnchorElement | null;
+    const link = container.querySelector('.msg__auth-action-link') as HTMLButtonElement | null;
     expect(link).not.toBeNull();
     expect(link!.getAttribute('data-provider-id')).toBe('adobe');
   });

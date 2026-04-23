@@ -654,6 +654,12 @@
   color: var(--s2-content-secondary);
 }
 .msg__auth-action-link {
+  /* Reset native <button> chrome so the element reads as a link while
+     preserving keyboard semantics. */
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
   color: var(--s2-accent, #1e66f5);
   text-decoration: underline;
   cursor: pointer;
@@ -662,7 +668,13 @@
 .msg__auth-action-link:hover {
   text-decoration: none;
 }
-.msg__auth-action-link--busy {
+.msg__auth-action-link:focus-visible {
+  outline: 2px solid var(--s2-accent, #1e66f5);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.msg__auth-action-link--busy,
+.msg__auth-action-link[disabled] {
   opacity: 0.6;
   pointer-events: none;
 }

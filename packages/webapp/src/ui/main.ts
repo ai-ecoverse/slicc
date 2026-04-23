@@ -1092,6 +1092,26 @@ async function main(): Promise<void> {
     },
     onError: (scoopJid, error, authAction) => {
       log.error('Scoop error', { scoopJid, error });
+      // Persist the auth-error bubble to the per-scoop buffer so the
+      // inline "Log in again" action survives scoop switches. Without
+      // this, handleScoopSelect later reloads from the buffer and the
+      // bubble disappears even though it was just shown.
+      if (authAction) {
+        const scoops = orchestrator.getScoops();
+        const scoop = scoops.find((s) => s.jid === scoopJid);
+        const source = scoop?.isCone ? 'cone' : (scoop?.name ?? 'unknown');
+        // Close any in-flight assistant message so this renders as its
+        // own bubble, matching the live emit path in ChatPanel.
+        scoopCurrentMessageId.delete(scoopJid);
+        getBuffer(scoopJid).push({
+          id: `auth-error-${scoopJid}-${uid()}`,
+          role: 'assistant',
+          source,
+          content: error,
+          timestamp: Date.now(),
+          authAction,
+        } as ChatMessage);
+      }
       if (selectedScoop?.jid === scoopJid) {
         emitToUI({ type: 'error', error, authAction });
       }

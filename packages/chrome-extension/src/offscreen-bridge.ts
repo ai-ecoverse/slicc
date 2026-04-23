@@ -48,6 +48,9 @@ interface BufferedChatMessage {
     isError?: boolean;
   }>;
   isStreaming?: boolean;
+  // Auth-error bubbles carry their re-auth metadata through the buffer +
+  // IndexedDB so the inline "Log in again" action survives panel reloads.
+  authAction?: { providerId: string; actionHint: 'reauth' };
 }
 
 export class OffscreenBridge {
@@ -157,6 +160,22 @@ export class OffscreenBridge {
       },
 
       onError: (scoopJid, error, authAction) => {
+        // Persist auth-error bubbles in the per-scoop buffer + IndexedDB
+        // snapshot. The panel reads history from that store on reconnect,
+        // so without this the "Log in again" action disappears whenever
+        // the panel re-opens or the offscreen bridge overwrites the
+        // session from its own state.
+        if (authAction) {
+          bridge.currentMessageId.delete(scoopJid);
+          bridge.getBuffer(scoopJid).push({
+            id: `auth-error-${scoopJid}-${uid()}`,
+            role: 'assistant',
+            content: error,
+            timestamp: Date.now(),
+            authAction,
+          } as BufferedChatMessage);
+          bridge.persistScoop(scoopJid);
+        }
         bridge.emit({
           type: 'error',
           scoopJid,
