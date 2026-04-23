@@ -64,6 +64,9 @@
             tx.onerror = function () {
               reject(tx.error);
             };
+            tx.onabort = function () {
+              reject(tx.error || new Error('Transaction aborted'));
+            };
           });
           db.close();
           send({

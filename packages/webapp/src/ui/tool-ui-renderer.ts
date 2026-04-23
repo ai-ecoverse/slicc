@@ -188,10 +188,20 @@ function openMountPopup(requestId: string): Promise<Record<string, unknown>> {
       `mount-popup.html?requestId=${encodeURIComponent(requestId)}`
     );
 
+    const cleanup = () => {
+      clearTimeout(timer);
+      chrome.runtime.onMessage.removeListener(listener);
+    };
+
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve({ cancelled: true });
+    }, 60_000);
+
     const listener = (msg: unknown) => {
       const m = msg as Record<string, unknown>;
       if (!m || m.source !== 'mount-popup' || m.requestId !== requestId) return;
-      chrome.runtime.onMessage.removeListener(listener);
+      cleanup();
       resolve(m);
     };
     chrome.runtime.onMessage.addListener(listener);
@@ -199,7 +209,7 @@ function openMountPopup(requestId: string): Promise<Record<string, unknown>> {
     chrome.windows
       .create({ url, type: 'popup', width: 400, height: 100, focused: true })
       .catch(() => {
-        chrome.runtime.onMessage.removeListener(listener);
+        cleanup();
         resolve({ error: 'Failed to open directory picker window' });
       });
   });
