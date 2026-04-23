@@ -38,11 +38,18 @@ const log = createLogger('orchestrator');
 /** Time in ms to wait before notifying cone that a scoop hasn't started work. */
 export const SCOOP_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const SCOOP_NOTIFICATION_DIR = '/shared/scoop-notifications';
+const SCOOP_NOTIFICATION_MAX_FILES = 200;
 const SCOOP_NOTIFICATION_PREVIEW_CHARS = 1000;
 
 function countTextLines(text: string): number {
-  if (text.length === 0) return 0;
-  return text.replace(/\r\n/g, '\n').split('\n').length;
+  const normalized = text.replace(/\r\n?/g, '\n');
+  if (normalized.length === 0) return 0;
+
+  let lines = 1;
+  for (let i = 0; i < normalized.length; i++) {
+    if (normalized[i] === '\n') lines++;
+  }
+  return normalized.endsWith('\n') ? lines - 1 : lines;
 }
 
 export interface OrchestratorCallbacks {
@@ -399,31 +406,55 @@ export class Orchestrator {
     const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
     if (!cone) return;
 
+    const lineCount = countTextLines(responseText);
+    const preview = responseText.slice(0, SCOOP_NOTIFICATION_PREVIEW_CHARS);
+    let notifyContent: string;
+    let artifactError: string | null = null;
+    let notificationPath: string | null = null;
+
     try {
-      const notificationPath = await this.writeScoopCompletionArtifact(scoop, responseText);
-      const lineCount = countTextLines(responseText);
-      const preview = responseText.slice(0, SCOOP_NOTIFICATION_PREVIEW_CHARS);
-      const notifyMsg: ChannelMessage = {
-        id: `scoop-done-${jid}-${Date.now()}`,
-        chatJid: cone.jid,
-        senderId: scoop.folder,
-        senderName: scoop.assistantLabel,
-        content: this.formatScoopCompletionNotification(
-          scoop.assistantLabel,
-          notificationPath,
-          lineCount,
-          preview
-        ),
-        timestamp: new Date().toISOString(),
-        fromAssistant: false,
-        channel: 'scoop-notify',
-      };
+      notificationPath = await this.writeScoopCompletionArtifact(scoop, responseText);
       log.info('Routing scoop completion to cone', {
         scoop: scoop.folder,
         responseLength: responseText.length,
         lineCount,
         notificationPath,
       });
+    } catch (err) {
+      artifactError = err instanceof Error ? err.message : String(err);
+      log.warn('Failed to persist scoop completion artifact, falling back to inline preview', {
+        scoop: scoop.folder,
+        error: artifactError,
+      });
+    }
+
+    if (artifactError === null) {
+      notifyContent = this.formatScoopCompletionNotification(
+        scoop.assistantLabel,
+        notificationPath ?? 'unavailable',
+        lineCount,
+        preview
+      );
+    } else {
+      notifyContent = this.formatScoopCompletionFallbackNotification(
+        scoop.assistantLabel,
+        lineCount,
+        preview,
+        artifactError
+      );
+    }
+
+    try {
+      const notifyMsg: ChannelMessage = {
+        id: `scoop-done-${jid}-${Date.now()}`,
+        chatJid: cone.jid,
+        senderId: scoop.folder,
+        senderName: scoop.assistantLabel,
+        content: notifyContent,
+        timestamp: new Date().toISOString(),
+        fromAssistant: false,
+        channel: 'scoop-notify',
+      };
       await this.handleMessage(notifyMsg);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -445,12 +476,46 @@ export class Orchestrator {
     if (!this.sharedFs) throw new Error('Shared filesystem not initialized');
 
     await this.sharedFs.mkdir(SCOOP_NOTIFICATION_DIR, { recursive: true });
+    await this.pruneScoopCompletionArtifacts(SCOOP_NOTIFICATION_MAX_FILES - 1);
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const suffix = Math.random().toString(36).slice(2, 8);
     const path = `${SCOOP_NOTIFICATION_DIR}/${timestamp}-${scoop.folder}-${suffix}.md`;
     await this.sharedFs.writeFile(path, responseText);
+    await this.pruneScoopCompletionArtifacts();
     return path;
+  }
+
+  private async pruneScoopCompletionArtifacts(
+    maxArtifacts: number = SCOOP_NOTIFICATION_MAX_FILES
+  ): Promise<void> {
+    if (!this.sharedFs) return;
+
+    let entries: Awaited<ReturnType<VirtualFS['readDir']>>;
+    try {
+      entries = await this.sharedFs.readDir(SCOOP_NOTIFICATION_DIR);
+    } catch {
+      return;
+    }
+
+    const files = entries
+      .filter((entry) => entry.type === 'file')
+      .map((entry) => entry.name)
+      .sort();
+    const excess = files.length - maxArtifacts;
+    if (excess <= 0) return;
+
+    for (const name of files.slice(0, excess)) {
+      const path = `${SCOOP_NOTIFICATION_DIR}/${name}`;
+      try {
+        await this.sharedFs.rm(path);
+      } catch (err) {
+        log.warn('Failed to prune scoop completion artifact', {
+          path,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   private formatScoopCompletionNotification(
@@ -462,6 +527,22 @@ export class Orchestrator {
     return [
       `[@${assistantLabel} completed]`,
       `VFS path: ${notificationPath}`,
+      `Total lines: ${lineCount}`,
+      `Preview (up to ${SCOOP_NOTIFICATION_PREVIEW_CHARS} chars):`,
+      preview,
+    ].join('\n');
+  }
+
+  private formatScoopCompletionFallbackNotification(
+    assistantLabel: string,
+    lineCount: number,
+    preview: string,
+    artifactError: string
+  ): string {
+    return [
+      `[@${assistantLabel} completed]`,
+      'VFS path: unavailable',
+      `Artifact persistence error: ${artifactError}`,
       `Total lines: ${lineCount}`,
       `Preview (up to ${SCOOP_NOTIFICATION_PREVIEW_CHARS} chars):`,
       preview,
