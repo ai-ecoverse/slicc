@@ -155,7 +155,7 @@ In the `handlePanelMessage()` switch, add a new case before the closing `}`:
 ```typescript
 case 'tool-ui-action': {
   const { requestId, action, data } = msg as import('./messages.js').ToolUIActionMsg;
-  toolUIRegistry.handleAction(requestId, { action, data });
+  await toolUIRegistry.handleAction(requestId, { action, data });
   break;
 }
 ```
@@ -426,7 +426,7 @@ After:
 
 - [ ] **Step 2: Add IDB helper to load and clean up handle**
 
-Add at the bottom of the file, before the closing of the class:
+Add as a module-level function at the bottom of `mount-commands.ts` (outside the `MountCommands` class):
 
 ```typescript
 async function loadAndClearPendingHandle(
@@ -543,17 +543,30 @@ git commit -m "feat: mount command handles IDB-stored directory handle from exte
 
 - Modify: `packages/chrome-extension/tests/offscreen-bridge.test.ts`
 
-- [ ] **Step 1: Read existing offscreen-bridge tests for patterns**
+The existing test file uses `sentMessages` (array populated by mocked `chrome.runtime.sendMessage`), `messageListeners` (registered `onMessage` listeners), and `simulatePanelMessage(payload)` in the `handlePanelMessage` describe block. The `toolUIRegistry` import must be mocked at the module level (hoisted) since the bridge closes over it at import time — same pattern as the existing `mockSessionStore`.
 
-Read `packages/chrome-extension/tests/offscreen-bridge.test.ts` to understand the mock setup.
+- [ ] **Step 1: Add hoisted mock for toolUIRegistry**
+
+Near the top of the file, alongside the existing `mockSessionStore` hoisted mock (around line 38), add:
+
+```typescript
+const { mockHandleAction } = vi.hoisted(() => ({
+  mockHandleAction: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../webapp/src/tools/tool-ui.js', () => ({
+  toolUIRegistry: {
+    handleAction: mockHandleAction,
+  },
+}));
+```
 
 - [ ] **Step 2: Add test for onToolUI callback**
 
-Add a test in the offscreen-bridge test file verifying that the `onToolUI` callback emits an `agent-event` message with `eventType: 'tool_ui'`:
+Add inside the `OffscreenBridge createCallbacks` describe block (which has `bridge`, `callbacks`, and `sentMessages` in scope):
 
 ```typescript
 it('onToolUI emits agent-event with tool_ui eventType', () => {
-  const callbacks = OffscreenBridge.createCallbacks(bridge);
   callbacks.onToolUI!('cone_1', 'bash', 'req-123', '<div>Mount?</div>');
 
   expect(sentMessages).toContainEqual(
@@ -576,7 +589,6 @@ it('onToolUI emits agent-event with tool_ui eventType', () => {
 
 ```typescript
 it('onToolUIDone emits agent-event with tool_ui_done eventType', () => {
-  const callbacks = OffscreenBridge.createCallbacks(bridge);
   callbacks.onToolUIDone!('cone_1', 'req-123');
 
   expect(sentMessages).toContainEqual(
@@ -595,37 +607,25 @@ it('onToolUIDone emits agent-event with tool_ui_done eventType', () => {
 
 - [ ] **Step 4: Add test for tool-ui-action handling**
 
-This test verifies that a `tool-ui-action` message from the panel calls `toolUIRegistry.handleAction()`:
+Add inside the `handlePanelMessage` describe block (which has `simulatePanelMessage` and a bound bridge):
 
 ```typescript
-it('tool-ui-action message calls toolUIRegistry.handleAction', async () => {
-  // Need to import and mock the registry
-  const { toolUIRegistry } = await import('../../../packages/webapp/src/tools/tool-ui.js');
-  const spy = vi.spyOn(toolUIRegistry, 'handleAction').mockResolvedValue(undefined);
+it('tool-ui-action relays to toolUIRegistry.handleAction', async () => {
+  mockHandleAction.mockClear();
 
-  // Simulate a panel message arriving
-  const panelMsg = {
-    source: 'panel',
-    payload: {
-      type: 'tool-ui-action',
-      requestId: 'req-456',
-      action: 'approve',
-      data: { handleInIdb: true, idbKey: 'pendingMount:req-456', dirName: 'mydir' },
-    },
-  };
-
-  // Trigger the message listener
-  runtimeMessageListeners.forEach((listener) => listener(panelMsg, {}, () => {}));
-
-  // Wait for async handling
-  await vi.waitFor(() => {
-    expect(spy).toHaveBeenCalledWith('req-456', {
-      action: 'approve',
-      data: { handleInIdb: true, idbKey: 'pendingMount:req-456', dirName: 'mydir' },
-    });
+  simulatePanelMessage({
+    type: 'tool-ui-action',
+    requestId: 'req-456',
+    action: 'approve',
+    data: { handleInIdb: true, idbKey: 'pendingMount:req-456', dirName: 'mydir' },
   });
 
-  spy.mockRestore();
+  await new Promise((r) => setTimeout(r, 10));
+
+  expect(mockHandleAction).toHaveBeenCalledWith('req-456', {
+    action: 'approve',
+    data: { handleInIdb: true, idbKey: 'pendingMount:req-456', dirName: 'mydir' },
+  });
 });
 ```
 
