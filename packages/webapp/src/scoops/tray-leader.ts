@@ -250,13 +250,19 @@ export class LeaderTrayManager {
       this.pingTimer = null;
     }
 
-    if (this.socket) {
+    // Clear `this.socket` BEFORE calling close(): some socket implementations
+    // (and our test fakes) emit 'close' synchronously from `close()`, which
+    // would re-enter `handleUnexpectedDisconnect` via the ping-loop close
+    // listener. The listener guards on `this.socket !== socket`, so once we
+    // null out `this.socket` here, the synchronous re-entry is a no-op.
+    const socket = this.socket;
+    this.socket = null;
+    if (socket) {
       try {
-        this.socket.close();
+        socket.close();
       } catch {
         // Ignore teardown failures.
       }
-      this.socket = null;
     }
   }
 

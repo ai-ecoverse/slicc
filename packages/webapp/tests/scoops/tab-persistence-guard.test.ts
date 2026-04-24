@@ -159,4 +159,40 @@ describe('TabPersistenceGuard', () => {
     expect(() => guard.deactivate()).not.toThrow();
     expect(guard.isActive()).toBe(false);
   });
+
+  it('releases the Web Lock immediately if the AbortSignal is already aborted when the callback runs', async () => {
+    const { ctx } = createFakeAudioContext();
+
+    // A LockManager that delays calling the callback by one microtask, giving
+    // the test a window to abort the signal before the callback registers
+    // its 'abort' listener. Without the already-aborted short-circuit in
+    // acquireWebLock, the callback's promise would never resolve.
+    const callbackInvoked = vi.fn();
+    let callbackResolved = false;
+    const manager: LockManagerLike = {
+      request: async (_name, options, callback) => {
+        await Promise.resolve();
+        callbackInvoked();
+        await callback();
+        callbackResolved = true;
+      },
+    };
+
+    const guard = new TabPersistenceGuard({
+      audioContextFactory: () => ctx,
+      lockManager: manager,
+      windowRef: createFakeWindow(),
+    });
+
+    guard.activate();
+    // Immediately deactivate — this aborts the controller before the
+    // delayed manager callback runs.
+    guard.deactivate();
+
+    // Drain microtasks so the manager callback can run.
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+
+    expect(callbackInvoked).toHaveBeenCalledTimes(1);
+    expect(callbackResolved).toBe(true);
+  });
 });

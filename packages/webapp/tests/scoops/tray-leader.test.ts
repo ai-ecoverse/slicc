@@ -838,6 +838,81 @@ describe('tray-leader', () => {
       state: 'error',
       error: expect.stringContaining('Leader WebSocket dropped'),
     });
+    // Regression: tearDownSocket calling socket.close() must NOT re-enter
+    // the close handler in an unbounded loop (FakeWebSocket dispatches
+    // 'close' synchronously from close()).
+    expect(sockets[0].closeCalls).toBeLessThanOrEqual(2);
+
+    manager.stop();
+  });
+
+  it('does not re-enter the close handler when teardown synchronously dispatches close', async () => {
+    // Regression test for re-entrant close: when reconnect is disabled and
+    // tearDownSocket() invokes socket.close(), some socket implementations
+    // synchronously fire the close event. The ping-loop close listener must
+    // not re-run handleUnexpectedDisconnect's branch and recurse.
+    const store = new MemorySessionStore();
+    store.value = {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'tray-1',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'controller-1',
+      controllerUrl: 'https://tray.example.com/controller/token',
+      joinUrl: 'https://tray.example.com/join/token',
+      webhookUrl: 'https://tray.example.com/webhook/token',
+      leaderKey: 'leader-key-1',
+      leaderWebSocketUrl: 'wss://tray.example.com/ws/1',
+      runtime: 'slicc-standalone',
+    };
+
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          trayId: 'tray-1',
+          controllerId: 'controller-1',
+          role: 'leader',
+          leaderKey: 'leader-key-1',
+          websocket: { url: 'wss://tray.example.com/ws/1' },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+
+    const sockets: FakeWebSocket[] = [];
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((r) => {
+      resolveReady = r;
+    });
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        const s = new FakeWebSocket();
+        sockets.push(s);
+        resolveReady();
+        return s;
+      },
+      pingIntervalMs: 60_000,
+      reconnect: false,
+    });
+
+    const startPromise = manager.start();
+    await ready;
+    sockets[0].dispatch('message', {
+      data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-1' }),
+    });
+    await startPromise;
+
+    // Triggering close should run cleanup exactly once: the manual dispatch
+    // here calls listeners (no extra closeCalls), and tearDownSocket nulls
+    // this.socket BEFORE invoking socket.close() so the synchronous
+    // re-dispatch is filtered by the listener's `this.socket !== socket`
+    // guard (no recursion, no further closeCalls).
+    sockets[0].dispatch('close', {});
+    expect(sockets[0].closeCalls).toBe(1);
 
     manager.stop();
   });

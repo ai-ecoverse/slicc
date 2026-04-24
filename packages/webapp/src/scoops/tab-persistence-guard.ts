@@ -153,11 +153,19 @@ export class TabPersistenceGuard {
       manager
         .request(LOCK_NAME, { mode: 'exclusive', signal: controller.signal }, () => {
           return new Promise<void>((resolve) => {
+            // The abort may already have happened between AbortController
+            // construction and the lock manager invoking the callback. In
+            // that case the 'abort' event will not fire again, so we'd
+            // hold the lock forever — short-circuit on signal.aborted.
+            if (controller.signal.aborted) {
+              resolve();
+              return;
+            }
             const onAbort = () => {
               controller.signal.removeEventListener('abort', onAbort);
               resolve();
             };
-            controller.signal.addEventListener('abort', onAbort);
+            controller.signal.addEventListener('abort', onAbort, { once: true });
           });
         })
         .catch((error: unknown) => {
