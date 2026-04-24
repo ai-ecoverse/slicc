@@ -33,7 +33,9 @@ The partial-content renderer (lines 416-458) sets `innerHTML` then re-creates `<
 
 Transform external scripts before the re-execution loop: scan `document.body` for `<script>` nodes with `https:` src, fetch their content (see fetch story below), and rewrite to inline before cloning into live script elements.
 
-**Fetch story**: The sandbox has a null origin, so `fetch('https://...')` only works if the CDN sends permissive CORS headers. For reliability, add a small parent relay: sandbox sends `postMessage({ type: 'fetch-script', url })` to the parent (side panel), parent calls `fetch(url)`, returns `postMessage({ type: 'fetch-script-response', url, text })`. Same pattern as the existing VFS read/write relay. This guarantees the fetch works regardless of CORS policy.
+**Fetch story**: The sandbox has a null origin, so `fetch('https://...')` only works if the CDN sends permissive CORS headers. For reliability, add a small parent relay: sandbox sends `postMessage({ type: 'fetch-script', id, url })` to the parent (side panel), parent calls `fetch(url)`, returns `postMessage({ type: 'fetch-script-response', id, url, text })`. The `id` field correlates requests to responses when multiple scripts load concurrently. Same pattern as the existing VFS read/write relay (which also uses request IDs). This guarantees the fetch works regardless of CORS policy.
+
+**Full-doc vs partial boundary**: Full-doc inlining happens entirely in `sprinkle-renderer.ts` — the side panel has network access so no relay is needed. The partial-content path runs inside the sandbox and uses the parent relay for fetching. These are two separate code paths; the relay is partial-path only.
 
 ### Security
 
@@ -47,9 +49,11 @@ In the `__loadModule` function (extension sandbox wrapper, lines 297-313), repla
 
 **Before**: `fetch(url)` then `response.text()` then `Blob` then `URL.createObjectURL` then `import(blobUrl)`
 
-**After**: `fetch(url + '?bundle')` then `response.text()` then evaluate the bundled IIFE text
+**After**: `fetch(url + '?bundle')` then `response.text()` then `new Function(text)()` to evaluate the bundled IIFE
 
-The `?bundle` query param makes esm.sh return a self-contained IIFE with no ES module syntax. The sandbox already has `unsafe-eval` in its CSP (Chrome's default for manifest sandbox pages), which is what makes `node -e` work in the first place (the entire code string is evaluated dynamically). The bundled script text is evaluated using the same mechanism.
+The `?bundle` query param makes esm.sh return a self-contained IIFE with no ES module syntax. `new Function` requires `unsafe-eval` which the sandbox already has (Chrome's default for manifest sandbox pages — it's what makes `node -e` work in the first place). `new Function` is preferred over indirect `eval` because it's scoped and doesn't leak into the calling scope.
+
+**URL construction**: If `id` ever contains a query string (rare for `require('pkg')` but possible), use `URL` parsing to append `bundle` as a query parameter instead of naive string concatenation.
 
 ### Return value contract
 
@@ -77,7 +81,7 @@ These custom element bundles are already loaded by the top-level `<script src="s
 - Is redundant since the elements are already registered from the initial load
 - Costs nothing to remove since the initial load covers all cases
 
-The top-level script tags load on every sandbox page load regardless of whether the sprinkle uses custom elements. This is a small cost (~30KB for editor + diff) but acceptable since the sandbox page is already loaded.
+The top-level script tags load on every sandbox page load regardless of whether the sprinkle uses custom elements. This is a small cost (~30KB for editor + diff + lucide-icons at lines 8-10) but acceptable since the sandbox page is already loaded.
 
 ## Files changed
 
