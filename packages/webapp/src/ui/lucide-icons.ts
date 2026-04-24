@@ -72,6 +72,16 @@ import { createIcons, icons } from 'lucide';
   },
 };
 
+// Auto-render on DOMContentLoaded if icons are already in the DOM
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    (window as any).LucideIcons.render();
+  });
+} else {
+  (window as any).LucideIcons.render();
+}
+
+// Watch for dynamic content changes and auto-render new icons
 const observer = new MutationObserver((mutations) => {
   let hasNewIcons = false;
   for (const mutation of mutations) {
@@ -91,15 +101,6 @@ const observer = new MutationObserver((mutations) => {
   }
 });
 
-function startLucide() {
-  (window as any).LucideIcons.render();
-  if (document.body) {
-    observer.observe(document.body, { childList: true, subtree: true });
-  }
-}
-
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', startLucide);
-} else {
-  startLucide();
+if (document.body) {
+  observer.observe(document.body, { childList: true, subtree: true });
 }
