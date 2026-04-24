@@ -103,4 +103,10 @@ const observer = new MutationObserver((mutations) => {
 
 if (document.body) {
   observer.observe(document.body, { childList: true, subtree: true });
+} else {
+  document.addEventListener('DOMContentLoaded', () => {
+    if (document.body) {
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
+  });
 }
