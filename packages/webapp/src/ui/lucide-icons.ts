@@ -101,12 +101,8 @@ const observer = new MutationObserver((mutations) => {
   }
 });
 
-if (document.body) {
+try {
   observer.observe(document.body, { childList: true, subtree: true });
-} else {
-  document.addEventListener('DOMContentLoaded', () => {
-    if (document.body) {
-      observer.observe(document.body, { childList: true, subtree: true });
-    }
-  });
+} catch {
+  // body may not exist yet when loaded in <head> (e.g. sprinkle-sandbox.html)
 }
