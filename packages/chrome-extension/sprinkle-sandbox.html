@@ -424,40 +424,59 @@ addEventListener('message', function(e) {
         if (v >= 0 && v <= 100) fills[i].style.width = v + '%';
       }
 
-      // Lazy-load custom element bundles before executing sprinkle scripts.
-      // Uses synchronous script injection so elements are registered before use.
-      var contentStr = msg.content || '';
-      if (contentStr.indexOf('<slicc-editor') !== -1 && !customElements.get('slicc-editor')) {
-        var edScript = document.createElement('script');
-        edScript.src = 'slicc-editor.js';
-        edScript.async = false;
-        document.head.appendChild(edScript);
-      }
-      if (contentStr.indexOf('<slicc-diff') !== -1 && !customElements.get('slicc-diff')) {
-        var dfScript = document.createElement('script');
-        dfScript.src = 'slicc-diff.js';
-        dfScript.async = false;
-        document.head.appendChild(dfScript);
-      }
-
       // Execute scripts (sandbox is CSP-exempt)
       // IMPORTANT: scope to body — document.querySelectorAll would also grab
       // the head script, re-execute it, and reset all window state.
       var deadScripts = Array.from(document.body.querySelectorAll('script'));
-      for (var j = 0; j < deadScripts.length; j++) {
-        var dead = deadScripts[j];
-        dead.remove();
-        var live = document.createElement('script');
-        for (var k = 0; k < dead.attributes.length; k++) {
-          live.setAttribute(dead.attributes[k].name, dead.attributes[k].value);
-        }
-        if (!dead.src) {
-          live.textContent = dead.textContent;
-        }
-        document.body.appendChild(live);
+      var __fid = 0;
+
+      function fetchScriptViaRelay(url) {
+        return new Promise(function(resolve, reject) {
+          var id = 'fs-' + (++__fid);
+          var timer = setTimeout(function() {
+            removeEventListener('message', handler);
+            reject(new Error('Fetch timeout for ' + url));
+          }, 30000);
+          function handler(event) {
+            if (event.data && event.data.type === 'sprinkle-fetch-script-response' && event.data.id === id) {
+              clearTimeout(timer);
+              removeEventListener('message', handler);
+              if (event.data.error) reject(new Error(event.data.error));
+              else resolve(event.data.text);
+            }
+          }
+          addEventListener('message', handler);
+          parent.postMessage({ type: 'sprinkle-fetch-script', id: id, url: url }, '*');
+        });
       }
 
-      parent.postMessage({ type: 'sprinkle-rendered' }, '*');
+      (async function executeScripts() {
+        for (var j = 0; j < deadScripts.length; j++) {
+          var dead = deadScripts[j];
+          dead.remove();
+          var live = document.createElement('script');
+          for (var k = 0; k < dead.attributes.length; k++) {
+            if (dead.attributes[k].name === 'src') continue;
+            live.setAttribute(dead.attributes[k].name, dead.attributes[k].value);
+          }
+          if (dead.src && /^https?:\/\//.test(dead.src)) {
+            try {
+              var text = await fetchScriptViaRelay(dead.src);
+              live.textContent = text;
+            } catch (err) {
+              var errMsg = err instanceof Error ? err.message : String(err);
+              live.textContent = "console.error('[sprinkle] Failed to load " + dead.src + ": " + errMsg.replace(/'/g, "\\'") + "')";
+            }
+          } else if (!dead.src) {
+            live.textContent = dead.textContent;
+          } else {
+            live.textContent = "console.warn('[sprinkle] Skipped script with unsupported src: " + dead.getAttribute('src') + "')";
+          }
+          document.body.appendChild(live);
+        }
+        if (window.LucideIcons) window.LucideIcons.render();
+        parent.postMessage({ type: 'sprinkle-rendered' }, '*');
+      })();
     }
   }
 
@@ -474,7 +493,8 @@ addEventListener('message', function(e) {
   var responseTypes = [
     'sprinkle-readfile-response', 'sprinkle-writefile-response',
     'sprinkle-readdir-response', 'sprinkle-exists-response',
-    'sprinkle-stat-response', 'sprinkle-mkdir-response', 'sprinkle-rm-response'
+    'sprinkle-stat-response', 'sprinkle-mkdir-response', 'sprinkle-rm-response',
+    'sprinkle-fetch-script-response'
   ];
   if (responseTypes.indexOf(msg.type) !== -1) {
     if (window.__slicc_childIframe && window.__slicc_childIframe.contentWindow) {
@@ -502,6 +522,7 @@ addEventListener('message', function(e) {
       'sprinkle-writefile', 'sprinkle-readdir', 'sprinkle-exists',
       'sprinkle-stat', 'sprinkle-mkdir', 'sprinkle-rm',
       'sprinkle-storage-set', 'sprinkle-storage-remove', 'sprinkle-storage-clear',
+      'sprinkle-fetch-script',
       'inline-sprinkle-lick', 'inline-sprinkle-height'
     ];
     if (bridgeTypes.indexOf(msg.type) !== -1) {

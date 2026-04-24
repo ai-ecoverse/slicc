@@ -295,22 +295,18 @@ export function createNodeCommand(): Command {
           ]);
           const __requireCache = Object.create(null);
           async function __loadModule(id) {
-            const url = 'https://esm.sh/' + id;
+            var url = 'https://cdn.jsdelivr.net/npm/' + id;
+            var resp = await fetch(url);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
+            var text = await resp.text();
+            var __mod = { exports: {} };
             try {
-              return await import(url);
-            } catch(e) {
-              // Fallback for sandbox/extension mode: fetch + blob URL
-              const resp = await fetch(url);
-              if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
-              const text = await resp.text();
-              const blob = new Blob([text], { type: 'text/javascript' });
-              const blobUrl = URL.createObjectURL(blob);
-              try {
-                return await import(blobUrl);
-              } finally {
-                URL.revokeObjectURL(blobUrl);
-              }
+              (0, Function)('module', 'exports', text)(__mod, __mod.exports);
+            } catch(fnErr) {
+              throw new Error('Failed to execute module ' + id + ': ' + (fnErr instanceof Error ? fnErr.message : String(fnErr)));
             }
+            if (Object.keys(__mod.exports).length > 0) return __mod.exports;
+            return self[id] || __mod.exports;
           }
           {
             const __code = ${JSON.stringify(code)};
@@ -348,7 +344,7 @@ export function createNodeCommand(): Command {
             }
             if (bareId in __requireCache) return __requireCache[bareId];
             if (id in __requireCache) return __requireCache[id];
-            throw new Error("require('" + id + "'): module not pre-loaded. Use a string literal or await import('https://esm.sh/" + id + "') directly.");
+            throw new Error("require('" + id + "'): module not pre-loaded. Use a static require('name') string literal so the module is fetched before execution.");
           };
           const module = { exports: {} };
           const exports = module.exports;

@@ -78,12 +78,10 @@ if (document.readyState === 'loading') {
     (window as any).LucideIcons.render();
   });
 } else {
-  // DOM already loaded
   (window as any).LucideIcons.render();
 }
 
 // Watch for dynamic content changes and auto-render new icons
-// This handles sprinkle HTML injected after initial load (extension fragment mode)
 const observer = new MutationObserver((mutations) => {
   let hasNewIcons = false;
   for (const mutation of mutations) {
@@ -103,4 +101,12 @@ const observer = new MutationObserver((mutations) => {
   }
 });
 
-observer.observe(document.body, { childList: true, subtree: true });
+try {
+  observer.observe(document.body, { childList: true, subtree: true });
+} catch {
+  // body may not exist yet when loaded in <head> (e.g. sprinkle-sandbox.html).
+  // In that case the observer never starts — dynamically injected data-lucide
+  // elements won't auto-render. Callers must use LucideIcons.render() explicitly
+  // (sprinkle-sandbox.html does this after partial-content script execution).
+  // DOMContentLoaded deferral was tried but interferes with sandbox page load timing.
+}

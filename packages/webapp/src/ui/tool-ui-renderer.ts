@@ -12,6 +12,8 @@
 
 import { toolUIRegistry } from '../tools/tool-ui.js';
 import { mountInlineSprinkle, type InlineSprinkleInstance } from './inline-sprinkle.js';
+import { collectThemeCSS } from './sprinkle-renderer.js';
+import { isThemeLight } from './theme.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tool-ui-renderer');
@@ -109,8 +111,6 @@ export class ToolUIRenderer {
     };
     window.addEventListener('message', this.messageHandler);
 
-    const { collectThemeCSS } = await import('./sprinkle-renderer.js');
-    const { isThemeLight } = await import('./theme.js');
     const themeCSS = collectThemeCSS();
 
     iframe.contentWindow!.postMessage(
