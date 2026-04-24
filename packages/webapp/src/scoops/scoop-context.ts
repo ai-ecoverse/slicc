@@ -55,10 +55,74 @@ export function isImageProcessingError(msg: string): boolean {
   );
 }
 
+/**
+ * Detect errors that are unlikely to succeed on retry.
+ * These include authentication failures, invalid model IDs, and permanent API errors.
+ */
+export function isNonRetryableError(msg: string): boolean {
+  return (
+    // HTTP 4xx errors (except 429 rate limit which is retryable)
+    /\b(401|403|404|405|410|422)\b/.test(msg) ||
+    // Authentication / authorization failures
+    /unauthorized|forbidden|authentication.*failed|invalid.*api.?key/i.test(msg) ||
+    // Invalid model errors
+    /model.*not.*found|invalid.*model|unknown.*model|does.*not.*exist/i.test(msg) ||
+    // Account/billing issues
+    /insufficient.*quota|billing|payment.*required|account.*suspended/i.test(msg) ||
+    // Malformed request (won't succeed on retry)
+    /invalid.*request|malformed|bad.*request/i.test(msg)
+  );
+}
+
+/**
+ * Detect transient errors that may succeed on retry.
+ * Includes rate limits, server errors, and network issues.
+ */
+export function isRetryableError(msg: string): boolean {
+  return (
+    // Rate limiting
+    /\b429\b|rate.*limit|too.*many.*requests|quota.*exceeded/i.test(msg) ||
+    // Server errors (5xx)
+    /\b(500|502|503|504)\b|internal.*server|bad.*gateway|service.*unavailable|gateway.*timeout/i.test(
+      msg
+    ) ||
+    // Network issues
+    /network.*error|connection.*refused|timeout|econnreset|socket.*hang.*up/i.test(msg) ||
+    // Temporary overload
+    /overloaded|temporarily.*unavailable|try.*again/i.test(msg)
+  );
+}
+
+/**
+ * Sleep for `ms` milliseconds, resolving early when the given AbortSignal fires.
+ * Returns `true` if the sleep was aborted, `false` if it completed normally.
+ * Exposed for testing the retry loop's cooperative cancellation.
+ */
+export function abortableSleep(ms: number, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve(false);
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export interface ScoopContextCallbacks {
   onResponse: (text: string, isPartial: boolean) => void;
   onResponseDone: () => void;
   onError: (error: string) => void;
+  /**
+   * Called when a fatal error occurs that cannot be recovered via retry.
+   * Unlike `onError`, this MUST bypass scoop_mute and notify the cone
+   * immediately so the user is aware the scoop is dead.
+   */
+  onFatalError?: (error: string) => void;
   onStatusChange: (status: 'initializing' | 'ready' | 'processing' | 'error') => void;
   /** Called when a tool starts executing */
   onToolStart?: (toolName: string, toolInput: unknown) => void;
@@ -113,6 +177,8 @@ export class ScoopContext {
   private disposed = false;
   private didStreamDeltas = false;
   private unsubscribe: (() => void) | null = null;
+  /** Aborts the in-flight prompt() retry loop and any pending backoff sleep. */
+  private promptAbortController: AbortController | null = null;
 
   private sessionStore: SessionStore | null = null;
   private sessionId: string;
@@ -355,26 +421,136 @@ export class ScoopContext {
       return;
     }
 
+    // Capture agent reference to avoid null access if dispose() runs mid-retry
+    const agent = this.agent;
+
+    // Replace any stale controller from a previous aborted run and capture
+    // the signal locally so stop()/dispose() can interrupt backoff sleeps.
+    this.promptAbortController?.abort();
+    const abortController = new AbortController();
+    this.promptAbortController = abortController;
+    const abortSignal = abortController.signal;
+
     this.isProcessing = true;
-    this.didStreamDeltas = false;
     this.setStatus('processing');
 
+    const MAX_RETRIES = 3;
+    const BASE_DELAY_MS = 1000;
+    let lastError: Error | null = null;
+
     try {
-      await this.agent.prompt(text);
-    } catch (err) {
-      if (!this.disposed) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.error('Agent error', { folder: this.scoop.folder, error: message });
-        this.callbacks.onError(message);
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        // Check disposal / cancellation before each attempt
+        if (this.disposed || abortSignal.aborted) return;
+
+        // Reset streaming state for each attempt to avoid stale state from previous attempts
+        this.didStreamDeltas = false;
+
+        try {
+          await agent.prompt(text);
+          // Success - exit retry loop
+          lastError = null;
+          break;
+        } catch (err) {
+          // Check disposal / cancellation after await
+          if (this.disposed || abortSignal.aborted) return;
+
+          lastError = err instanceof Error ? err : new Error(String(err));
+          const message = lastError.message;
+
+          // Check if this is a non-retryable error (4xx auth/model errors, etc.)
+          if (isNonRetryableError(message)) {
+            log.error('Non-retryable agent error', {
+              folder: this.scoop.folder,
+              error: message,
+              attempt,
+            });
+            // Fatal error - notify cone immediately, bypassing mute
+            this.setStatus('error');
+            if (this.callbacks.onFatalError) {
+              this.callbacks.onFatalError(
+                `Scoop "${this.scoop.name}" failed with unrecoverable error: ${message}`
+              );
+            } else {
+              this.callbacks.onError(message);
+            }
+            return;
+          }
+
+          // Check if this is a retryable error
+          if (isRetryableError(message) && attempt < MAX_RETRIES) {
+            const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1); // Exponential backoff
+            log.warn('Retryable agent error, will retry', {
+              folder: this.scoop.folder,
+              error: message,
+              attempt,
+              maxRetries: MAX_RETRIES,
+              delayMs: delay,
+            });
+            // Abortable backoff — stop()/dispose() cancels immediately
+            const aborted = await abortableSleep(delay, abortSignal);
+            if (aborted || this.disposed) return;
+            continue;
+          }
+
+          // Unknown error type or final retry - log and continue to failure handling
+          log.error('Agent error', {
+            folder: this.scoop.folder,
+            error: message,
+            attempt,
+            isRetryable: isRetryableError(message),
+          });
+
+          // If we've exhausted retries, break out
+          if (attempt === MAX_RETRIES) {
+            break;
+          }
+
+          // For unknown errors, also apply abortable exponential backoff
+          const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+          const aborted = await abortableSleep(delay, abortSignal);
+          if (aborted || this.disposed) return;
+        }
+      }
+
+      // If we exited the loop with an error, handle final failure
+      if (lastError && !this.disposed && !abortSignal.aborted) {
+        const message = lastError.message;
+        log.error('Agent error after retries exhausted', {
+          folder: this.scoop.folder,
+          error: message,
+          maxRetries: MAX_RETRIES,
+        });
+        // Treat exhausted retries as fatal - notify cone bypassing mute
+        this.setStatus('error');
+        if (this.callbacks.onFatalError) {
+          this.callbacks.onFatalError(
+            `Scoop "${this.scoop.name}" failed after ${MAX_RETRIES} attempts: ${message}`
+          );
+        } else {
+          this.callbacks.onError(message);
+        }
+        return;
+      }
+
+      if (!this.disposed && !abortSignal.aborted) {
+        this.setStatus('ready');
       }
     } finally {
       this.isProcessing = false;
-      this.setStatus('ready');
+      // Only clear the reference if it's still ours — a later prompt() may
+      // have already installed a new controller.
+      if (this.promptAbortController === abortController) {
+        this.promptAbortController = null;
+      }
     }
   }
 
   /** Stop the current agent operation and clear any queued prompts */
   stop(): void {
+    // Abort before touching the agent so any pending backoff sleep resolves
+    // and the retry loop exits on its next disposal/abort check.
+    this.promptAbortController?.abort();
     this.agent?.clearAllQueues?.();
     this.agent?.abort?.();
     this.isProcessing = false;
@@ -449,6 +625,9 @@ export class ScoopContext {
   /** Cleanup */
   dispose(): void {
     this.disposed = true;
+    // Cancel any in-flight retry loop / backoff sleep before tearing down the agent.
+    this.promptAbortController?.abort();
+    this.promptAbortController = null;
     this.agent?.clearAllQueues?.();
     this.agent?.abort?.();
     this.unsubscribe?.();
