@@ -9,6 +9,7 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   ScoopContext,
+  abortableSleep,
   isImageProcessingError,
   isNonRetryableError,
   isRetryableError,
@@ -1150,6 +1151,81 @@ describe('isRetryableError', () => {
     expect(isRetryableError('invalid api key')).toBe(false);
     expect(isRetryableError('model not found')).toBe(false);
     expect(isRetryableError('authentication failed')).toBe(false);
+  });
+});
+
+describe('abortableSleep', () => {
+  it('resolves with false after the timeout elapses', async () => {
+    const start = Date.now();
+    const aborted = await abortableSleep(20);
+    expect(aborted).toBe(false);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(15);
+  });
+
+  it('resolves with true immediately when signal is already aborted', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const start = Date.now();
+    const aborted = await abortableSleep(5000, ac.signal);
+    expect(aborted).toBe(true);
+    expect(Date.now() - start).toBeLessThan(50);
+  });
+
+  it('resolves with true when signal aborts mid-sleep', async () => {
+    const ac = new AbortController();
+    const start = Date.now();
+    const promise = abortableSleep(5000, ac.signal);
+    setTimeout(() => ac.abort(), 15);
+    const aborted = await promise;
+    expect(aborted).toBe(true);
+    expect(Date.now() - start).toBeLessThan(500);
+  });
+});
+
+describe('ScoopContext retry cancellation', () => {
+  let ctx: ScoopContext;
+  let callbacks: ScoopContextCallbacks;
+
+  beforeEach(() => {
+    callbacks = createMockCallbacks();
+    ctx = new ScoopContext(testScoop, callbacks, {} as any);
+  });
+
+  it('stop() cancels a pending backoff sleep without completing retries', async () => {
+    let attempts = 0;
+    injectMockAgent(ctx, async () => {
+      attempts += 1;
+      throw new Error('503 Service Unavailable');
+    });
+
+    const promptPromise = ctx.prompt('hello');
+    // Let the first attempt fail and enter the backoff sleep.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    ctx.stop();
+    await promptPromise;
+
+    // Only the first attempt should have run — stop() aborted backoff before retries.
+    expect(attempts).toBe(1);
+    // stop() transitions status to ready; no fatal error should fire on cancellation.
+    expect(callbacks.onFatalError).not.toHaveBeenCalled();
+    const statusCalls = (callbacks.onStatusChange as any).mock.calls.map((c: any[]) => c[0]);
+    expect(statusCalls).toContain('ready');
+  });
+
+  it('dispose() cancels a pending backoff sleep', async () => {
+    let attempts = 0;
+    injectMockAgent(ctx, async () => {
+      attempts += 1;
+      throw new Error('503 Service Unavailable');
+    });
+
+    const promptPromise = ctx.prompt('hello');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    ctx.dispose();
+    await promptPromise;
+
+    expect(attempts).toBe(1);
+    expect(callbacks.onFatalError).not.toHaveBeenCalled();
   });
 });
 
