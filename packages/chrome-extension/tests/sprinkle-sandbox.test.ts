@@ -29,7 +29,7 @@ function extractScriptBlocks(html: string) {
   return scriptTexts;
 }
 
-describe('sprinkle-sandbox.html', () => {
+describe('sprinkle-sandbox.html structural integrity', () => {
   it('does not contain literal </script> inside any <script> block', () => {
     const scripts = extractScriptBlocks(sandboxHtml);
     expect(scripts.length).toBeGreaterThan(0);
@@ -64,5 +64,54 @@ describe('sprinkle-sandbox.html', () => {
     const scripts = extractScriptBlocks(sandboxHtml);
     const hasBridge = scripts.some((s) => s.includes('window.slicc'));
     expect(hasBridge).toBe(true);
+  });
+});
+
+describe('sprinkle-sandbox.html extension sandbox fixes', () => {
+  it('does not dynamically inject slicc-editor.js or slicc-diff.js via createElement', () => {
+    const scripts = extractScriptBlocks(sandboxHtml);
+    for (const scriptText of scripts) {
+      expect(scriptText).not.toMatch(
+        /createElement\s*\(\s*['"]script['"]\s*\)[\s\S]*?\.src\s*=\s*['"]slicc-editor\.js['"]/
+      );
+      expect(scriptText).not.toMatch(
+        /createElement\s*\(\s*['"]script['"]\s*\)[\s\S]*?\.src\s*=\s*['"]slicc-diff\.js['"]/
+      );
+    }
+  });
+
+  it('loads slicc-editor.js and slicc-diff.js statically in head', () => {
+    const headMatch = sandboxHtml.match(/<head[\s\S]*?<\/head>/i);
+    expect(headMatch).toBeTruthy();
+    const head = headMatch![0];
+    expect(head).toContain('src="slicc-editor.js"');
+    expect(head).toContain('src="slicc-diff.js"');
+    expect(head).toContain('src="lucide-icons.js"');
+  });
+
+  it('contains the fetchScriptViaRelay function for partial-content external scripts', () => {
+    const scripts = extractScriptBlocks(sandboxHtml);
+    const hasRelay = scripts.some((s) => s.includes('fetchScriptViaRelay'));
+    expect(hasRelay).toBe(true);
+  });
+
+  it('includes sprinkle-fetch-script in bridgeTypes relay array', () => {
+    const scripts = extractScriptBlocks(sandboxHtml);
+    const hasFetchBridge = scripts.some((s) => s.includes("'sprinkle-fetch-script'"));
+    expect(hasFetchBridge).toBe(true);
+  });
+
+  it('includes sprinkle-fetch-script-response in responseTypes relay array', () => {
+    const scripts = extractScriptBlocks(sandboxHtml);
+    const hasFetchResponse = scripts.some((s) => s.includes("'sprinkle-fetch-script-response'"));
+    expect(hasFetchResponse).toBe(true);
+  });
+
+  it('fetchScriptViaRelay has a timeout', () => {
+    const scripts = extractScriptBlocks(sandboxHtml);
+    const relayScript = scripts.find((s) => s.includes('fetchScriptViaRelay'));
+    expect(relayScript).toBeTruthy();
+    expect(relayScript).toContain('setTimeout');
+    expect(relayScript).toContain('30000');
   });
 });
