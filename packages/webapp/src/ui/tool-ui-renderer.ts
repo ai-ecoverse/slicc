@@ -215,7 +215,7 @@ function openMountPopup(requestId: string): Promise<Record<string, unknown>> {
     chrome.runtime.onMessage.addListener(listener);
 
     chrome.windows
-      .create({ url, type: 'popup', width: 400, height: 100, focused: true })
+      .create({ url, type: 'popup', width: 300, height: 80, focused: true })
       .catch(() => {
         cleanup();
         resolve({ error: 'Failed to open directory picker window' });
