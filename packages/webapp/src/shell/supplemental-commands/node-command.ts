@@ -344,7 +344,7 @@ export function createNodeCommand(): Command {
             }
             if (bareId in __requireCache) return __requireCache[bareId];
             if (id in __requireCache) return __requireCache[id];
-            throw new Error("require('" + id + "'): module not pre-loaded. Use a string literal or await import('https://esm.sh/" + id + "') directly.");
+            throw new Error("require('" + id + "'): module not pre-loaded. Use a static require('name') string literal so the module is fetched before execution.");
           };
           const module = { exports: {} };
           const exports = module.exports;
