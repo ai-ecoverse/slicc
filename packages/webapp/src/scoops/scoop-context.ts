@@ -55,10 +55,54 @@ export function isImageProcessingError(msg: string): boolean {
   );
 }
 
+/**
+ * Detect errors that are unlikely to succeed on retry.
+ * These include authentication failures, invalid model IDs, and permanent API errors.
+ */
+export function isNonRetryableError(msg: string): boolean {
+  return (
+    // HTTP 4xx errors (except 429 rate limit which is retryable)
+    /\b(401|403|404|405|410|422)\b/.test(msg) ||
+    // Authentication / authorization failures
+    /unauthorized|forbidden|authentication.*failed|invalid.*api.?key/i.test(msg) ||
+    // Invalid model errors
+    /model.*not.*found|invalid.*model|unknown.*model|does.*not.*exist/i.test(msg) ||
+    // Account/billing issues
+    /insufficient.*quota|billing|payment.*required|account.*suspended/i.test(msg) ||
+    // Malformed request (won't succeed on retry)
+    /invalid.*request|malformed|bad.*request/i.test(msg)
+  );
+}
+
+/**
+ * Detect transient errors that may succeed on retry.
+ * Includes rate limits, server errors, and network issues.
+ */
+export function isRetryableError(msg: string): boolean {
+  return (
+    // Rate limiting
+    /\b429\b|rate.*limit|too.*many.*requests|quota.*exceeded/i.test(msg) ||
+    // Server errors (5xx)
+    /\b(500|502|503|504)\b|internal.*server|bad.*gateway|service.*unavailable|gateway.*timeout/i.test(
+      msg
+    ) ||
+    // Network issues
+    /network.*error|connection.*refused|timeout|econnreset|socket.*hang.*up/i.test(msg) ||
+    // Temporary overload
+    /overloaded|temporarily.*unavailable|try.*again/i.test(msg)
+  );
+}
+
 export interface ScoopContextCallbacks {
   onResponse: (text: string, isPartial: boolean) => void;
   onResponseDone: () => void;
   onError: (error: string) => void;
+  /**
+   * Called when a fatal error occurs that cannot be recovered via retry.
+   * Unlike `onError`, this MUST bypass scoop_mute and notify the cone
+   * immediately so the user is aware the scoop is dead.
+   */
+  onFatalError?: (error: string) => void;
   onStatusChange: (status: 'initializing' | 'ready' | 'processing' | 'error') => void;
   /** Called when a tool starts executing */
   onToolStart?: (toolName: string, toolInput: unknown) => void;
@@ -359,18 +403,98 @@ export class ScoopContext {
     this.didStreamDeltas = false;
     this.setStatus('processing');
 
-    try {
-      await this.agent.prompt(text);
-    } catch (err) {
-      if (!this.disposed) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.error('Agent error', { folder: this.scoop.folder, error: message });
+    const MAX_RETRIES = 3;
+    const BASE_DELAY_MS = 1000;
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        await this.agent.prompt(text);
+        // Success - exit retry loop
+        lastError = null;
+        break;
+      } catch (err) {
+        if (this.disposed) return;
+
+        lastError = err instanceof Error ? err : new Error(String(err));
+        const message = lastError.message;
+
+        // Check if this is a non-retryable error (4xx auth/model errors, etc.)
+        if (isNonRetryableError(message)) {
+          log.error('Non-retryable agent error', {
+            folder: this.scoop.folder,
+            error: message,
+            attempt,
+          });
+          // Fatal error - notify cone immediately, bypassing mute
+          this.setStatus('error');
+          if (this.callbacks.onFatalError) {
+            this.callbacks.onFatalError(
+              `Scoop "${this.scoop.name}" failed with unrecoverable error: ${message}`
+            );
+          } else {
+            this.callbacks.onError(message);
+          }
+          this.isProcessing = false;
+          return;
+        }
+
+        // Check if this is a retryable error
+        if (isRetryableError(message) && attempt < MAX_RETRIES) {
+          const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1); // Exponential backoff
+          log.warn('Retryable agent error, will retry', {
+            folder: this.scoop.folder,
+            error: message,
+            attempt,
+            maxRetries: MAX_RETRIES,
+            delayMs: delay,
+          });
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+
+        // Unknown error type or final retry - log and continue to failure handling
+        log.error('Agent error', {
+          folder: this.scoop.folder,
+          error: message,
+          attempt,
+          isRetryable: isRetryableError(message),
+        });
+
+        // If we've exhausted retries, break out
+        if (attempt === MAX_RETRIES) {
+          break;
+        }
+
+        // For unknown errors, also apply exponential backoff
+        const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+
+    // If we exited the loop with an error, handle final failure
+    if (lastError && !this.disposed) {
+      const message = lastError.message;
+      log.error('Agent error after retries exhausted', {
+        folder: this.scoop.folder,
+        error: message,
+        maxRetries: MAX_RETRIES,
+      });
+      // Treat exhausted retries as fatal - notify cone bypassing mute
+      this.setStatus('error');
+      if (this.callbacks.onFatalError) {
+        this.callbacks.onFatalError(
+          `Scoop "${this.scoop.name}" failed after ${MAX_RETRIES} attempts: ${message}`
+        );
+      } else {
         this.callbacks.onError(message);
       }
-    } finally {
       this.isProcessing = false;
-      this.setStatus('ready');
+      return;
     }
+
+    this.isProcessing = false;
+    this.setStatus('ready');
   }
 
   /** Stop the current agent operation and clear any queued prompts */

@@ -31,6 +31,7 @@ function createMockCallbacks(): ScoopContextCallbacks {
     onResponse: vi.fn(),
     onResponseDone: vi.fn(),
     onError: vi.fn(),
+    onFatalError: vi.fn(),
     onStatusChange: vi.fn(),
     onSendMessage: vi.fn(),
     getScoops: vi.fn(() => []),
@@ -398,18 +399,21 @@ describe('ScoopContext prompt queueing', () => {
 
   it('handles prompt failure gracefully', async () => {
     const prompts: string[] = [];
+    // Use a 403 error which is detected as non-retryable and fails immediately
     injectMockAgent(ctx, async (text) => {
       prompts.push(text);
-      throw new Error('prompt failed');
+      throw new Error('403 Forbidden: model not found');
     });
 
     await ctx.prompt('first');
 
+    // Non-retryable errors fail immediately without retries
     expect(prompts).toEqual(['first']);
-    expect(callbacks.onError).toHaveBeenCalledWith('prompt failed');
-    // Should return to ready status after error
+    // Fatal errors call onFatalError if available, otherwise onError
+    expect(callbacks.onFatalError).toHaveBeenCalled();
+    // Should be in error status after fatal error
     const statusCalls = (callbacks.onStatusChange as any).mock.calls;
-    expect(statusCalls[statusCalls.length - 1][0]).toBe('ready');
+    expect(statusCalls[statusCalls.length - 1][0]).toBe('error');
   });
 });
 

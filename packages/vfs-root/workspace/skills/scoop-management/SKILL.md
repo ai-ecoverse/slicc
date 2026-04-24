@@ -161,6 +161,8 @@ scoop_unmute({ scoop_names: ["scraper"] })
 
 ## Model Selection for Scoops
 
+**IMPORTANT: Always run `models` to verify available models before specifying a model for a scoop.** Model availability depends on the configured provider and API key. Specifying a non-existent model will cause the scoop to fail immediately with an unrecoverable error.
+
 Use `models --json` to discover available models before creating scoops. The `scoop_scoop` tool accepts a `model` parameter.
 
 Intelligence, speed, and cost are independent dimensions. Use `models --json` to compare them and pick the best tradeoff for each task:
@@ -172,7 +174,13 @@ Intelligence, speed, and cost are independent dimensions. Use `models --json` to
 
 Example:
 
-```
-scoop_scoop({ name: "fix-typos", model: "claude-haiku-4-5-20251001", prompt: "Fix all typos in /workspace/docs/" })
+```bash
+# First, check available models
+models
+
+# Then create scoops with verified model IDs
+scoop_scoop({ name: "fix-typos", model: "claude-haiku-4-5", prompt: "Fix all typos in /workspace/docs/" })
 scoop_scoop({ name: "architect", model: "claude-opus-4-6", prompt: "Design the new plugin system..." })
 ```
+
+**Error handling**: If a scoop fails due to an invalid model or API error, it will retry up to 3 times with exponential backoff for transient errors (rate limits, server errors). Non-retryable errors (invalid model, auth failures) fail immediately and notify the cone, bypassing any `scoop_mute` settings.

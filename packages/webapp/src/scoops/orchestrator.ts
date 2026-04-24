@@ -1246,6 +1246,82 @@ export class Orchestrator {
         this.dispatchScoopEvent(jid, 'onError', error);
         this.dispatchScoopEvent(jid, 'onStatusChange', 'error');
       },
+      onFatalError: (error) => {
+        // Fatal errors bypass mute and always notify the cone immediately.
+        // This ensures the user is aware when a scoop fails unrecoverably
+        // (e.g., invalid model, auth failure, exhausted retries).
+        if (!this.scoops.has(jid)) return;
+
+        const scoopRecord = this.scoops.get(jid)!;
+        log.error('Fatal scoop error', { jid, folder: scoopRecord.folder, error });
+
+        const tab = this.tabs.get(jid);
+        if (tab) {
+          tab.status = 'error';
+          tab.error = error;
+          this.tabs.set(jid, tab);
+        }
+        this.callbacks.onError(jid, error);
+        this.callbacks.onStatusChange(jid, 'error');
+        this.dispatchScoopEvent(jid, 'onError', error);
+        this.dispatchScoopEvent(jid, 'onStatusChange', 'error');
+
+        // Skip cone notification for the cone itself
+        if (scoopRecord.isCone) return;
+
+        // Force-unmute this scoop so the error notification reaches the cone
+        this.mutedScoops.delete(jid);
+        this.pendingCompletions.delete(jid);
+
+        // Fire any pending waiters with null (error) so scoop_wait doesn't hang
+        const waiters = this.completionWaiters.get(jid);
+        if (waiters && waiters.length > 0) {
+          this.completionWaiters.delete(jid);
+          for (const w of waiters) {
+            try {
+              w(null);
+            } catch (err) {
+              log.warn('completion waiter threw on fatal error', {
+                jid,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+        }
+
+        // Notify the cone about this fatal error
+        const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+        if (!cone) return;
+
+        const notifyMsg: ChannelMessage = {
+          id: `scoop-error-${jid}-${Date.now()}`,
+          chatJid: cone.jid,
+          senderId: scoopRecord.folder,
+          senderName: scoopRecord.assistantLabel,
+          content: `[@${scoopRecord.assistantLabel} FAILED]: ${error}`,
+          timestamp: new Date().toISOString(),
+          fromAssistant: false,
+          channel: 'scoop-error',
+        };
+
+        // Fire onIncomingMessage so the UI renders the error as a lick widget
+        try {
+          this.callbacks.onIncomingMessage?.(cone.jid, notifyMsg);
+        } catch (err) {
+          log.warn('onIncomingMessage for scoop-error threw', {
+            scoop: scoopRecord.folder,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+
+        // Route to cone's agent queue so it can act on the failure
+        this.handleMessage(notifyMsg).catch((err) => {
+          log.error('Failed to route fatal error to cone', {
+            scoop: scoopRecord.folder,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      },
       onStatusChange: (status) => {
         if (!this.scoops.has(jid)) return;
 
