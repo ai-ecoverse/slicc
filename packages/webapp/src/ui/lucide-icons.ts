@@ -72,18 +72,6 @@ import { createIcons, icons } from 'lucide';
   },
 };
 
-// Auto-render on DOMContentLoaded if icons are already in the DOM
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    (window as any).LucideIcons.render();
-  });
-} else {
-  // DOM already loaded
-  (window as any).LucideIcons.render();
-}
-
-// Watch for dynamic content changes and auto-render new icons
-// This handles sprinkle HTML injected after initial load (extension fragment mode)
 const observer = new MutationObserver((mutations) => {
   let hasNewIcons = false;
   for (const mutation of mutations) {
@@ -103,4 +91,15 @@ const observer = new MutationObserver((mutations) => {
   }
 });
 
-observer.observe(document.body, { childList: true, subtree: true });
+function startLucide() {
+  (window as any).LucideIcons.render();
+  if (document.body) {
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', startLucide);
+} else {
+  startLucide();
+}
