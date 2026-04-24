@@ -161,7 +161,7 @@ describe('shared server API conformance', () => {
       const body = (await proxied.json()) as { error?: string };
       expect(body.error).toBe('invalid_client');
     } finally {
-      upstream.close();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
     }
   });
 
@@ -191,7 +191,7 @@ describe('shared server API conformance', () => {
       const body = (await proxied.json()) as { error?: string };
       expect(body.error).toMatch(/Proxy fetch failed/);
     } finally {
-      upstream.close();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
     }
   });
 
