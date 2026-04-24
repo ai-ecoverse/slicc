@@ -523,7 +523,7 @@ addEventListener('message', function(e) {
       'sprinkle-stat', 'sprinkle-mkdir', 'sprinkle-rm',
       'sprinkle-storage-set', 'sprinkle-storage-remove', 'sprinkle-storage-clear',
       'sprinkle-fetch-script',
-      'inline-sprinkle-lick', 'inline-sprinkle-height'
+      'inline-sprinkle-lick', 'inline-sprinkle-height', 'inline-sprinkle-open-link'
     ];
     if (bridgeTypes.indexOf(msg.type) !== -1) {
       parent.postMessage(msg, '*');
