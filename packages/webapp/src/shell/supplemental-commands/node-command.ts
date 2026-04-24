@@ -295,21 +295,18 @@ export function createNodeCommand(): Command {
           ]);
           const __requireCache = Object.create(null);
           async function __loadModule(id) {
-            const url = 'https://esm.sh/' + id;
+            var parsedUrl = new URL('https://esm.sh/' + id);
+            parsedUrl.searchParams.set('bundle', '');
+            var url = parsedUrl.toString();
             try {
               return await import(url);
             } catch(e) {
-              // Fallback for sandbox/extension mode: fetch + blob URL
-              const resp = await fetch(url);
+              var resp = await fetch(url);
               if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
-              const text = await resp.text();
-              const blob = new Blob([text], { type: 'text/javascript' });
-              const blobUrl = URL.createObjectURL(blob);
-              try {
-                return await import(blobUrl);
-              } finally {
-                URL.revokeObjectURL(blobUrl);
-              }
+              var text = await resp.text();
+              var __mod = { exports: {} };
+              (0, Function)('module', 'exports', text)(__mod, __mod.exports);
+              return __mod.exports;
             }
           }
           {
