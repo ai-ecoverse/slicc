@@ -14,12 +14,12 @@
 
 ### File Map
 
-| File                                                              | Action | Responsibility                                                                               |
-| ----------------------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------- |
-| `packages/webapp/src/ui/lucide-icons.ts`                          | Modify | Guard MutationObserver against null body                                                     |
-| `packages/chrome-extension/sprinkle-sandbox.html`                 | Modify | Remove dead CE injection; add fetch-script relay; transform external scripts in partial path |
-| `packages/webapp/src/ui/sprinkle-renderer.ts`                     | Modify | Fetch-and-inline external scripts for full-doc; handle fetch-script relay from sandbox       |
-| `packages/webapp/src/shell/supplemental-commands/node-command.ts` | Modify | `?bundle` URL + `new Function` fallback                                                      |
+| File                                                              | Action | Responsibility                                                                                        |
+| ----------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------- |
+| `packages/webapp/src/ui/lucide-icons.ts`                          | Modify | Guard MutationObserver against null body                                                              |
+| `packages/chrome-extension/sprinkle-sandbox.html`                 | Modify | Remove dead CE injection; add sprinkle-fetch-script relay; transform external scripts in partial path |
+| `packages/webapp/src/ui/sprinkle-renderer.ts`                     | Modify | Fetch-and-inline external scripts for full-doc; handle sprinkle-fetch-script relay from sandbox       |
+| `packages/webapp/src/shell/supplemental-commands/node-command.ts` | Modify | `?bundle` URL + `new Function` fallback                                                               |
 
 ---
 
@@ -118,7 +118,7 @@ if (contentStr.indexOf('<slicc-diff') !== -1 && !customElements.get('slicc-diff'
 }
 ```
 
-These bundles are already loaded at lines 8-10 via `<script src>` in `<head>`.
+These bundles are already loaded at lines 8-9 (editor, diff) and line 10 (lucide) via `<script src>` in `<head>`.
 
 - [ ] **Step 2: Build extension to verify**
 
@@ -133,7 +133,7 @@ git add packages/chrome-extension/sprinkle-sandbox.html
 git commit -m "fix: remove broken dynamic CE script injection in sprinkle-sandbox
 
 The dynamic createElement('script').src fails with opaque origin error.
-Custom elements are already loaded from <head> at page init (lines 8-10)."
+Custom elements are already loaded from <head> at page init (lines 8-9)."
 ```
 
 ---
@@ -188,8 +188,10 @@ async function inlineExternalScripts(html: string): Promise<string> {
 Key details:
 
 - Regex matches only `https://` and `http://` src URLs (skips relative, data:, javascript:)
+- Only matches empty external tags (`><\/script>`) — scripts with both src and body content are invalid HTML and out of scope for v1
 - Fetches all in parallel for speed
 - Replaces in reverse order to preserve string indices
+- Duplicate identical tags: `String.replace(full, ...)` replaces only the first occurrence. Two byte-identical `<script src="same"></script>` tags would only inline the first. Rare in practice; accept as v1 limitation (index-based slice replacement or DOM parsing would fix)
 - Escapes closing script tags in fetched text to prevent premature tag termination
 - On fetch failure, inlines a `console.error` so the sprinkle author gets feedback
 
@@ -270,12 +272,17 @@ var __fid = 0;
 function fetchScriptViaRelay(url) {
   return new Promise(function (resolve, reject) {
     var id = 'fs-' + ++__fid;
+    var timer = setTimeout(function () {
+      removeEventListener('message', handler);
+      reject(new Error('Fetch timeout for ' + url));
+    }, 30000);
     function handler(event) {
       if (
         event.data &&
         event.data.type === 'sprinkle-fetch-script-response' &&
         event.data.id === id
       ) {
+        clearTimeout(timer);
         removeEventListener('message', handler);
         if (event.data.error) reject(new Error(event.data.error));
         else resolve(event.data.text);
@@ -300,15 +307,21 @@ function fetchScriptViaRelay(url) {
         var text = await fetchScriptViaRelay(dead.src);
         live.textContent = text;
       } catch (err) {
+        var errMsg = err instanceof Error ? err.message : String(err);
         live.textContent =
           "console.error('[sprinkle] Failed to load " +
           dead.src +
-          ": ' + " +
-          JSON.stringify(err.message) +
-          ')';
+          ': ' +
+          errMsg.replace(/'/g, "\\'") +
+          "')";
       }
     } else if (!dead.src) {
       live.textContent = dead.textContent;
+    } else {
+      live.textContent =
+        "console.warn('[sprinkle] Skipped script with unsupported src: " +
+        dead.getAttribute('src') +
+        "')";
     }
     document.body.appendChild(live);
   }
@@ -427,8 +440,7 @@ async function __loadModule(id) {
     if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
     var text = await resp.text();
     var __mod = { exports: {} };
-    new Function('module', 'exports', text)(__mod, __mod.exports);
-    if (Object.keys(__mod.exports).length > 0) return __mod.exports;
+    (0, Function)('module', 'exports', text)(__mod, __mod.exports);
     return __mod.exports;
   }
 }
@@ -437,9 +449,10 @@ async function __loadModule(id) {
 Key details:
 
 - Uses `URL` parsing to safely append `?bundle` (handles IDs that already have query strings)
-- First tries `import(url)` (works in CLI mode where CSP allows it)
-- Fallback: fetches bundled IIFE, evaluates with `new Function` using a module/exports shim
-- `new Function` requires `unsafe-eval` which the sandbox already has
+- First tries `import(url)` — in practice this always fails in the extension sandbox (CSP blocks it), but keeps the path open if a future CSP change allows it. This `__loadModule` only exists inside the extension `wrappedCode` string; the CLI path uses `import()` directly in `node-command.ts` lines 187-216
+- Fallback: fetches bundled IIFE, evaluates with indirect `Function` constructor using a CJS-style module/exports shim. Many `?bundle` outputs are IIFE/UMD — if the bundle sets `module.exports`, the shim captures it. If it attaches to `globalThis` instead, `__mod.exports` will be empty. This is a known v1 limitation; global extraction would be a follow-up
+- The sandbox already has `unsafe-eval` in its CSP (Chrome's default for manifest sandbox pages), which is what makes `node -e` work in the first place
+- **Acceptance gate**: verify at minimum that `require('lodash')` returns a usable object before closing this task
 
 - [ ] **Step 2: Run typecheck**
 
@@ -466,7 +479,122 @@ existing query strings."
 
 ---
 
-### Task 6: Verification
+### Task 6: Unit test for inlineExternalScripts
+
+**Files:**
+
+- Create: `packages/webapp/tests/ui/sprinkle-renderer-inline.test.ts`
+
+- [ ] **Step 1: Write tests for the pure function**
+
+```typescript
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// The function is not exported, so we test it indirectly or extract it.
+// For now, test the logic by importing the module and testing the regex + replacement pattern.
+// If inlineExternalScripts is not exported, add `export` to it in sprinkle-renderer.ts.
+
+describe('inlineExternalScripts', () => {
+  let inlineExternalScripts: (html: string) => Promise<string>;
+
+  beforeEach(async () => {
+    // Mock fetch for controlled responses
+    global.fetch = vi.fn();
+    const mod = await import('../../src/ui/sprinkle-renderer.js');
+    inlineExternalScripts = (mod as any).inlineExternalScripts;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns HTML unchanged when no external scripts', async () => {
+    const html = '<html><body><script>console.log("hi")</script></body></html>';
+    const result = await inlineExternalScripts(html);
+    expect(result).toBe(html);
+  });
+
+  it('inlines a single external https script', async () => {
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve('var x = 1;'),
+    });
+    const html = '<script src="https://cdn.example.com/lib.js"></script>';
+    const result = await inlineExternalScripts(html);
+    expect(result).toContain('<script>var x = 1;</script>');
+    expect(result).not.toContain('src=');
+  });
+
+  it('preserves script order with multiple externals', async () => {
+    let callOrder = 0;
+    (global.fetch as any).mockImplementation((url: string) => {
+      const order = ++callOrder;
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(`/* script ${order}: ${url} */`),
+      });
+    });
+    const html =
+      '<script src="https://a.com/a.js"></script>' +
+      '<script>inline</script>' +
+      '<script src="https://b.com/b.js"></script>';
+    const result = await inlineExternalScripts(html);
+    const aPos = result.indexOf('script 1');
+    const bPos = result.indexOf('script 2');
+    expect(aPos).toBeLessThan(bPos);
+    expect(result).toContain('<script>inline</script>');
+  });
+
+  it('handles fetch failure with console.error', async () => {
+    (global.fetch as any).mockRejectedValue(new Error('Network error'));
+    const html = '<script src="https://cdn.example.com/fail.js"></script>';
+    const result = await inlineExternalScripts(html);
+    expect(result).toContain('console.error');
+    expect(result).toContain('Network error');
+  });
+
+  it('skips relative and non-http src', async () => {
+    const html =
+      '<script src="local.js"></script>' + '<script src="data:text/javascript,alert(1)"></script>';
+    const result = await inlineExternalScripts(html);
+    expect(result).toBe(html);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('escapes closing script tags in fetched content', async () => {
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve('var s = "</script>";'),
+    });
+    const html = '<script src="https://cdn.example.com/lib.js"></script>';
+    const result = await inlineExternalScripts(html);
+    expect(result).not.toContain('</script>";');
+    expect(result).toContain('<\\/script');
+  });
+});
+```
+
+Note: if `inlineExternalScripts` is not exported from `sprinkle-renderer.ts`, add `export` to its declaration as part of this task.
+
+- [ ] **Step 2: Run tests**
+
+Run: `npx vitest run packages/webapp/tests/ui/sprinkle-renderer-inline.test.ts`
+Expected: All 6 tests pass
+
+- [ ] **Step 3: Commit**
+
+```bash
+npx prettier --write packages/webapp/tests/ui/sprinkle-renderer-inline.test.ts
+git add packages/webapp/tests/ui/sprinkle-renderer-inline.test.ts packages/webapp/src/ui/sprinkle-renderer.ts
+git commit -m "test: unit tests for inlineExternalScripts
+
+Covers: no-op, single inline, order preservation, fetch failure,
+non-http skip, and script tag escaping."
+```
+
+---
+
+### Task 7: Verification
 
 - [ ] **Step 1: Run full typecheck**
 
