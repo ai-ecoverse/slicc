@@ -1272,6 +1272,8 @@ export class Orchestrator {
         // Force-unmute this scoop so the error notification reaches the cone
         this.mutedScoops.delete(jid);
         this.pendingCompletions.delete(jid);
+        // Clear any partial response buffer to avoid stale data if scoop is reused
+        this.scoopResponseBuffer.delete(jid);
 
         // Fire any pending waiters with null (error) so scoop_wait doesn't hang
         const waiters = this.completionWaiters.get(jid);

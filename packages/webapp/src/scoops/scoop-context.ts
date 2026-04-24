@@ -399,102 +399,122 @@ export class ScoopContext {
       return;
     }
 
+    // Capture agent reference to avoid null access if dispose() runs mid-retry
+    const agent = this.agent;
+    if (!agent) {
+      this.callbacks.onError('Agent not initialized');
+      return;
+    }
+
     this.isProcessing = true;
-    this.didStreamDeltas = false;
     this.setStatus('processing');
 
     const MAX_RETRIES = 3;
     const BASE_DELAY_MS = 1000;
     let lastError: Error | null = null;
 
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        await this.agent.prompt(text);
-        // Success - exit retry loop
-        lastError = null;
-        break;
-      } catch (err) {
+    try {
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        // Check disposal before each attempt
         if (this.disposed) return;
 
-        lastError = err instanceof Error ? err : new Error(String(err));
-        const message = lastError.message;
+        // Reset streaming state for each attempt to avoid stale state from previous attempts
+        this.didStreamDeltas = false;
 
-        // Check if this is a non-retryable error (4xx auth/model errors, etc.)
-        if (isNonRetryableError(message)) {
-          log.error('Non-retryable agent error', {
-            folder: this.scoop.folder,
-            error: message,
-            attempt,
-          });
-          // Fatal error - notify cone immediately, bypassing mute
-          this.setStatus('error');
-          if (this.callbacks.onFatalError) {
-            this.callbacks.onFatalError(
-              `Scoop "${this.scoop.name}" failed with unrecoverable error: ${message}`
-            );
-          } else {
-            this.callbacks.onError(message);
+        try {
+          await agent.prompt(text);
+          // Success - exit retry loop
+          lastError = null;
+          break;
+        } catch (err) {
+          // Check disposal after await
+          if (this.disposed) return;
+
+          lastError = err instanceof Error ? err : new Error(String(err));
+          const message = lastError.message;
+
+          // Check if this is a non-retryable error (4xx auth/model errors, etc.)
+          if (isNonRetryableError(message)) {
+            log.error('Non-retryable agent error', {
+              folder: this.scoop.folder,
+              error: message,
+              attempt,
+            });
+            // Fatal error - notify cone immediately, bypassing mute
+            this.setStatus('error');
+            if (this.callbacks.onFatalError) {
+              this.callbacks.onFatalError(
+                `Scoop "${this.scoop.name}" failed with unrecoverable error: ${message}`
+              );
+            } else {
+              this.callbacks.onError(message);
+            }
+            return;
           }
-          this.isProcessing = false;
-          return;
-        }
 
-        // Check if this is a retryable error
-        if (isRetryableError(message) && attempt < MAX_RETRIES) {
-          const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1); // Exponential backoff
-          log.warn('Retryable agent error, will retry', {
+          // Check if this is a retryable error
+          if (isRetryableError(message) && attempt < MAX_RETRIES) {
+            const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1); // Exponential backoff
+            log.warn('Retryable agent error, will retry', {
+              folder: this.scoop.folder,
+              error: message,
+              attempt,
+              maxRetries: MAX_RETRIES,
+              delayMs: delay,
+            });
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            // Check disposal after backoff delay
+            if (this.disposed) return;
+            continue;
+          }
+
+          // Unknown error type or final retry - log and continue to failure handling
+          log.error('Agent error', {
             folder: this.scoop.folder,
             error: message,
             attempt,
-            maxRetries: MAX_RETRIES,
-            delayMs: delay,
+            isRetryable: isRetryableError(message),
           });
-          await new Promise((resolve) => setTimeout(resolve, delay));
-          continue;
-        }
 
-        // Unknown error type or final retry - log and continue to failure handling
-        log.error('Agent error', {
+          // If we've exhausted retries, break out
+          if (attempt === MAX_RETRIES) {
+            break;
+          }
+
+          // For unknown errors, also apply exponential backoff
+          const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          // Check disposal after backoff delay
+          if (this.disposed) return;
+        }
+      }
+
+      // If we exited the loop with an error, handle final failure
+      if (lastError && !this.disposed) {
+        const message = lastError.message;
+        log.error('Agent error after retries exhausted', {
           folder: this.scoop.folder,
           error: message,
-          attempt,
-          isRetryable: isRetryableError(message),
+          maxRetries: MAX_RETRIES,
         });
-
-        // If we've exhausted retries, break out
-        if (attempt === MAX_RETRIES) {
-          break;
+        // Treat exhausted retries as fatal - notify cone bypassing mute
+        this.setStatus('error');
+        if (this.callbacks.onFatalError) {
+          this.callbacks.onFatalError(
+            `Scoop "${this.scoop.name}" failed after ${MAX_RETRIES} attempts: ${message}`
+          );
+        } else {
+          this.callbacks.onError(message);
         }
-
-        // For unknown errors, also apply exponential backoff
-        const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        return;
       }
-    }
 
-    // If we exited the loop with an error, handle final failure
-    if (lastError && !this.disposed) {
-      const message = lastError.message;
-      log.error('Agent error after retries exhausted', {
-        folder: this.scoop.folder,
-        error: message,
-        maxRetries: MAX_RETRIES,
-      });
-      // Treat exhausted retries as fatal - notify cone bypassing mute
-      this.setStatus('error');
-      if (this.callbacks.onFatalError) {
-        this.callbacks.onFatalError(
-          `Scoop "${this.scoop.name}" failed after ${MAX_RETRIES} attempts: ${message}`
-        );
-      } else {
-        this.callbacks.onError(message);
+      if (!this.disposed) {
+        this.setStatus('ready');
       }
+    } finally {
       this.isProcessing = false;
-      return;
     }
-
-    this.isProcessing = false;
-    this.setStatus('ready');
   }
 
   /** Stop the current agent operation and clear any queued prompts */

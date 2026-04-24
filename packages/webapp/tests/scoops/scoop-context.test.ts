@@ -10,6 +10,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   ScoopContext,
   isImageProcessingError,
+  isNonRetryableError,
+  isRetryableError,
   type ScoopContextCallbacks,
 } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
@@ -1041,6 +1043,113 @@ describe('isImageProcessingError', () => {
     expect(isImageProcessingError('prompt is too long: 250000 tokens > 200000 maximum')).toBe(
       false
     );
+  });
+});
+
+describe('isNonRetryableError', () => {
+  it('matches 401 unauthorized errors', () => {
+    expect(isNonRetryableError('401 Unauthorized')).toBe(true);
+    expect(isNonRetryableError('Error: 401 - Invalid API key')).toBe(true);
+  });
+
+  it('matches 403 forbidden errors', () => {
+    expect(isNonRetryableError('403 Forbidden')).toBe(true);
+    expect(isNonRetryableError('Error 403: Access denied')).toBe(true);
+  });
+
+  it('matches 404 not found errors', () => {
+    expect(isNonRetryableError('404 Not Found')).toBe(true);
+    expect(isNonRetryableError('Model not found: claude-opus-4.5')).toBe(true);
+  });
+
+  it('matches invalid model errors', () => {
+    expect(isNonRetryableError('model not found')).toBe(true);
+    expect(isNonRetryableError('invalid model id')).toBe(true);
+    expect(isNonRetryableError('unknown model: gpt-5')).toBe(true);
+    expect(isNonRetryableError('The model does not exist')).toBe(true);
+  });
+
+  it('matches authentication failures', () => {
+    expect(isNonRetryableError('authentication failed')).toBe(true);
+    expect(isNonRetryableError('Unauthorized access')).toBe(true);
+    expect(isNonRetryableError('Forbidden: insufficient permissions')).toBe(true);
+    expect(isNonRetryableError('invalid api key')).toBe(true);
+    expect(isNonRetryableError('Invalid API-Key provided')).toBe(true);
+  });
+
+  it('matches billing/quota errors', () => {
+    expect(isNonRetryableError('insufficient quota')).toBe(true);
+    expect(isNonRetryableError('billing issue detected')).toBe(true);
+    expect(isNonRetryableError('payment required')).toBe(true);
+    expect(isNonRetryableError('account suspended')).toBe(true);
+  });
+
+  it('matches malformed request errors', () => {
+    expect(isNonRetryableError('invalid request body')).toBe(true);
+    expect(isNonRetryableError('malformed JSON')).toBe(true);
+    expect(isNonRetryableError('bad request: missing field')).toBe(true);
+  });
+
+  it('does NOT match 429 rate limit (retryable)', () => {
+    expect(isNonRetryableError('429 Too Many Requests')).toBe(false);
+  });
+
+  it('does NOT match 5xx server errors (retryable)', () => {
+    expect(isNonRetryableError('500 Internal Server Error')).toBe(false);
+    expect(isNonRetryableError('502 Bad Gateway')).toBe(false);
+    expect(isNonRetryableError('503 Service Unavailable')).toBe(false);
+  });
+
+  it('does NOT match network errors (retryable)', () => {
+    expect(isNonRetryableError('network error')).toBe(false);
+    expect(isNonRetryableError('connection refused')).toBe(false);
+    expect(isNonRetryableError('timeout')).toBe(false);
+  });
+});
+
+describe('isRetryableError', () => {
+  it('matches 429 rate limit errors', () => {
+    expect(isRetryableError('429 Too Many Requests')).toBe(true);
+    expect(isRetryableError('rate limit exceeded')).toBe(true);
+    expect(isRetryableError('too many requests, please slow down')).toBe(true);
+    expect(isRetryableError('quota exceeded, try again later')).toBe(true);
+  });
+
+  it('matches 5xx server errors', () => {
+    expect(isRetryableError('500 Internal Server Error')).toBe(true);
+    expect(isRetryableError('502 Bad Gateway')).toBe(true);
+    expect(isRetryableError('503 Service Unavailable')).toBe(true);
+    expect(isRetryableError('504 Gateway Timeout')).toBe(true);
+    expect(isRetryableError('internal server error')).toBe(true);
+    expect(isRetryableError('bad gateway')).toBe(true);
+    expect(isRetryableError('service unavailable')).toBe(true);
+    expect(isRetryableError('gateway timeout')).toBe(true);
+  });
+
+  it('matches network errors', () => {
+    expect(isRetryableError('network error')).toBe(true);
+    expect(isRetryableError('connection refused')).toBe(true);
+    expect(isRetryableError('request timeout')).toBe(true);
+    expect(isRetryableError('ECONNRESET')).toBe(true);
+    expect(isRetryableError('socket hang up')).toBe(true);
+  });
+
+  it('matches temporary overload errors', () => {
+    expect(isRetryableError('server overloaded')).toBe(true);
+    expect(isRetryableError('temporarily unavailable')).toBe(true);
+    expect(isRetryableError('please try again later')).toBe(true);
+  });
+
+  it('does NOT match 4xx client errors (non-retryable)', () => {
+    expect(isRetryableError('401 Unauthorized')).toBe(false);
+    expect(isRetryableError('403 Forbidden')).toBe(false);
+    expect(isRetryableError('404 Not Found')).toBe(false);
+  });
+
+  it('does NOT match auth/model errors (non-retryable)', () => {
+    expect(isRetryableError('invalid api key')).toBe(false);
+    expect(isRetryableError('model not found')).toBe(false);
+    expect(isRetryableError('authentication failed')).toBe(false);
   });
 });
 
