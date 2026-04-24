@@ -305,7 +305,11 @@ export function createNodeCommand(): Command {
               if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
               var text = await resp.text();
               var __mod = { exports: {} };
-              (0, Function)('module', 'exports', text)(__mod, __mod.exports);
+              try {
+                (0, Function)('module', 'exports', text)(__mod, __mod.exports);
+              } catch(fnErr) {
+                throw new Error('Failed to execute module ' + id + ': ' + (fnErr instanceof Error ? fnErr.message : String(fnErr)));
+              }
               return __mod.exports;
             }
           }
