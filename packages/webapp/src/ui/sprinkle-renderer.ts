@@ -18,6 +18,41 @@ declare global {
 
 const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
+const EXTERNAL_SCRIPT_RE =
+  /<script\b([^>]*)\bsrc\s*=\s*["'](https?:\/\/[^"']+)["']([^>]*)><\/script>/gi;
+
+export async function inlineExternalScripts(html: string): Promise<string> {
+  const matches: { full: string; url: string; index: number }[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = EXTERNAL_SCRIPT_RE.exec(html)) !== null) {
+    matches.push({ full: match[0], url: match[2], index: match.index });
+  }
+  EXTERNAL_SCRIPT_RE.lastIndex = 0;
+  if (matches.length === 0) return html;
+
+  const fetched = await Promise.all(
+    matches.map(async (m) => {
+      try {
+        const resp = await fetch(m.url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return { ...m, text: await resp.text() };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { ...m, text: `console.error('[sprinkle] Failed to load ${m.url}: ${msg}')` };
+      }
+    })
+  );
+
+  let result = html;
+  for (let i = fetched.length - 1; i >= 0; i--) {
+    const { full, text } = fetched[i];
+    const escaped = text.replace(/<\/script/gi, '<\\/script');
+    result = result.replace(full, `<script>${escaped}</script>`);
+  }
+
+  return result;
+}
+
 /** Detect whether content is a full HTML document (has DOCTYPE or <html> tag). */
 export function isFullDocument(content: string): boolean {
   const trimmed = content.trimStart().toLowerCase();
@@ -296,10 +331,13 @@ export class SprinkleRenderer {
     // Cache the bundle to avoid repeated fetches
     const lucideScript = await this.getLucideScript();
 
+    // Inline external CDN scripts (CSP blocks remote src in sandbox)
+    const processedContent = fullDoc ? await inlineExternalScripts(content) : content;
+
     iframe.contentWindow!.postMessage(
       {
         type: 'sprinkle-render',
-        content,
+        content: processedContent,
         name: sprinkleName,
         themeCSS,
         savedState,
