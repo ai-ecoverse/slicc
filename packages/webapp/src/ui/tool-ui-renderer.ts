@@ -110,6 +110,7 @@ export class ToolUIRenderer {
     window.addEventListener('message', this.messageHandler);
 
     const { collectThemeCSS } = await import('./sprinkle-renderer.js');
+    const { isThemeLight } = await import('./theme.js');
     const themeCSS = collectThemeCSS();
 
     iframe.contentWindow!.postMessage(
@@ -119,6 +120,7 @@ export class ToolUIRenderer {
         nonce: this.nonce,
         html,
         themeCSS,
+        isLight: isThemeLight(),
       },
       '*'
     );
@@ -213,7 +215,7 @@ function openMountPopup(requestId: string): Promise<Record<string, unknown>> {
     chrome.runtime.onMessage.addListener(listener);
 
     chrome.windows
-      .create({ url, type: 'popup', width: 400, height: 100, focused: true })
+      .create({ url, type: 'popup', width: 300, height: 80, focused: true })
       .catch(() => {
         cleanup();
         resolve({ error: 'Failed to open directory picker window' });
