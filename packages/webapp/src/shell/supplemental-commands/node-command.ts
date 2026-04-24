@@ -295,15 +295,17 @@ export function createNodeCommand(): Command {
           ]);
           const __requireCache = Object.create(null);
           async function __loadModule(id) {
-            var parsedUrl = new URL('https://esm.sh/' + id);
-            parsedUrl.searchParams.set('bundle', '');
-            var url = parsedUrl.toString();
+            var stubUrl = 'https://esm.sh/' + id + '?bundle';
             try {
-              return await import(url);
+              return await import(stubUrl);
             } catch(e) {
-              var resp = await fetch(url);
-              if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
-              var text = await resp.text();
+              var stubResp = await fetch(stubUrl);
+              if (!stubResp.ok) throw new Error('HTTP ' + stubResp.status + ' fetching ' + stubUrl);
+              var stubText = await stubResp.text();
+              var bundleMatch = stubText.match(/from\s+["']([^"']+\.bundle[^"']*)['"]/);
+              var bundleUrl = bundleMatch ? 'https://esm.sh' + bundleMatch[1] : stubUrl;
+              var bundleResp = bundleMatch ? await fetch(bundleUrl) : null;
+              var text = bundleResp && bundleResp.ok ? await bundleResp.text() : stubText;
               var __mod = { exports: {} };
               try {
                 (0, Function)('module', 'exports', text)(__mod, __mod.exports);
