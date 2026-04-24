@@ -90,6 +90,28 @@ struct ServerCommand: AsyncParsableCommand {
         var browserLabel = config.electron ? "Electron" : "Chrome"
         var overlayInjector: ElectronOverlayInjector?
 
+        // Load secrets from the Keychain BEFORE the browser launches.
+        //
+        // Without this hoist, `SecretInjector.loadSecrets()` ran several
+        // hundred milliseconds after Chrome / Electron took window focus,
+        // and every macOS Keychain access prompt for an `ai.sliccy.slicc`
+        // entry appeared *behind* the browser window — one dialog per
+        // secret, all stacked under whichever Chrome tab the user happened
+        // to have on top. Pulling the load forward keeps the prompts in
+        // front of the terminal / Finder window the user already has
+        // focus on, so they can answer them before the browser opens.
+        //
+        // (Note: macOS Keychain Services does not expose a way to coalesce
+        // ACL prompts for N items into one — `kSecMatchItemList` requires
+        // `kSecMatchLimitOne`, and `kSecReturnAttributes` + `kSecReturnData`
+        // + `kSecMatchLimitAll` together returns `errSecParam`. The number
+        // of dialogs is therefore set by the per-item ACL: items added with
+        // `security add-generic-password -A` show no prompt at all; items
+        // added without `-A` prompt once per item until the user clicks
+        // "Always Allow". See skills/google-workspace/SKILL.md.)
+        let envFileSecrets: [Secret] = config.envFileURL.flatMap { Self.parseEnvFileSecrets(at: $0) } ?? []
+        let secretInjector = SecretInjector(sessionId: UUID().uuidString, envFileSecrets: envFileSecrets)
+
         if config.electron, !config.serveOnly {
             guard let electronApp = config.electronApp else {
                 throw ValidationError(
@@ -148,8 +170,6 @@ struct ServerCommand: AsyncParsableCommand {
                 logger: Logger(label: "slicc.static-files")
             )
         )
-        let envFileSecrets: [Secret] = config.envFileURL.flatMap { Self.parseEnvFileSecrets(at: $0) } ?? []
-        let secretInjector = SecretInjector(sessionId: UUID().uuidString, envFileSecrets: envFileSecrets)
         registerAPIRoutes(router: router, lickSystem: lickSystem, config: config, httpClient: httpClient, secretInjector: secretInjector)
 
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
