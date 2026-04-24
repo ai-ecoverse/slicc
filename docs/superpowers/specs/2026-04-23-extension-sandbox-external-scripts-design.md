@@ -2,13 +2,14 @@
 
 ## Problem
 
-Three issues prevent external scripts from working in Chrome extension manifest sandbox pages:
+Four issues with scripts in Chrome extension manifest sandbox pages:
 
 1. **Sprinkle external scripts** — `<script src="https://unpkg.com/...">` blocked by sandbox CSP (`script-src 'self' 'unsafe-inline' 'unsafe-eval'`, no external origins)
 2. **node -e ESM imports** — `import('https://esm.sh/...')` blocked by same CSP; blob URL fallback also blocked since `blob:` isn't in `script-src`
 3. **Dynamic script injection in sprinkle-sandbox** — `document.createElement('script').src = 'slicc-editor.js'` fails at runtime because the sandbox's opaque origin (`null`) can't access `chrome-extension://` URLs dynamically (the same scripts work when loaded statically in `<head>` at page init)
+4. **Lucide MutationObserver crash** — `lucide-icons.js` (line 106) calls `observer.observe(document.body, ...)` but loads in `<head>` before `<body>` exists, so `document.body` is `null` and the call throws `TypeError: parameter 1 is not of type 'Node'`
 
-Root cause: Chrome MV3 manifest sandbox pages get an opaque origin and a fixed CSP that can't be customized. `unsafe-inline` and `unsafe-eval` are allowed, but no external script sources.
+Root cause for 1-3: Chrome MV3 manifest sandbox pages get an opaque origin and a fixed CSP that can't be customized. `unsafe-inline` and `unsafe-eval` are allowed, but no external script sources. Issue 4 is a timing bug in the lucide bundle.
 
 ## Fix 1: Fetch-and-inline external scripts in sprinkles
 
@@ -83,6 +84,26 @@ These custom element bundles are already loaded by the top-level `<script src>` 
 
 The top-level script tags load on every sandbox page load regardless of whether the sprinkle uses custom elements. This is a small cost (~30KB for editor + diff + lucide-icons at lines 8-10) but acceptable since the sandbox page is already loaded.
 
+## Fix 4: Guard lucide MutationObserver against missing body
+
+In `packages/webapp/src/ui/lucide-icons.ts`, line 106 calls `observer.observe(document.body, ...)` unconditionally. When the script loads in `<head>` (as it does in `sprinkle-sandbox.html` line 10), `document.body` is `null`.
+
+Fix: defer the observer to `DOMContentLoaded` or guard with `if (document.body)`. The existing `DOMContentLoaded` listener on line 76 already handles the render call — extend it to also start the observer:
+
+```
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    LucideIcons.render();
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+} else {
+  LucideIcons.render();
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+```
+
+This removes the unconditional `observer.observe(document.body, ...)` at the bottom and folds it into the existing readyState branching.
+
 ## Files changed
 
 | File                                                              | Change                                                                                                                                                |
@@ -90,6 +111,7 @@ The top-level script tags load on every sandbox page load regardless of whether 
 | `packages/webapp/src/ui/sprinkle-renderer.ts`                     | Scan and fetch-inline external `https:` scripts in full-doc HTML before postMessage                                                                   |
 | `packages/chrome-extension/sprinkle-sandbox.html`                 | Add fetch-script parent relay for partial path; remove dead dynamic CE injection (lines 430-441); transform external scripts before re-execution loop |
 | `packages/webapp/src/shell/supplemental-commands/node-command.ts` | `?bundle` URL + `new Function` fallback in `__loadModule`                                                                                             |
+| `packages/webapp/src/ui/lucide-icons.ts`                          | Guard MutationObserver against null `document.body`; defer to DOMContentLoaded                                                                        |
 
 ## Testing
 
@@ -100,3 +122,5 @@ The top-level script tags load on every sandbox page load regardless of whether 
 - CLI mode: no regression for sprinkles with external scripts
 - CLI mode: no regression for `node -e require()`
 - Fetch failure: sprinkle shows error in console, doesn't crash
+- No `MutationObserver` TypeError in extension console when sprinkle-sandbox loads
+- Lucide icons still auto-render in sprinkles after dynamic content injection
