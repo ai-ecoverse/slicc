@@ -474,6 +474,7 @@ addEventListener('message', function(e) {
           }
           document.body.appendChild(live);
         }
+        if (window.LucideIcons) window.LucideIcons.render();
         parent.postMessage({ type: 'sprinkle-rendered' }, '*');
       })();
     }
