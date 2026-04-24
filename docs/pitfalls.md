@@ -103,6 +103,8 @@ Extension CSP also blocks CDN fetches and dynamic asset loading. ImageMagick WAS
 | **Pyodide**          | Bundled at `dist/extension/pyodide/`. Load path: `chrome.runtime.getURL('pyodide/')` (trailing slash required)                                                                              |
 | **Sandbox HTML**     | Loaded via `chrome.runtime.getURL('sandbox.html')` as iframe src                                                                                                                            |
 
+Standalone browser mode loads Pyodide assets from jsdelivr. Keep `pyodide` pinned to an exact version in `package.json`; `packages/webapp/src/shell/supplemental-commands/shared.ts` derives the CDN URL from the installed `pyodide/package.json` version so Renovate updates the npm loader and browser assets together.
+
 **Build Integration**
 
 File: `packages/chrome-extension/vite.config.ts` `closeBundle` hook must:
