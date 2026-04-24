@@ -970,6 +970,7 @@ async function main() {
     }
     const targetUrl = req.headers['x-target-url'] as string;
     if (!targetUrl) {
+      res.setHeader('X-Proxy-Error', '1');
       res.status(400).json({ error: 'Missing X-Target-URL header' });
       return;
     }
@@ -1062,6 +1063,7 @@ async function main() {
         // Unmask request headers (replace masked values with real, validate domain)
         const headerResult = secretProxy.unmaskHeaders(headers, targetHostname);
         if (headerResult.forbidden) {
+          res.setHeader('X-Proxy-Error', '1');
           res.status(403).json({
             error: `Secret "${headerResult.forbidden.secretName}" is not allowed for domain "${headerResult.forbidden.hostname}"`,
           });
@@ -1134,6 +1136,7 @@ async function main() {
       res.end(buffer);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+      res.setHeader('X-Proxy-Error', '1');
       res.status(502).json({ error: `Proxy fetch failed: ${message}` });
     }
   });
