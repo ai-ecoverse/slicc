@@ -163,6 +163,13 @@ describeIfConfigured('deployed tray worker', () => {
       })
     );
 
+    // Round-trip a ping/pong to guarantee the DO has processed the bootstrap.offer
+    // message above before the follow-up HTTP poll arrives. Durable Objects process
+    // WebSocket messages FIFO on a given connection, so pong implies offer is applied.
+    socket.send(JSON.stringify({ type: 'ping' }));
+    const offerAckPong = await nextMessage();
+    expect(offerAckPong).toMatchObject({ type: 'pong', trayId: created.trayId });
+
     const polledBootstrap = await fetch(created.capabilities.join.url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
