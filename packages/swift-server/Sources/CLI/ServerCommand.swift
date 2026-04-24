@@ -90,44 +90,24 @@ struct ServerCommand: AsyncParsableCommand {
         var browserLabel = config.electron ? "Electron" : "Chrome"
         var overlayInjector: ElectronOverlayInjector?
 
-        // Load secrets from the Keychain BEFORE the browser launches.
-        //
-        // Without this hoist, `SecretInjector.loadSecrets()` ran several
-        // hundred milliseconds after Chrome / Electron took window focus,
-        // and every macOS Keychain access prompt for an `ai.sliccy.slicc`
-        // entry appeared *behind* the browser window — one dialog per
-        // secret, all stacked under whichever Chrome tab the user happened
-        // to have on top. Pulling the load forward keeps the prompts in
-        // front of the terminal / Finder window the user already has
-        // focus on, so they can answer them before the browser opens.
-        //
-        // (Note: macOS Keychain Services does not expose a way to coalesce
-        // ACL prompts for N items into one — `kSecMatchItemList` requires
-        // `kSecMatchLimitOne`, and `kSecReturnAttributes` + `kSecReturnData`
-        // + `kSecMatchLimitAll` together returns `errSecParam`. The number
-        // of dialogs is therefore set by the per-item ACL: items added with
-        // `security add-generic-password -A` show no prompt at all; items
-        // added without `-A` prompt once per item until the user clicks
-        // "Always Allow". See skills/google-workspace/SKILL.md.)
-        let envFileSecrets: [Secret] = config.envFileURL.flatMap { Self.parseEnvFileSecrets(at: $0) } ?? []
-        let secretInjector = SecretInjector(sessionId: UUID().uuidString, envFileSecrets: envFileSecrets)
-
+        // Resolve and validate the browser launch plan up-front so any
+        // ValidationError or URL-resolution failure surfaces *before* we
+        // touch the Keychain. Otherwise a misconfigured invocation
+        // (e.g. `--electron` without `--electron-app`) would still pop
+        // Keychain prompts on the way to throwing.
+        enum BrowserLaunchPlan {
+            case electron(appPath: String)
+            case chrome(executable: String?, launchURL: String, userDataDir: String)
+            case serveOnly
+        }
+        let launchPlan: BrowserLaunchPlan
         if config.electron, !config.serveOnly {
             guard let electronApp = config.electronApp else {
                 throw ValidationError(
                     "Electron mode requires an app path. Pass --electron <path> or --electron-app=<path>."
                 )
             }
-
-            let electronLauncher = ElectronLauncher(logger: Logger(label: "slicc.browser.electron-launcher"))
-            let launchedElectron = try await electronLauncher.launch(
-                appPath: electronApp,
-                cdpPort: cdpPort,
-                kill: config.kill
-            )
-            browserProcess = launchedElectron.process
-            browserLabel = launchedElectron.displayName
-            cdpPort = launchedElectron.cdpPort
+            launchPlan = .electron(appPath: electronApp)
         } else if !config.serveOnly {
             let chromeLauncher = ChromeLauncher(logger: Logger(label: "slicc.chrome-launcher"))
             let chromeExecutable = chromeLauncher.findChromeExecutable()
@@ -140,7 +120,53 @@ struct ServerCommand: AsyncParsableCommand {
                 tmpDir: environment["TMPDIR"],
                 servePort: servePort
             )
+            launchPlan = .chrome(
+                executable: chromeExecutable,
+                launchURL: launchURL,
+                userDataDir: userDataDir
+            )
+        } else {
+            launchPlan = .serveOnly
+        }
 
+        // Load secrets from the Keychain BEFORE the browser launches.
+        //
+        // Without this hoist, `SecretInjector.loadSecrets()` ran several
+        // hundred milliseconds after Chrome / Electron took window focus,
+        // and every macOS Keychain access prompt for an `ai.sliccy.slicc`
+        // entry appeared *behind* the browser window — one dialog per
+        // secret, all stacked under whichever Chrome tab the user happened
+        // to have on top. Pulling the load forward keeps the prompts in
+        // front of the terminal / Finder window the user already has
+        // focus on, so they can answer them before the browser opens.
+        //
+        // The CLI/launch-config validation above runs first so we don't
+        // pop Keychain prompts only to bail out with a `ValidationError`.
+        //
+        // (Note: macOS Keychain Services does not expose a way to coalesce
+        // ACL prompts for N items into one — `kSecMatchItemList` requires
+        // `kSecMatchLimitOne`, and `kSecReturnAttributes` + `kSecReturnData`
+        // + `kSecMatchLimitAll` together returns `errSecParam`. The number
+        // of dialogs is therefore set by the per-item ACL: items added with
+        // `security add-generic-password -A` show no prompt at all; items
+        // added without `-A` prompt once per item until the user clicks
+        // "Always Allow". See skills/google-workspace/SKILL.md.)
+        let envFileSecrets: [Secret] = config.envFileURL.flatMap { Self.parseEnvFileSecrets(at: $0) } ?? []
+        let secretInjector = SecretInjector(sessionId: UUID().uuidString, envFileSecrets: envFileSecrets)
+
+        switch launchPlan {
+        case .electron(let electronApp):
+            let electronLauncher = ElectronLauncher(logger: Logger(label: "slicc.browser.electron-launcher"))
+            let launchedElectron = try await electronLauncher.launch(
+                appPath: electronApp,
+                cdpPort: cdpPort,
+                kill: config.kill
+            )
+            browserProcess = launchedElectron.process
+            browserLabel = launchedElectron.displayName
+            cdpPort = launchedElectron.cdpPort
+        case .chrome(let chromeExecutable, let launchURL, let userDataDir):
+            let chromeLauncher = ChromeLauncher(logger: Logger(label: "slicc.chrome-launcher"))
             let launchedChrome = try await chromeLauncher.launch(
                 config: ChromeLaunchConfig(
                     projectRoot: repositoryRoot.path,
@@ -154,6 +180,8 @@ struct ServerCommand: AsyncParsableCommand {
             browserProcess = launchedChrome.process
             browserLabel = "Chrome"
             cdpPort = launchedChrome.cdpPort
+        case .serveOnly:
+            break
         }
 
         let lickSystem = LickSystem()
