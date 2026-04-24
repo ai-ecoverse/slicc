@@ -41,7 +41,7 @@ Transform external scripts before the re-execution loop: scan `document.body` fo
 
 This executes network-fetched code in a CSP-exempt sandbox. This is acceptable because sprinkle content is agent/user-authored (trusted), same as the existing pattern where sprinkle inline scripts already run with `unsafe-eval`. The trust boundary is the same — we're just removing a transport restriction, not expanding the trust model. The `unsafe-eval` capability is already part of Chrome's manifest sandbox CSP by design.
 
-## Fix 2: esm.sh `?bundle` + eval for node -e
+## Fix 2: esm.sh `?bundle` + `new Function` for node -e
 
 ### Change in `node-command.ts`
 
@@ -69,13 +69,13 @@ The exact URL format matters for reproducibility. Use `https://esm.sh/PACKAGE@VE
 
 ### CLI path
 
-The CLI path (non-extension) continues using `import('https://esm.sh/' + id)` directly since it runs in a regular page context with no CSP restrictions. The `?bundle` + eval path is extension-only.
+The CLI path (non-extension) continues using `import('https://esm.sh/' + id)` directly since it runs in a regular page context with no CSP restrictions. The `?bundle` + `new Function` path is extension-only.
 
 ## Fix 3: Remove broken dynamic script injection
 
 Remove lines 430-441 in `sprinkle-sandbox.html` — the `customElements.get('slicc-editor')` / `customElements.get('slicc-diff')` checks and dynamic `<script src>` injection.
 
-These custom element bundles are already loaded by the top-level `<script src="slicc-editor.js">` / `<script src="slicc-diff.js">` at lines 8-10 during page init. The dynamic fallback:
+These custom element bundles are already loaded by the top-level `<script src>` tags at lines 8-9 (`slicc-editor.js`, `slicc-diff.js`) during page init; line 10 loads `lucide-icons.js`. The dynamic fallback:
 
 - Fails with opaque origin error in extension mode
 - Is redundant since the elements are already registered from the initial load
@@ -89,7 +89,7 @@ The top-level script tags load on every sandbox page load regardless of whether 
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `packages/webapp/src/ui/sprinkle-renderer.ts`                     | Scan and fetch-inline external `https:` scripts in full-doc HTML before postMessage                                                                   |
 | `packages/chrome-extension/sprinkle-sandbox.html`                 | Add fetch-script parent relay for partial path; remove dead dynamic CE injection (lines 430-441); transform external scripts before re-execution loop |
-| `packages/webapp/src/shell/supplemental-commands/node-command.ts` | `?bundle` URL + eval fallback in `__loadModule`                                                                                                       |
+| `packages/webapp/src/shell/supplemental-commands/node-command.ts` | `?bundle` URL + `new Function` fallback in `__loadModule`                                                                                             |
 
 ## Testing
 
