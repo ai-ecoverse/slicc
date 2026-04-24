@@ -11,6 +11,7 @@ private let corsAllowMethodsHeader = HTTPField.Name("Access-Control-Allow-Method
 private let corsAllowHeadersHeader = HTTPField.Name("Access-Control-Allow-Headers")!
 private let cacheControlHeader = HTTPField.Name("Cache-Control")!
 private let targetURLHeader = HTTPField.Name("X-Target-URL")!
+private let proxyErrorMarkerHeader = HTTPField.Name("X-Proxy-Error")!
 private let contentTypeHeaderValue = "application/json; charset=utf-8"
 private let htmlContentTypeHeaderValue = "text/html; charset=utf-8"
 private let proxyHopByHopHeaders: Set<String> = [
@@ -224,7 +225,7 @@ func registerAPIRoutes(
         router.on("/api/fetch-proxy", method: method) { request, _ in
             guard let targetURLValue = request.headers[targetURLHeader],
                   let targetURL = URL(string: targetURLValue) else {
-                return try jsonErrorResponse(status: .badRequest, message: "Missing X-Target-URL header")
+                return try proxyErrorResponse(status: .badRequest, message: "Missing X-Target-URL header")
             }
 
             let targetHostname = targetURL.host ?? ""
@@ -241,7 +242,7 @@ func registerAPIRoutes(
                             injectedHeaders[field.name] = replaced
                         }
                     case .domainBlocked(let secretName, let hostname):
-                        return try jsonErrorResponse(
+                        return try proxyErrorResponse(
                             status: .forbidden,
                             message: "Secret \(secretName) is not allowed for domain \(hostname)"
                         )
@@ -276,7 +277,7 @@ func registerAPIRoutes(
                 // --- Response scrubbing: replace real values with masked ---
                 return makeProxyResponse(from: upstreamResponse, secretInjector: secretInjector)
             } catch {
-                return try jsonErrorResponse(status: .badGateway, message: "Proxy fetch failed: \(errorMessage(error))")
+                return try proxyErrorResponse(status: .badGateway, message: "Proxy fetch failed: \(errorMessage(error))")
             }
         }
     }
@@ -361,6 +362,17 @@ private func jsonResponse(
 
 private func jsonErrorResponse(status: HTTPResponse.Status, message: String) throws -> Response {
     try jsonResponse(.object(["error": .string(message)]), status: status)
+}
+
+/// Same as `jsonErrorResponse` but tags the response with `X-Proxy-Error: 1`
+/// so SecureFetch clients can distinguish proxy infrastructure failures from
+/// upstream 4xx/5xx responses that should flow through unchanged.
+private func proxyErrorResponse(status: HTTPResponse.Status, message: String) throws -> Response {
+    try jsonResponse(
+        .object(["error": .string(message)]),
+        status: status,
+        headers: [proxyErrorMarkerHeader: "1"]
+    )
 }
 
 private func corsHeaders(methods: String, headers: String) -> HTTPFields {

@@ -6,6 +6,7 @@
  */
 
 import type { HttpClient, GitHttpRequest, GitHttpResponse } from 'isomorphic-git';
+import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
 
 /**
  * Detect if running as a Chrome extension.
@@ -72,16 +73,10 @@ export function createGitHttpClient(): HttpClient {
           body: fetchBody,
         });
 
-        // Check for proxy errors
-        if (response.status === 502 || response.status === 400) {
-          const errorText = await response.text();
-          let errorMsg = `Proxy error ${response.status}`;
-          try {
-            errorMsg = JSON.parse(errorText).error ?? errorMsg;
-          } catch {
-            // Not JSON
-          }
-          throw new Error(errorMsg);
+        // Only treat as proxy failure when the proxy itself tagged it.
+        // Upstream 4xx/5xx (incl. git's own 401/404) must flow through.
+        if (isProxyError(response)) {
+          throw new Error(await readProxyErrorMessage(response));
         }
       }
 

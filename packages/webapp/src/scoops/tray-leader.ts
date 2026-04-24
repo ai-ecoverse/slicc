@@ -1,4 +1,5 @@
 import { createLogger } from '../core/logger.js';
+import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
 import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from './tray-types.js';
 import * as db from './db.js';
 import { buildTrayWorkerUrl } from './tray-runtime-config.js';
@@ -604,15 +605,10 @@ export function createTrayFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
       headers,
       cache: 'no-store',
     });
-    if (response.status === 400 || response.status === 502) {
-      let message = `Proxy error ${response.status}`;
-      try {
-        const payload = (await response.json()) as { error?: string };
-        message = payload.error ?? message;
-      } catch {
-        // Ignore malformed proxy error bodies.
-      }
-      throw new Error(message);
+    // Only treat as proxy infrastructure failure when the proxy tagged it.
+    // Upstream 4xx/5xx (e.g. tray-worker auth/quotas) must flow through.
+    if (isProxyError(response)) {
+      throw new Error(await readProxyErrorMessage(response));
     }
     return response;
   };

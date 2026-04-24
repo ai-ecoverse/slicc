@@ -29,6 +29,7 @@ import { executeJshFile, executeJsCode } from './jsh-executor.js';
 import { parseShellArgs } from './parse-shell-args.js';
 import { ScriptCatalog } from './script-catalog.js';
 import { trackShellCommand } from '../ui/telemetry.js';
+import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
 
 function basename(path: string): string {
   const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
@@ -220,16 +221,13 @@ function createProxiedFetch(): SecureFetch {
 
     const resp = await fetch('/api/fetch-proxy', init);
 
-    // Check for proxy errors before reading body
-    if (resp.status === 502 || resp.status === 400) {
-      const errorText = await resp.text();
-      let errorMsg = `Proxy error ${resp.status}`;
-      try {
-        errorMsg = JSON.parse(errorText).error ?? errorMsg;
-      } catch {
-        /* not JSON */
-      }
-      throw new Error(errorMsg);
+    // Only treat the response as a proxy infrastructure failure when the
+    // proxy itself tags it with `X-Proxy-Error: 1`. Upstream 4xx/5xx
+    // responses (e.g. Google OAuth's HTTP 400 with `{error:"invalid_client"}`)
+    // must flow through to curl/fetch unchanged — otherwise the caller can't
+    // distinguish "Google said no" from "the proxy is broken".
+    if (isProxyError(resp)) {
+      throw new Error(await readProxyErrorMessage(resp));
     }
 
     const body = await readResponseBody(resp, url);
