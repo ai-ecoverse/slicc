@@ -68,13 +68,13 @@ Manifest sandbox pages (`sandbox.html`, `sprinkle-sandbox.html`, `tool-ui-sandbo
 
 **Solutions**
 
-| Pattern                                    | How it works                                                                                                                               | Used by                                        |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| **Fetch-and-inline (full-doc)**            | Side panel scans HTML for `<script src="https://...">`, fetches content, replaces with `<script>inline</script>` before sending to sandbox | `sprinkle-renderer.ts:inlineExternalScripts()` |
-| **Parent relay (partial)**                 | Sandbox sends `sprinkle-fetch-script` to parent via postMessage, parent fetches, returns `sprinkle-fetch-script-response`                  | `sprinkle-sandbox.html:fetchScriptViaRelay()`  |
-| **`?bundle` + Function constructor**       | Append `?bundle` to esm.sh URLs for IIFE output, evaluate with `(0, Function)('module', 'exports', text)(mod, mod.exports)`                | `node-command.ts:__loadModule()`               |
-| **Static `<script src>` in `<head>` only** | Extension-relative scripts must load statically in the initial HTML, not via dynamic `createElement`                                       | `sprinkle-sandbox.html` lines 8-10             |
-| **Defer to DOMContentLoaded**              | Scripts loaded in `<head>` must guard `document.body` access                                                                               | `lucide-icons.ts:startLucide()`                |
+| Pattern                                    | How it works                                                                                                                                             | Used by                                        |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| **Fetch-and-inline (full-doc)**            | Side panel scans HTML for `<script src="https://...">`, fetches content, replaces with `<script>inline</script>` before sending to sandbox               | `sprinkle-renderer.ts:inlineExternalScripts()` |
+| **Parent relay (partial)**                 | Sandbox sends `sprinkle-fetch-script` to parent via postMessage, parent fetches, returns `sprinkle-fetch-script-response`                                | `sprinkle-sandbox.html:fetchScriptViaRelay()`  |
+| **jsdelivr + Function constructor**        | Fetch from `https://cdn.jsdelivr.net/npm/PACKAGE` (serves UMD/CJS main file), evaluate with `(0, Function)('module', 'exports', text)(mod, mod.exports)` | `node-command.ts:__loadModule()`               |
+| **Static `<script src>` in `<head>` only** | Extension-relative scripts must load statically in the initial HTML, not via dynamic `createElement`                                                     | `sprinkle-sandbox.html` lines 8-10             |
+| **Guard `document.body` with try-catch**   | Scripts loaded in `<head>` must guard `observer.observe(document.body)` — use try-catch, not DOMContentLoaded (which interferes with sandbox page load)  | `lucide-icons.ts`                              |
 
 **Key rules for extension sandbox development:**
 
