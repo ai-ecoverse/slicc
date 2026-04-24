@@ -1,4 +1,5 @@
 import type { PyodideInterface } from 'pyodide';
+import { version as pyodidePackageVersion } from 'pyodide/package.json';
 import { getMimeType } from '../../core/mime-types.js';
 import { normalizePath } from '../../fs/path-utils.js';
 
@@ -20,7 +21,16 @@ export interface SqlJsModule {
 type InitSqlJs = (options?: { locateFile?: (file: string) => string }) => Promise<SqlJsModule>;
 
 const SQLJS_WASM_CDN = 'https://sql.js.org/dist/';
-const PYODIDE_CDN = 'https://cdn.jsdelivr.net/pyodide/v0.27.7/full/';
+
+export function resolvePinnedPackageVersion(packageName: string, versionSpec: unknown): string {
+  if (typeof versionSpec !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(versionSpec)) {
+    throw new Error(`${packageName} must use an exact semver version in package.json`);
+  }
+  return versionSpec;
+}
+
+export const PYODIDE_VERSION = resolvePinnedPackageVersion('pyodide', pyodidePackageVersion);
+export const PYODIDE_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
 
 export const NODE_VERSION = 'v20.0.0-js-shim';
 

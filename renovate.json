@@ -7,6 +7,10 @@
   "platformAutomerge": true,
   "packageRules": [
     {
+      "matchPackageNames": ["pyodide"],
+      "rangeStrategy": "pin"
+    },
+    {
       "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
       "groupName": "non-major dependencies",
       "groupSlug": "non-major"
