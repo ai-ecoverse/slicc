@@ -47,7 +47,7 @@ export async function inlineExternalScripts(html: string): Promise<string> {
   for (let i = fetched.length - 1; i >= 0; i--) {
     const { full, text } = fetched[i];
     const escaped = text.replace(/<\/script/gi, '<\\/script');
-    result = result.replace(full, `<script>${escaped}</script>`);
+    result = result.replace(full, () => `<script>${escaped}</script>`);
   }
 
   return result;

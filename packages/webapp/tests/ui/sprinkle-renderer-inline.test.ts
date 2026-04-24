@@ -63,6 +63,17 @@ describe('inlineExternalScripts', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
+  it('preserves $& replacement patterns in fetched content', async () => {
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve('n.replace(Wt,"\\\\$&")'),
+    });
+    const html = '<script src="https://cdn.example.com/lib.js"></script>';
+    const result = await inlineExternalScripts(html);
+    expect(result).toContain('\\\\$&');
+    expect(result).not.toContain('cdn.example.com');
+  });
+
   it('escapes closing script tags in fetched content', async () => {
     (global.fetch as any).mockResolvedValue({
       ok: true,
