@@ -110,6 +110,7 @@ export class ToolUIRenderer {
     window.addEventListener('message', this.messageHandler);
 
     const { collectThemeCSS } = await import('./sprinkle-renderer.js');
+    const { isThemeLight } = await import('./theme.js');
     const themeCSS = collectThemeCSS();
 
     iframe.contentWindow!.postMessage(
@@ -119,6 +120,7 @@ export class ToolUIRenderer {
         nonce: this.nonce,
         html,
         themeCSS,
+        isLight: isThemeLight(),
       },
       '*'
     );
