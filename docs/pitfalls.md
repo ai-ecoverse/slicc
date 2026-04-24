@@ -80,9 +80,12 @@ Manifest sandbox pages (`sandbox.html`, `sprinkle-sandbox.html`, `tool-ui-sandbo
 
 1. **Never use `<script src="https://...">` in sandbox HTML** — it will be blocked by CSP. Use fetch-and-inline or the parent relay instead.
 2. **Never dynamically create `<script>` elements with extension-relative `src`** — opaque origin blocks runtime loads. Load statically in `<head>`.
-3. **Never call `import()` with external URLs in sandbox context** — CSP blocks it. Use `?bundle` + Function constructor for npm packages.
-4. **Always guard `document.body` in scripts loaded from `<head>`** — defer to `DOMContentLoaded`.
+3. **Never call `import()` with external URLs in sandbox context** — CSP blocks it and generates noisy console errors even when caught. Use jsdelivr CDN + indirect Function constructor (`(0, Function)('module', 'exports', text)`) for npm packages in `node -e`.
+4. **Always guard `document.body` in scripts loaded from `<head>`** — use `try {} catch {}` around `observer.observe(document.body)` rather than deferring to DOMContentLoaded (DOMContentLoaded listeners interfere with sandbox page load timing).
 5. **Use the parent relay for cross-origin fetches** — sandbox null origin means CORS is unreliable. The side panel has full network access.
+6. **Call `LucideIcons.render()` explicitly after injecting content in partial-content sprinkles** — the MutationObserver can't start in `<head>` (body is null), so icons won't auto-render. An explicit `render()` call after script execution handles this.
+7. **Use function replacements with `String.replace` when the replacement contains fetched code** — `String.replace(str, replacement)` interprets `$&`, `$1`, etc. as special patterns. Minified libraries (e.g. lodash) contain `$&` in regex escape functions. Use `str.replace(match, () => replacement)` to prevent corruption.
+8. **esm.sh `?bundle` returns ESM stubs, not evaluable bundles** — the top-level URL returns a small file with `export ... from "/.../pkg.bundle.mjs"`. Use jsdelivr (`https://cdn.jsdelivr.net/npm/PACKAGE`) instead, which serves the npm package's main file (typically UMD/CJS).
 
 **macOS TCC and Side Panel Crashes**
 

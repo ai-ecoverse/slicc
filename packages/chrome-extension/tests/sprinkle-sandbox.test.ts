@@ -114,4 +114,19 @@ describe('sprinkle-sandbox.html extension sandbox fixes', () => {
     expect(relayScript).toContain('setTimeout');
     expect(relayScript).toContain('30000');
   });
+
+  it('calls LucideIcons.render() after partial-content script execution', () => {
+    const scripts = extractScriptBlocks(sandboxHtml);
+    const mainScript = scripts.find((s) => s.includes('executeScripts'));
+    expect(mainScript).toBeTruthy();
+    expect(mainScript).toContain('LucideIcons');
+    expect(mainScript).toContain('.render()');
+  });
+
+  it('partial-content scripts handle non-HTTP src with a warning', () => {
+    const scripts = extractScriptBlocks(sandboxHtml);
+    const mainScript = scripts.find((s) => s.includes('executeScripts'));
+    expect(mainScript).toBeTruthy();
+    expect(mainScript).toContain('unsupported src');
+  });
 });
