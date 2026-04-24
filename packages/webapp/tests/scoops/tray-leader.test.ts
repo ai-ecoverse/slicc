@@ -506,4 +506,414 @@ describe('tray-leader', () => {
 
     manager.stop();
   });
+
+  it('auto-reconnects after the leader WebSocket closes unexpectedly', async () => {
+    const store = new MemorySessionStore();
+    const sockets: FakeWebSocket[] = [];
+    const socketReadyPromises: Array<{ promise: Promise<void>; resolve: () => void }> = [];
+    for (let i = 0; i < 2; i++) {
+      let resolve!: () => void;
+      const promise = new Promise<void>((r) => {
+        resolve = r;
+      });
+      socketReadyPromises.push({ promise, resolve });
+    }
+
+    // Pre-seed the store so the manager re-attaches without recreating the tray.
+    store.value = {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'tray-1',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'controller-1',
+      controllerUrl: 'https://tray.example.com/controller/token',
+      joinUrl: 'https://tray.example.com/join/token',
+      webhookUrl: 'https://tray.example.com/webhook/token',
+      leaderKey: 'leader-key-1',
+      leaderWebSocketUrl: 'wss://tray.example.com/ws/1',
+      runtime: 'slicc-standalone',
+    };
+
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      // Initial attach
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            trayId: 'tray-1',
+            controllerId: 'controller-1',
+            role: 'leader',
+            leaderKey: 'leader-key-1',
+            websocket: { url: 'wss://tray.example.com/ws/1' },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      )
+      // Reconnect attach
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            trayId: 'tray-1',
+            controllerId: 'controller-1',
+            role: 'leader',
+            leaderKey: 'leader-key-1',
+            websocket: { url: 'wss://tray.example.com/ws/2' },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      );
+
+    const onReconnecting = vi.fn();
+    const onReconnected = vi.fn();
+    let socketIndex = 0;
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        const s = new FakeWebSocket();
+        sockets.push(s);
+        socketReadyPromises[socketIndex].resolve();
+        socketIndex++;
+        return s;
+      },
+      pingIntervalMs: 60_000,
+      reconnect: { sleep: () => Promise.resolve(), baseDelayMs: 1, maxDelayMs: 1 },
+      onReconnecting,
+      onReconnected,
+    });
+
+    const startPromise = manager.start();
+    await socketReadyPromises[0].promise;
+    sockets[0].dispatch('message', {
+      data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-1' }),
+    });
+    const session1 = await startPromise;
+    expect(session1.trayId).toBe('tray-1');
+
+    // Simulate the leader tab being woken back up: the WebSocket dies.
+    sockets[0].dispatch('close', {});
+
+    // Yield to the microtask queue so the reconnect loop can run.
+    await socketReadyPromises[1].promise;
+    sockets[1].dispatch('message', {
+      data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-1' }),
+    });
+
+    // Wait for the reconnect to complete (callback is invoked at end of connectOnce).
+    await vi.waitFor(() => {
+      expect(onReconnected).toHaveBeenCalledTimes(1);
+    });
+
+    expect(onReconnecting).toHaveBeenCalledWith(1, expect.any(String));
+    expect(getLeaderTrayRuntimeStatus()).toMatchObject({ state: 'leader' });
+    expect(sockets).toHaveLength(2);
+
+    manager.stop();
+  });
+
+  it('gives up reconnect after maxAttempts and surfaces the error', async () => {
+    const store = new MemorySessionStore();
+    store.value = {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'tray-1',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'controller-1',
+      controllerUrl: 'https://tray.example.com/controller/token',
+      joinUrl: 'https://tray.example.com/join/token',
+      webhookUrl: 'https://tray.example.com/webhook/token',
+      leaderKey: 'leader-key-1',
+      leaderWebSocketUrl: 'wss://tray.example.com/ws/1',
+      runtime: 'slicc-standalone',
+    };
+
+    // First fetch: initial attach. Subsequent fetches: always reject (reconnect attempts fail).
+    let callCount = 0;
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        return new Response(
+          JSON.stringify({
+            trayId: 'tray-1',
+            controllerId: 'controller-1',
+            role: 'leader',
+            leaderKey: 'leader-key-1',
+            websocket: { url: 'wss://tray.example.com/ws/1' },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      throw new Error('network down');
+    });
+
+    const onReconnectGaveUp = vi.fn();
+    const sockets: FakeWebSocket[] = [];
+    let resolveFirstReady!: () => void;
+    const firstReady = new Promise<void>((r) => {
+      resolveFirstReady = r;
+    });
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        const s = new FakeWebSocket();
+        sockets.push(s);
+        if (sockets.length === 1) resolveFirstReady();
+        return s;
+      },
+      pingIntervalMs: 60_000,
+      reconnect: {
+        sleep: () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
+        maxAttempts: 3,
+        baseDelayMs: 1,
+        maxDelayMs: 1,
+      },
+      onReconnectGaveUp,
+    });
+
+    const startPromise = manager.start();
+    await firstReady;
+    sockets[0].dispatch('message', {
+      data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-1' }),
+    });
+    await startPromise;
+
+    sockets[0].dispatch('close', {});
+
+    await vi.waitFor(() => {
+      expect(onReconnectGaveUp).toHaveBeenCalledTimes(1);
+    });
+
+    expect(onReconnectGaveUp).toHaveBeenCalledWith(expect.any(String), 3);
+    expect(getLeaderTrayRuntimeStatus()).toMatchObject({
+      state: 'error',
+      error: expect.stringContaining('Leader reconnect failed after 3 attempts'),
+    });
+
+    manager.stop();
+  });
+
+  it('does not reconnect after stop() is called explicitly', async () => {
+    const store = new MemorySessionStore();
+    store.value = {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'tray-1',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'controller-1',
+      controllerUrl: 'https://tray.example.com/controller/token',
+      joinUrl: 'https://tray.example.com/join/token',
+      webhookUrl: 'https://tray.example.com/webhook/token',
+      leaderKey: 'leader-key-1',
+      leaderWebSocketUrl: 'wss://tray.example.com/ws/1',
+      runtime: 'slicc-standalone',
+    };
+
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          trayId: 'tray-1',
+          controllerId: 'controller-1',
+          role: 'leader',
+          leaderKey: 'leader-key-1',
+          websocket: { url: 'wss://tray.example.com/ws/1' },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+
+    const onReconnecting = vi.fn();
+    const sockets: FakeWebSocket[] = [];
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((r) => {
+      resolveReady = r;
+    });
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        const s = new FakeWebSocket();
+        sockets.push(s);
+        if (sockets.length === 1) resolveReady();
+        return s;
+      },
+      pingIntervalMs: 60_000,
+      reconnect: { sleep: () => Promise.resolve(), baseDelayMs: 1, maxDelayMs: 1 },
+      onReconnecting,
+    });
+
+    const startPromise = manager.start();
+    await ready;
+    sockets[0].dispatch('message', {
+      data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-1' }),
+    });
+    await startPromise;
+
+    manager.stop();
+    sockets[0].dispatch('close', {}); // would normally trigger reconnect
+
+    // Wait a tick to give any errant reconnect a chance to fire.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onReconnecting).not.toHaveBeenCalled();
+    expect(sockets).toHaveLength(1);
+    expect(getLeaderTrayRuntimeStatus()).toEqual({
+      state: 'inactive',
+      session: null,
+      error: null,
+    });
+  });
+
+  it('respects reconnect: false to disable auto-reconnect', async () => {
+    const store = new MemorySessionStore();
+    store.value = {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'tray-1',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'controller-1',
+      controllerUrl: 'https://tray.example.com/controller/token',
+      joinUrl: 'https://tray.example.com/join/token',
+      webhookUrl: 'https://tray.example.com/webhook/token',
+      leaderKey: 'leader-key-1',
+      leaderWebSocketUrl: 'wss://tray.example.com/ws/1',
+      runtime: 'slicc-standalone',
+    };
+
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          trayId: 'tray-1',
+          controllerId: 'controller-1',
+          role: 'leader',
+          leaderKey: 'leader-key-1',
+          websocket: { url: 'wss://tray.example.com/ws/1' },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+
+    const sockets: FakeWebSocket[] = [];
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((r) => {
+      resolveReady = r;
+    });
+    const onReconnecting = vi.fn();
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        const s = new FakeWebSocket();
+        sockets.push(s);
+        resolveReady();
+        return s;
+      },
+      pingIntervalMs: 60_000,
+      reconnect: false,
+      onReconnecting,
+    });
+
+    const startPromise = manager.start();
+    await ready;
+    sockets[0].dispatch('message', {
+      data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-1' }),
+    });
+    await startPromise;
+
+    sockets[0].dispatch('close', {});
+    await Promise.resolve();
+
+    expect(onReconnecting).not.toHaveBeenCalled();
+    expect(sockets).toHaveLength(1);
+    expect(getLeaderTrayRuntimeStatus()).toMatchObject({
+      state: 'error',
+      error: expect.stringContaining('Leader WebSocket dropped'),
+    });
+    // Regression: tearDownSocket calling socket.close() must NOT re-enter
+    // the close handler in an unbounded loop (FakeWebSocket dispatches
+    // 'close' synchronously from close()).
+    expect(sockets[0].closeCalls).toBeLessThanOrEqual(2);
+
+    manager.stop();
+  });
+
+  it('does not re-enter the close handler when teardown synchronously dispatches close', async () => {
+    // Regression test for re-entrant close: when reconnect is disabled and
+    // tearDownSocket() invokes socket.close(), some socket implementations
+    // synchronously fire the close event. The ping-loop close listener must
+    // not re-run handleUnexpectedDisconnect's branch and recurse.
+    const store = new MemorySessionStore();
+    store.value = {
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: 'tray-1',
+      createdAt: '2026-03-11T00:00:00.000Z',
+      controllerId: 'controller-1',
+      controllerUrl: 'https://tray.example.com/controller/token',
+      joinUrl: 'https://tray.example.com/join/token',
+      webhookUrl: 'https://tray.example.com/webhook/token',
+      leaderKey: 'leader-key-1',
+      leaderWebSocketUrl: 'wss://tray.example.com/ws/1',
+      runtime: 'slicc-standalone',
+    };
+
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          trayId: 'tray-1',
+          controllerId: 'controller-1',
+          role: 'leader',
+          leaderKey: 'leader-key-1',
+          websocket: { url: 'wss://tray.example.com/ws/1' },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+
+    const sockets: FakeWebSocket[] = [];
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((r) => {
+      resolveReady = r;
+    });
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        const s = new FakeWebSocket();
+        sockets.push(s);
+        resolveReady();
+        return s;
+      },
+      pingIntervalMs: 60_000,
+      reconnect: false,
+    });
+
+    const startPromise = manager.start();
+    await ready;
+    sockets[0].dispatch('message', {
+      data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-1' }),
+    });
+    await startPromise;
+
+    // Triggering close should run cleanup exactly once: the manual dispatch
+    // here calls listeners (no extra closeCalls), and tearDownSocket nulls
+    // this.socket BEFORE invoking socket.close() so the synchronous
+    // re-dispatch is filtered by the listener's `this.socket !== socket`
+    // guard (no recursion, no further closeCalls).
+    sockets[0].dispatch('close', {});
+    expect(sockets[0].closeCalls).toBe(1);
+
+    manager.stop();
+  });
 });

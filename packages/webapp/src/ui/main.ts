@@ -61,6 +61,7 @@ import {
 } from '../scoops/tray-webrtc.js';
 import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
 import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
+import { TabPersistenceGuard } from '../scoops/tab-persistence-guard.js';
 import {
   getElectronOverlayInitialTab,
   getLickWebSocketUrl,
@@ -2215,6 +2216,7 @@ async function main(): Promise<void> {
       let leaderSync!: LeaderSyncManager;
       let trayPeers!: LeaderTrayPeerManager;
       let leaderTargetRefreshInterval: ReturnType<typeof setInterval>;
+      const tabPersistenceGuard = new TabPersistenceGuard();
 
       const createAndWireLeaderSync = () => {
         leaderSync = new LeaderSyncManager({
@@ -2233,6 +2235,15 @@ async function main(): Promise<void> {
           },
           onFollowerAbort: () => {
             coneAgentHandle.stop();
+          },
+          onFollowerCountChanged: (count) => {
+            // Keep this tab resident in Chrome's memory while followers are attached
+            // — discarded leader tabs drop the join URL and force a hard reload.
+            if (count > 0) {
+              tabPersistenceGuard.activate();
+            } else {
+              tabPersistenceGuard.deactivate();
+            }
           },
         });
         leaderSyncRef = leaderSync;
@@ -2294,6 +2305,23 @@ async function main(): Promise<void> {
             });
           });
         },
+        onReconnecting: (attempt, lastError) => {
+          log.info('Leader tray reconnecting', { attempt, lastError });
+        },
+        onReconnected: (session) => {
+          log.info('Leader tray reconnected', { trayId: session.trayId });
+          const trayUrl = buildTrayLaunchUrl(
+            window.location.href,
+            session.workerBaseUrl,
+            session.trayId
+          );
+          if (trayUrl !== window.location.href) {
+            window.history.replaceState(window.history.state, '', trayUrl);
+          }
+        },
+        onReconnectGaveUp: (lastError, attempts) => {
+          log.warn('Leader tray reconnect gave up', { lastError, attempts });
+        },
       });
       // Wire the tray reset callback for `host reset` command
       setTrayResetter(async () => {
@@ -2339,6 +2367,7 @@ async function main(): Promise<void> {
           leaderSync.stop();
           trayPeers.stop();
           leaderTray.stop();
+          tabPersistenceGuard.deactivate();
         },
         { once: true }
       );

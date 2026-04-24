@@ -339,6 +339,15 @@ async function init(): Promise<void> {
             });
           });
         },
+        onReconnecting: (attempt, lastError) => {
+          log.info('Extension leader tray reconnecting', { attempt, lastError });
+        },
+        onReconnected: (session) => {
+          log.info('Extension leader tray reconnected', { trayId: session.trayId });
+        },
+        onReconnectGaveUp: (lastError, attempts) => {
+          log.warn('Extension leader tray reconnect gave up', { lastError, attempts });
+        },
       });
       void trayLeader.start().catch((error) => {
         log.warn('Leader tray join failed', {
