@@ -424,22 +424,6 @@ addEventListener('message', function(e) {
         if (v >= 0 && v <= 100) fills[i].style.width = v + '%';
       }
 
-      // Lazy-load custom element bundles before executing sprinkle scripts.
-      // Uses synchronous script injection so elements are registered before use.
-      var contentStr = msg.content || '';
-      if (contentStr.indexOf('<slicc-editor') !== -1 && !customElements.get('slicc-editor')) {
-        var edScript = document.createElement('script');
-        edScript.src = 'slicc-editor.js';
-        edScript.async = false;
-        document.head.appendChild(edScript);
-      }
-      if (contentStr.indexOf('<slicc-diff') !== -1 && !customElements.get('slicc-diff')) {
-        var dfScript = document.createElement('script');
-        dfScript.src = 'slicc-diff.js';
-        dfScript.async = false;
-        document.head.appendChild(dfScript);
-      }
-
       // Execute scripts (sandbox is CSP-exempt)
       // IMPORTANT: scope to body — document.querySelectorAll would also grab
       // the head script, re-execute it, and reset all window state.
