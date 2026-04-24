@@ -87,7 +87,7 @@ export function adaptTool(tool: ToolDefinition): AgentTool<any> {
     parameters: tool.inputSchema as any,
     async execute(
       toolCallId: string,
-      params: Record<string, any>,
+      params: unknown,
       signal?: AbortSignal,
       onUpdate?: (partialResult: AgentToolResult<any>) => void
     ): Promise<AgentToolResult<any>> {
@@ -98,7 +98,7 @@ export function adaptTool(tool: ToolDefinition): AgentTool<any> {
       }
 
       try {
-        const result = await tool.execute(params, signal);
+        const result = await tool.execute((params ?? {}) as Record<string, unknown>, signal);
         let content: (TextContent | ImageContent)[];
         try {
           content = await parseToolResultContent(result.content);
