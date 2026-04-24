@@ -279,6 +279,28 @@ export class SprinkleRenderer {
               '*'
             )
         );
+      } else if (msg.type === 'sprinkle-fetch-script') {
+        const url = msg.url as string;
+        const id = msg.id as string;
+        fetch(url)
+          .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+          .then((text) => {
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-fetch-script-response', id, url, text },
+              '*'
+            );
+          })
+          .catch((err: unknown) => {
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-fetch-script-response',
+                id,
+                url,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            );
+          });
       }
     };
     window.addEventListener('message', this.messageHandler);
