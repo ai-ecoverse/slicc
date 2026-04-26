@@ -167,6 +167,26 @@ struct SliccstartApp: App {
         if SliccBootstrapper.isBundled {
             appUpdater.check()
         }
+
+        autoLaunchConfiguredBrowser()
+    }
+
+    /// Launch the browser the user picked in Settings > Startup, if any.
+    /// Stored as the `AppTarget.id` (bundle path) under
+    /// `autoLaunchAppIdKey`. Failures are logged but never block startup.
+    private func autoLaunchConfiguredBrowser() {
+        let savedId = UserDefaults.standard.string(forKey: autoLaunchAppIdKey) ?? ""
+        guard !savedId.isEmpty else { return }
+        guard let target = targets.first(where: { $0.id == savedId && $0.type == .chromiumBrowser }) else {
+            log.info("autoLaunch: no matching browser found for id=\(savedId, privacy: .public)")
+            return
+        }
+        log.info("autoLaunch: launching \(target.name, privacy: .public)")
+        do {
+            try sliccProcess.launchStandalone(target)
+        } catch {
+            log.error("autoLaunch failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func createDebugBuild(for target: AppTarget) async {
