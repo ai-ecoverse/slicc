@@ -235,9 +235,27 @@ export class NavigationWatcher {
   private async handleAttachedToTarget(params: Record<string, unknown>): Promise<void> {
     const sessionId = params['sessionId'] as string | undefined;
     const info = params['targetInfo'] as
-      | { targetId?: string; type?: string; title?: string; url?: string }
+      | { targetId?: string; type?: string; title?: string; url?: string; openerId?: string }
       | undefined;
     if (!sessionId || !info || info.type !== 'page' || typeof info.targetId !== 'string') return;
+
+    // Popups opened via window.open() have an openerId pointing to the opener
+    // tab. Detach immediately — attaching CDP sessions to popups causes Chrome
+    // to show "debugger paused in another tab" in the opener, freezing OAuth
+    // flows and similar popup-based interactions.
+    if (info.openerId) {
+      log.debug('Detaching popup target to avoid debugger pause', {
+        targetId: info.targetId,
+        openerId: info.openerId,
+        url: info.url,
+      });
+      try {
+        await this.transport.send('Target.detachFromTarget', { sessionId });
+      } catch {
+        // best-effort
+      }
+      return;
+    }
 
     this.sessions.set(sessionId, {
       targetId: info.targetId,
