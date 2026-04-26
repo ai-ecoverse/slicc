@@ -17,7 +17,7 @@
   "vars": {
     "CLOUDFLARE_TURN_KEY_ID": "6c2201a0453bd6695ecb24a00b2b6ed1",
     // OAuth provider client IDs (public, safe to commit)
-    "GITHUB_CLIENT_ID": "",
+    "GITHUB_CLIENT_ID": "Ov23li6DZA5dPBZIaqFS",
   },
   // Secrets must be set via: npx wrangler secret put <SECRET_NAME>
   // - CLOUDFLARE_TURN_API_TOKEN
@@ -49,7 +49,7 @@
       "routes": [],
       "vars": {
         "CLOUDFLARE_TURN_KEY_ID": "6c2201a0453bd6695ecb24a00b2b6ed1",
-        "GITHUB_CLIENT_ID": "",
+        "GITHUB_CLIENT_ID": "Ov23liUe1b3b6GDjPGz4",
       },
       "durable_objects": {
         "bindings": [
