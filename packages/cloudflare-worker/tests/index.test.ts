@@ -1368,7 +1368,10 @@ describe('generic OAuth token broker', () => {
     const [fetchUrl, fetchInit] = mockFetch.mock.calls[0]!;
     expect(fetchUrl).toBe('https://github.com/login/oauth/access_token');
     expect(fetchInit?.method).toBe('POST');
-    expect(fetchInit?.headers).toMatchObject({ Accept: 'application/json' });
+    expect(fetchInit?.headers).toMatchObject({
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    });
   });
 
   it('returns 400 for unknown provider', async () => {
@@ -1463,10 +1466,12 @@ describe('generic OAuth token broker', () => {
     expect(post.headers.get('access-control-allow-origin')).toBeTruthy();
   });
 
-  it('returns 405 for non-POST requests to /oauth/token', async () => {
+  it('returns 405 with CORS and Allow headers for non-POST requests to /oauth/token', async () => {
     const env = oauthEnv();
     const response = await handleWorkerRequest(new Request('https://tray.test/oauth/token'), env);
     expect(response.status).toBe(405);
+    expect(response.headers.get('allow')).toContain('POST');
+    expect(response.headers.get('access-control-allow-origin')).toBeTruthy();
   });
 
   it('revokes a token via POST /oauth/revoke (delete-basic method)', async () => {

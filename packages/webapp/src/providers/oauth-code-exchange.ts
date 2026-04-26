@@ -14,7 +14,7 @@ import {
   DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
 } from '../scoops/tray-runtime-config.js';
 
-/** Resolve the worker base URL (user override → runtime config → production default). */
+/** Resolve the worker base URL (localStorage override → production default). */
 function getWorkerBaseUrl(): string {
   try {
     const stored = localStorage.getItem(TRAY_WORKER_STORAGE_KEY);
@@ -58,25 +58,28 @@ export async function exchangeOAuthCode(opts: {
     }),
   });
 
-  const body = await res.json();
+  let body: Record<string, unknown>;
+  try {
+    body = (await res.json()) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Token exchange failed (HTTP ${res.status}): non-JSON response`);
+  }
 
   if (!res.ok && res.status !== 200) {
     const msg =
-      (body as { error_description?: string; error?: string }).error_description ??
-      (body as { error?: string }).error ??
+      (body.error_description as string) ??
+      (body.error as string) ??
       `Token exchange failed (HTTP ${res.status})`;
     throw new Error(msg);
   }
 
   // GitHub returns 200 even for errors — check for error field
-  if ((body as { error?: string }).error) {
-    const msg =
-      (body as { error_description?: string; error: string }).error_description ??
-      (body as { error: string }).error;
+  if (body.error) {
+    const msg = (body.error_description as string) ?? (body.error as string);
     throw new Error(msg);
   }
 
-  return body as TokenResponse;
+  return body as unknown as TokenResponse;
 }
 
 /**

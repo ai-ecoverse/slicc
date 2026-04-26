@@ -9,14 +9,24 @@
 import { jsonResponse } from './shared.js';
 import { OAUTH_PROVIDERS, type OAuthProviderDef } from './oauth-registry.js';
 
-// ── CORS helper ───────────���────────────────────────────────────────
+// ── CORS helper ────────────────────────────────────────────────────
+
+const ALLOWED_ORIGINS = ['https://www.sliccy.ai', 'https://sliccy.ai', /^http:\/\/localhost:\d+$/];
+
+function isAllowedOrigin(origin: string): boolean {
+  return ALLOWED_ORIGINS.some((allowed) =>
+    typeof allowed === 'string' ? allowed === origin : allowed.test(origin)
+  );
+}
 
 function oauthCorsHeaders(request: Request): Record<string, string> {
-  const origin = request.headers.get('Origin') ?? '*';
+  const origin = request.headers.get('Origin');
+  const allowedOrigin = origin && isAllowedOrigin(origin) ? origin : 'https://www.sliccy.ai';
   return {
-    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Origin': allowedOrigin,
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
+    Vary: 'Origin',
   };
 }
 
@@ -25,7 +35,15 @@ export function handleOAuthPreflight(request: Request): Response {
   return new Response(null, { status: 204, headers: oauthCorsHeaders(request) });
 }
 
-// ── Credential resolution ─────��────────────────────────────────────
+/** Return a 405 with CORS headers and Allow header. */
+export function handleOAuthMethodNotAllowed(request: Request): Response {
+  return jsonResponse({ error: 'method_not_allowed', code: 'METHOD_NOT_ALLOWED' }, 405, {
+    ...oauthCorsHeaders(request),
+    Allow: 'POST, OPTIONS',
+  });
+}
+
+// ── Credential resolution ──────────────────────────────────────────
 
 type EnvRecord = Record<string, unknown>;
 
@@ -40,7 +58,7 @@ function resolveCredentials(
   return { clientId, clientSecret };
 }
 
-// ── Token exchange ─────────────────────��───────────────────────────
+// ── Token exchange ─────────────────────────────────────────────────
 
 export async function handleOAuthToken(
   request: Request,
@@ -70,14 +88,14 @@ export async function handleOAuthToken(
     );
   }
 
-  const def = OAUTH_PROVIDERS[provider];
-  if (!def) {
+  if (!Object.prototype.hasOwnProperty.call(OAUTH_PROVIDERS, provider)) {
     return jsonResponse(
       { error: 'unknown_provider', error_description: `Unknown OAuth provider "${provider}"` },
       400,
       cors
     );
   }
+  const def = OAUTH_PROVIDERS[provider];
 
   if (!code) {
     return jsonResponse(
@@ -99,18 +117,19 @@ export async function handleOAuthToken(
     );
   }
 
+  // OAuth 2.0 spec requires application/x-www-form-urlencoded for token exchange
   const upstream = await fetchImpl(def.tokenEndpoint, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
       Accept: 'application/json',
     },
-    body: JSON.stringify({
+    body: new URLSearchParams({
       client_id: creds.clientId,
       client_secret: creds.clientSecret,
       code,
-      redirect_uri,
       grant_type: 'authorization_code',
+      ...(redirect_uri ? { redirect_uri } : {}),
     }),
   });
 
@@ -121,7 +140,7 @@ export async function handleOAuthToken(
   });
 }
 
-// ── Token revocation ──────────────────────────────────────────────��
+// ── Token revocation ───────────────────────────────────────────────
 
 export async function handleOAuthRevoke(
   request: Request,
@@ -151,14 +170,14 @@ export async function handleOAuthRevoke(
     );
   }
 
-  const def = OAUTH_PROVIDERS[provider];
-  if (!def) {
+  if (!Object.prototype.hasOwnProperty.call(OAUTH_PROVIDERS, provider)) {
     return jsonResponse(
       { error: 'unknown_provider', error_description: `Unknown OAuth provider "${provider}"` },
       400,
       cors
     );
   }
+  const def = OAUTH_PROVIDERS[provider];
 
   if (!access_token) {
     return jsonResponse(

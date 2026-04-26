@@ -21,6 +21,10 @@ beforeEach(() => {
   mockFetch.mockReset();
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('exchangeOAuthCode', () => {
   it('calls the worker /oauth/token endpoint with the correct payload', async () => {
     mockFetch.mockResolvedValueOnce(
@@ -99,6 +103,19 @@ describe('exchangeOAuthCode', () => {
     await expect(
       exchangeOAuthCode({ provider: 'github', code: 'c', redirectUri: 'r' })
     ).rejects.toThrow('Not configured');
+  });
+
+  it('throws with useful message on non-JSON response', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response('<html>Bad Gateway</html>', {
+        status: 502,
+        headers: { 'content-type': 'text/html' },
+      })
+    );
+
+    await expect(
+      exchangeOAuthCode({ provider: 'github', code: 'c', redirectUri: 'r' })
+    ).rejects.toThrow('non-JSON response');
   });
 });
 

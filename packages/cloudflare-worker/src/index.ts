@@ -8,7 +8,12 @@ import {
 } from './shared.js';
 import { buildHandoffResponse } from './handoff-page.js';
 import { SessionTrayDurableObject } from './session-tray.js';
-import { handleOAuthToken, handleOAuthRevoke, handleOAuthPreflight } from './oauth-exchange.js';
+import {
+  handleOAuthToken,
+  handleOAuthRevoke,
+  handleOAuthPreflight,
+  handleOAuthMethodNotAllowed,
+} from './oauth-exchange.js';
 
 export interface WorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
@@ -87,7 +92,7 @@ export async function handleWorkerRequest(
       return handleOAuthPreflight(request);
     }
     if (request.method !== 'POST') {
-      return jsonResponse({ error: 'Method not allowed' }, 405);
+      return handleOAuthMethodNotAllowed(request);
     }
     if (url.pathname === '/oauth/token') {
       return handleOAuthToken(request, env as unknown as Record<string, unknown>, fetchImpl);
