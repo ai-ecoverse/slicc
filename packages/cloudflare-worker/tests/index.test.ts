@@ -1150,6 +1150,8 @@ describe('tray worker skeleton', () => {
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
         'GET /auth/callback',
+        'POST /oauth/token',
+        'POST /oauth/revoke',
         'GET /api/runtime-config',
         'ANY /api/fetch-proxy',
       ],
@@ -1313,6 +1315,216 @@ describe('browser routing', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { service: string };
     expect(body.service).toBe('slicc-tray-hub');
+  });
+});
+
+describe('generic OAuth token broker', () => {
+  function oauthEnv() {
+    return {
+      ...createTestHarness().env,
+      GITHUB_CLIENT_ID: 'test-client-id',
+      GITHUB_CLIENT_SECRET: 'test-client-secret',
+    };
+  }
+
+  it('exchanges an authorization code for tokens via POST /oauth/token', async () => {
+    const env = oauthEnv();
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          access_token: 'gho_test_token_123',
+          token_type: 'bearer',
+          scope: 'repo,read:user',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'github',
+          code: 'test-auth-code',
+          redirect_uri: 'https://www.sliccy.ai/auth/callback',
+        }),
+      }),
+      env,
+      mockFetch
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      access_token: string;
+      token_type: string;
+      scope: string;
+    };
+    expect(body.access_token).toBe('gho_test_token_123');
+    expect(body.token_type).toBe('bearer');
+    expect(body.scope).toBe('repo,read:user');
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [fetchUrl, fetchInit] = mockFetch.mock.calls[0]!;
+    expect(fetchUrl).toBe('https://github.com/login/oauth/access_token');
+    expect(fetchInit?.method).toBe('POST');
+    expect(fetchInit?.headers).toMatchObject({ Accept: 'application/json' });
+  });
+
+  it('returns 400 for unknown provider', async () => {
+    const env = oauthEnv();
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'nonexistent', code: 'abc' }),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('unknown_provider');
+  });
+
+  it('returns 501 when provider secrets are not configured', async () => {
+    const env = createTestHarness().env; // no GITHUB_CLIENT_ID/SECRET
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'github', code: 'abc' }),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(501);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('server_error');
+  });
+
+  it('forwards upstream error responses from the token endpoint', async () => {
+    const env = oauthEnv();
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: 'bad_verification_code',
+          error_description: 'The code passed is incorrect or expired.',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'github', code: 'expired-code' }),
+      }),
+      env,
+      mockFetch
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('bad_verification_code');
+  });
+
+  it('returns CORS headers on POST and OPTIONS preflight', async () => {
+    const env = oauthEnv();
+    const mockFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: 'tok' }), { status: 200 })
+      );
+
+    // OPTIONS preflight
+    const preflight = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'OPTIONS',
+        headers: { Origin: 'http://localhost:5710' },
+      }),
+      env
+    );
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('access-control-allow-origin')).toBeTruthy();
+    expect(preflight.headers.get('access-control-allow-methods')).toContain('POST');
+
+    // POST should also have CORS
+    const post = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Origin: 'http://localhost:5710' },
+        body: JSON.stringify({ provider: 'github', code: 'abc' }),
+      }),
+      env,
+      mockFetch
+    );
+    expect(post.headers.get('access-control-allow-origin')).toBeTruthy();
+  });
+
+  it('returns 405 for non-POST requests to /oauth/token', async () => {
+    const env = oauthEnv();
+    const response = await handleWorkerRequest(new Request('https://tray.test/oauth/token'), env);
+    expect(response.status).toBe(405);
+  });
+
+  it('revokes a token via POST /oauth/revoke (delete-basic method)', async () => {
+    const env = oauthEnv();
+    const mockFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/revoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'github', access_token: 'gho_token_to_revoke' }),
+      }),
+      env,
+      mockFetch
+    );
+
+    expect(response.status).toBe(204);
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [fetchUrl, fetchInit] = mockFetch.mock.calls[0]!;
+    expect(fetchUrl).toBe('https://api.github.com/applications/test-client-id/token');
+    expect(fetchInit?.method).toBe('DELETE');
+    expect(fetchInit?.headers).toMatchObject({
+      Authorization: `Basic ${btoa('test-client-id:test-client-secret')}`,
+    });
+  });
+
+  it('returns 400 for missing provider field', async () => {
+    const env = oauthEnv();
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code: 'abc' }),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('invalid_request');
+  });
+
+  it('returns 400 for missing code field', async () => {
+    const env = oauthEnv();
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'github' }),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('invalid_request');
   });
 });
 

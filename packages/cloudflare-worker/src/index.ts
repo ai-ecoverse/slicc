@@ -8,6 +8,7 @@ import {
 } from './shared.js';
 import { buildHandoffResponse } from './handoff-page.js';
 import { SessionTrayDurableObject } from './session-tray.js';
+import { handleOAuthToken, handleOAuthRevoke, handleOAuthPreflight } from './oauth-exchange.js';
 
 export interface WorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
@@ -43,7 +44,11 @@ try {
 </script>
 </body></html>`;
 
-export async function handleWorkerRequest(request: Request, env: WorkerEnv): Promise<Response> {
+export async function handleWorkerRequest(
+  request: Request,
+  env: WorkerEnv,
+  fetchImpl: typeof fetch = fetch
+): Promise<Response> {
   const url = new URL(request.url);
 
   if (url.hostname === 'sliccy.ai') {
@@ -74,6 +79,20 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
       status: 200,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
+  }
+
+  // Generic OAuth token exchange and revocation (authorization code grant)
+  if (url.pathname === '/oauth/token' || url.pathname === '/oauth/revoke') {
+    if (request.method === 'OPTIONS') {
+      return handleOAuthPreflight(request);
+    }
+    if (request.method !== 'POST') {
+      return jsonResponse({ error: 'Method not allowed' }, 405);
+    }
+    if (url.pathname === '/oauth/token') {
+      return handleOAuthToken(request, env as unknown as Record<string, unknown>, fetchImpl);
+    }
+    return handleOAuthRevoke(request, env as unknown as Record<string, unknown>, fetchImpl);
   }
 
   // Serve runtime config for the webapp (when served from the worker)
@@ -149,6 +168,8 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
         'GET /auth/callback',
+        'POST /oauth/token',
+        'POST /oauth/revoke',
         'GET /api/runtime-config',
         'ANY /api/fetch-proxy',
       ],
