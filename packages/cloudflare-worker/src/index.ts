@@ -98,7 +98,16 @@ export async function handleWorkerRequest(
   // Serve runtime config for the webapp (when served from the worker)
   if (url.pathname === '/api/runtime-config') {
     const workerBaseUrl = `${url.protocol}//${url.host}`;
-    return jsonResponse({ trayWorkerBaseUrl: workerBaseUrl });
+    const envRecord = env as unknown as Record<string, unknown>;
+    return jsonResponse({
+      trayWorkerBaseUrl: workerBaseUrl,
+      // Expose public OAuth client IDs so the webapp can build authorize URLs
+      // for the correct environment (staging vs production).
+      oauth: {
+        github:
+          typeof envRecord.GITHUB_CLIENT_ID === 'string' ? envRecord.GITHUB_CLIENT_ID : undefined,
+      },
+    });
   }
 
   // Fetch proxy not available in worker mode (webapp uses direct fetch instead)

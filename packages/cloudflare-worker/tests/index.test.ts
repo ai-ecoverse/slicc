@@ -1529,13 +1529,17 @@ describe('generic OAuth token broker', () => {
 });
 
 describe('API routes', () => {
-  it('returns runtime config with worker base URL', async () => {
-    const { env } = createTestHarness();
+  it('returns runtime config with worker base URL and OAuth client IDs', async () => {
+    const env = { ...createTestHarness().env, GITHUB_CLIENT_ID: 'test-gh-id' };
     const req = new Request('https://www.sliccy.ai/api/runtime-config');
     const res = await handleWorkerRequest(req, env);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { trayWorkerBaseUrl: string };
+    const body = (await res.json()) as {
+      trayWorkerBaseUrl: string;
+      oauth: { github?: string };
+    };
     expect(body.trayWorkerBaseUrl).toBe('https://www.sliccy.ai');
+    expect(body.oauth.github).toBe('test-gh-id');
   });
 
   it('returns 404 for fetch-proxy', async () => {

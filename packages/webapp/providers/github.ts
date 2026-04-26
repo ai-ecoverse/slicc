@@ -1,0 +1,425 @@
+/**
+ * GitHub Provider — OAuth login + GitHub Models LLM access.
+ *
+ * Authentication:
+ *   Authorization code grant via the generic OAuth token broker.
+ *   CLI mode:       popup → /auth/callback relay → code extracted → worker exchanges
+ *   Extension mode: chrome.identity.launchWebAuthFlow → code extracted → worker exchanges
+ *
+ * LLM access:
+ *   GitHub Models (models.inference.ai.azure.com) is an OpenAI-compatible API
+ *   authenticated with the GitHub OAuth token. Routes through pi-ai's
+ *   streamOpenAICompletions.
+ *
+ * Git integration:
+ *   The OAuth token is written to /workspace/.git/github-token in the global VFS
+ *   so isomorphic-git picks it up for push/pull/clone operations.
+ */
+
+import type { ProviderConfig, OAuthLauncher, ModelMetadata } from '../src/providers/types.js';
+import {
+  registerApiProvider,
+  streamOpenAICompletions,
+  streamSimpleOpenAICompletions,
+  createAssistantMessageEventStream,
+} from '@mariozechner/pi-ai';
+import type {
+  Api,
+  Model,
+  Context,
+  SimpleStreamOptions,
+  OpenAICompletionsOptions,
+} from '@mariozechner/pi-ai';
+import { saveOAuthAccount, getAccounts } from '../src/ui/provider-settings.js';
+import { exchangeOAuthCode, revokeOAuthToken } from '../src/providers/oauth-code-exchange.js';
+
+// ── Config ─────────────────────────────────────────────────────────
+
+interface GitHubConfig {
+  clientId: string;
+  scopes: string;
+  redirectUri?: string;
+}
+
+const configFiles = import.meta.glob('/packages/webapp/providers/github-config.json', {
+  eager: true,
+  import: 'default',
+}) as Record<string, GitHubConfig>;
+
+const githubConfig: GitHubConfig = configFiles['/packages/webapp/providers/github-config.json'] ?? {
+  clientId: '',
+  scopes: 'repo,read:user,user:email',
+};
+
+// ── Runtime config (fetches correct client ID per environment) ──────
+
+let runtimeClientId: string | null = null;
+
+async function resolveClientId(): Promise<string> {
+  if (runtimeClientId) return runtimeClientId;
+
+  // Try fetching from worker runtime config (returns env-specific client ID)
+  try {
+    const res = await fetch('/api/runtime-config');
+    if (res.ok) {
+      const data = (await res.json()) as { oauth?: { github?: string } };
+      if (data.oauth?.github) {
+        runtimeClientId = data.oauth.github;
+        return runtimeClientId;
+      }
+    }
+  } catch {
+    // Not served from worker (e.g. dev mode) — fall through
+  }
+
+  // Fall back to build-time config
+  return githubConfig.clientId;
+}
+
+// ── Runtime detection ──────────────────────────────────────────────
+
+const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
+
+// ── Helpers ────────────────────────────────────────────────────────
+
+function getGitHubAccount() {
+  return getAccounts().find((a) => a.providerId === 'github');
+}
+
+/** Extract the authorization code from a redirect URL (?code=...). */
+export function extractCodeFromUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return parsed.searchParams.get('code');
+  } catch {
+    return null;
+  }
+}
+
+/** Fetch GitHub user profile (name + avatar). */
+async function fetchUserProfile(accessToken: string): Promise<{ name?: string; avatar?: string }> {
+  try {
+    const res = await fetch('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/vnd.github+json',
+      },
+    });
+    if (res.ok) {
+      const user = (await res.json()) as {
+        login?: string;
+        name?: string;
+        avatar_url?: string;
+      };
+      return {
+        name: user.name || user.login,
+        avatar: user.avatar_url,
+      };
+    }
+  } catch (err) {
+    console.warn(
+      '[github] Failed to fetch user profile:',
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+  return {};
+}
+
+// ── Git token bridge ───────────────────────────────────────────────
+
+/** Write the GitHub token to the global VFS for isomorphic-git. */
+async function writeGitToken(token: string): Promise<void> {
+  try {
+    const { VirtualFS } = await import('../src/fs/index.js');
+    const fs = VirtualFS.create({ dbName: 'browser-coding-agent' });
+    await fs.writeFile('/workspace/.git/github-token', token);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('github-token-changed'));
+    }
+  } catch (err) {
+    console.warn(
+      '[github] Failed to write git token:',
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+}
+
+/** Clear the GitHub token from the global VFS. */
+async function clearGitToken(): Promise<void> {
+  try {
+    const { VirtualFS } = await import('../src/fs/index.js');
+    const fs = VirtualFS.create({ dbName: 'browser-coding-agent' });
+    await fs.rm('/workspace/.git/github-token');
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('github-token-changed'));
+    }
+  } catch {
+    // Ignore if file doesn't exist
+  }
+}
+
+// ── Token access ───────────────────────────────────────────────────
+
+async function getValidAccessToken(): Promise<string> {
+  const account = getGitHubAccount();
+  if (!account?.accessToken) throw new Error('Not logged in to GitHub — please log in first');
+  // GitHub OAuth tokens don't expire (unless revoked), so no renewal logic needed
+  return account.accessToken;
+}
+
+// ── GitHub Models ──────────────────────────────────────────────────
+
+const GITHUB_MODELS_BASE = 'https://models.inference.ai.azure.com';
+
+/** Known models available via GitHub Models. */
+const GITHUB_MODELS: Array<{ id: string; name: string } & ModelMetadata> = [
+  {
+    id: 'gpt-4o',
+    name: 'GPT-4o',
+    api: 'openai',
+    context_window: 128000,
+    max_tokens: 16384,
+    reasoning: false,
+    input: ['text', 'image'],
+  },
+  {
+    id: 'gpt-4o-mini',
+    name: 'GPT-4o Mini',
+    api: 'openai',
+    context_window: 128000,
+    max_tokens: 16384,
+    reasoning: false,
+    input: ['text', 'image'],
+  },
+  {
+    id: 'o4-mini',
+    name: 'o4-mini',
+    api: 'openai',
+    context_window: 200000,
+    max_tokens: 100000,
+    reasoning: true,
+    input: ['text', 'image'],
+  },
+  {
+    id: 'o3-mini',
+    name: 'o3-mini',
+    api: 'openai',
+    context_window: 200000,
+    max_tokens: 100000,
+    reasoning: true,
+    input: ['text'],
+  },
+];
+
+// ── Stream functions ───────────────────────────────────────────────
+
+function makeErrorOutput(model: Model<Api>, error: unknown) {
+  return {
+    type: 'error' as const,
+    reason: 'error' as const,
+    error: {
+      role: 'assistant' as const,
+      content: [],
+      api: 'github-openai' as Api,
+      provider: 'github',
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: 'error' as const,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      timestamp: Date.now(),
+    },
+  };
+}
+
+const streamGitHub = (
+  model: Model<Api>,
+  context: Context,
+  options: OpenAICompletionsOptions = {}
+) => {
+  const stream = createAssistantMessageEventStream();
+  (async () => {
+    try {
+      const accessToken = await getValidAccessToken();
+      const proxyModel = {
+        ...model,
+        baseUrl: `${GITHUB_MODELS_BASE}/v1`,
+        api: 'openai-completions' as Api,
+        compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
+      };
+      const inner = streamOpenAICompletions(proxyModel as any, context, {
+        ...options,
+        apiKey: accessToken,
+      } as any);
+      for await (const event of inner) stream.push(event as any);
+      stream.end();
+    } catch (error) {
+      console.error(
+        '[github] Stream error:',
+        error instanceof Error ? error.message : String(error)
+      );
+      stream.push(makeErrorOutput(model, error) as any);
+      stream.end();
+    }
+  })();
+  return stream;
+};
+
+const streamSimpleGitHub = (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => {
+  const stream = createAssistantMessageEventStream();
+  (async () => {
+    try {
+      const accessToken = await getValidAccessToken();
+      const proxyModel = {
+        ...model,
+        baseUrl: `${GITHUB_MODELS_BASE}/v1`,
+        api: 'openai-completions' as Api,
+        compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
+      };
+      const inner = streamSimpleOpenAICompletions(proxyModel as any, context, {
+        ...options,
+        apiKey: accessToken,
+      } as any);
+      for await (const event of inner) stream.push(event as any);
+      stream.end();
+    } catch (error) {
+      console.error(
+        '[github] Stream error:',
+        error instanceof Error ? error.message : String(error)
+      );
+      stream.push(makeErrorOutput(model, error) as any);
+      stream.end();
+    }
+  })();
+  return stream;
+};
+
+// ── Provider config ────────────────────────────────────────────────
+
+export const config: ProviderConfig = {
+  id: 'github',
+  name: 'GitHub',
+  description: 'GitHub Models + git authentication — login with your GitHub account',
+  requiresApiKey: false,
+  requiresBaseUrl: false,
+  isOAuth: true,
+  defaultModelId: 'gpt-4o',
+
+  getModelIds: () => GITHUB_MODELS,
+
+  onOAuthLogin: async (launcher: OAuthLauncher, onSuccess: () => void) => {
+    const clientId = await resolveClientId();
+    if (!clientId) {
+      throw new Error('GitHub OAuth not configured — no client ID available');
+    }
+
+    const redirectUri = isExtension
+      ? `https://${(chrome as any).runtime.id}.chromiumapp.org/`
+      : (githubConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
+
+    // Build OAuth state with port and CSRF nonce for the sliccy.ai relay (CLI only)
+    const oauthState = !isExtension
+      ? btoa(
+          JSON.stringify({
+            port: parseInt(new URL(window.location.href).port || '5710', 10),
+            path: '/auth/callback',
+            nonce: crypto.randomUUID(),
+          })
+        )
+      : undefined;
+    const expectedNonce = oauthState ? JSON.parse(atob(oauthState)).nonce : null;
+
+    const params = new URLSearchParams({
+      client_id: clientId,
+      scope: githubConfig.scopes,
+      redirect_uri: redirectUri,
+    });
+    if (oauthState) params.set('state', oauthState);
+    const authorizeUrl = `https://github.com/login/oauth/authorize?${params}`;
+
+    const redirectUrl = await launcher(authorizeUrl);
+    if (!redirectUrl) return;
+
+    // Verify CSRF nonce from relay callback
+    if (expectedNonce) {
+      try {
+        const callbackUrl = new URL(redirectUrl);
+        const receivedNonce = callbackUrl.searchParams.get('nonce');
+        if (receivedNonce !== expectedNonce) {
+          console.error('[github] OAuth nonce mismatch — possible CSRF');
+          return;
+        }
+      } catch (err) {
+        console.warn(
+          '[github] Nonce check skipped (URL parse failed):',
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+
+    // Extract authorization code from redirect URL
+    const code = extractCodeFromUrl(redirectUrl);
+    if (!code) {
+      console.error('[github] Could not extract authorization code from redirect URL');
+      return;
+    }
+
+    // Exchange code for token via the generic OAuth broker
+    const tokenResult = await exchangeOAuthCode({
+      provider: 'github',
+      code,
+      redirectUri,
+    });
+
+    // Fetch user profile
+    const userProfile = await fetchUserProfile(tokenResult.access_token);
+
+    // Save account
+    saveOAuthAccount({
+      providerId: 'github',
+      accessToken: tokenResult.access_token,
+      userName: userProfile.name,
+      userAvatar: userProfile.avatar,
+    });
+
+    // Bridge token to isomorphic-git
+    await writeGitToken(tokenResult.access_token);
+
+    onSuccess();
+  },
+
+  onOAuthLogout: async () => {
+    const account = getGitHubAccount();
+    if (account?.accessToken) {
+      await revokeOAuthToken({ provider: 'github', accessToken: account.accessToken }).catch(
+        (err) =>
+          console.warn(
+            '[github] Token revocation failed:',
+            err instanceof Error ? err.message : String(err)
+          )
+      );
+    }
+    // Clear git token from VFS
+    await clearGitToken();
+    // Clear account
+    saveOAuthAccount({ providerId: 'github', accessToken: '' });
+  },
+};
+
+// ── Registration ───────────────────────────────────────────────────
+
+export function register(): void {
+  registerApiProvider({
+    api: 'github-openai' as Api,
+    stream: streamGitHub as any,
+    streamSimple: streamSimpleGitHub as any,
+  });
+}
+
+export { getValidAccessToken, extractCodeFromUrl };
