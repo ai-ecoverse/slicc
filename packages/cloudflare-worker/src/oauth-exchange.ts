@@ -11,7 +11,12 @@ import { OAUTH_PROVIDERS, type OAuthProviderDef } from './oauth-registry.js';
 
 // ── CORS helper ────────────────────────────────────────────────────
 
-const ALLOWED_ORIGINS = ['https://www.sliccy.ai', 'https://sliccy.ai', /^http:\/\/localhost:\d+$/];
+const ALLOWED_ORIGINS = [
+  'https://www.sliccy.ai',
+  'https://sliccy.ai',
+  /^https:\/\/slicc-tray-hub[^.]*\.minivelos\.workers\.dev$/,
+  /^http:\/\/localhost:\d+$/,
+];
 
 function isAllowedOrigin(origin: string): boolean {
   return ALLOWED_ORIGINS.some((allowed) =>
