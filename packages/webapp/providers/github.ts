@@ -54,22 +54,42 @@ const githubConfig: GitHubConfig = configFiles['/packages/webapp/providers/githu
 // ── Runtime config (fetches correct client ID per environment) ──────
 
 let runtimeClientId: string | null = null;
+let runtimeWorkerBaseUrl: string | null = null;
 
 async function resolveClientId(): Promise<string> {
   if (runtimeClientId) return runtimeClientId;
 
-  // Try fetching from worker runtime config (returns env-specific client ID)
+  // Try fetching from the local runtime-config first (works when served from
+  // the worker directly — the worker injects oauth.github into the response).
+  // In dev mode, the node-server doesn't have OAuth config, but it returns
+  // trayWorkerBaseUrl pointing to the correct worker (staging in dev mode).
+  // In that case, fetch the worker's runtime-config to get the client ID.
   try {
-    const res = await fetch('/api/runtime-config');
-    if (res.ok) {
-      const data = (await res.json()) as { oauth?: { github?: string } };
-      if (data.oauth?.github) {
-        runtimeClientId = data.oauth.github;
+    const localRes = await fetch('/api/runtime-config');
+    if (localRes.ok) {
+      const localData = (await localRes.json()) as {
+        oauth?: { github?: string };
+        trayWorkerBaseUrl?: string;
+      };
+      if (localData.oauth?.github) {
+        runtimeClientId = localData.oauth.github;
         return runtimeClientId;
+      }
+      // Dev mode: local server has no OAuth config — fetch from the worker
+      if (localData.trayWorkerBaseUrl) {
+        runtimeWorkerBaseUrl = localData.trayWorkerBaseUrl;
+        const workerRes = await fetch(`${localData.trayWorkerBaseUrl}/api/runtime-config`);
+        if (workerRes.ok) {
+          const workerData = (await workerRes.json()) as { oauth?: { github?: string } };
+          if (workerData.oauth?.github) {
+            runtimeClientId = workerData.oauth.github;
+            return runtimeClientId;
+          }
+        }
       }
     }
   } catch {
-    // Not served from worker (e.g. dev mode) — fall through
+    // Network error — fall through to build-time config
   }
 
   // Fall back to build-time config
@@ -319,9 +339,12 @@ export const config: ProviderConfig = {
       throw new Error('GitHub OAuth not configured — no client ID available');
     }
 
+    // The redirect URI must match the GitHub App's configured callback URL.
+    // In dev mode, runtimeWorkerBaseUrl points to staging; in production the
+    // worker serves the app directly so we use the page origin.
     const redirectUri = isExtension
       ? `https://${(chrome as any).runtime.id}.chromiumapp.org/`
-      : (githubConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
+      : `${runtimeWorkerBaseUrl ?? window.location.origin}/auth/callback`;
 
     // Build OAuth state with port and CSRF nonce for the sliccy.ai relay (CLI only)
     const oauthState = !isExtension
