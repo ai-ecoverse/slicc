@@ -47,7 +47,7 @@ jobs:
             GITHUB_CLIENT_SECRET
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET_STAGING }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
 
       - name: Wait before staging deploy retry 2
         if: steps.deploy_attempt_1.outcome == 'failure'
@@ -68,7 +68,7 @@ jobs:
             GITHUB_CLIENT_SECRET
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET_STAGING }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
 
       - name: Finalize staging deploy metadata
         id: deploy

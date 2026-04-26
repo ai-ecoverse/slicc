@@ -50,7 +50,7 @@ jobs:
             GITHUB_CLIENT_SECRET
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
       - name: Wait before production deploy retry 2
         if: steps.deploy_attempt_1.outcome == 'failure'
         run: sleep 20
@@ -70,7 +70,7 @@ jobs:
             GITHUB_CLIENT_SECRET
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
       - name: Wait before production deploy retry 3
         if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
         run: sleep 40
@@ -90,7 +90,7 @@ jobs:
             GITHUB_CLIENT_SECRET
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
       - name: Finalize production deploy metadata
         id: deploy
         env:
