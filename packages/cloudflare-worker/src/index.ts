@@ -41,7 +41,11 @@ try {
   var nonce = state.nonce || '';
   if (!port || port < 1024 || port > 65535) throw new Error('Invalid port: ' + port);
   if (!path.startsWith('/')) throw new Error('Invalid path');
-  var target = 'http://localhost:' + port + path + '?nonce=' + encodeURIComponent(nonce);
+  // Forward all original query params (except state, which we consumed) to
+  // localhost so authorization codes (?code=xxx) survive the relay.
+  params.delete('state');
+  params.set('nonce', nonce);
+  var target = 'http://localhost:' + port + path + '?' + params.toString();
   location.replace(target + location.hash);
 } catch (e) {
   document.getElementById('msg').textContent = 'OAuth redirect failed: ' + e.message + '. Close this window and try again.';
