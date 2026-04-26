@@ -249,6 +249,13 @@ export class NavigationWatcher {
     try {
       await this.transport.send('Page.enable', {}, sessionId);
       await this.transport.send('Network.enable', {}, sessionId);
+      // Unpause the target in case Chrome paused it on attach. Some Chrome
+      // versions pause popup targets (e.g. window.open) when a CDP session
+      // is auto-attached, even with waitForDebuggerOnStart: false. Without
+      // this, OAuth popups freeze on about:blank with "debugger paused in
+      // another tab". Safe to call unconditionally — it's a no-op if the
+      // target is already running.
+      await this.transport.send('Runtime.runIfWaitingForDebugger', {}, sessionId);
       const tree = await this.transport.send('Page.getFrameTree', {}, sessionId);
       const frame = (tree['frameTree'] as { frame?: { id?: string } } | undefined)?.frame;
       if (frame?.id && typeof frame.id === 'string') {
