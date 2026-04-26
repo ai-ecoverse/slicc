@@ -19,77 +19,115 @@ enum SecretStoreError: Error, Sendable, Equatable {
     case keychainError(status: Int32)
 }
 
-/// Keychain service identifier used for all SLICC secrets.
+/// Keychain service identifier used for the SLICC secrets blob.
 private let keychainService = "ai.sliccy.slicc"
+
+/// Account name for the single Keychain item that holds every secret.
+private let keychainAccount = "__envfile__"
 
 /// CRUD operations for secrets stored in the macOS Keychain.
 ///
-/// - Service: `ai.sliccy.slicc`
-/// - Account: secret name (e.g. `GITHUB_TOKEN`)
-/// - Value: secret value in `kSecValueData`
-/// - Domains: comma-separated in `kSecAttrComment`
+/// All secrets live in a single `kSecClassGenericPassword` item under
+/// service `ai.sliccy.slicc` and account `__envfile__`. The item's value
+/// is an `.env`-formatted blob (`KEY=value` paired with `KEY_DOMAINS=...`)
+/// using the same format as `~/.slicc/secrets.env` consumed by node-server.
+///
+/// One item means one Keychain access prompt per signed binary, regardless
+/// of how many secrets the user stores. The same item is read by Sliccstart
+/// to power its Settings UI.
 enum SecretStore {
 
-    /// Retrieve a secret and its domains from the Keychain.
+    /// Serializes blob mutations within a single process.
+    private static let lock = NSLock()
+
     static func get(name: String) -> Secret? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: name,
-            kSecReturnData as String: true,
-            kSecReturnAttributes as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        guard status == errSecSuccess,
-            let attrs = result as? [String: Any],
-            let data = attrs[kSecValueData as String] as? Data,
-            let value = String(data: data, encoding: .utf8)
-        else {
-            return nil
-        }
-
-        let comment = attrs[kSecAttrComment as String] as? String ?? ""
-        let domains = parseDomains(comment)
-        return Secret(name: name, value: value, domains: domains)
+        readSecrets().first(where: { $0.name == name })
     }
 
-    /// Store or update a secret in the Keychain.
-    /// - Throws: `SecretStoreError.emptyDomains` if `domains` is empty.
     static func set(name: String, value: String, domains: [String]) throws {
         guard !domains.isEmpty else {
             throw SecretStoreError.emptyDomains
         }
+        try mutate { secrets in
+            let entry = Secret(name: name, value: value, domains: domains)
+            if let idx = secrets.firstIndex(where: { $0.name == name }) {
+                secrets[idx] = entry
+            } else {
+                secrets.append(entry)
+            }
+        }
+    }
 
-        let comment = domains.joined(separator: ",")
-        let valueData = Data(value.utf8)
+    static func delete(name: String) throws {
+        try mutate { secrets in
+            secrets.removeAll { $0.name == name }
+        }
+    }
 
-        // Try to update first.
+    static func list() -> [SecretEntry] {
+        readSecrets().map { SecretEntry(name: $0.name, domains: $0.domains) }
+    }
+
+    /// Returns every secret in a single Keychain read + parse. Prefer this
+    /// over `list()` followed by per-name `get(name:)` — the latter parses
+    /// the full blob on each call (N+1 against the same item).
+    static func all() -> [Secret] {
+        readSecrets()
+    }
+
+    // MARK: - Blob accessors
+
+    /// Read the env-file blob from Keychain.
+    ///
+    /// Returns `""` only when the item legitimately does not exist
+    /// (`errSecItemNotFound`). Any other failure — auth cancelled, decode
+    /// error, etc. — is reported as `SecretStoreError.keychainError` so
+    /// callers can avoid mutating against an empty baseline (which would
+    /// silently wipe stored secrets on the next write).
+    static func readBlob() throws -> String {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: keychainAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound {
+            return ""
+        }
+        guard status == errSecSuccess else {
+            throw SecretStoreError.keychainError(status: status)
+        }
+        guard let data = result as? Data,
+              let text = String(data: data, encoding: .utf8) else {
+            throw SecretStoreError.keychainError(status: errSecDecode)
+        }
+        return text
+    }
+
+    /// Replace the env-file blob in Keychain (creates the item on first use).
+    static func writeBlob(_ content: String) throws {
+        let valueData = Data(content.utf8)
         let searchQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: name,
-        ]
-        let updateAttrs: [String: Any] = [
-            kSecValueData as String: valueData,
-            kSecAttrComment as String: comment,
+            kSecAttrAccount as String: keychainAccount,
         ]
 
-        let updateStatus = SecItemUpdate(searchQuery as CFDictionary, updateAttrs as CFDictionary)
+        let updateStatus = SecItemUpdate(
+            searchQuery as CFDictionary,
+            [kSecValueData as String: valueData] as CFDictionary
+        )
 
         if updateStatus == errSecSuccess {
             return
         }
 
         if updateStatus == errSecItemNotFound {
-            // Add new item.
             var addQuery = searchQuery
             addQuery[kSecValueData as String] = valueData
-            addQuery[kSecAttrComment as String] = comment
-
             let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
             guard addStatus == errSecSuccess else {
                 throw SecretStoreError.keychainError(status: addStatus)
@@ -100,53 +138,24 @@ enum SecretStore {
         throw SecretStoreError.keychainError(status: updateStatus)
     }
 
-    /// Remove a secret from the Keychain.
-    static func delete(name: String) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: name,
-        ]
+    // MARK: - Private
 
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw SecretStoreError.keychainError(status: status)
-        }
+    /// Read-only path: a Keychain failure surfaces as an empty list rather
+    /// than a thrown error. Callers like `get` / `list` can't usefully
+    /// recover on the failure, and a missing return value is no worse than
+    /// the prior behaviour. Mutations use `mutate` instead, which DOES
+    /// propagate read failures so a transient error never silently wipes
+    /// the blob.
+    private static func readSecrets() -> [Secret] {
+        EnvFileFormat.secretsFromBlob((try? readBlob()) ?? "")
     }
 
-    /// List all secret names and domains (never values).
-    static func list() -> [SecretEntry] {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecReturnAttributes as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        guard status == errSecSuccess,
-            let items = result as? [[String: Any]]
-        else {
-            return []
-        }
-
-        return items.compactMap { attrs in
-            guard let account = attrs[kSecAttrAccount as String] as? String else {
-                return nil
-            }
-            let comment = attrs[kSecAttrComment as String] as? String ?? ""
-            return SecretEntry(name: account, domains: parseDomains(comment))
-        }
-    }
-
-    /// Parse a comma-separated domain string, trimming whitespace and
-    /// dropping empty entries.
-    private static func parseDomains(_ raw: String) -> [String] {
-        raw.split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+    private static func mutate(_ change: (inout [Secret]) -> Void) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        let blob = try readBlob()
+        var secrets = EnvFileFormat.secretsFromBlob(blob)
+        change(&secrets)
+        try writeBlob(EnvFileFormat.blobFromSecrets(secrets))
     }
 }
-

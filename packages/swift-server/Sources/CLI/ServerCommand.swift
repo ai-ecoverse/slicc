@@ -635,51 +635,13 @@ extension ServerCommand {
     /// Parse a .env file into `[Secret]` entries.
     ///
     /// Expects KEY=VALUE lines and KEY_DOMAINS=domain1,domain2 lines.
-    /// Keys without a matching _DOMAINS entry are skipped.
+    /// Keys without a matching _DOMAINS entry are skipped. Shares its parser
+    /// with `SecretStore`'s Keychain blob, so a `--env-file` override and the
+    /// stored blob accept exactly the same syntax.
     static func parseEnvFileSecrets(at url: URL) -> [Secret]? {
         guard let content = try? String(contentsOf: url, encoding: .utf8) else {
             return nil
         }
-
-        let domainsSuffix = "_DOMAINS"
-        var entries: [(key: String, value: String)] = []
-
-        for raw in content.components(separatedBy: "\n") {
-            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.isEmpty || line.hasPrefix("#") { continue }
-
-            guard let eqIndex = line.firstIndex(of: "=") else { continue }
-            let key = line[line.startIndex..<eqIndex].trimmingCharacters(in: .whitespacesAndNewlines)
-            var value = line[line.index(after: eqIndex)...].trimmingCharacters(in: .whitespacesAndNewlines)
-
-            // Strip matching quotes
-            if (value.hasPrefix("\"") && value.hasSuffix("\""))
-                || (value.hasPrefix("'") && value.hasSuffix("'")) {
-                value = String(value.dropFirst().dropLast())
-            }
-
-            if !key.isEmpty {
-                entries.append((key: key, value: value))
-            }
-        }
-
-        var secrets: [Secret] = []
-        for entry in entries {
-            if entry.key.hasSuffix(domainsSuffix) { continue }
-
-            let domainsKey = entry.key + domainsSuffix
-            guard let domainsEntry = entries.first(where: { $0.key == domainsKey }) else { continue }
-
-            let domains = domainsEntry.value
-                .components(separatedBy: ",")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-
-            if !domains.isEmpty {
-                secrets.append(Secret(name: entry.key, value: entry.value, domains: domains))
-            }
-        }
-
-        return secrets
+        return EnvFileFormat.secretsFromBlob(content)
     }
 }

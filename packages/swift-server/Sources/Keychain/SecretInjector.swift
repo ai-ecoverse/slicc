@@ -86,11 +86,11 @@ public final class SecretInjector: Sendable {
 
     private func loadSecrets() {
         guard let sessionId else { return }
-        let entries = SecretStore.list()
+        // Single Keychain read + parse for every secret. Previously this did
+        // SecretStore.list() followed by per-name SecretStore.get(...), which
+        // re-parsed the same blob N+1 times.
         var loaded: [LoadedSecret] = []
-        var loadedNames: Set<String> = []
-        for entry in entries {
-            guard let secret = SecretStore.get(name: entry.name) else { continue }
+        for secret in SecretStore.all() {
             let masked = mask(sessionId: sessionId, secretName: secret.name, realValue: secret.value)
             loaded.append(LoadedSecret(
                 name: secret.name,
@@ -98,7 +98,6 @@ public final class SecretInjector: Sendable {
                 maskedValue: masked,
                 domains: secret.domains
             ))
-            loadedNames.insert(secret.name)
         }
 
         // Merge env-file secrets: override existing by name, append new ones
