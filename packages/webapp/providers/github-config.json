@@ -1,5 +1,4 @@
 {
-  "clientId": "Ov23li6DZA5dPBZIaqFS",
-  "scopes": "repo,read:user,user:email",
-  "redirectUri": "https://www.sliccy.ai/auth/callback"
+  "clientId": "",
+  "scopes": "repo,read:user,user:email"
 }

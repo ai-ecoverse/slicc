@@ -100,19 +100,28 @@ export async function handleWorkerRequest(
     return handleOAuthRevoke(request, env as unknown as Record<string, unknown>, fetchImpl);
   }
 
-  // Serve runtime config for the webapp (when served from the worker)
+  // Serve runtime config for the webapp (when served from the worker).
+  // CORS enabled so dev-mode apps on localhost can fetch env-specific config.
   if (url.pathname === '/api/runtime-config') {
     const workerBaseUrl = `${url.protocol}//${url.host}`;
     const envRecord = env as unknown as Record<string, unknown>;
-    return jsonResponse({
-      trayWorkerBaseUrl: workerBaseUrl,
-      // Expose public OAuth client IDs so the webapp can build authorize URLs
-      // for the correct environment (staging vs production).
-      oauth: {
-        github:
-          typeof envRecord.GITHUB_CLIENT_ID === 'string' ? envRecord.GITHUB_CLIENT_ID : undefined,
+    const origin = request.headers.get('Origin');
+    const cors: Record<string, string> = origin
+      ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
+      : {};
+    return jsonResponse(
+      {
+        trayWorkerBaseUrl: workerBaseUrl,
+        // Expose public OAuth client IDs so the webapp can build authorize URLs
+        // for the correct environment (staging vs production).
+        oauth: {
+          github:
+            typeof envRecord.GITHUB_CLIENT_ID === 'string' ? envRecord.GITHUB_CLIENT_ID : undefined,
+        },
       },
-    });
+      200,
+      cors
+    );
   }
 
   // Fetch proxy not available in worker mode (webapp uses direct fetch instead)
