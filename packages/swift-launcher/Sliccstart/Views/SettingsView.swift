@@ -91,7 +91,10 @@ struct SecretsSettingsView: View {
 
             HStack(spacing: 6) {
                 Button {
-                    if !unlocked { unlock() }
+                    if !unlocked {
+                        unlock()
+                        guard unlocked else { return }
+                    }
                     editorDraft = .creating
                 } label: {
                     Image(systemName: "plus")
@@ -228,15 +231,30 @@ struct SecretsSettingsView: View {
         }
     }
 
+    /// Read the Keychain blob and reveal real secrets. On failure (auth
+    /// cancelled, decode error, etc.) `unlocked` stays `false` so the
+    /// overlay remains and the editor can't open against an empty
+    /// snapshot — preventing a later save from overwriting stored secrets.
     private func unlock() {
         guard !unlocked else { return }
-        secrets = EnvFileFormat.parseSecrets(SecretsKeychain.readBlob())
-            .sorted(by: { $0.name < $1.name })
-        unlocked = true
+        do {
+            let blob = try SecretsKeychain.readBlob()
+            secrets = EnvFileFormat.parseSecrets(blob)
+                .sorted(by: { $0.name < $1.name })
+            errorMessage = nil
+            unlocked = true
+        } catch {
+            log.error("unlock failed: \(error.localizedDescription, privacy: .public)")
+            errorMessage = error.localizedDescription
+            unlocked = false
+        }
     }
 
     private func save(draft: SecretDraft, secret: Secret) {
-        if !unlocked { unlock() }
+        if !unlocked {
+            unlock()
+            guard unlocked else { return }
+        }
         var working = secrets
         if case .editing(let original) = draft {
             working.removeAll { $0.name == original.name }
@@ -326,6 +344,20 @@ private struct SecretEditorSheet: View {
             .filter { !$0.isEmpty }
     }
 
+    /// First non-empty hostname pattern that fails the syntactic check, or
+    /// `nil` if every pattern is valid (or empty — empties are filtered out
+    /// before save).
+    private var firstInvalidPattern: String? {
+        for entry in domainEntries {
+            let trimmed = entry.pattern.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            if !EnvFileFormat.isValidHostnamePattern(trimmed) {
+                return trimmed
+            }
+        }
+        return nil
+    }
+
     private var nameIsValid: Bool {
         guard !trimmedName.isEmpty else { return false }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_"))
@@ -342,7 +374,11 @@ private struct SecretEditorSheet: View {
     }
 
     private var canSave: Bool {
-        nameIsValid && !nameCollides && !value.isEmpty && !trimmedDomains.isEmpty
+        nameIsValid
+            && !nameCollides
+            && !value.isEmpty
+            && !trimmedDomains.isEmpty
+            && firstInvalidPattern == nil
     }
 
     private var validationMessage: String? {
@@ -351,6 +387,9 @@ private struct SecretEditorSheet: View {
         if nameCollides { return "A secret named \"\(trimmedName)\" already exists." }
         if value.isEmpty { return "Value is required." }
         if trimmedDomains.isEmpty { return "Add at least one hostname pattern." }
+        if let bad = firstInvalidPattern {
+            return "\"\(bad)\" is not a valid hostname pattern. Use `example.com`, `*.example.com`, or `*`."
+        }
         return nil
     }
 

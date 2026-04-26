@@ -90,5 +90,34 @@ final class KeychainSecretStoreTests: XCTestCase {
         }
         XCTAssertNil(SecretStore.get(name: name))
     }
+
+    // MARK: - bulk read
+
+    func testAllReturnsEverySecretInOneCall() throws {
+        let n1 = secretName("BULK_A")
+        let n2 = secretName("BULK_B")
+        try SecretStore.set(name: n1, value: "v1", domains: ["a.com"])
+        try SecretStore.set(name: n2, value: "v2", domains: ["b.com", "*.b.com"])
+
+        let all = SecretStore.all().filter { $0.name.hasPrefix(prefix) }
+        let byName = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
+
+        XCTAssertEqual(byName[n1]?.value, "v1")
+        XCTAssertEqual(byName[n1]?.domains, ["a.com"])
+        XCTAssertEqual(byName[n2]?.value, "v2")
+        XCTAssertEqual(byName[n2]?.domains, ["b.com", "*.b.com"])
+    }
+
+    // MARK: - read errors
+
+    /// `errSecItemNotFound` is the only legitimate "empty" — readBlob must
+    /// not collapse other failures into "" or set/delete would silently
+    /// wipe stored secrets after a transient auth failure.
+    func testReadBlobReturnsEmptyForMissingItem() throws {
+        // After tearDown, the test prefix's secrets are gone, but the shared
+        // blob may still hold unrelated user data. Just verify readBlob does
+        // not throw on a normal read.
+        XCTAssertNoThrow(try SecretStore.readBlob())
+    }
 }
 

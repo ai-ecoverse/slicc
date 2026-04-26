@@ -68,11 +68,23 @@ enum SecretStore {
         readSecrets().map { SecretEntry(name: $0.name, domains: $0.domains) }
     }
 
+    /// Returns every secret in a single Keychain read + parse. Prefer this
+    /// over `list()` followed by per-name `get(name:)` — the latter parses
+    /// the full blob on each call (N+1 against the same item).
+    static func all() -> [Secret] {
+        readSecrets()
+    }
+
     // MARK: - Blob accessors
 
-    /// Read the env-file blob from Keychain. Returns `""` if the item does
-    /// not exist yet.
-    static func readBlob() -> String {
+    /// Read the env-file blob from Keychain.
+    ///
+    /// Returns `""` only when the item legitimately does not exist
+    /// (`errSecItemNotFound`). Any other failure — auth cancelled, decode
+    /// error, etc. — is reported as `SecretStoreError.keychainError` so
+    /// callers can avoid mutating against an empty baseline (which would
+    /// silently wipe stored secrets on the next write).
+    static func readBlob() throws -> String {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -82,10 +94,15 @@ enum SecretStore {
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let text = String(data: data, encoding: .utf8) else {
+        if status == errSecItemNotFound {
             return ""
+        }
+        guard status == errSecSuccess else {
+            throw SecretStoreError.keychainError(status: status)
+        }
+        guard let data = result as? Data,
+              let text = String(data: data, encoding: .utf8) else {
+            throw SecretStoreError.keychainError(status: errSecDecode)
         }
         return text
     }
@@ -123,14 +140,21 @@ enum SecretStore {
 
     // MARK: - Private
 
+    /// Read-only path: a Keychain failure surfaces as an empty list rather
+    /// than a thrown error. Callers like `get` / `list` can't usefully
+    /// recover on the failure, and a missing return value is no worse than
+    /// the prior behaviour. Mutations use `mutate` instead, which DOES
+    /// propagate read failures so a transient error never silently wipes
+    /// the blob.
     private static func readSecrets() -> [Secret] {
-        EnvFileFormat.secretsFromBlob(readBlob())
+        EnvFileFormat.secretsFromBlob((try? readBlob()) ?? "")
     }
 
     private static func mutate(_ change: (inout [Secret]) -> Void) throws {
         lock.lock()
         defer { lock.unlock() }
-        var secrets = EnvFileFormat.secretsFromBlob(readBlob())
+        let blob = try readBlob()
+        var secrets = EnvFileFormat.secretsFromBlob(blob)
         change(&secrets)
         try writeBlob(EnvFileFormat.blobFromSecrets(secrets))
     }

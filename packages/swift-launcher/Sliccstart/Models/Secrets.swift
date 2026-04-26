@@ -41,7 +41,15 @@ enum SecretsKeychain {
     static let service = "ai.sliccy.slicc"
     static let account = "__envfile__"
 
-    static func readBlob() -> String {
+    /// Read the env-file blob from Keychain.
+    ///
+    /// Returns `""` only when the item legitimately doesn't exist
+    /// (`errSecItemNotFound`). Any other failure — auth cancelled, decode
+    /// error, etc. — is reported as `SecretsError.keychainError`. The
+    /// Settings UI uses this to keep its overlay in place after a denied
+    /// prompt instead of presenting an empty list that could later overwrite
+    /// real secrets.
+    static func readBlob() throws -> String {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -51,10 +59,15 @@ enum SecretsKeychain {
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let text = String(data: data, encoding: .utf8) else {
+        if status == errSecItemNotFound {
             return ""
+        }
+        guard status == errSecSuccess else {
+            throw SecretsError.keychainError(status: status)
+        }
+        guard let data = result as? Data,
+              let text = String(data: data, encoding: .utf8) else {
+            throw SecretsError.keychainError(status: errSecDecode)
         }
         return text
     }
@@ -139,6 +152,36 @@ enum EnvFileFormat {
         raw.split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+    }
+
+    /// Whether `pattern` is a syntactically valid hostname pattern accepted
+    /// by the fetch-proxy domain matcher. Allowed shapes:
+    ///   `*`                — match any host
+    ///   `*.example.com`    — wildcard subdomain
+    ///   `example.com`      — exact host
+    ///
+    /// Each label must be 1+ chars of `[A-Za-z0-9_-]`, may not start or end
+    /// with `-`, and there can be no empty labels (`..` is rejected).
+    static func isValidHostnamePattern(_ pattern: String) -> Bool {
+        let trimmed = pattern.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return false }
+        if trimmed == "*" { return true }
+
+        var rest = trimmed
+        if rest.hasPrefix("*.") {
+            rest = String(rest.dropFirst(2))
+        }
+        if rest.isEmpty { return false }
+
+        for label in rest.split(separator: ".", omittingEmptySubsequences: false) {
+            if label.isEmpty { return false }
+            if label.first == "-" || label.last == "-" { return false }
+            for ch in label {
+                let valid = ch.isLetter || ch.isNumber || ch == "-" || ch == "_"
+                if !valid { return false }
+            }
+        }
+        return true
     }
 
     private static func parseEntries(_ content: String) -> [Entry] {

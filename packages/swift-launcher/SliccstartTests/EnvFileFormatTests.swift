@@ -60,4 +60,41 @@ final class EnvFileFormatTests: XCTestCase {
         XCTAssertTrue(EnvFileFormat.parseDomains("").isEmpty)
         XCTAssertTrue(EnvFileFormat.parseDomains(" , , ").isEmpty)
     }
+
+    // MARK: - hostname pattern validation
+
+    func testIsValidHostnamePatternAcceptsAllowedShapes() {
+        XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("*"))
+        XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("example.com"))
+        XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("api.github.com"))
+        XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("*.example.com"))
+        XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("*.api.github.com"))
+        // Single-label hosts are valid (e.g. localhost, internal services).
+        XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("localhost"))
+        // Underscores and dashes inside labels are accepted.
+        XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("my_service.internal"))
+        XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("a-b.example.com"))
+    }
+
+    func testIsValidHostnamePatternRejectsBadShapes() {
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern(""))
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("   "))
+        // Empty labels.
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("."))
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern(".com"))
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("example."))
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("a..b"))
+        // Wildcard misuse.
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("**"))
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("*."))
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("*foo.com"))
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("foo.*.com"))
+        // Leading/trailing dash in a label.
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("-foo.com"))
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("foo-.com"))
+        // Disallowed characters.
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("foo bar.com"))
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("foo:8080"))
+        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("https://foo.com"))
+    }
 }
