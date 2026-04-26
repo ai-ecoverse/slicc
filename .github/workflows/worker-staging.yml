@@ -1,23 +1,20 @@
-name: Worker Production Deploy
+name: Worker Staging Deploy
 
 on:
-  workflow_dispatch:
-    inputs:
-      target:
-        description: Worker environment to deploy
-        required: true
-        type: choice
-        options:
-          - production
-        default: production
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/cloudflare-worker/**'
+      - 'packages/webapp/src/providers/**'
+      - 'packages/webapp/providers/**'
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
-  deploy-production:
-    name: Deploy production + smoke test
-    if: github.ref == 'refs/heads/main'
+  deploy-staging:
+    name: Deploy staging + smoke test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -36,7 +33,7 @@ jobs:
       - name: Verify worker unit tests before deploy
         run: npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/index.test.ts
 
-      - name: Deploy production worker (attempt 1)
+      - name: Deploy staging worker (attempt 1)
         id: deploy_attempt_1
         continue-on-error: true
         uses: cloudflare/wrangler-action@v3
@@ -44,18 +41,19 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: packages/cloudflare-worker
-          command: deploy
+          command: deploy --env staging
           secrets: |
             CLOUDFLARE_TURN_API_TOKEN
             GITHUB_CLIENT_SECRET
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
-      - name: Wait before production deploy retry 2
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
+
+      - name: Wait before staging deploy retry 2
         if: steps.deploy_attempt_1.outcome == 'failure'
         run: sleep 20
 
-      - name: Deploy production worker (attempt 2)
+      - name: Deploy staging worker (attempt 2)
         id: deploy_attempt_2
         if: steps.deploy_attempt_1.outcome == 'failure'
         continue-on-error: true
@@ -64,42 +62,21 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: packages/cloudflare-worker
-          command: deploy
+          command: deploy --env staging
           secrets: |
             CLOUDFLARE_TURN_API_TOKEN
             GITHUB_CLIENT_SECRET
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
-      - name: Wait before production deploy retry 3
-        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
-        run: sleep 40
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
 
-      - name: Deploy production worker (attempt 3)
-        id: deploy_attempt_3
-        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
-        continue-on-error: true
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: packages/cloudflare-worker
-          command: deploy
-          secrets: |
-            CLOUDFLARE_TURN_API_TOKEN
-            GITHUB_CLIENT_SECRET
-        env:
-          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
-      - name: Finalize production deploy metadata
+      - name: Finalize staging deploy metadata
         id: deploy
         env:
           DEPLOYMENT_URL_1: ${{ steps.deploy_attempt_1.outputs.deployment-url }}
           DEPLOYMENT_URL_2: ${{ steps.deploy_attempt_2.outputs.deployment-url }}
-          DEPLOYMENT_URL_3: ${{ steps.deploy_attempt_3.outputs.deployment-url }}
           DEPLOY_OUTCOME_1: ${{ steps.deploy_attempt_1.outcome }}
           DEPLOY_OUTCOME_2: ${{ steps.deploy_attempt_2.outcome }}
-          DEPLOY_OUTCOME_3: ${{ steps.deploy_attempt_3.outcome }}
         run: |
           DEPLOYMENT_URL="${DEPLOYMENT_URL_1:-}"
           SUCCESSFUL_ATTEMPT=1
@@ -108,18 +85,14 @@ jobs:
             SUCCESSFUL_ATTEMPT=2
           fi
           if [ -z "$DEPLOYMENT_URL" ]; then
-            DEPLOYMENT_URL="${DEPLOYMENT_URL_3:-}"
-            SUCCESSFUL_ATTEMPT=3
-          fi
-          if [ -z "$DEPLOYMENT_URL" ]; then
-            echo "Cloudflare production deploy failed after 3 attempts"
-            echo "Attempt outcomes: 1=${DEPLOY_OUTCOME_1:-not-run}, 2=${DEPLOY_OUTCOME_2:-not-run}, 3=${DEPLOY_OUTCOME_3:-not-run}"
+            echo "Cloudflare staging deploy failed after 2 attempts"
+            echo "Attempt outcomes: 1=${DEPLOY_OUTCOME_1:-not-run}, 2=${DEPLOY_OUTCOME_2:-not-run}"
             exit 1
           fi
-          echo "Cloudflare production deploy succeeded on attempt ${SUCCESSFUL_ATTEMPT}: ${DEPLOYMENT_URL}"
+          echo "Cloudflare staging deploy succeeded on attempt ${SUCCESSFUL_ATTEMPT}: ${DEPLOYMENT_URL}"
           echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
 
-      - name: Run deployed smoke test against production
+      - name: Run deployed smoke test against staging
         env:
           WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
         run: |
@@ -138,3 +111,16 @@ jobs:
             echo "Deployed smoke test failed on attempt ${attempt}; waiting for workers.dev propagation before retrying..."
             sleep 15
           done
+
+      - name: Comment staging URL on PR
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = '${{ steps.deploy.outputs.deployment-url }}';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## Staging Deploy\n\nWorker deployed to staging: ${url}\n\nSmoke tests passed.`
+            });

@@ -105,11 +105,13 @@ describe('NavigationWatcher', () => {
     watcher = new NavigationWatcher(transport, (e) => events.push(e));
   });
 
-  it('subscribes to target discovery and auto-attach on start', async () => {
+  it('subscribes to target discovery on start (no auto-attach)', async () => {
     await watcher.start();
     const methods = transport.sentCommands.map((c) => c.method);
     expect(methods).toContain('Target.setDiscoverTargets');
-    expect(methods).toContain('Target.setAutoAttach');
+    // Auto-attach is intentionally NOT used — it causes Chrome to freeze
+    // the opener tab when window.open() creates a popup.
+    expect(methods).not.toContain('Target.setAutoAttach');
   });
 
   it('emits an event when a main-frame Document response carries x-slicc', async () => {
@@ -304,10 +306,8 @@ describe('NavigationWatcher', () => {
 
     // Teardown commands dispatched best-effort.
     const methods = transport.sentCommands.map((c) => c.method);
-    expect(methods).toContain('Target.setAutoAttach');
     expect(methods).toContain('Target.setDiscoverTargets');
-    const autoAttach = transport.sentCommands.find((c) => c.method === 'Target.setAutoAttach');
-    expect(autoAttach?.params).toMatchObject({ autoAttach: false });
+    expect(methods).not.toContain('Target.setAutoAttach');
     const discover = transport.sentCommands.find((c) => c.method === 'Target.setDiscoverTargets');
     expect(discover?.params).toMatchObject({ discover: false });
 

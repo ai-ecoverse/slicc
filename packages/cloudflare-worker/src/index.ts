@@ -8,6 +8,12 @@ import {
 } from './shared.js';
 import { buildHandoffResponse } from './handoff-page.js';
 import { SessionTrayDurableObject } from './session-tray.js';
+import {
+  handleOAuthToken,
+  handleOAuthRevoke,
+  handleOAuthPreflight,
+  handleOAuthMethodNotAllowed,
+} from './oauth-exchange.js';
 
 export interface WorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
@@ -35,7 +41,11 @@ try {
   var nonce = state.nonce || '';
   if (!port || port < 1024 || port > 65535) throw new Error('Invalid port: ' + port);
   if (!path.startsWith('/')) throw new Error('Invalid path');
-  var target = 'http://localhost:' + port + path + '?nonce=' + encodeURIComponent(nonce);
+  // Forward all original query params (except state, which we consumed) to
+  // localhost so authorization codes (?code=xxx) survive the relay.
+  params.delete('state');
+  params.set('nonce', nonce);
+  var target = 'http://localhost:' + port + path + '?' + params.toString();
   location.replace(target + location.hash);
 } catch (e) {
   document.getElementById('msg').textContent = 'OAuth redirect failed: ' + e.message + '. Close this window and try again.';
@@ -43,7 +53,11 @@ try {
 </script>
 </body></html>`;
 
-export async function handleWorkerRequest(request: Request, env: WorkerEnv): Promise<Response> {
+export async function handleWorkerRequest(
+  request: Request,
+  env: WorkerEnv,
+  fetchImpl: typeof fetch = fetch
+): Promise<Response> {
   const url = new URL(request.url);
 
   if (url.hostname === 'sliccy.ai') {
@@ -76,10 +90,42 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     });
   }
 
-  // Serve runtime config for the webapp (when served from the worker)
+  // Generic OAuth token exchange and revocation (authorization code grant)
+  if (url.pathname === '/oauth/token' || url.pathname === '/oauth/revoke') {
+    if (request.method === 'OPTIONS') {
+      return handleOAuthPreflight(request);
+    }
+    if (request.method !== 'POST') {
+      return handleOAuthMethodNotAllowed(request);
+    }
+    if (url.pathname === '/oauth/token') {
+      return handleOAuthToken(request, env as unknown as Record<string, unknown>, fetchImpl);
+    }
+    return handleOAuthRevoke(request, env as unknown as Record<string, unknown>, fetchImpl);
+  }
+
+  // Serve runtime config for the webapp (when served from the worker).
+  // CORS enabled so dev-mode apps on localhost can fetch env-specific config.
   if (url.pathname === '/api/runtime-config') {
     const workerBaseUrl = `${url.protocol}//${url.host}`;
-    return jsonResponse({ trayWorkerBaseUrl: workerBaseUrl });
+    const envRecord = env as unknown as Record<string, unknown>;
+    const origin = request.headers.get('Origin');
+    const cors: Record<string, string> = origin
+      ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }
+      : {};
+    return jsonResponse(
+      {
+        trayWorkerBaseUrl: workerBaseUrl,
+        // Expose public OAuth client IDs so the webapp can build authorize URLs
+        // for the correct environment (staging vs production).
+        oauth: {
+          github:
+            typeof envRecord.GITHUB_CLIENT_ID === 'string' ? envRecord.GITHUB_CLIENT_ID : undefined,
+        },
+      },
+      200,
+      cors
+    );
   }
 
   // Fetch proxy not available in worker mode (webapp uses direct fetch instead)
@@ -149,6 +195,8 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
         'GET /auth/callback',
+        'POST /oauth/token',
+        'POST /oauth/revoke',
         'GET /api/runtime-config',
         'ANY /api/fetch-proxy',
       ],

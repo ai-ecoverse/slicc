@@ -89,6 +89,9 @@ export class NavigationWatcher {
       }
     }
   };
+  private readonly onTargetCreated = (params: Record<string, unknown>) => {
+    void this.handleTargetCreated(params);
+  };
   private readonly onFrameNavigated = (params: Record<string, unknown>) => {
     const sessionId = params['sessionId'] as string | undefined;
     if (!sessionId) return;
@@ -139,21 +142,22 @@ export class NavigationWatcher {
   async start(): Promise<void> {
     if (this.started) return;
 
-    // Register listeners first so any events that fire as a side effect of
-    // setAutoAttach are captured.
+    // Register listeners before enabling discovery so events fired as a
+    // side effect are captured.
     this.transport.on('Target.attachedToTarget', this.onAttachedToTarget);
     this.transport.on('Target.detachedFromTarget', this.onDetachedFromTarget);
     this.transport.on('Target.targetInfoChanged', this.onTargetInfoChanged);
+    this.transport.on('Target.targetCreated', this.onTargetCreated);
     this.transport.on('Page.frameNavigated', this.onFrameNavigated);
     this.transport.on('Network.responseReceived', this.onResponseReceived);
 
     try {
+      // Use target discovery + manual attach instead of setAutoAttach.
+      // Auto-attach causes Chrome to pause the opener tab's JS when a
+      // window.open() popup is created, showing "debugger paused in another
+      // tab" and freezing OAuth flows. Manual attach via targetCreated lets
+      // us skip popup targets (those with openerId) entirely.
       await this.transport.send('Target.setDiscoverTargets', { discover: true });
-      await this.transport.send('Target.setAutoAttach', {
-        autoAttach: true,
-        waitForDebuggerOnStart: false,
-        flatten: true,
-      });
     } catch (err) {
       log.error('Failed to enable target discovery', {
         error: err instanceof Error ? err.message : String(err),
@@ -162,6 +166,7 @@ export class NavigationWatcher {
       this.transport.off('Target.attachedToTarget', this.onAttachedToTarget);
       this.transport.off('Target.detachedFromTarget', this.onDetachedFromTarget);
       this.transport.off('Target.targetInfoChanged', this.onTargetInfoChanged);
+      this.transport.off('Target.targetCreated', this.onTargetCreated);
       this.transport.off('Page.frameNavigated', this.onFrameNavigated);
       this.transport.off('Network.responseReceived', this.onResponseReceived);
       return;
@@ -208,25 +213,47 @@ export class NavigationWatcher {
     this.transport.off('Target.attachedToTarget', this.onAttachedToTarget);
     this.transport.off('Target.detachedFromTarget', this.onDetachedFromTarget);
     this.transport.off('Target.targetInfoChanged', this.onTargetInfoChanged);
+    this.transport.off('Target.targetCreated', this.onTargetCreated);
     this.transport.off('Page.frameNavigated', this.onFrameNavigated);
     this.transport.off('Network.responseReceived', this.onResponseReceived);
     this.sessions.clear();
 
     try {
-      await this.transport.send('Target.setAutoAttach', {
-        autoAttach: false,
-        waitForDebuggerOnStart: false,
-        flatten: true,
-      });
-    } catch (err) {
-      log.debug('Failed to disable auto-attach on stop', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-    try {
       await this.transport.send('Target.setDiscoverTargets', { discover: false });
     } catch (err) {
       log.debug('Failed to disable target discovery on stop', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Handle a newly discovered target. Manually attach to non-popup page
+   * targets. Popup targets (those with openerId) are skipped — attaching
+   * to them causes Chrome to pause the opener tab.
+   */
+  private async handleTargetCreated(params: Record<string, unknown>): Promise<void> {
+    const info = params['targetInfo'] as
+      | { targetId?: string; type?: string; attached?: boolean; openerId?: string }
+      | undefined;
+    if (!info || info.type !== 'page' || typeof info.targetId !== 'string') return;
+    if (info.attached) return; // already attached
+    if (info.openerId) {
+      log.debug('Skipping popup target to avoid debugger pause', {
+        targetId: info.targetId,
+        openerId: info.openerId,
+      });
+      return;
+    }
+
+    try {
+      await this.transport.send('Target.attachToTarget', {
+        targetId: info.targetId,
+        flatten: true,
+      });
+    } catch (err) {
+      log.debug('Failed to attach to discovered target', {
+        targetId: info.targetId,
         error: err instanceof Error ? err.message : String(err),
       });
     }

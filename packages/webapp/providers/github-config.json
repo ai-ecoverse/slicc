@@ -1,0 +1,4 @@
+{
+  "clientId": "",
+  "scopes": "repo,read:user,user:email"
+}
