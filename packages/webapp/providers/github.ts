@@ -422,4 +422,4 @@ export function register(): void {
   });
 }
 
-export { getValidAccessToken, extractCodeFromUrl };
+export { getValidAccessToken };
