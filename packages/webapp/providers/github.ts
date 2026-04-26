@@ -16,7 +16,12 @@
  *   so isomorphic-git picks it up for push/pull/clone operations.
  */
 
-import type { ProviderConfig, OAuthLauncher, ModelMetadata } from '../src/providers/types.js';
+import type {
+  ProviderConfig,
+  OAuthLauncher,
+  OAuthLoginOptions,
+  ModelMetadata,
+} from '../src/providers/types.js';
 import {
   registerApiProvider,
   streamOpenAICompletions,
@@ -333,11 +338,17 @@ export const config: ProviderConfig = {
 
   getModelIds: () => GITHUB_MODELS,
 
-  onOAuthLogin: async (launcher: OAuthLauncher, onSuccess: () => void) => {
+  onOAuthLogin: async (
+    launcher: OAuthLauncher,
+    onSuccess: () => void,
+    options?: OAuthLoginOptions
+  ) => {
     const clientId = await resolveClientId();
     if (!clientId) {
       throw new Error('GitHub OAuth not configured — no client ID available');
     }
+
+    const scopes = options?.scopes ?? githubConfig.scopes;
 
     // The redirect URI must match the GitHub App's configured callback URL.
     // In dev mode, runtimeWorkerBaseUrl points to staging; in production the
@@ -360,7 +371,7 @@ export const config: ProviderConfig = {
 
     const params = new URLSearchParams({
       client_id: clientId,
-      scope: githubConfig.scopes,
+      scope: scopes,
       redirect_uri: redirectUri,
     });
     if (oauthState) params.set('state', oauthState);

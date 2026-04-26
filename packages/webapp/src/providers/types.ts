@@ -9,6 +9,12 @@
  */
 export type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
 
+/** Options passed to onOAuthLogin from the caller (e.g. oauth-token command). */
+export interface OAuthLoginOptions {
+  /** Override the default scopes for this login. Comma-separated (e.g. "repo,models:read"). */
+  scopes?: string;
+}
+
 /**
  * Optional model capability overrides.
  * Used by both modelOverrides (static) and getModelIds (dynamic).
@@ -47,7 +53,11 @@ export interface ProviderConfig {
    * Receives a launcher that opens the OAuth flow and returns the redirect URL.
    * The provider builds the authorize URL, calls the launcher, then handles the result.
    */
-  onOAuthLogin?: (launcher: OAuthLauncher, onSuccess: () => void) => Promise<void>;
+  onOAuthLogin?: (
+    launcher: OAuthLauncher,
+    onSuccess: () => void,
+    options?: OAuthLoginOptions
+  ) => Promise<void>;
   /** Called when the user clicks logout for this OAuth provider. */
   onOAuthLogout?: () => Promise<void>;
   /**

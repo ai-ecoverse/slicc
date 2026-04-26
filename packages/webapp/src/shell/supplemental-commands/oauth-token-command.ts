@@ -9,15 +9,21 @@ Usage:
   oauth-token --provider <id>     Same, using flag form
   oauth-token                     Get token for the currently selected provider
   oauth-token --list              List OAuth providers with status
+  oauth-token --scope <scopes>    Request specific OAuth scopes (comma-separated)
   oauth-token --help              Show this help message
 
 If no valid token exists or the token is expired, the OAuth login flow
 is triggered automatically. The raw access token is printed to stdout
 on success.
 
+The --scope flag overrides the provider's default scopes for this login.
+This forces a new login even if a valid token exists, since the existing
+token may not have the requested scopes.
+
 Examples:
   oauth-token adobe
-  curl -H "Authorization: Bearer $(oauth-token adobe)" https://api.corp.com/data
+  oauth-token github --scope "repo,models:read"
+  curl -H "Authorization: Bearer $(oauth-token github)" https://api.github.com/user
 `;
 }
 
@@ -41,6 +47,18 @@ export function createOAuthTokenCommand(): Command {
         getRegisteredProviderConfig,
         getOAuthAccountInfo
       );
+    }
+
+    // Parse --scope flag
+    let scopeOverride: string | undefined;
+    const scopeFlagIdx = args.indexOf('--scope');
+    if (scopeFlagIdx >= 0) {
+      scopeOverride = args[scopeFlagIdx + 1];
+      if (!scopeOverride) {
+        return { stdout: '', stderr: 'oauth-token: --scope requires a value\n', exitCode: 1 };
+      }
+      // Remove --scope and its value so they don't interfere with provider ID parsing
+      args.splice(scopeFlagIdx, 2);
     }
 
     // Determine provider ID
@@ -89,19 +107,26 @@ export function createOAuthTokenCommand(): Command {
       };
     }
 
-    // Check for existing valid token
-    const info = getOAuthAccountInfo(providerId);
-    if (info && !info.expired) {
-      return { stdout: `${info.token}\n`, stderr: '', exitCode: 0 };
+    // Check for existing valid token (skip if --scope is set, since the
+    // existing token may not have the requested scopes)
+    if (!scopeOverride) {
+      const info = getOAuthAccountInfo(providerId);
+      if (info && !info.expired) {
+        return { stdout: `${info.token}\n`, stderr: '', exitCode: 0 };
+      }
     }
 
-    // No valid token — trigger the login flow
+    // No valid token (or --scope override) — trigger the login flow
     try {
       const { createOAuthLauncher } = await import('../../providers/oauth-service.js');
       const launcher = createOAuthLauncher();
-      await config.onOAuthLogin(launcher, () => {
-        /* onSuccess callback */
-      });
+      await config.onOAuthLogin(
+        launcher,
+        () => {
+          /* onSuccess callback */
+        },
+        scopeOverride ? { scopes: scopeOverride } : undefined
+      );
 
       // Read the newly saved token
       const newInfo = getOAuthAccountInfo(providerId);
