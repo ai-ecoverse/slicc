@@ -142,6 +142,10 @@ struct SliccstartApp: App {
                 }
             }
         }
+
+        Settings {
+            SettingsView()
+        }
     }
 
     private func initialize() async {
