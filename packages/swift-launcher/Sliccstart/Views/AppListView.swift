@@ -230,10 +230,17 @@ struct WebKitRow: View {
             }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "safari")
-                    .font(.system(size: 15))
-                    .frame(width: 28, height: 28)
-                    .foregroundStyle(webKitManager.isInstalled ? .blue : .gray)
+                Group {
+                    if let icon = webKitManager.installedAppIcon {
+                        Image(nsImage: icon)
+                            .resizable()
+                    } else {
+                        Image(systemName: "safari")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.gray)
+                    }
+                }
+                .frame(width: 28, height: 28)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("WebKit")
                         .font(.system(size: 13))

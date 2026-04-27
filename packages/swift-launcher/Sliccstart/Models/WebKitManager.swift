@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import os
 
@@ -71,6 +72,18 @@ final class WebKitManager {
     func refresh() {
         if case .installing = installState { return }
         installState = Self.detectWebKit()
+    }
+
+    /// macOS icon for the installed Playwright.app (the same icon you see
+    /// in the title bar of the MiniBrowser window). Returned via
+    /// NSWorkspace so the row stays in lockstep with the on-disk app —
+    /// no need to ship a static asset that could drift from upstream.
+    /// Returns `nil` until the install completes.
+    var installedAppIcon: NSImage? {
+        guard case let .installed(_, frameworkPath) = installState else { return nil }
+        let appPath = "\(frameworkPath)/Playwright.app"
+        guard FileManager.default.fileExists(atPath: appPath) else { return nil }
+        return NSWorkspace.shared.icon(forFile: appPath)
     }
 
     /// Install Playwright's patched WebKit by downloading the archive
