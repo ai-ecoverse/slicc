@@ -336,6 +336,19 @@ interface SSEChunk {
   };
 }
 
+/** Find the next event boundary in `buffer`. Returns the index of the
+ *  blank line and the boundary length so the caller can slice past it.
+ *  Per the SSE spec a boundary is a blank line, where line terminators
+ *  may be CR, LF, or CRLF — Hummingbird-backed servers (SwiftLM, the
+ *  slicc-server proxy) emit `\r\n\r\n`, llama-server emits `\n\n`. */
+function nextEventBoundary(buffer: string): { index: number; length: number } | null {
+  const crlf = buffer.indexOf('\r\n\r\n');
+  const lf = buffer.indexOf('\n\n');
+  if (crlf >= 0 && (lf < 0 || crlf <= lf)) return { index: crlf, length: 4 };
+  if (lf >= 0) return { index: lf, length: 2 };
+  return null;
+}
+
 async function* iterateSSE(response: Response): AsyncIterable<SSEChunk> {
   const body = response.body;
   if (!body) return;
@@ -345,22 +358,30 @@ async function* iterateSSE(response: Response): AsyncIterable<SSEChunk> {
 
   while (true) {
     const { value, done } = await reader.read();
-    if (done) break;
+    if (done) {
+      // Flush a trailing event without a final blank line (defensive
+      // against servers that don't terminate the last frame cleanly).
+      const tail = buffer.trim();
+      if (tail) {
+        const payload = parseDataPayload(tail);
+        if (payload && payload !== '[DONE]') {
+          try {
+            yield JSON.parse(payload) as SSEChunk;
+          } catch {
+            /* drop malformed tail */
+          }
+        }
+      }
+      break;
+    }
     buffer += decoder.decode(value, { stream: true });
-    let idx: number;
-    while ((idx = buffer.indexOf('\n\n')) >= 0) {
-      const event = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 2);
-      if (!event) continue;
-      // Each event is one or more lines; only `data: …` carries the JSON.
-      // SwiftLM uses single-line `data:` events but be defensive about
-      // multi-line concatenation.
-      const dataLines = event
-        .split('\n')
-        .filter((l) => l.startsWith('data:'))
-        .map((l) => l.slice(5).trimStart());
-      if (dataLines.length === 0) continue;
-      const payload = dataLines.join('');
+    while (true) {
+      const boundary = nextEventBoundary(buffer);
+      if (!boundary) break;
+      const event = buffer.slice(0, boundary.index);
+      buffer = buffer.slice(boundary.index + boundary.length);
+      const payload = parseDataPayload(event);
+      if (!payload) continue;
       if (payload === '[DONE]') return;
       try {
         yield JSON.parse(payload) as SSEChunk;
@@ -369,6 +390,19 @@ async function* iterateSSE(response: Response): AsyncIterable<SSEChunk> {
       }
     }
   }
+}
+
+/** Pull the JSON payload out of one SSE event, joining multi-line `data:`
+ *  fields the way the spec requires. Returns null when the event has no
+ *  data field (heartbeats, comment-only, etc.). */
+function parseDataPayload(event: string): string | null {
+  const lines = event
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .filter((l) => l.startsWith('data:'))
+    .map((l) => l.slice(5).trimStart());
+  if (lines.length === 0) return null;
+  return lines.join('');
 }
 
 // ── Stream function ─────────────────────────────────────────────────
