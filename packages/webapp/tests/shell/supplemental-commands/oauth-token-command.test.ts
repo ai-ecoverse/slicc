@@ -380,4 +380,83 @@ describe('oauth-token command', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('No OAuth providers');
   });
+
+  it('--scope bypasses valid token cache and triggers login with scopes', async () => {
+    const mockOnOAuthLogin = vi.fn(async (_launcher, _onSuccess, _options) => {
+      mockGetOAuthAccountInfo.mockReturnValue({
+        token: 'scoped-token',
+        expired: false,
+      });
+    });
+
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: mockOnOAuthLogin,
+    });
+    // Valid token exists — normally would return immediately
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'existing-token',
+      expired: false,
+    });
+    mockCreateOAuthLauncher.mockReturnValue(vi.fn());
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['github', '--scope', 'repo,models:read'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('scoped-token\n');
+    // Login was triggered despite valid token
+    expect(mockOnOAuthLogin).toHaveBeenCalled();
+    // Scopes were passed through as the third argument
+    expect(mockOnOAuthLogin).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), {
+      scopes: 'repo,models:read',
+    });
+  });
+
+  it('--scope without value returns error', async () => {
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['github', '--scope'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--scope requires a value');
+  });
+
+  it('--scope with flag-like value returns error', async () => {
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['github', '--scope', '--provider'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--scope requires a value');
+  });
+
+  it('without --scope, does not pass options to onOAuthLogin', async () => {
+    const mockOnOAuthLogin = vi.fn(async (_launcher, _onSuccess, _options) => {
+      mockGetOAuthAccountInfo.mockReturnValue({
+        token: 'default-token',
+        expired: false,
+      });
+    });
+
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: mockOnOAuthLogin,
+    });
+    mockGetOAuthAccountInfo.mockReturnValue(null);
+    mockCreateOAuthLauncher.mockReturnValue(vi.fn());
+
+    const cmd = createOAuthTokenCommand();
+    await cmd.execute(['github'], createMockCtx());
+    expect(mockOnOAuthLogin).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.any(Function),
+      undefined
+    );
+  });
 });
