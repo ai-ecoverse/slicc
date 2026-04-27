@@ -81,14 +81,34 @@ final class SwiftLMProcess {
 
         let proc = Process()
         proc.executableURL = binary
-        proc.arguments = [
+
+        var args: [String] = [
             "--model", model,
             "--port", "\(swiftLMPort)",
             "--host", "127.0.0.1",
             "--max-tokens", "\(Self.defaultMaxTokens)",
             "--ctx-size", "\(Self.defaultContextSize)",
             "--cors", Self.corsOrigin,
+            // SwiftLM defaults --thinking off; we turn it on so reasoning
+            // models (Qwen3+, Gemma 4 with tools) emit `delta.reasoning_content`
+            // out of the box. Templates for non-thinking models ignore it,
+            // and clients can still override per-request via
+            // `chat_template_kwargs.enable_thinking`.
+            "--thinking",
         ]
+
+        // Vision-language models need --vision; without it SwiftLM loads
+        // them through the text-only `LLMModelFactory` and ignores image
+        // parts in OpenAI multipart content. We probe the cached config.json
+        // (mirroring SwiftLM's own `ModelArchitectureProbe`) so VLMs like
+        // Gemma 4 light up automatically.
+        let capabilities = ModelArchProbe.capabilities(for: model)
+        if capabilities.supportsVision {
+            args.append("--vision")
+            log.info("start: enabling --vision for \(model, privacy: .public)")
+        }
+
+        proc.arguments = args
         // SwiftLM finds `mlx.metallib` next to the binary; cwd doesn't matter
         // for that, but pin it to the version directory so any relative paths
         // SwiftLM might resolve still land somewhere predictable.
