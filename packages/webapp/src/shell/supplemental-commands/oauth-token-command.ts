@@ -53,8 +53,8 @@ export function createOAuthTokenCommand(): Command {
     let scopeOverride: string | undefined;
     const scopeFlagIdx = args.indexOf('--scope');
     if (scopeFlagIdx >= 0) {
-      scopeOverride = args[scopeFlagIdx + 1];
-      if (!scopeOverride) {
+      scopeOverride = args[scopeFlagIdx + 1]?.trim();
+      if (!scopeOverride || scopeOverride.startsWith('-')) {
         return { stdout: '', stderr: 'oauth-token: --scope requires a value\n', exitCode: 1 };
       }
       // Remove --scope and its value so they don't interfere with provider ID parsing

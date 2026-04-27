@@ -11,7 +11,12 @@ export type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
 
 /** Options passed to onOAuthLogin from the caller (e.g. oauth-token command). */
 export interface OAuthLoginOptions {
-  /** Override the default scopes for this login. Comma-separated (e.g. "repo,models:read"). */
+  /**
+   * Override the default scopes for this login. Passed directly to the
+   * provider's authorize URL as the `scope` parameter. Format is
+   * provider-specific (GitHub uses comma-separated, Google uses
+   * space-separated). The provider is responsible for any normalization.
+   */
   scopes?: string;
 }
 
