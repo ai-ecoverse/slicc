@@ -6,12 +6,16 @@ let package = Package(
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/s1ntoneli/AppUpdater.git", exact: "0.2.0"),
+        .package(url: "https://github.com/huggingface/swift-huggingface.git", from: "0.4.0"),
     ],
     targets: [
         // Keep slicc-server as a separate Swift package; build-app.sh bundles its binary.
         .executableTarget(
             name: "Sliccstart",
-            dependencies: ["AppUpdater"],
+            dependencies: [
+                "AppUpdater",
+                .product(name: "HuggingFace", package: "swift-huggingface"),
+            ],
             path: "Sliccstart",
             resources: [.process("Resources")]
         ),
