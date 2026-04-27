@@ -33,6 +33,7 @@ import { createFileTools, createBashTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import {
   getApiKey,
+  getProviderConfig,
   resolveCurrentModel,
   resolveModelById,
   getSelectedProvider,
@@ -347,13 +348,16 @@ export class ScoopContext {
 
       // Create agent
       const apiKey = getApiKey();
-      if (!apiKey) {
-        // No credentials configured yet — defer agent creation rather
-        // than surfacing a hard error. The deterministic onboarding
-        // flow (welcome wizard → connect-llm dip) is expected to
-        // collect a key before the user tries to chat. `prompt()`
-        // performs a lazy re-init so the agent comes up the moment
-        // a key lands.
+      const provider = getSelectedProvider();
+      const providerConfig = getProviderConfig(provider);
+      if (!apiKey && providerConfig.requiresApiKey !== false) {
+        // No credentials configured yet for a provider that needs one —
+        // defer agent creation rather than surfacing a hard error. The
+        // deterministic onboarding flow (welcome wizard → connect-llm
+        // dip) is expected to collect a key before the user tries to
+        // chat. `prompt()` performs a lazy re-init so the agent comes
+        // up the moment a key lands. Providers that opt out of auth
+        // (e.g. local SwiftLM) skip this check entirely.
         log.info('ScoopContext init deferred — no API key yet', {
           folder: this.scoop.folder,
         });
