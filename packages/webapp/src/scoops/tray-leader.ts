@@ -1,4 +1,5 @@
 import { createLogger } from '../core/logger.js';
+import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
 import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from './tray-types.js';
 import * as db from './db.js';
 import { buildTrayWorkerUrl } from './tray-runtime-config.js';
@@ -7,6 +8,10 @@ const log = createLogger('tray-leader');
 const LEADER_TRAY_STATE_KEY = 'leader-tray-session';
 const LEADER_TRAY_PING_INTERVAL_MS = 30_000;
 const LEADER_TRAY_CONNECT_TIMEOUT_MS = 10_000;
+const LEADER_TRAY_RECONNECT_BASE_DELAY_MS = 1_000;
+const LEADER_TRAY_RECONNECT_MAX_DELAY_MS = 30_000;
+const LEADER_TRAY_RECONNECT_BACKOFF_MULTIPLIER = 2;
+const LEADER_TRAY_RECONNECT_MAX_ATTEMPTS = 20;
 
 interface CreateTrayResponse {
   trayId: string;
@@ -40,9 +45,10 @@ export interface LeaderTraySession {
 }
 
 export interface LeaderTrayRuntimeStatus {
-  state: 'inactive' | 'connecting' | 'leader' | 'error';
+  state: 'inactive' | 'connecting' | 'leader' | 'reconnecting' | 'error';
   session: LeaderTraySession | null;
   error: string | null;
+  reconnectAttempts?: number;
 }
 
 let leaderTrayRuntimeStatus: LeaderTrayRuntimeStatus = {
@@ -80,6 +86,19 @@ export interface LeaderTrayWebSocket {
   close(code?: number, reason?: string): void;
 }
 
+export interface LeaderTrayReconnectOptions {
+  /** Base delay in ms before the first reconnect attempt. Default: 1000. */
+  baseDelayMs?: number;
+  /** Multiplier applied to the delay after each failed attempt. Default: 2. */
+  backoffMultiplier?: number;
+  /** Maximum delay between reconnect attempts in ms. Default: 30000. */
+  maxDelayMs?: number;
+  /** Maximum number of reconnect attempts before giving up. Default: 20. */
+  maxAttempts?: number;
+  /** Sleep implementation for testing. Default: setTimeout-based. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
 export interface LeaderTrayManagerOptions {
   workerBaseUrl: string;
   runtime: string;
@@ -89,6 +108,14 @@ export interface LeaderTrayManagerOptions {
   onControlMessage?: (message: WorkerToLeaderControlMessage) => void;
   pingIntervalMs?: number;
   connectTimeoutMs?: number;
+  /** Reconnect options. If omitted, auto-reconnect is enabled with defaults. Pass `false` to disable. */
+  reconnect?: LeaderTrayReconnectOptions | false;
+  /** Called when the leader WebSocket dies and a reconnect attempt is starting. */
+  onReconnecting?: (attempt: number, lastError: string) => void;
+  /** Called when reconnect succeeds with a (possibly identical) session. */
+  onReconnected?: (session: LeaderTraySession) => void;
+  /** Called when reconnection fails permanently (max attempts exhausted). */
+  onReconnectGaveUp?: (lastError: string, attempts: number) => void;
 }
 
 export class IndexedDbLeaderTraySessionStore implements LeaderTraySessionStore {
@@ -149,9 +176,18 @@ export class LeaderTrayManager {
   private readonly webSocketFactory: (url: string) => LeaderTrayWebSocket;
   private readonly pingIntervalMs: number;
   private readonly connectTimeoutMs: number;
+  private readonly reconnectEnabled: boolean;
+  private readonly reconnectBaseDelayMs: number;
+  private readonly reconnectMaxDelayMs: number;
+  private readonly reconnectBackoffMultiplier: number;
+  private readonly reconnectMaxAttempts: number;
+  private readonly reconnectSleep: (ms: number) => Promise<void>;
   private socket: LeaderTrayWebSocket | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private currentSession: LeaderTraySession | null = null;
+  private stopped = false;
+  private reconnecting = false;
+  private reconnectGeneration = 0;
 
   constructor(private readonly options: LeaderTrayManagerOptions) {
     this.store = options.store ?? new IndexedDbLeaderTraySessionStore();
@@ -159,9 +195,20 @@ export class LeaderTrayManager {
     this.webSocketFactory = options.webSocketFactory ?? ((url) => new WebSocket(url));
     this.pingIntervalMs = options.pingIntervalMs ?? LEADER_TRAY_PING_INTERVAL_MS;
     this.connectTimeoutMs = options.connectTimeoutMs ?? LEADER_TRAY_CONNECT_TIMEOUT_MS;
+    const reconnect = options.reconnect;
+    this.reconnectEnabled = reconnect !== false;
+    const cfg: LeaderTrayReconnectOptions = reconnect === false || !reconnect ? {} : reconnect;
+    this.reconnectBaseDelayMs = cfg.baseDelayMs ?? LEADER_TRAY_RECONNECT_BASE_DELAY_MS;
+    this.reconnectMaxDelayMs = cfg.maxDelayMs ?? LEADER_TRAY_RECONNECT_MAX_DELAY_MS;
+    this.reconnectBackoffMultiplier =
+      cfg.backoffMultiplier ?? LEADER_TRAY_RECONNECT_BACKOFF_MULTIPLIER;
+    this.reconnectMaxAttempts = cfg.maxAttempts ?? LEADER_TRAY_RECONNECT_MAX_ATTEMPTS;
+    this.reconnectSleep =
+      cfg.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   }
 
   async start(): Promise<LeaderTraySession> {
+    this.stopped = false;
     if (this.currentSession && this.socket) {
       setLeaderTrayRuntimeStatus({ state: 'leader', session: this.currentSession, error: null });
       return this.currentSession;
@@ -171,17 +218,7 @@ export class LeaderTrayManager {
     this.currentSession = null;
 
     try {
-      const storedSession = await this.store.load();
-      const reusableSession =
-        storedSession?.workerBaseUrl === this.options.workerBaseUrl ? storedSession : null;
-
-      const session = await this.attachWithRecovery(reusableSession);
-      this.currentSession = session;
-      const socket = await this.openLeaderSocket(session.leaderWebSocketUrl!);
-      this.socket = socket;
-      this.startPingLoop(socket);
-      setLeaderTrayRuntimeStatus({ state: 'leader', session, error: null });
-
+      const session = await this.connectOnce();
       log.info('Leader joined tray', {
         trayId: session.trayId,
         controllerId: session.controllerId,
@@ -199,22 +236,135 @@ export class LeaderTrayManager {
   }
 
   stop(): void {
+    this.stopped = true;
+    this.reconnecting = false;
+    this.reconnectGeneration++;
+    this.tearDownSocket();
+
+    this.currentSession = null;
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+  }
+
+  private tearDownSocket(): void {
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
     }
 
-    if (this.socket) {
+    // Clear `this.socket` BEFORE calling close(): some socket implementations
+    // (and our test fakes) emit 'close' synchronously from `close()`, which
+    // would re-enter `handleUnexpectedDisconnect` via the ping-loop close
+    // listener. The listener guards on `this.socket !== socket`, so once we
+    // null out `this.socket` here, the synchronous re-entry is a no-op.
+    const socket = this.socket;
+    this.socket = null;
+    if (socket) {
       try {
-        this.socket.close();
+        socket.close();
       } catch {
         // Ignore teardown failures.
       }
-      this.socket = null;
+    }
+  }
+
+  /**
+   * Run a single attach + WebSocket open cycle. On success, sets `socket`,
+   * `currentSession`, and runtime status, and starts the ping loop. The
+   * caller is responsible for surfacing errors.
+   */
+  private async connectOnce(): Promise<LeaderTraySession> {
+    const storedSession = await this.store.load();
+    const reusableSession =
+      storedSession?.workerBaseUrl === this.options.workerBaseUrl ? storedSession : null;
+
+    const session = await this.attachWithRecovery(reusableSession);
+    this.currentSession = session;
+    const socket = await this.openLeaderSocket(session.leaderWebSocketUrl!);
+    this.socket = socket;
+    this.startPingLoop(socket);
+    setLeaderTrayRuntimeStatus({ state: 'leader', session, error: null });
+    return session;
+  }
+
+  /**
+   * Handle an unexpected socket close/error after a successful start.
+   * Tears the existing socket down, then runs a backoff loop to re-attach
+   * and reopen the leader WebSocket. Stays a no-op once `stop()` has been
+   * called or when reconnect is disabled.
+   */
+  private async handleUnexpectedDisconnect(reason: string): Promise<void> {
+    if (this.stopped) return;
+    if (!this.reconnectEnabled) {
+      log.warn('Leader WebSocket dropped and auto-reconnect is disabled', { reason });
+      this.tearDownSocket();
+      this.currentSession = null;
+      setLeaderTrayRuntimeStatus({
+        state: 'error',
+        session: null,
+        error: `Leader WebSocket dropped: ${reason}`,
+      });
+      return;
+    }
+    if (this.reconnecting) return;
+    this.reconnecting = true;
+    const generation = ++this.reconnectGeneration;
+
+    log.warn('Leader WebSocket dropped — starting reconnect loop', { reason });
+    this.tearDownSocket();
+
+    let attempt = 0;
+    let delay = this.reconnectBaseDelayMs;
+    let lastError = reason;
+
+    while (
+      !this.stopped &&
+      generation === this.reconnectGeneration &&
+      attempt < this.reconnectMaxAttempts
+    ) {
+      attempt++;
+      setLeaderTrayRuntimeStatus({
+        state: 'reconnecting',
+        session: this.currentSession,
+        error: null,
+        reconnectAttempts: attempt,
+      });
+      this.options.onReconnecting?.(attempt, lastError);
+
+      log.info('Leader reconnect attempt', { attempt, delay });
+      await this.reconnectSleep(delay);
+      if (this.stopped || generation !== this.reconnectGeneration) break;
+
+      try {
+        const session = await this.connectOnce();
+        if (this.stopped || generation !== this.reconnectGeneration) {
+          this.tearDownSocket();
+          break;
+        }
+        this.reconnecting = false;
+        log.info('Leader reconnect successful', { attempt, trayId: session.trayId });
+        this.options.onReconnected?.(session);
+        return;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        log.warn('Leader reconnect attempt failed', { attempt, error: lastError });
+        this.tearDownSocket();
+      }
+
+      delay = Math.min(delay * this.reconnectBackoffMultiplier, this.reconnectMaxDelayMs);
     }
 
-    this.currentSession = null;
-    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+    if (!this.stopped && generation === this.reconnectGeneration) {
+      this.reconnecting = false;
+      this.currentSession = null;
+      setLeaderTrayRuntimeStatus({
+        state: 'error',
+        session: null,
+        error: `Leader reconnect failed after ${attempt} attempts: ${lastError}`,
+        reconnectAttempts: attempt,
+      });
+      log.warn('Leader reconnect gave up', { attempts: attempt, lastError });
+      this.options.onReconnectGaveUp?.(lastError, attempt);
+    }
   }
 
   async clearSession(): Promise<void> {
@@ -352,18 +502,30 @@ export class LeaderTrayManager {
       clearInterval(this.pingTimer);
     }
 
+    const onSocketDown = (reason: string) => {
+      // Only trigger if this is still our active socket and we haven't been stopped.
+      if (this.stopped || this.socket !== socket) return;
+      this.handleUnexpectedDisconnect(reason).catch((error) => {
+        log.warn('Leader reconnect loop crashed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    };
+
     const sendPing = () => {
       try {
         socket.send(JSON.stringify({ type: 'ping' }));
-      } catch {
-        this.stop();
+      } catch (error) {
+        onSocketDown(
+          `Leader ping send failed: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
     };
 
     sendPing();
     this.pingTimer = setInterval(sendPing, this.pingIntervalMs);
-    socket.addEventListener('close', () => this.stop());
-    socket.addEventListener('error', () => this.stop());
+    socket.addEventListener('close', () => onSocketDown('Leader WebSocket closed'));
+    socket.addEventListener('error', () => onSocketDown('Leader WebSocket errored'));
   }
 
   private async fetchJson<T>(url: string, init: RequestInit): Promise<T> {
@@ -423,23 +585,30 @@ export function createTrayFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
   }
 
   return async (url, init = {}) => {
+    const targetUrl = typeof url === 'string' ? url : url.toString();
+
+    // Skip the proxy for same-origin requests (e.g. when served from the worker)
+    try {
+      const target = new URL(targetUrl);
+      if (target.origin === window.location.origin) {
+        return fetchImpl(targetUrl, { ...init, cache: 'no-store' as RequestCache });
+      }
+    } catch {
+      // If URL parsing fails, fall through to proxy
+    }
+
     const headers = new Headers(init.headers);
-    headers.set('X-Target-URL', typeof url === 'string' ? url : url.toString());
+    headers.set('X-Target-URL', targetUrl);
 
     const response = await fetchImpl('/api/fetch-proxy', {
       ...init,
       headers,
       cache: 'no-store',
     });
-    if (response.status === 400 || response.status === 502) {
-      let message = `Proxy error ${response.status}`;
-      try {
-        const payload = (await response.json()) as { error?: string };
-        message = payload.error ?? message;
-      } catch {
-        // Ignore malformed proxy error bodies.
-      }
-      throw new Error(message);
+    // Only treat as proxy infrastructure failure when the proxy tagged it.
+    // Upstream 4xx/5xx (e.g. tray-worker auth/quotas) must flow through.
+    if (isProxyError(response)) {
+      throw new Error(await readProxyErrorMessage(response));
     }
     return response;
   };

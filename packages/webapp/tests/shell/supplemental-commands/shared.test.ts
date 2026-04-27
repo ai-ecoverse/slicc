@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { version as pyodidePackageVersion } from 'pyodide/package.json';
+import rootPackageJson from '../../../../../package.json';
 import {
   toPreviewUrl,
   isLikelyUrl,
@@ -9,6 +11,9 @@ import {
   isSafeServeEntry,
   resolveServeEntryPath,
   resolveNodePackageBaseUrl,
+  PYODIDE_CDN,
+  PYODIDE_VERSION,
+  resolvePinnedPackageVersion,
 } from '../../../src/shell/supplemental-commands/shared.js';
 
 describe('toPreviewUrl', () => {
@@ -200,5 +205,23 @@ describe('resolveNodePackageBaseUrl', () => {
       resolveNodePackageBaseUrl('pyodide/pyodide.mjs', '../../../../../node_modules/pyodide/')
         .pathname
     ).toContain('/node_modules/pyodide/');
+  });
+});
+
+describe('Pyodide version resolution', () => {
+  it('uses the installed pyodide package version for the browser CDN fallback', () => {
+    expect(PYODIDE_VERSION).toBe(pyodidePackageVersion);
+    expect(PYODIDE_CDN).toBe(`https://cdn.jsdelivr.net/pyodide/v${pyodidePackageVersion}/full/`);
+  });
+
+  it('keeps the root pyodide dependency pinned to the installed package version', () => {
+    const pyodideVersion = rootPackageJson.dependencies.pyodide;
+    expect(pyodideVersion).toBe(pyodidePackageVersion);
+  });
+
+  it('rejects version ranges so CDN assets cannot drift from the npm loader', () => {
+    expect(() => resolvePinnedPackageVersion('pyodide', '^0.29.3')).toThrow(
+      'pyodide must use an exact semver version in package.json'
+    );
   });
 });

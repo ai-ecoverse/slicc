@@ -10,7 +10,7 @@
 | Git                         | `packages/webapp/src/git/`             | isomorphic-git wrapper                                                          | `git-commands.ts`                          | N/A                                                                                                   |
 | Skills                      | `packages/webapp/src/skills/`          | Skill package manager                                                           | `apply.ts`                                 | N/A                                                                                                   |
 | CDP                         | `packages/webapp/src/cdp/`             | Chrome DevTools Protocol                                                        | `browser-api.ts`                           | `browser-api.test.ts`                                                                                 |
-| Tools                       | `packages/webapp/src/tools/`           | Tool factories; active scoop surface is file + bash + javascript                | `bash-tool.ts`                             | `bash-tool.test.ts`                                                                                   |
+| Tools                       | `packages/webapp/src/tools/`           | Tool factories; active scoop surface is file + bash                             | `bash-tool.ts`                             | `bash-tool.test.ts`                                                                                   |
 | Core Agent                  | `packages/webapp/src/core/`            | pi-mono agent loop + streaming                                                  | `index.ts`                                 | `agent.test.ts`                                                                                       |
 | Scoops Orchestrator         | `packages/webapp/src/scoops/`          | Multi-agent system (cone + scoops)                                              | `orchestrator.ts`                          | N/A                                                                                                   |
 | UI                          | `packages/webapp/src/ui/`              | Chat, Terminal, Files, Memory panels                                            | `main.ts`                                  | `types.test.ts`                                                                                       |
@@ -110,16 +110,18 @@
 
 ### packages/webapp/src/shell/ — Shell & Terminal
 
-| File                       | Purpose                                                                                                                             |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `wasm-shell.ts`            | WasmShell class; just-bash interpreter + xterm.js terminal + command registration (VfsAdapter bridges to VirtualFS)                 |
-| `index.ts`                 | Re-exports                                                                                                                          |
-| `vfs-adapter.ts`           | Implements just-bash IFileSystem interface, bridges just-bash ↔ VirtualFS                                                           |
-| `binary-cache.ts`          | Caches binary responses (Uint8Array) to preserve byte fidelity through VFS writes                                                   |
-| `jsh-discovery.ts`         | Scans VFS for `*.jsh` files; returns `Map<name, path>` with priority roots (`/workspace/skills/`) scanned first                     |
-| `jsh-executor.ts`          | Executes `.jsh` files with Node-like globals (process, console, fs bridge); dual-mode (AsyncFunction CLI, sandbox iframe extension) |
-| `parse-shell-args.ts`      | Shell-like argument parser (double/single quotes, backslash escapes)                                                                |
-| `supplemental-commands.ts` | Re-exports all supplemental command factories                                                                                       |
+| File                       | Purpose                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `wasm-shell.ts`            | WasmShell class; just-bash interpreter + xterm.js terminal + command registration (VfsAdapter bridges to VirtualFS)                   |
+| `index.ts`                 | Re-exports                                                                                                                            |
+| `vfs-adapter.ts`           | Implements just-bash IFileSystem interface, bridges just-bash ↔ VirtualFS                                                             |
+| `binary-cache.ts`          | Caches binary responses (Uint8Array) to preserve byte fidelity through VFS writes                                                     |
+| `script-catalog.ts`        | Shared `.jsh`/`.bsh` discovery cache; invalidated by `FsWatcher`, bypasses cache for mounted roots where external edits are invisible |
+| `jsh-discovery.ts`         | Scans VFS for `*.jsh` files; returns `Map<name, path>` with priority roots (`/workspace/skills/`) scanned first                       |
+| `bsh-discovery.ts`         | Scans `/workspace` and `/shared` for `*.bsh` browser helpers and parses hostname / `@match` metadata                                  |
+| `jsh-executor.ts`          | Executes `.jsh` files with Node-like globals (process, console, fs bridge); dual-mode (AsyncFunction CLI, sandbox iframe extension)   |
+| `parse-shell-args.ts`      | Shell-like argument parser (double/single quotes, backslash escapes)                                                                  |
+| `supplemental-commands.ts` | Re-exports all supplemental command factories                                                                                         |
 
 ### packages/webapp/src/shell/supplemental-commands/ — Custom Shell Commands
 
@@ -167,28 +169,27 @@ Native `/workspace/skills` entries are the only install-managed skills. Compatib
 
 ### packages/webapp/src/scoops/ — Multi-Agent Orchestration
 
-| File                        | Purpose                                                                                                                                                                                                                                                                                                                                    |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `orchestrator.ts`           | Manages scoop contexts, routes messages, handles responses, owns shared VirtualFS                                                                                                                                                                                                                                                          |
-| `scoop-context.ts`          | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, scoop-management tools); wires file tools + `bash` + `grep`/`find` + `javascript`, with browser automation via `playwright-cli` shell commands. Overflow recovery preserves ToolCall blocks in assistant messages to maintain API-required tool_use ↔ toolResult pairing |
-| `scoop-management-tools.ts` | Scoop tools: `send_message`; cone-only tools: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory`                                                                                                                                                                                                             |
-| `db.ts`                     | IndexedDB (`slicc-groups` DB v3): scoops, messages, sessions, tasks, state, webhooks, crontasks stores                                                                                                                                                                                                                                     |
-| `lick-manager.ts`           | Browser-side lick management (webhooks + crontasks); all state in IndexedDB                                                                                                                                                                                                                                                                |
-| `scheduler.ts`              | TaskScheduler for internal task scheduling (used by orchestrator)                                                                                                                                                                                                                                                                          |
-| `heartbeat.ts`              | Heartbeat monitoring (detects when scoop contexts are idle)                                                                                                                                                                                                                                                                                |
-| `skills.ts`                 | loadSkills, formatSkillsForPrompt: load SKILL.md files into agent system prompt; createDefaultSkills: bundled defaults                                                                                                                                                                                                                     |
-| `types.ts`                  | RegisteredScoop, ChannelMessage, ScoopTabState, ScheduledTask, WebhookEntry, CronTaskEntry                                                                                                                                                                                                                                                 |
-| `index.ts`                  | Re-exports                                                                                                                                                                                                                                                                                                                                 |
+| File                        | Purpose                                                                                                                                                                                                                                                                                                                     |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `orchestrator.ts`           | Manages scoop contexts, routes messages, handles responses, owns shared VirtualFS                                                                                                                                                                                                                                           |
+| `scoop-context.ts`          | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, scoop-management tools); wires file tools + `bash` + `grep`/`find`, with browser automation via `playwright-cli` shell commands. Overflow recovery preserves ToolCall blocks in assistant messages to maintain API-required tool_use ↔ toolResult pairing |
+| `scoop-management-tools.ts` | Scoop tools: `send_message`; cone-only tools: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory`                                                                                                                                                                                              |
+| `db.ts`                     | IndexedDB (`slicc-groups` DB v3): scoops, messages, sessions, tasks, state, webhooks, crontasks stores                                                                                                                                                                                                                      |
+| `lick-manager.ts`           | Browser-side lick management (webhooks + crontasks); all state in IndexedDB                                                                                                                                                                                                                                                 |
+| `scheduler.ts`              | TaskScheduler for internal task scheduling (used by orchestrator)                                                                                                                                                                                                                                                           |
+| `heartbeat.ts`              | Heartbeat monitoring (detects when scoop contexts are idle)                                                                                                                                                                                                                                                                 |
+| `skills.ts`                 | loadSkills, formatSkillsForPrompt: load SKILL.md files into agent system prompt; createDefaultSkills: bundled defaults                                                                                                                                                                                                      |
+| `types.ts`                  | RegisteredScoop, ChannelMessage, ScoopTabState, ScheduledTask, WebhookEntry, CronTaskEntry                                                                                                                                                                                                                                  |
+| `index.ts`                  | Re-exports                                                                                                                                                                                                                                                                                                                  |
 
 ### packages/webapp/src/tools/ — Agent Tools
 
-| File                 | Purpose                                                                                                       |
-| -------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `bash-tool.ts`       | `bash` tool: execute shell commands via WasmShell                                                             |
-| `file-tools.ts`      | `read_file`, `write_file`, `edit_file` tools for VirtualFS operations                                         |
-| `javascript-tool.ts` | `javascript` tool: execute JS in the browser context (fs.readDir, fs.readFile, fs.readFileBinary access)      |
-| `search-tools.ts`    | `grep` and `find` tool factories for recursive VirtualFS search (not part of the active ScoopContext surface) |
-| `index.ts`           | Tool factory functions (createBashTool, createFileTools, createSearchTools, createJavaScriptTool)             |
+| File              | Purpose                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------- |
+| `bash-tool.ts`    | `bash` tool: execute shell commands via WasmShell                                                             |
+| `file-tools.ts`   | `read_file`, `write_file`, `edit_file` tools for VirtualFS operations                                         |
+| `search-tools.ts` | `grep` and `find` tool factories for recursive VirtualFS search (not part of the active ScoopContext surface) |
+| `index.ts`        | Tool factory functions (createBashTool, createFileTools, createSearchTools)                                   |
 
 ### packages/webapp/src/ui/ — User Interface
 
@@ -332,12 +333,13 @@ User input in chat → ChatPanel.sendMessage()
                 → per-scoop message buffer
                   → emitToUI() [if scoop is selected]
                     → ChatPanel DOM update (streaming)
-      → Tool calls [bash, file, grep/find, javascript, NanoClaw, etc.]
+      → Tool calls [bash, file, grep/find, NanoClaw, etc.]
         → RestrictedFS / WasmShell / BrowserAPI
           → results
           → back to agent loop
     → Scoop completes
-      → Orchestrator notification
+      → Orchestrator writes full output to /shared/scoop-notifications/
+      → Orchestrator notification (path + preview + line count)
         → Cone's message queue
         → Cone processes completion
 ```
@@ -352,15 +354,16 @@ Cone executes feed_scoop tool
         → Tool calls
         → Scoop processes independently
     → Scoop completes
-      → Orchestrator notification
+      → Orchestrator writes full output to /shared/scoop-notifications/
+      → Orchestrator notification (path + preview + line count)
         → Cone's message queue
-        → Cone receives result
+        → Cone decides whether to read the file or act on the preview
 ```
 
 ### Lick (Event) Flow
 
 ```
-External webhook POST / scheduled cron task fires
+External webhook POST / scheduled cron task / fswatch change fires
   → LickManager receives event in IndexedDB
     → dispatch() routes to target scoop
       → ScoopContext processes lick
@@ -405,6 +408,47 @@ Scoop removal / app clear
 | `slicc-groups`         | 3       | scoops, messages, sessions, tasks, state, webhooks, crontasks | Orchestrator data (scoops, messages, tasks)                                                                                                                    |
 | `agent-sessions`       | 1       | sessions                                                      | Core agent session history: persisted `SessionData` (`AgentMessage[]` + config + timestamps) per scoop, keyed by JID; loaded on scoop init, saved on agent_end |
 | `slicc-fs-global`      | 1       | config                                                        | Git global config storage                                                                                                                                      |
+
+## Secrets & Secret Injection
+
+SLICC prevents the agent from seeing or exfiltrating real secret values (API keys, tokens, credentials). Secrets are stored server-side and injected at the fetch-proxy boundary, scoped to authorized domains only.
+
+### Masking Engine
+
+Each secret is masked using `HMAC-SHA256(session_id + secret_name, secret_value)`. The result is format-preserving — known prefixes like `ghp_`, `sk-`, `AKIA` are kept, and the hash portion matches the original value's length and character set. Masks are deterministic within a session (the agent can compare values) but differ across sessions (no lookup-table attacks).
+
+### Scrubbing Pipeline
+
+Real secret values are scrubbed at every output boundary before reaching the agent:
+
+1. **Shell environment** — env vars contain masked values, not real ones
+2. **Tool output** — all `bash`, `read_file`, and other tool results are scanned for real values and replaced with masks
+3. **Fetch proxy (outbound)** — masked values in request headers are unmasked if the domain matches; 403 if not. Masked values in request bodies are unmasked for matching domains and passed through unchanged otherwise
+4. **Fetch proxy (inbound)** — response bodies and headers are scanned for real values and replaced with masks
+5. **Chat messages** — user-typed real values are scrubbed before entering the agent conversation
+
+### Storage Backends
+
+| Backend        | Runtime                     | Storage                                                        | Encryption                           |
+| -------------- | --------------------------- | -------------------------------------------------------------- | ------------------------------------ |
+| macOS Keychain | swift-server                | `SecItemAdd`/`SecItemCopyMatching`, service `ai.sliccy.slicc`  | Login keychain (encrypted at rest)   |
+| `.env` file    | node-server (all platforms) | `~/.slicc/secrets.env`, `KEY=VALUE` + `KEY_DOMAINS=...` format | Filesystem permissions (`chmod 600`) |
+
+Both implement the same `SecretStore` interface: `get(name)`, `set(name, value, config)`, `delete(name)`, `list()`.
+
+File path resolution: `--env-file <path>` CLI flag → `SLICC_SECRETS_FILE` env var → `~/.slicc/secrets.env`.
+
+### Key Source Files
+
+| File                                                                | Purpose                                                        |
+| ------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `packages/node-server/src/secrets/`                                 | Node `.env` SecretStore, masking engine, domain matching       |
+| `packages/swift-server/Sources/`                                    | Swift Keychain SecretStore, masking engine                     |
+| `packages/node-server/src/index.ts`                                 | Fetch proxy secret injection (node-server)                     |
+| `packages/webapp/src/shell/supplemental-commands/secret-command.ts` | `secret` shell command                                         |
+| `packages/webapp/src/scoops/scoop-context.ts`                       | Shell env population with masked values, tool output scrubbing |
+
+See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 
 ## File-Finding Guide
 

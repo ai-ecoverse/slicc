@@ -24,6 +24,8 @@ import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
 import { FileLogger } from './file-logger.js';
 import { CliLogDedup } from './cli-log-dedup.js';
+import { EnvSecretStore } from './secrets/env-secret-store.js';
+import { SecretProxyManager } from './secrets/proxy-manager.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
@@ -331,7 +333,6 @@ async function attachConsoleForwarder(cdpPort: number, pageUrl: string): Promise
 
 const PREFERRED_SERVE_PORT = parseInt(process.env['PORT'] ?? '5710', 10);
 const PREFERRED_CDP_PORT = RUNTIME_FLAGS.cdpPort;
-const PREFERRED_HMR_PORT = 24679;
 
 async function main() {
   // Resolve available ports before anything else — serve port must be known
@@ -358,16 +359,12 @@ async function main() {
     CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
   }
 
-  const HMR_PORT = DEV_MODE ? await findAvailablePort(PREFERRED_HMR_PORT) : PREFERRED_HMR_PORT;
   const SERVE_ORIGIN = `http://localhost:${SERVE_PORT}`;
 
   if (usingDynamicElectronPorts) {
     console.log(`Dynamic port allocation for Electron app: CDP=${CDP_PORT}, serve=${SERVE_PORT}`);
   } else if (SERVE_PORT !== PREFERRED_SERVE_PORT) {
     console.log(`Port ${PREFERRED_SERVE_PORT} in use, serving on port ${SERVE_PORT}`);
-  }
-  if (DEV_MODE && HMR_PORT !== PREFERRED_HMR_PORT) {
-    console.log(`HMR port ${PREFERRED_HMR_PORT} in use, using port ${HMR_PORT}`);
   }
 
   if (DEV_MODE) {
@@ -591,6 +588,18 @@ async function main() {
   }
 
   // 3. Set up express app with request logging
+  const secretProxy = new SecretProxyManager();
+  try {
+    await secretProxy.reload();
+    if (secretProxy.hasSecrets()) {
+      console.log(
+        `Loaded ${secretProxy.getMaskedEntries().length} secrets for fetch-proxy injection`
+      );
+    }
+  } catch (err) {
+    console.warn('Failed to load secrets:', err instanceof Error ? err.message : err);
+  }
+
   const app = express();
   app.use(requestLogger);
 
@@ -885,6 +894,63 @@ async function main() {
     }
   });
 
+  // Profile-independent handoff injection.
+  //
+  // The CDP navigation-watcher only sees tabs inside the Chrome instance
+  // SLICC launched (isolated profile keyed by port); similarly the
+  // extension's webRequest observer only fires inside the profile where it
+  // is installed. External tools (e.g. the slicc-handoff helper) post here
+  // so a handoff reaches the cone regardless of which browser profile the
+  // user is currently driving.
+  app.post('/api/handoff', (req, res) => {
+    const payload = req.body as {
+      sliccHeader?: unknown;
+      url?: unknown;
+      title?: unknown;
+    };
+    if (typeof payload?.sliccHeader !== 'string' || payload.sliccHeader.length === 0) {
+      res.status(400).json({ error: 'sliccHeader is required (non-empty string)' });
+      return;
+    }
+    broadcastLickEvent({
+      type: 'navigate_event',
+      sliccHeader: payload.sliccHeader,
+      url:
+        typeof payload.url === 'string' && payload.url.length > 0 ? payload.url : 'about:handoff',
+      title: typeof payload.title === 'string' ? payload.title : undefined,
+      timestamp: new Date().toISOString(),
+    });
+    res.json({ ok: true });
+  });
+
+  // Secret management API — direct .env file access (no browser needed)
+  const secretStore = new EnvSecretStore(RUNTIME_FLAGS.envFile ?? undefined);
+
+  app.get('/api/secrets', (_req, res) => {
+    try {
+      const entries = secretStore.list();
+      res.json(entries);
+    } catch (err) {
+      res
+        .status(500)
+        .json({ error: err instanceof Error ? err.message : 'Failed to list secrets' });
+    }
+  });
+
+  // Masked secrets endpoint — returns name + maskedValue pairs for shell env population.
+  // The browser fetches this at shell init to populate env vars with masked values.
+  // Real values are never exposed; only deterministic session-scoped masks.
+  app.get('/api/secrets/masked', (_req, res) => {
+    try {
+      const entries = secretProxy.getMaskedEntries();
+      res.json(entries);
+    } catch (err) {
+      res
+        .status(500)
+        .json({ error: err instanceof Error ? err.message : 'Failed to get masked secrets' });
+    }
+  });
+
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
   // Used by just-bash's curl which calls the browser's fetch() API.
   // Note: express.json() may have already parsed the body, so we check req.body first.
@@ -904,6 +970,7 @@ async function main() {
     }
     const targetUrl = req.headers['x-target-url'] as string;
     if (!targetUrl) {
+      res.setHeader('X-Proxy-Error', '1');
       res.status(400).json({ error: 'Missing X-Target-URL header' });
       return;
     }
@@ -983,8 +1050,39 @@ async function main() {
       // Without this, Cloudflare may Brotli-compress the response, the proxy strips
       // Content-Encoding (line below), and the browser receives compressed garbage.
       headers['accept-encoding'] = 'identity';
+
+      // --- Secret injection: unmask headers ---
+      let targetHostname: string;
+      try {
+        targetHostname = new URL(targetUrl).hostname;
+      } catch {
+        targetHostname = '';
+      }
+
+      if (secretProxy.hasSecrets()) {
+        // Unmask request headers (replace masked values with real, validate domain)
+        const headerResult = secretProxy.unmaskHeaders(headers, targetHostname);
+        if (headerResult.forbidden) {
+          res.setHeader('X-Proxy-Error', '1');
+          res.status(403).json({
+            error: `Secret "${headerResult.forbidden.secretName}" is not allowed for domain "${headerResult.forbidden.hostname}"`,
+          });
+          return;
+        }
+      }
+
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
       if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
+        // --- Secret injection: unmask request body ---
+        // Body uses unmaskBody: domain mismatches leave the masked value as-is
+        // (safe/meaningless) rather than rejecting. This avoids false 403s when
+        // LLM conversation context contains masked secrets sent to non-matching
+        // domains like Bedrock.
+        if (secretProxy.hasSecrets()) {
+          const bodyStr = rawBody.toString('utf-8');
+          const bodyResult = secretProxy.unmaskBody(bodyStr, targetHostname);
+          rawBody = Buffer.from(bodyResult.text, 'utf-8');
+        }
         // Buffer extends Uint8Array which is a valid fetch body at runtime.
         fetchInit.body = rawBody as unknown as RequestInit['body'];
       }
@@ -1011,21 +1109,34 @@ async function main() {
           lower !== 'set-cookie' &&
           !lower.startsWith('x-proxy-')
         ) {
-          res.setHeader(k, v);
+          // Scrub real secret values from response headers
+          res.setHeader(k, secretProxy.scrubResponse(v));
         }
       });
       if (setCookieValues.length > 0) {
-        res.setHeader('X-Proxy-Set-Cookie', JSON.stringify(setCookieValues));
+        res.setHeader(
+          'X-Proxy-Set-Cookie',
+          secretProxy.scrubResponse(JSON.stringify(setCookieValues))
+        );
       }
 
-      // Send body as raw binary - explicitly set content-length and use end()
-      // instead of send() to avoid any Express middleware transformations
+      // Send body — scrub real secret values from response body (text-only)
       const body = await upstream.arrayBuffer();
-      const buffer = Buffer.from(body);
+      let buffer = Buffer.from(body);
+      if (secretProxy.hasSecrets()) {
+        const ct = (upstream.headers.get('content-type') ?? '').toLowerCase();
+        const isText =
+          ct.startsWith('text/') || ct.startsWith('application/json') || ct.includes('charset=');
+        if (isText) {
+          const scrubbed = secretProxy.scrubResponse(buffer.toString('utf-8'));
+          buffer = Buffer.from(scrubbed, 'utf-8');
+        }
+      }
       res.setHeader('Content-Length', buffer.length);
       res.end(buffer);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+      res.setHeader('X-Proxy-Error', '1');
       res.status(502).json({ error: `Proxy fetch failed: ${message}` });
     }
   });
@@ -1042,7 +1153,8 @@ async function main() {
       server: {
         middlewareMode: true,
         hmr: {
-          port: HMR_PORT, // Use a separate port for HMR WebSocket to avoid conflicting with /cdp
+          server, // Share the HTTP server — our upgrade handler routes /cdp and /licks-ws separately
+          path: '/__vite_hmr', // Dedicated path avoids conflicts with /cdp upgrade handler
         },
       },
       appType: 'custom', // We handle index.html serving ourselves via the handler below
@@ -1071,7 +1183,7 @@ async function main() {
         next(err);
       }
     });
-    console.log(`Vite dev server middleware attached (HMR active on port ${HMR_PORT})`);
+    console.log(`Vite dev server middleware attached (HMR on ${SERVE_ORIGIN}/__vite_hmr)`);
   } else {
     // Production mode: serve built static files
     const uiDir = resolve(__dirname, '..', 'ui');
@@ -1084,7 +1196,13 @@ async function main() {
   }
 
   // 4. CDP WebSocket proxy at /cdp
-  //    Use noServer mode so Vite's dev middleware doesn't intercept the upgrade.
+  //    Use noServer mode so Vite's dev middleware doesn't intercept the
+  //    upgrade. Keep the default per-message payload cap on this socket —
+  //    the oversized-message feedback loop we have to defend against
+  //    (see the chromeWs constructor below for the full writeup) is
+  //    purely Chrome-to-proxy, never client-to-proxy, so raising the
+  //    cap here would only widen the DoS surface for anything on
+  //    localhost that can reach ws://127.0.0.1:PORT/cdp.
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (request, socket, head) => {
@@ -1226,7 +1344,17 @@ async function main() {
       }
 
       messageBuffer = [];
-      chromeWs = new WebSocket(url);
+      // Disable the ws library's per-message size cap (default 100 MiB).
+      // The slicc UI runs INSIDE the Chrome instance it's debugging, so
+      // Chrome's Network domain reports every CDP frame — including the
+      // event frames themselves — back to us as `Network.webSocketFrame*`
+      // messages that each embed the prior frame's payload. That produces
+      // an exponential feedback loop which, left unchecked, trips the
+      // default 100 MiB cap and closes the Chrome WebSocket (code 1006).
+      // Without the cap the loop is still bounded by Chrome's own frame
+      // limits, but the proxy no longer dies and later CDP calls like
+      // `Target.getTargets` keep working instead of being DROPPED.
+      chromeWs = new WebSocket(url, { maxPayload: 0 });
 
       chromeWs.on('open', () => {
         console.log('[cdp-proxy] chromeWs open');
@@ -1240,12 +1368,75 @@ async function main() {
         resolve();
       });
 
+      // The slicc UI runs inside the Chrome instance it's debugging, so
+      // Chrome's Network domain reports every CDP frame back through the
+      // same socket as `Network.webSocketFrameReceived` /
+      // `Network.webSocketFrameSent` events whose `payloadData` embeds
+      // the prior frame's bytes — a self-amplifying feedback loop that,
+      // left alone, drives per-frame sizes past V8's ~512 MiB string
+      // limit and crashes node-server with `ERR_STRING_TOO_LONG`. It
+      // also starves the browser's own debugger UI (the classic
+      // "debugger paused in another window" freeze) because the CDP
+      // event stream fills up with self-referential noise instead of
+      // the events DevTools actually needs.
+      //
+      // Peek at the raw bytes and skip the runaway event types once
+      // they exceed a small sniffing threshold. Legitimate CDP payloads
+      // we care about (screenshots, DOM snapshots, large tool results)
+      // are never `Network.webSocketFrame*` messages, so filtering by
+      // method is far safer than a blanket size cap that would also
+      // drop genuine large events.
+      const CDP_PROXY_INSPECT_BYTES = 256 * 1024;
+      const CDP_PROXY_HARD_FRAME_CAP = 64 * 1024 * 1024;
+      const loopEventPrefixes = [
+        '{"method":"Network.webSocketFrameReceived"',
+        '{"method":"Network.webSocketFrameSent"',
+      ];
+
+      /**
+       * Normalise the `ws` library's polymorphic message payload into a
+       * single Buffer we can safely peek at and forward. Without this,
+       * a later `String(data)` would coerce an `ArrayBuffer` to
+       * `"[object ArrayBuffer]"` and a `Buffer[]` to comma-joined
+       * stringified fragments, corrupting the CDP frame.
+       */
+      const toBuffer = (data: unknown): Buffer => {
+        if (Buffer.isBuffer(data)) return data;
+        if (data instanceof ArrayBuffer) return Buffer.from(data);
+        if (Array.isArray(data)) return Buffer.concat(data as Buffer[]);
+        // Rare fallback — string frames in text mode. Keep bytes faithful.
+        return Buffer.from(String(data));
+      };
+
       chromeWs.on('message', (data) => {
-        const preview = String(data).slice(0, 200);
+        const buf = toBuffer(data);
+        const byteLen = buf.length;
+
+        // Peek at the first 256 KiB only — enough to identify the event
+        // type cheaply without stringifying the whole runaway buffer.
+        const head = buf.subarray(0, CDP_PROXY_INSPECT_BYTES).toString();
+
+        if (loopEventPrefixes.some((p) => head.startsWith(p))) {
+          const msg = `[cdp-proxy] Dropping Chrome feedback-loop event (${byteLen} bytes, ${head.slice(1, 60)}…)`;
+          if (cdpDedup.shouldLog(msg)) console.debug(msg);
+          return;
+        }
+
+        // Hard safety net — still refuse anything that would blow past
+        // V8's string length limit (buf.toString throws ERR_STRING_TOO_LONG
+        // for any frame larger than ~512 MiB).
+        if (byteLen > CDP_PROXY_HARD_FRAME_CAP) {
+          const msg = `[cdp-proxy] Dropping oversized Chrome→Client frame (${byteLen} bytes)`;
+          if (cdpDedup.shouldLog(msg)) console.debug(msg);
+          return;
+        }
+
+        const str = buf.toString();
+        const preview = str.slice(0, 200);
         const msg = `[cdp-proxy] Chrome→Client: ${preview}`;
         if (cdpDedup.shouldLog(msg)) console.debug(msg);
         if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
-          activeClientWs.send(String(data));
+          activeClientWs.send(str);
         }
       });
 

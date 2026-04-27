@@ -234,7 +234,17 @@ function readQueryTrayConfig(locationHref: string): TrayUrlConfig | null {
     }
 
     const workerBaseUrl = normalizeTrayWorkerBaseUrl(url.searchParams.get(TRAY_WORKER_QUERY_PARAM));
-    return workerBaseUrl ? { workerBaseUrl, trayId: null, joinUrl: null } : null;
+    if (workerBaseUrl) {
+      return { workerBaseUrl, trayId: null, joinUrl: null };
+    }
+
+    // Check if the page URL itself is a join URL (e.g. when served from the worker at /join/:token)
+    const pathJoinConfig = parseTrayJoinUrl(locationHref);
+    if (pathJoinConfig) {
+      return pathJoinConfig;
+    }
+
+    return null;
   } catch {
     return null;
   }

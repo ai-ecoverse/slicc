@@ -2,6 +2,43 @@ import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 import { NODE_VERSION, NodeExitError, formatConsoleArg, nodeRuntimeState } from './shared.js';
 
+const NODE_BUILTINS_UNAVAILABLE = new Set([
+  'http',
+  'https',
+  'net',
+  'tls',
+  'dgram',
+  'dns',
+  'cluster',
+  'worker_threads',
+  'child_process',
+  'crypto',
+  'os',
+  'stream',
+  'zlib',
+  'vm',
+  'v8',
+  'perf_hooks',
+  'readline',
+  'repl',
+  'tty',
+  'inspector',
+]);
+
+/**
+ * Extract require('...') specifiers from source code via regex.
+ * Matches require("foo"), require('foo'), and require(`foo`) with static string literals.
+ */
+function extractRequireSpecifiers(code: string): string[] {
+  const re = /\brequire\s*\(\s*(['"`])([^'"`\s]+)\1\s*\)/g;
+  const ids = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    ids.add(m[2]);
+  }
+  return [...ids];
+}
+
 function nodeHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: 'usage: node -e <code> [args...]\n',
@@ -145,8 +182,73 @@ export function createNodeCommand(): Command {
       return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
     };
 
-    const requireShim = (id: string): never => {
-      throw new Error(`require('${id}') is not supported in node shim`);
+    const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+    if (!isExtensionMode) {
+      // Pre-scan code for require('...') specifiers and fetch them into the cache
+      // so that requireShim can return synchronously.
+      // (extension mode handles this inside the sandbox)
+      const specifiers = extractRequireSpecifiers(code);
+      // Filter out Node built-ins we handle locally
+      const builtinsLocal = new Set(['fs', 'process', 'buffer']);
+      const filteredSpecifiers = specifiers
+        .map((s) => (s.startsWith('node:') ? s.slice(5) : s))
+        .filter((s) => !builtinsLocal.has(s) && !NODE_BUILTINS_UNAVAILABLE.has(s));
+      const cache = (nodeRuntimeState.__requireCache ??
+        (nodeRuntimeState.__requireCache = Object.create(null))) as Record<string, unknown>;
+      const uncached = filteredSpecifiers.filter((id) => !(id in cache));
+      if (uncached.length > 0) {
+        const results = await Promise.allSettled(
+          uncached.map(async (id) => {
+            const mod = await import(/* @vite-ignore */ 'https://esm.sh/' + id);
+            const val = mod && typeof mod === 'object' && 'default' in mod ? mod.default : mod;
+            cache[id] = val;
+          })
+        );
+        for (let i = 0; i < results.length; i++) {
+          if (results[i].status === 'rejected') {
+            const err = (results[i] as PromiseRejectedResult).reason;
+            writeStderr(
+              `Warning: failed to pre-load require('${uncached[i]}'): ${err instanceof Error ? err.message : String(err)}\n`
+            );
+          }
+        }
+      }
+    }
+
+    const requireShim = (id: string): unknown => {
+      const bareId = id.startsWith('node:') ? id.slice(5) : id;
+      // Node built-in interception
+      if (bareId === 'fs') return fsBridge;
+      if (bareId === 'process') return processShim;
+      if (bareId === 'buffer') return { Buffer: globalThis.Buffer };
+      if (bareId === 'path') {
+        // Check cache first (path-browserify may have been pre-fetched)
+        const cache = nodeRuntimeState.__requireCache as Record<string, unknown> | undefined;
+        if (cache && 'path' in cache) return cache['path'];
+        if (cache && id in cache) return cache[id];
+        // Will be handled by esm.sh pre-fetch if statically referenced
+        throw new Error(
+          `require('${id}'): path module not pre-loaded. Add require('path') as a static import.`
+        );
+      }
+      if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
+        const hints: Record<string, string> = {
+          http: ' Use fetch() instead.',
+          https: ' Use fetch() instead.',
+          child_process: ' Use exec() which is available as a shell bridge.',
+          crypto: ' Use globalThis.crypto (Web Crypto API) instead.',
+        };
+        throw new Error(
+          `require('${id}'): Node built-in '${bareId}' is not available in the browser environment.${hints[bareId] || ''}`
+        );
+      }
+      // Regular npm package cache lookup
+      const cache = nodeRuntimeState.__requireCache as Record<string, unknown> | undefined;
+      if (cache && id in cache) return cache[id];
+      throw new Error(
+        `require('${id}'): module not pre-loaded. Use a string literal or await import('https://esm.sh/${id}') directly.`
+      );
     };
 
     const moduleShim = { exports: {} as Record<string, unknown>, filename };
@@ -154,7 +256,6 @@ export function createNodeCommand(): Command {
     try {
       // In extension mode, AsyncFunction constructor is blocked by CSP.
       // Route through the JavaScript tool's sandbox iframe which has full VFS bridge.
-      const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
       if (isExtensionMode) {
         // Wrap the user code with node-like shims.
         // The sandbox already provides `fs` (with readFile, writeFile, readDir, exists, etc.)
@@ -186,7 +287,65 @@ export function createNodeCommand(): Command {
             self.addEventListener('message', handler);
             parent.postMessage({ type: 'shell_exec', id, command }, '*');
           });
-          const require = (id) => { throw new Error("require('" + id + "') is not supported"); };
+          const __builtinsLocal = new Set(['fs', 'process', 'buffer']);
+          const __NODE_BUILTINS_UNAVAILABLE = new Set([
+            'http', 'https', 'net', 'tls', 'dgram', 'dns', 'cluster',
+            'worker_threads', 'child_process', 'crypto', 'os', 'stream',
+            'zlib', 'vm', 'v8', 'perf_hooks', 'readline', 'repl', 'tty', 'inspector'
+          ]);
+          const __requireCache = Object.create(null);
+          async function __loadModule(id) {
+            var url = 'https://cdn.jsdelivr.net/npm/' + id;
+            var resp = await fetch(url);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
+            var text = await resp.text();
+            var __mod = { exports: {} };
+            try {
+              (0, Function)('module', 'exports', text)(__mod, __mod.exports);
+            } catch(fnErr) {
+              throw new Error('Failed to execute module ' + id + ': ' + (fnErr instanceof Error ? fnErr.message : String(fnErr)));
+            }
+            if (Object.keys(__mod.exports).length > 0) return __mod.exports;
+            return self[id] || __mod.exports;
+          }
+          {
+            const __code = ${JSON.stringify(code)};
+            const __re = /\\brequire\\s*\\(\\s*(['"\`])([^'"\`\\s]+)\\1\\s*\\)/g;
+            const __ids = new Set();
+            let __m;
+            while ((__m = __re.exec(__code)) !== null) __ids.add(__m[2]);
+            const __uncached = [...__ids]
+              .map(s => s.startsWith('node:') ? s.slice(5) : s)
+              .filter(s => !__builtinsLocal.has(s) && !__NODE_BUILTINS_UNAVAILABLE.has(s))
+              .filter((id) => !(id in __requireCache));
+            if (__uncached.length > 0) {
+              const __results = await Promise.allSettled(
+                __uncached.map(async (id) => {
+                  const mod = await __loadModule(id);
+                  const val = mod && typeof mod === 'object' && 'default' in mod ? mod.default : mod;
+                  __requireCache[id] = val;
+                })
+              );
+              for (let __i = 0; __i < __results.length; __i++) {
+                if (__results[__i].status === 'rejected') {
+                  __stderr.push("Warning: failed to pre-load require('" + __uncached[__i] + "'): " + __results[__i].reason + "\\n");
+                }
+              }
+            }
+          }
+          const require = (id) => {
+            const bareId = id.startsWith('node:') ? id.slice(5) : id;
+            if (bareId === 'fs') return fs;
+            if (bareId === 'process') return process;
+            if (bareId === 'buffer') return { Buffer: globalThis.Buffer || (typeof Buffer !== 'undefined' ? Buffer : undefined) };
+            if (__NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
+              const __hints = { http: ' Use fetch() instead.', https: ' Use fetch() instead.', child_process: ' Use exec() which is available as a shell bridge.', crypto: ' Use globalThis.crypto (Web Crypto API) instead.' };
+              throw new Error("require('" + id + "'): Node built-in '" + bareId + "' is not available in the browser environment." + (__hints[bareId] || ''));
+            }
+            if (bareId in __requireCache) return __requireCache[bareId];
+            if (id in __requireCache) return __requireCache[id];
+            throw new Error("require('" + id + "'): module not pre-loaded. Use a static require('name') string literal so the module is fetched before execution.");
+          };
           const module = { exports: {} };
           const exports = module.exports;
           try {
@@ -391,7 +550,7 @@ export function createNodeCommand(): Command {
         fs: typeof fsBridge,
         process: typeof processShim,
         console: typeof nodeConsole,
-        require: (id: string) => never,
+        require: (id: string) => unknown,
         module: typeof moduleShim,
         exports: Record<string, unknown>,
         __state: Record<string, unknown>,

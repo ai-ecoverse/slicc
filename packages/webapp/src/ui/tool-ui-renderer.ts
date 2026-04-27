@@ -12,6 +12,8 @@
 
 import { toolUIRegistry } from '../tools/tool-ui.js';
 import { mountInlineSprinkle, type InlineSprinkleInstance } from './inline-sprinkle.js';
+import { collectThemeCSS } from './sprinkle-renderer.js';
+import { isThemeLight } from './theme.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tool-ui-renderer');
@@ -90,9 +92,12 @@ export class ToolUIRenderer {
 
       if (msg.type === 'tool-ui-action' && msg.id === this.requestId) {
         log.info('Tool UI action received', { id: msg.id, action: msg.action });
-        toolUIRegistry.handleAction(msg.id, {
-          action: msg.action,
-          data: msg.data,
+        this.relayActionToOffscreen(msg.action, msg.data, msg.picker).catch((err: unknown) => {
+          log.error('relayActionToOffscreen failed', {
+            requestId: this.requestId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          toolUIRegistry.cancel(this.requestId, 'Relay failed');
         });
       } else if (msg.type === 'tool-ui-rendered' && msg.id === this.requestId) {
         if (msg.height && this.iframe) {
@@ -106,7 +111,6 @@ export class ToolUIRenderer {
     };
     window.addEventListener('message', this.messageHandler);
 
-    const { collectThemeCSS } = await import('./sprinkle-renderer.js');
     const themeCSS = collectThemeCSS();
 
     iframe.contentWindow!.postMessage(
@@ -116,6 +120,7 @@ export class ToolUIRenderer {
         nonce: this.nonce,
         html,
         themeCSS,
+        isLight: isThemeLight(),
       },
       '*'
     );
@@ -137,6 +142,37 @@ export class ToolUIRenderer {
     });
   }
 
+  private async relayActionToOffscreen(
+    action: string,
+    data: unknown,
+    picker?: string
+  ): Promise<void> {
+    let actionData = data;
+
+    if (picker === 'directory') {
+      actionData = await openMountPopup(this.requestId);
+    }
+
+    chrome.runtime
+      .sendMessage({
+        source: 'panel' as const,
+        payload: {
+          type: 'tool-ui-action' as const,
+          requestId: this.requestId,
+          action,
+          data: actionData,
+        },
+      })
+      .catch((err: unknown) => {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log.error('Failed to relay tool UI action to offscreen', {
+          requestId: this.requestId,
+          error: errMsg,
+        });
+        toolUIRegistry.cancel(this.requestId, `Relay failed: ${errMsg}`);
+      });
+  }
+
   /** Clean up */
   dispose(): void {
     if (this.messageHandler) {
@@ -152,6 +188,39 @@ export class ToolUIRenderer {
       this.inlineSprinkle = null;
     }
   }
+}
+
+function openMountPopup(requestId: string): Promise<Record<string, unknown>> {
+  return new Promise((resolve) => {
+    const url = chrome.runtime.getURL(
+      `mount-popup.html?requestId=${encodeURIComponent(requestId)}`
+    );
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      chrome.runtime.onMessage.removeListener(listener);
+    };
+
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve({ cancelled: true });
+    }, 60_000);
+
+    const listener = (msg: unknown) => {
+      const m = msg as Record<string, unknown>;
+      if (!m || m.source !== 'mount-popup' || m.requestId !== requestId) return;
+      cleanup();
+      resolve(m);
+    };
+    chrome.runtime.onMessage.addListener(listener);
+
+    chrome.windows
+      .create({ url, type: 'popup', width: 300, height: 80, focused: true })
+      .catch(() => {
+        cleanup();
+        resolve({ error: 'Failed to open directory picker window' });
+      });
+  });
 }
 
 /** Map of active renderers by request ID */

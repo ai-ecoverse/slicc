@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for the tool modules and active agent tool surface in SLICC. `packages/webapp/src/tools/` contains file, bash, browser, search, and javascript tool factories, but the current scoop/cone surface wired in `packages/webapp/src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, and scoop-management tools. Browser automation and search for active scoop agents now run through shell commands via `bash` (`playwright-cli` / `playwright` / `puppeteer`, plus shell-native `rg` / `grep` / `find`).
+Complete reference for the tool modules and active agent tool surface in SLICC. `packages/webapp/src/tools/` contains file, bash, browser, and search tool factories, but the current scoop/cone surface wired in `packages/webapp/src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, and scoop-management tools. Browser automation and search for active scoop agents now run through shell commands via `bash` (`playwright-cli` / `playwright` / `puppeteer`, plus shell-native `rg` / `grep` / `find`).
 
 ---
 
@@ -312,51 +312,6 @@ List files and directories recursively in VirtualFS using simple glob matching. 
 - Default `pattern` is `*`
 - Truncates after 500 results
 
-### javascript
-
-**File**: `packages/webapp/src/tools/javascript-tool.ts`
-
-Execute JavaScript code in an isolated sandbox with VFS access.
-
-| Property   | Value                        |
-| ---------- | ---------------------------- |
-| **Name**   | `javascript`                 |
-| **Input**  | `{ code: string }`           |
-| **Output** | `{ content: stdout+stderr }` |
-
-**Sandbox**:
-
-- CLI mode: Uses `AsyncFunction` constructor
-- Extension mode: Runs in hidden iframe (CSP-exempt), VFS ops via postMessage
-
-**VFS API**:
-
-```typescript
-const fs = {
-  readFile(path: string): Promise<string>,
-  readFileBinary(path: string): Promise<Uint8Array>,
-  writeFile(path: string, content: string): Promise<void>,
-  writeFileBinary(path: string, bytes: Uint8Array): Promise<void>,
-  readDir(path: string): Promise<string[]>,
-  exists(path: string): Promise<boolean>,
-  stat(path: string): Promise<{ isDirectory, isFile, size }>,
-  mkdir(path: string): Promise<void>,
-  rm(path: string): Promise<void>,
-  fetchToFile(url: string, path: string): Promise<number>,
-};
-```
-
-**Globals**: `console` (log, info, warn, error), `fetch`.
-
-**Example**:
-
-```javascript
-const data = await fs.readFile('/data.json');
-const parsed = JSON.parse(data);
-const result = parsed.items.filter((x) => x.id > 10);
-console.log(result);
-```
-
 ---
 
 ### Search via `bash` (shell alternatives)
@@ -489,7 +444,6 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 | read_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
 | write_file               | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
 | edit_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
-| javascript               | ✓    | ✓              | Active in `ScoopContext`                                              |
 | **send_message**         | ✓    | ✓              | Scoop-management tool                                                 |
 | **list_scoops**          | ✓    | ✗              | Cone-only scoop-management tool                                       |
 | **scoop_scoop**          | ✓    | ✗              | Cone-only scoop-management tool                                       |
@@ -551,7 +505,6 @@ The agent can inspect `isError` to determine if a tool call succeeded or needs r
 
 - **bash**: Each command is synchronous in just-bash; avoid blocking operations
 - **BrowserAPI-backed automation**: Screenshots and evaluations are fast (<100ms on local tabs). Network delays dominate remote sites whether invoked via `playwright-cli`, `playwright`, or `puppeteer`
-- **javascript**: Sandbox message passing adds ~10ms overhead per call
 - **read_file**: LineNumber formatting is O(file size); reading huge files (>1MB) may be slow
 - **context-compaction**: Runs before every LLM call; threshold check is O(message count). When compaction triggers, an LLM call adds latency but only happens when approaching context limits.
 

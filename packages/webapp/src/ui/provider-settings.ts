@@ -9,8 +9,6 @@ import type { Model } from '../core/index.js';
 import type { Api } from '@mariozechner/pi-ai';
 import { storeTrayJoinUrl, hasStoredTrayJoinUrl } from '../scoops/tray-runtime-config.js';
 import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
-import { getThemePreference, setThemePreference } from './theme.js';
-import type { ThemePreference } from './theme.js';
 import type { RefreshTrayRuntimeMsg } from '../../../chrome-extension/src/messages.js';
 import {
   getRegisteredProviderConfig,
@@ -18,6 +16,11 @@ import {
   shouldIncludeProvider,
 } from '../providers/index.js';
 import type { ProviderConfig } from '../providers/index.js';
+import {
+  isBedrockCampCompatible,
+  getBedrockCampExtraModels,
+  bedrockCampRegionFromBaseUrl,
+} from '../providers/built-in/bedrock-camp.js';
 
 export type { ProviderConfig } from '../providers/index.js';
 
@@ -52,6 +55,8 @@ export interface Account {
   providerId: string;
   apiKey: string;
   baseUrl?: string;
+  deployment?: string;
+  apiVersion?: string;
   // OAuth fields (used by OAuth providers)
   accessToken?: string;
   refreshToken?: string;
@@ -122,10 +127,21 @@ function applyModelMetadata(
 // Get models for a provider
 export function getProviderModels(providerId: string): Model<Api>[] {
   try {
-    // Bedrock CAMP uses Amazon Bedrock models with custom API
+    // Bedrock CAMP uses Amazon Bedrock models with custom API.
+    // Filter to inference-profile-prefixed Claude 4.x whose region matches
+    // the configured endpoint (eu.* against us-* 400s "invalid model
+    // identifier"), and inject models missing from pi-ai's registry (e.g.
+    // opus-4.7). Dedupe by ID so extras auto-drop when pi-ai ships them.
     if (providerId === 'bedrock-camp') {
-      const bedrockModels = getModelsDynamic('amazon-bedrock');
-      return bedrockModels.map((m) => ({
+      const region = bedrockCampRegionFromBaseUrl(getBaseUrlForProvider('bedrock-camp'));
+      const bedrockModels = getModelsDynamic('amazon-bedrock').filter((m) =>
+        isBedrockCampCompatible(m, region)
+      );
+      const existingIds = new Set(bedrockModels.map((m) => m.id));
+      const extras = getBedrockCampExtraModels().filter(
+        (m) => isBedrockCampCompatible(m, region) && !existingIds.has(m.id)
+      );
+      return [...bedrockModels, ...extras].map((m) => ({
         ...m,
         api: 'bedrock-camp-converse' as Api,
         provider: 'bedrock-camp',
@@ -329,10 +345,18 @@ function saveAccounts(accounts: Account[]): void {
   localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
 }
 
-export function addAccount(providerId: string, apiKey: string, baseUrl?: string): void {
+export function addAccount(
+  providerId: string,
+  apiKey: string,
+  baseUrl?: string,
+  deployment?: string,
+  apiVersion?: string
+): void {
   const accounts = getAccounts().filter((a) => a.providerId !== providerId);
   const entry: Account = { providerId, apiKey };
   if (baseUrl) entry.baseUrl = baseUrl;
+  if (deployment) entry.deployment = deployment;
+  if (apiVersion) entry.apiVersion = apiVersion;
   accounts.push(entry);
   saveAccounts(accounts);
 }
@@ -375,6 +399,14 @@ export function getApiKeyForProvider(providerId: string): string | null {
 
 export function getBaseUrlForProvider(providerId: string): string | null {
   return getAccounts().find((a) => a.providerId === providerId)?.baseUrl ?? null;
+}
+
+export function getDeploymentForProvider(providerId: string): string | null {
+  return getAccounts().find((a) => a.providerId === providerId)?.deployment ?? null;
+}
+
+export function getApiVersionForProvider(providerId: string): string | null {
+  return getAccounts().find((a) => a.providerId === providerId)?.apiVersion ?? null;
 }
 
 // --- Selected model (format: "providerId:modelId") ---
@@ -552,9 +584,14 @@ export function resolveCurrentModel(): Model<Api> {
   const modelId = getSelectedModelId();
   const baseUrl = getBaseUrlForProvider(providerId);
 
-  // Get default model if none selected
+  // Get default model if none selected — check provider's defaultModelId preference
   const models = getProviderModels(providerId);
-  const effectiveModelId = modelId || models[0]?.id || 'claude-sonnet-4-0';
+  const providerConfig = getProviderConfig(providerId);
+  const preferredId = providerConfig.defaultModelId
+    ? models.find((m) => m.id.toLowerCase().includes(providerConfig.defaultModelId!.toLowerCase()))
+        ?.id
+    : undefined;
+  const effectiveModelId = modelId || preferredId || models[0]?.id || 'claude-sonnet-4-6';
 
   try {
     const providerConfig = getProviderConfig(providerId);
@@ -635,6 +672,8 @@ const ICON_PATHS = {
 export interface ShowProviderSettingsOptions {
   /** When true, start with the "Join a tray" form instead of the account form (when no accounts exist). */
   preferTrayJoin?: boolean;
+  /** When set, show a simplified "Join this tray" confirmation with the URL pre-filled (no paste needed). */
+  autoJoinUrl?: string;
 }
 
 /**
@@ -656,6 +695,8 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
     // Decide initial view: list if accounts exist, tray-join or add-form if empty
     if (getAccounts().length > 0) {
       renderAccountsList();
+    } else if (options?.autoJoinUrl) {
+      renderAutoJoinConfirmation(options.autoJoinUrl);
     } else if (options?.preferTrayJoin) {
       renderJoinTrayForm();
     } else {
@@ -775,7 +816,8 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
       btnRow.style.cssText = 'display: flex; gap: 8px;';
 
       const addBtn = document.createElement('button');
-      addBtn.className = 'dialog__btn';
+      addBtn.className =
+        currentAccounts.length > 0 ? 'dialog__btn dialog__btn--secondary' : 'dialog__btn';
       addBtn.style.flex = '1';
       addBtn.textContent = 'Add Account';
       addBtn.addEventListener('click', () => renderAccountForm());
@@ -825,76 +867,16 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
       joinTrayBtn.addEventListener('click', () => renderJoinTrayForm());
       dialog.appendChild(joinTrayBtn);
 
-      // ── Theme section ───────────────────────────────────────────
-      const themeSep = document.createElement('hr');
-      themeSep.style.cssText =
+      // Separator before Get Started
+      const closeSep = document.createElement('hr');
+      closeSep.style.cssText =
         'border: none; border-top: 1px solid var(--s2-border-subtle); margin: 16px 0;';
-      dialog.appendChild(themeSep);
-
-      const themeLabel = document.createElement('div');
-      themeLabel.className = 'dialog__desc';
-      themeLabel.style.cssText = 'font-weight: 600; margin-bottom: 8px;';
-      themeLabel.textContent = 'Theme';
-      dialog.appendChild(themeLabel);
-
-      const themeGroup = document.createElement('div');
-      themeGroup.setAttribute('role', 'radiogroup');
-      themeGroup.setAttribute('aria-label', 'Theme');
-      themeGroup.style.cssText =
-        'display: flex; gap: 0; margin-bottom: 16px; ' +
-        'border-radius: var(--s2-radius-default); overflow: hidden; ' +
-        'border: 1px solid var(--s2-border-subtle);';
-
-      const themeOptions: [ThemePreference, string][] = [
-        ['system', 'System'],
-        ['light', 'Light'],
-        ['dark', 'Dark'],
-      ];
-      const themeBtns: HTMLButtonElement[] = [];
-
-      for (const [value, label] of themeOptions) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.setAttribute('role', 'radio');
-        btn.setAttribute('aria-checked', String(value === getThemePreference()));
-        btn.textContent = label;
-        btn.dataset.theme = value;
-        btn.style.cssText =
-          'flex: 1; padding: 8px 0; border: none; ' +
-          'font-size: 13px; font-weight: 600; cursor: pointer; ' +
-          'transition: background var(--s2-transition-default), ' +
-          'color var(--s2-transition-default);';
-        themeBtns.push(btn);
-        themeGroup.appendChild(btn);
-      }
-
-      function styleThemeBtns() {
-        const cs = getComputedStyle(document.documentElement);
-        for (const btn of themeBtns) {
-          const active = btn.dataset.theme === getThemePreference();
-          btn.setAttribute('aria-checked', String(active));
-          btn.style.background = active
-            ? cs.getPropertyValue('--s2-accent').trim()
-            : cs.getPropertyValue('--s2-bg-layer-2').trim();
-          btn.style.color = active ? '#fff' : cs.getPropertyValue('--s2-content-secondary').trim();
-        }
-      }
-      styleThemeBtns();
-
-      for (const btn of themeBtns) {
-        btn.addEventListener('click', () => {
-          setThemePreference(btn.dataset.theme as ThemePreference);
-          styleThemeBtns();
-        });
-      }
-
-      dialog.appendChild(themeGroup);
+      dialog.appendChild(closeSep);
 
       // Close button
       const closeBtn = document.createElement('button');
-      closeBtn.className = 'dialog__btn dialog__btn--secondary';
-      closeBtn.style.marginTop = '8px';
-      closeBtn.textContent = 'Close';
+      closeBtn.className = 'dialog__btn';
+      closeBtn.textContent = 'Get Started';
       closeBtn.addEventListener('click', () => {
         overlay.remove();
         resolve((localStorage.getItem(ACCOUNTS_KEY) ?? '') !== accountsBefore);
@@ -1064,6 +1046,56 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       dialog.appendChild(baseUrlSection);
 
+      // Deployment section (shown for providers with requiresDeployment)
+      const deploymentSection = document.createElement('div');
+      deploymentSection.style.display = 'none';
+
+      const deploymentLabel = document.createElement('div');
+      deploymentLabel.className = 'dialog__desc';
+      deploymentLabel.textContent = 'Deployment:';
+      deploymentSection.appendChild(deploymentLabel);
+
+      const deploymentInput = document.createElement('input');
+      deploymentInput.className = 'dialog__input';
+      deploymentInput.type = 'text';
+      deploymentInput.autocomplete = 'off';
+      deploymentInput.spellcheck = false;
+      if (isEdit && editing.deployment) deploymentInput.value = editing.deployment;
+      deploymentSection.appendChild(deploymentInput);
+
+      const deploymentDesc = document.createElement('div');
+      deploymentDesc.className = 'dialog__desc';
+      deploymentDesc.style.cssText =
+        'font-size: 11px; color: var(--s2-content-secondary); margin-top: -12px; margin-bottom: 16px;';
+      deploymentSection.appendChild(deploymentDesc);
+
+      dialog.appendChild(deploymentSection);
+
+      // API version section (shown for providers with requiresApiVersion)
+      const apiVersionSection = document.createElement('div');
+      apiVersionSection.style.display = 'none';
+
+      const apiVersionLabel = document.createElement('div');
+      apiVersionLabel.className = 'dialog__desc';
+      apiVersionLabel.textContent = 'API Version:';
+      apiVersionSection.appendChild(apiVersionLabel);
+
+      const apiVersionInput = document.createElement('input');
+      apiVersionInput.className = 'dialog__input';
+      apiVersionInput.type = 'text';
+      apiVersionInput.autocomplete = 'off';
+      apiVersionInput.spellcheck = false;
+      if (isEdit && editing.apiVersion) apiVersionInput.value = editing.apiVersion;
+      apiVersionSection.appendChild(apiVersionInput);
+
+      const apiVersionDesc = document.createElement('div');
+      apiVersionDesc.className = 'dialog__desc';
+      apiVersionDesc.style.cssText =
+        'font-size: 11px; color: var(--s2-content-secondary); margin-top: -12px; margin-bottom: 16px;';
+      apiVersionSection.appendChild(apiVersionDesc);
+
+      dialog.appendChild(apiVersionSection);
+
       // Error message area
       const errorEl = document.createElement('div');
       errorEl.style.cssText =
@@ -1103,6 +1135,27 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           baseUrlSection.style.display = providerConfig.requiresBaseUrl ? '' : 'none';
           saveBtn.style.display = '';
         }
+
+        // Deployment field
+        if (providerConfig.requiresDeployment) {
+          deploymentSection.style.display = '';
+          deploymentInput.placeholder = providerConfig.deploymentPlaceholder || 'deployment-name';
+          deploymentDesc.textContent = providerConfig.deploymentDescription || '';
+        } else {
+          deploymentSection.style.display = 'none';
+        }
+
+        // API version field
+        if (providerConfig.requiresApiVersion) {
+          apiVersionSection.style.display = '';
+          if (!apiVersionInput.value && providerConfig.apiVersionDefault) {
+            apiVersionInput.value = providerConfig.apiVersionDefault;
+          }
+          apiVersionInput.placeholder = providerConfig.apiVersionDefault || 'api-version';
+          apiVersionDesc.textContent = providerConfig.apiVersionDescription || '';
+        } else {
+          apiVersionSection.style.display = 'none';
+        }
       }
 
       providerSelect.addEventListener('change', () => {
@@ -1130,7 +1183,20 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           return;
         }
 
-        addAccount(pid, apiKeyInput.value.trim(), baseUrlInput.value.trim() || undefined);
+        if (config.requiresDeployment && !deploymentInput.value.trim()) {
+          errorEl.textContent = 'Deployment name is required for this provider.';
+          errorEl.style.display = '';
+          deploymentInput.focus();
+          return;
+        }
+
+        addAccount(
+          pid,
+          apiKeyInput.value.trim(),
+          baseUrlInput.value.trim() || undefined,
+          deploymentInput.value.trim() || undefined,
+          apiVersionInput.value.trim() || undefined
+        );
 
         renderAccountsList();
       }
@@ -1142,6 +1208,8 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
       };
       apiKeyInput.addEventListener('keydown', handleEnter);
       baseUrlInput.addEventListener('keydown', handleEnter);
+      deploymentInput.addEventListener('keydown', handleEnter);
+      apiVersionInput.addEventListener('keydown', handleEnter);
 
       dialog.appendChild(saveBtn);
 
@@ -1177,6 +1245,80 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           baseUrlInput.focus();
         }
       });
+    }
+
+    function renderAutoJoinConfirmation(joinUrl: string) {
+      dialog.innerHTML = '';
+
+      const title = document.createElement('div');
+      title.className = 'dialog__title';
+      title.textContent = 'Join this tray';
+      dialog.appendChild(title);
+
+      const desc = document.createElement('div');
+      desc.className = 'dialog__desc';
+      desc.style.marginBottom = '12px';
+      desc.textContent =
+        'You\u2019ve been invited to join a SLICC tray session. Click below to connect.';
+      dialog.appendChild(desc);
+
+      // Show truncated URL for context
+      const urlDisplay = document.createElement('div');
+      urlDisplay.className = 'dialog__desc';
+      urlDisplay.style.cssText =
+        'font-family: monospace; font-size: 11px; color: var(--s2-content-secondary); word-break: break-all; margin-bottom: 16px; padding: 8px; background: var(--s2-bg-secondary); border-radius: 4px;';
+      const displayUrl =
+        joinUrl.length > 80 ? joinUrl.slice(0, 40) + '\u2026' + joinUrl.slice(-37) : joinUrl;
+      urlDisplay.textContent = displayUrl;
+      dialog.appendChild(urlDisplay);
+
+      const statusEl = document.createElement('div');
+      statusEl.style.cssText =
+        'font-size: 12px; color: var(--s2-content-secondary); margin-bottom: 8px; display: none;';
+      dialog.appendChild(statusEl);
+
+      const joinBtn = document.createElement('button');
+      joinBtn.className = 'dialog__btn';
+      joinBtn.textContent = 'Join tray';
+      joinBtn.addEventListener('click', () => {
+        const stored = storeTrayJoinUrl(window.localStorage, joinUrl);
+        if (!stored) {
+          statusEl.textContent = 'Invalid tray join URL.';
+          statusEl.style.display = '';
+          statusEl.style.color = 'var(--slicc-cone)';
+          return;
+        }
+
+        if (isExtensionRuntime()) {
+          const payload: RefreshTrayRuntimeMsg = { type: 'refresh-tray-runtime' };
+          void chrome.runtime.sendMessage({ source: 'panel' as const, payload }).catch(() => {});
+        } else {
+          window.dispatchEvent(
+            new CustomEvent('slicc:tray-join', {
+              detail: { joinUrl: stored.joinUrl },
+            })
+          );
+        }
+
+        statusEl.textContent = 'Connecting to tray...';
+        statusEl.style.display = '';
+        statusEl.style.color = 'var(--s2-content-secondary)';
+
+        setTimeout(() => {
+          overlay.remove();
+          resolve(false);
+        }, 800);
+      });
+      dialog.appendChild(joinBtn);
+
+      const altBtn = document.createElement('button');
+      altBtn.className = 'dialog__btn dialog__btn--secondary';
+      altBtn.style.marginTop = '8px';
+      altBtn.textContent = 'Set up an account instead';
+      altBtn.addEventListener('click', () => {
+        renderAccountForm();
+      });
+      dialog.appendChild(altBtn);
     }
 
     function renderJoinTrayForm() {

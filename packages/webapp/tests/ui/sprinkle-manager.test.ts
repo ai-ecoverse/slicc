@@ -20,14 +20,19 @@ describe('SprinkleManager', () => {
     lickHandler = vi.fn() as unknown as (event: LickEvent) => void;
     addSprinkle = vi.fn();
     removeSprinkle = vi.fn();
-    mgr = new SprinkleManager(vfs, lickHandler, {
-      addSprinkle: addSprinkle as unknown as (
-        name: string,
-        title: string,
-        element: HTMLElement
-      ) => void,
-      removeSprinkle: removeSprinkle as unknown as (name: string) => void,
-    });
+    mgr = new SprinkleManager(
+      vfs,
+      lickHandler,
+      {
+        addSprinkle: addSprinkle as unknown as (
+          name: string,
+          title: string,
+          element: HTMLElement
+        ) => void,
+        removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+      },
+      vi.fn()
+    );
   });
 
   it('refresh discovers available sprinkles', async () => {
@@ -57,5 +62,20 @@ describe('SprinkleManager', () => {
 
   it('sendToSprinkle does not throw for closed sprinkle', () => {
     expect(() => mgr.sendToSprinkle('unknown', {})).not.toThrow();
+  });
+
+  it('open throws descriptive error when file content is undefined', async () => {
+    await vfs.writeFile('/shared/sprinkles/broken/broken.shtml', '<title>Broken</title><div/>');
+    await mgr.refresh();
+
+    // Mock readFile to return undefined (simulating VFS corruption)
+    const originalReadFile = vfs.readFile.bind(vfs);
+    vfs.readFile = vi.fn().mockResolvedValue(undefined) as typeof vfs.readFile;
+
+    await expect(mgr.open('broken')).rejects.toThrow(
+      'Failed to read sprinkle content: /shared/sprinkles/broken/broken.shtml'
+    );
+
+    vfs.readFile = originalReadFile;
   });
 });

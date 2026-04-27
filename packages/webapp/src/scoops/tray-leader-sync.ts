@@ -46,6 +46,8 @@ export interface LeaderSyncManagerOptions {
   onFollowerDead?: (bootstrapId: string) => void;
   /** VirtualFS instance for handling remote fs requests targeting the leader. */
   vfs?: VirtualFS;
+  /** Called whenever a follower is added or removed (incl. via dead detection or stop). */
+  onFollowerCountChanged?: (count: number) => void;
 }
 
 /** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
@@ -172,6 +174,7 @@ export class LeaderSyncManager {
       floatType: deriveFloatType(meta?.runtime),
     });
     log.info('Follower added to sync', { bootstrapId, followerCount: this.followers.size });
+    this.options.onFollowerCountChanged?.(this.followers.size);
 
     // Send initial snapshot
     this.sendSnapshotToFollower(bootstrapId);
@@ -210,6 +213,7 @@ export class LeaderSyncManager {
     }
 
     log.info('Follower removed from sync', { bootstrapId, followerCount: this.followers.size });
+    this.options.onFollowerCountChanged?.(this.followers.size);
   }
 
   /**

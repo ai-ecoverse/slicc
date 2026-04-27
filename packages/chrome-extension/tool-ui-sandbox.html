@@ -100,6 +100,7 @@ document.addEventListener('click', function(e) {
       var action = target.dataset.action;
       var data = target.dataset.actionData;
       try { data = data ? JSON.parse(data) : undefined; } catch(err) { /* keep as string */ }
+      var picker = target.dataset.picker || undefined;
 
       // Post the action to parent — this runs with user gesture context!
       sendToParent({
@@ -107,6 +108,7 @@ document.addEventListener('click', function(e) {
         id: window.__toolui_id,
         action: action,
         data: data,
+        picker: picker,
       });
 
       e.preventDefault();
@@ -147,6 +149,13 @@ addEventListener('message', function(e) {
     window.__toolui_nonce = msg.nonce || '';
     window.__parentOrigin = e.origin || '*';
 
+    // Apply theme class so CSS variables resolve correctly
+    if (msg.isLight) {
+      document.documentElement.classList.add('theme-light');
+    } else {
+      document.documentElement.classList.remove('theme-light');
+    }
+
     // Inject theme CSS from parent
     if (msg.themeCSS) {
       var themeStyle = document.createElement('style');
@@ -154,12 +163,15 @@ addEventListener('message', function(e) {
       document.head.appendChild(themeStyle);
     }
 
-    // Sanitize and render the HTML content
+    // Sanitize and render the HTML content (trusted agent-authored tool UI, same as sprinkle sandbox)
+    // eslint-disable-next-line no-unsanitized/property
     document.body.innerHTML = sanitizeHtml(msg.html);
 
-    // Send rendered confirmation with initial height
-    var height = document.documentElement.scrollHeight;
-    sendToParent({ type: 'tool-ui-rendered', id: msg.id, height: height });
+    // Defer height measurement until after CSS is painted
+    requestAnimationFrame(function() {
+      var height = document.documentElement.scrollHeight;
+      sendToParent({ type: 'tool-ui-rendered', id: window.__toolui_id, height: height });
+    });
 
     // Watch for size changes and report them
     if (typeof ResizeObserver !== 'undefined') {
@@ -169,6 +181,10 @@ addEventListener('message', function(e) {
       });
       observer.observe(document.body);
     }
+  }
+
+  if (msg.type === 'slicc-theme') {
+    document.documentElement.classList.toggle('theme-light', !!msg.isLight);
   }
 });
 </script>

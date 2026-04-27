@@ -186,6 +186,195 @@ describe('RestrictedFS', () => {
     ).rejects.toThrow('ENOENT');
   });
 
+  // ── Mount path access (dynamic read-only) ──────────────────────────
+
+  describe('mount paths as dynamic read-only prefixes', () => {
+    let mountVfs: VirtualFS;
+    let mountRestricted: RestrictedFS;
+
+    beforeAll(async () => {
+      mountVfs = await VirtualFS.create({ dbName: 'test-restricted-fs-mounts', wipe: true });
+      await mountVfs.mkdir('/scoops/scoop-a', { recursive: true });
+      await mountVfs.writeFile('/scoops/scoop-a/file.txt', 'scoop file');
+
+      // Simulate a mount by creating the directory and adding files,
+      // then registering it as a mount point via the VFS mount mechanism.
+      // Since we can't use real FileSystemDirectoryHandle in tests, we
+      // create the content in LFS and mock listMounts to include the path.
+      await mountVfs.mkdir('/mnt/kb', { recursive: true });
+      await mountVfs.writeFile('/mnt/kb/README.md', 'mount readme');
+      await mountVfs.writeFile('/mnt/kb/data.json', '{"key":"value"}');
+
+      // Spy on listMounts to return our simulated mount path
+      const originalListMounts = mountVfs.listMounts.bind(mountVfs);
+      mountVfs.listMounts = () => [...originalListMounts(), '/mnt/kb'];
+
+      mountRestricted = new RestrictedFS(mountVfs, ['/scoops/scoop-a/']);
+    });
+
+    it('readFile on a mounted path succeeds', async () => {
+      const content = await mountRestricted.readFile('/mnt/kb/README.md', { encoding: 'utf-8' });
+      expect(content).toBe('mount readme');
+    });
+
+    it('writeFile on a mounted path throws EACCES', async () => {
+      await expect(mountRestricted.writeFile('/mnt/kb/new.txt', 'nope')).rejects.toThrow('EACCES');
+    });
+
+    it('readDir on a mounted path returns entries', async () => {
+      const entries = await mountRestricted.readDir('/mnt/kb');
+      const names = entries.map((e) => e.name);
+      expect(names).toContain('README.md');
+      expect(names).toContain('data.json');
+    });
+
+    it('stat on a mounted path works', async () => {
+      const stat = await mountRestricted.stat('/mnt/kb');
+      expect(stat.type).toBe('directory');
+    });
+
+    it('exists on a mounted path returns true', async () => {
+      expect(await mountRestricted.exists('/mnt/kb')).toBe(true);
+      expect(await mountRestricted.exists('/mnt/kb/README.md')).toBe(true);
+    });
+
+    it('mkdir on a mounted path throws EACCES', async () => {
+      await expect(mountRestricted.mkdir('/mnt/kb/subdir')).rejects.toThrow('EACCES');
+    });
+
+    it('rm on a mounted path throws EACCES', async () => {
+      await expect(mountRestricted.rm('/mnt/kb/README.md')).rejects.toThrow('EACCES');
+    });
+
+    it('readDir on root includes mount parent paths', async () => {
+      const entries = await mountRestricted.readDir('/');
+      const names = entries.map((e) => e.name);
+      expect(names).toContain('mnt');
+      expect(names).toContain('scoops');
+    });
+  });
+
+  // ── Symlink target validation ─────────────────────────────────────
+
+  describe('symlink target validation', () => {
+    let symlinkVfs: VirtualFS;
+    let symlinkRestricted: RestrictedFS;
+
+    beforeAll(async () => {
+      symlinkVfs = await VirtualFS.create({ dbName: 'test-restricted-fs-symlinks', wipe: true });
+      // Set up directory structure
+      await symlinkVfs.mkdir('/scoops/my-scoop', { recursive: true });
+      await symlinkVfs.mkdir('/shared', { recursive: true });
+      await symlinkVfs.mkdir('/secret', { recursive: true });
+      await symlinkVfs.writeFile('/scoops/my-scoop/legit.txt', 'allowed content');
+      await symlinkVfs.writeFile('/shared/data.txt', 'shared data');
+      await symlinkVfs.writeFile('/secret/data.txt', 'top secret');
+
+      // Create symlinks:
+      // escape-link -> /secret/data.txt (points outside allowed)
+      await symlinkVfs.symlink('/secret/data.txt', '/scoops/my-scoop/escape-link');
+      // good-link -> /shared/data.txt (points to another allowed path)
+      await symlinkVfs.symlink('/shared/data.txt', '/scoops/my-scoop/good-link');
+      // chain: /scoops/my-scoop/chain-link -> /scoops/my-scoop/escape-link -> /secret/data.txt
+      await symlinkVfs.symlink('/scoops/my-scoop/escape-link', '/scoops/my-scoop/chain-link');
+
+      symlinkRestricted = new RestrictedFS(symlinkVfs, ['/scoops/my-scoop/'], ['/shared/']);
+    });
+
+    it('readFile through symlink pointing outside throws ENOENT', async () => {
+      await expect(
+        symlinkRestricted.readFile('/scoops/my-scoop/escape-link', { encoding: 'utf-8' })
+      ).rejects.toThrow('ENOENT');
+    });
+
+    it('readFile through symlink pointing to allowed path succeeds', async () => {
+      const content = await symlinkRestricted.readFile('/scoops/my-scoop/good-link', {
+        encoding: 'utf-8',
+      });
+      expect(content).toBe('shared data');
+    });
+
+    it('readTextFile through symlink pointing outside throws ENOENT', async () => {
+      await expect(symlinkRestricted.readTextFile('/scoops/my-scoop/escape-link')).rejects.toThrow(
+        'ENOENT'
+      );
+    });
+
+    it('stat through symlink pointing outside throws ENOENT', async () => {
+      await expect(symlinkRestricted.stat('/scoops/my-scoop/escape-link')).rejects.toThrow(
+        'ENOENT'
+      );
+    });
+
+    it('exists returns false for symlink pointing outside', async () => {
+      expect(await symlinkRestricted.exists('/scoops/my-scoop/escape-link')).toBe(false);
+    });
+
+    it('symlink chain where final target is outside throws ENOENT', async () => {
+      await expect(
+        symlinkRestricted.readFile('/scoops/my-scoop/chain-link', { encoding: 'utf-8' })
+      ).rejects.toThrow('ENOENT');
+    });
+
+    it('writeFile through symlink pointing outside throws EACCES', async () => {
+      // Create a symlink to a directory outside allowed
+      await symlinkVfs.mkdir('/outside-dir', { recursive: true });
+      await symlinkVfs.symlink('/outside-dir', '/scoops/my-scoop/dir-escape');
+      await expect(
+        symlinkRestricted.writeFile('/scoops/my-scoop/dir-escape/file.txt', 'hacked')
+      ).rejects.toThrow('EACCES');
+    });
+
+    it('readlink on symlink pointing outside throws ENOENT', async () => {
+      await expect(symlinkRestricted.readlink('/scoops/my-scoop/escape-link')).rejects.toThrow(
+        'ENOENT'
+      );
+    });
+
+    it('readlink on symlink pointing to allowed path succeeds', async () => {
+      const target = await symlinkRestricted.readlink('/scoops/my-scoop/good-link');
+      expect(target).toBe('/shared/data.txt');
+    });
+  });
+
+  // ── Destination symlink escape and rm symlink tests ─────────────────
+
+  describe('destination symlink escape', () => {
+    let escVfs: VirtualFS;
+    let escRestricted: RestrictedFS;
+
+    beforeAll(async () => {
+      escVfs = await VirtualFS.create({ dbName: 'test-restricted-fs-dest-symlink', wipe: true });
+      await escVfs.mkdir('/scoops/my-scoop', { recursive: true });
+      await escVfs.mkdir('/outside', { recursive: true });
+      await escVfs.writeFile('/outside/secret', 'top secret');
+
+      escRestricted = new RestrictedFS(escVfs, ['/scoops/my-scoop/']);
+    });
+
+    it('writeFile through existing symlink pointing outside sandbox is blocked', async () => {
+      await escVfs.symlink('/outside/secret', '/scoops/my-scoop/escape-write');
+      await expect(
+        escRestricted.writeFile('/scoops/my-scoop/escape-write', 'hacked')
+      ).rejects.toThrow('EACCES');
+    });
+
+    it('copyFile to existing symlink pointing outside sandbox is blocked', async () => {
+      await escVfs.writeFile('/scoops/my-scoop/src.txt', 'source');
+      await escVfs.symlink('/outside/secret', '/scoops/my-scoop/escape-copy');
+      await expect(
+        escRestricted.copyFile('/scoops/my-scoop/src.txt', '/scoops/my-scoop/escape-copy')
+      ).rejects.toThrow('EACCES');
+    });
+
+    it('rm can delete a symlink whose target is outside writable prefixes', async () => {
+      await escVfs.symlink('/outside/data', '/scoops/my-scoop/rm-link');
+      // Should succeed — we're removing the link node, not the target
+      await escRestricted.rm('/scoops/my-scoop/rm-link');
+      expect(await escVfs.exists('/scoops/my-scoop/rm-link')).toBe(false);
+    });
+  });
+
   it('rename checks both paths', async () => {
     await restricted.writeFile('/scoops/andy-scoop/rename-src.txt', 'src');
     // Rename within allowed - should work
@@ -203,5 +392,30 @@ describe('RestrictedFS', () => {
     await expect(
       restricted.rename('/scoops/andy-scoop/escape.txt', '/root-escape.txt')
     ).rejects.toThrow('EACCES');
+  });
+
+  describe('canWrite predicate', () => {
+    it('returns true for paths inside a writable prefix', () => {
+      expect(restricted.canWrite('/scoops/andy-scoop/file.txt')).toBe(true);
+      expect(restricted.canWrite('/scoops/andy-scoop')).toBe(true);
+      expect(restricted.canWrite('/shared/data.txt')).toBe(true);
+    });
+
+    it('returns false for paths outside any writable prefix', () => {
+      // Sibling scoop — the exact sandbox-escape case Item B guards.
+      expect(restricted.canWrite('/scoops/other-scoop')).toBe(false);
+      expect(restricted.canWrite('/scoops/other-scoop/secret.txt')).toBe(false);
+      // Parent dir of the sandbox — `stat` would succeed on this path, but
+      // it must NOT be writable.
+      expect(restricted.canWrite('/scoops')).toBe(false);
+      expect(restricted.canWrite('/')).toBe(false);
+      expect(restricted.canWrite('/root-file.txt')).toBe(false);
+    });
+
+    it('returns false for read-only prefixes', () => {
+      const readOnly = new RestrictedFS(vfs, ['/scoops/andy-scoop/'], ['/workspace/']);
+      expect(readOnly.canWrite('/workspace/foo.txt')).toBe(false);
+      expect(readOnly.canWrite('/scoops/andy-scoop/foo.txt')).toBe(true);
+    });
   });
 });

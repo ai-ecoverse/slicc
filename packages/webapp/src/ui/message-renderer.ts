@@ -39,6 +39,30 @@ function highlightCode(code: string, lang: string): string {
   return html;
 }
 
+function protectHighlightedSpans(html: string): {
+  html: string;
+  restore: (input: string) => string;
+} {
+  const protectedSpans: string[] = [];
+  const protectedHtml = html.replace(
+    /<span class="tok-(?:comment|string)">[\s\S]*?<\/span>/g,
+    (match) => {
+      const token = String.fromCharCode(0xe000 + protectedSpans.length);
+      protectedSpans.push(match);
+      return token;
+    }
+  );
+
+  return {
+    html: protectedHtml,
+    restore: (input: string) =>
+      input.replace(/[\ue000-\uf8ff]/g, (token) => {
+        const index = token.charCodeAt(0) - 0xe000;
+        return protectedSpans[index] ?? token;
+      }),
+  };
+}
+
 function highlightJS(html: string): string {
   html = html.replace(/(\/\/[^\n]*)/g, '<span class="tok-comment">$1</span>');
   html = html.replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="tok-comment">$1</span>');
@@ -46,6 +70,8 @@ function highlightJS(html: string): string {
     /(&quot;[^&]*?&quot;|&#x27;[^&]*?&#x27;|`[^`]*?`)/g,
     '<span class="tok-string">$1</span>'
   );
+  const protectedSpans = protectHighlightedSpans(html);
+  html = protectedSpans.html;
   const kw = [
     'const',
     'let',
@@ -93,7 +119,7 @@ function highlightJS(html: string): string {
   );
   html = html.replace(/\b(\d+\.?\d*)\b/g, '<span class="tok-number">$1</span>');
   html = html.replace(/\b([a-zA-Z_$][\w$]*)\s*(?=\()/g, '<span class="tok-fn">$1</span>');
-  return html;
+  return protectedSpans.restore(html);
 }
 
 function highlightJSON(html: string): string {

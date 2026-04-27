@@ -298,7 +298,7 @@ describe('Agent (pi-mono)', () => {
       initialState: { model: testModel() },
       streamFn: createMockStreamFn([textResponse('hi')]),
     });
-    agent.setSystemPrompt('Be concise');
+    agent.state.systemPrompt = 'Be concise';
     expect(agent.state.systemPrompt).toBe('Be concise');
   });
 
@@ -308,7 +308,7 @@ describe('Agent (pi-mono)', () => {
       streamFn: createMockStreamFn([textResponse('hi')]),
     });
     const newModel = { ...testModel(), id: 'claude-sonnet-4-5' };
-    agent.setModel(newModel);
+    agent.state.model = newModel;
     expect(agent.state.model.id).toBe('claude-sonnet-4-5');
   });
 });

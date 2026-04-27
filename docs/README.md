@@ -20,25 +20,25 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 
 ## Layer Quick Reference
 
-| Layer               | Directory                              | Key File              | Purpose                                                          |
-| ------------------- | -------------------------------------- | --------------------- | ---------------------------------------------------------------- |
-| Virtual Filesystem  | `packages/webapp/src/fs/`              | `virtual-fs.ts`       | POSIX-like FS backed by LightningFS (IndexedDB)                  |
-| Shell               | `packages/webapp/src/shell/`           | `wasm-shell.ts`       | just-bash WASM interpreter + xterm.js terminal                   |
-| CDP                 | `packages/webapp/src/cdp/`             | `browser-api.ts`      | Chrome DevTools Protocol client (Playwright-style API)           |
-| Tools               | `packages/webapp/src/tools/`           | `bash-tool.ts`        | Tool factories; active scoop surface is file + bash + javascript |
-| Core Agent          | `packages/webapp/src/core/`            | `index.ts`            | pi-mono agent loop, streaming, context compaction                |
-| Scoops Orchestrator | `packages/webapp/src/scoops/`          | `orchestrator.ts`     | Multi-agent system (cone + scoops), message routing              |
-| UI                  | `packages/webapp/src/ui/`              | `main.ts`             | Vanilla TS layout: Chat + Terminal + Browser Preview             |
-| CLI Server          | `packages/node-server/src/`            | `index.ts`            | Express + CDP WebSocket proxy, Chrome launcher                   |
-| Extension           | `packages/chrome-extension/src/`       | `service-worker.ts`   | Chrome Manifest V3 extension (side panel)                        |
-| Sprinkles           | `packages/webapp/src/ui/sprinkle-*.ts` | `sprinkle-manager.ts` | Composable `.shtml` panels with agent bridge API                 |
+| Layer               | Directory                              | Key File              | Purpose                                                |
+| ------------------- | -------------------------------------- | --------------------- | ------------------------------------------------------ |
+| Virtual Filesystem  | `packages/webapp/src/fs/`              | `virtual-fs.ts`       | POSIX-like FS backed by LightningFS (IndexedDB)        |
+| Shell               | `packages/webapp/src/shell/`           | `wasm-shell.ts`       | just-bash WASM interpreter + xterm.js terminal         |
+| CDP                 | `packages/webapp/src/cdp/`             | `browser-api.ts`      | Chrome DevTools Protocol client (Playwright-style API) |
+| Tools               | `packages/webapp/src/tools/`           | `bash-tool.ts`        | Tool factories; active scoop surface is file + bash    |
+| Core Agent          | `packages/webapp/src/core/`            | `index.ts`            | pi-mono agent loop, streaming, context compaction      |
+| Scoops Orchestrator | `packages/webapp/src/scoops/`          | `orchestrator.ts`     | Multi-agent system (cone + scoops), message routing    |
+| UI                  | `packages/webapp/src/ui/`              | `main.ts`             | Vanilla TS layout: Chat + Terminal + Browser Preview   |
+| CLI Server          | `packages/node-server/src/`            | `index.ts`            | Express + CDP WebSocket proxy, Chrome launcher         |
+| Extension           | `packages/chrome-extension/src/`       | `service-worker.ts`   | Chrome Manifest V3 extension (side panel)              |
+| Sprinkles           | `packages/webapp/src/ui/sprinkle-*.ts` | `sprinkle-manager.ts` | Composable `.shtml` panels with agent bridge API       |
 
 ## Active Scoop Tool Surface
 
 The active tool surface wired in `packages/webapp/src/scoops/scoop-context.ts` is:
 
 - File tools: `read_file`, `write_file`, `edit_file`
-- Execution tools: `bash`, `javascript`
+- Execution tools: `bash`
 - NanoClaw tools: `send_message` for all scoops, plus cone-only scoop-management tools
 
 Browser automation and search for agents run through shell commands via `bash` (`playwright-cli` / `playwright` / `puppeteer` for browser automation, `grep` / `find` / `rg` for search), with `serve <dir>` for previewing VFS app directories and `open` for single files or URLs.

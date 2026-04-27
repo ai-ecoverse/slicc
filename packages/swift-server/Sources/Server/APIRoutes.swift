@@ -11,6 +11,7 @@ private let corsAllowMethodsHeader = HTTPField.Name("Access-Control-Allow-Method
 private let corsAllowHeadersHeader = HTTPField.Name("Access-Control-Allow-Headers")!
 private let cacheControlHeader = HTTPField.Name("Cache-Control")!
 private let targetURLHeader = HTTPField.Name("X-Target-URL")!
+private let proxyErrorMarkerHeader = HTTPField.Name("X-Proxy-Error")!
 private let contentTypeHeaderValue = "application/json; charset=utf-8"
 private let htmlContentTypeHeaderValue = "text/html; charset=utf-8"
 private let proxyHopByHopHeaders: Set<String> = [
@@ -45,7 +46,8 @@ func registerAPIRoutes(
     router: Router<some RequestContext>,
     lickSystem: LickSystem,
     config: ServerConfig,
-    httpClient: HTTPClient
+    httpClient: HTTPClient,
+    secretInjector: SecretInjector = SecretInjector(secrets: [])
 ) {
     router.get("/api/runtime-config") { _, _ in
         let envWorkerBaseUrl: String? = {
@@ -192,20 +194,90 @@ func registerAPIRoutes(
         )
     }
 
+    // Secret management API — direct Keychain access (no browser needed)
+    router.get("/api/secrets") { _, _ in
+        let entries = SecretStore.list()
+        let items: [LickSystem.JSONValue] = entries.map { entry in
+            .object([
+                "name": .string(entry.name),
+                "domains": .array(entry.domains.map { .string($0) }),
+            ])
+        }
+        return try jsonResponse(.array(items))
+    }
+
+    // Masked secrets endpoint — returns name + maskedValue + domains for shell env population.
+    // The browser fetches this at shell init to populate env vars with masked values.
+    // Real values are never exposed; only deterministic session-scoped masks.
+    router.get("/api/secrets/masked") { _, _ in
+        let entries = secretInjector.maskedEntries
+        let items: [LickSystem.JSONValue] = entries.map { entry in
+            .object([
+                "name": .string(entry.name),
+                "maskedValue": .string(entry.maskedValue),
+                "domains": .array(entry.domains.map { .string($0) }),
+            ])
+        }
+        return try jsonResponse(.array(items))
+    }
+
     for method in fetchProxyMethods {
         router.on("/api/fetch-proxy", method: method) { request, _ in
             guard let targetURLValue = request.headers[targetURLHeader],
                   let targetURL = URL(string: targetURLValue) else {
-                return try jsonErrorResponse(status: .badRequest, message: "Missing X-Target-URL header")
+                return try proxyErrorResponse(status: .badRequest, message: "Missing X-Target-URL header")
             }
 
+            let targetHostname = targetURL.host ?? ""
+
             do {
-                let rawBody = try await collectBody(from: request)
-                let upstreamRequest = try makeProxyRequest(from: request, targetURL: targetURL, rawBody: rawBody)
+                var rawBody = try await collectBody(from: request)
+
+                // --- Secret injection: scan headers + body for masked values ---
+                var injectedHeaders = request.headers
+                for field in request.headers {
+                    switch secretInjector.inject(text: field.value, hostname: targetHostname) {
+                    case .success(let replaced):
+                        if replaced != field.value {
+                            injectedHeaders[field.name] = replaced
+                        }
+                    case .domainBlocked(let secretName, let hostname):
+                        return try proxyErrorResponse(
+                            status: .forbidden,
+                            message: "Secret \(secretName) is not allowed for domain \(hostname)"
+                        )
+                    }
+                }
+
+                // Inject secrets into request body — uses injectBody which leaves
+                // masked values as-is on domain mismatch (safe/meaningless) rather
+                // than rejecting. Avoids false 403s from LLM conversation context.
+                if rawBody.readableBytes > 0,
+                   let bodyString = rawBody.getString(at: rawBody.readerIndex, length: rawBody.readableBytes) {
+                    let replaced = secretInjector.injectBody(text: bodyString, hostname: targetHostname)
+                    if replaced != bodyString {
+                        rawBody = ByteBuffer(string: replaced)
+                    }
+                }
+
+                let injectedRequest = Request(
+                    head: .init(
+                        method: request.method,
+                        scheme: request.head.scheme,
+                        authority: request.head.authority,
+                        path: request.head.path,
+                        headerFields: injectedHeaders
+                    ),
+                    body: request.body
+                )
+
+                let upstreamRequest = try makeProxyRequest(from: injectedRequest, targetURL: targetURL, rawBody: rawBody)
                 let upstreamResponse = try await httpClient.execute(request: upstreamRequest).get()
-                return makeProxyResponse(from: upstreamResponse)
+
+                // --- Response scrubbing: replace real values with masked ---
+                return makeProxyResponse(from: upstreamResponse, secretInjector: secretInjector)
             } catch {
-                return try jsonErrorResponse(status: .badGateway, message: "Proxy fetch failed: \(errorMessage(error))")
+                return try proxyErrorResponse(status: .badGateway, message: "Proxy fetch failed: \(errorMessage(error))")
             }
         }
     }
@@ -290,6 +362,17 @@ private func jsonResponse(
 
 private func jsonErrorResponse(status: HTTPResponse.Status, message: String) throws -> Response {
     try jsonResponse(.object(["error": .string(message)]), status: status)
+}
+
+/// Same as `jsonErrorResponse` but tags the response with `X-Proxy-Error: 1`
+/// so SecureFetch clients can distinguish proxy infrastructure failures from
+/// upstream 4xx/5xx responses that should flow through unchanged.
+private func proxyErrorResponse(status: HTTPResponse.Status, message: String) throws -> Response {
+    try jsonResponse(
+        .object(["error": .string(message)]),
+        status: status,
+        headers: [proxyErrorMarkerHeader: "1"]
+    )
 }
 
 private func corsHeaders(methods: String, headers: String) -> HTTPFields {
@@ -396,7 +479,7 @@ private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: By
     )
 }
 
-private func makeProxyResponse(from response: HTTPClient.Response) -> Response {
+private func makeProxyResponse(from response: HTTPClient.Response, secretInjector: SecretInjector) -> Response {
     // Forbidden-header transport: collect Set-Cookie headers and encode as X-Proxy-Set-Cookie
     let setCookies = response.headers[canonicalForm: "set-cookie"].map { String($0) }
 
@@ -414,16 +497,36 @@ private func makeProxyResponse(from response: HTTPClient.Response) -> Response {
     if !setCookies.isEmpty,
        let jsonData = try? JSONSerialization.data(withJSONObject: setCookies),
        let jsonString = String(data: jsonData, encoding: .utf8) {
-        headers[HTTPField.Name("X-Proxy-Set-Cookie")!] = jsonString
+        headers[HTTPField.Name("X-Proxy-Set-Cookie")!] = secretInjector.scrub(text: jsonString)
+    }
+
+    // Scrub real secret values from response headers
+    if !secretInjector.isEmpty {
+        var scrubbedHeaders = HTTPFields()
+        for field in headers {
+            let scrubbedValue = secretInjector.scrub(text: field.value)
+            scrubbedHeaders.append(HTTPField(name: field.name, value: scrubbedValue))
+        }
+        headers = scrubbedHeaders
     }
 
     headers[cacheControlHeader] = "no-store, no-cache"
     headers[HTTPField.Name.contentLength] = nil
 
+    // Scrub real secret values from response body
+    var responseBody = response.body ?? ByteBuffer()
+    if !secretInjector.isEmpty, responseBody.readableBytes > 0,
+       let bodyString = responseBody.getString(at: responseBody.readerIndex, length: responseBody.readableBytes) {
+        let scrubbed = secretInjector.scrub(text: bodyString)
+        if scrubbed != bodyString {
+            responseBody = ByteBuffer(string: scrubbed)
+        }
+    }
+
     return Response(
         status: HTTPResponse.Status(code: Int(response.status.code), reasonPhrase: response.status.reasonPhrase),
         headers: headers,
-        body: .init(byteBuffer: response.body ?? ByteBuffer())
+        body: .init(byteBuffer: responseBody)
     )
 }
 

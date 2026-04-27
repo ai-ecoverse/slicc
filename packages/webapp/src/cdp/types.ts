@@ -91,6 +91,15 @@ export interface BoundingBox {
   height: number;
 }
 
+/** Frame info returned by BrowserAPI.getFrameTree(). */
+export interface FrameInfo {
+  frameId: string;
+  parentFrameId?: string;
+  url: string;
+  name: string;
+  securityOrigin?: string;
+}
+
 /** Accessibility tree node. */
 export interface AccessibilityNode {
   role: string;

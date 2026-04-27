@@ -5,6 +5,8 @@ export { DebuggerClient } from './debugger-client.js';
 export { OffscreenCdpProxy } from './offscreen-cdp-proxy.js';
 export { PanelCdpProxy } from './panel-cdp-proxy.js';
 export { HarRecorder } from './har-recorder.js';
+export { NavigationWatcher, extractSliccHeader, decodeSliccHeader } from './navigation-watcher.js';
+export type { NavigationEvent, NavigationEventHandler } from './navigation-watcher.js';
 export { RemoteCDPTransport } from './remote-cdp-transport.js';
 export type { RemoteCDPSender } from './remote-cdp-transport.js';
 export type { CDPTransport } from './transport.js';

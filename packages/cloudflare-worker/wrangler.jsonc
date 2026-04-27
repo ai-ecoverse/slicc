@@ -4,14 +4,24 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-03-11",
   "workers_dev": true,
+  "assets": {
+    "directory": "../../dist/ui/",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "not_found_handling": "single-page-application",
+  },
   "routes": [
     { "pattern": "www.sliccy.ai/*", "zone_name": "sliccy.ai" },
     { "pattern": "sliccy.ai/*", "zone_name": "sliccy.ai" },
   ],
   "vars": {
     "CLOUDFLARE_TURN_KEY_ID": "6c2201a0453bd6695ecb24a00b2b6ed1",
+    // OAuth provider client IDs (public, safe to commit)
+    "GITHUB_CLIENT_ID": "Ov23li6DZA5dPBZIaqFS",
   },
-  // CLOUDFLARE_TURN_API_TOKEN must be set via: npx wrangler secret put CLOUDFLARE_TURN_API_TOKEN
+  // Secrets must be set via: npx wrangler secret put <SECRET_NAME>
+  // - CLOUDFLARE_TURN_API_TOKEN
+  // - GITHUB_CLIENT_SECRET
   "durable_objects": {
     "bindings": [
       {
@@ -30,9 +40,16 @@
     "staging": {
       "name": "slicc-tray-hub-staging",
       "workers_dev": true,
+      "assets": {
+        "directory": "../../dist/ui/",
+        "binding": "ASSETS",
+        "run_worker_first": true,
+        "not_found_handling": "single-page-application",
+      },
       "routes": [],
       "vars": {
         "CLOUDFLARE_TURN_KEY_ID": "6c2201a0453bd6695ecb24a00b2b6ed1",
+        "GITHUB_CLIENT_ID": "Ov23liUe1b3b6GDjPGz4",
       },
       "durable_objects": {
         "bindings": [

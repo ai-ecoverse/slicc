@@ -1,0 +1,115 @@
+#!/usr/bin/env node
+
+import { spawn } from 'node:child_process';
+import process from 'node:process';
+
+const BASE_URL = 'https://www.sliccy.ai/handoff';
+
+function usage() {
+  return `Usage: slicc-handoff [--open] <instruction>
+
+Build a SLICC handoff URL. When visited, the response carries an \`x-slicc\` header
+whose value is the instruction string. SLICC observes that header on main-frame
+navigations and shows the user an approval prompt.
+
+Arguments:
+  <instruction>   The verb-prefixed instruction string, e.g.
+                  "handoff:Continue this task", or "upskill:https://github.com/owner/repo".
+                  If the instruction does not start with a known verb, \`handoff:\` is prepended.
+
+Options:
+  --open          Open the generated URL in the local browser
+  -h, --help      Show this help text
+
+Examples:
+  slicc-handoff "Continue the signup test in the browser"
+  slicc-handoff --open "upskill:https://github.com/slicc/skills-extra"
+`;
+}
+
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}
+
+function openUrl(url) {
+  return new Promise((resolve, reject) => {
+    const opener =
+      process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
+    const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
+    const child = spawn(opener, args, {
+      detached: process.platform !== 'win32',
+      stdio: 'ignore',
+    });
+    child.on('error', () =>
+      reject(new Error('Could not find a browser opener command (open/xdg-open/start).'))
+    );
+    child.on('spawn', () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+const KNOWN_VERBS = ['handoff', 'upskill'];
+
+function normalizeInstruction(raw) {
+  const trimmed = raw.trim();
+  if (!trimmed) fail('Instruction must not be empty.');
+  const colonIdx = trimmed.indexOf(':');
+  if (colonIdx > 0) {
+    const verb = trimmed.slice(0, colonIdx);
+    if (KNOWN_VERBS.includes(verb)) return trimmed;
+  }
+  return `handoff:${trimmed}`;
+}
+
+async function main() {
+  let openOnSuccess = false;
+  const positional = [];
+
+  for (const arg of process.argv.slice(2)) {
+    switch (arg) {
+      case '--open':
+        openOnSuccess = true;
+        break;
+      case '-h':
+      case '--help':
+        process.stdout.write(usage());
+        return;
+      default:
+        positional.push(arg);
+    }
+  }
+
+  if (positional.length === 0) fail(usage());
+  const instruction = normalizeInstruction(positional.join(' '));
+  const url = `${BASE_URL}?msg=${encodeURIComponent(instruction)}`;
+
+  process.stdout.write(`${url}\n`);
+
+  // Always try to notify a local SLICC node-server over localhost. This
+  // works regardless of which browser profile the user is currently
+  // driving — the CDP watcher only sees tabs in the SLICC-launched Chrome
+  // profile, and the extension's webRequest listener only fires in the
+  // profile where it is installed.
+  const port = process.env['SLICC_PORT'] ?? '5710';
+  try {
+    await fetch(`http://localhost:${port}/api/handoff`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sliccHeader: instruction,
+        url,
+        title: 'SLICC handoff',
+      }),
+      signal: AbortSignal.timeout(2000),
+    });
+  } catch {
+    // No local SLICC server running — fall through to --open.
+  }
+
+  if (openOnSuccess) await openUrl(url);
+}
+
+void main().catch((err) => fail(err instanceof Error ? err.message : String(err)));

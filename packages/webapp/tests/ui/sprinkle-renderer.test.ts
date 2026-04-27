@@ -10,10 +10,18 @@ function makeBridge(name: string): SprinkleBridgeAPI {
     on: vi.fn(),
     off: vi.fn(),
     readFile: vi.fn(),
+    writeFile: vi.fn(),
+    readDir: vi.fn(),
+    exists: vi.fn(),
+    stat: vi.fn(),
+    mkdir: vi.fn(),
+    rm: vi.fn(),
+    screenshot: vi.fn(),
     setState: vi.fn(),
     getState: vi.fn(() => null),
     open: vi.fn(),
     close: vi.fn(),
+    stopCone: vi.fn(),
   };
 }
 

@@ -30,6 +30,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Build webapp for worker static assets
+        run: npm run build -w @slicc/webapp
+
       - name: Verify worker unit tests before deploy
         run: npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/index.test.ts
 
@@ -44,8 +47,10 @@ jobs:
           command: deploy
           secrets: |
             CLOUDFLARE_TURN_API_TOKEN
+            GITHUB_CLIENT_SECRET
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
       - name: Wait before production deploy retry 2
         if: steps.deploy_attempt_1.outcome == 'failure'
         run: sleep 20
@@ -62,8 +67,10 @@ jobs:
           command: deploy
           secrets: |
             CLOUDFLARE_TURN_API_TOKEN
+            GITHUB_CLIENT_SECRET
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
       - name: Wait before production deploy retry 3
         if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
         run: sleep 40
@@ -80,8 +87,10 @@ jobs:
           command: deploy
           secrets: |
             CLOUDFLARE_TURN_API_TOKEN
+            GITHUB_CLIENT_SECRET
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
       - name: Finalize production deploy metadata
         id: deploy
         env:

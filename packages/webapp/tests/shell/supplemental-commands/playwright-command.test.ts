@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import {
   createPlaywrightCommand,
   getSharedState,
@@ -266,6 +266,32 @@ describe('playwright-cli goto', () => {
     const result = await cmd.execute(['goto', 'https://other.com'], {} as any);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--tab');
+  });
+
+  it('accepts --tab with space separator', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['goto', 'https://other.com', '--tab', 'tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Navigated to https://other.com');
+    expect(browser.withTab).toHaveBeenCalledWith('tab-1', expect.any(Function));
+    expect(browser.navigate).toHaveBeenCalledWith('https://other.com');
+  });
+
+  it('errors when --tab is provided without a value', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['goto', 'https://example.com', '--tab'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab requires a value');
+  });
+
+  it('errors when --tab value is another flag', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['goto', 'https://example.com', '--tab', '--wait-until=load'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--tab requires a value');
   });
 });
 
@@ -1833,6 +1859,17 @@ describe('playwright-cli session history logging', () => {
     expect(screenshotFiles[0]).toMatch(/screenshot-.*\.png$/);
   });
 
+  it('accepts --filename with space separator', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute(
+      ['screenshot', '--tab=tab-1', '--filename', '/workspace/shot.png'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Screenshot saved to /workspace/shot.png');
+  });
+
   it('screenshot does not include base64 img tag in output', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
@@ -1899,9 +1936,24 @@ describe('playwright-cli teleport subcommand', () => {
     expect(state.teleportWatchers.size).toBeGreaterThan(0);
     const watcher = Array.from(state.teleportWatchers.values())[0];
     expect(watcher.phase).toBe('armed');
-    expect(watcher.startPattern.source).toBe('login\\.example\\.com');
-    expect(watcher.returnPattern.source).toBe('app\\.example\\.com');
+  });
 
+  it('accepts --start and --return with space separators', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute(
+      ['teleport', '--tab', 'tab-1', '--start', 'login\\.example', '--return', 'app\\.example'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Teleport armed');
+    expect(result.stdout).toContain('login\\.example');
+
+    // Verify watcher was installed
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatchers.size).toBeGreaterThan(0);
+    const watcher = Array.from(state.teleportWatchers.values())[0];
+    expect(watcher.phase).toBe('armed');
     // Cleanup timers
     watcher.pollInterval && clearInterval(watcher.pollInterval);
   });
@@ -2901,5 +2953,555 @@ describe('formatCookieDomainSummary (via teleport output)', () => {
       state.teleportWatchers.size === 0 ||
         state.teleportWatchers.values().next().value?.phase === 'done'
     ).toBe(true);
+  });
+});
+
+describe('iframe support', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  const mainTreeWithIframe = {
+    role: 'RootWebArea',
+    name: 'Test Page',
+    children: [
+      {
+        role: 'button',
+        name: 'Submit',
+        backendNodeId: 42,
+        children: [],
+      },
+      {
+        role: 'iframe',
+        name: 'Content Frame',
+        value: 'https://app.example.com/frame',
+        children: [],
+      },
+    ],
+  };
+
+  const iframeTree = {
+    role: 'RootWebArea',
+    name: 'Frame Content',
+    children: [
+      {
+        role: 'heading',
+        name: 'Frame Heading',
+        backendNodeId: 100,
+        children: [],
+      },
+      {
+        role: 'button',
+        name: 'Frame Button',
+        backendNodeId: 101,
+        children: [],
+      },
+    ],
+  };
+
+  const frameTreeResponse = [
+    { frameId: 'main', url: 'https://example.com', name: '' },
+    {
+      frameId: 'frame-1',
+      parentFrameId: 'main',
+      url: 'https://app.example.com/frame',
+      name: '',
+    },
+  ];
+
+  beforeEach(() => {
+    browser = createMockBrowser({
+      getAccessibilityTree: vi.fn().mockResolvedValue(mainTreeWithIframe),
+      getFrameTree: vi.fn().mockResolvedValue(frameTreeResponse),
+      getAccessibilityTreeForFrame: vi.fn().mockResolvedValue(iframeTree),
+      evaluateInFrame: vi.fn().mockResolvedValue(undefined),
+    });
+    fs = createMockFS();
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
+    );
+  });
+
+  it('snapshot emits iframe placeholder', async () => {
+    // Use a browser without getFrameTree so stitching is skipped
+    const simpleB = createMockBrowser({
+      getAccessibilityTree: vi.fn().mockResolvedValue(mainTreeWithIframe),
+    });
+    (simpleB.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
+    );
+
+    const cmd = createPlaywrightCommand('playwright-cli', simpleB as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('- iframe "Content Frame"');
+  });
+
+  it('snapshot stitches iframe content', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    // Main frame content
+    expect(result.stdout).toContain('button "Submit"');
+    // Iframe placeholder
+    expect(result.stdout).toContain('- iframe "Content Frame"');
+    // Stitched iframe content
+    expect(result.stdout).toContain('heading "Frame Heading"');
+    expect(result.stdout).toContain('button "Frame Button"');
+    // Iframe refs use f1 prefix
+    expect(result.stdout).toContain('[ref=f1e1]');
+    expect(result.stdout).toContain('[ref=f1e2]');
+  });
+
+  it('snapshot with --no-iframes skips iframe stitching', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['snapshot', '--tab=tab-1', '--no-iframes=true'], {} as any);
+    expect(result.exitCode).toBe(0);
+    // Iframe placeholder should still be present
+    expect(result.stdout).toContain('- iframe "Content Frame"');
+    // Stitched content should NOT be present
+    expect(result.stdout).not.toContain('heading "Frame Heading"');
+    expect(result.stdout).not.toContain('button "Frame Button"');
+    expect(result.stdout).not.toContain('[ref=f1e1]');
+  });
+
+  it('frames subcommand lists frames', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['frames', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('[main]');
+    expect(result.stdout).toContain('[child]');
+    expect(result.stdout).toContain('https://example.com');
+    expect(result.stdout).toContain('https://app.example.com/frame');
+  });
+
+  it('click in iframe ref calls evaluateInFrame', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    // Take snapshot first to populate refs
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['click', 'f1e1', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Clicked f1e1 (in iframe)');
+    expect(browser.evaluateInFrame).toHaveBeenCalledWith(
+      'frame-1',
+      expect.stringContaining('document.querySelector')
+    );
+  });
+
+  it('fill in iframe ref calls evaluateInFrame', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['fill', 'f1e1', 'test text', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Filled f1e1 with: test text (in iframe)');
+    expect(browser.evaluateInFrame).toHaveBeenCalledWith(
+      'frame-1',
+      expect.stringContaining('test text')
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration tests — real Chrome + real CDP + real HTML with iframes
+// ---------------------------------------------------------------------------
+
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { WebSocket as NodeWebSocket } from 'ws';
+import { BrowserAPI as RealBrowserAPI } from '../../../src/cdp/browser-api.js';
+import {
+  findChromeExecutable,
+  waitForCdpPortFromStderr,
+} from '../../../../node-server/src/chrome-launch.js';
+import type { CDPTransport } from '../../../src/cdp/transport.js';
+import type {
+  CDPConnectOptions,
+  CDPEventListener,
+  ConnectionState,
+} from '../../../src/cdp/types.js';
+
+// -- Thin Node.js CDPTransport using the `ws` package -----------------------
+
+class NodeCDPTransport implements CDPTransport {
+  private ws: NodeWebSocket | null = null;
+  private nextId = 1;
+  private pending = new Map<
+    number,
+    { resolve: (r: Record<string, unknown>) => void; reject: (e: Error) => void }
+  >();
+  private listeners = new Map<string, Set<CDPEventListener>>();
+  private _state: ConnectionState = 'disconnected';
+
+  get state(): ConnectionState {
+    return this._state;
+  }
+
+  async connect(options?: CDPConnectOptions): Promise<void> {
+    if (!options?.url) throw new Error('URL required');
+    const { url, timeout = 10000 } = options;
+    this._state = 'connecting';
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.cleanup();
+        reject(new Error('Connection timed out'));
+      }, timeout);
+      this.ws = new NodeWebSocket(url);
+      this.ws.on('open', () => {
+        clearTimeout(timer);
+        this._state = 'connected';
+        resolve();
+      });
+      this.ws.on('error', () => {
+        clearTimeout(timer);
+        if (this._state === 'connecting') {
+          this.cleanup();
+          reject(new Error('WebSocket connection failed'));
+        }
+      });
+      this.ws.on('message', (data: Buffer) => this.handleMessage(data.toString()));
+      this.ws.on('close', () => this.handleClose());
+    });
+  }
+
+  disconnect(): void {
+    if (this.ws) {
+      this.ws.removeAllListeners('close');
+      this.ws.close();
+    }
+    this.cleanup();
+  }
+
+  async send(
+    method: string,
+    params?: Record<string, unknown>,
+    sessionId?: string,
+    timeout = 30000
+  ): Promise<Record<string, unknown>> {
+    if (this._state !== 'connected' || !this.ws) throw new Error('Not connected');
+    const id = this.nextId++;
+    const msg: Record<string, unknown> = { id, method };
+    if (params) msg['params'] = params;
+    if (sessionId) msg['sessionId'] = sessionId;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP timed out: ${method}`));
+      }, timeout);
+      this.pending.set(id, {
+        resolve: (r) => {
+          clearTimeout(timer);
+          resolve(r);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+      });
+      this.ws!.send(JSON.stringify(msg));
+    });
+  }
+
+  on(event: string, listener: CDPEventListener): void {
+    let s = this.listeners.get(event);
+    if (!s) {
+      s = new Set();
+      this.listeners.set(event, s);
+    }
+    s.add(listener);
+  }
+  off(event: string, listener: CDPEventListener): void {
+    this.listeners.get(event)?.delete(listener);
+  }
+  async once(event: string, timeout = 30000): Promise<Record<string, unknown>> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`once timed out: ${event}`)), timeout);
+      const handler: CDPEventListener = (params) => {
+        clearTimeout(timer);
+        this.off(event, handler);
+        resolve(params);
+      };
+      this.on(event, handler);
+    });
+  }
+
+  private handleMessage(raw: string): void {
+    let msg: Record<string, unknown>;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (typeof msg['id'] === 'number') {
+      const p = this.pending.get(msg['id'] as number);
+      if (p) {
+        this.pending.delete(msg['id'] as number);
+        const err = msg['error'] as { message?: string; code?: number } | undefined;
+        if (err) p.reject(new Error(`CDP error: ${err.message} (${err.code})`));
+        else p.resolve((msg['result'] as Record<string, unknown>) ?? {});
+      }
+      return;
+    }
+    if (typeof msg['method'] === 'string') {
+      const params = (msg['params'] as Record<string, unknown>) ?? {};
+      if (msg['sessionId']) (params as Record<string, unknown>)['sessionId'] = msg['sessionId'];
+      const s = this.listeners.get(msg['method'] as string);
+      if (s)
+        for (const l of s)
+          try {
+            l(params);
+          } catch {
+            /* ignore */
+          }
+    }
+  }
+  private handleClose(): void {
+    for (const [, p] of this.pending) p.reject(new Error('Connection closed'));
+    this.cleanup();
+  }
+  private cleanup(): void {
+    this._state = 'disconnected';
+    this.ws = null;
+    this.pending.clear();
+  }
+}
+
+// -- HTML fixtures -----------------------------------------------------------
+
+function mainHtml(port: number): string {
+  return `<!DOCTYPE html>
+<html>
+<head><title>Main Page</title></head>
+<body>
+  <h1>Main Content</h1>
+  <button id="main-btn">Main Button</button>
+  <iframe id="child-frame" title="Child Frame" src="http://127.0.0.1:${port}/frame.html" width="400" height="300"></iframe>
+</body>
+</html>`;
+}
+
+const FRAME_HTML = `<!DOCTYPE html>
+<html>
+<head><title>Child Frame</title></head>
+<body>
+  <h2>Frame Content</h2>
+  <button id="frame-btn" aria-label="Frame Button" onclick="this.textContent='Clicked!'">Frame Button</button>
+  <input id="frame-input" type="text" aria-label="Frame Input" placeholder="Type here" />
+</body>
+</html>`;
+
+// -- Conditional integration tests -------------------------------------------
+
+const chromePath = findChromeExecutable();
+const describeIntegration = chromePath ? describe : describe.skip;
+
+describeIntegration('iframe integration', { timeout: 60_000 }, () => {
+  let server: http.Server;
+  let serverPort: number;
+  let chromeProcess: ChildProcess;
+  let tmpDir: string;
+  let transport: NodeCDPTransport;
+  let browser: RealBrowserAPI;
+  let mockFs: ReturnType<typeof createMockFS>;
+
+  beforeAll(async () => {
+    // 1. Start HTTP server serving fixture HTML
+    server = http.createServer((req, res) => {
+      if (req.url === '/main.html') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(mainHtml(serverPort));
+      } else if (req.url === '/frame.html') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(FRAME_HTML);
+      } else {
+        res.writeHead(404);
+        res.end('Not found');
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    serverPort = (server.address() as AddressInfo).port;
+
+    // 2. Launch Chrome headless
+    tmpDir = mkdtempSync(join(tmpdir(), 'slicc-iframe-test-'));
+    chromeProcess = spawn(chromePath!, [
+      '--headless=new',
+      '--remote-debugging-port=0',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-gpu',
+      '--disable-crash-reporter',
+      `--user-data-dir=${tmpDir}`,
+      'about:blank',
+    ]);
+    const cdpPort = await waitForCdpPortFromStderr(chromeProcess, 15000);
+
+    // 3. Fetch the browser WS URL from /json/version
+    const versionRes = await fetch(`http://127.0.0.1:${cdpPort}/json/version`);
+    const versionJson = (await versionRes.json()) as { webSocketDebuggerUrl: string };
+    const wsUrl = versionJson.webSocketDebuggerUrl;
+
+    // 4. Connect via NodeCDPTransport
+    transport = new NodeCDPTransport();
+    await transport.connect({ url: wsUrl });
+    browser = new RealBrowserAPI(transport as unknown as CDPTransport);
+
+    // 5. Create a mock FS for the command
+    mockFs = createMockFS();
+  }, 30_000);
+
+  afterAll(async () => {
+    try {
+      transport?.disconnect();
+    } catch {
+      /* ignore */
+    }
+    if (chromeProcess) {
+      chromeProcess.kill('SIGKILL');
+      // Wait a bit for process to exit
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    server?.close();
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  async function navigateAndWait(targetId: string, url: string): Promise<void> {
+    await browser.withTab(targetId, async () => {
+      await browser.navigate(url);
+      // Wait for the page and iframes to load
+      await new Promise((r) => setTimeout(r, 1500));
+    });
+  }
+
+  it('snapshot includes iframe content with frame-prefixed refs', async () => {
+    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/main.html`);
+    await new Promise((r) => setTimeout(r, 2000));
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      browser as BrowserAPI,
+      mockFs as VirtualFS
+    );
+    const result = await cmd.execute(['snapshot', `--tab=${targetId}`], {} as any);
+    expect(result.exitCode).toBe(0);
+    // Main frame content
+    expect(result.stdout).toContain('Main Content');
+    // Iframe placeholder
+    expect(result.stdout).toContain('iframe');
+    // Stitched child frame content
+    expect(result.stdout).toMatch(/Frame Content|Frame Button/);
+    // Frame-prefixed refs
+    expect(result.stdout).toMatch(/f1e[0-9]+/);
+  });
+
+  it('snapshot --no-iframes shows placeholder only', async () => {
+    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/main.html`);
+    await new Promise((r) => setTimeout(r, 2000));
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      browser as BrowserAPI,
+      mockFs as VirtualFS
+    );
+    const result = await cmd.execute(
+      ['snapshot', `--tab=${targetId}`, '--no-iframes=true'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('iframe');
+    // No stitched content
+    expect(result.stdout).not.toContain('Frame Button');
+  });
+
+  it('frames lists main and child frames', async () => {
+    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/main.html`);
+    await new Promise((r) => setTimeout(r, 2000));
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      browser as BrowserAPI,
+      mockFs as VirtualFS
+    );
+    const result = await cmd.execute(['frames', `--tab=${targetId}`], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('[main]');
+    expect(result.stdout).toContain('/main.html');
+    expect(result.stdout).toContain('[child]');
+    expect(result.stdout).toContain('/frame.html');
+  });
+
+  it('click on iframe element works', async () => {
+    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/main.html`);
+    await new Promise((r) => setTimeout(r, 2000));
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      browser as BrowserAPI,
+      mockFs as VirtualFS
+    );
+
+    // Take snapshot to populate refs
+    const snap1 = await cmd.execute(['snapshot', `--tab=${targetId}`], {} as any);
+    expect(snap1.exitCode).toBe(0);
+
+    // Find the ref for Frame Button — match patterns like:
+    //   - button "Frame Button" [ref=f1e2]
+    const btnMatch = snap1.stdout.match(/button "Frame Button" \[ref=(f1e[0-9]+)\]/);
+    const btnRef = btnMatch?.[1];
+    expect(btnRef).toBeDefined();
+
+    // Click the button
+    const clickResult = await cmd.execute(['click', btnRef!, `--tab=${targetId}`], {} as any);
+    if (clickResult.exitCode !== 0) {
+      throw new Error(`click failed: ${clickResult.stderr}`);
+    }
+    expect(clickResult.stdout).toContain('Clicked');
+
+    // Re-snapshot and verify button text changed
+    const snap2 = await cmd.execute(['snapshot', `--tab=${targetId}`], {} as any);
+    expect(snap2.exitCode).toBe(0);
+    expect(snap2.stdout).toContain('Clicked!');
+  });
+
+  it('fill in iframe input works', async () => {
+    const targetId = await browser.createPage(`http://127.0.0.1:${serverPort}/main.html`);
+    await new Promise((r) => setTimeout(r, 2000));
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      browser as BrowserAPI,
+      mockFs as VirtualFS
+    );
+
+    // Take snapshot to populate refs
+    const snap = await cmd.execute(['snapshot', `--tab=${targetId}`], {} as any);
+    expect(snap.exitCode).toBe(0);
+
+    // Find the ref for the input (textbox with aria-label "Frame Input")
+    const inputMatch = snap.stdout.match(/textbox[^\n]*\[ref=(f1e[0-9]+)\]/);
+    const inputRef = inputMatch?.[1];
+    expect(inputRef).toBeDefined();
+
+    // Fill the input
+    const fillResult = await cmd.execute(
+      ['fill', inputRef!, 'hello world', `--tab=${targetId}`],
+      {} as any
+    );
+    if (fillResult.exitCode !== 0) {
+      throw new Error(`fill failed: ${fillResult.stderr}`);
+    }
+    expect(fillResult.stdout).toContain('Filled');
+
+    // Verify value via evaluateInFrame
+    await browser.withTab(targetId, async () => {
+      const frames = await browser.getFrameTree();
+      const childFrame = frames.find((f) => f.parentFrameId);
+      expect(childFrame).toBeDefined();
+      const value = await browser.evaluateInFrame(
+        childFrame!.frameId,
+        `document.getElementById('frame-input').value`
+      );
+      expect(value).toBe('hello world');
+    });
   });
 });

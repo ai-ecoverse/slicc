@@ -231,6 +231,7 @@ export const config: ProviderConfig = {
   baseUrlPlaceholder: 'https://your-proxy.example.com',
   baseUrlDescription: 'Anthropic-compatible proxy endpoint',
   isOAuth: true,
+  defaultModelId: 'sonnet',
 
   getModelIds: () => {
     // Helper to propagate metadata from cache
@@ -271,7 +272,7 @@ export const config: ProviderConfig = {
       }
     } catch {}
     // Default before any config is fetched
-    return [{ id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }];
+    return [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }];
   },
 
   onOAuthLogin: async (launcher: OAuthLauncher, onSuccess: () => void) => {

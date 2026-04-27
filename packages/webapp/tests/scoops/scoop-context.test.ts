@@ -9,7 +9,10 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   ScoopContext,
+  abortableSleep,
   isImageProcessingError,
+  isNonRetryableError,
+  isRetryableError,
   type ScoopContextCallbacks,
 } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
@@ -31,6 +34,7 @@ function createMockCallbacks(): ScoopContextCallbacks {
     onResponse: vi.fn(),
     onResponseDone: vi.fn(),
     onError: vi.fn(),
+    onFatalError: vi.fn(),
     onStatusChange: vi.fn(),
     onSendMessage: vi.fn(),
     getScoops: vi.fn(() => []),
@@ -74,8 +78,10 @@ describe('ScoopContext session persistence', () => {
 
   it('accepts a sessionStore parameter', () => {
     const mockStore = { load: vi.fn(), save: vi.fn(), delete: vi.fn() } as any;
-    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore, undefined, 'cone_1');
     expect((ctx as any).sessionStore).toBe(mockStore);
+    // Internal persistence key is the scoop's JID — stable across days so
+    // `SessionStore.load` can restore saved conversations.
     expect((ctx as any).sessionId).toBe(testScoop.jid);
   });
 
@@ -86,7 +92,7 @@ describe('ScoopContext session persistence', () => {
 
   it('saves session on agent_end with messages', () => {
     const mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) } as any;
-    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore, undefined, 'cone_1');
     injectMockAgent(ctx, async () => {});
 
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
@@ -396,18 +402,21 @@ describe('ScoopContext prompt queueing', () => {
 
   it('handles prompt failure gracefully', async () => {
     const prompts: string[] = [];
+    // Use a 403 error which is detected as non-retryable and fails immediately
     injectMockAgent(ctx, async (text) => {
       prompts.push(text);
-      throw new Error('prompt failed');
+      throw new Error('403 Forbidden: model not found');
     });
 
     await ctx.prompt('first');
 
+    // Non-retryable errors fail immediately without retries
     expect(prompts).toEqual(['first']);
-    expect(callbacks.onError).toHaveBeenCalledWith('prompt failed');
-    // Should return to ready status after error
+    // Fatal errors call onFatalError if available, otherwise onError
+    expect(callbacks.onFatalError).toHaveBeenCalled();
+    // Should be in error status after fatal error
     const statusCalls = (callbacks.onStatusChange as any).mock.calls;
-    expect(statusCalls[statusCalls.length - 1][0]).toBe('ready');
+    expect(statusCalls[statusCalls.length - 1][0]).toBe('error');
   });
 });
 
@@ -421,13 +430,12 @@ describe('ScoopContext clearMessages', () => {
   });
 
   it('calls agent.clearMessages() when agent exists', () => {
-    const mockClearMessages = vi.fn();
     injectMockAgent(ctx, async () => {});
-    (ctx as any).agent.clearMessages = mockClearMessages;
+    (ctx as any).agent.state.messages = [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }];
 
     ctx.clearMessages();
 
-    expect(mockClearMessages).toHaveBeenCalled();
+    expect((ctx as any).agent.state.messages).toEqual([]);
   });
 
   it('handles null agent gracefully (no throw)', () => {
@@ -456,12 +464,19 @@ describe('ScoopContext context overflow recovery', () => {
   ): { replaceMessages: ReturnType<typeof vi.fn>; mockPrompt: ReturnType<typeof vi.fn> } {
     const replaceMessages = vi.fn();
     const promptFn = vi.fn(mockPrompt);
+    const stateData = { messages: [] as any[] };
+    const state = new Proxy(stateData, {
+      set(target, prop, value) {
+        if (prop === 'messages') replaceMessages(value);
+        (target as any)[prop] = value;
+        return true;
+      },
+    });
     const agent = {
       prompt: promptFn,
       abort: vi.fn(),
       subscribe: vi.fn(() => () => {}),
-      replaceMessages,
-      state: { messages: [] },
+      state,
     };
     (ctx as any).agent = agent;
     (ctx as any).status = 'ready';
@@ -1032,6 +1047,188 @@ describe('isImageProcessingError', () => {
   });
 });
 
+describe('isNonRetryableError', () => {
+  it('matches 401 unauthorized errors', () => {
+    expect(isNonRetryableError('401 Unauthorized')).toBe(true);
+    expect(isNonRetryableError('Error: 401 - Invalid API key')).toBe(true);
+  });
+
+  it('matches 403 forbidden errors', () => {
+    expect(isNonRetryableError('403 Forbidden')).toBe(true);
+    expect(isNonRetryableError('Error 403: Access denied')).toBe(true);
+  });
+
+  it('matches 404 not found errors', () => {
+    expect(isNonRetryableError('404 Not Found')).toBe(true);
+    expect(isNonRetryableError('Model not found: claude-opus-4.5')).toBe(true);
+  });
+
+  it('matches invalid model errors', () => {
+    expect(isNonRetryableError('model not found')).toBe(true);
+    expect(isNonRetryableError('invalid model id')).toBe(true);
+    expect(isNonRetryableError('unknown model: gpt-5')).toBe(true);
+    expect(isNonRetryableError('The model does not exist')).toBe(true);
+  });
+
+  it('matches authentication failures', () => {
+    expect(isNonRetryableError('authentication failed')).toBe(true);
+    expect(isNonRetryableError('Unauthorized access')).toBe(true);
+    expect(isNonRetryableError('Forbidden: insufficient permissions')).toBe(true);
+    expect(isNonRetryableError('invalid api key')).toBe(true);
+    expect(isNonRetryableError('Invalid API-Key provided')).toBe(true);
+  });
+
+  it('matches billing/quota errors', () => {
+    expect(isNonRetryableError('insufficient quota')).toBe(true);
+    expect(isNonRetryableError('billing issue detected')).toBe(true);
+    expect(isNonRetryableError('payment required')).toBe(true);
+    expect(isNonRetryableError('account suspended')).toBe(true);
+  });
+
+  it('matches malformed request errors', () => {
+    expect(isNonRetryableError('invalid request body')).toBe(true);
+    expect(isNonRetryableError('malformed JSON')).toBe(true);
+    expect(isNonRetryableError('bad request: missing field')).toBe(true);
+  });
+
+  it('does NOT match 429 rate limit (retryable)', () => {
+    expect(isNonRetryableError('429 Too Many Requests')).toBe(false);
+  });
+
+  it('does NOT match 5xx server errors (retryable)', () => {
+    expect(isNonRetryableError('500 Internal Server Error')).toBe(false);
+    expect(isNonRetryableError('502 Bad Gateway')).toBe(false);
+    expect(isNonRetryableError('503 Service Unavailable')).toBe(false);
+  });
+
+  it('does NOT match network errors (retryable)', () => {
+    expect(isNonRetryableError('network error')).toBe(false);
+    expect(isNonRetryableError('connection refused')).toBe(false);
+    expect(isNonRetryableError('timeout')).toBe(false);
+  });
+});
+
+describe('isRetryableError', () => {
+  it('matches 429 rate limit errors', () => {
+    expect(isRetryableError('429 Too Many Requests')).toBe(true);
+    expect(isRetryableError('rate limit exceeded')).toBe(true);
+    expect(isRetryableError('too many requests, please slow down')).toBe(true);
+    expect(isRetryableError('quota exceeded, try again later')).toBe(true);
+  });
+
+  it('matches 5xx server errors', () => {
+    expect(isRetryableError('500 Internal Server Error')).toBe(true);
+    expect(isRetryableError('502 Bad Gateway')).toBe(true);
+    expect(isRetryableError('503 Service Unavailable')).toBe(true);
+    expect(isRetryableError('504 Gateway Timeout')).toBe(true);
+    expect(isRetryableError('internal server error')).toBe(true);
+    expect(isRetryableError('bad gateway')).toBe(true);
+    expect(isRetryableError('service unavailable')).toBe(true);
+    expect(isRetryableError('gateway timeout')).toBe(true);
+  });
+
+  it('matches network errors', () => {
+    expect(isRetryableError('network error')).toBe(true);
+    expect(isRetryableError('connection refused')).toBe(true);
+    expect(isRetryableError('request timeout')).toBe(true);
+    expect(isRetryableError('ECONNRESET')).toBe(true);
+    expect(isRetryableError('socket hang up')).toBe(true);
+  });
+
+  it('matches temporary overload errors', () => {
+    expect(isRetryableError('server overloaded')).toBe(true);
+    expect(isRetryableError('temporarily unavailable')).toBe(true);
+    expect(isRetryableError('please try again later')).toBe(true);
+  });
+
+  it('does NOT match 4xx client errors (non-retryable)', () => {
+    expect(isRetryableError('401 Unauthorized')).toBe(false);
+    expect(isRetryableError('403 Forbidden')).toBe(false);
+    expect(isRetryableError('404 Not Found')).toBe(false);
+  });
+
+  it('does NOT match auth/model errors (non-retryable)', () => {
+    expect(isRetryableError('invalid api key')).toBe(false);
+    expect(isRetryableError('model not found')).toBe(false);
+    expect(isRetryableError('authentication failed')).toBe(false);
+  });
+});
+
+describe('abortableSleep', () => {
+  it('resolves with false after the timeout elapses', async () => {
+    const start = Date.now();
+    const aborted = await abortableSleep(20);
+    expect(aborted).toBe(false);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(15);
+  });
+
+  it('resolves with true immediately when signal is already aborted', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const start = Date.now();
+    const aborted = await abortableSleep(5000, ac.signal);
+    expect(aborted).toBe(true);
+    expect(Date.now() - start).toBeLessThan(50);
+  });
+
+  it('resolves with true when signal aborts mid-sleep', async () => {
+    const ac = new AbortController();
+    const start = Date.now();
+    const promise = abortableSleep(5000, ac.signal);
+    setTimeout(() => ac.abort(), 15);
+    const aborted = await promise;
+    expect(aborted).toBe(true);
+    expect(Date.now() - start).toBeLessThan(500);
+  });
+});
+
+describe('ScoopContext retry cancellation', () => {
+  let ctx: ScoopContext;
+  let callbacks: ScoopContextCallbacks;
+
+  beforeEach(() => {
+    callbacks = createMockCallbacks();
+    ctx = new ScoopContext(testScoop, callbacks, {} as any);
+  });
+
+  it('stop() cancels a pending backoff sleep without completing retries', async () => {
+    let attempts = 0;
+    injectMockAgent(ctx, async () => {
+      attempts += 1;
+      throw new Error('503 Service Unavailable');
+    });
+
+    const promptPromise = ctx.prompt('hello');
+    // Let the first attempt fail and enter the backoff sleep.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    ctx.stop();
+    await promptPromise;
+
+    // Only the first attempt should have run — stop() aborted backoff before retries.
+    expect(attempts).toBe(1);
+    // stop() transitions status to ready; no fatal error should fire on cancellation.
+    expect(callbacks.onFatalError).not.toHaveBeenCalled();
+    const statusCalls = (callbacks.onStatusChange as any).mock.calls.map((c: any[]) => c[0]);
+    expect(statusCalls).toContain('ready');
+  });
+
+  it('dispose() cancels a pending backoff sleep', async () => {
+    let attempts = 0;
+    injectMockAgent(ctx, async () => {
+      attempts += 1;
+      throw new Error('503 Service Unavailable');
+    });
+
+    const promptPromise = ctx.prompt('hello');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    ctx.dispose();
+    await promptPromise;
+
+    expect(attempts).toBe(1);
+    expect(callbacks.onFatalError).not.toHaveBeenCalled();
+  });
+});
+
 describe('ScoopContext image error recovery', () => {
   let ctx: ScoopContext;
   let callbacks: ScoopContextCallbacks;
@@ -1047,12 +1244,19 @@ describe('ScoopContext image error recovery', () => {
   ): { replaceMessages: ReturnType<typeof vi.fn>; mockPrompt: ReturnType<typeof vi.fn> } {
     const replaceMessages = vi.fn();
     const promptFn = vi.fn(mockPrompt);
+    const stateData = { messages: [] as any[] };
+    const state = new Proxy(stateData, {
+      set(target, prop, value) {
+        if (prop === 'messages') replaceMessages(value);
+        (target as any)[prop] = value;
+        return true;
+      },
+    });
     const agent = {
       prompt: promptFn,
       abort: vi.fn(),
       subscribe: vi.fn(() => () => {}),
-      replaceMessages,
-      state: { messages: [] },
+      state,
     };
     (ctx as any).agent = agent;
     (ctx as any).status = 'ready';
@@ -1410,15 +1614,13 @@ describe('ScoopContext.reloadSkills', () => {
     const callbacks = createMockCallbacks();
     const ctx = new ScoopContext(testScoop, callbacks, {} as VirtualFS);
 
-    // Inject mock agent with setSystemPrompt spy
-    const setSystemPrompt = vi.fn();
+    // Inject mock agent with state that tracks systemPrompt changes
     const agent = {
       prompt: vi.fn(),
       abort: vi.fn(),
       subscribe: vi.fn(() => () => {}),
       followUp: vi.fn(),
       clearAllQueues: vi.fn(),
-      setSystemPrompt,
       state: { isStreaming: false, systemPrompt: 'old prompt' },
     };
     (ctx as any).agent = agent;
@@ -1438,8 +1640,8 @@ describe('ScoopContext.reloadSkills', () => {
 
     await ctx.reloadSkills();
 
-    expect(setSystemPrompt).toHaveBeenCalledOnce();
-    const newPrompt = setSystemPrompt.mock.calls[0]![0] as string;
+    const newPrompt = agent.state.systemPrompt;
+    expect(newPrompt).not.toBe('old prompt');
     expect(newPrompt).toContain('test-skill');
     expect(newPrompt).toContain('A test skill');
   });
@@ -1449,5 +1651,111 @@ describe('ScoopContext.reloadSkills', () => {
     const ctx = new ScoopContext(testScoop, callbacks, {} as VirtualFS);
     // agent is null -- should not throw
     await expect(ctx.reloadSkills()).resolves.toBeUndefined();
+  });
+});
+
+describe('ScoopContext dispose', () => {
+  let ctx: ScoopContext;
+  let callbacks: ScoopContextCallbacks;
+
+  beforeEach(() => {
+    callbacks = createMockCallbacks();
+    ctx = new ScoopContext(testScoop, callbacks, {} as any);
+  });
+
+  it('aborts agent and clears queues on dispose', () => {
+    injectMockAgent(ctx, async () => {});
+    const agent = (ctx as any).agent;
+
+    ctx.dispose();
+
+    expect(agent.abort).toHaveBeenCalled();
+    expect(agent.clearAllQueues).toHaveBeenCalled();
+    expect((ctx as any).agent).toBeNull();
+  });
+
+  it('suppresses status callbacks after dispose', async () => {
+    let resolvePrompt!: () => void;
+    const promptStarted = new Promise<void>((r) => {
+      resolvePrompt = r;
+    });
+    let resolveBlock!: () => void;
+    const blockPrompt = new Promise<void>((r) => {
+      resolveBlock = r;
+    });
+
+    injectMockAgent(ctx, async () => {
+      resolvePrompt();
+      await blockPrompt;
+    });
+
+    const promptPromise = ctx.prompt('hello');
+    await promptStarted;
+
+    ctx.dispose();
+
+    resolveBlock();
+    await promptPromise;
+
+    const statusCalls = (callbacks.onStatusChange as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[0]
+    );
+    expect(statusCalls).toContain('processing');
+    const afterProcessing = statusCalls.slice(statusCalls.indexOf('processing') + 1);
+    expect(afterProcessing).not.toContain('ready');
+  });
+
+  it('suppresses error callbacks from aborted prompt', async () => {
+    let resolvePrompt!: () => void;
+    const promptStarted = new Promise<void>((r) => {
+      resolvePrompt = r;
+    });
+
+    injectMockAgent(ctx, async () => {
+      resolvePrompt();
+      throw new Error('aborted');
+    });
+
+    const promptPromise = ctx.prompt('hello');
+    await promptStarted;
+
+    (callbacks.onError as ReturnType<typeof vi.fn>).mockClear();
+
+    ctx.dispose();
+    await promptPromise;
+
+    expect(callbacks.onError).not.toHaveBeenCalled();
+  });
+
+  it('suppresses agent event callbacks after dispose', () => {
+    // Add optional tool callbacks so we can assert they're not called
+    callbacks.onToolStart = vi.fn();
+    callbacks.onToolEnd = vi.fn();
+    ctx = new ScoopContext(testScoop, callbacks, {} as never);
+    injectMockAgent(ctx, async () => {});
+
+    ctx.dispose();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing private method for testing
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+
+    handler({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'hi' } });
+    handler({ type: 'tool_execution_start', toolName: 'bash', args: {} });
+    handler({
+      type: 'tool_execution_end',
+      toolName: 'bash',
+      result: { content: [] },
+      isError: false,
+    });
+    handler({ type: 'turn_end' });
+    handler({
+      type: 'agent_end',
+      messages: [{ role: 'user', content: 'hello', timestamp: Date.now() }],
+    });
+
+    expect(callbacks.onResponse).not.toHaveBeenCalled();
+    expect(callbacks.onToolStart).not.toHaveBeenCalled();
+    expect(callbacks.onToolEnd).not.toHaveBeenCalled();
+    expect(callbacks.onResponseDone).not.toHaveBeenCalled();
   });
 });

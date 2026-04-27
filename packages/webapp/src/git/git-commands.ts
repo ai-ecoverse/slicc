@@ -9,10 +9,10 @@
 import '../shims/buffer-polyfill.js';
 
 import * as git from 'isomorphic-git';
-import type FS from '@isomorphic-git/lightning-fs';
 import { VirtualFS } from '../fs/index.js';
 import { gitHttp } from './git-http.js';
 import { unifiedDiff, diffStat } from './diff.js';
+import { createIsomorphicGitFs, type IsoGitFsPromises } from './vfs-fs-adapter.js';
 
 export interface GitCommandResult {
   stdout: string;
@@ -39,7 +39,7 @@ export interface GitCommandsOptions {
 export class GitCommands {
   private static globalFsByDbName: Map<string, Promise<VirtualFS>> = new Map();
 
-  private lfs: FS.PromisifiedFS;
+  private lfs: IsoGitFsPromises;
   private corsProxy?: string;
   private authorName: string;
   private authorEmail: string;
@@ -49,8 +49,10 @@ export class GitCommands {
   private githubTokenLoaded = false;
 
   constructor(private options: GitCommandsOptions) {
-    // Use the shared VirtualFS's underlying LightningFS
-    this.lfs = options.fs.getLightningFS();
+    // Route through a VirtualFS-backed adapter so isomorphic-git sees mount
+    // points (File System Access API) the same way shell/agent tools do.
+    // See packages/webapp/src/git/vfs-fs-adapter.ts.
+    this.lfs = createIsomorphicGitFs(options.fs).promises;
     this.corsProxy = options.corsProxy;
     this.authorName = options.authorName ?? 'User';
     this.authorEmail = options.authorEmail ?? 'user@example.com';

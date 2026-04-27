@@ -94,6 +94,21 @@ describe('LeaderSyncManager', () => {
     }
   });
 
+  it('fires onFollowerCountChanged on add and remove', () => {
+    const onFollowerCountChanged = vi.fn();
+    const { manager } = createManager({ onFollowerCountChanged });
+    const ch1 = new FakeChannel();
+    const ch2 = new FakeChannel();
+
+    manager.addFollower('b1', ch1);
+    manager.addFollower('b2', ch2);
+    expect(onFollowerCountChanged.mock.calls.map((c) => c[0])).toEqual([1, 2]);
+
+    manager.removeFollower('b1');
+    manager.removeFollower('b2');
+    expect(onFollowerCountChanged.mock.calls.map((c) => c[0])).toEqual([1, 2, 1, 0]);
+  });
+
   it('sends a large snapshot as chunks on addFollower', () => {
     // Create messages large enough to exceed the 64KB chunk threshold
     const largeMessages: ChatMessage[] = [];

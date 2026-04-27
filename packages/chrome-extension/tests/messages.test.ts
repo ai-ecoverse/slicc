@@ -46,6 +46,18 @@ describe('isExtensionMessage', () => {
     expect(isExtensionMessage(msg)).toBe(true);
   });
 
+  it('returns true for navigate-lick envelopes', () => {
+    const msg: ExtensionMessage = {
+      source: 'service-worker',
+      payload: {
+        type: 'navigate-lick',
+        url: 'https://example.com/',
+        sliccHeader: 'handoff:do the thing',
+      },
+    };
+    expect(isExtensionMessage(msg)).toBe(true);
+  });
+
   it('returns false for null', () => {
     expect(isExtensionMessage(null)).toBe(false);
   });

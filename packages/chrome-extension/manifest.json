@@ -3,8 +3,17 @@
   "name": "slicc",
   "version": "0.2.0",
   "description": "AI coding agent in your browser side panel — automates tabs, edits files, and runs shell commands for web development",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnEuuMuC5INo0Harfu36DPaBV+NtIMF7CUyhfEtzWNyjBQ2EWOCZNuEl0RYuoLA6IsF17OeMCRrEYDu8oDIRW+EkksmbXl9A7TxN4HKgsOp8BUATgl80HsPNgveef7u1pRJhd9I/qIA1AkbtZ0LelUmLgMO8Kc2nLMinfVcAScPMaKvP2gUXrw3njgTAdhlBhUpoPG85puFm3dY7b1b58tpJFeoJ90Labnae4oynAIlF9ipJbOLBaMrA/trs3jX3niaa5RArNNsXmfm59JJh51d6532IKBgLVWikVVSa8SOMK1wG9ZxqWuSU/vay0UlvK6qOsTRL7xxUHkvXZIeZlIwIDAQAB",
-  "permissions": ["debugger", "tabs", "tabGroups", "sidePanel", "offscreen", "identity"],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuc3ZpsoTSbWemItL7LsKp4O4gcjiWPM641pQyJ1CC3Nqr3qsAd9RM3ekPLUsnjVc4nnuGFq5iiYWeDx+WEpt78L0A+mAJBCdWjLRTo0xZvEJRuDU9ky9zEmy0vK6neyj0tBjRKHbi9m+T2P3NDFbP9IhZ/RsSzE9L/Dx+0t/uHG1la0LejvWfh/cnQKymGtkDJ+aC98zQ8oj4R9X8Q1BxN8qia9dfcuKFyFT9+dYdtf2ZwF7hNrmx25a+VSfMqb0TbGVV5g+/1P8wdPB9YsFihhkcd+8EQN9oiV9EH0+wUUlQFC+PKlqz11hsTzNRtTuPUi+xJXOBavcE7VXiiX0TwIDAQAB",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "tabGroups",
+    "sidePanel",
+    "offscreen",
+    "identity",
+    "storage",
+    "webRequest"
+  ],
   "host_permissions": ["<all_urls>"],
   "side_panel": {
     "default_path": "index.html"

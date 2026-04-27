@@ -102,6 +102,94 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertEqual(attempts, 3)
     }
 
+    func testProbeExistingChromeReturnsBrowserWhenCdpIsLive() async {
+        let payload = Data(#"{"Browser":"Chrome/147.0.7727.101","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/test"}"#.utf8)
+        let okResponse = HTTPURLResponse(
+            url: URL(string: "http://127.0.0.1:9222/json/version")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        let launcher = ChromeLauncher(
+            fetchData: { _ in (payload, okResponse) }
+        )
+
+        let browser = await launcher.probeExistingChrome(cdpPort: 9222)
+
+        XCTAssertEqual(browser, "Chrome/147.0.7727.101")
+    }
+
+    func testProbeExistingChromeReturnsNilWhenNothingResponds() async {
+        let launcher = ChromeLauncher(
+            fetchData: { _ in throw URLError(.cannotConnectToHost) }
+        )
+
+        let browser = await launcher.probeExistingChrome(cdpPort: 9222)
+
+        XCTAssertNil(browser)
+    }
+
+    func testProbeExistingChromeRejectsNonCdpHttpResponses() async {
+        // Some other HTTP service (e.g. a dev server) squatting on the port
+        // must not be mistaken for a Chrome CDP endpoint.
+        let payload = Data(#"{"hello":"world"}"#.utf8)
+        let okResponse = HTTPURLResponse(
+            url: URL(string: "http://127.0.0.1:9222/json/version")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        let launcher = ChromeLauncher(
+            fetchData: { _ in (payload, okResponse) }
+        )
+
+        let browser = await launcher.probeExistingChrome(cdpPort: 9222)
+
+        XCTAssertNil(browser)
+    }
+
+    func testLaunchFailsFastWhenCdpPortIsAlreadyServingChrome() async throws {
+        let chromePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        let cdpResponse = Data(#"{"Browser":"Chrome/147.0.7727.101","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/test"}"#.utf8)
+        let okResponse = HTTPURLResponse(
+            url: URL(string: "http://127.0.0.1:9222/json/version")!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+
+        final class SpawnCounter: @unchecked Sendable {
+            var count = 0
+        }
+        let spawns = SpawnCounter()
+
+        let launcher = ChromeLauncher(
+            fileExists: { $0 == chromePath },
+            processFactory: {
+                spawns.count += 1
+                return Process()
+            },
+            fetchData: { _ in (cdpResponse, okResponse) }
+        )
+
+        do {
+            _ = try await launcher.launch(config: ChromeLaunchConfig(
+                cdpPort: 9222,
+                launchUrl: "http://localhost:5710",
+                userDataDir: "/tmp/user-data",
+                executablePath: chromePath
+            ))
+            XCTFail("expected chromeAlreadyRunning but launch succeeded")
+        } catch ChromeLauncherError.chromeAlreadyRunning(let port, let browser) {
+            XCTAssertEqual(port, 9222)
+            XCTAssertEqual(browser, "Chrome/147.0.7727.101")
+        } catch {
+            XCTFail("expected chromeAlreadyRunning but got \(error)")
+        }
+
+        XCTAssertEqual(spawns.count, 0, "processFactory must not be invoked when a Chrome is already on the CDP port")
+    }
+
     private func makeLauncher(
         existingPaths: Set<String> = [],
         directoryListings: [String: [String]] = [:],

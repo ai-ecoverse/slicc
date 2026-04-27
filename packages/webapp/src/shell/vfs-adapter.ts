@@ -50,6 +50,22 @@ export class VfsAdapter implements IFileSystem {
     return this.registeredCommandsFn?.() ?? [];
   }
 
+  /**
+   * Writability predicate — delegates to the wrapped `VirtualFS` /
+   * `RestrictedFS`. Exposed so shell commands can check whether a path
+   * is writable under the current sandbox (if any) BEFORE delegating an
+   * op to a lower layer that can't see the caller's ACL. `VirtualFS`
+   * always returns `true`; `RestrictedFS` checks its writable prefixes.
+   *
+   * Not part of the `IFileSystem` contract; callers that need this must
+   * feature-detect (`'canWrite' in ctx.fs`) or cast. See the `agent`
+   * supplemental command for a concrete use.
+   */
+  canWrite(path: string): boolean {
+    const wrapped = this.vfs as unknown as { canWrite?: (p: string) => boolean };
+    return typeof wrapped.canWrite === 'function' ? wrapped.canWrite(path) : true;
+  }
+
   async readFile(path: string, options?: ReadFileOptions | BufferEncoding): Promise<string> {
     const normalized = normalizePath(path);
     const raw = await this.vfs.readFile(normalized, { encoding: 'binary' });
@@ -202,11 +218,23 @@ export class VfsAdapter implements IFileSystem {
         };
       }
     }
+    // Fast path: synchronous CacheFS stat for non-mounted paths
+    const fast = this.vfs.statSync(normalized);
+    if (fast) {
+      return {
+        isFile: fast.type === 'file',
+        isDirectory: fast.type === 'directory',
+        isSymbolicLink: !!fast.isSymlink,
+        mode: fast.type === 'directory' ? 0o755 : 0o644,
+        size: fast.size,
+        mtime: new Date(fast.mtime),
+      };
+    }
     const s = await this.vfs.stat(normalized);
     return {
       isFile: s.type === 'file',
       isDirectory: s.type === 'directory',
-      isSymbolicLink: false,
+      isSymbolicLink: !!s.isSymlink,
       mode: s.type === 'directory' ? 0o755 : 0o644,
       size: s.size,
       mtime: new Date(s.mtime),
@@ -214,8 +242,28 @@ export class VfsAdapter implements IFileSystem {
   }
 
   async lstat(path: string): Promise<FsStat> {
-    // Our VFS has no symlinks, lstat === stat
-    return this.stat(path);
+    const normalized = normalizePath(path);
+    // Fast path: synchronous CacheFS lstat for non-mounted paths
+    const fast = this.vfs.lstatSync(normalized);
+    if (fast) {
+      return {
+        isFile: fast.type === 'file',
+        isDirectory: fast.type === 'directory',
+        isSymbolicLink: fast.type === 'symlink',
+        mode: fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644,
+        size: fast.size,
+        mtime: new Date(fast.mtime),
+      };
+    }
+    const s = await this.vfs.lstat(normalized);
+    return {
+      isFile: s.type === 'file',
+      isDirectory: s.type === 'directory',
+      isSymbolicLink: s.type === 'symlink',
+      mode: s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644,
+      size: s.size,
+      mtime: new Date(s.mtime),
+    };
   }
 
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
@@ -226,6 +274,9 @@ export class VfsAdapter implements IFileSystem {
     const normalized = normalizePath(path);
     if (normalized === '/usr') return ['bin'];
     if (normalized === '/usr/bin') return this.getVirtualBinCommands().slice().sort();
+    // Fast path: synchronous CacheFS read for non-mounted paths
+    const fast = this.vfs.readDirSync(normalized);
+    if (fast !== null) return fast.map((e) => e.name);
     const entries = await this.vfs.readDir(normalized);
     return entries.map((e) => e.name);
   }
@@ -246,13 +297,82 @@ export class VfsAdapter implements IFileSystem {
           isSymbolicLink: false,
         }));
     }
+
+    // Fast path: synchronous CacheFS read for non-mounted paths.
+    // readDirSync returns null when the path is under a mount or
+    // the CacheFS internal isn't available.
+    const fastEntries = this.vfs.readDirSync(normalized);
+    if (fastEntries !== null) {
+      const result: DirentEntry[] = [];
+      for (const e of fastEntries) {
+        if (e.type === 'symlink') {
+          const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
+          // Try synchronous stat first (follows symlinks via CacheFS)
+          const targetStat = this.vfs.statSync(childPath);
+          if (targetStat) {
+            result.push({
+              name: e.name,
+              isFile: targetStat.type === 'file',
+              isDirectory: targetStat.type === 'directory',
+              isSymbolicLink: true,
+            });
+          } else {
+            // Symlink target is in a mount or unresolvable — fall back to async
+            let isFile = false;
+            let isDir = false;
+            try {
+              const asyncStat = await this.vfs.stat(childPath);
+              isFile = asyncStat.type === 'file';
+              isDir = asyncStat.type === 'directory';
+            } catch {
+              // Dangling symlink
+            }
+            result.push({ name: e.name, isFile, isDirectory: isDir, isSymbolicLink: true });
+          }
+        } else {
+          result.push({
+            name: e.name,
+            isFile: e.type === 'file',
+            isDirectory: e.type === 'directory',
+            isSymbolicLink: false,
+          });
+        }
+      }
+      return result;
+    }
+
+    // Slow path: async VirtualFS readDir for mounted paths.
     const entries = await this.vfs.readDir(normalized);
-    return entries.map((e) => ({
-      name: e.name,
-      isFile: e.type === 'file',
-      isDirectory: e.type === 'directory',
-      isSymbolicLink: false,
-    }));
+    const result: DirentEntry[] = [];
+    for (const e of entries) {
+      if (e.type === 'symlink') {
+        // Try to determine if symlink target is file or directory
+        let isFile = false;
+        let isDir = false;
+        try {
+          const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
+          const targetStat = await this.vfs.stat(childPath);
+          isFile = targetStat.type === 'file';
+          isDir = targetStat.type === 'directory';
+        } catch {
+          // Dangling symlink — report as symlink only
+        }
+        result.push({
+          name: e.name,
+          isFile,
+          isDirectory: isDir,
+          isSymbolicLink: true,
+        });
+      } else {
+        result.push({
+          name: e.name,
+          isFile: e.type === 'file',
+          isDirectory: e.type === 'directory',
+          isSymbolicLink: false,
+        });
+      }
+    }
+    return result;
   }
 
   async rm(path: string, options?: RmOptions): Promise<void> {
@@ -308,21 +428,20 @@ export class VfsAdapter implements IFileSystem {
     // Our VFS doesn't track permissions — no-op
   }
 
-  async symlink(_target: string, _linkPath: string): Promise<void> {
-    throw new Error('Symlinks not supported in VirtualFS');
+  async symlink(target: string, linkPath: string): Promise<void> {
+    await this.vfs.symlink(target, normalizePath(linkPath));
   }
 
   async link(_existingPath: string, _newPath: string): Promise<void> {
     throw new Error('Hard links not supported in VirtualFS');
   }
 
-  async readlink(_path: string): Promise<string> {
-    throw new Error('Symlinks not supported in VirtualFS');
+  async readlink(path: string): Promise<string> {
+    return this.vfs.readlink(normalizePath(path));
   }
 
   async realpath(path: string): Promise<string> {
-    // No symlinks, so realpath is just normalization
-    return normalizePath(path);
+    return this.vfs.realpath(normalizePath(path));
   }
 
   async utimes(path: string, _atime: Date, _mtime: Date): Promise<void> {

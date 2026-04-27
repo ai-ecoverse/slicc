@@ -38,19 +38,58 @@ if (isExtensionMode) {
 
 **Implementation Details**
 
-| Aspect            | Details                                                                                                                    |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **Sandbox file**  | `packages/chrome-extension/sandbox.html` (copied to `dist/extension/` by vite config)                                      |
-| **Exec pattern**  | Parent page sends `{ type: 'exec', id, code }`, sandbox posts back `{ type: 'exec_result', id, result, logs, error }`      |
-| **VFS bridge**    | Sandbox iframe uses same postMessage pattern for VFS operations (readFile, writeFile, etc.)                                |
-| **Shared iframe** | JavaScript tool and node command share the same sandbox iframe (find via `document.querySelector('iframe[data-js-tool]')`) |
-| **Wait for load** | In extension mode, must await sandbox iframe `load` event before posting messages                                          |
+| Aspect            | Details                                                                                                               |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **Sandbox file**  | `packages/chrome-extension/sandbox.html` (copied to `dist/extension/` by vite config)                                 |
+| **Exec pattern**  | Parent page sends `{ type: 'exec', id, code }`, sandbox posts back `{ type: 'exec_result', id, result, logs, error }` |
+| **VFS bridge**    | Sandbox iframe uses same postMessage pattern for VFS operations (readFile, writeFile, etc.)                           |
+| **Shared iframe** | Node command uses the sandbox iframe (find via `document.querySelector('iframe[data-js-tool]')`)                      |
+| **Wait for load** | In extension mode, must await sandbox iframe `load` event before posting messages                                     |
 
 **Related Files**
 
-- `packages/webapp/src/tools/javascript-tool.ts` lines 248–270 (dual-mode iframe setup)
 - `packages/webapp/src/shell/supplemental-commands/node-command.ts` lines 145–221 (extension routing)
 - `packages/chrome-extension/sandbox.html` (entry point, must load in extension via `chrome.runtime.getURL()`)
+
+## Extension Sandbox: External Scripts & Opaque Origin
+
+**The Problem**
+
+Manifest sandbox pages (`sandbox.html`, `sprinkle-sandbox.html`, `tool-ui-sandbox.html`) get an **opaque origin** (`null`) and a fixed CSP: `script-src 'self' 'unsafe-inline' 'unsafe-eval'`. This blocks:
+
+| What fails                                                 | Why                                                                                                                   |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `<script src="https://cdn.example.com/lib.js">`            | CSP `script-src` has no external origins                                                                              |
+| `import('https://esm.sh/lodash')`                          | Same CSP restriction                                                                                                  |
+| `import(blobUrl)`                                          | `blob:` not in `script-src`                                                                                           |
+| `document.createElement('script').src = 'slicc-editor.js'` | Opaque origin can't load `chrome-extension://` URLs at runtime (static `<script src>` in `<head>` works at page init) |
+| `fetch('https://...')` from sandbox                        | Only works if CDN sends permissive CORS headers (null origin)                                                         |
+| `observer.observe(document.body)` in `<head>` scripts      | `document.body` is `null` before `<body>` is parsed                                                                   |
+
+**Solutions**
+
+| Pattern                                    | How it works                                                                                                                                             | Used by                                        |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| **Fetch-and-inline (full-doc)**            | Side panel scans HTML for `<script src="https://...">`, fetches content, replaces with `<script>inline</script>` before sending to sandbox               | `sprinkle-renderer.ts:inlineExternalScripts()` |
+| **Parent relay (partial)**                 | Sandbox sends `sprinkle-fetch-script` to parent via postMessage, parent fetches, returns `sprinkle-fetch-script-response`                                | `sprinkle-sandbox.html:fetchScriptViaRelay()`  |
+| **jsdelivr + Function constructor**        | Fetch from `https://cdn.jsdelivr.net/npm/PACKAGE` (serves UMD/CJS main file), evaluate with `(0, Function)('module', 'exports', text)(mod, mod.exports)` | `node-command.ts:__loadModule()`               |
+| **Static `<script src>` in `<head>` only** | Extension-relative scripts must load statically in the initial HTML, not via dynamic `createElement`                                                     | `sprinkle-sandbox.html` lines 8-10             |
+| **Guard `document.body` with try-catch**   | Scripts loaded in `<head>` must guard `observer.observe(document.body)` — use try-catch, not DOMContentLoaded (which interferes with sandbox page load)  | `lucide-icons.ts`                              |
+
+**Key rules for extension sandbox development:**
+
+1. **Never use `<script src="https://...">` in sandbox HTML** — it will be blocked by CSP. Use fetch-and-inline or the parent relay instead.
+2. **Never dynamically create `<script>` elements with extension-relative `src`** — opaque origin blocks runtime loads. Load statically in `<head>`.
+3. **Never call `import()` with external URLs in sandbox context** — CSP blocks it and generates noisy console errors even when caught. Use jsdelivr CDN + indirect Function constructor (`(0, Function)('module', 'exports', text)`) for npm packages in `node -e`.
+4. **Always guard `document.body` in scripts loaded from `<head>`** — use `try {} catch {}` around `observer.observe(document.body)` rather than deferring to DOMContentLoaded (DOMContentLoaded listeners interfere with sandbox page load timing).
+5. **Use the parent relay for cross-origin fetches** — sandbox null origin means CORS is unreliable. The side panel has full network access.
+6. **Call `LucideIcons.render()` explicitly after injecting content in partial-content sprinkles** — the MutationObserver can't start in `<head>` (body is null), so icons won't auto-render. An explicit `render()` call after script execution handles this.
+7. **Use function replacements with `String.replace` when the replacement contains fetched code** — `String.replace(str, replacement)` interprets `$&`, `$1`, etc. as special patterns. Minified libraries (e.g. lodash) contain `$&` in regex escape functions. Use `str.replace(match, () => replacement)` to prevent corruption.
+8. **esm.sh `?bundle` returns ESM stubs, not evaluable bundles** — the top-level URL returns a small file with `export ... from "/.../pkg.bundle.mjs"`. Use jsdelivr (`https://cdn.jsdelivr.net/npm/PACKAGE`) instead, which serves the npm package's main file (typically UMD/CJS).
+
+**macOS TCC and Side Panel Crashes**
+
+Chrome's side panel cannot host macOS TCC (Transparency, Consent, and Control) permission dialogs. If code in the side panel triggers a TCC dialog (e.g., iterating a `FileSystemDirectoryHandle` for `~/Downloads`), Chrome's renderer crashes instead of showing the dialog. Solution: route operations that might trigger TCC through a popup window (`chrome.windows.create({ type: 'popup' })`) — see `mount-popup.html` for the pattern.
 
 ## WASM & Bundled Assets in Extension Mode
 
@@ -64,6 +103,8 @@ Extension CSP also blocks CDN fetches and dynamic asset loading. ImageMagick WAS
 | **Pyodide**          | Bundled at `dist/extension/pyodide/`. Load path: `chrome.runtime.getURL('pyodide/')` (trailing slash required)                                                                              |
 | **Sandbox HTML**     | Loaded via `chrome.runtime.getURL('sandbox.html')` as iframe src                                                                                                                            |
 
+Standalone browser mode loads Pyodide assets from jsdelivr. Keep `pyodide` pinned to an exact version in `package.json`; `packages/webapp/src/shell/supplemental-commands/shared.ts` derives the CDN URL from the installed `pyodide/package.json` version so Renovate updates the npm loader and browser assets together.
+
 **Build Integration**
 
 File: `packages/chrome-extension/vite.config.ts` `closeBundle` hook must:
@@ -71,39 +112,6 @@ File: `packages/chrome-extension/vite.config.ts` `closeBundle` hook must:
 1. Copy Pyodide from node_modules (~13MB) to `dist/extension/pyodide/`
 2. Bundle ImageMagick WASM to `dist/extension/magick.wasm`
 3. Ensure manifest `web_accessible_resources` includes all assets
-
-## JavaScript Tool: Dual-Mode Pattern
-
-**CLI Mode** (`packages/webapp/src/tools/javascript-tool.ts` lines 262–270)
-
-```typescript
-iframe.sandbox.add('allow-scripts');
-iframe.sandbox.add('allow-same-origin');
-document.body.appendChild(iframe);
-const doc = iframe.contentDocument!;
-doc.open();
-doc.write(IFRAME_HTML);
-doc.close();
-iframeReady = Promise.resolve(iframe); // Synchronous
-```
-
-**Extension Mode** (`packages/webapp/src/tools/javascript-tool.ts` lines 250–260)
-
-```typescript
-iframeReady = new Promise<HTMLIFrameElement>((resolve) => {
-  iframe!.addEventListener(
-    'load',
-    () => {
-      resolve(iframe!);
-    },
-    { once: true }
-  );
-  iframe!.src = chrome.runtime.getURL('sandbox.html');
-  document.body.appendChild(iframe!);
-});
-```
-
-Key difference: extension mode must **wait for load event** before posting messages. CLI mode is synchronous.
 
 ## Node Command: Three-Branch Path
 
@@ -154,12 +162,12 @@ private checkWrite(path: string): void {
 
 All paths in VirtualFS must follow these rules:
 
-| Rule                   | Example         | Violation                                        |
-| ---------------------- | --------------- | ------------------------------------------------ |
-| **Absolute**           | `/foo/bar`, `/` | `foo/bar` (relative), `./foo`                    |
-| **Forward-slash only** | `/path/to/file` | `\path\to\file` (backslash)                      |
-| **Normalized**         | `/a/b/c`        | `/a//b/c` (double slash), `/a/b/./c` (dot-slash) |
-| **No symlinks**        | All paths real  | Symlinks not supported; read underlying target   |
+| Rule                   | Example             | Violation                                                                   |
+| ---------------------- | ------------------- | --------------------------------------------------------------------------- |
+| **Absolute**           | `/foo/bar`, `/`     | `foo/bar` (relative), `./foo`                                               |
+| **Forward-slash only** | `/path/to/file`     | `\path\to\file` (backslash)                                                 |
+| **Normalized**         | `/a/b/c`            | `/a//b/c` (double slash), `/a/b/./c` (dot-slash)                            |
+| **Symlinks supported** | `/link` → `/target` | Use `symlink()`, `readlink()`, `lstat()`, `realpath()`; max 40 hops (ELOOP) |
 
 **Normalization**: Use `normalizePath(path)` from `packages/webapp/src/fs/path-utils.ts` before any VFS operation.
 
@@ -367,7 +375,7 @@ Use `format: 'iife'` to avoid code-splitting.
 
 **When Modifying preview-sw.ts**
 
-1. Test in dev mode (`npm run dev:full`)
+1. Test in dev mode (`npm run dev`)
 2. Verify prod build includes bundle (`npm run build`, check `dist/ui/preview-sw.js` for LightningFS code)
 3. Update the production bundle hook if adding imports
 
@@ -511,7 +519,7 @@ When adding a feature that touches:
 
 **Manual Testing**
 
-- [ ] Test in standalone CLI mode (`npm run dev:full`)
-- [ ] Test in extension mode (`npm run build:extension` → load in chrome://extensions)
+- [ ] Test in standalone CLI mode (`npm run dev`)
+- [ ] Test in extension mode (`npm run build -w @slicc/chrome-extension` → load in chrome://extensions)
 - [ ] If added WASM, verify bundled path in extension build
 - [ ] If added command, test in both terminal modes

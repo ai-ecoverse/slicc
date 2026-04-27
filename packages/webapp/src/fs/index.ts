@@ -15,3 +15,7 @@ export type {
   FsErrorCode,
 } from './types.js';
 export { normalizePath, splitPath, pathSegments, joinPath } from './path-utils.js';
+export { FsWatcher } from './fs-watcher.js';
+export type { FsChangeEvent, FsChangeType, FsWatchFilter, FsWatchCallback } from './fs-watcher.js';
+export { MountIndex } from './mount-index.js';
+export type { MountIndexEntry, MountIndexState, IndexingStatus } from './mount-index.js';

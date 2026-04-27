@@ -44,6 +44,10 @@ Offscreen Document
 - Use `sprinkle-sandbox.html` for sprinkle panels and inline sprinkle rendering.
 - `tool-ui-sandbox.html` and related HTML shells exist for specialized extension UI surfaces.
 - When loading bundled assets, prefer `chrome.runtime.getURL(...)`.
+- **External CDN scripts in sprinkles** are fetch-and-inlined by `sprinkle-renderer.ts` (full-doc) or via `sprinkle-fetch-script` parent relay (partial-content). Never use `<script src="https://...">` directly in sandbox HTML.
+- **npm packages in `node -e`** use esm.sh `?bundle` + indirect Function constructor. Never use `import()` with external URLs in sandbox context.
+- **Extension-relative scripts** must load statically in `<head>`, not via dynamic `createElement('script').src` (opaque origin blocks runtime loads).
+- See `docs/pitfalls.md` "Extension Sandbox: External Scripts & Opaque Origin" for the full reference.
 
 ## Dual-Context Shell Model
 

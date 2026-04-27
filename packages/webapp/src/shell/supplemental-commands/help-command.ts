@@ -47,8 +47,13 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
       'commands',
       'which',
       'uname',
+      'man',
       'host',
       'oauth-token',
+      'secret',
+      'nuke',
+      'models',
+      'cost',
     ],
   ],
   ['Data processing', ['xargs', 'jq', 'base64', 'date']],
@@ -57,7 +62,8 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Languages', ['node', 'python', 'python3', 'sqlite3']],
   ['Skills', ['skill', 'upskill']],
   ['Browser & UI', ['serve', 'open', 'imgcat', ...PLAYWRIGHT_COMMAND_NAMES, 'webhook']],
-  ['Filesystem', ['mount']],
+  ['Filesystem', ['mount', 'fswatch']],
+  ['Scoops & agents', ['agent']],
 ]);
 
 function formatHelp(commands: string[], jshCommands: string[] = []): string {

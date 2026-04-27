@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleWorkerRequest } from '../src/index.js';
+import worker, { handleWorkerRequest } from '../src/index.js';
 import {
   FOLLOWER_ATTACH_RETRY_AFTER_MS,
+  wantsJSON,
   TRAY_RECLAIM_TTL_MS,
   type DurableObjectIdLike,
   type DurableObjectStateLike,
@@ -122,15 +123,23 @@ class FakeNamespace {
   }
 }
 
+const MOCK_HTML = '<html><body>SPA</body></html>';
+const fakeAssets = {
+  fetch: async (_req: Request) =>
+    new Response(MOCK_HTML, {
+      headers: { 'content-type': 'text/html' },
+    }),
+};
+
 function createTestHarness(start = Date.parse('2026-03-11T00:00:00.000Z')): {
-  env: { TRAY_HUB: FakeNamespace };
+  env: { TRAY_HUB: FakeNamespace; ASSETS: typeof fakeAssets };
   advance: (ms: number) => void;
   readTray: (trayId: string) => Promise<TrayRecord | undefined>;
 } {
   let now = start;
   const namespace = new FakeNamespace(() => now);
   return {
-    env: { TRAY_HUB: namespace },
+    env: { TRAY_HUB: namespace, ASSETS: fakeAssets },
     advance: (ms: number) => {
       now += ms;
     },
@@ -238,7 +247,7 @@ describe('tray worker skeleton', () => {
     };
 
     const waitingForLeader = await handleWorkerRequest(
-      new Request(session.capabilities.join.url),
+      new Request(`${session.capabilities.join.url}?json=true`),
       env
     );
     expect(waitingForLeader.status).toBe(409);
@@ -261,7 +270,7 @@ describe('tray worker skeleton', () => {
     const leader = (await leaderAttach.json()) as { websocket: { url: string } };
 
     const waitingForSocket = await handleWorkerRequest(
-      new Request(session.capabilities.join.url),
+      new Request(`${session.capabilities.join.url}?json=true`),
       env
     );
     expect(waitingForSocket.status).toBe(409);
@@ -278,7 +287,7 @@ describe('tray worker skeleton', () => {
     expect(socketResponse.status).toBe(101);
 
     const signalingReady = await handleWorkerRequest(
-      new Request(session.capabilities.join.url),
+      new Request(`${session.capabilities.join.url}?json=true`),
       env
     );
     expect(signalingReady.status).toBe(200);
@@ -317,7 +326,10 @@ describe('tray worker skeleton', () => {
     expect(preflight.headers.get('access-control-allow-headers')).toContain('content-type');
 
     // GET (non-POST) join probe should also have CORS
-    const probe = await handleWorkerRequest(new Request(session.capabilities.join.url), env);
+    const probe = await handleWorkerRequest(
+      new Request(`${session.capabilities.join.url}?json=true`),
+      env
+    );
     expect(probe.headers.get('access-control-allow-origin')).toBe('*');
 
     // POST attach should also have CORS
@@ -1126,18 +1138,31 @@ describe('tray worker skeleton', () => {
 
   it('advertises /tray as the only create route in service metadata', async () => {
     const { env } = createTestHarness();
-    const response = await handleWorkerRequest(new Request('https://tray.test/'), env);
+    const response = await handleWorkerRequest(new Request('https://tray.test/?json=true'), env);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       routes: [
         'POST /tray',
+        'GET /download/slicc.dmg',
+        'GET /handoff',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
         'GET /auth/callback',
+        'POST /oauth/token',
+        'POST /oauth/revoke',
+        'GET /api/runtime-config',
+        'ANY /api/fetch-proxy',
       ],
     });
+  });
+
+  it('redirects bare apex sliccy.ai to www.sliccy.ai at handleWorkerRequest level', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(new Request('https://sliccy.ai/'), env);
+    expect(response.status).toBe(301);
+    expect(response.headers.get('Location')).toBe('https://www.sliccy.ai/');
   });
 
   it('redirects apex sliccy.ai to www.sliccy.ai with 301 preserving path and query', async () => {
@@ -1147,9 +1172,473 @@ describe('tray worker skeleton', () => {
     expect(response.headers.get('Location')).toBe('https://www.sliccy.ai/some/path?q=1');
   });
 
-  it('does not redirect requests to www.sliccy.ai', async () => {
+  it('does not redirect www.sliccy.ai with query params', async () => {
     const { env } = createTestHarness();
-    const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/'), env);
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/?json=true'),
+      env
+    );
     expect(response.status).toBe(200);
+  });
+
+  it('does not redirect www.sliccy.ai with a path', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/some/path'), env);
+    expect(response.status).toBe(200);
+  });
+
+  it('does not redirect www.sliccy.ai/handoff', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/handoff'), env);
+    expect(response.status).toBe(200);
+  });
+
+  it('serves the handoff page without x-slicc header when msg is absent', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/handoff'), env);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toContain('text/html');
+    expect(response.headers.get('x-slicc')).toBeNull();
+    const html = await response.text();
+    expect(html).toContain('SLICC handoff');
+  });
+
+  it('percent-encodes the msg into the x-slicc header', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request(
+        'https://www.sliccy.ai/handoff?msg=upskill%3Ahttps%3A%2F%2Fgithub.com%2Ffoo%2Fbar'
+      ),
+      env
+    );
+    expect(response.status).toBe(200);
+    // encodeURIComponent preserves ':' and '/' as unreserved-for-components.
+    expect(response.headers.get('x-slicc')).toBe('upskill%3Ahttps%3A%2F%2Fgithub.com%2Ffoo%2Fbar');
+  });
+
+  it('survives non-Latin1 msg values (emoji, CJK) instead of throwing', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/handoff?msg=handoff%3A%F0%9F%9A%80%20%E4%BD%A0%E5%A5%BD'),
+      env
+    );
+    expect(response.status).toBe(200);
+    const header = response.headers.get('x-slicc');
+    expect(header).toBeTruthy();
+    expect(decodeURIComponent(header!)).toBe('handoff:🚀 你好');
+  });
+
+  it('neutralises CR/LF header injection attempts', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/handoff?msg=handoff%3Afoo%0D%0AX-Injected%3A+bar'),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-Injected')).toBeNull();
+    // The CRLF bytes are percent-encoded inside the value, not split into
+    // a new header line.
+    expect(response.headers.get('x-slicc')).toBe('handoff%3Afoo%0D%0AX-Injected%3A%20bar');
+  });
+});
+
+describe('wantsJSON', () => {
+  it('returns true when ?json=true is present', () => {
+    const req = new Request('https://example.com/join/token?json=true');
+    expect(wantsJSON(req)).toBe(true);
+  });
+
+  it('returns false when ?json is absent', () => {
+    const req = new Request('https://example.com/join/token');
+    expect(wantsJSON(req)).toBe(false);
+  });
+
+  it('returns false when ?json has other value', () => {
+    const req = new Request('https://example.com/?json=false');
+    expect(wantsJSON(req)).toBe(false);
+  });
+});
+
+describe('browser routing', () => {
+  it('serves SPA for plain GET requests to /', async () => {
+    const { env } = createTestHarness();
+    const req = new Request('https://example.com/');
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+  });
+
+  it('serves SPA for plain GET requests to /join/:token', async () => {
+    const { env } = createTestHarness();
+    const trayRes = await handleWorkerRequest(
+      new Request('https://example.com/tray', { method: 'POST' }),
+      env
+    );
+    const tray = (await trayRes.json()) as {
+      capabilities: { join: { token: string } };
+    };
+    const joinToken = tray.capabilities.join.token;
+
+    const req = new Request(`https://example.com/join/${joinToken}`);
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+  });
+
+  it('serves JSON API for requests to /join/:token with ?json=true', async () => {
+    const { env } = createTestHarness();
+    const trayRes = await handleWorkerRequest(
+      new Request('https://example.com/tray', { method: 'POST' }),
+      env
+    );
+    const tray = (await trayRes.json()) as {
+      capabilities: { join: { url: string } };
+    };
+
+    const req = new Request(`${tray.capabilities.join.url}?json=true`);
+    const res = await handleWorkerRequest(req, env);
+    expect(res.headers.get('content-type')).toContain('application/json');
+  });
+
+  it('serves SPA for plain GET requests to unknown paths', async () => {
+    const { env } = createTestHarness();
+    const req = new Request('https://example.com/some/random/path');
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+  });
+
+  it('serves JSON service info for requests to unknown paths with ?json=true', async () => {
+    const { env } = createTestHarness();
+    const req = new Request('https://example.com/some/random/path?json=true');
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { service: string };
+    expect(body.service).toBe('slicc-tray-hub');
+  });
+});
+
+describe('generic OAuth token broker', () => {
+  function oauthEnv() {
+    return {
+      ...createTestHarness().env,
+      GITHUB_CLIENT_ID: 'test-client-id',
+      GITHUB_CLIENT_SECRET: 'test-client-secret',
+    };
+  }
+
+  it('exchanges an authorization code for tokens via POST /oauth/token', async () => {
+    const env = oauthEnv();
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          access_token: 'gho_test_token_123',
+          token_type: 'bearer',
+          scope: 'repo,read:user',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'github',
+          code: 'test-auth-code',
+          redirect_uri: 'https://www.sliccy.ai/auth/callback',
+        }),
+      }),
+      env,
+      mockFetch
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      access_token: string;
+      token_type: string;
+      scope: string;
+    };
+    expect(body.access_token).toBe('gho_test_token_123');
+    expect(body.token_type).toBe('bearer');
+    expect(body.scope).toBe('repo,read:user');
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [fetchUrl, fetchInit] = mockFetch.mock.calls[0]!;
+    expect(fetchUrl).toBe('https://github.com/login/oauth/access_token');
+    expect(fetchInit?.method).toBe('POST');
+    expect(fetchInit?.headers).toMatchObject({
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    });
+  });
+
+  it('returns 400 for unknown provider', async () => {
+    const env = oauthEnv();
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'nonexistent', code: 'abc' }),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('unknown_provider');
+  });
+
+  it('returns 501 when provider secrets are not configured', async () => {
+    const env = createTestHarness().env; // no GITHUB_CLIENT_ID/SECRET
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'github', code: 'abc' }),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(501);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('server_error');
+  });
+
+  it('forwards upstream error responses from the token endpoint', async () => {
+    const env = oauthEnv();
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: 'bad_verification_code',
+          error_description: 'The code passed is incorrect or expired.',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
+    );
+
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'github', code: 'expired-code' }),
+      }),
+      env,
+      mockFetch
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('bad_verification_code');
+  });
+
+  it('returns CORS headers on POST and OPTIONS preflight', async () => {
+    const env = oauthEnv();
+    const mockFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: 'tok' }), { status: 200 })
+      );
+
+    // OPTIONS preflight
+    const preflight = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'OPTIONS',
+        headers: { Origin: 'http://localhost:5710' },
+      }),
+      env
+    );
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('access-control-allow-origin')).toBeTruthy();
+    expect(preflight.headers.get('access-control-allow-methods')).toContain('POST');
+
+    // POST should also have CORS
+    const post = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Origin: 'http://localhost:5710' },
+        body: JSON.stringify({ provider: 'github', code: 'abc' }),
+      }),
+      env,
+      mockFetch
+    );
+    expect(post.headers.get('access-control-allow-origin')).toBeTruthy();
+  });
+
+  it('returns 405 with CORS and Allow headers for non-POST requests to /oauth/token', async () => {
+    const env = oauthEnv();
+    const response = await handleWorkerRequest(new Request('https://tray.test/oauth/token'), env);
+    expect(response.status).toBe(405);
+    expect(response.headers.get('allow')).toContain('POST');
+    expect(response.headers.get('access-control-allow-origin')).toBeTruthy();
+  });
+
+  it('revokes a token via POST /oauth/revoke (delete-basic method)', async () => {
+    const env = oauthEnv();
+    const mockFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/revoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'github', access_token: 'gho_token_to_revoke' }),
+      }),
+      env,
+      mockFetch
+    );
+
+    expect(response.status).toBe(204);
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [fetchUrl, fetchInit] = mockFetch.mock.calls[0]!;
+    expect(fetchUrl).toBe('https://api.github.com/applications/test-client-id/token');
+    expect(fetchInit?.method).toBe('DELETE');
+    expect(fetchInit?.headers).toMatchObject({
+      Authorization: `Basic ${btoa('test-client-id:test-client-secret')}`,
+    });
+  });
+
+  it('returns 400 for missing provider field', async () => {
+    const env = oauthEnv();
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code: 'abc' }),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('invalid_request');
+  });
+
+  it('returns 400 for missing code field', async () => {
+    const env = oauthEnv();
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/oauth/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'github' }),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('invalid_request');
+  });
+});
+
+describe('API routes', () => {
+  it('returns runtime config with worker base URL and OAuth client IDs', async () => {
+    const env = { ...createTestHarness().env, GITHUB_CLIENT_ID: 'test-gh-id' };
+    const req = new Request('https://www.sliccy.ai/api/runtime-config');
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      trayWorkerBaseUrl: string;
+      oauth: { github?: string };
+    };
+    expect(body.trayWorkerBaseUrl).toBe('https://www.sliccy.ai');
+    expect(body.oauth.github).toBe('test-gh-id');
+  });
+
+  it('returns 404 for fetch-proxy', async () => {
+    const { env } = createTestHarness();
+    const req = new Request('https://www.sliccy.ai/api/fetch-proxy', { method: 'POST' });
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('not available');
+  });
+});
+
+describe('X-Robots-Tag header', () => {
+  it('does NOT add x-robots-tag to root sliccy.ai redirect', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://sliccy.ai/'), env);
+    expect(res.status).toBe(301);
+    expect(res.headers.get('Location')).toBe('https://www.sliccy.com/');
+    expect(res.headers.has('x-robots-tag')).toBe(false);
+  });
+
+  it('does NOT add x-robots-tag to root www.sliccy.ai redirect', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://www.sliccy.ai/'), env);
+    expect(res.status).toBe(301);
+    expect(res.headers.get('Location')).toBe('https://www.sliccy.com/');
+    expect(res.headers.has('x-robots-tag')).toBe(false);
+  });
+
+  it('adds x-robots-tag: noindex to non-root sliccy.ai redirect', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://sliccy.ai/some/path?q=1'), env);
+    expect(res.status).toBe(301);
+    expect(res.headers.get('Location')).toBe('https://www.sliccy.ai/some/path?q=1');
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
+  });
+
+  it('adds x-robots-tag: noindex to SPA fallback', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://www.sliccy.ai/some/path'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
+  });
+
+  it('adds x-robots-tag: noindex to handoff page', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://www.sliccy.ai/handoff'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
+  });
+
+  it('adds x-robots-tag: noindex to API routes', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://www.sliccy.ai/api/runtime-config'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
+  });
+
+  it('adds x-robots-tag: noindex to tray POST', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(
+      new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
+      env
+    );
+    expect(res.status).toBe(201);
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
+  });
+
+  it('does NOT add x-robots-tag to WebSocket upgrade (101) responses', async () => {
+    const { env } = createTestHarness();
+    const created = await worker.fetch(
+      new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      capabilities: { controller: { url: string } };
+    };
+
+    const leaderAttach = await worker.fetch(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-ws-test', runtime: 'cli' }),
+      }),
+      env
+    );
+    const leader = (await leaderAttach.json()) as { websocket: { url: string } };
+
+    const wsResponse = await worker.fetch(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
+    expect(wsResponse.status).toBe(101);
+    expect(wsResponse.headers.has('x-robots-tag')).toBe(false);
+    expect((wsResponse as unknown as { webSocket: unknown }).webSocket).toBeDefined();
   });
 });

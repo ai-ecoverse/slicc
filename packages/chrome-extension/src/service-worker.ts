@@ -16,6 +16,7 @@ import type {
   CdpCommandMsg,
   CdpResponseMsg,
   CdpEventMsg,
+  NavigateLickMsg,
   TraySocketCommandMessage,
   TraySocketErrorMsg,
   TraySocketMessageMsg,
@@ -24,7 +25,6 @@ import type {
   OAuthRequestMsg,
   OAuthResultMsg,
 } from './messages.js';
-
 // ---------------------------------------------------------------------------
 // Side panel behavior
 // ---------------------------------------------------------------------------
@@ -119,6 +119,59 @@ async function addToSliccGroup(tabId: number): Promise<void> {
     });
   }
 }
+
+// ---------------------------------------------------------------------------
+// x-slicc header observer — emit a navigate lick when a main-frame document
+// response carries the x-slicc header.
+// ---------------------------------------------------------------------------
+
+function findSliccHeader(
+  headers: Array<{ name: string; value?: string }> | undefined
+): string | null {
+  if (!headers) return null;
+  for (const h of headers) {
+    if (h.name.toLowerCase() === 'x-slicc' && typeof h.value === 'string' && h.value.length > 0) {
+      // Producers percent-encode the value so non-Latin1 input survives
+      // transport. Decode on read; fall back to raw if malformed.
+      try {
+        return decodeURIComponent(h.value);
+      } catch {
+        return h.value;
+      }
+    }
+  }
+  return null;
+}
+
+chrome.webRequest.onHeadersReceived.addListener(
+  (details) => {
+    const sliccHeader = findSliccHeader(details.responseHeaders);
+    if (!sliccHeader) return;
+    const payload: NavigateLickMsg = {
+      type: 'navigate-lick',
+      url: details.url,
+      sliccHeader,
+      tabId: details.tabId >= 0 ? details.tabId : undefined,
+    };
+    const tabId = details.tabId;
+    const dispatch = (title?: string) => {
+      if (title) payload.title = title;
+      chrome.runtime.sendMessage({ source: 'service-worker' as const, payload }).catch(() => {
+        // Offscreen may not be listening yet — best effort.
+      });
+    };
+    if (tabId >= 0) {
+      chrome.tabs
+        .get(tabId)
+        .then((tab) => dispatch(tab.title))
+        .catch(() => dispatch());
+    } else {
+      dispatch();
+    }
+  },
+  { urls: ['<all_urls>'], types: ['main_frame'] },
+  ['responseHeaders']
+);
 
 // ---------------------------------------------------------------------------
 // CDP state for proxying chrome.debugger calls

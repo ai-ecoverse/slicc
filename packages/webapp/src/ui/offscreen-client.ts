@@ -108,15 +108,23 @@ export class OffscreenClient {
     return this.scoopStatuses.get(jid) === 'processing';
   }
 
-  /** Called by ScoopsPanel.createScoop(). Adds optimistically so the UI
-   *  updates immediately, then sends to offscreen. The real scoop (with a
-   *  different JID) replaces the optimistic one when scoop-created arrives. */
+  /** Bootstrap the cone. Only called once per session when no cone exists on
+   *  disk. Non-cone scoops are created inside the offscreen orchestrator by
+   *  the agent's `scoop_scoop` tool — never through this path. Adds
+   *  optimistically so the UI updates immediately, then sends to offscreen.
+   *  The real scoop (with a different JID) replaces the optimistic one when
+   *  `scoop-created` arrives. */
   async registerScoop(scoop: RegisteredScoop): Promise<void> {
+    if (!scoop.isCone) {
+      throw new Error(
+        'OffscreenClient.registerScoop is cone-only; use scoop_scoop for non-cone scoops'
+      );
+    }
     if (!this.scoops.find((s) => s.name === scoop.name)) {
       this.scoops.push(scoop);
       this.scoopStatuses.set(scoop.jid, 'initializing');
     }
-    this.send({ type: 'scoop-create', name: scoop.name, isCone: scoop.isCone });
+    this.send({ type: 'cone-create', name: scoop.name });
   }
 
   /** Called by ScoopsPanel delete button. */
@@ -214,8 +222,8 @@ export class OffscreenClient {
   private sprinkleOpHandler: ((payload: any) => void) | null = null;
 
   /** Send a sprinkle lick event to the offscreen orchestrator. */
-  sendSprinkleLick(sprinkleName: string, body: unknown): void {
-    this.send({ type: 'sprinkle-lick', sprinkleName, body } as any);
+  sendSprinkleLick(sprinkleName: string, body: unknown, targetScoop?: string): void {
+    this.send({ type: 'sprinkle-lick', sprinkleName, body, targetScoop } as any);
   }
 
   /** Register a handler for sprinkle-op messages from the offscreen proxy. */
@@ -333,6 +341,35 @@ export class OffscreenClient {
             toolName: msg.toolName ?? '',
             result: msg.toolResult ?? '',
             isError: msg.isError,
+          });
+        }
+        break;
+      }
+
+      case 'tool_ui': {
+        let msgId = this.currentMessageId.get(msg.scoopJid);
+        if (!msgId) {
+          msgId = `scoop-${msg.scoopJid}-${uid()}`;
+          this.currentMessageId.set(msg.scoopJid, msgId);
+          this.emitToUI({ type: 'message_start', messageId: msgId });
+        }
+        this.emitToUI({
+          type: 'tool_ui',
+          messageId: msgId,
+          toolName: msg.toolName ?? '',
+          requestId: msg.requestId ?? '',
+          html: msg.html ?? '',
+        });
+        break;
+      }
+
+      case 'tool_ui_done': {
+        const msgId = this.currentMessageId.get(msg.scoopJid);
+        if (msgId) {
+          this.emitToUI({
+            type: 'tool_ui_done',
+            messageId: msgId,
+            requestId: msg.requestId ?? '',
           });
         }
         break;
