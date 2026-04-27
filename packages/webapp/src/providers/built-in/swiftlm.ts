@@ -367,6 +367,112 @@ function nextEventBoundary(buffer: string): { index: number; length: number } | 
   return null;
 }
 
+/** Stateful tracker that splits `delta.content` text into thinking vs
+ *  responding fragments. Mirrors SwiftLM's `ThinkingStateTracker` but
+ *  catches stray opening/closing tags either side has missed (Qwen 3.6
+ *  sometimes emits a bare `</think>` mid-stream without an opening tag,
+ *  Gemma 4 sometimes emits `<|channel>` followed by a token name that
+ *  isn't `thought`). When SwiftLM correctly routes thinking into
+ *  `delta.reasoning_content`, this tracker never sees the markers and is
+ *  a no-op.
+ *
+ *  Returns chunks tagged `text` or `thinking`; the streamer routes them
+ *  to the matching content block. */
+interface SplitFragment {
+  kind: 'text' | 'thinking';
+  text: string;
+}
+
+class ThinkSplitter {
+  private phase: 'text' | 'thinking' = 'text';
+  private buffer = '';
+
+  private static readonly OPEN_TAGS = [
+    '<think>',
+    '<thinking>',
+    '<|channel>thought\n',
+    '<|channel>thought',
+  ];
+  private static readonly CLOSE_TAGS = ['</think>', '</thinking>', '<channel|>'];
+
+  /** Called when SwiftLM emits a `delta.reasoning_content` chunk —
+   *  Qwen 3.6 uses this as a "thinking is starting" signal but then
+   *  spills the rest of the trace into `delta.content` along with a
+   *  closing `</think>`. Pre-flipping into thinking phase lets the
+   *  downstream splitter route those content tokens as reasoning. */
+  enterThinkingMode(): void {
+    if (this.phase === 'text' && this.buffer === '') {
+      this.phase = 'thinking';
+    }
+  }
+
+  push(input: string): SplitFragment[] {
+    if (!input) return [];
+    this.buffer += input;
+    const out: SplitFragment[] = [];
+
+    while (this.buffer.length > 0) {
+      if (this.phase === 'text') {
+        const tags = ThinkSplitter.OPEN_TAGS;
+        const found = this.findEarliest(this.buffer, tags);
+        if (found) {
+          if (found.index > 0) out.push({ kind: 'text', text: this.buffer.slice(0, found.index) });
+          this.buffer = this.buffer.slice(found.index + found.match.length);
+          this.phase = 'thinking';
+          continue;
+        }
+        if (this.endsWithTagPrefix(this.buffer, tags)) return out;
+        out.push({ kind: 'text', text: this.buffer });
+        this.buffer = '';
+        return out;
+      } else {
+        const tags = ThinkSplitter.CLOSE_TAGS;
+        const found = this.findEarliest(this.buffer, tags);
+        if (found) {
+          if (found.index > 0)
+            out.push({ kind: 'thinking', text: this.buffer.slice(0, found.index) });
+          this.buffer = this.buffer.slice(found.index + found.match.length);
+          this.phase = 'text';
+          continue;
+        }
+        if (this.endsWithTagPrefix(this.buffer, tags)) return out;
+        out.push({ kind: 'thinking', text: this.buffer });
+        this.buffer = '';
+        return out;
+      }
+    }
+    return out;
+  }
+
+  /** Flush any unterminated buffer at end of stream as the current phase. */
+  flush(): SplitFragment[] {
+    if (!this.buffer) return [];
+    const out: SplitFragment[] = [{ kind: this.phase, text: this.buffer }];
+    this.buffer = '';
+    return out;
+  }
+
+  private findEarliest(s: string, tags: string[]): { index: number; match: string } | null {
+    let best: { index: number; match: string } | null = null;
+    for (const tag of tags) {
+      const i = s.indexOf(tag);
+      if (i >= 0 && (best === null || i < best.index)) {
+        best = { index: i, match: tag };
+      }
+    }
+    return best;
+  }
+
+  private endsWithTagPrefix(s: string, tags: string[]): boolean {
+    for (const tag of tags) {
+      for (let len = Math.min(s.length, tag.length); len >= 1; len--) {
+        if (s.endsWith(tag.slice(0, len))) return true;
+      }
+    }
+    return false;
+  }
+}
+
 async function* iterateSSE(response: Response): AsyncIterable<SSEChunk> {
   const body = response.body;
   if (!body) return;
@@ -495,6 +601,7 @@ const streamSwiftLM = (
       }
 
       const toolCallsByIndex = new Map<number, ToolCallAccumulator>();
+      const splitter = new ThinkSplitter();
 
       for await (const chunk of iterateSSE(response)) {
         if (chunk.usage) {
@@ -508,6 +615,11 @@ const streamSwiftLM = (
           const delta = choice.delta ?? {};
 
           if (delta.reasoning_content) {
+            // SwiftLM correctly routed thinking — pass it through. Also
+            // signal the content splitter that we're in thinking mode,
+            // since Qwen 3.6 follows up by leaking the rest of the trace
+            // (and a closing `</think>`) into `delta.content`.
+            splitter.enterThinkingMode();
             const thinking = findOrCreateThinkingBlock(output, stream);
             thinking.block.thinking += delta.reasoning_content;
             stream.push({
@@ -519,14 +631,31 @@ const streamSwiftLM = (
           }
 
           if (delta.content) {
-            const text = findOrCreateTextBlock(output, stream);
-            text.block.text += delta.content;
-            stream.push({
-              type: 'text_delta',
-              contentIndex: text.index,
-              delta: delta.content,
-              partial: output,
-            });
+            // Split out any inline `<think>…</think>` or
+            // `<|channel>thought…<channel|>` markers SwiftLM didn't catch.
+            // Qwen 3.6 in particular can emit the closing tag without a
+            // matching opener, leaking the reasoning trace into content.
+            for (const fragment of splitter.push(delta.content)) {
+              if (fragment.kind === 'thinking') {
+                const thinking = findOrCreateThinkingBlock(output, stream);
+                thinking.block.thinking += fragment.text;
+                stream.push({
+                  type: 'thinking_delta',
+                  contentIndex: thinking.index,
+                  delta: fragment.text,
+                  partial: output,
+                });
+              } else {
+                const text = findOrCreateTextBlock(output, stream);
+                text.block.text += fragment.text;
+                stream.push({
+                  type: 'text_delta',
+                  contentIndex: text.index,
+                  delta: fragment.text,
+                  partial: output,
+                });
+              }
+            }
           }
 
           if (delta.tool_calls) {
@@ -578,6 +707,30 @@ const streamSwiftLM = (
                   ? 'length'
                   : 'stop';
           }
+        }
+      }
+
+      // Flush any unterminated tail of the splitter (e.g. truncated
+      // `<thi`-prefix held back in the buffer) as the current phase.
+      for (const fragment of splitter.flush()) {
+        if (fragment.kind === 'thinking') {
+          const thinking = findOrCreateThinkingBlock(output, stream);
+          thinking.block.thinking += fragment.text;
+          stream.push({
+            type: 'thinking_delta',
+            contentIndex: thinking.index,
+            delta: fragment.text,
+            partial: output,
+          });
+        } else {
+          const text = findOrCreateTextBlock(output, stream);
+          text.block.text += fragment.text;
+          stream.push({
+            type: 'text_delta',
+            contentIndex: text.index,
+            delta: fragment.text,
+            partial: output,
+          });
         }
       }
 

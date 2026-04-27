@@ -19,10 +19,10 @@ struct SuggestedModel: Identifiable, Equatable, Hashable {
 enum SuggestedModels {
     static let all: [SuggestedModel] = [
         SuggestedModel(
-            repoId: "mlx-community/gemma-4-26b-a4b-it-4bit",
-            summary: "26B MoE (4B active) · 4-bit",
-            note: "Best quality/speed balance. ~85 tok/s on M-series.",
-            approxSizeGB: 13
+            repoId: "mlx-community/Qwen3.6-35B-A3B-4bit",
+            summary: "35B MoE (A3B) · 4-bit · recommended",
+            note: "Best at tool calls with the SLICC system prompt. MoE sparsity + MLX kernels keep it fast.",
+            approxSizeGB: 18
         ),
         SuggestedModel(
             repoId: "mlx-community/gemma-4-31b-mxfp4",
@@ -33,14 +33,14 @@ enum SuggestedModels {
         SuggestedModel(
             repoId: "mlx-community/Qwen3.6-27B-4bit",
             summary: "27B dense · 4-bit",
-            note: "Strong general-purpose alternative to Gemma 4.",
+            note: "Strong general-purpose alternative.",
             approxSizeGB: 14
         ),
         SuggestedModel(
-            repoId: "mlx-community/Qwen3.6-35B-A3B-4bit",
-            summary: "35B MoE (A3B) · 4-bit",
-            note: "Often the fastest high-quality choice (MoE sparsity + MLX).",
-            approxSizeGB: 18
+            repoId: "mlx-community/gemma-4-26b-a4b-it-4bit",
+            summary: "26B MoE (4B active) · 4-bit",
+            note: "Fastest quantized option. Tool calls with the SLICC prompt are unreliable; better for plain chat.",
+            approxSizeGB: 13
         ),
     ]
 }
