@@ -90,6 +90,15 @@ struct ServerCommand: AsyncParsableCommand {
         var browserLabel = config.electron ? "Electron" : "Chrome"
         var overlayInjector: ElectronOverlayInjector?
 
+        // Read the Keychain before launching the browser so the macOS ACL
+        // prompt appears in front of the still-focused terminal instead of
+        // stacking behind the new Chrome/Electron window. Post-#493 there
+        // is at most one prompt (single `__envfile__` blob), but it still
+        // pops on the first slicc-server run after Sliccstart wrote the
+        // blob, and SecretStore.all() is what triggers it.
+        let envFileSecrets: [Secret] = config.envFileURL.flatMap { Self.parseEnvFileSecrets(at: $0) } ?? []
+        let secretInjector = SecretInjector(sessionId: UUID().uuidString, envFileSecrets: envFileSecrets)
+
         if config.electron, !config.serveOnly {
             guard let electronApp = config.electronApp else {
                 throw ValidationError(
@@ -148,8 +157,6 @@ struct ServerCommand: AsyncParsableCommand {
                 logger: Logger(label: "slicc.static-files")
             )
         )
-        let envFileSecrets: [Secret] = config.envFileURL.flatMap { Self.parseEnvFileSecrets(at: $0) } ?? []
-        let secretInjector = SecretInjector(sessionId: UUID().uuidString, envFileSecrets: envFileSecrets)
         registerAPIRoutes(router: router, lickSystem: lickSystem, config: config, httpClient: httpClient, secretInjector: secretInjector)
 
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
