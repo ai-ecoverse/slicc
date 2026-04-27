@@ -7,6 +7,8 @@ import SwiftUI
 struct MessageListView: View {
     let messages: [ChatMessage]
     let isStreaming: Bool
+    /// Forwarded to inline sprinkle bubbles for `sprinkle.lick` events.
+    var onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)?
 
     private let background = Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255)
 
@@ -50,9 +52,12 @@ struct MessageListView: View {
                             .padding(.bottom, 4)
 
                         ForEach(group.messages) { message in
-                            MessageBubble(message: message)
-                                .id(message.id)
-                                .padding(.horizontal, 12)
+                            MessageBubble(
+                                message: message,
+                                onInlineSprinkleLick: onInlineSprinkleLick
+                            )
+                            .id(message.id)
+                            .padding(.horizontal, 12)
                         }
                     }
 

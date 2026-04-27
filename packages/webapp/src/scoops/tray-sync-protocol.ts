@@ -28,6 +28,18 @@ export type LeaderToFollowerMessage =
   | { type: 'user_message_echo'; text: string; messageId: string; scoopJid: string }
   | { type: 'status'; scoopStatus: string }
   | { type: 'error'; error: string }
+  | { type: 'scoops.list'; scoops: ScoopSummary[]; activeScoopJid: string }
+  | { type: 'sprinkles.list'; sprinkles: SprinkleSummary[] }
+  | {
+      type: 'sprinkle.content';
+      requestId: string;
+      sprinkleName: string;
+      content: string;
+      chunkIndex?: number;
+      totalChunks?: number;
+      error?: string;
+    }
+  | { type: 'sprinkle.update'; sprinkleName: string; data: unknown }
   | { type: 'targets.registry'; targets: TrayTargetEntry[] }
   | {
       type: 'cdp.request';
@@ -58,7 +70,16 @@ export type LeaderToFollowerMessage =
 export type FollowerToLeaderMessage =
   | { type: 'user_message'; text: string; messageId: string }
   | { type: 'abort' }
-  | { type: 'request_snapshot' }
+  | { type: 'request_snapshot'; scoopJid?: string }
+  | { type: 'scoops.select'; scoopJid: string }
+  | { type: 'sprinkles.refresh' }
+  | { type: 'sprinkle.fetch'; requestId: string; sprinkleName: string }
+  | {
+      type: 'sprinkle.lick';
+      sprinkleName: string;
+      body: unknown;
+      targetScoop?: string;
+    }
   | { type: 'targets.advertise'; targets: RemoteTargetInfo[]; runtimeId: string }
   | {
       type: 'cdp.request';
@@ -95,6 +116,34 @@ export interface RemoteTargetInfo {
   targetId: string;
   title: string;
   url: string;
+}
+
+// ---------------------------------------------------------------------------
+// Scoop / sprinkle summary types (for follower views)
+// ---------------------------------------------------------------------------
+
+/** Lightweight scoop description sent to followers for their scoop picker / swipe view. */
+export interface ScoopSummary {
+  jid: string;
+  name: string;
+  folder: string;
+  isCone: boolean;
+  assistantLabel: string;
+  trigger?: string;
+}
+
+/** Lightweight sprinkle description sent to followers for the sprinkle sidebar. */
+export interface SprinkleSummary {
+  /** Sprinkle name (basename without .shtml). */
+  name: string;
+  /** Display title. */
+  title: string;
+  /** VFS path (used for chunked content fetch). */
+  path: string;
+  /** Whether this sprinkle is currently open in the leader's UI. */
+  open: boolean;
+  /** Whether this sprinkle should auto-open. */
+  autoOpen: boolean;
 }
 
 export interface TrayTargetEntry {

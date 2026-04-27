@@ -70,7 +70,7 @@ class FollowerSyncManager {
 
     /// Request a full snapshot from the leader
     func requestSnapshot() {
-        send(.requestSnapshot)
+        send(.requestSnapshot(scoopJid: nil))
     }
 
     /// Start keepalive
@@ -144,6 +144,11 @@ class FollowerSyncManager {
             if let ka = keepalive {
                 Task { await ka.receivedPong() }
             }
+
+        case .scoopsList, .sprinklesList, .sprinkleContent, .sprinkleUpdate:
+            // Newer protocol messages — handled by AppState directly, not by this
+            // legacy delegate-based sync manager. Ignored here.
+            break
 
         case .unknown:
             break  // Silently ignore unhandled message types
