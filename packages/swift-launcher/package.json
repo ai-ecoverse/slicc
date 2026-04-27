@@ -2,7 +2,11 @@
   "name": "@slicc/swift-launcher",
   "private": true,
   "scripts": {
-    "build": "test -f ../swift-server/.build/release/slicc-server || (echo 'Error: slicc-server binary not found. Run: cd ../swift-server && swift build -c release' && exit 1) && test -d ../../dist/ui || (echo 'Error: dist/ui not found. Run: npm run build -w @slicc/webapp' && exit 1) && swift build -c release && node assemble-app.mjs",
-    "test": "swift test"
+    "generate:webkit-manifest": "node scripts/generate-webkit-manifest.mjs",
+    "build": "test -f ../swift-server/.build/release/slicc-server || (echo 'Error: slicc-server binary not found. Run: cd ../swift-server && swift build -c release' && exit 1) && test -d ../../dist/ui || (echo 'Error: dist/ui not found. Run: npm run build -w @slicc/webapp' && exit 1) && npm run generate:webkit-manifest && swift build -c release && node assemble-app.mjs",
+    "test": "npm run generate:webkit-manifest && swift test"
+  },
+  "devDependencies": {
+    "playwright-core": "1.58.2"
   }
 }
