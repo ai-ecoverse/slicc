@@ -51,10 +51,14 @@ final class SwiftLMProcess {
     /// Default CLI flags. SwiftLM's defaults are tuned for short demos
     /// (`--max-tokens 2048`, no explicit ctx-size) which leaves the agent
     /// truncating long replies; we override to something useful for a
-    /// development chat workload. Power-user knobs (turbo-kv, stream-experts,
-    /// thinking, vision, audio) stay off until exposed in the UI.
+    /// development chat workload.
     static let defaultMaxTokens = 8192
-    static let defaultContextSize = 32_768
+
+    /// Floor used when a model's `config.json` doesn't declare
+    /// `max_position_embeddings`. Anything we'd reasonably ship here
+    /// supports at least 32k; the fallback exists only to keep the launch
+    /// from failing if the probe couldn't read config.
+    static let fallbackContextSize = 32_768
 
     /// Allowed CORS origins for the SwiftLM HTTP server. The webapp talks
     /// to localhost ports — Sliccy serves on 5710 and Electron-mode lands
@@ -82,13 +86,31 @@ final class SwiftLMProcess {
         let proc = Process()
         proc.executableURL = binary
 
+        // Probe the cached config.json once and use it for every flag
+        // that depends on the model: vision routing, context window.
+        let capabilities = ModelArchProbe.capabilities(for: model)
+        let contextSize = capabilities.maxContextSize ?? Self.fallbackContextSize
+        log.info(
+            "start: \(model, privacy: .public) ctx=\(contextSize) vision=\(capabilities.supportsVision)"
+        )
+
         var args: [String] = [
             "--model", model,
             "--port", "\(swiftLMPort)",
             "--host", "127.0.0.1",
             "--max-tokens", "\(Self.defaultMaxTokens)",
-            "--ctx-size", "\(Self.defaultContextSize)",
+            // Run at the model's declared maximum context. SwiftLM's
+            // sliding-window cache keeps this from blowing up RAM for
+            // typical short-conversation use, and `--turbo-kv` below
+            // compresses any KV history past 8k to ~3.5 bits/token so the
+            // long-context paths stay viable on 32-64 GB Macs.
+            "--ctx-size", "\(contextSize)",
             "--cors", Self.corsOrigin,
+            // 3-bit PolarQuant + QJL KV-cache compression. SwiftLM's
+            // upstream recommendation for any 100k+ context workload —
+            // safely active alongside short contexts because the
+            // compression only kicks in past 8 192 tokens of history.
+            "--turbo-kv",
             // SwiftLM defaults --thinking off; we turn it on so reasoning
             // models (Qwen3+, Gemma 4 with tools) emit `delta.reasoning_content`
             // out of the box. Templates for non-thinking models ignore it,
@@ -102,10 +124,8 @@ final class SwiftLMProcess {
         // parts in OpenAI multipart content. We probe the cached config.json
         // (mirroring SwiftLM's own `ModelArchitectureProbe`) so VLMs like
         // Gemma 4 light up automatically.
-        let capabilities = ModelArchProbe.capabilities(for: model)
         if capabilities.supportsVision {
             args.append("--vision")
-            log.info("start: enabling --vision for \(model, privacy: .public)")
         }
 
         proc.arguments = args
