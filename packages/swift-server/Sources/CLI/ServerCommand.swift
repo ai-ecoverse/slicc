@@ -114,10 +114,18 @@ struct ServerCommand: AsyncParsableCommand {
 
             let frameworkPath = environment["DYLD_FRAMEWORK_PATH"]
                 ?? webkitLauncher.resolveFrameworkPath(binaryPath: webkitPath)
-            let launched = try webkitLauncher.launch(binaryPath: webkitPath, frameworkPath: frameworkPath)
+            // Open a visible MiniBrowser window pointed at the SLICC UI.
+            // The same window is also the CDP target the agent drives via
+            // the inspector pipe, so the user sees what the agent is doing
+            // in real time.
+            let launched = try webkitLauncher.launch(
+                binaryPath: webkitPath,
+                frameworkPath: frameworkPath,
+                startupURL: serveOrigin
+            )
             webkitProcess = launched
             browserLabel = "WebKit"
-            print("WebKit launched with inspector pipe")
+            print("WebKit launched with inspector pipe; window at \(serveOrigin)")
         } else if config.electron, !config.serveOnly {
             guard let electronApp = config.electronApp else {
                 throw ValidationError(

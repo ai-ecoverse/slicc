@@ -127,7 +127,15 @@ struct WebKitLauncher: Sendable {
     /// - fd 4 (from WebKit's perspective): WebKit writes responses to parent
     ///
     /// The inspector pipe uses null-byte delimited JSON messages.
-    func launch(binaryPath: String, frameworkPath: String? = nil) throws -> WebKitProcess {
+    ///
+    /// Pass `startupURL` to have Playwright's MiniBrowser open a visible
+    /// startup window navigated to that URL. Omit it to launch headless
+    /// (no visible window) — useful for pure automation contexts.
+    func launch(
+        binaryPath: String,
+        frameworkPath: String? = nil,
+        startupURL: String? = nil
+    ) throws -> WebKitProcess {
         guard fileExists(binaryPath) else {
             throw WebKitLauncherError.invalidExecutable(binaryPath)
         }
@@ -146,9 +154,19 @@ struct WebKitLauncher: Sendable {
             throw WebKitLauncherError.pipeCreationFailed
         }
 
+        // Build base argv. Drop `--no-startup-window` when a startup URL is
+        // given so MiniBrowser actually opens a visible window pointed at
+        // the SLICC UI.
+        var browserArgs: [String] = ["--inspector-pipe"]
+        if let startupURL {
+            browserArgs.append(startupURL)
+        } else {
+            browserArgs.append("--no-startup-window")
+        }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binaryPath)
-        process.arguments = ["--inspector-pipe", "--no-startup-window"]
+        process.arguments = browserArgs
 
         var env = environmentProvider()
         env["DYLD_FRAMEWORK_PATH"] = resolvedFrameworkPath
@@ -184,8 +202,8 @@ struct WebKitLauncher: Sendable {
         posix_spawn_file_actions_addclose(&fileActions, fromWebKit[0])
         posix_spawn_file_actions_addclose(&fileActions, fromWebKit[1])
 
-        // Build argv for posix_spawn
-        let args = [binaryPath, "--inspector-pipe", "--no-startup-window"]
+        // Build argv for posix_spawn (binary + same browser args computed above).
+        let args = [binaryPath] + browserArgs
         let cArgs = args.map { strdup($0) } + [nil]
         defer { cArgs.forEach { free($0) } }
 
