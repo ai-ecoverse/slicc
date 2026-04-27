@@ -184,6 +184,9 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
       const value = arg.slice('--browser='.length).trim().toLowerCase();
       if (value === 'webkit' || value === 'chrome') {
         browser = value;
+      } else if (value.length > 0) {
+        // Surface invalid values instead of silently falling back to chrome.
+        throw new Error(`Invalid --browser value "${value}". Expected one of: chrome, webkit.`);
       }
       continue;
     }

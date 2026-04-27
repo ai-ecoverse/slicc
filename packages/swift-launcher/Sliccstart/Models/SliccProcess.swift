@@ -92,13 +92,19 @@ final class SliccProcess {
             originalAppPath: nil
         )
 
+        // Intentionally do NOT pass DYLD_FRAMEWORK_PATH / DYLD_LIBRARY_PATH
+        // here. WebKitManager exposes the install root, but Playwright's
+        // dylibs actually live under `Playwright.app/Contents/Frameworks`.
+        // Pointing DYLD_* at the install root breaks WebKit startup. The
+        // server (`WebKitLauncher.resolveFrameworkPath(binaryPath:)`)
+        // computes the correct frameworks dir from the binary path, so we
+        // just hand it WEBKIT_PATH and let it resolve the rest.
+        _ = frameworkPath  // Reserved for future use; kept in the API for callers.
         try spawn(target: target, extraArgs: [
             "--browser=webkit",
             "--cdp-port=\(Self.browserCdpPort)",
         ], env: [
             "WEBKIT_PATH": binaryPath,
-            "DYLD_FRAMEWORK_PATH": frameworkPath,
-            "DYLD_LIBRARY_PATH": frameworkPath,
             "PORT": "\(Self.browserPort)",
         ])
     }

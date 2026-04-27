@@ -164,22 +164,14 @@ struct WebKitLauncher: Sendable {
             browserArgs.append("--no-startup-window")
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binaryPath)
-        process.arguments = browserArgs
-
         var env = environmentProvider()
         env["DYLD_FRAMEWORK_PATH"] = resolvedFrameworkPath
         env["DYLD_LIBRARY_PATH"] = env["DYLD_LIBRARY_PATH"] ?? resolvedFrameworkPath
-        process.environment = env
-
-        process.standardInput = Pipe()
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
 
         // Map the pipe fds to fd 3 and fd 4 for the child process using
-        // posix_spawn file actions. Swift's Process doesn't natively support
-        // extra file descriptors, so we use posix_spawn directly.
+        // posix_spawn file actions. Swift's `Process` doesn't natively
+        // support arbitrary inherited file descriptors, so we go through
+        // posix_spawn directly instead.
         //
         // From WebKit's perspective:
         //   fd 3 = read end of toWebKit pipe (WebKit reads commands)

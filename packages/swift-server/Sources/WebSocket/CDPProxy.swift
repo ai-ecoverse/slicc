@@ -36,7 +36,10 @@ actor CDPProxy {
     private var pipeWrite: FileHandle?
     private var pipeRead: FileHandle?
     private var pipeReadTask: Task<Void, Never>?
-    private var pipeBuffer: String = ""
+    /// Byte-level buffer for incomplete null-byte delimited messages.
+    /// We split frames on raw 0x00 before decoding so a UTF-8 codepoint
+    /// split across pipe reads never produces replacement characters.
+    private var pipeBuffer: Data = Data()
     private var pipeMode: Bool = false
 
     init(
@@ -569,10 +572,9 @@ actor CDPProxy {
                     pipeRead.readabilityHandler = nil
                     return
                 }
-                let str = String(decoding: data, as: UTF8.self)
                 Task {
                     guard let self else { return }
-                    await self.handlePipeData(str)
+                    await self.handlePipeData(data)
                 }
             }
 
@@ -585,12 +587,14 @@ actor CDPProxy {
     }
 
     /// Process incoming data from the WebKit pipe, splitting on null bytes.
-    private func handlePipeData(_ str: String) async {
-        pipeBuffer += str
+    private func handlePipeData(_ data: Data) async {
+        pipeBuffer.append(data)
 
-        while let nullIdx = pipeBuffer.firstIndex(of: "\0") {
-            let raw = String(pipeBuffer[pipeBuffer.startIndex..<nullIdx])
-            pipeBuffer = String(pipeBuffer[pipeBuffer.index(after: nullIdx)...])
+        while let nullIdx = pipeBuffer.firstIndex(of: 0) {
+            let frame = pipeBuffer.subdata(in: pipeBuffer.startIndex..<nullIdx)
+            pipeBuffer.removeSubrange(pipeBuffer.startIndex...nullIdx)
+            guard !frame.isEmpty else { continue }
+            let raw = String(decoding: frame, as: UTF8.self)
             guard !raw.isEmpty else { continue }
 
             let preview = String(raw.prefix(200))

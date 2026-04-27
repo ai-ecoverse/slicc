@@ -394,8 +394,10 @@ async function main() {
   // WebSocket clients to the WebKit inspector pipe instead of Chrome's WS.
   let webkitWritable: NodeJS.WritableStream | null = null;
   let webkitReadable: NodeJS.ReadableStream | null = null;
-  /** Buffer for incomplete null-byte delimited messages from WebKit pipe. */
-  let webkitPipeBuffer = '';
+  /** Byte buffer for incomplete null-byte delimited messages from WebKit pipe.
+   *  Buffer raw bytes (not strings) so a multi-byte UTF-8 codepoint split
+   *  across reads doesn't get corrupted by premature decode. */
+  let webkitPipeBuffer: Buffer = Buffer.alloc(0);
 
   // 1. Launch browser unless an external CDP provider is already running.
   if (WEBKIT_MODE && !SERVE_ONLY) {
@@ -1507,15 +1509,19 @@ async function main() {
   // WebKit pipe → WebSocket bridge
   // ---------------------------------------------------------------------------
   if (WEBKIT_MODE && webkitReadable) {
-    // Read null-byte delimited JSON from WebKit pipe and forward to active client
+    // Read null-byte delimited JSON from WebKit pipe and forward to active
+    // client. Operate on bytes so we never decode a partial UTF-8 sequence:
+    // each frame is decoded only once we've seen its terminating 0x00.
     webkitReadable.on('data', (chunk: Buffer | Uint8Array) => {
-      const str = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf-8');
-      webkitPipeBuffer += str;
+      const buf = typeof chunk === 'string' ? Buffer.from(chunk, 'utf-8') : Buffer.from(chunk);
+      webkitPipeBuffer =
+        webkitPipeBuffer.length === 0 ? buf : Buffer.concat([webkitPipeBuffer, buf]);
       let nullIdx: number;
-      while ((nullIdx = webkitPipeBuffer.indexOf('\0')) !== -1) {
-        const raw = webkitPipeBuffer.slice(0, nullIdx);
-        webkitPipeBuffer = webkitPipeBuffer.slice(nullIdx + 1);
-        if (!raw) continue;
+      while ((nullIdx = webkitPipeBuffer.indexOf(0)) !== -1) {
+        const frame = webkitPipeBuffer.subarray(0, nullIdx);
+        webkitPipeBuffer = webkitPipeBuffer.subarray(nullIdx + 1);
+        if (frame.length === 0) continue;
+        const raw = frame.toString('utf-8');
         const preview = raw.slice(0, 200);
         const msg = `[cdp-proxy] WebKit→Client: ${preview}`;
         if (cdpDedup.shouldLog(msg)) console.debug(msg);

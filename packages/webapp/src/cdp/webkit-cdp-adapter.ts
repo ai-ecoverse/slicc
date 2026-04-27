@@ -60,9 +60,14 @@ interface PageProxy {
  * stream and reads null-byte delimited JSON from a readable stream.
  */
 class WebKitPipeTransport {
-  private buffer = '';
+  // Buffer raw bytes (not strings) so multi-byte UTF-8 sequences split across
+  // pipe reads don't introduce U+FFFD replacement characters before we've seen
+  // the terminating 0x00 delimiter. We split on 0x00 byte-wise then decode each
+  // complete frame as UTF-8.
+  private buffer: Uint8Array = new Uint8Array(0);
   private onMessage: ((msg: Record<string, unknown>) => void) | null = null;
   private onClose: (() => void) | null = null;
+  private decoder = new TextDecoder('utf-8');
 
   constructor(
     private writable: WebKitWritable,
@@ -75,8 +80,8 @@ class WebKitPipeTransport {
     this.onClose = onClose;
 
     this.readable.on('data', (chunk: Buffer | Uint8Array) => {
-      const str = typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
-      this.buffer += str;
+      const bytes = typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk;
+      this.appendBytes(bytes);
       this.processBuffer();
     });
 
@@ -96,19 +101,33 @@ class WebKitPipeTransport {
     this.writable.write(json + '\0');
   }
 
+  private appendBytes(chunk: Uint8Array): void {
+    if (chunk.length === 0) return;
+    const merged = new Uint8Array(this.buffer.length + chunk.length);
+    merged.set(this.buffer, 0);
+    merged.set(chunk, this.buffer.length);
+    this.buffer = merged;
+  }
+
   private processBuffer(): void {
-    let nullIdx: number;
-    while ((nullIdx = this.buffer.indexOf('\0')) !== -1) {
-      const raw = this.buffer.slice(0, nullIdx);
-      this.buffer = this.buffer.slice(nullIdx + 1);
-      if (!raw) continue;
-      try {
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        this.onMessage?.(parsed);
-      } catch {
-        log.warn('Failed to parse WIP message', { raw: raw.slice(0, 200) });
+    let start = 0;
+    for (let i = 0; i < this.buffer.length; i++) {
+      if (this.buffer[i] !== 0) continue;
+      if (i > start) {
+        const frame = this.buffer.subarray(start, i);
+        const raw = this.decoder.decode(frame);
+        if (raw.length > 0) {
+          try {
+            const parsed = JSON.parse(raw) as Record<string, unknown>;
+            this.onMessage?.(parsed);
+          } catch {
+            log.warn('Failed to parse WIP message', { raw: raw.slice(0, 200) });
+          }
+        }
       }
+      start = i + 1;
     }
+    this.buffer = start === 0 ? this.buffer : this.buffer.subarray(start);
   }
 }
 
@@ -145,9 +164,13 @@ export class WebKitCDPAdapter implements CDPTransport {
 
   // WIP state tracking
   private browserContextId: string | null = null;
-  /** Map from CDP sessionId → PageProxy info */
+  /** All known page proxies, keyed by pageProxyId. Includes proxies that
+   *  have not yet been attached to via Target.attachToTarget. This is the
+   *  authoritative target list — `sessions` only tracks attached proxies. */
+  private pageProxies = new Map<string, PageProxy>();
+  /** Map from CDP sessionId → PageProxy info (only populated after attach). */
   private sessions = new Map<string, PageProxy>();
-  /** Map from pageProxyId → CDP sessionId */
+  /** Map from pageProxyId → CDP sessionId (only for attached proxies). */
   private proxyToSession = new Map<string, string>();
   /** Map from inner target command id → { outerResolve, outerReject, sessionId } */
   private innerPending = new Map<
@@ -290,8 +313,9 @@ export class WebKitCDPAdapter implements CDPTransport {
   ): Promise<Record<string, unknown>> {
     switch (method) {
       case 'Target.getTargets': {
-        // Return current known pages as CDP TargetInfo[]
-        const targetInfos = Array.from(this.sessions.values()).map((p) => ({
+        // Return all known page proxies (attached or not) as CDP TargetInfo[].
+        // Listing flows shouldn't depend on whether a proxy has been attached.
+        const targetInfos = Array.from(this.pageProxies.values()).map((p) => ({
           targetId: p.pageProxyId,
           type: 'page',
           title: p.title,
@@ -343,15 +367,28 @@ export class WebKitCDPAdapter implements CDPTransport {
         const targetId = params['targetId'] as string;
         const proxy = this.findProxyByTargetId(targetId);
         if (proxy) {
-          await this.sendWip('Playwright.deleteContext', {
-            browserContextId: proxy.browserContextId,
-          });
-          // Clean up session maps
+          // Close only this specific page proxy. The browser context is
+          // shared across all pages (created once in connect()), so deleting
+          // it here would tear down every other tab. Use Playwright.closePage
+          // to close just the requested page.
+          try {
+            await this.sendWip('Playwright.closePage', {
+              pageProxyId: proxy.pageProxyId,
+            });
+          } catch (err) {
+            log.warn('Playwright.closePage failed', {
+              pageProxyId: proxy.pageProxyId,
+              error: String(err),
+            });
+          }
+          // Clean up session maps; the rest is finalized by
+          // Playwright.pageProxyDestroyed when WebKit confirms the close.
           const sid = this.proxyToSession.get(proxy.pageProxyId);
           if (sid) {
             this.sessions.delete(sid);
             this.proxyToSession.delete(proxy.pageProxyId);
           }
+          this.pageProxies.delete(proxy.pageProxyId);
         }
         return {};
       }
@@ -634,6 +671,7 @@ export class WebKitCDPAdapter implements CDPTransport {
       // Emit a CDP-style Target.detachedFromTarget event
       this.emit('Target.detachedFromTarget', { sessionId });
     }
+    this.pageProxies.delete(pageProxyId);
   }
 
   private handleTargetCreated(
@@ -661,7 +699,27 @@ export class WebKitCDPAdapter implements CDPTransport {
         title: targetInfo.title ?? '',
         resumed: false,
       };
+      // Track the proxy in the authoritative map so attach/getTargets find it.
+      this.pageProxies.set(pageProxyId, proxy);
       pending.resolve(proxy);
+    } else {
+      // Target created externally (e.g. window.open in WebKit); record it so
+      // listing/attach flows can see it without a corresponding createTarget.
+      const existing = this.pageProxies.get(pageProxyId);
+      if (existing) {
+        existing.targetId = targetInfo.targetId;
+        existing.url = targetInfo.url ?? existing.url;
+        existing.title = targetInfo.title ?? existing.title;
+      } else if (this.browserContextId) {
+        this.pageProxies.set(pageProxyId, {
+          pageProxyId,
+          browserContextId: this.browserContextId,
+          targetId: targetInfo.targetId,
+          url: targetInfo.url ?? '',
+          title: targetInfo.title ?? '',
+          resumed: false,
+        });
+      }
     }
   }
 
@@ -828,14 +886,12 @@ export class WebKitCDPAdapter implements CDPTransport {
 
   /**
    * Find a PageProxy by its pageProxyId (used as CDP targetId).
+   * Searches the authoritative `pageProxies` map so freshly-created targets
+   * (not yet attached) are discoverable.
    */
   private findProxyByTargetId(targetId: string): PageProxy | undefined {
     // targetId in CDP maps to pageProxyId in WIP
-    for (const proxy of this.sessions.values()) {
-      if (proxy.pageProxyId === targetId) return proxy;
-    }
-    // Also check by scanning pendingProxies (not yet in sessions)
-    return undefined;
+    return this.pageProxies.get(targetId);
   }
 
   /**
@@ -873,6 +929,7 @@ export class WebKitCDPAdapter implements CDPTransport {
     this.innerPending.clear();
     this.sessions.clear();
     this.proxyToSession.clear();
+    this.pageProxies.clear();
     this.pendingProxies.clear();
     this.browserContextId = null;
   }

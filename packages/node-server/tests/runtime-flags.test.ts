@@ -304,4 +304,16 @@ describe('parseCliRuntimeFlags', () => {
     expect(parseCliRuntimeFlags(['--version']).version).toBe(true);
     expect(parseCliRuntimeFlags(['-v']).version).toBe(true);
   });
+
+  it('parses --browser=webkit', () => {
+    expect(parseCliRuntimeFlags(['--browser=webkit']).browser).toBe('webkit');
+  });
+
+  it('accepts --browser=chrome explicitly', () => {
+    expect(parseCliRuntimeFlags(['--browser=chrome']).browser).toBe('chrome');
+  });
+
+  it('throws on unsupported --browser values', () => {
+    expect(() => parseCliRuntimeFlags(['--browser=safari'])).toThrow(/Invalid --browser/);
+  });
 });

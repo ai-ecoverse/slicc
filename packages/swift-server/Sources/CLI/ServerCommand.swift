@@ -67,6 +67,14 @@ struct ServerCommand: AsyncParsableCommand {
 
     mutating func run() async throws {
         let config = ServerConfig.resolve(from: self)
+        // Validate the browser engine selection up front so a typo surfaces
+        // as a clear ValidationError rather than silently launching Chrome.
+        let supportedBrowsers: Set<String> = ["chrome", "webkit"]
+        guard supportedBrowsers.contains(config.browser) else {
+            throw ValidationError(
+                "Invalid --browser value \"\(self.browser)\". Expected one of: chrome, webkit."
+            )
+        }
         let logLevel = Self.loggerLevel(from: config.logLevel)
         let logDirectory = config.logDirectoryURL ?? FileLogger.defaultLogDirectory
         let fileLoggerConfiguration = FileLoggerConfiguration(
