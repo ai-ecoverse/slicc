@@ -43,12 +43,22 @@ interface CachedModel {
   supportsVision?: boolean;
 }
 
+/** True when the runtime has both `localStorage` and `fetch` — i.e. an
+ *  actual browser. Node test environments (vitest's default) have neither,
+ *  and the provider's auto-discovery import would otherwise crash test
+ *  runs that load the providers index. */
+const isBrowser =
+  typeof localStorage !== 'undefined' &&
+  typeof fetch !== 'undefined' &&
+  typeof window !== 'undefined';
+
 /** Best-effort fetch of `GET /v1/models` + `GET /health`. Refreshes the
  *  local cache on success; clears it on any error so SwiftLM transparently
  *  disappears from the model dropdown when the server stops. The two
  *  requests are issued in parallel and a small abort budget keeps boot
  *  fast when SwiftLM isn't running. */
 async function refreshModelsCache(): Promise<void> {
+  if (!isBrowser) return;
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2000);
@@ -78,11 +88,12 @@ async function refreshModelsCache(): Promise<void> {
     }
     localStorage.setItem(MODELS_CACHE_KEY, JSON.stringify(models));
   } catch {
-    localStorage.removeItem(MODELS_CACHE_KEY);
+    if (isBrowser) localStorage.removeItem(MODELS_CACHE_KEY);
   }
 }
 
 function readCachedModels(): Array<{ id: string; name?: string } & ModelMetadata> {
+  if (!isBrowser) return [];
   const raw = localStorage.getItem(MODELS_CACHE_KEY);
   if (!raw) return [];
   let parsed: unknown;
