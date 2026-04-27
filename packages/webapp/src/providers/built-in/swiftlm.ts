@@ -136,7 +136,12 @@ function readCachedModels(): Array<{ id: string; name?: string } & ModelMetadata
       // Sliccstart launches SwiftLM at the model's declared
       // `max_position_embeddings` (Gemma 4 / Qwen 3.6 ship at 262 144).
       context_window: 262_144,
-      max_tokens: 8_192,
+      // Thinking-capable models (Gemma 4, Qwen 3.6) routinely burn
+      // 4–6k reasoning tokens before any user-visible content emits, and
+      // tool-call rounds add more on top. 8k was clipping the answer at
+      // `finish_reason: length`. 32k leaves headroom for one full
+      // think → content → tool-call cycle without being wasteful.
+      max_tokens: 32_768,
       input: m.supportsVision ? ['text', 'image'] : ['text'],
     }));
 }

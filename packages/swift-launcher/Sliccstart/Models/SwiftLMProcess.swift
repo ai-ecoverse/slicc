@@ -51,8 +51,11 @@ final class SwiftLMProcess {
     /// Default CLI flags. SwiftLM's defaults are tuned for short demos
     /// (`--max-tokens 2048`, no explicit ctx-size) which leaves the agent
     /// truncating long replies; we override to something useful for a
-    /// development chat workload.
-    static let defaultMaxTokens = 8192
+    /// development chat workload. Thinking-capable models (Gemma 4, Qwen
+    /// 3.6) routinely burn 4–6k reasoning tokens before any user-visible
+    /// content emits, and tool-call rounds add more on top — anything
+    /// below ~16k clips at `finish_reason: length`.
+    static let defaultMaxTokens = 32_768
 
     /// Floor used when a model's `config.json` doesn't declare
     /// `max_position_embeddings`. Anything we'd reasonably ship here
