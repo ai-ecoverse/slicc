@@ -145,7 +145,8 @@ class FollowerSyncManager {
                 Task { await ka.receivedPong() }
             }
 
-        case .scoopsList, .sprinklesList, .sprinkleContent, .sprinkleUpdate:
+        case .scoopsList, .sprinklesList, .sprinkleContent, .sprinkleUpdate,
+             .cdpRequest, .targetsRegistry, .tabOpen:
             // Newer protocol messages — handled by AppState directly, not by this
             // legacy delegate-based sync manager. Ignored here.
             break
