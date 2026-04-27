@@ -192,6 +192,19 @@ function normalizeToolCallId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
 }
 
+/** SLICC's orchestrator prepends `[<time>] <senderName>: ` to every user
+ *  message it hands to the agent (orchestrator.ts processScoopQueue). For
+ *  multi-scoop disambiguation that's the right call, but the prefix cues
+ *  Gemma 4 / qwen 3.6 chat templates into "transcript continuation" mode
+ *  where the model keeps emitting fake `[<date>] User: ...` turns instead
+ *  of taking on the assistant role. We strip the prefix on its way to
+ *  SwiftLM only — the chat panel still renders timestamps in the bubble
+ *  UI separately. */
+const SLICC_USER_PREFIX = /^\[[^\]]+\]\s+\w+:\s+/;
+function stripSliccUserPrefix(text: string): string {
+  return text.replace(SLICC_USER_PREFIX, '');
+}
+
 function convertMessages(context: Context, model: Model<Api>): OpenAIChatMessage[] {
   const transformed = transformMessages(
     context.messages,
@@ -203,10 +216,10 @@ function convertMessages(context: Context, model: Model<Api>): OpenAIChatMessage
   for (const m of transformed) {
     if (m.role === 'user') {
       if (typeof m.content === 'string') {
-        result.push({ role: 'user', content: m.content });
+        result.push({ role: 'user', content: stripSliccUserPrefix(m.content) });
       } else {
         const parts = (m.content as ContentBlock[]).map((c) => {
-          if (c.type === 'text') return { type: 'text', text: c.text ?? '' };
+          if (c.type === 'text') return { type: 'text', text: stripSliccUserPrefix(c.text ?? '') };
           if (c.type === 'image') {
             return {
               type: 'image_url',
