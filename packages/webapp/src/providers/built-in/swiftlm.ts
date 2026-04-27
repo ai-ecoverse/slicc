@@ -395,9 +395,24 @@ class ThinkSplitter {
   ];
   private static readonly CLOSE_TAGS = ['</think>', '</thinking>', '<channel|>'];
 
+  /** Models known to emit thinking content into `delta.content` without
+   *  a matching opening tag (and without reliably emitting the synthetic
+   *  `delta.reasoning_content: "\n"` opener either). We default the
+   *  splitter into thinking phase for these so the leak gets routed to
+   *  the ThinkingContent block until the closing `</think>` arrives.
+   *  SwiftLM ought to fix this upstream but until then a client-side
+   *  default keeps the chat panel readable. */
+  private static readonly DEFAULT_THINKING_RE = /qwen3[._]\d/i;
+
+  constructor(modelId: string) {
+    if (ThinkSplitter.DEFAULT_THINKING_RE.test(modelId)) {
+      this.phase = 'thinking';
+    }
+  }
+
   /** Called when SwiftLM emits a `delta.reasoning_content` chunk —
-   *  Qwen 3.6 uses this as a "thinking is starting" signal but then
-   *  spills the rest of the trace into `delta.content` along with a
+   *  some models use this as a "thinking is starting" signal but then
+   *  spill the rest of the trace into `delta.content` along with a
    *  closing `</think>`. Pre-flipping into thinking phase lets the
    *  downstream splitter route those content tokens as reasoning. */
   enterThinkingMode(): void {
@@ -601,7 +616,7 @@ const streamSwiftLM = (
       }
 
       const toolCallsByIndex = new Map<number, ToolCallAccumulator>();
-      const splitter = new ThinkSplitter();
+      const splitter = new ThinkSplitter(model.id);
 
       for await (const chunk of iterateSSE(response)) {
         if (chunk.usage) {
