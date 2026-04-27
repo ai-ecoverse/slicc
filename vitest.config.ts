@@ -18,6 +18,10 @@ export default defineConfig({
         resolve: {
           alias: {
             buffer: 'buffer/',
+            // The pinned isomorphic-git package resolves "." to index.cjs, and
+            // that CJS entry imports Node crypto. Force the browser-safe ESM
+            // entry instead.
+            'isomorphic-git': resolve(workspaceRoot, 'node_modules/isomorphic-git/index.js'),
             'node:zlib': resolve(webappDir, 'src/shims/empty.ts'),
             'node:module': resolve(webappDir, 'src/shims/empty.ts'),
             stream: resolve(webappDir, 'src/shims/stream.ts'),

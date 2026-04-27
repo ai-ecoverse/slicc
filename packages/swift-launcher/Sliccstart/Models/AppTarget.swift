@@ -26,11 +26,23 @@ struct AppTarget: Identifiable {
 
     static let knownChromiumBrowsers: [(bundleId: String, name: String)] = [
         ("com.google.Chrome", "Google Chrome"),
+        ("com.google.Chrome.beta", "Google Chrome Beta"),
+        ("com.google.Chrome.dev", "Google Chrome Dev"),
         ("com.google.Chrome.canary", "Chrome Canary"),
+        ("com.google.chrome.for.testing", "Chrome for Testing"),
         ("com.brave.Browser", "Brave Browser"),
+        ("com.brave.Browser.beta", "Brave Beta"),
+        ("com.brave.Browser.nightly", "Brave Nightly"),
         ("com.microsoft.edgemac", "Microsoft Edge"),
+        ("com.microsoft.edgemac.Beta", "Microsoft Edge Beta"),
+        ("com.microsoft.edgemac.Dev", "Microsoft Edge Dev"),
+        ("com.microsoft.edgemac.Canary", "Microsoft Edge Canary"),
         ("com.vivaldi.Vivaldi", "Vivaldi"),
+        ("com.vivaldi.Vivaldi.snapshot", "Vivaldi Snapshot"),
         ("com.operasoftware.Opera", "Opera"),
+        ("company.thebrowser.Browser", "Arc"),
+        ("company.thebrowser.dia", "Dia"),
+        ("com.openai.atlas", "ChatGPT Atlas"),
         ("org.chromium.Chromium", "Chromium"),
     ]
 

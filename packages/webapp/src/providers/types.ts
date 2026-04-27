@@ -9,6 +9,17 @@
  */
 export type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
 
+/** Options passed to onOAuthLogin from the caller (e.g. oauth-token command). */
+export interface OAuthLoginOptions {
+  /**
+   * Override the default scopes for this login. Passed directly to the
+   * provider's authorize URL as the `scope` parameter. Format is
+   * provider-specific (GitHub uses comma-separated, Google uses
+   * space-separated). The provider is responsible for any normalization.
+   */
+  scopes?: string;
+}
+
 /**
  * Optional model capability overrides.
  * Used by both modelOverrides (static) and getModelIds (dynamic).
@@ -47,7 +58,11 @@ export interface ProviderConfig {
    * Receives a launcher that opens the OAuth flow and returns the redirect URL.
    * The provider builds the authorize URL, calls the launcher, then handles the result.
    */
-  onOAuthLogin?: (launcher: OAuthLauncher, onSuccess: () => void) => Promise<void>;
+  onOAuthLogin?: (
+    launcher: OAuthLauncher,
+    onSuccess: () => void,
+    options?: OAuthLoginOptions
+  ) => Promise<void>;
   /** Called when the user clicks logout for this OAuth provider. */
   onOAuthLogout?: () => Promise<void>;
   /**
@@ -55,6 +70,20 @@ export interface ProviderConfig {
    * Applied after pi-ai registry defaults, before getModelIds metadata.
    */
   modelOverrides?: Record<string, ModelMetadata>;
+  /**
+   * Optional: preferred default model ID when no model has been explicitly selected.
+   * Searched by substring match (case-insensitive) against available model IDs.
+   * Falls back to the first model in the list if no match is found.
+   */
+  defaultModelId?: string;
+  /** When true, the setup dialog shows a deployment name text input. */
+  requiresDeployment?: boolean;
+  deploymentPlaceholder?: string;
+  deploymentDescription?: string;
+  /** When true, the setup dialog shows an API version text input with a default value. */
+  requiresApiVersion?: boolean;
+  apiVersionDefault?: string;
+  apiVersionDescription?: string;
   /**
    * Optional: return the model IDs this provider supports.
    * When present, getProviderModels uses this instead of returning all Anthropic models.

@@ -15,6 +15,7 @@ import type {
   WaitForSelectorOptions,
   BoundingBox,
   AccessibilityNode,
+  FrameInfo,
 } from './types.js';
 import type { TrayTargetEntry } from '../scoops/tray-sync-protocol.js';
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
@@ -53,6 +54,7 @@ export class BrowserAPI {
   private attachedTargetId: string | null = null;
   private trayTargetProvider: TrayTargetProvider | null = null;
   private remoteTargetInfo: { runtimeId: string; localTargetId: string } | null = null;
+  private _frameContextCache = new Map<string, number>();
   private _tabLock: Promise<void> = Promise.resolve();
   private _onSessionChange?: ((sessionId: string, transport: CDPTransport) => void) | undefined;
   private readonly handleJavaScriptDialogOpening = async (
@@ -195,10 +197,12 @@ export class BrowserAPI {
    * Create a new browser tab/target.
    * Returns the targetId of the newly created tab.
    * The tab opens in the background by default.
+   * Always creates on the local browser, even when currently attached to a remote target.
    */
   async createPage(url?: string): Promise<string> {
     await this.ensureConnected();
-    const result = await this.client.send('Target.createTarget', {
+    await this.ensureLocalConnected();
+    const result = await this.localClient.send('Target.createTarget', {
       url: url ?? 'about:blank',
       background: true,
     });
@@ -277,10 +281,12 @@ export class BrowserAPI {
 
   /**
    * List all open pages (tabs).
+   * Always queries the local browser, even when currently attached to a remote target.
    */
   async listPages(): Promise<PageInfo[]> {
     await this.ensureConnected();
-    const result = await this.client.send('Target.getTargets');
+    await this.ensureLocalConnected();
+    const result = await this.localClient.send('Target.getTargets');
     const targets = (result['targetInfos'] as TargetInfo[]) ?? [];
     return targets
       .filter((t) => t.type === 'page')
@@ -307,6 +313,9 @@ export class BrowserAPI {
     }
     // Don't detach from previous target — just attach to the new one.
     // Detaching then re-attaching causes Chrome to steal window focus.
+
+    // Invalidate cached isolated-world context IDs from the previous target
+    this._frameContextCache.clear();
 
     // Check if this is a remote tray target (format: "runtimeId:localTargetId")
     if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {
@@ -338,7 +347,20 @@ export class BrowserAPI {
       }
     }
 
-    const result = await this.client.send('Target.attachToTarget', {
+    // Restore local transport if we were previously attached to a remote target
+    if (this.remoteTargetInfo) {
+      if (this.trayTargetProvider?.removeRemoteTransport) {
+        this.trayTargetProvider.removeRemoteTransport(
+          this.remoteTargetInfo.runtimeId,
+          this.remoteTargetInfo.localTargetId
+        );
+      }
+      this.setClient(this.localClient);
+      this.remoteTargetInfo = null;
+    }
+    await this.ensureLocalConnected();
+
+    const result = await this.localClient.send('Target.attachToTarget', {
       targetId,
       flatten: true,
     });
@@ -346,8 +368,8 @@ export class BrowserAPI {
     this.attachedTargetId = targetId;
     // Keep Page events available so unexpected dialogs can be auto-dismissed
     // before they stall the current CDP command.
-    await this.client.send('Page.enable', {}, this.sessionId);
-    this._onSessionChange?.(this.sessionId, this.client);
+    await this.localClient.send('Page.enable', {}, this.sessionId);
+    this._onSessionChange?.(this.sessionId, this.localClient);
     return this.sessionId;
   }
 
@@ -455,7 +477,14 @@ export class BrowserAPI {
       }
       // No clip/fullPage = viewport screenshot (Chrome's default behavior)
 
-      const result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+      let result: Record<string, unknown>;
+      try {
+        result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+      } catch (err: unknown) {
+        // Background/throttled tabs have a suspended renderer — wake it and retry once
+        await this.client.send('Page.bringToFront', {}, this.sessionId!);
+        result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+      }
       let base64 = result['data'] as string;
 
       // Post-capture resize via ImageMagick WASM if image exceeds maxWidth.
@@ -832,6 +861,192 @@ export class BrowserAPI {
   }
 
   /**
+   * Get the frame tree for the attached page as a flat list of FrameInfo objects.
+   */
+  async getFrameTree(): Promise<FrameInfo[]> {
+    await this.ensureConnected();
+    this.ensureAttached();
+
+    await this.client.send('Page.enable', {}, this.sessionId!);
+    const result = await this.client.send('Page.getFrameTree', {}, this.sessionId!);
+    const frameTree = result['frameTree'] as {
+      frame: { id: string; parentId?: string; url: string; name?: string; securityOrigin?: string };
+      childFrames?: unknown[];
+    };
+
+    const frames: FrameInfo[] = [];
+    const flatten = (node: {
+      frame: {
+        id: string;
+        parentId?: string;
+        url: string;
+        name?: string;
+        securityOrigin?: string;
+      };
+      childFrames?: unknown[];
+    }): void => {
+      frames.push({
+        frameId: node.frame.id,
+        parentFrameId: node.frame.parentId,
+        url: node.frame.url,
+        name: node.frame.name ?? '',
+        securityOrigin: node.frame.securityOrigin,
+      });
+      if (Array.isArray(node.childFrames)) {
+        for (const child of node.childFrames) {
+          flatten(
+            child as {
+              frame: {
+                id: string;
+                parentId?: string;
+                url: string;
+                name?: string;
+                securityOrigin?: string;
+              };
+              childFrames?: unknown[];
+            }
+          );
+        }
+      }
+    };
+    flatten(frameTree);
+    return frames;
+  }
+
+  /**
+   * Evaluate a JavaScript expression in a specific frame.
+   * Creates an isolated world for the frame and caches the context ID.
+   */
+  async evaluateInFrame(
+    frameId: string,
+    expression: string,
+    options?: EvaluateOptions
+  ): Promise<unknown> {
+    await this.ensureConnected();
+    this.ensureAttached();
+
+    const isDestroyedContextError = (err: unknown): boolean => {
+      const message = err instanceof Error ? err.message : String(err);
+      return (
+        message.includes('Cannot find context with specified id') ||
+        message.includes('Execution context was destroyed')
+      );
+    };
+
+    const createIsolatedWorld = async (): Promise<number> => {
+      const worldResult = await this.client.send(
+        'Page.createIsolatedWorld',
+        { frameId, worldName: '__slicc_iframe' },
+        this.sessionId!
+      );
+      const id = worldResult['executionContextId'] as number;
+      this._frameContextCache.set(frameId, id);
+      return id;
+    };
+
+    let contextId = this._frameContextCache.get(frameId);
+    if (contextId === undefined) {
+      try {
+        contextId = await createIsolatedWorld();
+      } catch (err) {
+        throw new Error(
+          `Failed to create isolated world for frame ${frameId}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+
+    await this.client.send('Runtime.enable', {}, this.sessionId!);
+
+    const evaluateParams = {
+      expression,
+      contextId,
+      awaitPromise: options?.awaitPromise ?? true,
+      returnByValue: options?.returnByValue ?? true,
+    };
+
+    let result: Record<string, unknown>;
+    try {
+      result = await this.client.send('Runtime.evaluate', evaluateParams, this.sessionId!);
+    } catch (err) {
+      if (isDestroyedContextError(err)) {
+        this._frameContextCache.delete(frameId);
+        contextId = await createIsolatedWorld();
+        result = await this.client.send(
+          'Runtime.evaluate',
+          { ...evaluateParams, contextId },
+          this.sessionId!
+        );
+      } else {
+        throw err;
+      }
+    }
+
+    const exceptionDetails = result['exceptionDetails'] as
+      | { text: string; exception?: { description?: string } }
+      | undefined;
+    if (exceptionDetails) {
+      const msg = exceptionDetails.exception?.description ?? exceptionDetails.text;
+      // Check if this is a destroyed context error — retry once
+      if (isDestroyedContextError(new Error(msg))) {
+        this._frameContextCache.delete(frameId);
+        contextId = await createIsolatedWorld();
+        const retryResult = await this.client.send(
+          'Runtime.evaluate',
+          { ...evaluateParams, contextId },
+          this.sessionId!
+        );
+        const retryException = retryResult['exceptionDetails'] as
+          | { text: string; exception?: { description?: string } }
+          | undefined;
+        if (retryException) {
+          const retryMsg = retryException.exception?.description ?? retryException.text;
+          throw new Error(`Evaluation in frame ${frameId} failed: ${retryMsg}`);
+        }
+        const retryObj = retryResult['result'] as {
+          type: string;
+          value?: unknown;
+          description?: string;
+        };
+        return retryObj.value;
+      }
+      // Invalidate cache — the frame may have navigated
+      this._frameContextCache.delete(frameId);
+      throw new Error(`Evaluation in frame ${frameId} failed: ${msg}`);
+    }
+
+    const remoteObj = result['result'] as {
+      type: string;
+      value?: unknown;
+      description?: string;
+    };
+    return remoteObj.value;
+  }
+
+  /**
+   * Get the accessibility tree for a specific frame.
+   * For the main frame (no frameId), delegates to getAccessibilityTree().
+   */
+  async getAccessibilityTreeForFrame(frameId?: string): Promise<AccessibilityNode> {
+    if (!frameId) {
+      return this.getAccessibilityTree();
+    }
+
+    await this.ensureConnected();
+    this.ensureAttached();
+
+    const rawResult = await this.evaluateInFrame(frameId, INJECTED_ARIA_SNAPSHOT_SCRIPT, {
+      awaitPromise: false,
+      returnByValue: true,
+    });
+
+    if (!rawResult || typeof rawResult !== 'object') {
+      return { role: 'RootWebArea', name: '' };
+    }
+
+    return normalizeInjectedTree(rawResult as Record<string, unknown>);
+  }
+
+  /**
    * Send a raw CDP command on the current session.
    * Used by playwright-cli for cookie operations via the Network domain.
    */
@@ -904,6 +1119,12 @@ export class BrowserAPI {
    * Resets stale session/target state when reconnecting after a drop.
    * If the current client is a disconnected remote transport, restores the local transport.
    */
+  private async ensureLocalConnected(): Promise<void> {
+    if (this.localClient.state === 'disconnected') {
+      await this.localClient.connect({ url: getDefaultCdpUrl() });
+    }
+  }
+
   private async ensureConnected(): Promise<void> {
     if (this.client.state === 'disconnected') {
       // If we were using a remote transport that got disconnected (follower went away),

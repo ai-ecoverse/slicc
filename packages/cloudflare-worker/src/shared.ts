@@ -130,6 +130,11 @@ export function parseCapabilityToken(token: string): { trayId: string; secret: s
   return { trayId, secret };
 }
 
+export function wantsJSON(request: Request): boolean {
+  const url = new URL(request.url);
+  return url.searchParams.get('json') === 'true';
+}
+
 export function jsonResponse(payload: unknown, status = 200, headers?: HeadersInit): Response {
   return new Response(JSON.stringify(payload, null, 2), {
     status,

@@ -23,15 +23,21 @@ describeIfConfigured('deployed tray worker', () => {
   it('exercises the phase 1 flow against a deployed worker', async () => {
     const baseUrl = new URL(workerBaseUrl!);
 
-    const rootResponse = await fetch(baseUrl);
+    const rootResponse = await fetch(new URL('/?json=true', baseUrl));
     expect(rootResponse.status).toBe(200);
     await expect(rootResponse.json()).resolves.toMatchObject({
       routes: [
         'POST /tray',
+        'GET /download/slicc.dmg',
+        'GET /handoff',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
         'GET /auth/callback',
+        'POST /oauth/token',
+        'POST /oauth/revoke',
+        'GET /api/runtime-config',
+        'ANY /api/fetch-proxy',
       ],
     });
 
@@ -53,7 +59,7 @@ describeIfConfigured('deployed tray worker', () => {
     expect(createResponse.status).toBe(201);
     const created = (await createResponse.json()) as CreateTrayResponse;
 
-    const joinResponse = await fetch(created.capabilities.join.url);
+    const joinResponse = await fetch(`${created.capabilities.join.url}?json=true`);
     expect(joinResponse.status).toBe(409);
     await expect(joinResponse.json()).resolves.toMatchObject({
       trayId: created.trayId,
@@ -138,7 +144,7 @@ describeIfConfigured('deployed tray worker', () => {
     const pong = await nextMessage();
     expect(pong).toMatchObject({ type: 'pong', trayId: created.trayId });
 
-    const joinWithLeader = await fetch(created.capabilities.join.url);
+    const joinWithLeader = await fetch(`${created.capabilities.join.url}?json=true`);
     expect(joinWithLeader.status).toBe(200);
     await expect(joinWithLeader.json()).resolves.toMatchObject({
       trayId: created.trayId,
@@ -158,6 +164,13 @@ describeIfConfigured('deployed tray worker', () => {
         offer: { type: 'offer', sdp: 'offer-sdp' },
       })
     );
+
+    // Round-trip a ping/pong to guarantee the DO has processed the bootstrap.offer
+    // message above before the follow-up HTTP poll arrives. Durable Objects process
+    // WebSocket messages FIFO on a given connection, so pong implies offer is applied.
+    socket.send(JSON.stringify({ type: 'ping' }));
+    const offerAckPong = await nextMessage();
+    expect(offerAckPong).toMatchObject({ type: 'pong', trayId: created.trayId });
 
     const polledBootstrap = await fetch(created.capabilities.join.url, {
       method: 'POST',
@@ -209,6 +222,16 @@ describeIfConfigured('deployed tray worker', () => {
 
     socket.close();
   }, 30_000);
+
+  it('serves the webapp SPA for plain GET requests', async () => {
+    const baseUrl = new URL(workerBaseUrl!);
+    const response = await fetch(baseUrl);
+    expect(response.status).toBe(200);
+    const contentType = response.headers.get('content-type') || '';
+    expect(contentType).toContain('text/html');
+    const body = await response.text();
+    expect(body).toContain('<!DOCTYPE html>');
+  }, 15_000);
 });
 
 function openWebSocket(

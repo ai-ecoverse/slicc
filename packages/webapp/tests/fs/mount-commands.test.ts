@@ -2,11 +2,19 @@ import { describe, it, expect, vi } from 'vitest';
 import { MountCommands } from '../../src/fs/mount-commands.js';
 import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 
+function makeMockMountIndex() {
+  return {
+    getState: vi.fn(() => undefined),
+    isReady: vi.fn(() => false),
+  };
+}
+
 function makeFs(overrides: Partial<VirtualFS> = {}): VirtualFS {
   return {
     listMounts: vi.fn(() => []),
     unmount: vi.fn(),
     mount: vi.fn(),
+    getMountIndex: vi.fn(() => makeMockMountIndex()),
     ...overrides,
   } as unknown as VirtualFS;
 }

@@ -8,15 +8,14 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 
 ## Directory Structure
 
-| Path                                          | Purpose                                                            |
-| --------------------------------------------- | ------------------------------------------------------------------ |
-| `packages/vfs-root/shared/`                   | Shared content that becomes `/shared/` in the VFS                  |
-| `packages/vfs-root/workspace/`                | Default workspace content that becomes `/workspace/` in the VFS    |
-| `packages/vfs-root/shared/CLAUDE.md`          | Agent-facing runtime instructions bundled into `/shared/CLAUDE.md` |
-| `packages/vfs-root/shared/sprinkles/`         | Built-in sprinkle UIs                                              |
-| `packages/vfs-root/shared/sounds/`            | Shared notification sounds                                         |
-| `packages/vfs-root/shared/skill-catalog.json` | Built-in skill catalog metadata                                    |
-| `packages/vfs-root/workspace/skills/`         | Default installable workspace skills                               |
+| Path                                  | Purpose                                                            |
+| ------------------------------------- | ------------------------------------------------------------------ |
+| `packages/vfs-root/shared/`           | Shared content that becomes `/shared/` in the VFS                  |
+| `packages/vfs-root/workspace/`        | Default workspace content that becomes `/workspace/` in the VFS    |
+| `packages/vfs-root/shared/CLAUDE.md`  | Agent-facing runtime instructions bundled into `/shared/CLAUDE.md` |
+| `packages/vfs-root/shared/sprinkles/` | Built-in sprinkle UIs                                              |
+| `packages/vfs-root/shared/sounds/`    | Shared notification sounds                                         |
+| `packages/vfs-root/workspace/skills/` | Default installable workspace skills                               |
 
 ## Adding Default Content
 
@@ -24,7 +23,6 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 
 - Add new built-in workspace skills under `packages/vfs-root/workspace/skills/<skill-name>/`.
 - Include `SKILL.md` and any companion assets or `.jsh` scripts the skill needs.
-- Update `packages/vfs-root/shared/skill-catalog.json` when the built-in catalog should surface the new skill.
 
 ### Sprinkles
 
@@ -35,6 +33,13 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 
 - Add shared sounds under `packages/vfs-root/shared/sounds/`.
 - Prefer stable filenames because shell commands and docs may reference them directly.
+
+## External Handoffs
+
+- Mechanism: `x-slicc` response header on main-frame document responses → `navigate` lick → cone approval card.
+- Agent-facing flow: `packages/vfs-root/workspace/skills/handoff/SKILL.md` (bundled to `/workspace/skills/handoff/SKILL.md`) and the trigger line in `shared/CLAUDE.md` (bundled to `/shared/CLAUDE.md`).
+- Protocol reference: `docs/slicc-handoff.md`.
+- When handoff behavior changes, keep the skill, `shared/CLAUDE.md`, and `docs/slicc-handoff.md` aligned — do not duplicate their content here.
 
 ## Important Distinction
 

@@ -6,12 +6,7 @@
  */
 
 import type { AgentHandle, AgentEvent, ChatMessage, ToolCall } from './types.js';
-import {
-  renderAssistantMessageContent,
-  renderMessageContent,
-  renderToolInput,
-  escapeHtml,
-} from './message-renderer.js';
+import { renderAssistantMessageContent, renderMessageContent } from './message-renderer.js';
 import { SessionStore } from './session-store.js';
 import { createLogger } from '../core/logger.js';
 import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
@@ -21,6 +16,9 @@ import {
   type InlineSprinkleInstance,
 } from './inline-sprinkle.js';
 import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
+import { getToolDescriptor, createToolIcon, createToolBody, toolStatus } from './tool-call-view.js';
+import { getLickDescriptor, createLickIcon, parseLickContent } from './lick-view.js';
+import { isLickChannel, type LickChannel } from './lick-channels.js';
 import {
   getAllAvailableModels,
   getSelectedModelId,
@@ -34,28 +32,6 @@ const log = createLogger('chat-panel');
 /** Generate a simple unique ID. */
 function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-/** Tool icons — compact text abbreviations instead of emojis */
-const TOOL_ICONS: Record<string, string> = {
-  bash: '$',
-  browser: 'B',
-  read_file: 'R',
-  write_file: 'W',
-  edit_file: 'E',
-  javascript: 'JS',
-  delegate_to_scoop: 'D',
-  send_message: 'M',
-  schedule_task: 'T',
-  list_scoops: 'LS',
-  list_tasks: 'LT',
-  register_scoop: 'RS',
-  update_global_memory: 'GM',
-};
-
-/** Get icon for a tool */
-function getToolIcon(toolName: string): string {
-  return TOOL_ICONS[toolName] ?? '?';
 }
 
 function renderChatMessageContent(msg: ChatMessage): string {
@@ -96,6 +72,10 @@ export class ChatPanel {
   public onInlineSprinkleLick?: (action: string, data: unknown) => void;
   private modelSelectorEl!: HTMLElement;
   public onModelChange?: (modelId: string) => void;
+  // Per-sessionId write queue for `persistLickToSession`. Chains concurrent
+  // load→mutate→save cycles behind the previous in-flight call so bursty
+  // licks (e.g. fswatch) for a non-selected scoop can't clobber each other.
+  private lickPersistQueues = new Map<string, Promise<void>>();
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -196,6 +176,82 @@ export class ChatPanel {
     }
   }
 
+  /** Persist a lick message into an arbitrary session (by id).
+   *
+   * Used by `routeLickToScoop` when the lick arrives for a scoop that isn't
+   * currently selected: we still want the next reload's first-select to
+   * render the lick as a lick widget, not as a plain user bubble loaded from
+   * orchestrator DB. Safe to call concurrently with the panel's own saves —
+   * writes are scoped to the non-selected session id so there's no overlap.
+   *
+   * Per-sessionId writes are serialized via `lickPersistQueues` so bursty
+   * channels (fswatch, rapid webhook fanout) can't interleave their
+   * load→mutate→save cycles and clobber each other.
+   */
+  async persistLickToSession(
+    sessionId: string,
+    lick: {
+      id: string;
+      content: string;
+      channel: LickChannel;
+      timestamp: number;
+    }
+  ): Promise<void> {
+    const prior = this.lickPersistQueues.get(sessionId) ?? Promise.resolve();
+    const next = prior
+      .catch(() => {
+        /* swallow upstream errors so this write still runs */
+      })
+      .then(() => this.writeLickToSession(sessionId, lick));
+    this.lickPersistQueues.set(sessionId, next);
+    // Evict the entry once it settles if no newer write has queued behind it,
+    // to keep the map bounded across long-lived panels.
+    void next.finally(() => {
+      if (this.lickPersistQueues.get(sessionId) === next) {
+        this.lickPersistQueues.delete(sessionId);
+      }
+    });
+    return next;
+  }
+
+  private async writeLickToSession(
+    sessionId: string,
+    lick: {
+      id: string;
+      content: string;
+      channel: LickChannel;
+      timestamp: number;
+    }
+  ): Promise<void> {
+    try {
+      const existing = await this.sessionStore.load(sessionId);
+      const messages = existing?.messages ?? [];
+      if (messages.some((m) => m.id === lick.id)) return; // already there
+      const msg: ChatMessage = {
+        id: lick.id,
+        role: 'user',
+        content: lick.content,
+        timestamp: lick.timestamp,
+        source: 'lick',
+        channel: lick.channel,
+      };
+      // Insert in timestamp order so the persisted history stays monotonic.
+      let insertAt = messages.length;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].timestamp <= lick.timestamp) {
+          insertAt = i + 1;
+          break;
+        }
+        insertAt = i;
+      }
+      messages.splice(insertAt, 0, msg);
+      await this.sessionStore.saveMessages(sessionId, messages);
+    } catch {
+      // Persistence errors are non-fatal — the orchestrator DB remains
+      // authoritative and will backfill via the DB fallback on next open.
+    }
+  }
+
   /** Lock/unlock input based on external processing state (e.g., cone auto-activated by scoop notification). */
   setProcessing(busy: boolean): void {
     if (busy) {
@@ -218,18 +274,42 @@ export class ChatPanel {
     this.persistSession();
   }
 
-  /** Add a lick message (webhook/cron/sprinkle event). */
-  addLickMessage(id: string, content: string, channel: 'webhook' | 'cron' | 'sprinkle'): void {
+  /** Add a lick message (webhook/cron/sprinkle event).
+   *
+   * Pass `timestamp` when replaying from history so ordering is preserved.
+   * Omit it (defaults to `Date.now()`) for live events. History replays
+   * insert the message in timestamp order so backfill doesn't break the
+   * chronological flow; live events append.
+   */
+  addLickMessage(id: string, content: string, channel: LickChannel, timestamp?: number): void {
+    const ts = timestamp ?? Date.now();
+    // Ignore duplicate id (can happen when merging live buffer + DB fallback).
+    if (this.messages.some((m) => m.id === id)) return;
     const msg: ChatMessage = {
       id,
       role: 'user',
       content,
-      timestamp: Date.now(),
+      timestamp: ts,
       source: 'lick',
       channel,
     };
-    this.messages.push(msg);
-    this.appendMessageEl(msg);
+
+    // Find the correct insertion index so history-replay stays ordered.
+    let insertAt = this.messages.length;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i].timestamp <= ts) {
+        insertAt = i + 1;
+        break;
+      }
+      insertAt = i;
+    }
+    if (insertAt === this.messages.length) {
+      this.messages.push(msg);
+      this.appendMessageEl(msg);
+    } else {
+      this.messages.splice(insertAt, 0, msg);
+      this.renderMessages();
+    }
     this.persistSession();
   }
 
@@ -420,9 +500,7 @@ export class ChatPanel {
     });
 
     this.textarea.addEventListener('input', () => {
-      // Auto-resize textarea
-      this.textarea.style.height = 'auto';
-      this.textarea.style.height = Math.min(this.textarea.scrollHeight, 120) + 'px';
+      this.adjustTextareaHeight();
     });
 
     this.sendBtn.addEventListener('click', () => this.sendMessage());
@@ -442,8 +520,7 @@ export class ChatPanel {
     this.voiceInput = new VoiceInput({
       onTranscript: (text, _isFinal) => {
         this.textarea.value = text;
-        this.textarea.style.height = 'auto';
-        this.textarea.style.height = Math.min(this.textarea.scrollHeight, 120) + 'px';
+        this.adjustTextareaHeight();
       },
       onStateChange: (state) => {
         if (state === 'error') {
@@ -504,6 +581,30 @@ export class ChatPanel {
     }
   }
 
+  /**
+   * Grow the textarea to fit its content, up to 30% of the chat panel's
+   * available height. Falls back to 30% of the window height when the
+   * panel hasn't laid out yet (e.g. first input before layout).
+   */
+  private adjustTextareaHeight(): void {
+    const panelHeight =
+      this.container.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 0) || 0;
+    const maxHeight = Math.max(18, Math.floor(panelHeight * 0.3));
+    this.textarea.style.height = 'auto';
+    // Cache scrollHeight once — it's layout-dependent and reading it twice
+    // would force an extra reflow.
+    const scrollHeight = this.textarea.scrollHeight;
+    const next = Math.min(scrollHeight, maxHeight);
+    this.textarea.style.height = next + 'px';
+    this.textarea.style.overflowY = scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }
+
+  /** Reset the textarea back to a single row after submit or clear. */
+  private resetTextareaHeight(): void {
+    this.textarea.style.height = 'auto';
+    this.textarea.style.overflowY = 'hidden';
+  }
+
   private sendMessage(): void {
     const text = this.textarea.value.trim();
     if (!text) return;
@@ -524,9 +625,9 @@ export class ChatPanel {
     this.appendMessageEl(msg);
     this.persistSession();
 
-    // Clear input
+    // Clear input and shrink back to a single row
     this.textarea.value = '';
-    this.textarea.style.height = 'auto';
+    this.resetTextareaHeight();
 
     // Only lock input if not already streaming (first message triggers streaming)
     if (!this.isStreaming) {
@@ -978,10 +1079,14 @@ export class ChatPanel {
         break;
       }
     }
+    // Last real user turn — licks and delegation frames don't count.
+    // Tool calls in earlier messages render with a muted status dot.
+    const lastRealUserIdx = this.findLastRealUserIdx();
     for (let i = 0; i < this.messages.length; i++) {
       const msg = this.messages[i];
       const showLabel = this.shouldShowLabel(msg, prevRole, prevTimestamp);
-      const el = this.createMessageEl(msg, showLabel, i === lastAssistantIdx);
+      const stale = lastRealUserIdx > i;
+      const el = this.createMessageEl(msg, showLabel, i === lastAssistantIdx, stale);
       this.messagesInner.appendChild(el);
       prevRole = msg.role;
       prevTimestamp = msg.timestamp;
@@ -1000,6 +1105,13 @@ export class ChatPanel {
     const prev = this.messages.length >= 2 ? this.messages[this.messages.length - 2] : null;
     const showLabel = this.shouldShowLabel(msg, prev?.role ?? null, prev?.timestamp ?? 0);
     const isLastAssistant = msg.role === 'assistant';
+    // If this new message is itself a real user turn, any previously-
+    // rendered tool calls should become stale — retint them now.
+    if (this.isRealUserTurn(msg)) {
+      this.messagesInner
+        .querySelectorAll('.tool-call')
+        .forEach((el) => el.classList.add('tool-call--stale'));
+    }
     const el = this.createMessageEl(msg, showLabel, isLastAssistant);
     this.messagesInner.appendChild(el);
     this.scrollToBottom();
@@ -1012,7 +1124,7 @@ export class ChatPanel {
     prevTimestamp: number
   ): boolean {
     // Always show label for lick messages
-    if (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') return true;
+    if (msg.source === 'lick' || isLickChannel(msg.channel)) return true;
     // Show label if role changed
     if (msg.role !== prevRole) return true;
     // Show label if >2 min gap
@@ -1042,19 +1154,39 @@ export class ChatPanel {
         }
         isLastAssistant = idx === lastIdx;
       }
-      const newEl = this.createMessageEl(msg, showLabel, isLastAssistant);
+      const stale = this.findLastRealUserIdx() > idx;
+      const newEl = this.createMessageEl(msg, showLabel, isLastAssistant, stale);
       existing.replaceWith(newEl);
     }
     this.scrollToBottom();
   }
 
+  /** A plain user turn — not a lick and not a cone delegation frame. */
+  private isRealUserTurn(msg: ChatMessage): boolean {
+    if (msg.role !== 'user') return false;
+    if (msg.source === 'lick') return false;
+    if (msg.source === 'delegation' || msg.channel === 'delegation') return false;
+    return true;
+  }
+
+  /** Index of the most recent real user turn, or -1 if none. */
+  private findLastRealUserIdx(): number {
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.isRealUserTurn(this.messages[i])) return i;
+    }
+    return -1;
+  }
+
   private createMessageEl(
     msg: ChatMessage,
     showLabel = true,
-    isLastAssistant = false
+    isLastAssistant = false,
+    stale = false
   ): HTMLElement {
-    // Licks (webhook/cron) get their own compact style like tool calls
-    const isLick = msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron';
+    // Licks (webhook/cron/etc. and scoop-notify/scoop-idle) get their own
+    // compact style like tool calls. Using isLickChannel keeps this check
+    // aligned with the canonical lick channel list in main.ts.
+    const isLick = msg.source === 'lick' || isLickChannel(msg.channel);
     if (isLick) {
       const wrapper = document.createElement('div');
       wrapper.className = 'msg-group';
@@ -1127,8 +1259,7 @@ export class ChatPanel {
 
     // For lick messages in cone view, wrap content in collapsible
     const isLickInCone =
-      (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') &&
-      this.sessionId === 'session-cone';
+      (msg.source === 'lick' || isLickChannel(msg.channel)) && this.sessionId === 'session-cone';
     // For scoop messages in cone view, wrap in collapsible
     const isScoopInCone =
       msg.source &&
@@ -1179,7 +1310,7 @@ export class ChatPanel {
     // Tool calls rendered outside the message bubble for compact display
     if (msg.toolCalls) {
       for (const tc of msg.toolCalls) {
-        wrapper.appendChild(this.createToolCallEl(tc));
+        wrapper.appendChild(this.createToolCallEl(tc, stale));
       }
     }
 
@@ -1232,108 +1363,89 @@ export class ChatPanel {
     return row;
   }
 
-  /** Create a lick element (webhook/cron event) styled like tool calls */
+  /** Create a lick element (webhook/cron/sprinkle/...) styled as an
+   *  incoming bubble — right-aligned like user messages, icon on the
+   *  right side, collapsed preview carries the canonical event name. */
   private createLickEl(msg: ChatMessage): HTMLElement {
+    const desc = getLickDescriptor(msg);
+    const { preview, body } = parseLickContent(msg.content);
+
     const el = document.createElement('details');
-    el.className = 'lick';
+    el.className = `lick lick--${msg.channel ?? 'event'}`;
 
-    const channelType =
-      msg.channel === 'webhook' ? 'Webhook' : msg.channel === 'cron' ? 'Cron' : 'Event';
-
-    // Summary shows tongue emoji and type
     const summary = document.createElement('summary');
     summary.className = 'lick__header';
-    summary.innerHTML = `<span class="lick__icon">E</span> <span class="lick__type">${channelType}</span>`;
 
-    // Add brief preview
-    const preview = document.createElement('span');
-    preview.className = 'lick__preview';
-    // Extract a meaningful preview from the content
-    const contentPreview = msg.content
-      .replace(/\[Webhook Event:.*?\]\n```json\n?/s, '')
-      .slice(0, 50);
-    preview.textContent =
-      contentPreview.replace(/\n/g, ' ') + (contentPreview.length >= 50 ? '...' : '');
-    summary.appendChild(preview);
+    const label = document.createElement('span');
+    label.className = 'lick__type';
+    label.textContent = desc.label;
+    summary.appendChild(label);
+
+    if (preview) {
+      const previewEl = document.createElement('span');
+      previewEl.className = 'lick__preview';
+      previewEl.textContent = preview;
+      summary.appendChild(previewEl);
+    }
+
+    const iconWrap = document.createElement('span');
+    iconWrap.className = 'lick__icon';
+    iconWrap.appendChild(createLickIcon(msg));
+    summary.appendChild(iconWrap);
 
     el.appendChild(summary);
 
-    // Details content
+    // Expanded body — render the remainder (sans the `[Xyz Event: name]`
+    // header) as markdown. Payload JSON stays as a raw fenced code block
+    // because the shape isn't fixed and we don't want to alter it.
     const details = document.createElement('div');
     details.className = 'lick__details';
-    details.innerHTML = renderMessageContent(msg.content);
+    details.innerHTML = renderMessageContent(body);
     el.appendChild(details);
 
     return el;
   }
 
-  private createToolCallEl(tc: ToolCall): HTMLElement {
-    const icon = getToolIcon(tc.name);
+  private createToolCallEl(tc: ToolCall, stale = false): HTMLElement {
+    const desc = getToolDescriptor(tc.name);
+    const status = toolStatus(tc);
 
     // Use <details> for collapsible behavior - collapsed by default, expand on hover/click
     const el = document.createElement('details');
-    el.className = 'tool-call';
+    el.className = `tool-call tool-call--${status}${stale ? ' tool-call--stale' : ''}`;
 
-    // Summary shows icon and tool name
     const summary = document.createElement('summary');
     summary.className = 'tool-call__header';
-    summary.innerHTML = `<span class="tool-call__icon"><svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span> <span class="tool-call__name">${escapeHtml(tc.name)}</span>`;
 
-    // Add brief input preview to summary
-    if (tc.input !== undefined) {
+    const iconWrap = document.createElement('span');
+    iconWrap.className = 'tool-call__icon';
+    iconWrap.appendChild(createToolIcon(tc.name));
+    summary.appendChild(iconWrap);
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'tool-call__name';
+    nameEl.textContent = desc.title;
+    summary.appendChild(nameEl);
+
+    const previewText = desc.preview(tc.input);
+    if (previewText) {
       const preview = document.createElement('span');
       preview.className = 'tool-call__preview';
-      const inputStr = typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input);
-      preview.textContent = inputStr.slice(0, 40) + (inputStr.length > 40 ? '...' : '');
+      preview.textContent = previewText;
       summary.appendChild(preview);
     }
 
-    // Status indicator — text-based
     const statusEl = document.createElement('span');
-    if (tc.result === undefined) {
-      statusEl.className = 'tool-call__status tool-call__status--running';
-    } else if (tc.isError) {
-      statusEl.className = 'tool-call__status tool-call__status--error';
-      statusEl.textContent = 'failed';
-    } else {
-      statusEl.className = 'tool-call__status tool-call__status--success';
-      statusEl.textContent = '\u2713'; // ✓
-    }
+    statusEl.className = `tool-call__status tool-call__status--${status}`;
+    statusEl.setAttribute('aria-label', status);
     summary.appendChild(statusEl);
 
     el.appendChild(summary);
 
-    // Details content (shown on expand)
     const details = document.createElement('div');
     details.className = 'tool-call__details';
+    details.appendChild(createToolBody(tc));
 
-    if (tc.input !== undefined) {
-      const inputEl = document.createElement('div');
-      inputEl.className = 'tool-call__input';
-      const inputLabel = document.createElement('div');
-      inputLabel.className = 'tool-call__label';
-      inputLabel.textContent = 'Input:';
-      inputEl.appendChild(inputLabel);
-      const inputCode = document.createElement('pre');
-      inputCode.innerHTML = renderToolInput(tc.input);
-      inputEl.appendChild(inputCode);
-      details.appendChild(inputEl);
-    }
-
-    if (tc.result !== undefined) {
-      const resultEl = document.createElement('div');
-      resultEl.className = `tool-call__result${tc.isError ? ' tool-call__result--error' : ''}`;
-      const resultLabel = document.createElement('div');
-      resultLabel.className = 'tool-call__label';
-      resultLabel.textContent = tc.isError ? 'Error:' : 'Result:';
-      resultEl.appendChild(resultLabel);
-      const resultPre = document.createElement('pre');
-      resultPre.textContent = tc.result;
-      resultEl.appendChild(resultPre);
-      details.appendChild(resultEl);
-    }
-
-    // Render screenshot thumbnail from transient data (not persisted in messages)
     const screenshotUrl = tc._screenshotDataUrl;
     if (screenshotUrl) {
       const imgEl = document.createElement('img');

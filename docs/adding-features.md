@@ -1019,10 +1019,10 @@ npm run typecheck
 npm run test
 
 # Standalone dev
-npm run dev:full
+npm run dev
 
 # Extension dev
-npm run build:extension
+npm run build -w @slicc/chrome-extension
 # Then load dist/extension in chrome://extensions
 ```
 

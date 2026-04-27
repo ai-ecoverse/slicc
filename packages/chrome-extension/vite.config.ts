@@ -24,6 +24,10 @@ export default defineConfig(({ mode }) => ({
   },
   resolve: {
     alias: {
+      // The pinned isomorphic-git package resolves "." to index.cjs, and that
+      // CJS entry imports Node crypto. Force the browser-safe ESM entry
+      // instead.
+      'isomorphic-git': resolve(repoRoot, 'node_modules/isomorphic-git/index.js'),
       'node:zlib': resolve(__dirname, '../webapp/src/shims/empty.ts'),
       'node:module': resolve(__dirname, '../webapp/src/shims/empty.ts'),
       stream: resolve(__dirname, '../webapp/src/shims/stream.ts'),
@@ -49,6 +53,7 @@ export default defineConfig(({ mode }) => ({
     target: 'esnext',
   },
   optimizeDeps: {
+    exclude: ['@mariozechner/pi-coding-agent'],
     esbuildOptions: {
       target: 'esnext',
     },
@@ -61,17 +66,49 @@ export default defineConfig(({ mode }) => ({
       input: {
         index: resolve(__dirname, '../webapp/index.html'),
         offscreen: resolve(__dirname, 'offscreen.html'),
-        'service-worker': resolve(__dirname, 'src/service-worker.ts'),
       },
       output: {
-        entryFileNames: (chunkInfo) => {
-          if (chunkInfo.name === 'service-worker') return 'service-worker.js';
-          return 'assets/[name]-[hash].js';
-        },
+        entryFileNames: 'assets/[name]-[hash].js',
       },
     },
   },
   plugins: [
+    {
+      name: 'stub-pi-node-internals',
+      enforce: 'pre' as const,
+      resolveId(source, importer) {
+        const normalizedImporter = importer?.replace(/\\/g, '/');
+        if (normalizedImporter?.includes('@mariozechner/pi-coding-agent')) {
+          if (source.endsWith('/session-manager.js')) {
+            return resolve(__dirname, '../webapp/src/stubs/pi-session-manager-stub.ts');
+          }
+          if (source.endsWith('/config.js') || source === '../config.js') {
+            return resolve(__dirname, '../webapp/src/stubs/pi-config-stub.ts');
+          }
+        }
+      },
+    },
+    {
+      name: 'build-extension-service-worker',
+      async closeBundle() {
+        // MV3 service workers are classic scripts, not ES modules.
+        // Bundle the service worker as one self-contained file so Chrome
+        // never sees Rollup-generated shared-chunk imports.
+        const esbuild = await import('esbuild');
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, 'src/service-worker.ts')],
+          bundle: true,
+          outfile: resolve(repoRoot, 'dist/extension/service-worker.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: {
+            __DEV__: JSON.stringify(mode !== 'production'),
+            global: 'globalThis',
+          },
+        });
+      },
+    },
     {
       name: 'build-preview-sw',
       async closeBundle() {
@@ -86,6 +123,56 @@ export default defineConfig(({ mode }) => ({
           target: 'esnext',
           minify: true,
           define: { __DEV__: 'false', global: 'globalThis' },
+        });
+      },
+    },
+    {
+      name: 'build-slicc-editor',
+      async closeBundle() {
+        const esbuild = await import('esbuild');
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, '../webapp/src/ui/slicc-editor-entry.ts')],
+          bundle: true,
+          outfile: resolve(repoRoot, 'dist/extension/slicc-editor.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+        // Also build lucide-icons.js for sprinkles
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, '../webapp/src/ui/lucide-icons.ts')],
+          bundle: true,
+          outfile: resolve(repoRoot, 'dist/extension/lucide-icons.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+      },
+    },
+    {
+      name: 'build-slicc-diff',
+      async closeBundle() {
+        const esbuild = await import('esbuild');
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, '../webapp/src/ui/slicc-diff-entry.ts')],
+          bundle: true,
+          outfile: resolve(repoRoot, 'dist/extension/slicc-diff.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+          plugins: [
+            {
+              name: 'resolve-pierre-diffs-internals',
+              setup(build) {
+                build.onResolve({ filter: /^@pierre\/diffs\/dist\// }, (args) => ({
+                  path: resolve(repoRoot, 'node_modules', args.path.replace(/\.js$/, '') + '.js'),
+                }));
+              },
+            },
+          ],
         });
       },
     },
@@ -116,6 +203,8 @@ export default defineConfig(({ mode }) => ({
         );
         copyFileSync(resolve(__dirname, 'voice-popup.html'), resolve(outDir, 'voice-popup.html'));
         copyFileSync(resolve(__dirname, 'voice-popup.js'), resolve(outDir, 'voice-popup.js'));
+        copyFileSync(resolve(__dirname, 'mount-popup.html'), resolve(outDir, 'mount-popup.html'));
+        copyFileSync(resolve(__dirname, 'mount-popup.js'), resolve(outDir, 'mount-popup.js'));
 
         // Copy logo files for extension icons and header
         const logosSrc = resolve(__dirname, '../assets/logos');

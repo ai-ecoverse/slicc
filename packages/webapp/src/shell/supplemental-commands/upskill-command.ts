@@ -3,8 +3,10 @@ import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { VirtualFS as SharedVirtualFS } from '../../fs/index.js';
 import type { DiscoveredSkill } from '../../skills/types.js';
+import { SLICC_DIR, STATE_FILE } from '../../skills/constants.js';
 import { unzipSync } from 'fflate';
 import { consumeCachedBinaryByUrl } from '../binary-cache.js';
+import { decodeFetchBody, getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
 
 // ClawHub uses a Convex backend - this is the actual API endpoint
 const CLAWHUB_API = 'https://wry-manatee-359.convex.site/api/v1';
@@ -13,6 +15,7 @@ const SKILLS_DIR = '/workspace/skills';
 const GITHUB_GLOBAL_DB = 'slicc-fs-global';
 const GITHUB_TOKEN_PATH = '/workspace/.git/github-token';
 const GITHUB_API_ACCEPT = 'application/vnd.github.v3+json';
+const SKILL_CATALOG_URL = 'https://www.sliccy.com/skills/catalog.json';
 
 interface ClawHubSearchResult {
   slug: string;
@@ -98,10 +101,57 @@ interface UserProfile {
   name: string;
 }
 
+interface RemoteCatalogRow {
+  name: string;
+  displayName: string;
+  description: string;
+  repo: string;
+  path: string;
+  skill: string;
+  apps: string;
+  tasks: string;
+  role: string;
+  purpose: string;
+  boost: string;
+}
+
 interface ScoredSkill {
   entry: CatalogSkill;
   score: number;
   matchReasons: string[];
+}
+
+function splitField(value: string): string[] | undefined {
+  if (!value || !value.trim()) return undefined;
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function parseRemoteCatalog(data: RemoteCatalogRow[]): CatalogSkill[] {
+  return data.map((row) => {
+    const boost = row.boost ? parseFloat(row.boost) : NaN;
+    const priority = Number.isFinite(boost) ? boost : undefined;
+
+    return {
+      name: row.name,
+      displayName: row.displayName || row.name,
+      description: row.description || '',
+      source: {
+        repo: row.repo,
+        path: row.path || undefined,
+        skill: row.skill || undefined,
+      },
+      affinity: {
+        apps: splitField(row.apps),
+        tasks: splitField(row.tasks),
+        role: splitField(row.role),
+        purpose: splitField(row.purpose),
+      },
+      priority,
+    };
+  });
 }
 
 const AFFINITY_WEIGHTS = { apps: 3, tasks: 2, role: 1, purpose: 1 };
@@ -147,6 +197,55 @@ function buildInstallCmd(source: CatalogSkillSource): string {
   if (source.path) cmd += ` --path ${source.path}`;
   if (source.skill) cmd += ` --skill ${source.skill}`;
   return cmd;
+}
+
+/**
+ * Lightweight check for installed skill names — avoids the expensive full-VFS
+ * BFS walk that discoverSkills() performs for compatibility roots.
+ * Only used by recommendations to filter already-installed skills.
+ */
+async function getInstalledSkillNames(fs: VirtualFS): Promise<Set<string>> {
+  const names = new Set<string>();
+  // 1. Native skills dir listing
+  try {
+    const entries = await fs.readDir(SKILLS_DIR);
+    for (const e of entries) {
+      if (e.type === 'directory') names.add(e.name);
+    }
+  } catch {
+    /* dir may not exist */
+  }
+  // 2. State file (tracks applied skills)
+  try {
+    const raw = await fs.readTextFile(`/${SLICC_DIR}/${STATE_FILE}`);
+    const state = JSON.parse(raw) as { applied_skills?: Array<{ name: string }> };
+    for (const s of state.applied_skills ?? []) names.add(s.name);
+  } catch {
+    /* file may not exist */
+  }
+  // 3. Compatibility skill roots (.agents/skills/, .claude/skills/) — scan
+  //    top-level VFS directories (no deep BFS) for these well-known paths.
+  const COMPAT_DIRS = ['.agents', '.claude'] as const;
+  try {
+    const topLevel = await fs.readDir('/');
+    for (const dir of topLevel) {
+      if (dir.type !== 'directory') continue;
+      for (const compatDir of COMPAT_DIRS) {
+        try {
+          const skillsRoot = `/${dir.name}/${compatDir}/skills`;
+          const skillEntries = await fs.readDir(skillsRoot);
+          for (const se of skillEntries) {
+            if (se.type === 'directory') names.add(se.name);
+          }
+        } catch {
+          /* no compat skills dir */
+        }
+      }
+    }
+  } catch {
+    /* root listing failed */
+  }
+  return names;
 }
 
 interface GitHubContent {
@@ -226,10 +325,11 @@ function getHeader(headers: Record<string, string> | undefined, name: string): s
   return undefined;
 }
 
-function getGitHubErrorDetail(body: string): string | undefined {
-  if (!body) return undefined;
+function getGitHubErrorDetail(body: Uint8Array | string): string | undefined {
+  const text = decodeFetchBody(body);
+  if (!text) return undefined;
   try {
-    const parsed = JSON.parse(body) as GitHubErrorBody;
+    const parsed = JSON.parse(text) as GitHubErrorBody;
     if (typeof parsed.message === 'string' && parsed.message.trim()) {
       return parsed.message.trim();
     }
@@ -237,7 +337,7 @@ function getGitHubErrorDetail(body: string): string | undefined {
     // Not JSON — fall back to a trimmed text preview.
   }
 
-  const trimmed = body.trim();
+  const trimmed = text.trim();
   if (!trimmed) return undefined;
   return trimmed.slice(0, 200);
 }
@@ -448,7 +548,7 @@ async function fetchClawHubResults(
     headers: { Accept: 'application/json' },
   });
   if (response.status !== 200) throw new Error(`ClawHub returned HTTP ${response.status}`);
-  const data = JSON.parse(response.body) as ClawHubSearchResponse;
+  const data = parseFetchJson<ClawHubSearchResponse>(response.body);
   if (!data.results) return [];
   return data.results.map((r) => ({
     name: r.slug,
@@ -481,7 +581,7 @@ async function fetchTesslResults(
     headers: { Accept: 'application/json' },
   });
   if (response.status !== 200) throw new Error(`Tessl returned HTTP ${response.status}`);
-  const data = JSON.parse(response.body) as TesslSearchResponse;
+  const data = parseFetchJson<TesslSearchResponse>(response.body);
   if (!data.data) return [];
 
   // Filter to skills only (exclude tiles), deduplicate by sourceUrl
@@ -653,20 +753,8 @@ async function installFromClawHub(
 
     // Try to get cached binary data by URL first (most reliable - bypasses string encoding issues)
     let zipBytes = consumeCachedBinaryByUrl(downloadUrl);
-    let badCharIdx = -1;
-    let badCharCode = 0;
-
     if (!zipBytes) {
-      // Fallback: Convert latin1 string to bytes - each char code maps directly to a byte
-      zipBytes = new Uint8Array(downloadResponse.body.length);
-      for (let i = 0; i < downloadResponse.body.length; i++) {
-        const code = downloadResponse.body.charCodeAt(i);
-        if (code > 255 && badCharIdx < 0) {
-          badCharIdx = i;
-          badCharCode = code;
-        }
-        zipBytes[i] = code & 0xff; // Mask to byte range
-      }
+      zipBytes = getFetchBodyBytes(downloadResponse.body);
     }
 
     // Unzip the bundle
@@ -679,10 +767,9 @@ async function installFromClawHub(
       const hexPreview = Array.from(zipBytes.slice(0, 20))
         .map((b) => b.toString(16).padStart(2, '0'))
         .join(' ');
-      const badCharInfo = badCharIdx >= 0 ? `\nBad char at ${badCharIdx}: code ${badCharCode}` : '';
       return {
         stdout: '',
-        stderr: `upskill: failed to unzip: ${msg}\nContent-Type: ${contentType}\nBody: ${downloadResponse.body.length} chars\nHex: ${hexPreview}${badCharInfo}\n`,
+        stderr: `upskill: failed to unzip: ${msg}\nContent-Type: ${contentType}\nBody: ${zipBytes.length} bytes\nHex: ${hexPreview}\n`,
         exitCode: 1,
       };
     }
@@ -823,7 +910,7 @@ async function resolveTesslRef(
   if (response.status !== 200) {
     return { error: `Tessl search failed (HTTP ${response.status})` };
   }
-  const data = JSON.parse(response.body) as TesslSearchResponse;
+  const data = parseFetchJson<TesslSearchResponse>(response.body);
   // Find exact name match among skills
   const match = data.data?.find((item) => item.type === 'skill' && item.attributes.name === name);
   if (!match) {
@@ -869,10 +956,7 @@ async function fetchRepoZip(
 
   let zipBytes = consumeCachedBinaryByUrl(url);
   if (!zipBytes) {
-    zipBytes = new Uint8Array(response.body.length);
-    for (let i = 0; i < response.body.length; i++) {
-      zipBytes[i] = response.body.charCodeAt(i) & 0xff;
-    }
+    zipBytes = getFetchBodyBytes(response.body);
   }
 
   try {
@@ -953,7 +1037,7 @@ async function listGitHubSkills(
       );
     }
 
-    const contents = JSON.parse(response.body) as GitHubContent[];
+    const contents = parseFetchJson<GitHubContent[]>(response.body);
 
     for (const item of contents) {
       if (item.type === 'file' && item.name === 'SKILL.md') {
@@ -1068,7 +1152,7 @@ async function installFromGitHub(
       };
     }
 
-    const contents = JSON.parse(response.body) as GitHubContent[];
+    const contents = parseFetchJson<GitHubContent[]>(response.body);
 
     await fs.mkdir(destDir, { recursive: true });
 
@@ -1092,7 +1176,7 @@ async function installFromGitHub(
               formatGitHubFailure(subResponse, `${owner}/${repo}/${item.path}`, github.hasToken)
             );
           }
-          const subContents = JSON.parse(subResponse.body) as GitHubContent[];
+          const subContents = parseFetchJson<GitHubContent[]>(subResponse.body);
           await fs.mkdir(`${destBase}/${item.name}`, { recursive: true });
           await downloadDir(subContents, `${destBase}/${item.name}`);
         }
@@ -1156,6 +1240,71 @@ function parseClawHubRef(ref: string): string | null {
 async function runPostInstallHooks(): Promise<void> {
   await refreshSprinklesAfterInstall();
   await reloadSkillsAfterInstall();
+}
+
+/**
+ * Install a single skill from an already-downloaded and stripped ZIP archive.
+ * Skips post-install hooks so batch callers can run them once at the end.
+ */
+async function installSkillFromZip(
+  skillPath: string,
+  skillName: string,
+  files: Record<string, Uint8Array>,
+  fs: VirtualFS,
+  force: boolean = false
+): Promise<{ ok: boolean; error?: string }> {
+  const destDir = `${SKILLS_DIR}/${skillName}`;
+  try {
+    await fs.stat(destDir);
+    if (!force) {
+      return { ok: false, error: `skill "${skillName}" already exists (use --force to overwrite)` };
+    }
+    await fs.rm(destDir, { recursive: true });
+  } catch {
+    // Doesn't exist, continue
+  }
+
+  const normalizedSkillPath = skillPath.replace(/^\/|\/$/g, '');
+  const prefix = normalizedSkillPath ? normalizedSkillPath + '/' : '';
+  await fs.mkdir(destDir, { recursive: true });
+  let fileCount = 0;
+
+  try {
+    for (const [path, content] of Object.entries(files)) {
+      if (!path.startsWith(prefix)) continue;
+      const relativePath = path.slice(prefix.length);
+      if (!relativePath || path.endsWith('/')) continue;
+
+      const filePath = `${destDir}/${relativePath}`;
+
+      // Zip-slip protection: reject paths that escape destDir
+      const normalizedPath = filePath.replace(/\/+/g, '/');
+      if (
+        normalizedPath.includes('/../') ||
+        normalizedPath.includes('/..') ||
+        !normalizedPath.startsWith(destDir + '/')
+      ) {
+        continue; // skip malicious entry
+      }
+
+      const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
+      if (parentDir !== destDir) {
+        await fs.mkdir(parentDir, { recursive: true });
+      }
+
+      await fs.writeFile(filePath, content);
+      fileCount++;
+    }
+  } catch (err) {
+    await fs.rm(destDir, { recursive: true }).catch(() => {});
+    throw err;
+  }
+
+  if (fileCount === 0) {
+    await fs.rm(destDir, { recursive: true }).catch(() => {});
+    return { ok: false, error: `no files found for skill "${skillName}" in ZIP` };
+  }
+  return { ok: true };
 }
 
 /** After a successful install, reload skills on all active agent contexts. */
@@ -1239,31 +1388,35 @@ async function handleRecommendations(
     };
   }
 
-  // Read skill catalog
-  let catalog: SkillCatalog;
+  // Fetch catalog and installed names in parallel
+  let catalogSkills: CatalogSkill[];
+  let installed: Set<string>;
   try {
-    const raw = await fs.readTextFile('/shared/skill-catalog.json');
-    catalog = JSON.parse(raw) as SkillCatalog;
-  } catch {
+    const [catalogResult, installedResult] = await Promise.all([
+      (async () => {
+        const response = await fetchFn(SKILL_CATALOG_URL, {
+          headers: { Accept: 'application/json' },
+        });
+        if (response.status !== 200) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const data = parseFetchJson<{ data: RemoteCatalogRow[] }>(response.body);
+        return parseRemoteCatalog(data.data);
+      })(),
+      getInstalledSkillNames(fs),
+    ]);
+    catalogSkills = catalogResult;
+    installed = installedResult;
+  } catch (err) {
     return {
       stdout: '',
-      stderr: 'upskill: skill catalog not found at /shared/skill-catalog.json\n',
+      stderr: `upskill: failed to fetch skill catalog from ${SKILL_CATALOG_URL}: ${err instanceof Error ? err.message : String(err)}\n`,
       exitCode: 1,
     };
   }
 
-  // Get already-installed skills
-  const installed = new Set<string>();
-  try {
-    const skills = await import('../../skills/index.js');
-    const discovered = await skills.discoverSkills(fs);
-    for (const s of discovered) installed.add(s.name);
-  } catch {
-    /* best effort */
-  }
-
   // Score and filter
-  const scored = scoreSkills(catalog.skills, profile).filter((s) => !installed.has(s.entry.name));
+  const scored = scoreSkills(catalogSkills, profile).filter((s) => !installed.has(s.entry.name));
 
   if (scored.length === 0) {
     return {
@@ -1274,49 +1427,178 @@ async function handleRecommendations(
   }
 
   if (install) {
-    // Install all recommended skills
+    // Group scored entries by repo so each ZIP is downloaded only once
+    const repoGroups = new Map<string, ScoredSkill[]>();
+    for (const rec of scored) {
+      const repoKey = rec.entry.source.repo;
+      const group = repoGroups.get(repoKey);
+      if (group) {
+        group.push(rec);
+      } else {
+        repoGroups.set(repoKey, [rec]);
+      }
+    }
+
+    // Count total skills for progress tracking
+    const totalSkills = scored.length;
+    let completedSkills = 0;
+    const startTime = Date.now();
+
     let output = '';
     let errors = '';
     let successCount = 0;
 
-    for (const rec of scored) {
-      const src = rec.entry.source;
-      const github = await createGitHubRequestContext(fetchFn);
+    // Process repos in parallel, skills within each repo sequentially (shared ZIP)
+    const repoResults = await Promise.allSettled(
+      Array.from(repoGroups.entries()).map(async ([repoKey, recs]) => {
+        const [owner, repo] = repoKey.split('/');
+        const zip = await fetchRepoZip(owner, repo, fetchFn);
+        if (zip.status === 'not_found' || zip.status === 'error') {
+          const errMsg =
+            zip.status === 'not_found'
+              ? `upskill: repository ${repoKey} not found\n`
+              : `upskill: failed to fetch ${repoKey}: ${zip.message}\n`;
+          const results: Array<{ ok: boolean; name: string; error?: string }> = [];
+          for (const rec of recs) {
+            completedSkills++;
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            const eta =
+              completedSkills < totalSkills
+                ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
+                : '';
+            output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: repo fetch failed${eta}\n`;
+            results.push({
+              ok: false,
+              name: rec.entry.name,
+              error: `repo fetch failed for ${repoKey}`,
+            });
+          }
+          return { errors: errMsg, results };
+        }
 
-      const [owner, repo] = src.repo.split('/');
-      const listResult = await listGitHubSkills(owner, repo, github, src.path, fetchFn);
-      if (listResult.error) {
-        errors += `upskill: failed to list ${rec.entry.name}: ${listResult.error}\n`;
+        const files = stripZipPrefix(zip.files);
+        const results: Array<{ ok: boolean; name: string; error?: string }> = [];
+
+        // Precompute skill index: map skillName → path for all SKILL.md entries
+        const skillIndex = new Map<string, string>();
+        for (const p of Object.keys(files)) {
+          if (p.endsWith('/SKILL.md')) {
+            const skillDir = p.replace(/\/SKILL\.md$/, '');
+            const name = skillDir.split('/').pop() || skillDir;
+            skillIndex.set(name, skillDir);
+          }
+        }
+
+        for (const rec of recs) {
+          const src = rec.entry.source;
+          // Resolve the skill path from the ZIP
+          let skillPath: string;
+          let skillName: string;
+
+          // Resolution strategy:
+          // 1. If src.skill is provided, use it to look up in index
+          // 2. If src.skill is missing but src.path is provided, use path directly (explicit path takes precedence)
+          // 3. If neither src.skill nor src.path, fall back to looking up rec.entry.name in index
+          // 4. If none of the above work, error
+
+          if (src.skill) {
+            // Explicit skill field - look up in index
+            const indexedPath = skillIndex.get(src.skill);
+            if (indexedPath) {
+              skillPath = indexedPath;
+              skillName = src.skill;
+            } else if (src.path) {
+              // Skill not found in index, but explicit path provided
+              const normalizedPath = src.path.replace(/^\/|\/$/g, '');
+              skillPath = normalizedPath;
+              skillName = src.skill;
+            } else {
+              // Explicit skill field but not found and no path
+              const error = `skill "${src.skill}" not found in ${repoKey}`;
+              results.push({
+                ok: false,
+                name: rec.entry.name,
+                error,
+              });
+              completedSkills++;
+              const eta =
+                completedSkills < totalSkills
+                  ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
+                  : '';
+              output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: ${error}${eta}\n`;
+              continue;
+            }
+          } else if (src.path) {
+            // No explicit skill field, but explicit path provided - use path directly
+            const normalizedPath = src.path.replace(/^\/|\/$/g, '');
+            skillPath = normalizedPath;
+            skillName = rec.entry.name;
+          } else {
+            // No skill field and no path - try looking up name in index as fallback
+            const indexedPath = skillIndex.get(rec.entry.name);
+            if (indexedPath) {
+              skillPath = indexedPath;
+              skillName = rec.entry.name;
+            } else {
+              // Fallback failed - no way to resolve
+              const error = `skill "${rec.entry.name}" not found in ${repoKey} and no explicit path provided`;
+              results.push({
+                ok: false,
+                name: rec.entry.name,
+                error,
+              });
+              completedSkills++;
+              const eta =
+                completedSkills < totalSkills
+                  ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
+                  : '';
+              output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: ${error}${eta}\n`;
+              continue;
+            }
+          }
+
+          const skillStart = Date.now();
+          const result = await installSkillFromZip(skillPath, skillName, files, fs, false);
+          completedSkills++;
+
+          const skillDuration = ((Date.now() - skillStart) / 1000).toFixed(1);
+          const avgTime = (Date.now() - startTime) / completedSkills;
+          const remaining = Math.round(((totalSkills - completedSkills) * avgTime) / 1000);
+          const eta = completedSkills < totalSkills ? ` (~${remaining}s remaining)` : '';
+
+          if (result.ok) {
+            results.push({ ok: true, name: skillName });
+            output += `[${completedSkills}/${totalSkills}] Installed "${skillName}" from ${repoKey} (${skillDuration}s)${eta}\n`;
+          } else {
+            results.push({ ok: false, name: skillName, error: result.error });
+            output += `[${completedSkills}/${totalSkills}] Failed "${skillName}" from ${repoKey}: ${result.error}${eta}\n`;
+          }
+        }
+
+        return { errors: '', results };
+      })
+    );
+
+    // Collect results from parallel repo processing
+    for (const settled of repoResults) {
+      if (settled.status === 'rejected') {
+        errors += `upskill: unexpected error: ${settled.reason}\n`;
         continue;
       }
-
-      // If a specific skill is named, install just that one; otherwise install all from the path
-      const toInstall = src.skill
-        ? listResult.skills.filter((s) => s.name === src.skill)
-        : listResult.skills;
-
-      for (const skill of toInstall) {
-        const result = await installFromGitHub(
-          owner,
-          repo,
-          skill.path,
-          skill.name,
-          fs,
-          github,
-          false,
-          fetchFn
-        );
-        if (result.exitCode === 0) {
-          output += result.stdout;
-          successCount++;
-        } else {
-          errors += result.stderr;
-        }
+      if (settled.value.errors) {
+        errors += settled.value.errors;
+      }
+      for (const r of settled.value.results) {
+        if (r.ok) successCount++;
+        else if (r.error) errors += `upskill: ${r.error}\n`;
       }
     }
 
+    const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
     if (successCount > 0) {
-      output += `\nInstalled ${successCount} recommended skill(s)\n`;
+      output += `\nInstalled ${successCount} recommended skill(s) in ${totalElapsed}s\n`;
+      await runPostInstallHooks();
     }
     return { stdout: output, stderr: errors, exitCode: errors ? 1 : 0 };
   }
@@ -1554,36 +1836,78 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
         return { stdout: output, stderr: '', exitCode: 0 };
       }
 
-      // Install selected skills
+      // Install selected skills — download ZIP once, extract all skills from it
       let output = '';
       let errors = '';
       let successCount = 0;
+      const totalSkills = skillsToInstall.length;
+      const startTime = Date.now();
 
-      for (const skill of skillsToInstall) {
-        const installResult = await installFromGitHub(
-          owner,
-          repo,
-          skill.path,
-          skill.name,
-          fs,
-          github,
-          force,
-          fetchFn,
-          effectiveBranch
-        );
+      // For batch installs (--all or multiple --skill), use ZIP and skip per-skill hooks
+      if (totalSkills > 1) {
+        const zip = await fetchRepoZip(owner, repo, fetchFn, effectiveBranch);
+        if (zip.status === 'not_found') {
+          const target = effectiveBranch
+            ? `branch "${effectiveBranch}" in ${owner}/${repo}`
+            : `repository ${owner}/${repo}`;
+          return { stdout: '', stderr: `upskill: ${target} not found\n`, exitCode: 1 };
+        }
+        if (zip.status === 'error') {
+          return {
+            stdout: '',
+            stderr: `upskill: failed to fetch ${owner}/${repo}: ${zip.message}\n`,
+            exitCode: 1,
+          };
+        }
 
-        if (installResult.exitCode === 0) {
-          output += installResult.stdout;
-          successCount++;
-        } else {
-          errors += installResult.stderr;
+        const files = stripZipPrefix(zip.files);
+
+        for (let si = 0; si < skillsToInstall.length; si++) {
+          const skill = skillsToInstall[si];
+          const result = await installSkillFromZip(skill.path, skill.name, files, fs, force);
+          const idx = si + 1;
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          const avgTime = (Date.now() - startTime) / idx;
+          const remaining = Math.round(((totalSkills - idx) * avgTime) / 1000);
+          const eta = idx < totalSkills ? ` (~${remaining}s remaining)` : '';
+
+          if (result.ok) {
+            output += `[${idx}/${totalSkills}] Installed "${skill.name}" from ${owner}/${repo} (${elapsed}s)${eta}\n`;
+            successCount++;
+          } else {
+            output += `[${idx}/${totalSkills}] Failed "${skill.name}": ${result.error}${eta}\n`;
+            errors += `upskill: ${result.error}\n`;
+          }
+        }
+      } else {
+        // Single skill — use the existing installFromGitHub path
+        for (const skill of skillsToInstall) {
+          const installResult = await installFromGitHub(
+            owner,
+            repo,
+            skill.path,
+            skill.name,
+            fs,
+            github,
+            force,
+            fetchFn,
+            effectiveBranch
+          );
+
+          if (installResult.exitCode === 0) {
+            output += installResult.stdout;
+            successCount++;
+          } else {
+            errors += installResult.stderr;
+          }
         }
       }
 
+      const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
       if (successCount > 0) {
-        output += `\nInstalled ${successCount} skill(s)\n`;
-        await refreshSprinklesAfterInstall();
-        await reloadSkillsAfterInstall();
+        output += `\nInstalled ${successCount} skill(s)${totalSkills > 1 ? ` in ${totalElapsed}s` : ''}\n`;
+        await runPostInstallHooks();
       }
 
       return {

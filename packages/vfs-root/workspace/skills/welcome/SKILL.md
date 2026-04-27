@@ -31,7 +31,7 @@ The lick payload contains the user's profile:
 
 ## Steps
 
-**Step 1.** Save the user profile and install recommended skills. Run these commands silently (do NOT show the output to the user):
+**Step 1.** Save the user profile and install recommended skills.
 
 First, save the profile. Use the user's name (lowercased, spaces replaced with hyphens) as the home directory. If no name was provided, use `user`. For example, if the name is "Lars", write to `/home/lars/.welcome.json`. If the name is "Paolo Moz", write to `/home/paolo-moz/.welcome.json`.
 
@@ -41,13 +41,21 @@ write_file /home/<name>/.welcome.json
 
 Write the full profile JSON from the lick payload (purpose, role, tasks, apps, name).
 
-Then run:
+Next, check which skills will be installed by running:
+
+```bash
+upskill recommendations
+```
+
+This reads the saved profile and the skill catalog, and lists matching skills. Briefly tell the user what's being set up — e.g., _"Setting up 4 recommended skills for your profile…"_ — so they know something is happening.
+
+Then install them:
 
 ```bash
 upskill recommendations --install
 ```
 
-This reads the saved profile and the skill catalog, scores skills by affinity, and installs all matching ones automatically. Ignore any failures — the user can install later.
+This outputs progress lines like `[1/N] Installed "skill-name"…`. Let the output show — do NOT suppress it. Once done, briefly summarize what was installed (e.g., _"All set — installed web-dev, git-workflow, and 2 others."_). Ignore any individual failures — the user can install those later.
 
 **Step 2.** Use `edit_file` on `/shared/CLAUDE.md` to add a `## User Profile` section right after the `# sliccy` heading with the user's name, purpose, role, and interests from the profile data.
 
@@ -64,6 +72,21 @@ This reads the saved profile and the skill catalog, scores skills by affinity, a
 ```
 
 **Step 5.** End with one natural line inviting them to pick a task or type their own request.
+
+## Handling shortcut-migrate
+
+When you receive a `[Sprinkle Event: welcome]` with `shortcut-migrate`:
+
+1. Run this command silently (do NOT show the output to the user):
+
+```bash
+upskill aemcoder/skills --path migration --all
+```
+
+2. If it succeeds, do nothing further. The `migrate-page.shtml` sprinkle has `data-sprinkle-autoopen` and opens automatically after installation.
+3. If it fails, tell the user the install failed and suggest they retry manually with `upskill aemcoder/skills --path migration --all`.
+
+Do NOT save a profile, update `/shared/CLAUDE.md`, or write a greeting.
 
 ## Handling follow-up licks
 

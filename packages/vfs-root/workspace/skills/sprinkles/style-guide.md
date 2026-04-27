@@ -2,6 +2,60 @@
 
 Use these CSS classes in `.shtml` sprinkles. Do NOT write custom CSS — these components cover all common UI patterns.
 
+## Icons (Lucide)
+
+Lucide icons are available globally via the `LucideIcons` object. Use declarative `data-lucide` attributes for automatic rendering, or create icons programmatically.
+
+**Declarative usage** (recommended):
+
+```html
+<!-- Icon renders automatically on page load -->
+<i data-lucide="check" class="sprinkle-icon"></i>
+<i data-lucide="alert-circle" class="sprinkle-icon"></i>
+<i data-lucide="settings" class="sprinkle-icon sprinkle-icon--l"></i>
+
+<!-- In buttons -->
+<button class="sprinkle-btn sprinkle-btn--primary">
+  <i data-lucide="save" class="sprinkle-icon"></i> Save
+</button>
+
+<!-- In action card headers -->
+<div class="sprinkle-action-card">
+  <div class="sprinkle-action-card__header">
+    <i data-lucide="check-circle" class="sprinkle-icon" style="color: var(--uxc-positive-text)"></i>
+    Success
+  </div>
+</div>
+```
+
+**Programmatic usage**:
+
+```javascript
+// Create an icon element
+const icon = LucideIcons.createElement('alert-triangle', {
+  size: 20,
+  color: 'var(--uxc-notice-text)',
+  strokeWidth: 2,
+  class: 'sprinkle-icon',
+});
+container.appendChild(icon);
+
+// Re-render all icons after dynamic content changes
+LucideIcons.render();
+```
+
+**Icon sizes**:
+
+- `.sprinkle-icon--xs` — 12px (small badges)
+- `.sprinkle-icon--s` — 14px (inline text)
+- `.sprinkle-icon--m` — 16px (default, buttons)
+- `.sprinkle-icon--l` — 20px (headings)
+- `.sprinkle-icon--xl` — 24px (large cards)
+
+**Icon names**: Use kebab-case from [lucide.dev/icons](https://lucide.dev/icons) — e.g., `check`, `alert-circle`, `arrow-right`, `file-text`.
+
+**NO EMOJIS** — Always use Lucide icons instead of emoji for a professional, consistent look.
+
 ## Cards
 
 `.sprinkle-card` — Card with shadow (hover elevates).
@@ -146,6 +200,120 @@ Inline `--fill-color` overrides the variant color.
 Accepts `--value` or `--progress` for fill width.
 
 **Variants**: `--positive`/`--notice`/`--negative` on container. Default color: informative (blue).
+
+## Code Editor
+
+`<slicc-editor>` — Pre-bundled CodeMirror 6 editor custom element. Use for code editing, config editing, or any domain-specific text with syntax highlighting. The editor auto-themes to S2 tokens (dark/light).
+
+**Attributes:**
+
+- `language` — Built-in: `json`, `markdown`, `html`. Omit for plain text.
+- `line-numbers` — Show line numbers gutter (boolean attribute).
+- `readonly` — Disable editing (boolean attribute).
+
+**Inner text** is used as placeholder (shown when editor is empty).
+
+**Basic usage:**
+
+```html
+<slicc-editor id="config" language="json" line-numbers>{"key": "value"}</slicc-editor>
+<script>
+  var editor = document.getElementById('config');
+  editor.value = '{\n  "name": "example"\n}';
+  editor.addEventListener('change', function (e) {
+    slicc.lick({ action: 'config-changed', data: { value: e.detail.value } });
+  });
+</script>
+```
+
+**Custom syntax highlighter** for domain-specific languages:
+
+```html
+<slicc-editor id="lyrics" line-numbers>[Intro] Write your lyrics here...</slicc-editor>
+<script>
+  var editor = document.getElementById('lyrics');
+  var CM6 = window.__SLICC_CM6__;
+  editor.setHighlighter({
+    token: function (stream) {
+      if (stream.match(/^\[.*?\]/)) return 'keyword';
+      if (stream.match(/^\(.*?\)/)) return 'comment';
+      stream.next();
+      return null;
+    },
+  });
+</script>
+```
+
+**Gutter markers** (colored dots on specific lines):
+
+```javascript
+editor.setGutterMarkers({
+  3: { color: 'var(--s2-notice)', tooltip: 'Check meter' },
+  7: { color: 'var(--s2-negative)', tooltip: 'Error here' },
+});
+```
+
+**Properties & Methods:**
+
+| API                          | Description                                                         |
+| ---------------------------- | ------------------------------------------------------------------- |
+| `.value`                     | Get/set editor content (string)                                     |
+| `.setHighlighter(parser)`    | Set custom StreamLanguage parser with `token(stream, state)` method |
+| `.setGutterMarkers(markers)` | Set line markers: `{ lineNo: { color, tooltip? } }`                 |
+| `change` event               | Fires on edit. `e.detail.value` has new content                     |
+
+## Diff Viewer
+
+`<slicc-diff>` — Pre-bundled diff viewer custom element ([@pierre/diffs](https://diffs.com)). Use for showing code changes, migration previews, before/after comparisons. Includes Shiki syntax highlighting and auto dark/light theming.
+
+**Two-file mode** (compare old vs new):
+
+```html
+<slicc-diff
+  old-name="config.json"
+  old-contents='{"debug": false}'
+  new-name="config.json"
+  new-contents='{"debug": true, "verbose": true}'
+  diff-style="split"
+></slicc-diff>
+```
+
+**Patch mode** (unified diff string):
+
+```html
+<slicc-diff id="mydiff"></slicc-diff>
+<script>
+  document.getElementById('mydiff').patch =
+    '--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old line\n+new line';
+</script>
+```
+
+**JS property API** (for dynamic content):
+
+```html
+<slicc-diff id="preview"></slicc-diff>
+<script>
+  var diff = document.getElementById('preview');
+  diff.oldFile = { name: 'app.ts', contents: oldCode };
+  diff.newFile = { name: 'app.ts', contents: newCode };
+  diff.options = { diffStyle: 'unified', overflow: 'wrap' };
+</script>
+```
+
+**Attributes:**
+
+| Attribute        | Default  | Description                                  |
+| ---------------- | -------- | -------------------------------------------- |
+| `old-name`       | —        | Old filename                                 |
+| `old-contents`   | —        | Old file contents                            |
+| `new-name`       | —        | New filename                                 |
+| `new-contents`   | —        | New file contents                            |
+| `patch`          | —        | Unified diff string (alternative to old/new) |
+| `diff-style`     | `split`  | `split` (side-by-side) or `unified` (single) |
+| `overflow`       | `scroll` | `scroll` or `wrap` for long lines            |
+| `disable-header` | —        | Boolean: hide the file header bar            |
+
+**JS Properties:** `.oldFile`, `.newFile` (objects with `name` + `contents`), `.patch` (string), `.options` (object).
 
 ## Layout — Basic
 

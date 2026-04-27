@@ -3,16 +3,15 @@
  * and auto-executes matching `.bsh` scripts from the VFS.
  *
  * The watchdog:
- * 1. Periodically re-discovers `.bsh` files on the VFS
- * 2. Listens for main-frame navigations on attached browser tabs
- * 3. Matches the navigated URL against discovered hostname patterns + @match directives
- * 4. Executes matching scripts in the target page via CDP Runtime.evaluate
+ * 1. Listens for main-frame navigations on attached browser tabs
+ * 2. Asks ScriptCatalog for the current `.bsh` matches for the URL
+ * 3. Executes matching scripts in the target page via CDP Runtime.evaluate
  */
 
 import type { CDPTransport } from '../cdp/transport.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
-import type { VirtualFS } from '../fs/index.js';
-import { discoverBshScripts, findMatchingScripts, type BshEntry } from './bsh-discovery.js';
+import type { BshEntry, BshDiscoveryFS } from './bsh-discovery.js';
+import type { ScriptCatalog } from './script-catalog.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('bsh-watchdog');
@@ -26,20 +25,17 @@ export interface BshWatchdogOptions {
    *  When provided, the watchdog registers a session-change callback so it
    *  automatically tracks transport swaps (remote targets, reconnects). */
   browserAPI?: BrowserAPI;
-  /** VirtualFS for discovering .bsh files and reading script content. */
-  fs: VirtualFS;
-  /** How often (ms) to re-discover .bsh files. Default: 10000. */
-  discoveryIntervalMs?: number;
+  /** Shared script catalog used for `.bsh` discovery and matching. */
+  scriptCatalog: ScriptCatalog;
+  /** Filesystem used to read discovered `.bsh` script content. */
+  fs: BshDiscoveryFS;
 }
 
 export class BshWatchdog {
   private transport: CDPTransport;
   private readonly browserAPI?: BrowserAPI;
-  private readonly fs: VirtualFS;
-  private readonly discoveryIntervalMs: number;
-
-  private entries: BshEntry[] = [];
-  private discoveryTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly fs: BshDiscoveryFS;
+  private readonly scriptCatalog: ScriptCatalog;
   private running = false;
 
   /** Set of URLs currently being handled (prevents re-entrant execution). */
@@ -49,24 +45,19 @@ export class BshWatchdog {
     if (!options.transport && !options.browserAPI) {
       throw new Error('BshWatchdog requires either transport or browserAPI');
     }
+    if (!options.scriptCatalog) {
+      throw new Error('BshWatchdog requires a ScriptCatalog');
+    }
     this.browserAPI = options.browserAPI;
     this.transport = options.transport ?? options.browserAPI!.getTransport();
     this.fs = options.fs;
-    this.discoveryIntervalMs = options.discoveryIntervalMs ?? 10_000;
+    this.scriptCatalog = options.scriptCatalog;
   }
 
   /** Start watching for navigations. */
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
-
-    // Initial discovery
-    await this.discover();
-
-    // Periodic re-discovery
-    this.discoveryTimer = setInterval(() => {
-      void this.discover();
-    }, this.discoveryIntervalMs);
 
     // Subscribe to navigation events
     this.transport.on('Page.frameNavigated', this.onFrameNavigated);
@@ -82,7 +73,16 @@ export class BshWatchdog {
       });
     }
 
-    log.info('BSH watchdog started', { scriptCount: this.entries.length });
+    let scriptCount: number | undefined;
+    try {
+      scriptCount = (await this.scriptCatalog.getBshEntries()).length;
+    } catch (err) {
+      log.warn('BSH watchdog startup discovery failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    log.info('BSH watchdog started', scriptCount === undefined ? undefined : { scriptCount });
   }
 
   /** Stop watching and clean up. */
@@ -92,16 +92,9 @@ export class BshWatchdog {
 
     this.transport.off('Page.frameNavigated', this.onFrameNavigated);
 
-    if (this.discoveryTimer) {
-      clearInterval(this.discoveryTimer);
-      this.discoveryTimer = null;
-    }
-
     if (this.browserAPI) {
       this.browserAPI.setSessionChangeCallback(undefined);
     }
-
-    this.entries = [];
     this.executing.clear();
 
     log.info('BSH watchdog stopped');
@@ -123,19 +116,13 @@ export class BshWatchdog {
 
   /** Force a re-discovery of .bsh files. */
   async discover(): Promise<void> {
-    try {
-      this.entries = await discoverBshScripts(this.fs);
-      log.debug('BSH discovery complete', { count: this.entries.length });
-    } catch (err) {
-      log.error('BSH discovery failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    this.scriptCatalog.invalidateBsh();
+    await this.scriptCatalog.getBshEntries();
   }
 
   /** Get the current discovered entries (for testing). */
-  getEntries(): readonly BshEntry[] {
-    return this.entries;
+  async getEntries(): Promise<readonly BshEntry[]> {
+    return this.scriptCatalog.getBshEntries();
   }
 
   /** Handle a Page.frameNavigated CDP event. */
@@ -157,37 +144,40 @@ export class BshWatchdog {
       return;
     }
 
-    // Skip if no scripts discovered
-    if (this.entries.length === 0) return;
+    void this.scriptCatalog
+      .findMatchingBshScripts(url)
+      .then((matches) => {
+        if (matches.length === 0) return;
 
-    // Find matching scripts
-    const matches = findMatchingScripts(this.entries, url);
-    if (matches.length === 0) return;
+        for (const entry of matches) {
+          const key = `${entry.path}::${url}`;
+          if (this.executing.has(key)) continue;
+          this.executing.add(key);
 
-    // Execute matching scripts (fire-and-forget)
-    for (const entry of matches) {
-      // Prevent re-entrant execution for the same script+URL combo
-      const key = `${entry.path}::${url}`;
-      if (this.executing.has(key)) continue;
-      this.executing.add(key);
+          log.info('BSH watchdog executing script', { script: entry.path, url });
 
-      log.info('BSH watchdog executing script', { script: entry.path, url });
-
-      void this.executeInTargetPage(entry.path, url, sessionId)
-        .then(() => {
-          log.info('BSH script completed', { script: entry.path, url });
-        })
-        .catch((err) => {
-          log.error('BSH script execution error', {
-            script: entry.path,
-            url,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        })
-        .finally(() => {
-          this.executing.delete(key);
+          void this.executeInTargetPage(entry.path, url, sessionId)
+            .then(() => {
+              log.info('BSH script completed', { script: entry.path, url });
+            })
+            .catch((err) => {
+              log.error('BSH script execution error', {
+                script: entry.path,
+                url,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            })
+            .finally(() => {
+              this.executing.delete(key);
+            });
+        }
+      })
+      .catch((err) => {
+        log.error('BSH discovery failed', {
+          url,
+          error: err instanceof Error ? err.message : String(err),
         });
-    }
+      });
   };
 
   /**
@@ -202,8 +192,49 @@ export class BshWatchdog {
     const content = await this.fs.readFile(scriptPath);
     const scriptContent = typeof content === 'string' ? content : new TextDecoder().decode(content);
 
-    // Wrap in async IIFE with error handling and evaluate in target page
-    const wrappedScript = `(async () => { try {\n${scriptContent}\n} catch(e) { console.error('[bsh]', e); } })()`;
+    // Wrap in async IIFE with pre-scanned synchronous require() and error handling
+    const wrappedScript = `(async () => {
+  const __requireSpecifiers = (function() {
+    const re = /require\\s*\\(\\s*['"]([^'"]+)['"]\\s*\\)/g;
+    const code = ${JSON.stringify(scriptContent)};
+    const specs = [];
+    let m;
+    while ((m = re.exec(code)) !== null) specs.push(m[1]);
+    return [...new Set(specs)];
+  })();
+  const __NODE_BUILTINS_UNAVAILABLE = new Set([
+    'http', 'https', 'net', 'tls', 'dgram', 'dns', 'cluster',
+    'worker_threads', 'child_process', 'crypto', 'os', 'stream',
+    'zlib', 'vm', 'v8', 'perf_hooks', 'readline', 'repl', 'tty', 'inspector',
+    'fs'
+  ]);
+  const __requireCache = Object.create(null);
+  const __uncached = __requireSpecifiers.filter(id => {
+    const bare = id.startsWith('node:') ? id.slice(5) : id;
+    return !__NODE_BUILTINS_UNAVAILABLE.has(bare) && bare !== 'buffer';
+  });
+  await Promise.allSettled(__uncached.map(async (id) => {
+    try {
+      const mod = await import('https://esm.sh/' + id);
+      __requireCache[id] = mod.default !== undefined ? mod.default : mod;
+    } catch(e) { /* will throw at require() call time */ }
+  }));
+  const require = (id) => {
+    const bareId = id.startsWith('node:') ? id.slice(5) : id;
+    if (bareId === 'buffer' && typeof Buffer !== 'undefined') return { Buffer };
+    if (__NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
+      const __suggestions = { http: ' Use fetch() instead.', https: ' Use fetch() instead.', crypto: ' Use globalThis.crypto (Web Crypto API) instead.' };
+      const __hint = __suggestions[bareId] || '';
+      throw new Error("require('" + id + "'): Node built-in '" + bareId + "' is not available in the browser environment." + __hint);
+    }
+    if (bareId in __requireCache) return __requireCache[bareId];
+    if (id in __requireCache) return __requireCache[id];
+    throw new Error("require('" + id + "'): module not pre-loaded. Use a string literal or await import('https://esm.sh/" + id + "') directly.");
+  };
+  try {
+    ${scriptContent}
+  } catch(e) { console.error('[bsh]', e); }
+})()`;
 
     await this.transport.send('Runtime.enable', {}, sessionId);
     const result = await this.transport.send(

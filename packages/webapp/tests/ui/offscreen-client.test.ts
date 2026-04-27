@@ -234,18 +234,34 @@ describe('OffscreenClient', () => {
   it('registerScoop sends scoop-create message', () => {
     client.registerScoop({
       jid: 'temp',
-      name: 'Test',
-      folder: 'test-scoop',
-      isCone: false,
-      type: 'scoop',
-      requiresTrigger: true,
-      assistantLabel: 'test-scoop',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
       addedAt: '',
     });
     const envelope = sentMessages[0] as { payload: any };
-    expect(envelope.payload.type).toBe('scoop-create');
-    expect(envelope.payload.name).toBe('Test');
-    expect(envelope.payload.isCone).toBe(false);
+    expect(envelope.payload.type).toBe('cone-create');
+    expect(envelope.payload.name).toBe('Cone');
+    // No `isCone` on the wire — the bridge handler knows this path is cone-only.
+    expect(envelope.payload.isCone).toBeUndefined();
+  });
+
+  it('registerScoop rejects when called with a non-cone scoop', async () => {
+    await expect(
+      client.registerScoop({
+        jid: 'temp',
+        name: 'Rogue',
+        folder: 'rogue-scoop',
+        isCone: false,
+        type: 'scoop',
+        requiresTrigger: true,
+        assistantLabel: 'rogue-scoop',
+        addedAt: '',
+      })
+    ).rejects.toThrow(/cone-only/i);
   });
 
   it('unregisterScoop sends scoop-drop and removes locally', () => {

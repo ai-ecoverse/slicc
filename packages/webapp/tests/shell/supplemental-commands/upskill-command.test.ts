@@ -26,11 +26,17 @@ function createMockCtx() {
 
 function response(
   status: number,
-  body: string,
+  body: string | Uint8Array,
   headers: Record<string, string> = {},
   statusText = ''
 ) {
-  return { status, statusText, headers, body, url: 'https://example.test' };
+  return {
+    status,
+    statusText,
+    headers,
+    body: typeof body === 'string' ? new TextEncoder().encode(body) : body,
+    url: 'https://example.test',
+  };
 }
 
 let dbCounter = 0;
@@ -509,11 +515,9 @@ describe('upskill Tessl registry integration', () => {
       'skills-main/my-skill/helper.js': encoder.encode('console.log("hi");\n'),
       'skills-main/other/README.md': encoder.encode('# Not a skill\n'),
     });
-    const zipBody = String.fromCharCode(...zipBytes);
-
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes('codeload.github.com')) {
-        return response(200, zipBody);
+        return response(200, zipBytes);
       }
       // GitHub API should NOT be called — fail if it is
       if (url.includes('api.github.com')) {
@@ -566,11 +570,9 @@ describe('upskill Tessl registry integration', () => {
         '---\nname: reload-skill\n---\n# Reload Skill\n'
       ),
     });
-    const zipBody = String.fromCharCode(...zipBytes);
-
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes('codeload.github.com')) {
-        return response(200, zipBody);
+        return response(200, zipBytes);
       }
       throw new Error(`unexpected url: ${url}`);
     });
@@ -740,30 +742,32 @@ describe('upskill recommendations subcommand', () => {
       })
     );
 
-    // Write catalog
-    await fs.mkdir('/shared', { recursive: true });
-    await fs.writeFile(
-      '/shared/skill-catalog.json',
-      JSON.stringify({
-        version: 1,
-        skills: [
-          {
-            name: 'aem',
-            displayName: 'AEM',
-            description: 'AEM skill',
-            source: { repo: 'adobe/skills', path: 'skills/aem', skill: 'aem' },
-            affinity: {
-              apps: ['aem'],
-              tasks: ['build-websites'],
-              role: ['developer'],
-              purpose: ['work'],
-            },
-          },
-        ],
-      })
-    );
-
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          }),
+          headers: {},
+        };
+      }
+      return { status: 404, body: '', headers: {} };
+    });
     const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
     const result = await cmd.execute(['recommendations'], createMockCtx() as any);
 
@@ -771,5 +775,83 @@ describe('upskill recommendations subcommand', () => {
     expect(result.stdout).toContain('AEM');
     expect(result.stdout).toContain('score: 7');
     expect(result.stdout).toContain('upskill recommendations --install');
+  });
+
+  it('returns error when catalog fetch fails', async () => {
+    // Write profile so we get past profile check
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
+
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      return { status: 500, body: 'Internal Server Error', headers: {} };
+    });
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['recommendations'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('failed to fetch skill catalog');
+    expect(result.stderr).toContain('sliccy.com/skills/catalog.json');
+  });
+
+  it('excludes already-installed skills from recommendations', async () => {
+    // Write profile
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
+
+    // Create an installed skill directory
+    await fs.mkdir('/workspace/skills/aem', { recursive: true });
+    await fs.writeFile('/workspace/skills/aem/SKILL.md', '# AEM Skill\n');
+
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          }),
+          headers: {},
+        };
+      }
+      return { status: 404, body: '', headers: {} };
+    });
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['recommendations'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    // AEM should be filtered out since it's already installed
+    expect(result.stdout).toContain('all matching skills are already installed');
+    expect(result.stdout).not.toContain('AEM');
   });
 });

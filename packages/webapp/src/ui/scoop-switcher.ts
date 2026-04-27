@@ -8,7 +8,6 @@ import type { Orchestrator } from '../scoops/orchestrator.js';
 
 export interface ScoopSwitcherCallbacks {
   onScoopSelect: (scoop: RegisteredScoop) => void;
-  onCreateScoop: (name: string) => void;
   onDeleteScoop: (jid: string) => void;
 }
 
@@ -148,19 +147,6 @@ export class ScoopSwitcher {
           item.appendChild(badge);
         }
 
-        if (!scoop.isCone) {
-          const del = document.createElement('span');
-          del.className = 'scoop-dd__delete';
-          del.textContent = '\u00d7';
-          del.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.callbacks.onDeleteScoop(scoop.jid);
-            this.dropdownOpen = false;
-            this.render();
-          });
-          item.appendChild(del);
-        }
-
         item.addEventListener('click', () => {
           this.selectedJid = scoop.jid;
           this.dropdownOpen = false;
@@ -170,26 +156,6 @@ export class ScoopSwitcher {
 
         menu.appendChild(item);
       }
-
-      // Add scoop button
-      const addItem = document.createElement('div');
-      addItem.className = 'scoop-dd__item scoop-dd__item--add';
-      const addIcon = document.createElement('span');
-      addIcon.textContent = '+';
-      addIcon.style.cssText = 'font-weight: bold; width: 20px; text-align: center;';
-      addItem.appendChild(addIcon);
-      const addLabel = document.createElement('span');
-      addLabel.textContent = 'New scoop';
-      addItem.appendChild(addLabel);
-      addItem.addEventListener('click', () => {
-        this.dropdownOpen = false;
-        this.render();
-        const name = prompt('Enter scoop name:');
-        if (name?.trim()) {
-          this.callbacks.onCreateScoop(name.trim());
-        }
-      });
-      menu.appendChild(addItem);
 
       this.container.appendChild(menu);
     }

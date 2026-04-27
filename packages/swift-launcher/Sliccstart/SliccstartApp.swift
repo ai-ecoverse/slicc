@@ -30,7 +30,7 @@ struct SliccstartApp: App {
     @State private var debugBuildTarget: AppTarget?
     @State private var isCreatingDebugBuild = false
     @State private var debugBuildProgress: String = ""
-    @StateObject private var appUpdater = AppUpdater(owner: "ai-ecoverse", repo: "slicc", releasePrefix: "Sliccstart")
+    @StateObject private var appUpdater = AppUpdater(owner: "ai-ecoverse", repo: "slicc", releasePrefix: "Sliccstart", provider: TolerantGithubReleaseProvider())
 
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
@@ -168,6 +168,10 @@ struct SliccstartApp: App {
                 }
             }
         }
+
+        Settings {
+            SettingsView()
+        }
     }
 
     private func initialize() async {
@@ -189,6 +193,26 @@ struct SliccstartApp: App {
         // Check for app updates in bundled mode
         if SliccBootstrapper.isBundled {
             appUpdater.check()
+        }
+
+        autoLaunchConfiguredBrowser()
+    }
+
+    /// Launch the browser the user picked in Settings > Startup, if any.
+    /// Stored as the `AppTarget.id` (bundle path) under
+    /// `autoLaunchAppIdKey`. Failures are logged but never block startup.
+    private func autoLaunchConfiguredBrowser() {
+        let savedId = UserDefaults.standard.string(forKey: autoLaunchAppIdKey) ?? ""
+        guard !savedId.isEmpty else { return }
+        guard let target = targets.first(where: { $0.id == savedId && $0.type == .chromiumBrowser }) else {
+            log.info("autoLaunch: no matching browser found for id=\(savedId, privacy: .public)")
+            return
+        }
+        log.info("autoLaunch: launching \(target.name, privacy: .public)")
+        do {
+            try sliccProcess.launchStandalone(target)
+        } catch {
+            log.error("autoLaunch failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

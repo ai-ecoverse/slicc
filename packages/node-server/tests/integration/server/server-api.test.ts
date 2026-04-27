@@ -102,6 +102,9 @@ describe('shared server API conformance', () => {
   it('proxies local requests through /api/fetch-proxy', async () => {
     const missingHeader = await fetchFromServer('/api/fetch-proxy', { method: 'POST' });
     expect(missingHeader.status).toBe(400);
+    // Proxy infrastructure errors must be tagged so SecureFetch clients
+    // can distinguish them from upstream 4xx/5xx that should flow through.
+    expect(missingHeader.headers.get('x-proxy-error')).toBe('1');
 
     const proxied = await fetchFromServer('/api/fetch-proxy', {
       method: 'GET',
@@ -113,9 +116,83 @@ describe('shared server API conformance', () => {
     expect(proxied.headers.get('transfer-encoding')).toBeNull();
     expect(proxied.headers.get('content-encoding')).toBeNull();
     expect(proxied.headers.get('www-authenticate')).toBeNull();
+    // Successful proxied responses must NOT carry the proxy-error marker.
+    expect(proxied.headers.get('x-proxy-error')).toBeNull();
 
     const body = (await proxied.json()) as Record<string, unknown>;
     expect(body).toHaveProperty('trayWorkerBaseUrl');
+  });
+
+  it('forwards upstream 4xx without the proxy-error marker', async () => {
+    // Mount a tiny upstream that always replies 400 with an OAuth-style
+    // JSON body — this is exactly the shape Google's token endpoint uses
+    // for invalid_client. The proxy must pass status + body through and
+    // must NOT set X-Proxy-Error, so SecureFetch returns the response
+    // unchanged instead of throwing "[object Object]".
+    const { createServer } = await import('node:http');
+    const upstream = createServer((_req, res) => {
+      res.statusCode = 400;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          error: 'invalid_client',
+          error_description: 'The OAuth client was not found.',
+        })
+      );
+    });
+
+    await new Promise<void>((resolve) => upstream.listen(0, resolve));
+    const port = (upstream.address() as import('node:net').AddressInfo).port;
+
+    try {
+      const proxied = await fetchFromServer('/api/fetch-proxy', {
+        method: 'POST',
+        headers: {
+          'x-target-url': `http://localhost:${port}/token`,
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: 'client_id=fake&grant_type=refresh_token',
+      });
+
+      expect(proxied.status).toBe(400);
+      // Crucially: no proxy-error marker → upstream 4xx flows through.
+      expect(proxied.headers.get('x-proxy-error')).toBeNull();
+
+      const body = (await proxied.json()) as { error?: string };
+      expect(body.error).toBe('invalid_client');
+    } finally {
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
+  it('tags upstream-fetch failures with X-Proxy-Error: 1', async () => {
+    // Stand up an upstream that closes the connection before any response
+    // is written. Node's fetch resolves this as a network error which the
+    // proxy converts to a 502 — that 502 is a proxy infrastructure failure
+    // (we never got an upstream answer) and so must carry the marker.
+    const { createServer } = await import('node:http');
+    const upstream = createServer((req) => {
+      req.socket.destroy();
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, resolve));
+    const port = (upstream.address() as import('node:net').AddressInfo).port;
+
+    try {
+      const proxied = await fetchFromServer('/api/fetch-proxy', {
+        method: 'GET',
+        headers: {
+          'x-target-url': `http://localhost:${port}/never`,
+        },
+      });
+
+      expect(proxied.status).toBe(502);
+      expect(proxied.headers.get('x-proxy-error')).toBe('1');
+
+      const body = (await proxied.json()) as { error?: string };
+      expect(body.error).toMatch(/Proxy fetch failed/);
+    } finally {
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
   });
 
   it('accepts X-Proxy-Cookie without errors and does not forward it in the response', async () => {
@@ -336,6 +413,33 @@ describe('shared server API conformance', () => {
   it('accepts websocket upgrades on /cdp', async () => {
     const { socket } = await openWebSocket('/cdp');
     openSockets.add(socket);
+  });
+
+  it('lists secrets via GET /api/secrets', async () => {
+    const list = await fetchFromServer('/api/secrets');
+    expect(list.status).toBe(200);
+    const entries = (await list.json()) as Array<{ name: string; domains: string[] }>;
+    expect(Array.isArray(entries)).toBe(true);
+    // Value must never be returned
+    for (const entry of entries) {
+      expect((entry as Record<string, unknown>)['value']).toBeUndefined();
+    }
+  });
+
+  it('rejects POST /api/secrets (write route removed)', async () => {
+    const res = await fetchFromServer('/api/secrets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'INTTEST_BLOCKED', value: 'v', domains: ['d.com'] }),
+    });
+    // Express returns 404 for unmatched routes
+    expect(res.status).toBeGreaterThanOrEqual(400);
+  });
+
+  it('rejects DELETE /api/secrets/:name (write route removed)', async () => {
+    const res = await fetchFromServer('/api/secrets/INTTEST_BLOCKED', { method: 'DELETE' });
+    // Express returns 404 for unmatched routes
+    expect(res.status).toBeGreaterThanOrEqual(400);
   });
 
   it('returns structured responses from lick-backed REST endpoints based on browser connectivity', async () => {

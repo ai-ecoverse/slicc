@@ -29,6 +29,7 @@ import type {
   IncomingMessageMsg,
 } from './messages.js';
 import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
+import { toolUIRegistry } from '../../../packages/webapp/src/tools/tool-ui.js';
 import type { ChatMessage } from '../../../packages/webapp/src/ui/types.js';
 import type { BrowserAPI } from '../../../packages/webapp/src/cdp/index.js';
 
@@ -152,7 +153,7 @@ export class OffscreenBridge {
 
         // Also emit the full scoop list so the panel can update its switcher.
         // This catches agent-created scoops (via scoop_scoop tool) that bypass
-        // the panel's scoop-create → scoop-created flow.
+        // the panel's cone-create → scoop-created flow.
         bridge.emitScoopList();
       },
 
@@ -209,6 +210,26 @@ export class OffscreenBridge {
           toolName,
           toolResult: result,
           isError,
+        });
+      },
+
+      onToolUI: (scoopJid, toolName, requestId, html) => {
+        bridge.emit({
+          type: 'agent-event',
+          scoopJid,
+          eventType: 'tool_ui',
+          toolName,
+          requestId,
+          html,
+        });
+      },
+
+      onToolUIDone: (scoopJid, requestId) => {
+        bridge.emit({
+          type: 'agent-event',
+          scoopJid,
+          eventType: 'tool_ui_done',
+          requestId,
         });
       },
 
@@ -390,21 +411,20 @@ export class OffscreenBridge {
         break;
       }
 
-      case 'scoop-create': {
-        const folder =
-          msg.name
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, '-')
-            .replace(/-+$/, '') + (msg.isCone ? '' : '-scoop');
+      case 'cone-create': {
+        // This path is cone-only. Non-cone scoops are created inside the
+        // offscreen orchestrator by the agent's `scoop_scoop` tool, which is
+        // where their path-config defaults (visiblePaths / writablePaths) get
+        // injected. Building a non-cone scoop here would bypass that layer
+        // and yield a sandbox with no writable paths; see #436.
         const scoop: RegisteredScoop = {
-          jid: msg.isCone ? `cone_${Date.now()}` : `scoop_${folder}_${Date.now()}`,
+          jid: `cone_${Date.now()}`,
           name: msg.name,
-          folder,
-          isCone: msg.isCone,
-          type: msg.isCone ? 'cone' : 'scoop',
-          trigger: msg.isCone ? undefined : `@${folder}`,
-          requiresTrigger: !msg.isCone,
-          assistantLabel: msg.isCone ? 'sliccy' : folder,
+          folder: 'cone',
+          isCone: true,
+          type: 'cone',
+          requiresTrigger: false,
+          assistantLabel: 'sliccy',
           addedAt: new Date().toISOString(),
         };
         await this.orchestrator.registerScoop(scoop);
@@ -502,16 +522,26 @@ export class OffscreenBridge {
       }
 
       case 'sprinkle-lick': {
-        // Sprinkle click event from the side panel — route to the cone
+        // Sprinkle lick event from the side panel — route to targetScoop or fall back to cone
         const scoops = this.orchestrator.getScoops();
-        const cone = scoops.find((s) => s.isCone);
-        if (cone) {
-          const lickMsg = msg as any;
+        const lickMsg = msg as any;
+        let target = lickMsg.targetScoop
+          ? scoops.find(
+              (s) =>
+                s.name === lickMsg.targetScoop ||
+                s.folder === lickMsg.targetScoop ||
+                s.folder === `${lickMsg.targetScoop}-scoop`
+            )
+          : undefined;
+        if (!target) {
+          target = scoops.find((s) => s.isCone);
+        }
+        if (target) {
           const msgId = `sprinkle-${lickMsg.sprinkleName}-${Date.now()}`;
           const content = `[Sprinkle Event: ${lickMsg.sprinkleName}]\n\`\`\`json\n${JSON.stringify(lickMsg.body, null, 2)}\n\`\`\``;
           const channelMsg: ChannelMessage = {
             id: msgId,
-            chatJid: cone.jid,
+            chatJid: target.jid,
             senderId: 'sprinkle',
             senderName: `sprinkle:${lickMsg.sprinkleName}`,
             content,
@@ -519,7 +549,7 @@ export class OffscreenBridge {
             fromAssistant: false,
             channel: 'sprinkle',
           };
-          this.getBuffer(cone.jid).push({
+          this.getBuffer(target.jid).push({
             id: msgId,
             role: 'user',
             content,
@@ -527,7 +557,7 @@ export class OffscreenBridge {
             source: 'lick',
             channel: 'sprinkle',
           } as any);
-          this.persistScoop(cone.jid);
+          this.persistScoop(target.jid);
           await this.orchestrator.handleMessage(channelMsg);
         }
         break;
@@ -560,6 +590,22 @@ export class OffscreenBridge {
             id,
             error: err instanceof Error ? err.message : String(err),
           } satisfies PanelCdpResponseMsg);
+        }
+        break;
+      }
+
+      case 'tool-ui-action': {
+        const { requestId, action, data } = msg as import('./messages.js').ToolUIActionMsg;
+        try {
+          await toolUIRegistry.handleAction(requestId, { action, data });
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.error('[offscreen-bridge] Tool UI action failed', {
+            requestId,
+            action,
+            error: errMsg,
+          });
+          toolUIRegistry.cancel(requestId, `Action failed: ${errMsg}`);
         }
         break;
       }

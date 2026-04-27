@@ -62,6 +62,9 @@ struct ServerCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Path to static UI files (dist/ui)")
     var staticRoot: String?
 
+    @Option(name: .long, help: "Path to secrets .env file")
+    var envFile: String?
+
     mutating func run() async throws {
         let config = ServerConfig.resolve(from: self)
         let logLevel = Self.loggerLevel(from: config.logLevel)
@@ -90,6 +93,15 @@ struct ServerCommand: AsyncParsableCommand {
         var browserLabel = config.electron ? "Electron" : (config.webkitMode ? "WebKit" : "Chrome")
         var overlayInjector: ElectronOverlayInjector?
         var webkitProcess: WebKitProcess?
+
+        // Read the Keychain before launching the browser so the macOS ACL
+        // prompt appears in front of the still-focused terminal instead of
+        // stacking behind the new Chrome/Electron window. Post-#493 there
+        // is at most one prompt (single `__envfile__` blob), but it still
+        // pops on the first slicc-server run after Sliccstart wrote the
+        // blob, and SecretStore.all() is what triggers it.
+        let envFileSecrets: [Secret] = config.envFileURL.flatMap { Self.parseEnvFileSecrets(at: $0) } ?? []
+        let secretInjector = SecretInjector(sessionId: UUID().uuidString, envFileSecrets: envFileSecrets)
 
         if config.webkitMode, !config.serveOnly {
             let webkitLauncher = WebKitLauncher(logger: Logger(label: "slicc.webkit-launcher"))
@@ -164,7 +176,7 @@ struct ServerCommand: AsyncParsableCommand {
                 logger: Logger(label: "slicc.static-files")
             )
         )
-        registerAPIRoutes(router: router, lickSystem: lickSystem, config: config, httpClient: httpClient)
+        registerAPIRoutes(router: router, lickSystem: lickSystem, config: config, httpClient: httpClient, secretInjector: secretInjector)
 
         // Install WebKit pipe bridge on the CDP proxy before setting up routes
         if let webkitProcess {
@@ -309,6 +321,8 @@ struct ServerConfig: Sendable, Equatable {
     let prompt: String?
     let browser: String
     let staticRoot: String?
+    let envFile: String?
+    let envFileURL: URL?
 
     var webkitMode: Bool { browser == "webkit" }
 
@@ -329,6 +343,7 @@ struct ServerConfig: Sendable, Equatable {
         let normalizedPrompt = normalizedText(command.prompt)
         let normalizedBrowser = command.browser.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedStaticRoot = normalizedText(command.staticRoot)
+        let normalizedEnvFile = normalizedText(command.envFile)
 
         let positiveCdpPort = command.cdpPort > 0 ? command.cdpPort : defaultCliCdpPort
         let resolvedElectron = command.electron || normalizedElectronApp != nil
@@ -359,7 +374,9 @@ struct ServerConfig: Sendable, Equatable {
             logDirectoryURL: resolvedFileURL(from: normalizedLogDir),
             prompt: normalizedPrompt,
             browser: normalizedBrowser,
-            staticRoot: normalizedStaticRoot
+            staticRoot: normalizedStaticRoot,
+            envFile: normalizedEnvFile,
+            envFileURL: resolvedFileURL(from: normalizedEnvFile)
         )
     }
 
@@ -454,10 +471,20 @@ extension ServerCommand {
 
     static func resolveServePort(
         from environment: [String: String],
-        resolveAvailablePort: (Int) async throws -> Int = findAvailablePort(startingFrom:)
+        resolveAvailablePort: (Int, Bool) async throws -> Int = { preferred, strict in
+            try await findAvailablePort(startingFrom: preferred, strict: strict)
+        }
     ) async throws -> Int {
-        let preferredPort = preferredServePort(from: environment) ?? defaultServePort
-        return try await resolveAvailablePort(preferredPort)
+        // If the launcher or operator explicitly set PORT=..., respect it
+        // strictly — silently binding a neighbouring port would break the
+        // contract with whoever told us which port to use and leave Chrome
+        // pointed at a dead origin. When PORT is not set, fall back to the
+        // permissive walking behaviour so `slicc-server` still starts on a
+        // free neighbour if 5710 is casually in use.
+        if let explicit = preferredServePort(from: environment) {
+            return try await resolveAvailablePort(explicit, true)
+        }
+        return try await resolveAvailablePort(defaultServePort, false)
     }
 
     static func preferredServePort(from environment: [String: String]) -> Int? {
@@ -647,5 +674,18 @@ extension ServerCommand {
 
     struct ParsedTrayJoinURL {
         let joinURL: String
+    }
+
+    /// Parse a .env file into `[Secret]` entries.
+    ///
+    /// Expects KEY=VALUE lines and KEY_DOMAINS=domain1,domain2 lines.
+    /// Keys without a matching _DOMAINS entry are skipped. Shares its parser
+    /// with `SecretStore`'s Keychain blob, so a `--env-file` override and the
+    /// stored blob accept exactly the same syntax.
+    static func parseEnvFileSecrets(at url: URL) -> [Secret]? {
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
+            return nil
+        }
+        return EnvFileFormat.secretsFromBlob(content)
     }
 }

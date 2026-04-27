@@ -1,7 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { handleWorkerRequest } from '../src/index.js';
 
-const env = { TRAY_HUB: {} } as any;
+const fakeAssets = {
+  fetch: async (_req: Request) =>
+    new Response('<html><body>SPA</body></html>', {
+      headers: { 'content-type': 'text/html' },
+    }),
+};
+
+const env = { TRAY_HUB: {}, ASSETS: fakeAssets } as any;
 
 function relayRequest(query: string): Request {
   return new Request(`https://www.sliccy.ai/auth/callback${query}`);

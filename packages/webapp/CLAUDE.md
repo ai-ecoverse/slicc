@@ -30,8 +30,9 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 ### Orchestrator
 
 - Path: `packages/webapp/src/scoops/`
-- `orchestrator.ts` creates and destroys scoops, routes messages, and manages shared runtime state.
+- `orchestrator.ts` creates and destroys scoops, routes messages, and manages shared runtime state. Exposes `observeScoop(jid, handler)` for per-scoop event taps used by the agent bridge; observers are dropped defensively by both `unregisterScoop` and `destroyScoopTab`.
 - `scoop-context.ts` owns per-scoop prompt execution and filesystem/tool isolation.
+- `agent-bridge.ts` wraps the orchestrator into a stable `globalThis.__slicc_agent` surface used by the `agent` shell command. Registers ephemeral sub-scoops with `notifyOnComplete: false` so spawns from any float don't trigger cone turns. Sandbox defaults: `writablePaths = [cwd, /shared/, <scratch>/, /tmp/]`, `visiblePaths = [/workspace/, invokingCwd]` unioned and de-duped; `--read-only` is pure-replace and drops both defaults.
 - `skills.ts`, tray files, and scheduler files extend orchestration rather than the UI directly.
 
 ### VirtualFS
@@ -45,9 +46,10 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 
 - Path: `packages/webapp/src/shell/`
 - `wasm-shell.ts` hosts the just-bash runtime.
-- `supplemental-commands/` contains built-in commands.
-- `jsh-discovery.ts` and `bsh-discovery.ts` auto-register VFS scripts.
-- `vfs-adapter.ts` bridges shell calls into the virtual filesystem.
+- `script-catalog.ts` is the shared `.jsh`/`.bsh` discovery service; it caches behind `FsWatcher` invalidation and bypasses cache for mounted trees where external changes are invisible to the watcher.
+- `supplemental-commands/` contains built-in commands, including `supplemental-commands/agent-command.ts` which forwards `ctx.cwd` as `invokingCwd` and validates `<cwd>` writability via `ctx.fs.canWrite` to prevent nested-scoop sandbox escape.
+- `jsh-discovery.ts` and `bsh-discovery.ts` provide the raw scans used by the shared catalog.
+- `vfs-adapter.ts` bridges shell calls into the virtual filesystem and forwards `canWrite` (duck-typed so both `VirtualFS` and `RestrictedFS` back it without branching).
 
 ### CDP
 
@@ -59,7 +61,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 ### Tools
 
 - Path: `packages/webapp/src/tools/`
-- Active surface is file tools, `bash`, `javascript`, and scoop/nanoclaw helpers.
+- Active surface is file tools, `bash`, and scoop/nanoclaw helpers.
 - Browser automation is intentionally routed through shell commands rather than a separate tool family.
 
 ### Core Agent
@@ -81,6 +83,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 - `main.ts` boots standalone mode or delegates to the extension offscreen client.
 - `layout.ts`, `tabbed-ui.ts`, and `tab-zone.ts` manage the main container model.
 - `preview-sw.ts` serves `/preview/*` content from VFS and is built as a standalone IIFE.
+- **Design-time chat fixture**: load the app with `?ui-fixture=1` (also accepts `?ui-fixture` or `?ui-fixture=true`) to swap the chat view for a synthetic session covering every message variant — user/assistant bubbles, markdown + code blocks, all four tool-call states, the six lick channels, delegation, queued messages, and a streaming tail. Messages live in `chat-fixture.ts` (pure `createChatFixture()`) and persist to a dedicated `session-ui-fixture` id so real scoop storage is untouched; clicking any real scoop cleanly exits fixture mode. Vite HMR picks up CSS changes live against the fixture. When adding new message UI variants, extend `createChatFixture()` and the matching assertion in `tests/ui/chat-fixture.test.ts` so the harness stays comprehensive.
 
 ### Skills
 
@@ -124,7 +127,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 
 - `.jsh` files are JavaScript shell scripts discovered anywhere on the VFS.
 - Command name is the basename without `.jsh`.
-- `packages/webapp/src/shell/jsh-discovery.ts` scans `/workspace/skills` first, then the wider VFS.
+- `packages/webapp/src/shell/script-catalog.ts` shares discovery across `WasmShell`, `which`, and other lookup paths. Raw scanning still comes from `jsh-discovery.ts`, which scans `/workspace/skills` first, then the wider VFS.
 - Scripts run in an async wrapper: prefer top-level `await` and always `await fs.*` operations.
 
 ### `.bsh` browser scripts
@@ -136,7 +139,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
   - `-.okta.com.bsh` → `*.okta.com`
   - `login.okta.com.bsh` → exact host match
 - Optional `// @match` directives in the first 10 lines narrow matching further.
-- `BshWatchdog` reads scripts from VFS and evaluates them in the target page via `BrowserAPI.evaluate()`.
+- `BshWatchdog` uses `ScriptCatalog` for matching and reads script content from VFS before evaluating it in the target page via CDP.
 
 ## Related Guides
 

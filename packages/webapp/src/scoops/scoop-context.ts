@@ -24,10 +24,10 @@ import type {
   TextContent,
   Model,
 } from '../core/index.js';
-import { isContextOverflow } from '@mariozechner/pi-ai';
+import { isContextOverflow, streamSimple } from '@mariozechner/pi-ai';
 import type { AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
 import type { SessionStore } from '../core/session.js';
-import { createFileTools, createBashTool, createJavaScriptTool } from '../tools/index.js';
+import { createFileTools, createBashTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import {
   getApiKey,
@@ -40,6 +40,8 @@ import {
   createScoopManagementTools,
   type ScoopManagementToolsConfig,
 } from './scoop-management-tools.js';
+import { getAdobeSessionId } from './llm-session-id.js';
+import { fetchSecretEnvVars } from '../core/secret-env.js';
 
 const log = createLogger('scoop-context');
 
@@ -53,10 +55,74 @@ export function isImageProcessingError(msg: string): boolean {
   );
 }
 
+/**
+ * Detect errors that are unlikely to succeed on retry.
+ * These include authentication failures, invalid model IDs, and permanent API errors.
+ */
+export function isNonRetryableError(msg: string): boolean {
+  return (
+    // HTTP 4xx errors (except 429 rate limit which is retryable)
+    /\b(401|403|404|405|410|422)\b/.test(msg) ||
+    // Authentication / authorization failures
+    /unauthorized|forbidden|authentication.*failed|invalid.*api.?key/i.test(msg) ||
+    // Invalid model errors
+    /model.*not.*found|invalid.*model|unknown.*model|does.*not.*exist/i.test(msg) ||
+    // Account/billing issues
+    /insufficient.*quota|billing|payment.*required|account.*suspended/i.test(msg) ||
+    // Malformed request (won't succeed on retry)
+    /invalid.*request|malformed|bad.*request/i.test(msg)
+  );
+}
+
+/**
+ * Detect transient errors that may succeed on retry.
+ * Includes rate limits, server errors, and network issues.
+ */
+export function isRetryableError(msg: string): boolean {
+  return (
+    // Rate limiting
+    /\b429\b|rate.*limit|too.*many.*requests|quota.*exceeded/i.test(msg) ||
+    // Server errors (5xx)
+    /\b(500|502|503|504)\b|internal.*server|bad.*gateway|service.*unavailable|gateway.*timeout/i.test(
+      msg
+    ) ||
+    // Network issues
+    /network.*error|connection.*refused|timeout|econnreset|socket.*hang.*up/i.test(msg) ||
+    // Temporary overload
+    /overloaded|temporarily.*unavailable|try.*again/i.test(msg)
+  );
+}
+
+/**
+ * Sleep for `ms` milliseconds, resolving early when the given AbortSignal fires.
+ * Returns `true` if the sleep was aborted, `false` if it completed normally.
+ * Exposed for testing the retry loop's cooperative cancellation.
+ */
+export function abortableSleep(ms: number, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve(false);
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export interface ScoopContextCallbacks {
   onResponse: (text: string, isPartial: boolean) => void;
   onResponseDone: () => void;
   onError: (error: string) => void;
+  /**
+   * Called when a fatal error occurs that cannot be recovered via retry.
+   * Unlike `onError`, this MUST bypass scoop_mute and notify the cone
+   * immediately so the user is aware the scoop is dead.
+   */
+  onFatalError?: (error: string) => void;
   onStatusChange: (status: 'initializing' | 'ready' | 'processing' | 'error') => void;
   /** Called when a tool starts executing */
   onToolStart?: (toolName: string, toolInput: unknown) => void;
@@ -70,12 +136,28 @@ export interface ScoopContextCallbacks {
   onSendMessage: (text: string, sender?: string) => void;
   /** Get all scoops (for cone) */
   getScoops: () => RegisteredScoop[];
+  /** Get tab state for a scoop by JID (cone only). */
+  getScoopTabState?: (jid: string) => import('./types.js').ScoopTabState | undefined;
   /** Feed a prompt to a specific scoop (cone only). */
   onFeedScoop?: (scoopJid: string, prompt: string) => Promise<void>;
   /** Create a new scoop (cone only) */
   onScoopScoop?: (scoop: Omit<RegisteredScoop, 'jid'>) => Promise<RegisteredScoop>;
   /** Drop/remove a scoop (cone only) */
   onDropScoop?: (scoopJid: string) => Promise<void>;
+  /** Mute scoops so their completions are not forwarded to the cone (cone only). */
+  onMuteScoops?: (jids: readonly string[]) => void;
+  /** Unmute scoops; returns any stashed completions so the caller can
+   *  fold them into its tool result (cone only). */
+  onUnmuteScoops?: (
+    jids: readonly string[]
+  ) => Promise<
+    Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
+  >;
+  /** Wait for a batch of scoops to complete (cone only). */
+  onWaitForScoops?: (
+    jids: readonly string[],
+    timeoutMs?: number
+  ) => Promise<Array<{ jid: string; summary: string | null; timedOut: boolean }>>;
   /** Get global CLAUDE.md content (shared across all scoops) */
   getGlobalMemory: () => Promise<string>;
   /** Update global CLAUDE.md (cone only) */
@@ -92,13 +174,17 @@ export class ScoopContext {
   private agent: Agent | null = null;
   private status: 'initializing' | 'ready' | 'processing' | 'error' = 'initializing';
   private isProcessing = false;
+  private disposed = false;
   private didStreamDeltas = false;
   private unsubscribe: (() => void) | null = null;
+  /** Aborts the in-flight prompt() retry loop and any pending backoff sleep. */
+  private promptAbortController: AbortController | null = null;
 
   private sessionStore: SessionStore | null = null;
   private sessionId: string;
   private sessionCreatedAt: number = 0;
   private isRecovering: 'overflow' | 'image' | false = false;
+  private coneJid: string | undefined;
 
   private skillsFs: VirtualFS | null = null;
   private skillsDir: string = '/workspace/skills';
@@ -108,13 +194,18 @@ export class ScoopContext {
     callbacks: ScoopContextCallbacks,
     fs: VirtualFS | RestrictedFS,
     sessionStore?: SessionStore,
-    skillsFs?: VirtualFS
+    skillsFs?: VirtualFS,
+    coneJid?: string
   ) {
     this.scoop = scoop;
     this.callbacks = callbacks;
     this.fs = fs;
     this.sessionStore = sessionStore ?? null;
     this.skillsFs = skillsFs ?? null;
+    this.coneJid = coneJid;
+    // Internal persistence key — stable across days/restarts so saved
+    // conversations can be restored by `SessionStore.load`. The outgoing
+    // Adobe `X-Session-Id` is computed separately in `init()`.
     this.sessionId = scoop.jid;
   }
 
@@ -146,12 +237,22 @@ export class ScoopContext {
 
       const effectiveSkillsFs = (this.skillsFs ?? this.fs) as VirtualFS;
 
+      // Fetch masked secret values from the server to populate shell environment.
+      // Real values never leave the server — only deterministic masked values are used.
+      const secretEnv = await fetchSecretEnvVars();
+
       // Pass effectiveSkillsFs for JSH discovery so scoops can find .jsh files from all loaded skills
       this.shell = new WasmShell({
         fs: this.fs as VirtualFS,
         cwd,
+        env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
         browserAPI: browser,
         jshDiscoveryFs: this.skillsFs ? effectiveSkillsFs : undefined,
+        allowedCommands: this.scoop.config?.allowedCommands,
+        // Forward this scoop's jid so the `agent` supplemental command can
+        // tell the AgentBridge which scoop is the parent of any nested
+        // `agent <cwd> ... <prompt>` invocation — used for model inheritance.
+        getParentJid: () => this.scoop.jid,
       });
       log.info('WasmShell initialized', { folder: this.scoop.folder });
       const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
@@ -161,9 +262,13 @@ export class ScoopContext {
         scoop: this.scoop,
         onSendMessage: this.callbacks.onSendMessage,
         getScoops: this.callbacks.getScoops,
+        getScoopTabState: this.callbacks.getScoopTabState,
         onFeedScoop: this.callbacks.onFeedScoop,
         onScoopScoop: this.callbacks.onScoopScoop,
         onDropScoop: this.callbacks.onDropScoop,
+        onMuteScoops: this.callbacks.onMuteScoops,
+        onUnmuteScoops: this.callbacks.onUnmuteScoops,
+        onWaitForScoops: this.callbacks.onWaitForScoops,
         onSetGlobalMemory: this.callbacks.setGlobalMemory,
         getGlobalMemory: this.callbacks.getGlobalMemory,
       };
@@ -173,7 +278,6 @@ export class ScoopContext {
       const legacyTools = [
         ...createFileTools(this.fs as VirtualFS),
         createBashTool(this.shell),
-        createJavaScriptTool(this.fs as VirtualFS),
         ...scoopManagementTools,
       ];
       const tools = adaptTools(legacyTools);
@@ -217,6 +321,8 @@ export class ScoopContext {
       const model = this.scoop.config?.modelId
         ? resolveModelById(this.scoop.config.modelId)
         : resolveCurrentModel();
+      const label = this.scoop.isCone ? 'Cone' : `Scoop "${this.scoop.name}"`;
+      console.log(`[model] ${label} using model: ${model.id} (provider: ${model.provider})`);
 
       const systemPrompt = this.buildSystemPrompt(globalMemory, scoopMemory, skills);
 
@@ -247,6 +353,23 @@ export class ScoopContext {
         getApiKey: () => getApiKey() ?? undefined,
       });
 
+      // Compute the Adobe session identifier once per init. It is a
+      // daily-rotating random UUID for the cone, and `<uuid>/<hash(folder, uuid)>`
+      // for scoops — salted with the UUID so the scoop folder name never
+      // reaches the provider. Only sent as the `X-Session-Id` header for the
+      // Adobe proxy; other providers receive no such header.
+      const adobeSessionId = await getAdobeSessionId(this.scoop, this.coneJid);
+      const streamWithSessionId: typeof streamSimple = (m, ctx, opts) => {
+        if (m.provider !== 'adobe') return streamSimple(m, ctx, opts);
+        return streamSimple(m, ctx, {
+          ...opts,
+          headers: { ...opts?.headers, 'X-Session-Id': adobeSessionId },
+        });
+      };
+
+      // Guard: dispose() may have run while init() was awaiting above.
+      if (this.disposed) return;
+
       this.agent = new Agent({
         initialState: {
           model,
@@ -254,8 +377,9 @@ export class ScoopContext {
           systemPrompt,
           messages: restoredMessages,
         },
-        getApiKey: () => apiKey,
+        getApiKey: () => getApiKey() ?? undefined,
         transformContext: compactFn,
+        streamFn: streamWithSessionId,
       });
 
       // Subscribe to agent events
@@ -264,6 +388,7 @@ export class ScoopContext {
       this.setStatus('ready');
       log.info('ScoopContext initialized', { folder: this.scoop.folder, toolCount: tools.length });
     } catch (err) {
+      if (this.disposed) return;
       const message = err instanceof Error ? err.message : String(err);
       log.error('ScoopContext init failed', { folder: this.scoop.folder, error: message });
       this.setStatus('error');
@@ -296,24 +421,136 @@ export class ScoopContext {
       return;
     }
 
+    // Capture agent reference to avoid null access if dispose() runs mid-retry
+    const agent = this.agent;
+
+    // Replace any stale controller from a previous aborted run and capture
+    // the signal locally so stop()/dispose() can interrupt backoff sleeps.
+    this.promptAbortController?.abort();
+    const abortController = new AbortController();
+    this.promptAbortController = abortController;
+    const abortSignal = abortController.signal;
+
     this.isProcessing = true;
-    this.didStreamDeltas = false;
     this.setStatus('processing');
 
+    const MAX_RETRIES = 3;
+    const BASE_DELAY_MS = 1000;
+    let lastError: Error | null = null;
+
     try {
-      await this.agent.prompt(text);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.error('Agent error', { folder: this.scoop.folder, error: message });
-      this.callbacks.onError(message);
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        // Check disposal / cancellation before each attempt
+        if (this.disposed || abortSignal.aborted) return;
+
+        // Reset streaming state for each attempt to avoid stale state from previous attempts
+        this.didStreamDeltas = false;
+
+        try {
+          await agent.prompt(text);
+          // Success - exit retry loop
+          lastError = null;
+          break;
+        } catch (err) {
+          // Check disposal / cancellation after await
+          if (this.disposed || abortSignal.aborted) return;
+
+          lastError = err instanceof Error ? err : new Error(String(err));
+          const message = lastError.message;
+
+          // Check if this is a non-retryable error (4xx auth/model errors, etc.)
+          if (isNonRetryableError(message)) {
+            log.error('Non-retryable agent error', {
+              folder: this.scoop.folder,
+              error: message,
+              attempt,
+            });
+            // Fatal error - notify cone immediately, bypassing mute
+            this.setStatus('error');
+            if (this.callbacks.onFatalError) {
+              this.callbacks.onFatalError(
+                `Scoop "${this.scoop.name}" failed with unrecoverable error: ${message}`
+              );
+            } else {
+              this.callbacks.onError(message);
+            }
+            return;
+          }
+
+          // Check if this is a retryable error
+          if (isRetryableError(message) && attempt < MAX_RETRIES) {
+            const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1); // Exponential backoff
+            log.warn('Retryable agent error, will retry', {
+              folder: this.scoop.folder,
+              error: message,
+              attempt,
+              maxRetries: MAX_RETRIES,
+              delayMs: delay,
+            });
+            // Abortable backoff — stop()/dispose() cancels immediately
+            const aborted = await abortableSleep(delay, abortSignal);
+            if (aborted || this.disposed) return;
+            continue;
+          }
+
+          // Unknown error type or final retry - log and continue to failure handling
+          log.error('Agent error', {
+            folder: this.scoop.folder,
+            error: message,
+            attempt,
+            isRetryable: isRetryableError(message),
+          });
+
+          // If we've exhausted retries, break out
+          if (attempt === MAX_RETRIES) {
+            break;
+          }
+
+          // For unknown errors, also apply abortable exponential backoff
+          const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+          const aborted = await abortableSleep(delay, abortSignal);
+          if (aborted || this.disposed) return;
+        }
+      }
+
+      // If we exited the loop with an error, handle final failure
+      if (lastError && !this.disposed && !abortSignal.aborted) {
+        const message = lastError.message;
+        log.error('Agent error after retries exhausted', {
+          folder: this.scoop.folder,
+          error: message,
+          maxRetries: MAX_RETRIES,
+        });
+        // Treat exhausted retries as fatal - notify cone bypassing mute
+        this.setStatus('error');
+        if (this.callbacks.onFatalError) {
+          this.callbacks.onFatalError(
+            `Scoop "${this.scoop.name}" failed after ${MAX_RETRIES} attempts: ${message}`
+          );
+        } else {
+          this.callbacks.onError(message);
+        }
+        return;
+      }
+
+      if (!this.disposed && !abortSignal.aborted) {
+        this.setStatus('ready');
+      }
     } finally {
       this.isProcessing = false;
-      this.setStatus('ready');
+      // Only clear the reference if it's still ours — a later prompt() may
+      // have already installed a new controller.
+      if (this.promptAbortController === abortController) {
+        this.promptAbortController = null;
+      }
     }
   }
 
   /** Stop the current agent operation and clear any queued prompts */
   stop(): void {
+    // Abort before touching the agent so any pending backoff sleep resolves
+    // and the retry loop exits on its next disposal/abort check.
+    this.promptAbortController?.abort();
     this.agent?.clearAllQueues?.();
     this.agent?.abort?.();
     this.isProcessing = false;
@@ -322,7 +559,9 @@ export class ScoopContext {
 
   /** Clear the agent's in-memory conversation history (used by clear-chat). */
   clearMessages(): void {
-    this.agent?.clearMessages();
+    if (this.agent) {
+      this.agent.state.messages = [];
+    }
   }
 
   /** Get the agent's current in-memory messages (for diagnostics). */
@@ -349,7 +588,7 @@ export class ScoopContext {
   updateModel(): void {
     if (!this.agent) return;
     const model = resolveCurrentModel();
-    this.agent.setModel(model);
+    this.agent.state.model = model;
     log.info('Model updated on running agent', { folder: this.scoop.folder, model: model.id });
   }
 
@@ -375,7 +614,7 @@ export class ScoopContext {
     const globalMemory = await this.callbacks.getGlobalMemory();
 
     const newPrompt = this.buildSystemPrompt(globalMemory, scoopMemory, skills);
-    this.agent.setSystemPrompt(newPrompt);
+    this.agent.state.systemPrompt = newPrompt;
 
     log.info('Skills reloaded', {
       folder: this.scoop.folder,
@@ -385,6 +624,12 @@ export class ScoopContext {
 
   /** Cleanup */
   dispose(): void {
+    this.disposed = true;
+    // Cancel any in-flight retry loop / backoff sleep before tearing down the agent.
+    this.promptAbortController?.abort();
+    this.promptAbortController = null;
+    this.agent?.clearAllQueues?.();
+    this.agent?.abort?.();
     this.unsubscribe?.();
     this.shell?.dispose();
     this.agent = null;
@@ -393,11 +638,13 @@ export class ScoopContext {
   }
 
   private setStatus(status: 'initializing' | 'ready' | 'processing' | 'error'): void {
+    if (this.disposed) return;
     this.status = status;
     this.callbacks.onStatusChange(status);
   }
 
   private handleAgentEvent(event: CoreAgentEvent): void {
+    if (this.disposed) return;
     switch (event.type) {
       case 'message_update': {
         const ame = event.assistantMessageEvent as AssistantMessageEvent;
@@ -595,7 +842,7 @@ export class ScoopContext {
       }
 
       // Replace the agent's message history with the trimmed version
-      this.agent.replaceMessages(trimmed);
+      this.agent.state.messages = trimmed;
 
       // Re-prompt with an explanation so the agent can adapt
       const explanation =
@@ -674,7 +921,7 @@ export class ScoopContext {
         stripped++;
       }
 
-      this.agent.replaceMessages(trimmed);
+      this.agent.state.messages = trimmed;
 
       const explanation = `[System: An image was rejected by the API and has been removed from the conversation (${stripped} message(s) affected). The conversation continues without the image.]`;
 
@@ -704,7 +951,7 @@ export class ScoopContext {
     if (!this.fs) return;
 
     const dirs = this.scoop.isCone
-      ? ['/workspace', '/shared', '/scoops', '/home', '/tmp']
+      ? ['/workspace', '/shared', '/scoops', '/home', '/tmp', '/mnt']
       : [
           `/scoops/${this.scoop.folder}`,
           `/scoops/${this.scoop.folder}/workspace`,
@@ -721,7 +968,12 @@ export class ScoopContext {
       }
     }
 
-    // Create default CLAUDE.md if missing
+    // Create default CLAUDE.md if missing. Best-effort: scoops with
+    // pure-replace `writablePaths: []` (or no overlap with the memory
+    // path) have no writable location for this file, and that's a
+    // legitimate configuration — a read-only / audit-style scoop
+    // simply runs without a persisted memory file. Swallowing the
+    // EACCES keeps init on the happy path for zero-write sandboxes.
     const memoryPath = this.scoop.isCone
       ? '/workspace/CLAUDE.md'
       : `/scoops/${this.scoop.folder}/CLAUDE.md`;
@@ -740,7 +992,19 @@ Created: ${new Date().toISOString()}
 ## Context
 (Add important context here)
 `;
-      await this.fs.writeFile(memoryPath, defaultMemory);
+      try {
+        await this.fs.writeFile(memoryPath, defaultMemory);
+      } catch (err) {
+        const code = (err as { code?: string })?.code;
+        if (code === 'EACCES') {
+          log.debug('Skipping default memory write (sandbox is read-only)', {
+            folder: this.scoop.folder,
+            path: memoryPath,
+          });
+        } else {
+          throw err;
+        }
+      }
     }
   }
 
@@ -784,9 +1048,9 @@ Use the **delegate_to_scoop** tool to send work to scoops. IMPORTANT:
 - If the user says "do the same" or references earlier work, YOU must expand that into explicit instructions
 - Use **list_scoops** first to see available scoop names
 
-**You will automatically receive a notification when a scoop finishes.** The notification contains their full response.
+**You will automatically receive a notification when a scoop finishes.** The notification includes a VFS path to the full output, the total line count, and the first 1000 characters.
 You do NOT need to schedule polling tasks or check for completion markers — just delegate and wait. You will be
-prompted again with the scoop's results when they are done. Then you can act on those results (move files, etc.).
+prompted again when they are done, and you can decide whether to inspect the saved file before acting on the result.
 `
     : `
 You are a scoop with restricted filesystem access:

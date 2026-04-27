@@ -2,6 +2,7 @@ import AsyncHTTPClient
 import Foundation
 import Hummingbird
 import HummingbirdTesting
+import HTTPTypes
 import XCTest
 @testable import slicc_server
 
@@ -135,6 +136,61 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
+    func testFetchProxyMissingTargetURLIsTaggedAsProxyError() async throws {
+        // The proxy must mark its own infrastructure errors with X-Proxy-Error: 1
+        // so SecureFetch clients can distinguish them from upstream 4xx/5xx
+        // responses (which must flow through unchanged so curl prints the
+        // body instead of the previous "[object Object]").
+        try await self.withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient
+            )
+
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(uri: "/api/fetch-proxy", method: .post) { response in
+                    XCTAssertEqual(response.status, .badRequest)
+                    XCTAssertEqual(response.headers[HTTPField.Name("X-Proxy-Error")!], "1")
+                    XCTAssertEqual(
+                        try self.decodeJSONObject(from: response.body)["error"],
+                        .string("Missing X-Target-URL header")
+                    )
+                }
+            }
+        }
+    }
+
+    func testFetchProxyUpstreamFailureIsTaggedAsProxyError() async throws {
+        // Pointing the proxy at an unreachable upstream forces the underlying
+        // fetch to throw, which the proxy converts to a 502 — that 502 IS a
+        // proxy infrastructure failure and so must carry the marker.
+        try await self.withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient
+            )
+
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(
+                    uri: "/api/fetch-proxy",
+                    method: .get,
+                    headers: [HTTPField.Name("X-Target-URL")!: "http://127.0.0.1:1/never"]
+                ) { response in
+                    XCTAssertEqual(response.status, .badGateway)
+                    XCTAssertEqual(response.headers[HTTPField.Name("X-Proxy-Error")!], "1")
+                }
+            }
+        }
+    }
+
     func testOAuthResultRoundTripsAndClears() async throws {
         try await self.withHTTPClient { httpClient in
             let router = Router()
@@ -195,7 +251,9 @@ final class APIRoutesTests: XCTestCase {
             logDirectoryURL: nil,
             prompt: nil,
             browser: "chrome",
-            staticRoot: nil
+            staticRoot: nil,
+            envFile: nil,
+            envFileURL: nil
         )
     }
 

@@ -18,10 +18,15 @@ export interface UserMessageMsg {
   messageId: string;
 }
 
-export interface ScoopCreateMsg {
-  type: 'scoop-create';
+/**
+ * Panel → offscreen: bootstrap the cone. Sent exactly once per side-panel
+ * session when no cone exists on disk yet. Non-cone scoops are created by
+ * the agent's `scoop_scoop` tool inside the offscreen orchestrator, not
+ * through this message.
+ */
+export interface ConeCreateMsg {
+  type: 'cone-create';
   name: string;
-  isCone: boolean;
 }
 
 export interface ScoopFeedMsg {
@@ -88,6 +93,8 @@ export interface SprinkleLickMsg {
   type: 'sprinkle-lick';
   sprinkleName: string;
   body: unknown;
+  /** Optional target scoop for routed sprinkle lick events. */
+  targetScoop?: string;
 }
 
 /** Request skill reload after upskill install. */
@@ -95,9 +102,16 @@ export interface ReloadSkillsMsg {
   type: 'reload-skills';
 }
 
+export interface ToolUIActionMsg {
+  type: 'tool-ui-action';
+  requestId: string;
+  action: string;
+  data?: unknown;
+}
+
 export type PanelToOffscreenMessage =
   | UserMessageMsg
-  | ScoopCreateMsg
+  | ConeCreateMsg
   | ScoopFeedMsg
   | ScoopDropMsg
   | AbortMsg
@@ -110,7 +124,8 @@ export type PanelToOffscreenMessage =
   | PanelCdpCommandMsg
   | OAuthRequestMsg
   | SprinkleLickMsg
-  | ReloadSkillsMsg;
+  | ReloadSkillsMsg
+  | ToolUIActionMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)
@@ -119,12 +134,21 @@ export type PanelToOffscreenMessage =
 export interface AgentEventMsg {
   type: 'agent-event';
   scoopJid: string;
-  eventType: 'text_delta' | 'tool_start' | 'tool_end' | 'turn_end' | 'response_done';
+  eventType:
+    | 'text_delta'
+    | 'tool_start'
+    | 'tool_end'
+    | 'turn_end'
+    | 'response_done'
+    | 'tool_ui'
+    | 'tool_ui_done';
   text?: string;
   toolName?: string;
   toolInput?: unknown;
   toolResult?: string;
   isError?: boolean;
+  requestId?: string;
+  html?: string;
 }
 
 export interface ScoopStatusMsg {
@@ -195,6 +219,18 @@ export interface OAuthResultMsg {
   error?: string;
   /** Full redirect URL — needed for implicit grant (token in fragment). */
   redirectUrl?: string;
+}
+
+/**
+ * Service worker → offscreen: a main-frame document response in some tab
+ * carried an `x-slicc` header. Emitted by the webRequest observer.
+ */
+export interface NavigateLickMsg {
+  type: 'navigate-lick';
+  url: string;
+  sliccHeader: string;
+  title?: string;
+  tabId?: number;
 }
 
 export type OffscreenToPanelMessage =
@@ -300,7 +336,7 @@ export interface PanelEnvelope {
 
 export interface ServiceWorkerEnvelope {
   source: 'service-worker';
-  payload: CdpProxyMessage | TraySocketEventMessage | OAuthResultMsg;
+  payload: CdpProxyMessage | TraySocketEventMessage | OAuthResultMsg | NavigateLickMsg;
 }
 
 export type ExtensionMessage = OffscreenEnvelope | PanelEnvelope | ServiceWorkerEnvelope;

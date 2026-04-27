@@ -7,11 +7,46 @@ const workspaceRoot = resolve(__dirname, '../..');
 const uiOutDir = resolve(workspaceRoot, 'dist/ui');
 const previewSwEntry = resolve(__dirname, 'src/ui/preview-sw.ts');
 const electronOverlayEntry = resolve(__dirname, 'src/ui/electron-overlay-entry.ts');
+const sliccEditorEntry = resolve(__dirname, 'src/ui/slicc-editor-entry.ts');
+const sliccDiffEntry = resolve(__dirname, 'src/ui/slicc-diff-entry.ts');
+const lucideIconsEntry = resolve(__dirname, 'src/ui/lucide-icons.ts');
+
+/** esbuild plugin: resolve @pierre/diffs internal imports that aren't in the exports map. */
+function pierreDiffsPlugin() {
+  return {
+    name: 'resolve-pierre-diffs-internals',
+    setup(build: { onResolve: Function }) {
+      build.onResolve({ filter: /^@pierre\/diffs\/dist\// }, (args: { path: string }) => ({
+        path: resolve(workspaceRoot, 'node_modules', args.path.replace(/\.js$/, '') + '.js'),
+      }));
+    },
+  };
+}
 
 export default defineConfig(({ mode }) => ({
   root: workspaceRoot,
   publicDir: resolve(workspaceRoot, 'packages/assets'),
   plugins: [
+    {
+      name: 'stub-pi-node-internals',
+      enforce: 'pre' as const,
+      // pi-coding-agent's compaction.js uses relative imports that pull in
+      // Node-only code. session-manager.js needs fs/crypto/path/url, and
+      // config.js calls fileURLToPath(import.meta.url) at the top level.
+      // Vite resolve.alias can't intercept relative imports inside
+      // node_modules, so we use a resolveId hook instead.
+      resolveId(source, importer) {
+        const normalizedImporter = importer?.replace(/\\/g, '/');
+        if (normalizedImporter?.includes('@mariozechner/pi-coding-agent')) {
+          if (source.endsWith('/session-manager.js')) {
+            return resolve(__dirname, 'src/stubs/pi-session-manager-stub.ts');
+          }
+          if (source.endsWith('/config.js') || source === '../config.js') {
+            return resolve(__dirname, 'src/stubs/pi-config-stub.ts');
+          }
+        }
+      },
+    },
     {
       name: 'build-webapp-runtime-assets',
       configureServer(server) {
@@ -19,6 +54,8 @@ export default defineConfig(({ mode }) => ({
         let cachedSwMtime = 0;
         let cachedOverlayCode: string | null = null;
         let cachedOverlayMtime = 0;
+        // Editor/diff/lucide IIFE bundles are always rebuilt in dev (no mtime cache)
+        // because transitive imports wouldn't invalidate the entry file's mtime.
 
         server.middlewares.use('/preview-sw.js', async (_req, res) => {
           try {
@@ -96,6 +133,73 @@ export default defineConfig(({ mode }) => ({
             );
           }
         });
+
+        server.middlewares.use('/slicc-editor.js', async (_req, res) => {
+          try {
+            const esbuild = await import('esbuild');
+            const result = await esbuild.build({
+              entryPoints: [sliccEditorEntry],
+              bundle: true,
+              write: false,
+              format: 'iife',
+              target: 'esnext',
+              define: { __DEV__: 'true', global: 'globalThis' },
+            });
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(result.outputFiles![0].text);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.error('[slicc-editor] Failed to build:', errMsg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[slicc-editor] Build failed:', ${JSON.stringify(errMsg)});`);
+          }
+        });
+
+        server.middlewares.use('/slicc-diff.js', async (_req, res) => {
+          try {
+            const esbuild = await import('esbuild');
+            const result = await esbuild.build({
+              entryPoints: [sliccDiffEntry],
+              bundle: true,
+              write: false,
+              format: 'iife',
+              target: 'esnext',
+              define: { __DEV__: 'true', global: 'globalThis' },
+              plugins: [pierreDiffsPlugin()],
+            });
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(result.outputFiles![0].text);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.error('[slicc-diff] Failed to build:', errMsg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[slicc-diff] Build failed:', ${JSON.stringify(errMsg)});`);
+          }
+        });
+
+        server.middlewares.use('/lucide-icons.js', async (_req, res) => {
+          try {
+            const esbuild = await import('esbuild');
+            const result = await esbuild.build({
+              entryPoints: [lucideIconsEntry],
+              bundle: true,
+              write: false,
+              format: 'iife',
+              target: 'esnext',
+              define: { __DEV__: 'true', global: 'globalThis' },
+            });
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(result.outputFiles![0].text);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.error('[lucide-icons] Failed to build:', errMsg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[lucide-icons] Build failed:', ${JSON.stringify(errMsg)});`);
+          }
+        });
       },
       async closeBundle() {
         // Keep this config focused on production build artifacts; node-server owns dev serving.
@@ -139,6 +243,39 @@ export default defineConfig(({ mode }) => ({
           ],
         });
 
+        // <slicc-editor> custom element bundle for sprinkle iframes.
+        await esbuild.build({
+          entryPoints: [sliccEditorEntry],
+          bundle: true,
+          outfile: resolve(uiOutDir, 'slicc-editor.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+
+        // <slicc-diff> custom element bundle for sprinkle iframes.
+        await esbuild.build({
+          entryPoints: [sliccDiffEntry],
+          bundle: true,
+          outfile: resolve(uiOutDir, 'slicc-diff.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+          plugins: [pierreDiffsPlugin()],
+        });
+
+        // Lucide icons bundle for sprinkle iframes.
+        await esbuild.build({
+          entryPoints: [lucideIconsEntry],
+          bundle: true,
+          outfile: resolve(uiOutDir, 'lucide-icons.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
         copyFileSync(
           resolve(__dirname, '../assets/logos/favicon.png'),
           resolve(uiOutDir, 'favicon.png')
@@ -162,6 +299,10 @@ export default defineConfig(({ mode }) => ({
     alias: {
       // Buffer polyfill for isomorphic-git (browser compatibility)
       buffer: 'buffer/',
+      // The pinned isomorphic-git package resolves "." to index.cjs, and that
+      // CJS entry imports Node crypto. Force the browser-safe ESM entry
+      // instead.
+      'isomorphic-git': resolve(workspaceRoot, 'node_modules/isomorphic-git/index.js'),
       // just-bash's browser bundle references node:zlib and node:module for
       // gzip/gunzip commands that aren't functional in browsers anyway.
       // Alias to empty stubs so the bundled JS never tries to fetch them.
@@ -196,8 +337,19 @@ export default defineConfig(({ mode }) => ({
     target: 'esnext',
   },
   optimizeDeps: {
+    exclude: ['@mariozechner/pi-coding-agent'],
     esbuildOptions: {
       target: 'esnext',
+    },
+  },
+  server: {
+    watch: {
+      // Anchor to workspaceRoot so the ignore only matches the top-level
+      // .yolo/.intent dirs in the main checkout. Using a bare `**/.yolo/**`
+      // glob matches chokidar's absolute paths, which silently mutes the
+      // watcher for every file when the dev server runs from *inside* a
+      // .yolo/ worktree (e.g. `PORT=5720 npm run dev` in `.yolo/claude-1`).
+      ignored: [resolve(workspaceRoot, '.yolo/**'), resolve(workspaceRoot, '.intent/**')],
     },
   },
   build: {

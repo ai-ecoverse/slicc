@@ -1,21 +1,62 @@
 import Darwin
 import Foundation
 
-enum PortResolverError: Error, Sendable {
+enum PortResolverError: LocalizedError, Sendable {
     case invalidPort(Int)
     case noAvailablePorts(startingFrom: Int)
     case socketFailure(code: Int32, host: String, port: Int)
+    /// Thrown only when `strict: true` was requested and the preferred port
+    /// could not be bound. Callers that asked for an exact port must fail
+    /// loudly instead of silently walking the port space.
+    case preferredPortUnavailable(port: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidPort(let port):
+            return "Port \(port) is outside the valid range 0-65535."
+        case .noAvailablePorts(let start):
+            return "No available ports found starting from \(start)."
+        case .socketFailure(let code, let host, let port):
+            return "Failed to bind \(host):\(port): errno=\(code) (\(String(cString: strerror(code))))."
+        case .preferredPortUnavailable(let port):
+            return "Port \(port) is already in use. Quit the process holding it (e.g. a previous slicc-server or a stale Chrome) and try again."
+        }
+    }
 }
 
 /// Try to bind a TCP socket to the port. If it fails, increment and retry.
 /// Returns the first available port starting from `preferred`.
-func findAvailablePort(startingFrom preferred: Int) async throws -> Int {
+///
+/// - Parameters:
+///   - preferred: The port the caller wants. Passing 0 asks the kernel
+///     to pick any free port.
+///   - strict: When `true`, do not walk the port space on `EADDRINUSE`.
+///     The preferred port is tried exactly once and any bind conflict is
+///     surfaced as `PortResolverError.preferredPortUnavailable`. Use this
+///     when the caller has an externally agreed port (e.g. a launcher set
+///     `PORT=5710`) and binding anywhere else would silently break the
+///     contract with whoever launched us.
+func findAvailablePort(startingFrom preferred: Int, strict: Bool = false) async throws -> Int {
     guard (0...65_535).contains(preferred) else {
         throw PortResolverError.invalidPort(preferred)
     }
 
     if preferred == 0 {
         return try tryListenOnPortDualStack(0)
+    }
+
+    if strict {
+        // Strict mode probes IPv4 only. Hummingbird binds 127.0.0.1 later,
+        // so an IPv6-only occupier on ::1:<preferred> does not actually
+        // block us and must not cause a spurious preferredPortUnavailable.
+        do {
+            return try tryListenOnPort(preferred, host: .ipv4)
+        } catch let error as PortResolverError {
+            if case .socketFailure(let code, _, _) = error, code == EADDRINUSE {
+                throw PortResolverError.preferredPortUnavailable(port: preferred)
+            }
+            throw error
+        }
     }
 
     var port = preferred

@@ -29,11 +29,13 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 ## Top-Level Commands
 
 ```bash
-npm install             # Install dependencies (first time)
-npm run build           # Production build (UI + CLI/Electron)
-npm run test            # Vitest run
-npm run typecheck       # Browser + Node typecheck
-npm run build:extension # Chrome extension build into dist/extension/
+npm install                              # Install dependencies (first time)
+npm run build                            # Production build (all workspaces)
+npm run build -w @slicc/webapp           # UI-only build (faster for UI changes)
+npm run build -w @slicc/chrome-extension # Chrome extension build into dist/extension/
+npm run test                             # Vitest run
+npm run typecheck                        # Browser + Node typecheck
+npm run dev                              # Dev mode with Vite HMR + Chrome + CDP
 ```
 
 For runtime-specific commands, use the nearest guide:
@@ -47,6 +49,17 @@ For runtime-specific commands, use the nearest guide:
 - [`packages/swift-server/CLAUDE.md`](packages/swift-server/CLAUDE.md)
 - [`packages/dev-tools/CLAUDE.md`](packages/dev-tools/CLAUDE.md)
 - [`docs/CLAUDE.md`](docs/CLAUDE.md)
+
+## External Handoffs
+
+In this repo, phrases like `handoff to slicc` or `move this to slicc` mean:
+
+- compose a verb-prefixed instruction: `handoff:<free text>` or `upskill:<github url>`
+- open `https://www.sliccy.ai/handoff?msg=<urlencoded>` in the local browser
+- the cloudflare-worker serves that URL with an `x-slicc: <msg>` response header
+- SLICC observes the header on main-frame navigations via a `navigate` lick and shows an approval prompt to the user
+
+Prefer the helper in `.agents/skills/slicc-handoff/scripts/slicc-handoff` when it exists.
 
 ## Cross-Cutting Principles
 
@@ -73,7 +86,7 @@ Use the ice cream terms in code review comments and docs when they match the dom
 - Auth uses `git config github.token <PAT>`.
 - Network behavior differs by runtime: CLI routes git/fetch traffic through `/api/fetch-proxy`; the extension uses direct fetch.
 
-**Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR)
+**Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP). Vite HMR shares the UI server via `/__vite_hmr`.
 
 ### Parallel Instances
 
@@ -84,7 +97,7 @@ PORT=5720 npm run dev   # Second instance on port 5720
 PORT=5730 npm run dev   # Third instance on port 5730
 ```
 
-Each instance gets an isolated Chrome profile (keyed by port), separate CDP port (auto-detected), and separate HMR port. No shared state between instances.
+Each instance gets an isolated Chrome profile (keyed by port) and separate CDP port (auto-detected). HMR shares the UI server. No shared state between instances.
 
 ## Philosophy
 
@@ -135,15 +148,15 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 ### Key Subsystems
 
-**Orchestrator** (`packages/webapp/src/scoops/orchestrator.ts`): Creates/destroys scoops, routes messages, manages VFS. Cone delegates via `feed_scoop` — scoops get complete self-contained prompts (no access to cone's conversation).
+**Orchestrator** (`packages/webapp/src/scoops/orchestrator.ts`): Creates/destroys scoops, routes messages, manages VFS. Cone delegates via `feed_scoop` — scoops get complete self-contained prompts (no access to cone's conversation). Exposes `observeScoop(jid, handler)` for per-scoop event taps (observers are dropped defensively on both `unregisterScoop` and `destroyScoopTab`). `agent-bridge.ts` publishes `globalThis.__slicc_agent` — the shell-facing surface used by the `agent` supplemental command to spawn ephemeral one-shot sub-scoops with `notifyOnComplete: false` (no cone turn on completion). Extension float proxies the bridge from the side panel to the offscreen agent engine via `chrome.runtime` messages.
 
 **VirtualFS** (`packages/webapp/src/fs/`): POSIX-like async FS backed by LightningFS (IndexedDB). `RestrictedFS` wraps it with path ACLs for scoops. `FsError` carries POSIX error codes.
 
-**Shell** (`packages/webapp/src/shell/`): WasmShell wraps just-bash 2.11.7 (WASM). 78+ commands including `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `convert`, `pdftk`, `skill`, `upskill`, `webhook`, `crontask`, `mount`, `oauth-token`, `debug`. Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`. **Two shell contexts in extension mode**: side panel has its own WasmShell (mounted in terminal tab), offscreen document has the agent's WasmShell (runs bash tool calls). Commands that affect the UI must handle both — use `window.__slicc_*` hooks for direct calls (panel) and `chrome.runtime.sendMessage` relay for offscreen→panel communication.
+**Shell** (`packages/webapp/src/shell/`): WasmShell wraps just-bash 2.11.7 (WASM). 78+ commands including `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `convert`, `pdftk`, `skill`, `upskill`, `webhook`, `crontask`, `mount`, `oauth-token`, `debug`, `agent` (spawn a one-shot sub-scoop via AgentBridge — shell surface for scoop delegation from any float). Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`. **Two shell contexts in extension mode**: side panel has its own WasmShell (mounted in terminal tab), offscreen document has the agent's WasmShell (runs bash tool calls). Commands that affect the UI must handle both — use `window.__slicc_*` hooks for direct calls (panel) and `chrome.runtime.sendMessage` relay for offscreen→panel communication.
 
 **CDP** (`packages/webapp/src/cdp/`): `CDPTransport` interface with WebSocket (CLI) and `chrome.debugger` (extension) implementations. `BrowserAPI` provides Playwright-style API (listPages, navigate, screenshot, evaluate, click, etc.). Screenshots normalize DPR to 1.
 
-**Tools** (`packages/webapp/src/tools/`): Active tool surface: `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, plus NanoClaw tools (`send_message`, cone-only: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory`). Browser automation goes through shell commands via `bash`.
+**Tools** (`packages/webapp/src/tools/`): Active tool surface: `read_file`, `write_file`, `edit_file`, `bash`, plus NanoClaw tools (`send_message`, cone-only: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory`). Browser automation goes through shell commands via `bash`.
 
 **Core Agent** (`packages/webapp/src/core/`): Uses pi-agent-core for agent loop, pi-ai for LLM streaming. `tool-adapter.ts` bridges legacy ToolDefinition to pi-compatible AgentTool. `SessionStore` persists conversations to IndexedDB.
 

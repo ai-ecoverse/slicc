@@ -157,6 +157,49 @@ describe('tray-runtime-config', () => {
     expect(storage.getItem('slicc.trayWorkerBaseUrl')).toBe('https://tray.example.com/base');
   });
 
+  it('resolves a join URL from the page path (worker-served webapp)', async () => {
+    const storage = new MemoryStorage();
+
+    await expect(
+      resolveTrayRuntimeConfig({
+        locationHref:
+          'https://slicc-tray-hub-staging.minivelos.workers.dev/join/tray-id.secret-token',
+        storage,
+        envBaseUrl: null,
+        runtimeConfigFetcher: async () => null,
+      })
+    ).resolves.toEqual({
+      workerBaseUrl: 'https://slicc-tray-hub-staging.minivelos.workers.dev',
+      trayId: 'tray-id',
+      joinUrl: 'https://slicc-tray-hub-staging.minivelos.workers.dev/join/tray-id.secret-token',
+    });
+
+    expect(storage.getItem('slicc.trayJoinUrl')).toBe(
+      'https://slicc-tray-hub-staging.minivelos.workers.dev/join/tray-id.secret-token'
+    );
+    expect(storage.getItem('slicc.trayWorkerBaseUrl')).toBe(
+      'https://slicc-tray-hub-staging.minivelos.workers.dev'
+    );
+  });
+
+  it('prefers query param join URL over path-based join URL', async () => {
+    const storage = new MemoryStorage();
+
+    await expect(
+      resolveTrayRuntimeConfig({
+        locationHref:
+          'https://worker.dev/join/path-tray.path-secret?tray=https://other.dev/join/query-tray.query-secret',
+        storage,
+        envBaseUrl: null,
+        runtimeConfigFetcher: async () => null,
+      })
+    ).resolves.toEqual({
+      workerBaseUrl: 'https://other.dev',
+      trayId: 'query-tray',
+      joinUrl: 'https://other.dev/join/query-tray.query-secret',
+    });
+  });
+
   it('resolves stored tray join state before server, stored leader, or env defaults', async () => {
     const storage = new MemoryStorage();
     storeTrayJoinUrl(storage, 'https://tray.example.com/base/join/tray-join.secret');

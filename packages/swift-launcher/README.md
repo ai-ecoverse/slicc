@@ -60,6 +60,9 @@ and build the native server: `cd packages/swift-server && swift build`
 
 - **Launch browser**: Click any Chromium browser to start SLICC CLI server
   with that browser (standalone mode, temporary profile).
+  Supported bundle IDs include Chrome stable/beta/dev/canary, Chrome for
+  Testing, Edge stable/beta/dev/canary, Brave stable/beta/nightly, Vivaldi,
+  Arc, Dia, ChatGPT Atlas, Opera, and Chromium.
 - **Launch Electron app**: Click any Electron app to attach SLICC as a
   side panel overlay. Multiple apps can run simultaneously on separate ports.
 - **Get extension**: Opens the Chrome Web Store listing to install the

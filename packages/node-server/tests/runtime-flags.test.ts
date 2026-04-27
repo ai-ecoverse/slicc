@@ -24,6 +24,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      envFile: null,
       version: false,
       browser: 'chrome',
     });
@@ -46,6 +47,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      envFile: null,
       version: false,
       browser: 'chrome',
     });
@@ -76,6 +78,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      envFile: null,
       version: false,
       browser: 'chrome',
     });
@@ -100,6 +103,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      envFile: null,
       version: false,
       browser: 'chrome',
     });
@@ -122,6 +126,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      envFile: null,
       version: false,
       browser: 'chrome',
     });
@@ -144,6 +149,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      envFile: null,
       version: false,
       browser: 'chrome',
     });
@@ -166,6 +172,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      envFile: null,
       version: false,
       browser: 'chrome',
     });
@@ -188,6 +195,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      envFile: null,
       version: false,
       browser: 'chrome',
     });
@@ -235,6 +243,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      envFile: null,
       version: false,
       browser: 'chrome',
     });
@@ -257,6 +266,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      envFile: null,
       version: false,
       browser: 'chrome',
     });

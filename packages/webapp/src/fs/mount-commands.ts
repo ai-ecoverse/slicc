@@ -55,7 +55,41 @@ export class MountCommands {
     if (sub === 'list' || sub === '-l') {
       const mounts = this.options.fs.listMounts();
       if (mounts.length === 0) return { stdout: 'No active mounts\n', stderr: '', exitCode: 0 };
-      return { stdout: mounts.map((m) => m).join('\n') + '\n', stderr: '', exitCode: 0 };
+      const mountIndex = this.options.fs.getMountIndex();
+      const lines = mounts.map((m) => {
+        const state = mountIndex.getState(m);
+        if (!state) return m;
+        if (state.status === 'ready') {
+          return `${m} (indexed: ${state.indexed} entries)`;
+        } else if (state.status === 'indexing') {
+          return `${m} (indexing: ${state.indexed} entries...)`;
+        } else if (state.status === 'error') {
+          return `${m} (index error: ${state.error})`;
+        }
+        return `${m} (pending index)`;
+      });
+      return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+    }
+
+    // refresh <path> - re-index a mounted directory
+    if (sub === 'refresh') {
+      const target = args[1];
+      if (!target) return { stdout: '', stderr: 'mount refresh: path required', exitCode: 1 };
+      const targetPath = target.startsWith('/') ? target : `${cwd.replace(/\/$/, '')}/${target}`;
+      try {
+        await this.options.fs.refreshMount(targetPath);
+        return {
+          stdout: `Re-indexed ${targetPath}\n`,
+          stderr: '',
+          exitCode: 0,
+        };
+      } catch (err) {
+        return {
+          stdout: '',
+          stderr: `mount refresh: ${err instanceof Error ? err.message : String(err)}`,
+          exitCode: 1,
+        };
+      }
     }
 
     // mount <target-path>
@@ -93,17 +127,31 @@ export class MountCommands {
       const result = await showToolUIFromContext({
         html: `
           <div class="sprinkle-action-card">
-            <div class="sprinkle-action-card__header">Mount local directory <span class="sprinkle-badge sprinkle-badge--notice">approval</span></div>
-            <div class="sprinkle-action-card__body">The agent wants to mount a local directory at <code>${escapeHtml(targetPath)}</code>. This will give the agent read/write access to files in the directory you select.</div>
+            <div class="sprinkle-action-card__header">Mount at <code>${escapeHtml(targetPath)}</code> <span class="sprinkle-badge sprinkle-badge--notice">approval</span></div>
             <div class="sprinkle-action-card__actions">
               <button class="sprinkle-btn sprinkle-btn--secondary" data-action="deny">Deny</button>
-              <button class="sprinkle-btn sprinkle-btn--primary" data-action="approve">Select directory</button>
+              <button class="sprinkle-btn sprinkle-btn--primary" data-action="approve" data-picker="directory">Select directory</button>
             </div>
           </div>
         `,
-        onAction: async (action) => {
+        onAction: async (action, data) => {
           if (action === 'approve') {
-            // This runs with user gesture context!
+            const d = data as Record<string, unknown> | undefined;
+
+            if (d?.handleInIdb && typeof d.idbKey === 'string') {
+              try {
+                const handle = await loadAndClearPendingHandle(d.idbKey);
+                if (!handle) return { error: 'No directory handle found in storage' };
+                await reactivateHandle(handle);
+                return { approved: true, handle };
+              } catch (err: unknown) {
+                return { error: err instanceof Error ? err.message : String(err) };
+              }
+            }
+
+            if (d?.cancelled) return { cancelled: true };
+            if (d?.error) return { error: String(d.error) };
+
             try {
               const handle = await (
                 window as Window &
@@ -147,8 +195,40 @@ export class MountCommands {
       }
 
       dirHandle = res.handle;
+    } else if (typeof chrome !== 'undefined' && !!chrome?.runtime?.id) {
+      // Extension terminal: picker must run in popup window so macOS TCC
+      // dialogs render properly (side panel can't host them → renderer crash)
+      try {
+        const result = await openMountPickerPopup();
+        if (result.cancelled) {
+          return { stdout: '', stderr: 'mount: cancelled', exitCode: 1 };
+        }
+        if (result.error) {
+          return { stdout: '', stderr: `mount: ${result.error}`, exitCode: 1 };
+        }
+        if (result.handleInIdb && typeof result.idbKey === 'string') {
+          const handle = await loadAndClearPendingHandle(result.idbKey);
+          if (!handle) {
+            return {
+              stdout: '',
+              stderr: 'mount: no directory handle found in storage',
+              exitCode: 1,
+            };
+          }
+          await reactivateHandle(handle);
+          dirHandle = handle;
+        } else {
+          return { stdout: '', stderr: 'mount: unexpected popup result', exitCode: 1 };
+        }
+      } catch (err: unknown) {
+        return {
+          stdout: '',
+          stderr: `mount: ${err instanceof Error ? err.message : String(err)}`,
+          exitCode: 1,
+        };
+      }
     } else {
-      // Terminal/interactive: direct picker (has user gesture)
+      // CLI/standalone: direct picker (TCC dialogs work in regular page context)
       try {
         dirHandle = await (
           window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
@@ -168,7 +248,10 @@ export class MountCommands {
     try {
       await this.options.fs.mount(targetPath, dirHandle);
       return {
-        stdout: `Mounted '${dirHandle.name}' → ${targetPath} (live bridge — reads and writes go to the real filesystem)\n`,
+        stdout:
+          `Mounted '${dirHandle.name}' → ${targetPath}\n` +
+          `Indexing in background for fast file discovery.\n` +
+          `Note: External changes are not auto-detected — use 'mount refresh ${targetPath}' after modifying files outside the browser.\n`,
         stderr: '',
         exitCode: 0,
       };
@@ -188,26 +271,110 @@ export class MountCommands {
           'Usage: mount <target-path>',
           '       mount unmount <path>',
           '       mount list',
+          '       mount refresh <path>',
           '',
           'Transparently bridge a real filesystem directory into the virtual filesystem.',
           'Opens a directory picker; all reads and writes under <target-path> go directly',
           'to the real directory — no copying occurs. Changes are immediately visible on',
-          'both sides.',
+          'both sides. Mount points must be empty so existing VFS files are not hidden.',
+          '',
+          'Upon mounting, files are indexed asynchronously for fast discovery. External',
+          'changes (made outside the browser) are NOT automatically detected — use',
+          '`mount refresh` to re-index after external modifications.',
           '',
           'Arguments:',
           '  <target-path>  Mount point in the virtual filesystem (required).',
           '',
           'Sub-commands:',
-          '  unmount <path>  Remove a mount point',
-          '  list            Show active mount points',
+          '  unmount <path>   Remove a mount point',
+          '  list             Show active mount points and index status',
+          '  refresh <path>   Re-index a mount after external changes',
           '',
           'Examples:',
-          '  mount /workspace/myapp   # Mount selected dir at /workspace/myapp',
-          '  mount list               # Show active mounts',
-          '  mount unmount /workspace/myapp',
+          '  mount /mnt/myapp           # Mount selected dir at /mnt/myapp',
+          '  mount list                 # Show active mounts with index status',
+          '  mount refresh /mnt/myapp   # Re-index after external changes',
+          '  mount unmount /mnt/myapp',
         ].join('\n') + '\n',
       stderr: '',
       exitCode: 0,
     };
   }
+}
+
+async function reactivateHandle(handle: FileSystemDirectoryHandle): Promise<void> {
+  type HandleWithPermission = FileSystemDirectoryHandle & {
+    requestPermission?: (opts: { mode: string }) => Promise<string>;
+  };
+  const h = handle as HandleWithPermission;
+  if (h.requestPermission) {
+    const state = await h.requestPermission({ mode: 'readwrite' });
+    if (state !== 'granted') {
+      throw new Error(`Permission denied for "${handle.name}" (${state})`);
+    }
+  }
+}
+
+function openMountPickerPopup(): Promise<Record<string, unknown>> {
+  const popupRequestId = `mount-${Date.now().toString(36)}`;
+  return new Promise((resolve) => {
+    const url = chrome.runtime.getURL(
+      `mount-popup.html?requestId=${encodeURIComponent(popupRequestId)}`
+    );
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      chrome.runtime.onMessage.removeListener(listener);
+    };
+
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve({ cancelled: true });
+    }, 60_000);
+
+    const listener = (msg: unknown) => {
+      const m = msg as Record<string, unknown>;
+      if (!m || m.source !== 'mount-popup' || m.requestId !== popupRequestId) return;
+      cleanup();
+      resolve(m);
+    };
+    chrome.runtime.onMessage.addListener(listener);
+
+    chrome.windows
+      .create({ url, type: 'popup', width: 300, height: 80, focused: true })
+      .catch(() => {
+        cleanup();
+        resolve({ error: 'Failed to open directory picker window' });
+      });
+  });
+}
+
+async function loadAndClearPendingHandle(
+  idbKey: string
+): Promise<FileSystemDirectoryHandle | null> {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const req = indexedDB.open('slicc-pending-mount', 1);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains('handles')) {
+        req.result.createObjectStore('handles');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  const tx = db.transaction('handles', 'readwrite');
+  const store = tx.objectStore('handles');
+  const getReq = store.get(idbKey);
+  const deleteReq = store.delete(idbKey);
+  deleteReq.onerror = () => {
+    console.warn('[mount] Failed to delete pending handle from IDB', idbKey, deleteReq.error);
+  };
+  const handle = await new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
+    tx.oncomplete = () => resolve(getReq.result ?? null);
+    getReq.onerror = () => reject(getReq.error ?? new Error('IDB get failed'));
+    tx.onerror = () => reject(tx.error ?? new Error('IDB transaction failed'));
+    tx.onabort = () => reject(tx.error ?? new Error('IDB transaction aborted'));
+  });
+  db.close();
+  return handle;
 }

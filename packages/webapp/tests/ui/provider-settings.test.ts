@@ -1151,6 +1151,79 @@ describe('getProviderModels with getModelIds', () => {
   });
 });
 
+describe('Adobe sonnet model preference', () => {
+  function setupAdobeProvider(modelIds: Array<{ id: string; name: string; api?: string }>) {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('adobe', {
+      id: 'adobe',
+      name: 'Adobe',
+      description: 'Adobe provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      defaultModelId: 'sonnet',
+      getModelIds: () => modelIds,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+    saveOAuthAccount({ providerId: 'adobe', accessToken: 'tok-test' });
+  }
+
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+    mockGetProviders.mockReturnValue(['anthropic']);
+    mockGetModels.mockImplementation((providerId: string) => {
+      if (providerId === 'anthropic') {
+        return [
+          { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', reasoning: true },
+          { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', reasoning: true },
+        ];
+      }
+      return [];
+    });
+  });
+
+  it('resolveCurrentModel prefers sonnet for Adobe when no model selected', () => {
+    setupAdobeProvider([
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+    ]);
+    storage.set('selected-model', 'adobe:');
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('claude-sonnet-4-6');
+  });
+
+  it('resolveCurrentModel respects explicit selection over sonnet preference', () => {
+    setupAdobeProvider([
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
+    ]);
+    storage.set('selected-model', 'adobe:claude-opus-4-6');
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('claude-opus-4-6');
+  });
+
+  it('resolveCurrentModel falls back to first model when no sonnet available', () => {
+    setupAdobeProvider([
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' },
+    ]);
+    storage.set('selected-model', 'adobe:');
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('claude-opus-4-6');
+  });
+
+  it('does NOT apply defaultModelId preference for providers without it', () => {
+    addAccount('anthropic', 'ant-key');
+    // No selected-model — anthropic has no defaultModelId, so picks first model
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('claude-opus-4-6');
+  });
+});
+
 describe('model metadata overrides', () => {
   beforeEach(() => {
     storage.clear();

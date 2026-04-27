@@ -14,7 +14,6 @@ type DebuggerDetachListener = (source: { tabId: number }, reason: string) => voi
 
 const runtimeMessageListeners: OnMessageListener[] = [];
 const runtimeSentMessages: unknown[] = [];
-const installedListeners: Array<() => void> = [];
 const debuggerEventListeners: DebuggerEventListener[] = [];
 const debuggerDetachListeners: DebuggerDetachListener[] = [];
 
@@ -59,6 +58,16 @@ function createChromeMock() {
       hasDocument: vi.fn(async () => true),
       createDocument: vi.fn(),
     },
+    action: {
+      setBadgeText: vi.fn(async () => undefined),
+      setBadgeBackgroundColor: vi.fn(async () => undefined),
+    },
+    storage: {
+      local: {
+        get: vi.fn(async () => ({})),
+        set: vi.fn(async () => undefined),
+      },
+    },
     runtime: {
       sendMessage: vi.fn(async (message: unknown) => {
         runtimeSentMessages.push(message);
@@ -69,14 +78,23 @@ function createChromeMock() {
         }),
       },
       onInstalled: {
-        addListener: vi.fn((listener: () => void) => {
-          installedListeners.push(listener);
-        }),
+        addListener: vi.fn(),
       },
     },
     tabs: {
       query: vi.fn(async () => []),
       create: vi.fn(async ({ url }: { url: string }) => ({ id: 123, url })),
+      remove: vi.fn(async () => undefined),
+      group: vi.fn(async () => 1),
+      onCreated: {
+        addListener: vi.fn(),
+      },
+      onUpdated: {
+        addListener: vi.fn(),
+      },
+    },
+    tabGroups: {
+      update: vi.fn(async () => undefined),
     },
     debugger: {
       attach: vi.fn(),
@@ -93,6 +111,15 @@ function createChromeMock() {
         }),
       },
     },
+    identity: {
+      launchWebAuthFlow: vi.fn(),
+      getRedirectURL: vi.fn(),
+    },
+    webRequest: {
+      onHeadersReceived: {
+        addListener: vi.fn(),
+      },
+    },
   };
 }
 
@@ -102,11 +129,19 @@ function dispatchOffscreenMessage(payload: unknown): void {
   }
 }
 
-describe('extension service worker tray socket proxy', () => {
+async function flushAsync(): Promise<void> {
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function loadServiceWorker(): Promise<void> {
+  await import('../src/service-worker.js');
+}
+
+describe('extension service worker', () => {
   beforeEach(async () => {
     runtimeMessageListeners.length = 0;
     runtimeSentMessages.length = 0;
-    installedListeners.length = 0;
     debuggerEventListeners.length = 0;
     debuggerDetachListeners.length = 0;
     MockWebSocket.instances.length = 0;
@@ -118,7 +153,7 @@ describe('extension service worker tray socket proxy', () => {
     (globalThis as typeof globalThis & { WebSocket: typeof MockWebSocket }).WebSocket =
       MockWebSocket as never;
 
-    await import('../src/service-worker.js');
+    await loadServiceWorker();
   });
 
   it('hosts the leader tray socket in the service worker and relays frames', async () => {
@@ -154,7 +189,7 @@ describe('extension service worker tray socket proxy', () => {
 
   it('reports tray socket command failures back to offscreen', async () => {
     dispatchOffscreenMessage({ type: 'tray-socket-send', id: 99, data: '{"type":"ping"}' });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushAsync();
 
     expect(runtimeSentMessages).toContainEqual({
       source: 'service-worker',

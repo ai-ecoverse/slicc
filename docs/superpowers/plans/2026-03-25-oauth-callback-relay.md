@@ -172,7 +172,7 @@ Change `redirectUri`:
 {
   "proxyEndpoint": "https://adobe-llm-proxy.paolo-moz.workers.dev",
   "redirectUri": "https://www.sliccy.ai/auth/callback",
-  "extensionRedirectUri": "https://akggccfpkleihhemkkikggopnifgelbk.chromiumapp.org/adobe"
+  "extensionRedirectUri": "https://akjjllgokmbgpbdbmafpiefnhidlmbgf.chromiumapp.org/adobe"
 }
 ```
 

@@ -7,6 +7,7 @@
  */
 
 import { collectThemeCSS } from './sprinkle-renderer.js';
+import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
 
@@ -23,11 +24,18 @@ const BRIDGE_SCRIPT = `(function() {
     parent.postMessage({ type: 'inline-sprinkle-height',
       height: document.documentElement.scrollHeight }, '*');
   }
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'slicc-theme') {
+      document.documentElement.classList.toggle('theme-light', !!e.data.isLight);
+    }
+  });
   window.addEventListener('load', function() {
     reportHeight();
     new ResizeObserver(reportHeight).observe(document.body);
   });
-  /* Support data-action attributes (Tool UI compat) — auto-lick on click */
+  /* Support data-action attributes (Tool UI compat) — auto-lick on click.
+     Also intercept <a href> clicks and relay to the parent so links open
+     despite the iframe sandbox blocking top-level navigation. */
   document.addEventListener('click', function(e) {
     var el = e.target;
     while (el && el !== document.body) {
@@ -35,6 +43,19 @@ const BRIDGE_SCRIPT = `(function() {
         var actionData = el.dataset.actionData;
         if (actionData) { try { actionData = JSON.parse(actionData); } catch(ex) {} }
         window.slicc.lick({ action: el.dataset.action, data: actionData || null });
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (el.tagName === 'A' && el.getAttribute('href')) {
+        var href = el.getAttribute('href');
+        /* Allow in-iframe anchor navigation (#foo). Skip javascript: for safety. */
+        if (href.charAt(0) === '#') return;
+        if (/^javascript:/i.test(href)) { e.preventDefault(); return; }
+        /* Resolve relative URLs against the iframe's base. */
+        var resolved;
+        try { resolved = new URL(href, document.baseURI).href; } catch(ex) { resolved = href; }
+        parent.postMessage({ type: 'inline-sprinkle-open-link', url: resolved }, '*');
         e.preventDefault();
         e.stopPropagation();
         return;
@@ -58,16 +79,18 @@ export function mountInlineSprinkle(
   onLick: (action: string, data: unknown) => void
 ): InlineSprinkleInstance {
   const themeCSS = collectThemeCSS();
+  const htmlClass = isThemeLight() ? ' class="theme-light"' : '';
 
   const srcdoc = `<!DOCTYPE html>
-<html><head>
+<html${htmlClass}><head>
 <meta charset="utf-8">
 <style>${themeCSS}</style>
 <style>html,body{margin:0;padding:0;overflow:hidden;background:transparent;box-sizing:border-box}
 *,*::before,*::after{box-sizing:inherit}
 body{font-family:var(--s2-font-family, sans-serif);font-size:13px;color:var(--s2-content-default)}</style>
 <style>.sprinkle-inline{padding:var(--s2-spacing-100) 0}
-.sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px;box-shadow:none;background:var(--s2-bg-elevated)}
+.sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px;box-shadow:none}
+.sprinkle-inline .sprinkle-btn:not([class*="sprinkle-btn--"]){background:var(--s2-bg-elevated)}
 .sprinkle-inline .sprinkle-card{box-shadow:none;margin:0}
 .sprinkle-inline .sprinkle-action-card{margin:0;width:100%}
 .sprinkle-inline .sprinkle-action-card .sprinkle-table{width:100%}
@@ -94,6 +117,15 @@ mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inheri
 .c-green{background:#27500A;color:#EAF3DE}
 </style>
 <script>${BRIDGE_SCRIPT}</script>
+${
+  // Custom element bundles are loaded via src in CLI mode (same-origin).
+  // In extension mode, inline sprinkles route through sprinkle-sandbox.html
+  // which handles lazy-loading for fragment content. Full custom element
+  // support in extension inline sprinkles requires the full-doc inlining path.
+  content.includes('<slicc-editor') ? '<script src="/slicc-editor.js"></script>' : ''
+}
+${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : ''}
+<script src="/lucide-icons.js"></script>
 </head>
 <body class="sprinkle-inline">${content}</body></html>`;
 
@@ -106,6 +138,9 @@ mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inheri
   iframe.style.cssText = 'width:100%;border:none;overflow:hidden;display:block;';
   iframe.srcdoc = srcdoc;
   container.appendChild(iframe);
+  iframe.addEventListener('load', () => registerSprinkleWindow(iframe.contentWindow), {
+    once: true,
+  });
 
   const messageHandler = (event: MessageEvent) => {
     if (event.source !== iframe.contentWindow) return;
@@ -116,6 +151,8 @@ mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inheri
       onLick(msg.action, msg.data);
     } else if (msg.type === 'inline-sprinkle-height') {
       iframe.style.height = msg.height + 'px';
+    } else if (msg.type === 'inline-sprinkle-open-link') {
+      openInlineSprinkleLink(msg.url);
     }
   };
   window.addEventListener('message', messageHandler);
@@ -123,9 +160,25 @@ mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inheri
   return {
     dispose() {
       window.removeEventListener('message', messageHandler);
+      unregisterSprinkleWindow(iframe.contentWindow);
       iframe.remove();
     },
   };
+}
+
+/**
+ * Open a link from a sandboxed inline sprinkle in a new tab. Only http(s)
+ * and mailto: URLs are allowed to avoid navigating the host page through
+ * javascript:/data: schemes relayed from the iframe.
+ */
+function openInlineSprinkleLink(url: unknown): void {
+  if (typeof url !== 'string' || !url) return;
+  if (!/^(https?:|mailto:)/i.test(url)) return;
+  try {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } catch {
+    /* extension window.open may return null — fire and forget */
+  }
 }
 
 /**
@@ -190,6 +243,8 @@ function mountInlineSprinkleExtension(
       onLick(msg.action, msg.data);
     } else if (msg.type === 'inline-sprinkle-height') {
       iframe.style.height = msg.height + 'px';
+    } else if (msg.type === 'inline-sprinkle-open-link') {
+      openInlineSprinkleLink(msg.url);
     }
   };
   window.addEventListener('message', messageHandler);
@@ -197,7 +252,11 @@ function mountInlineSprinkleExtension(
   iframe.addEventListener(
     'load',
     () => {
-      iframe.contentWindow?.postMessage({ type: 'inline-sprinkle-render', srcdoc }, '*');
+      registerSprinkleWindow(iframe.contentWindow);
+      iframe.contentWindow?.postMessage(
+        { type: 'inline-sprinkle-render', srcdoc, isLight: isThemeLight() },
+        '*'
+      );
     },
     { once: true }
   );
@@ -205,6 +264,7 @@ function mountInlineSprinkleExtension(
   return {
     dispose() {
       window.removeEventListener('message', messageHandler);
+      unregisterSprinkleWindow(iframe.contentWindow);
       iframe.remove();
     },
   };

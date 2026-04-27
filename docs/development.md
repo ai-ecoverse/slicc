@@ -6,14 +6,13 @@ Build, run, test, and debug SLICC locally.
 
 | Command                                                                                           | What It Does                                                                                                              | When to Use                                                                                            |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `npm run dev:full`                                                                                | Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710)                                                                  | Interactive development; live reload; test browser features                                            |
+| `npm run dev`                                                                                     | Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710)                                                                  | Interactive development; live reload; test browser features                                            |
 | `npm run dev:electron -- /Applications/Slack.app`                                                 | Launch the main CLI in Electron attach mode against an Electron app                                                       | Electron overlay/runtime work                                                                          |
-| `npm run dev`                                                                                     | Vite dev server only (no Chrome/CDP)                                                                                      | Quick UI iteration without launching browser                                                           |
 | `npm run start:extension`                                                                         | Rebuild the extension, then launch the CLI with the dedicated extension profile auto-loading `dist/extension`             | Extension verification without re-loading unpacked extension by hand                                   |
-| `npm run build`                                                                                   | Production build: Vite UI + TSC CLI/Electron Node target                                                                  | Pre-deployment validation; final bundle check                                                          |
-| `npm run build:ui`                                                                                | Vite build only into `dist/ui/`                                                                                           | Build UI assets separately                                                                             |
-| `npm run build:cli`                                                                               | TSC build only into `dist/node-server/`                                                                                   | Build CLI server + Electron attach helpers separately                                                  |
-| `npm run build:extension`                                                                         | Chrome extension bundle into `dist/extension/`                                                                            | Build extension; load in `chrome://extensions`                                                         |
+| `npm run build`                                                                                   | Production build: all workspaces (webapp, node-server, extension, worker, swift)                                          | Pre-deployment validation; final bundle check                                                          |
+| `npm run build -w @slicc/webapp`                                                                  | Vite build only into `dist/ui/`                                                                                           | Build UI assets separately (faster iteration for UI-only changes)                                      |
+| `npm run build -w @slicc/node-server`                                                             | TSC build only into `dist/node-server/`                                                                                   | Build CLI server + Electron attach helpers separately                                                  |
+| `npm run build -w @slicc/chrome-extension`                                                        | Chrome extension bundle into `dist/extension/`                                                                            | Build extension; load in `chrome://extensions`                                                         |
 | `npm run package:release`                                                                         | Package deterministic extension + Node/CLI release artifacts into `artifacts/release/` (after running the build commands) | Prepare CI/local release assets for GitHub Releases and later npm publish wiring                       |
 | `npm run start`                                                                                   | Run production CLI (requires build first)                                                                                 | Run built production bundle                                                                            |
 | `npm run start:electron -- /Applications/Slack.app`                                               | Run the built Electron attach mode                                                                                        | Smoke-test production Electron output                                                                  |
@@ -34,10 +33,10 @@ Releases are automated with semantic-release. Maintainers do not cut version tag
 ### End-to-end flow
 
 1. Merge or push conventional-commit changes onto `main`, or manually dispatch `.github/workflows/release.yml` against `main`.
-2. The release workflow runs `npm ci`, `npm run typecheck`, `npm run test`, `npm run build`, and `npm run build:extension` before calling `npx semantic-release`.
+2. The release workflow runs `npm ci`, `npm run typecheck`, `npm run test`, and `npm run build` before calling `npx semantic-release`.
 3. `.releaserc.json` limits publishing to `main`, so the semantic-release run exits without publishing when invoked from other refs.
-4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, `node dist/node-server/sync-release-version.js <version>` updates the root `manifest.json`, and `npm run build:extension && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
-5. During publish, semantic-release publishes the `sliccy` npm package via GitHub Actions OIDC trusted publishing and creates a GitHub Release with generated release notes plus the packaged assets from `artifacts/release/`.
+4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, `node dist/node-server/sync-release-version.js <version>` updates the extension `manifest.json`, and `npm run build -w @slicc/chrome-extension && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
+5. During publish, semantic-release publishes the `sliccy` npm package via GitHub Actions OIDC trusted publishing, runs `npm run publish:worker` and `npm run publish:chrome`, and then creates a GitHub Release with generated release notes plus the packaged assets from `artifacts/release/`.
 
 ### GitHub Release outputs
 
@@ -61,6 +60,11 @@ Each published GitHub Release includes semantic-release generated release notes 
 - Commit format: merges intended to trigger releases must use conventional commits so semantic-release can determine the next version.
 - npm trusted publisher: configure the `sliccy` package on npm to trust this repository's GitHub Actions release workflow. npm exposes trusted publishers per package in the package settings UI, and each package can only have one trusted publisher configured at a time.
 - First publish bootstrap: npm trusted publishing cannot do the very first publish for a brand-new package. A maintainer must publish the initial `sliccy` version manually/bootstrap it once so the package exists on npm, then attach the trusted publisher for subsequent GitHub Actions OIDC releases from `main`.
+- Chrome Web Store service account: enable the Chrome Web Store API in Google Cloud, create a service account, and add that service-account email in the Chrome Web Store Developer Dashboard for this publisher.
+- GitHub Actions release env for Chrome Web Store:
+  - repo secret `CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON` containing the service-account JSON key
+  - repo variables `CHROME_WEB_STORE_PUBLISHER_ID` and `CHROME_WEB_STORE_ITEM_ID`
+  - optional repo variables `CHROME_WEB_STORE_PUBLISH_TYPE`, `CHROME_WEB_STORE_DEPLOY_PERCENTAGE`, `CHROME_WEB_STORE_FORCE_CANCEL_PENDING`, and `CHROME_WEB_STORE_SKIP_REVIEW`
 - GitHub permissions: the release workflow must keep GitHub Actions `contents: write` access so semantic-release can create tags/releases and upload release assets, plus `id-token: write` so npm trusted publishing can mint the OIDC token. If you replace the default `GITHUB_TOKEN`, use a token with equivalent release/asset write access.
 
 ### Local packaging and dry-run checks
@@ -69,22 +73,38 @@ Run the packaging flow after the normal production builds:
 
 ```bash
 npm run build
-npm run build:extension
 npm run package:release
 ```
 
 For a local semantic-release config check, run `npx semantic-release --dry-run --no-ci` from a clone of `main` with full git history. This validates branch/configuration and GitHub release wiring, but local runs do not receive the GitHub Actions OIDC token that npm trusted publishing uses in CI.
 
+To validate the Chrome Web Store publisher locally after `npm run package:release`, export the Chrome Web Store env vars above and run:
+
+```bash
+npm run publish:chrome
+```
+
+For a side-effect-free local verification, set `CHROME_WEB_STORE_DRY_RUN=true`:
+
+```bash
+CHROME_WEB_STORE_DRY_RUN=true npm run publish:chrome
+```
+
+That dry run checks release packaging, exchanges the service-account token, and fetches the current item status, but it does not cancel pending reviews, upload a ZIP, or publish a new revision.
+
+If the Chrome Web Store env vars are all unset, `npm run publish:chrome` exits without publishing. If the configuration is partial, it fails fast with the missing variable names.
+If a Chrome Web Store revision is already pending review, `npm run publish:chrome` warns and skips the Chrome publish step by default so the rest of the release can continue. Set `CHROME_WEB_STORE_FORCE_CANCEL_PENDING=true` to cancel the pending review and re-submit automatically instead.
+
 When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browser runtime now exposes it at `/api/runtime-config` and the cone runtime will automatically create/attach a tray leader session on startup. Passing `--lead` to the CLI launches Chrome with the canonical `?tray=<worker-base-url>` query, and successful leader attach rewrites the visible URL to `?tray=<worker-base-url>/tray/<trayId>`. Passing `--join <join-url>` launches Chrome with the canonical `?tray=<join-url>` follower capability instead; the CLI validates that the value parses as a tray `.../join/<trayId>.<secret>` URL and strips any hash/query suffixes before launch. In standalone/Electron startup, if there is no query override, stored join/base URL, server runtime config, or `VITE_WORKER_BASE_URL`, the browser falls back to the staging worker in dev builds and the production worker in normal builds. Extension/offscreen builds can still use `VITE_WORKER_BASE_URL`, persisted runtime storage, or URL overrides via `tray` (canonical) plus legacy `lead` / `trayWorkerUrl` for the same leader-join path. `GET /join/:token` now reports readiness plus the supported bootstrap transport (`409 FOLLOWER_JOIN_NOT_READY` before a live leader, `200` with `signaling.transport = 'http-poll'` once the leader WebSocket is live), while **`POST /join/:token` remains the follower HTTP contract**: initial attach returns `result.action = wait|signal|fail`, and subsequent `poll` / `answer` / `ice-candidate` / `retry` actions drive the offer/answer/ICE bootstrap without requiring follower-owned tray WebSockets.
 
 ## Ports (CLI Mode Only)
 
-| Port  | Service            | Mode                        |
-| ----- | ------------------ | --------------------------- |
-| 5710  | UI server          | CLI + Electron embedded app |
-| 9222  | Chrome CDP         | CLI only                    |
-| 9223  | Electron CDP       | Electron float only         |
-| 24679 | Vite HMR WebSocket | CLI/Electron dev mode       |
+| Port | Service            | Mode                                    |
+| ---- | ------------------ | --------------------------------------- |
+| 5710 | UI server          | CLI + Electron embedded app             |
+| 9222 | Chrome CDP         | CLI only                                |
+| 9223 | Electron CDP       | Electron float only                     |
+| —    | Vite HMR WebSocket | Shares UI server port via `/__vite_hmr` |
 
 ## Environment Variables
 
@@ -110,7 +130,7 @@ All four build gates MUST pass:
 
 Manual verification in the relevant runtimes:
 
-- [ ] Feature works in CLI mode (`npm run dev:full`)
+- [ ] Feature works in CLI mode (`npm run dev`)
   - Launch Chrome automatically
   - Navigate to http://localhost:5710
   - Interact with UI; check functionality
@@ -166,9 +186,11 @@ Use these before relying on CI:
 - `npx wrangler deploy --dry-run --config packages/cloudflare-worker/wrangler.jsonc`
 - `cd packages/cloudflare-worker && WORKER_BASE_URL=<deployed-worker-url> npm test -- tests/deployed.test.ts`
 
+The worker also serves a lightweight handoff page at `GET /handoff` that echoes the `msg` query parameter into an `x-slicc` response header. See `docs/slicc-handoff.md`.
+
 ## Extension Testing Steps
 
-> **End users** install the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/slicc/akggccfpkleihhemkkikggopnifgelbk). The steps below are for **development** only — loading a local build for testing.
+> **End users** install the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/slicc/akjjllgokmbgpbdbmafpiefnhidlmbgf). The steps below are for **development** only — loading a local build for testing.
 
 If you want a reusable browser profile instead of re-loading the unpacked extension by hand every time, use `npm run start:extension`.
 
@@ -193,6 +215,7 @@ If you want a reusable browser profile instead of re-loading the unpacked extens
    - Interact with side panel
    - Check terminal output
    - Verify file browser works
+   - Open a `https://www.sliccy.ai/handoff?msg=handoff:test` URL and confirm the Chat tab shows the approval card for the `x-slicc` header
    - Take screenshots if needed
 
 5. **Iterate**
@@ -208,14 +231,14 @@ If you want a reusable browser profile instead of re-loading the unpacked extens
 Start dev server with Chrome and CDP:
 
 ```bash
-npm run dev:full
+npm run dev
 ```
 
 This launches:
 
 - Express server on port 5710
 - Chrome with remote debugging on port 9222
-- Vite HMR WebSocket on port 24679
+- Vite HMR WebSocket on the same server via `/__vite_hmr`
 
 ### Electron float debugging
 
@@ -302,7 +325,7 @@ log.error('error message');
 
 New features MUST work in the relevant runtimes:
 
-- **CLI mode** (`npm run dev:full`)
+- **CLI mode** (`npm run dev`)
   - Runs in browser launched by Node/Express
   - Can use direct fetch without CORS
   - Can use `AsyncFunction` constructor

@@ -4,7 +4,7 @@ This file covers the tray hub worker in `packages/cloudflare-worker/`.
 
 ## Scope
 
-The worker provides tray session coordination, capability-token routing, TURN credential lookup, and leader/follower signaling for tray-connected SLICC runtimes.
+The worker provides tray session coordination, capability-token routing, TURN credential lookup, and leader/follower signaling for tray-connected SLICC runtimes. It also serves the built SLICC webapp as static assets to browser visitors.
 
 ## Main Files
 
@@ -25,6 +25,7 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 ### Public routes
 
 - `POST /tray` — create a tray and issue join/controller/webhook capability URLs
+- `GET /handoff` — echoes the `msg` query parameter into an `x-slicc` response header so SLICC can emit a `navigate` lick and show the user an approval prompt
 - `GET|POST /join/:token` — follower join and bootstrap polling flow
 - `GET|POST /controller/:token` — leader attach flow and leader WebSocket upgrade
 - `POST /webhook/:token/:webhookId` — forward webhook events into the live leader
@@ -43,11 +44,25 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 - `session-tray.ts` caches ICE servers and refreshes them before TTL expiry.
 - `wrangler.jsonc` defines the key ID; the API token is stored as a Wrangler secret.
 
+### Static Asset Serving
+
+- The worker serves the built webapp (`dist/ui/`) via Cloudflare Workers Static Assets.
+- `wrangler.jsonc` configures `assets.directory` pointing to `../../dist/ui/` with binding name `ASSETS`.
+- Content negotiation uses `wantsJSON()` in `shared.ts` — checks for `?json=true` query parameter.
+- GET/HEAD requests to `/join/:token` and `/controller/:token` without `?json=true` get the SPA (webapp handles tray joining client-side).
+- GET/HEAD requests to unmatched paths without `?json=true` get an SPA fallback.
+- Requests with `?json=true`, POST requests, and WebSocket upgrades always get the API/JSON response.
+- The browser tray follower code (`packages/webapp/src/scoops/tray-follower.ts`) appends `?json=true` to all fetch calls to ensure API responses.
+- The webapp must be built (`npm run build -w @slicc/webapp`) before the worker can be deployed.
+
 ## Commands
 
 ### Worker and deploy
 
 ```bash
+# Build webapp first (required for static assets)
+npm run build -w @slicc/webapp
+
 npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc
 npx wrangler deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc
 npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc
@@ -73,6 +88,7 @@ This lives at the repo root because it coordinates the worker with browser runti
 ## Operational Notes
 
 - Treat the worker as coordination infrastructure, not canonical session storage.
+- The `/handoff` page is intentionally stateless; the `msg` query parameter is echoed into the `x-slicc` response header and the page body is only an informational preview.
 - Keep signaling protocol changes aligned with the browser tray runtime in `packages/webapp/src/scoops/`.
 - **When adding or changing routes**, update ALL THREE test/config locations:
   1. `tests/index.test.ts` — unit test that checks the routes list in the root 200 response

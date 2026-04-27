@@ -296,13 +296,115 @@ describe('executeJshFile', () => {
     expect(result.stdout.trim()).toBe('number');
   });
 
-  it('provides require shim that throws', async () => {
+  it('require throws for non-pre-scanned dynamic specifiers', async () => {
     const ctx = createMockCtx({
-      '/workspace/req.jsh': 'try { require("fs"); } catch(e) { console.log(e.message); }',
+      '/workspace/req.jsh':
+        'try { const x = require(String("dynamic-pkg")); console.log("unexpected: " + x); } catch(e) { console.log(e.message); }',
     });
     const result = await executeJshFile('/workspace/req.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('not supported');
+    expect(result.stdout).toContain('not pre-loaded');
+  });
+
+  it('require throws helpful error for modules that failed to pre-fetch', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-err.jsh':
+        'try { const x = require("this-package-definitely-does-not-exist-xyz123"); console.log("got: " + typeof x); } catch(e) { console.log(e.message); }',
+    });
+    const result = await executeJshFile('/workspace/req-err.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('not pre-loaded');
+  });
+
+  it('require returns pre-cached module', async () => {
+    // Pre-populate cache before execution
+    const { nodeRuntimeState } = await import('../../src/shell/supplemental-commands/shared.js');
+    nodeRuntimeState.__requireCache = Object.create(null);
+    (nodeRuntimeState.__requireCache as Record<string, unknown>)['test-sentinel-pkg'] = {
+      hello: 'world',
+    };
+
+    const ctx = createMockCtx({
+      '/workspace/req-cached.jsh':
+        'const mod = require("test-sentinel-pkg"); console.log(JSON.stringify(mod));',
+    });
+    const result = await executeJshFile('/workspace/req-cached.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('{"hello":"world"}');
+
+    // Clean up
+    delete nodeRuntimeState.__requireCache;
+  });
+
+  it('require("fs") returns the fs bridge', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-fs.jsh': `
+        const myFs = require('fs');
+        console.log(typeof myFs.readFile);
+        console.log(typeof myFs.writeFile);
+        console.log(typeof myFs.exists);
+      `,
+    });
+    const result = await executeJshFile('/workspace/req-fs.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('function');
+  });
+
+  it('require("node:fs") strips prefix and returns fs bridge', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-nodefs.jsh': `
+        const myFs = require('node:fs');
+        console.log(typeof myFs.readFile);
+      `,
+    });
+    const result = await executeJshFile('/workspace/req-nodefs.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('function');
+  });
+
+  it('require("process") returns the process shim', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-process.jsh': `
+        const proc = require('process');
+        console.log(typeof proc.cwd);
+        console.log(typeof proc.env);
+      `,
+    });
+    const result = await executeJshFile('/workspace/req-process.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('function');
+    expect(result.stdout).toContain('object');
+  });
+
+  it('require("http") throws clear browser-unavailable error', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-http.jsh': `
+        try {
+          const http = require('http');
+        } catch(e) {
+          console.log(e.message);
+        }
+      `,
+    });
+    const result = await executeJshFile('/workspace/req-http.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('not available in the browser');
+  });
+
+  it('require("node:crypto") strips prefix and throws browser-unavailable error', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-crypto.jsh': `
+        try {
+          require('node:crypto');
+        } catch(e) {
+          console.log(e.message);
+        }
+      `,
+    });
+    const result = await executeJshFile('/workspace/req-crypto.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('not available in the browser');
+    expect(result.stdout).toContain('crypto');
   });
 });
 

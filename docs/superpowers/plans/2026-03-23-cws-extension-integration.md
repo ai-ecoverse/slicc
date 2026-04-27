@@ -43,11 +43,11 @@ const key = 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnEuuMuC5INo0Harfu36DPaB
 const hash = crypto.createHash('sha256').update(Buffer.from(key, 'base64')).digest();
 const id = Array.from(hash.slice(0, 16)).flatMap(b => [String.fromCharCode(97 + (b >> 4)), String.fromCharCode(97 + (b & 0xf))]).join('');
 console.log('Extension ID:', id);
-console.log('Match:', id === 'akggccfpkleihhemkkikggopnifgelbk');
+console.log('Match:', id === 'akjjllgokmbgpbdbmafpiefnhidlmbgf');
 "
 ```
 
-Expected: `Extension ID: akggccfpkleihhemkkikggopnifgelbk` and `Match: true`
+Expected: `Extension ID: akjjllgokmbgpbdbmafpiefnhidlmbgf` and `Match: true`
 
 - [ ] **Step 3: Commit**
 
@@ -56,7 +56,7 @@ git add manifest.json
 git commit -m "feat: update manifest key to match CWS extension ID
 
 Local unpacked builds now produce the same extension ID
-(akggccfpkleihhemkkikggopnifgelbk) as the Chrome Web Store version."
+(akjjllgokmbgpbdbmafpiefnhidlmbgf) as the Chrome Web Store version."
 ```
 
 ---
@@ -80,7 +80,7 @@ Old:
 New:
 
 ```json
-"extensionRedirectUri": "https://akggccfpkleihhemkkikggopnifgelbk.chromiumapp.org/adobe"
+"extensionRedirectUri": "https://akjjllgokmbgpbdbmafpiefnhidlmbgf.chromiumapp.org/adobe"
 ```
 
 - [ ] **Step 2: Verify the fallback in adobe.ts is consistent**
@@ -93,7 +93,7 @@ const redirectUri = isExtension
   : (adobeConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
 ```
 
-With the Task 1 manifest key change, `chrome.runtime.id` will be `akggccfpkleihhemkkikggopnifgelbk`, so the fallback also produces the correct base URI. The explicit config value adds the `/adobe` path suffix which must match whatever is allowlisted in IMS. No code changes needed in `adobe.ts`.
+With the Task 1 manifest key change, `chrome.runtime.id` will be `akjjllgokmbgpbdbmafpiefnhidlmbgf`, so the fallback also produces the correct base URI. The explicit config value adds the `/adobe` path suffix which must match whatever is allowlisted in IMS. No code changes needed in `adobe.ts`.
 
 - [ ] **Step 3: Run build gates**
 
@@ -110,7 +110,7 @@ git add packages/webapp/providers/adobe-config.json
 git commit -m "fix: update Adobe IMS redirect URI for CWS extension ID
 
 The extension is now published to the Chrome Web Store with ID
-akggccfpkleihhemkkikggopnifgelbk. Update the OAuth redirect URI
+akjjllgokmbgpbdbmafpiefnhidlmbgf. Update the OAuth redirect URI
 to match."
 ```
 
@@ -131,7 +131,7 @@ Replace lines 101-119 (the `// MARK: - Guided extension install` section) with:
 ```swift
 // MARK: - Chrome Web Store
 
-static let chromeWebStoreURL = "https://chromewebstore.google.com/detail/slicc/akggccfpkleihhemkkikggopnifgelbk"
+static let chromeWebStoreURL = "https://chromewebstore.google.com/detail/slicc/akjjllgokmbgpbdbmafpiefnhidlmbgf"
 
 func openChromeWebStore() {
     if let url = URL(string: Self.chromeWebStoreURL) {
@@ -302,7 +302,7 @@ const key = manifest.key;
 const hash = crypto.createHash('sha256').update(Buffer.from(key, 'base64')).digest();
 const id = Array.from(hash.slice(0, 16)).flatMap(b => [String.fromCharCode(97 + (b >> 4)), String.fromCharCode(97 + (b & 0xf))]).join('');
 console.log('Built extension ID:', id);
-console.log('Match:', id === 'akggccfpkleihhemkkikggopnifgelbk');
+console.log('Match:', id === 'akjjllgokmbgpbdbmafpiefnhidlmbgf');
 "
 ```
 

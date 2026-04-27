@@ -40,6 +40,9 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **upskill**                                 | `upskill-command.ts`       | Install skills from GitHub/ClawHub                                                                                                          | `upskill owner/repo`, `upskill clawhub:name`, `upskill search "query"`                                                                      |
 | **sprinkle**                                | `sprinkle-command.ts`      | Manage `.shtml` sprinkle panels and inline chat UI                                                                                          | `sprinkle list`, `sprinkle open <name>`, `sprinkle chat '<html>'`                                                                           |
 | **debug**                                   | `debug-command.ts`         | Toggle Terminal/Memory tabs in extension mode                                                                                               | `debug on`, `debug off`, no args = show state; extension-only (not registered in CLI)                                                       |
+| **cost**                                    | `cost-command.ts`          | Show session cost breakdown per scoop/cone                                                                                                  | `--json`, `-h`                                                                                                                              |
+| **models**                                  | `models-command.ts`        | List available LLM models with pricing and benchmarks                                                                                       | `--all`, `--json`, `--provider <id>`, `--refresh`                                                                                           |
+| **secret**                                  | `secret-command.ts`        | Manage secrets (API keys, tokens) with domain-scoped injection                                                                              | `list`, `set <name>`, `delete <name>`, `test <name> <url>`                                                                                  |
 | **git**                                     | (isomorphic-git)           | Full git support                                                                                                                            | `git clone`, `git commit`, `git push`, etc.                                                                                                 |
 
 **Example usage**:
@@ -154,6 +157,8 @@ Then: / (full filesystem scan)
 Rule: First basename wins (no conflicts)
 ```
 
+`script-catalog.ts` is the shared lookup layer used by `WasmShell`, `which`, and browser-script matching. When an `FsWatcher` is present it caches discovery results and clears them on filesystem changes; mounted directories bypass the cache because external edits inside File System Access mounts are not observable through the watcher.
+
 **Execution**: Via `jsh-executor.ts` (dual-mode):
 
 - CLI: `AsyncFunction` constructor with Node-like globals
@@ -216,8 +221,12 @@ console.log(ls.stdout);
 
 #### require / module / exports
 
+Scripts can import npm packages via `require('package-name')`. This fetches from esm.sh CDN and caches for the session. Version pinning is supported: `require('lodash@4')`.
+
 ```typescript
-require(id)               // ❌ Not supported (throws error)
+const _ = require('lodash');
+const { marked } = require('marked');
+const chalk = require('chalk@5');
 module.exports: {}        // Available for ES module pattern
 exports: module.exports   // Alias
 ```
@@ -378,7 +387,6 @@ await fs.writeFile('/output.jpg', newBytes);
 ### Tools Supporting Binary
 
 - **playwright-cli**: `screenshot --filename=<path>` saves PNGs directly to the VFS
-- **javascript** tool: `fs.readFileBinary()`, `fs.writeFileBinary()` preserve byte fidelity
 - **node** / **.jsh**: `fs.readFileBinary()`, `fs.writeFileBinary()` available
 - **bash**: Limited binary support (command output truncated at 100KB)
 
@@ -482,16 +490,46 @@ echo "Today is $DATE"
 - **File I/O**: IndexedDB operations, <100ms per file
 - **Binary operations**: LightningFS encoding/decoding, <50ms for typical images
 
-For large-scale processing (1000+ files), batch operations and JavaScript tool are faster than shell loops.
+For large-scale processing (1000+ files), batch operations and `.jsh` scripts are faster than shell loops.
+
+---
+
+## CDN-backed require()
+
+`node -e`, `.jsh`, and `.bsh` scripts can import npm packages at runtime via `require()`:
+
+```js
+const _ = require('lodash');
+const { marked } = require('marked');
+const chalk = require('chalk@5');
+```
+
+Packages are fetched from [esm.sh](https://esm.sh) and cached for the session. Version pinning via `@version` syntax is supported.
+
+**Note:** require() is synchronous. Modules referenced with string literals are automatically pre-fetched before script execution. For dynamic specifiers, use `await import('https://esm.sh/' + name)` directly.
+
+### Node Built-in Modules
+
+Some Node.js built-in modules are available via `require()`:
+
+| Module                                                  | Status                                                                |
+| ------------------------------------------------------- | --------------------------------------------------------------------- |
+| `fs`                                                    | ✅ VFS bridge (readFile, writeFile, readDir, exists, stat, mkdir, rm) |
+| `process`                                               | ✅ Shim (argv, env, cwd, exit, stdout, stderr)                        |
+| `buffer`                                                | ✅ Browser polyfill                                                   |
+| `path`                                                  | ✅ Via esm.sh (browser polyfill)                                      |
+| `url`, `querystring`, `util`, `events`, `assert`        | ✅ Via esm.sh                                                         |
+| `http`, `https`, `crypto`, `net`, `child_process`, etc. | ❌ Not available in browser                                           |
+
+The `node:` prefix is supported: `require('node:path')` works the same as `require('path')`.
 
 ---
 
 ## Limitations
 
 - **Binary output in bash**: Commands producing binary output are limited to 100KB (just-bash constraint)
-- **require() not supported**: .jsh scripts cannot import modules
 - **Symlinks**: Not supported by LightningFS
-- **Large files**: Reading >100MB files in bash is slow; use JavaScript tool instead
+- **Large files**: Reading >100MB files in bash is slow; use `node -e` or `.jsh` scripts instead
 - **Network timeout**: curl/fetch timeout at 30 seconds (default)
 
 ---
@@ -557,6 +595,15 @@ console.log(files);
 
 # Schedule a task
 crontask add "cleanup" "0 3 * * 0" cleaner-scoop "Remove old files from /tmp"
+
+# List configured secrets (names + domains, never values)
+secret list
+
+# Check if a secret would be injected for a URL
+secret test GITHUB_TOKEN https://api.github.com/repos/foo/bar
+
+# Show instructions for adding a new secret
+secret set API_KEY
 ```
 
 ---
@@ -568,4 +615,4 @@ crontask add "cleanup" "0 3 * * 0" cleaner-scoop "Remove old files from /tmp"
 - **JSH executor**: `packages/webapp/src/shell/jsh-executor.ts`
 - **Binary cache**: `packages/webapp/src/shell/binary-cache.ts`
 - **Argument parser**: `packages/webapp/src/shell/parse-shell-args.ts`
-- **Discovery**: `packages/webapp/src/shell/jsh-discovery.ts`
+- **Discovery**: `packages/webapp/src/shell/script-catalog.ts`, `packages/webapp/src/shell/jsh-discovery.ts`

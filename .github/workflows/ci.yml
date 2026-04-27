@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
           cache: npm
@@ -94,6 +94,13 @@ jobs:
             echo "::error::CLAUDE.md exceeds 30,000 character limit ($chars chars). Please condense it."
             exit 1
           fi
+      - name: Check agent CLAUDE.md size
+        run: |
+          size=$(wc -c < packages/vfs-root/shared/CLAUDE.md)
+          if [ "$size" -gt 3000 ]; then
+            echo "::error::packages/vfs-root/shared/CLAUDE.md exceeds 3KB limit ($size bytes). Keep agent instructions concise."
+            exit 1
+          fi
 
   webapp:
     needs: changes
@@ -105,7 +112,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
           cache: npm
@@ -114,8 +121,42 @@ jobs:
         run: tsc --noEmit -p tsconfig.json
       - name: Test
         run: npx vitest run --project webapp
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
       - name: Build
         run: npm run build -w @slicc/webapp
+      - name: Check bundle for Node-only APIs
+        run: |
+          # Scan browser bundles for Node-only APIs that should never be bundled.
+          # Exclude pyodide files which legitimately contain Node references.
+          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/ui/assets/*.js 2>/dev/null | grep -v pyodide || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Node-only APIs found in browser bundle:"
+            for f in $MATCHES; do
+              echo "  $f:"
+              grep -nE "$FORBIDDEN" "$f" | head -5
+            done
+            exit 1
+          fi
+          echo "✓ No Node-only APIs found in webapp bundle"
+      - name: Check dev deps for Node-only APIs
+        working-directory: packages/webapp
+        run: |
+          # Force Vite to pre-bundle dependencies (same as dev server startup)
+          npx vite optimize --force
+          # Scan optimized deps for Node-only APIs that crash in the browser
+          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
+          MATCHES=$(grep -rlE "$FORBIDDEN" ../../node_modules/.vite/deps/*.js 2>/dev/null | grep -v pyodide || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Node-only APIs found in Vite dev-optimized deps:"
+            for f in $MATCHES; do
+              echo "  $f:"
+              grep -nE "$FORBIDDEN" "$f" | head -5
+            done
+            exit 1
+          fi
+          echo "✓ No Node-only APIs found in dev-optimized deps"
       - name: Build node-server (E2E dependency)
         run: npm run build -w @slicc/node-server
       - name: E2E tests
@@ -131,7 +172,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
           cache: npm
@@ -154,7 +195,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
           cache: npm
@@ -165,21 +206,58 @@ jobs:
         run: npm run build -w @slicc/webapp
       - name: Build extension
         run: npm run build -w @slicc/chrome-extension
+      - name: Check bundle for Node-only APIs
+        run: |
+          # Scan extension bundles for Node-only APIs that should never be bundled.
+          # Exclude pyodide files which legitimately contain Node references.
+          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/assets/*.js 2>/dev/null | grep -v pyodide || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Node-only APIs found in extension bundle:"
+            for f in $MATCHES; do
+              echo "  $f:"
+              grep -nE "$FORBIDDEN" "$f" | head -5
+            done
+            exit 1
+          fi
+          echo "✓ No Node-only APIs found in extension bundle"
+      - name: Check dev deps for Node-only APIs
+        working-directory: packages/chrome-extension
+        run: |
+          # Force Vite to pre-bundle dependencies (same as dev server startup)
+          npx vite optimize --force
+          # Scan optimized deps for Node-only APIs that crash in the browser
+          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
+          MATCHES=$(grep -rlE "$FORBIDDEN" ../../node_modules/.vite/deps/*.js 2>/dev/null | grep -v pyodide || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Node-only APIs found in Vite dev-optimized deps (extension):"
+            for f in $MATCHES; do
+              echo "  $f:"
+              grep -nE "$FORBIDDEN" "$f" | head -5
+            done
+            exit 1
+          fi
+          echo "✓ No Node-only APIs found in dev-optimized deps (extension)"
 
   cloudflare-worker:
     needs: changes
     if: >-
       needs.changes.outputs.cloudflare-worker == 'true' ||
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Build webapp for worker static assets
+        run: npm run build -w @slicc/webapp
       - name: Typecheck
         run: tsc --noEmit -p tsconfig.worker.json
       - name: Test
@@ -297,7 +375,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
           cache: npm

@@ -216,7 +216,7 @@ async function pathExists(fs: VirtualFS, path: string): Promise<boolean> {
 async function readSortedDir(
   fs: VirtualFS,
   path: string
-): Promise<Array<{ name: string; type: 'file' | 'directory' }>> {
+): Promise<Array<{ name: string; type: 'file' | 'directory' | 'symlink' }>> {
   try {
     const entries = await fs.readDir(path);
     return [...entries].sort((a, b) => a.name.localeCompare(b.name));

@@ -74,17 +74,9 @@ export function createBashTool(shell: WasmShell): ToolDefinition {
   return {
     name: 'bash',
     description:
-      'Execute a bash command in a full Unix-like shell (just-bash with 78+ commands). ' +
-      'Shell features: pipes (|), redirects (>, >>, <, <<), chaining (&& ; ||), subshells, ' +
-      'control flow (if/else, for, while, case), command substitution ($(...)), process substitution, ' +
-      'shell functions, arrays, variable expansion, globs, brace expansion, here-docs. ' +
-      'Text processing: grep, egrep, fgrep, rg (ripgrep), sed, awk, cut, tr, sort, uniq, wc, ' +
-      'head, tail, fold, nl, rev, column, paste, join, comm, expand, strings, od. ' +
-      'Data formats: jq (JSON), base64, md5sum, sha256sum. ' +
-      'File operations: find, diff, tar, gzip, gunzip, cp, mv, rm, mkdir, touch, chmod, du, file, dirname, basename, tee, xargs, zip, unzip. ' +
-      'Custom commands: git, open (serve VFS files in browser tab, --view for agent vision, --download for file save), sqlite3, node (-e shim with fs bridge), python3/python. ' +
-      'Networking: curl (full HTTP client — GET, POST, PUT, DELETE with headers, data, auth). ' +
-      'Utilities: seq, date, printf, expr, env, export, test/[, true, false, read.',
+      'Execute a bash command. Full shell with pipes, redirects, chaining, control flow. ' +
+      'Includes: grep, rg, sed, awk, jq, find, curl, git, node, python3, sqlite3, ' +
+      'open (--view for vision), playwright-cli (browser automation). Run `commands` for full list.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -95,12 +87,12 @@ export function createBashTool(shell: WasmShell): ToolDefinition {
       },
       required: ['command'],
     },
-    async execute(input: Record<string, unknown>): Promise<ToolResult> {
+    async execute(input: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
       const command = input['command'] as string;
       log.debug('Execute', { command });
 
       try {
-        const result = await shell.executeCommand(command);
+        const result = await shell.executeCommand(command, signal);
 
         log.debug('Result', {
           exitCode: result.exitCode,
