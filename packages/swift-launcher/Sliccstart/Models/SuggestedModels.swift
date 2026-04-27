@@ -25,22 +25,18 @@ enum SuggestedModels {
             approxSizeGB: 18
         ),
         SuggestedModel(
-            repoId: "mlx-community/gemma-4-31b-mxfp4",
-            summary: "31B dense · MXFP4",
-            note: "Highest quality on 64 GB+ Macs. 40–70 tok/s.",
-            approxSizeGB: 16
-        ),
-        SuggestedModel(
             repoId: "mlx-community/Qwen3.6-27B-4bit",
             summary: "27B dense · 4-bit",
-            note: "Strong general-purpose alternative.",
+            note: "Lighter alternative if Qwen3.6-35B-A3B doesn't fit.",
             approxSizeGB: 14
         ),
-        SuggestedModel(
-            repoId: "mlx-community/gemma-4-26b-a4b-it-4bit",
-            summary: "26B MoE (4B active) · 4-bit",
-            note: "Fastest quantized option. Tool calls with the SLICC prompt are unreliable; better for plain chat.",
-            approxSizeGB: 13
-        ),
+        // Gemma 4 entries dropped:
+        //  - mlx-community/gemma-4-26b-a4b-it-4bit narrates commands instead
+        //    of calling tools when given the SLICC system prompt; reliable
+        //    only with a minimal "you must call tools" prompt.
+        //  - mlx-community/gemma-4-31b-mxfp4 ships without `chat_template`
+        //    in tokenizer_config.json and swift-transformers rejects every
+        //    chat completion with `missingChatTemplate`. Re-add once the
+        //    mlx-community upload includes the template.
     ]
 }
