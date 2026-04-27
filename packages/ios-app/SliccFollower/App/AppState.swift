@@ -41,6 +41,29 @@ class AppState: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var isStreaming: Bool = false
 
+    // Multi-scoop awareness
+    /// All scoops the leader has registered (cone first), updated via `scoops.list`.
+    @Published var scoops: [ScoopSummary] = []
+    /// JID of the scoop this follower is currently viewing (independent from leader's selection).
+    @Published var selectedScoopJid: String?
+    /// JID of the leader's currently active scoop (informational; used to mark the active row).
+    @Published var leaderActiveScoopJid: String?
+    /// Per-scoop message buffers. Source of truth for `messages`.
+    private var messagesByScoop: [String: [ChatMessage]] = [:]
+
+    // Sprinkle awareness
+    @Published var sprinkles: [SprinkleSummary] = []
+    /// In-memory cache of fetched sprinkle .shtml content keyed by sprinkle name.
+    @Published var sprinkleContents: [String: String] = [:]
+    /// Pending fetch requests waiting for chunked content; keyed by requestId.
+    private var pendingSprinkleFetches: [String: SprinkleFetchBuffer] = [:]
+    /// Inflight requestIds keyed by sprinkleName, used to dedupe concurrent fetches.
+    private var inflightSprinkleNameToRequest: [String: String] = [:]
+    /// Continuations awaiting sprinkle content (sprinkleName -> [continuations]).
+    private var sprinkleContentWaiters: [String: [CheckedContinuation<String, Error>]] = [:]
+    /// Most recent sprinkle update payloads keyed by sprinkle name. Drained by views.
+    @Published var sprinkleUpdates: [String: AnyCodable] = [:]
+
     // Connection metadata (populated after successful connect)
     @Published var leaderConnected: Bool = false
     @Published var participantCount: Int = 0
@@ -52,6 +75,13 @@ class AppState: ObservableObject {
 
     /// Last connection error, surfaced to the UI.
     @Published var lastError: String?
+
+    /// Buffer for chunked sprinkle.content responses.
+    private struct SprinkleFetchBuffer {
+        let sprinkleName: String
+        var chunks: [Int: String] = [:]
+        var totalChunks: Int = 1
+    }
 
     // MARK: - Init
 
@@ -135,6 +165,23 @@ class AppState: ObservableObject {
         connectedSince = nil
         isStreaming = false
         streamingMessageId = nil
+        scoops = []
+        selectedScoopJid = nil
+        leaderActiveScoopJid = nil
+        messagesByScoop.removeAll()
+        sprinkles = []
+        sprinkleContents.removeAll()
+        sprinkleUpdates.removeAll()
+        pendingSprinkleFetches.removeAll()
+        inflightSprinkleNameToRequest.removeAll()
+        // Resolve any pending waiters with an error so callers don't hang.
+        let waiters = sprinkleContentWaiters
+        sprinkleContentWaiters.removeAll()
+        for (_, list) in waiters {
+            for waiter in list {
+                waiter.resume(throwing: SprinkleFetchError.fetchFailed("Disconnected"))
+            }
+        }
     }
 
     /// Clear all stored data (history, credentials, etc.)
@@ -159,6 +206,10 @@ class AppState: ObservableObject {
             timestamp: Date().timeIntervalSince1970 * 1000
         )
         messages.append(message)
+        // Mirror into the per-scoop buffer so swipe-back retains the message.
+        if let jid = selectedScoopJid {
+            messagesByScoop[jid, default: []].append(message)
+        }
 
         let msg = FollowerToLeaderMessage.userMessage(text: trimmed, messageId: messageId)
         sendToLeader(msg)
@@ -169,6 +220,139 @@ class AppState: ObservableObject {
         isStreaming = false
         streamingMessageId = nil
         sendToLeader(.abort)
+    }
+
+    // MARK: - Scoop Switching
+
+    /// Select a specific scoop to view. Independent of the leader's selection.
+    func selectScoop(jid: String) {
+        guard jid != selectedScoopJid else { return }
+        guard scoops.contains(where: { $0.jid == jid }) else { return }
+        selectedScoopJid = jid
+        // Show whatever we already have buffered, then request a fresh snapshot.
+        let cached = messagesByScoop[jid] ?? []
+        messages = cached
+        isStreaming = cached.last?.isStreaming == true
+        streamingMessageId = isStreaming ? cached.last?.id : nil
+        sendToLeader(.requestSnapshot(scoopJid: jid))
+    }
+
+    /// Swipe left → next scoop in the list. Wraps around to the first when at end.
+    func swipeToNextScoop() {
+        guard !scoops.isEmpty else { return }
+        let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
+        let nextIndex = (currentIndex + 1) % scoops.count
+        selectScoop(jid: scoops[nextIndex].jid)
+    }
+
+    /// Swipe right → previous scoop. Falls back to the cone if we'd otherwise
+    /// underflow (matches the user's "or cone if no more are left" expectation).
+    func swipeToPreviousScoop() {
+        guard !scoops.isEmpty else { return }
+        let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
+        if currentIndex > 0 {
+            selectScoop(jid: scoops[currentIndex - 1].jid)
+        } else if let cone = scoops.first(where: { $0.isCone }) {
+            selectScoop(jid: cone.jid)
+        }
+    }
+
+    /// The summary for the currently-viewed scoop, if any.
+    var selectedScoop: ScoopSummary? {
+        scoops.first(where: { $0.jid == selectedScoopJid })
+    }
+
+    // MARK: - Sprinkles
+
+    /// Ask the leader to refresh the sprinkle list.
+    func refreshSprinkles() {
+        sendToLeader(.sprinklesRefresh)
+    }
+
+    /// Fetch the raw .shtml content for a sprinkle. Returns cached content
+    /// when available, otherwise sends a `sprinkle.fetch` and awaits the
+    /// reassembled response. Throws on transport / leader errors.
+    func fetchSprinkleContent(_ sprinkleName: String) async throws -> String {
+        if let cached = sprinkleContents[sprinkleName] { return cached }
+        let requestId = UUID().uuidString
+        // Dedupe concurrent fetches for the same sprinkle.
+        if inflightSprinkleNameToRequest[sprinkleName] == nil {
+            inflightSprinkleNameToRequest[sprinkleName] = requestId
+            pendingSprinkleFetches[requestId] = SprinkleFetchBuffer(sprinkleName: sprinkleName)
+            sendToLeader(.sprinkleFetch(requestId: requestId, sprinkleName: sprinkleName))
+        }
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+            sprinkleContentWaiters[sprinkleName, default: []].append(continuation)
+        }
+    }
+
+    /// Forward a sprinkle lick (from a panel or inline sprinkle) to the leader.
+    func sendSprinkleLick(_ sprinkleName: String, body: AnyCodable?, targetScoop: String? = nil) {
+        sendToLeader(.sprinkleLick(
+            sprinkleName: sprinkleName,
+            body: body,
+            targetScoop: targetScoop
+        ))
+    }
+
+    /// Reassemble chunked sprinkle.content responses and resolve waiters.
+    private func handleSprinkleContent(
+        requestId: String,
+        sprinkleName: String,
+        content: String,
+        chunkIndex: Int?,
+        totalChunks: Int?,
+        error: String?
+    ) {
+        if let error = error {
+            logger.error("sprinkle.content error for \(sprinkleName): \(error)")
+            pendingSprinkleFetches.removeValue(forKey: requestId)
+            inflightSprinkleNameToRequest.removeValue(forKey: sprinkleName)
+            let waiters = sprinkleContentWaiters.removeValue(forKey: sprinkleName) ?? []
+            for waiter in waiters {
+                waiter.resume(throwing: SprinkleFetchError.fetchFailed(error))
+            }
+            return
+        }
+
+        let assembled: String?
+        if let chunkIndex = chunkIndex, let totalChunks = totalChunks {
+            var buffer = pendingSprinkleFetches[requestId]
+                ?? SprinkleFetchBuffer(sprinkleName: sprinkleName)
+            buffer.totalChunks = totalChunks
+            buffer.chunks[chunkIndex] = content
+            pendingSprinkleFetches[requestId] = buffer
+            if buffer.chunks.count >= totalChunks {
+                assembled = (0..<totalChunks)
+                    .compactMap { buffer.chunks[$0] }
+                    .joined()
+                pendingSprinkleFetches.removeValue(forKey: requestId)
+            } else {
+                assembled = nil
+            }
+        } else {
+            assembled = content
+            pendingSprinkleFetches.removeValue(forKey: requestId)
+        }
+
+        guard let final = assembled else { return }
+        sprinkleContents[sprinkleName] = final
+        inflightSprinkleNameToRequest.removeValue(forKey: sprinkleName)
+        let waiters = sprinkleContentWaiters.removeValue(forKey: sprinkleName) ?? []
+        for waiter in waiters {
+            waiter.resume(returning: final)
+        }
+    }
+
+    enum SprinkleFetchError: LocalizedError {
+        case fetchFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case let .fetchFailed(reason):
+                return "Failed to load sprinkle: \(reason)"
+            }
+        }
     }
 
     // MARK: - Private: Signaling Loop
@@ -318,7 +502,7 @@ class AppState: ObservableObject {
         Task { await keepalive?.start() }
 
         // Request initial snapshot.
-        sendToLeader(.requestSnapshot)
+        sendToLeader(.requestSnapshot(scoopJid: nil))
     }
 
     /// Called from WebRTCBridge when data arrives on the channel.
@@ -337,16 +521,13 @@ class AppState: ObservableObject {
         switch msg {
         case let .snapshot(chatMessages, scoopJid):
             logger.info("Snapshot received: \(chatMessages.count) messages, scoopJid=\(scoopJid)")
-            messages = chatMessages
-            isStreaming = chatMessages.last?.isStreaming == true
-            streamingMessageId = isStreaming ? chatMessages.last?.id : nil
+            ingestSnapshot(messages: chatMessages, scoopJid: scoopJid)
 
         case let .snapshotChunk(chunkData, chunkIndex, totalChunks, _):
             logger.info("Snapshot chunk \(chunkIndex + 1)/\(totalChunks) received (\(chunkData.count) chars)")
             snapshotTotalChunks = totalChunks
             snapshotChunks[chunkIndex] = chunkData
             if snapshotChunks.count == totalChunks {
-                // Reassemble snapshot — the payload is {"messages": [...], "scoopJid": "..."}
                 let fullJson = (0..<totalChunks).compactMap { snapshotChunks[$0] }.joined()
                 snapshotChunks.removeAll()
                 logger.info("Reassembling chunked snapshot (\(fullJson.count) chars total)")
@@ -354,12 +535,9 @@ class AppState: ObservableObject {
                     do {
                         let payload = try JSONDecoder().decode(SnapshotPayload.self, from: jsonData)
                         logger.info("Chunked snapshot decoded: \(payload.messages.count) messages, scoopJid=\(payload.scoopJid)")
-                        messages = payload.messages
-                        isStreaming = payload.messages.last?.isStreaming == true
-                        streamingMessageId = isStreaming ? payload.messages.last?.id : nil
+                        ingestSnapshot(messages: payload.messages, scoopJid: payload.scoopJid)
                     } catch {
                         logger.error("Failed to decode reassembled snapshot: \(error.localizedDescription)")
-                        // Log a preview of the JSON for debugging
                         let preview = String(fullJson.prefix(300))
                         logger.error("Snapshot JSON preview: \(preview)")
                     }
@@ -368,19 +546,23 @@ class AppState: ObservableObject {
 
         case let .agentEvent(event, scoopJid):
             logger.debug("Agent event received: scoopJid=\(scoopJid)")
-            handleAgentEvent(event)
+            handleAgentEvent(event, scoopJid: scoopJid)
 
-        case let .userMessageEcho(text, messageId, _):
+        case let .userMessageEcho(text, messageId, scoopJid):
             logger.debug("User message echo: id=\(messageId)")
-            // Only add if not already present (we optimistically added in sendMessage).
-            if !messages.contains(where: { $0.id == messageId }) {
+            var buffer = messagesByScoop[scoopJid] ?? []
+            if !buffer.contains(where: { $0.id == messageId }) {
                 let msg = ChatMessage(
                     id: messageId,
                     role: .user,
                     content: text,
                     timestamp: Date().timeIntervalSince1970 * 1000
                 )
-                messages.append(msg)
+                buffer.append(msg)
+                messagesByScoop[scoopJid] = buffer
+                if scoopJid == selectedScoopJid {
+                    messages = buffer
+                }
             }
 
         case let .status(scoopStatus):
@@ -395,6 +577,45 @@ class AppState: ObservableObject {
             logger.error("Leader error: \(error)")
             lastError = error
 
+        case let .scoopsList(scoops, activeScoopJid):
+            logger.info("Scoops list received: \(scoops.count) scoops, active=\(activeScoopJid)")
+            self.scoops = scoops
+            self.leaderActiveScoopJid = activeScoopJid
+            // First time we hear about scoops: select the cone (or the active one) for viewing.
+            if selectedScoopJid == nil {
+                let cone = scoops.first(where: { $0.isCone })
+                let initial = cone?.jid ?? activeScoopJid
+                if !initial.isEmpty {
+                    selectedScoopJid = initial
+                    // Pull buffered messages for this scoop if we haven't yet.
+                    if messagesByScoop[initial] == nil {
+                        sendToLeader(.requestSnapshot(scoopJid: initial))
+                    } else {
+                        messages = messagesByScoop[initial] ?? []
+                    }
+                }
+            }
+
+        case let .sprinklesList(sprinkles):
+            logger.info("Sprinkles list received: \(sprinkles.count) sprinkles")
+            self.sprinkles = sprinkles
+
+        case let .sprinkleContent(requestId, sprinkleName, content, chunkIndex, totalChunks, error):
+            handleSprinkleContent(
+                requestId: requestId,
+                sprinkleName: sprinkleName,
+                content: content,
+                chunkIndex: chunkIndex,
+                totalChunks: totalChunks,
+                error: error
+            )
+
+        case let .sprinkleUpdate(sprinkleName, data):
+            logger.debug("Sprinkle update for \(sprinkleName)")
+            if let data = data {
+                sprinkleUpdates[sprinkleName] = data
+            }
+
         case .ping:
             sendToLeader(.pong)
             Task { await keepalive?.receivedPing() }
@@ -408,11 +629,26 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Process an AgentEvent from the leader, updating messages and streaming state.
-    private func handleAgentEvent(_ event: AgentEvent) {
+    /// Apply a snapshot payload for `scoopJid` to the per-scoop buffer, and
+    /// refresh `messages` if it matches the currently-viewed scoop.
+    private func ingestSnapshot(messages chatMessages: [ChatMessage], scoopJid: String) {
+        messagesByScoop[scoopJid] = chatMessages
+        if selectedScoopJid == nil { selectedScoopJid = scoopJid }
+        if scoopJid == selectedScoopJid {
+            messages = chatMessages
+            isStreaming = chatMessages.last?.isStreaming == true
+            streamingMessageId = isStreaming ? chatMessages.last?.id : nil
+        }
+    }
+
+    /// Process an AgentEvent from the leader, routing into the right scoop buffer.
+    private func handleAgentEvent(_ event: AgentEvent, scoopJid: String) {
+        var buffer = messagesByScoop[scoopJid] ?? []
+        let isVisible = (scoopJid == selectedScoopJid)
+
         switch event {
         case let .messageStart(messageId):
-            logger.info("Agent event: message_start id=\(messageId)")
+            logger.info("Agent event: message_start id=\(messageId) scoop=\(scoopJid)")
             let newMsg = ChatMessage(
                 id: messageId,
                 role: .assistant,
@@ -420,27 +656,39 @@ class AppState: ObservableObject {
                 timestamp: Date().timeIntervalSince1970 * 1000,
                 isStreaming: true
             )
-            messages.append(newMsg)
-            isStreaming = true
-            streamingMessageId = messageId
-            onStreamingEvent?(.messageStart(messageId: messageId))
+            buffer.append(newMsg)
+            messagesByScoop[scoopJid] = buffer
+            if isVisible {
+                messages = buffer
+                isStreaming = true
+                streamingMessageId = messageId
+                onStreamingEvent?(.messageStart(messageId: messageId))
+            }
 
         case let .contentDelta(messageId, text):
-            if let idx = messages.firstIndex(where: { $0.id == messageId }) {
-                messages[idx].content += text
+            if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
+                buffer[idx].content += text
+                messagesByScoop[scoopJid] = buffer
+                if isVisible {
+                    messages = buffer
+                    onStreamingEvent?(.contentDelta(messageId: messageId, text: text))
+                }
             }
-            onStreamingEvent?(.contentDelta(messageId: messageId, text: text))
 
         case let .contentDone(messageId):
             logger.debug("Agent event: content_done id=\(messageId)")
-            if let idx = messages.firstIndex(where: { $0.id == messageId }) {
-                messages[idx].isStreaming = false
+            if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
+                buffer[idx].isStreaming = false
+                messagesByScoop[scoopJid] = buffer
+                if isVisible {
+                    messages = buffer
+                    onStreamingEvent?(.contentDone(messageId: messageId))
+                }
             }
-            onStreamingEvent?(.contentDone(messageId: messageId))
 
         case let .toolUseStart(messageId, toolName, toolInput):
             logger.info("Agent event: tool_use_start id=\(messageId) tool=\(toolName)")
-            if let idx = messages.firstIndex(where: { $0.id == messageId }) {
+            if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
                 let inputStr: String
                 if let toolInput, let data = try? JSONEncoder().encode(toolInput),
                    let str = String(data: data, encoding: .utf8) {
@@ -449,38 +697,48 @@ class AppState: ObservableObject {
                     inputStr = "{}"
                 }
                 let tc = ToolCall(id: UUID().uuidString, name: toolName, input: toolInput)
-                if messages[idx].toolCalls == nil {
-                    messages[idx].toolCalls = [tc]
+                if buffer[idx].toolCalls == nil {
+                    buffer[idx].toolCalls = [tc]
                 } else {
-                    messages[idx].toolCalls?.append(tc)
+                    buffer[idx].toolCalls?.append(tc)
                 }
-                onStreamingEvent?(.toolUseStart(
-                    messageId: messageId, toolName: toolName, toolInput: inputStr))
+                messagesByScoop[scoopJid] = buffer
+                if isVisible {
+                    messages = buffer
+                    onStreamingEvent?(.toolUseStart(
+                        messageId: messageId, toolName: toolName, toolInput: inputStr))
+                }
             }
 
         case let .toolResult(messageId, toolName, result, isError):
-            if let idx = messages.firstIndex(where: { $0.id == messageId }) {
-                if let tcIdx = messages[idx].toolCalls?.lastIndex(where: { $0.name == toolName }) {
-                    messages[idx].toolCalls?[tcIdx].result = result
-                    messages[idx].toolCalls?[tcIdx].isError = isError
+            if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
+                if let tcIdx = buffer[idx].toolCalls?.lastIndex(where: { $0.name == toolName }) {
+                    buffer[idx].toolCalls?[tcIdx].result = result
+                    buffer[idx].toolCalls?[tcIdx].isError = isError
+                    messagesByScoop[scoopJid] = buffer
+                    if isVisible { messages = buffer }
                 }
             }
 
         case let .turnEnd(messageId):
             logger.info("Agent event: turn_end id=\(messageId)")
-            if let idx = messages.firstIndex(where: { $0.id == messageId }) {
-                messages[idx].isStreaming = false
+            if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
+                buffer[idx].isStreaming = false
+                messagesByScoop[scoopJid] = buffer
+                if isVisible {
+                    messages = buffer
+                    isStreaming = false
+                    streamingMessageId = nil
+                }
             }
-            isStreaming = false
-            streamingMessageId = nil
 
         case let .error(error):
             logger.error("Agent event: error — \(error)")
-            lastError = error
+            if isVisible { lastError = error }
 
         case .unknown:
             logger.debug("Agent event: unknown type")
-            break  // Silently ignore unhandled event types
+            break
         }
     }
 

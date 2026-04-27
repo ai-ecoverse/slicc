@@ -85,6 +85,31 @@ enum AgentEvent: Codable {
     }
 }
 
+// MARK: - ScoopSummary / SprinkleSummary
+
+/// Mirrors ScoopSummary from tray-sync-protocol.ts
+struct ScoopSummary: Codable, Identifiable, Hashable {
+    let jid: String
+    let name: String
+    let folder: String
+    let isCone: Bool
+    let assistantLabel: String
+    let trigger: String?
+
+    var id: String { jid }
+}
+
+/// Mirrors SprinkleSummary from tray-sync-protocol.ts
+struct SprinkleSummary: Codable, Identifiable, Hashable {
+    let name: String
+    let title: String
+    let path: String
+    let open: Bool
+    let autoOpen: Bool
+
+    var id: String { name }
+}
+
 // MARK: - LeaderToFollowerMessage
 
 /// Mirrors LeaderToFollowerMessage from tray-sync-protocol.ts
@@ -96,6 +121,16 @@ enum LeaderToFollowerMessage: Codable {
     case userMessageEcho(text: String, messageId: String, scoopJid: String)
     case status(scoopStatus: String)
     case error(error: String)
+    case scoopsList(scoops: [ScoopSummary], activeScoopJid: String)
+    case sprinklesList(sprinkles: [SprinkleSummary])
+    case sprinkleContent(
+        requestId: String,
+        sprinkleName: String,
+        content: String,
+        chunkIndex: Int?,
+        totalChunks: Int?,
+        error: String?)
+    case sprinkleUpdate(sprinkleName: String, data: AnyCodable?)
     case ping
     case pong
     case unknown(type: String)
@@ -103,6 +138,8 @@ enum LeaderToFollowerMessage: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, messages, scoopJid, chunkData, chunkIndex, totalChunks
         case event, text, messageId, scoopStatus, error
+        case scoops, activeScoopJid, sprinkles
+        case requestId, sprinkleName, content, data
     }
 
     init(from decoder: Decoder) throws {
@@ -132,6 +169,29 @@ enum LeaderToFollowerMessage: Codable {
             self = .status(scoopStatus: try container.decode(String.self, forKey: .scoopStatus))
         case "error":
             self = .error(error: try container.decode(String.self, forKey: .error))
+        case "scoops.list":
+            self = .scoopsList(
+                scoops: (try? container.decode([ScoopSummary].self, forKey: .scoops)) ?? [],
+                activeScoopJid: (try? container.decode(String.self, forKey: .activeScoopJid)) ?? ""
+            )
+        case "sprinkles.list":
+            self = .sprinklesList(
+                sprinkles: (try? container.decode([SprinkleSummary].self, forKey: .sprinkles)) ?? []
+            )
+        case "sprinkle.content":
+            self = .sprinkleContent(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                sprinkleName: try container.decode(String.self, forKey: .sprinkleName),
+                content: (try? container.decode(String.self, forKey: .content)) ?? "",
+                chunkIndex: try container.decodeIfPresent(Int.self, forKey: .chunkIndex),
+                totalChunks: try container.decodeIfPresent(Int.self, forKey: .totalChunks),
+                error: try container.decodeIfPresent(String.self, forKey: .error)
+            )
+        case "sprinkle.update":
+            self = .sprinkleUpdate(
+                sprinkleName: try container.decode(String.self, forKey: .sprinkleName),
+                data: try container.decodeIfPresent(AnyCodable.self, forKey: .data)
+            )
         case "ping":
             self = .ping
         case "pong":
@@ -169,6 +229,25 @@ enum LeaderToFollowerMessage: Codable {
         case let .error(error):
             try container.encode("error", forKey: .type)
             try container.encode(error, forKey: .error)
+        case let .scoopsList(scoops, activeScoopJid):
+            try container.encode("scoops.list", forKey: .type)
+            try container.encode(scoops, forKey: .scoops)
+            try container.encode(activeScoopJid, forKey: .activeScoopJid)
+        case let .sprinklesList(sprinkles):
+            try container.encode("sprinkles.list", forKey: .type)
+            try container.encode(sprinkles, forKey: .sprinkles)
+        case let .sprinkleContent(requestId, sprinkleName, content, chunkIndex, totalChunks, error):
+            try container.encode("sprinkle.content", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(sprinkleName, forKey: .sprinkleName)
+            try container.encode(content, forKey: .content)
+            try container.encodeIfPresent(chunkIndex, forKey: .chunkIndex)
+            try container.encodeIfPresent(totalChunks, forKey: .totalChunks)
+            try container.encodeIfPresent(error, forKey: .error)
+        case let .sprinkleUpdate(sprinkleName, data):
+            try container.encode("sprinkle.update", forKey: .type)
+            try container.encode(sprinkleName, forKey: .sprinkleName)
+            try container.encodeIfPresent(data, forKey: .data)
         case .ping:
             try container.encode("ping", forKey: .type)
         case .pong:
@@ -186,12 +265,17 @@ enum LeaderToFollowerMessage: Codable {
 enum FollowerToLeaderMessage: Codable {
     case userMessage(text: String, messageId: String)
     case abort
-    case requestSnapshot
+    case requestSnapshot(scoopJid: String?)
+    case scoopsSelect(scoopJid: String)
+    case sprinklesRefresh
+    case sprinkleFetch(requestId: String, sprinkleName: String)
+    case sprinkleLick(sprinkleName: String, body: AnyCodable?, targetScoop: String?)
     case ping
     case pong
 
     private enum CodingKeys: String, CodingKey {
-        case type, text, messageId
+        case type, text, messageId, scoopJid
+        case requestId, sprinkleName, body, targetScoop
     }
 
     init(from decoder: Decoder) throws {
@@ -205,7 +289,21 @@ enum FollowerToLeaderMessage: Codable {
         case "abort":
             self = .abort
         case "request_snapshot":
-            self = .requestSnapshot
+            self = .requestSnapshot(
+                scoopJid: try container.decodeIfPresent(String.self, forKey: .scoopJid))
+        case "scoops.select":
+            self = .scoopsSelect(scoopJid: try container.decode(String.self, forKey: .scoopJid))
+        case "sprinkles.refresh":
+            self = .sprinklesRefresh
+        case "sprinkle.fetch":
+            self = .sprinkleFetch(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                sprinkleName: try container.decode(String.self, forKey: .sprinkleName))
+        case "sprinkle.lick":
+            self = .sprinkleLick(
+                sprinkleName: try container.decode(String.self, forKey: .sprinkleName),
+                body: try container.decodeIfPresent(AnyCodable.self, forKey: .body),
+                targetScoop: try container.decodeIfPresent(String.self, forKey: .targetScoop))
         case "ping":
             self = .ping
         case "pong":
@@ -226,8 +324,23 @@ enum FollowerToLeaderMessage: Codable {
             try container.encode(messageId, forKey: .messageId)
         case .abort:
             try container.encode("abort", forKey: .type)
-        case .requestSnapshot:
+        case let .requestSnapshot(scoopJid):
             try container.encode("request_snapshot", forKey: .type)
+            try container.encodeIfPresent(scoopJid, forKey: .scoopJid)
+        case let .scoopsSelect(scoopJid):
+            try container.encode("scoops.select", forKey: .type)
+            try container.encode(scoopJid, forKey: .scoopJid)
+        case .sprinklesRefresh:
+            try container.encode("sprinkles.refresh", forKey: .type)
+        case let .sprinkleFetch(requestId, sprinkleName):
+            try container.encode("sprinkle.fetch", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(sprinkleName, forKey: .sprinkleName)
+        case let .sprinkleLick(sprinkleName, body, targetScoop):
+            try container.encode("sprinkle.lick", forKey: .type)
+            try container.encode(sprinkleName, forKey: .sprinkleName)
+            try container.encodeIfPresent(body, forKey: .body)
+            try container.encodeIfPresent(targetScoop, forKey: .targetScoop)
         case .ping:
             try container.encode("ping", forKey: .type)
         case .pong:
