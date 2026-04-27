@@ -27,7 +27,7 @@ enum SuggestedModels {
         SuggestedModel(
             repoId: "mlx-community/Qwen3.6-27B-4bit",
             summary: "27B dense · 4-bit",
-            note: "Lighter alternative if Qwen3.6-35B-A3B doesn't fit.",
+            note: "Smaller on disk than Qwen3.6-35B-A3B, but dense — every token activates all 27B params, so generation is markedly slower than the 35B-A3B MoE.",
             approxSizeGB: 14
         ),
         // Gemma 4 entries dropped:
