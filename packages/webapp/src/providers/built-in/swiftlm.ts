@@ -2,9 +2,15 @@
  * Local SwiftLM — OpenAI-compatible LLM running on localhost via the
  * Sliccstart Models tab.
  *
- * No auth/baseUrl configuration: the URL is hardcoded to the SwiftLM
- * default (`http://localhost:5413/v1`) and the server is unauthenticated
- * by default. The model list is fetched from `/v1/models` at boot and
+ * Routes through `/api/fetch-proxy` in CLI/Electron (X-Target-URL header)
+ * and direct fetch in extension mode, mirroring `bedrock-camp.ts`. Going
+ * via the proxy avoids browser cross-origin headaches with the OpenAI
+ * SDK (the SDK's `credentials: 'include'` fetch is incompatible with
+ * SwiftLM's wildcard CORS response).
+ *
+ * No auth/baseUrl configuration: SwiftLM's URL is hardcoded to its CLI
+ * default (`http://localhost:5413/v1`) and the server is unauthenticated.
+ * The model list is fetched from `/v1/models` + `/health` at boot and
  * cached in localStorage so `getModelIds` (which must be sync) can return
  * the currently-loaded model. When SwiftLM isn't reachable, the cache is
  * cleared and the provider's model list returns empty — the entry stops
@@ -12,27 +18,39 @@
  */
 
 import type { ProviderConfig, ModelMetadata } from '../types.js';
-import { registerApiProvider, streamOpenAICompletions } from '@mariozechner/pi-ai';
+import {
+  registerApiProvider,
+  calculateCost,
+  createAssistantMessageEventStream,
+} from '@mariozechner/pi-ai';
+import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
+import { transformMessages } from '@mariozechner/pi-ai/dist/providers/transform-messages.js';
+import { buildBaseOptions } from '@mariozechner/pi-ai/dist/providers/simple-options.js';
 import type {
-  AssistantMessageEventStream,
   Api,
   Model,
   Context,
   SimpleStreamOptions,
-  StreamFunction,
   StreamOptions,
+  AssistantMessage,
+  TextContent,
+  ThinkingContent,
+  ToolCall,
 } from '@mariozechner/pi-ai';
-import { buildBaseOptions } from '@mariozechner/pi-ai/dist/providers/simple-options.js';
 
 const PROVIDER_ID = 'swiftlm';
-const SWIFTLM_BASE_URL = 'http://localhost:5413/v1';
+const SWIFTLM_BASE_URL = 'http://localhost:5413';
 const SWIFTLM_API_TYPE = 'swiftlm-openai' as Api;
-
-/** Cache key in localStorage. The webapp pre-fetches the SwiftLM `/v1/models`
- *  and `/health` endpoints at boot and stuffs the result here so the
- *  (synchronous) provider `getModelIds` callback can answer without a
- *  network round-trip. */
 const MODELS_CACHE_KEY = 'swiftlm:models';
+
+const isExtension =
+  typeof chrome !== 'undefined' && !!(chrome as { runtime?: { id?: string } })?.runtime?.id;
+const isBrowser =
+  typeof localStorage !== 'undefined' &&
+  typeof fetch !== 'undefined' &&
+  typeof window !== 'undefined';
+
+// ── Model discovery / cache ─────────────────────────────────────────
 
 interface CachedModel {
   id: string;
@@ -43,30 +61,36 @@ interface CachedModel {
   supportsVision?: boolean;
 }
 
-/** True when the runtime has both `localStorage` and `fetch` — i.e. an
- *  actual browser. Node test environments (vitest's default) have neither,
- *  and the provider's auto-discovery import would otherwise crash test
- *  runs that load the providers index. */
-const isBrowser =
-  typeof localStorage !== 'undefined' &&
-  typeof fetch !== 'undefined' &&
-  typeof window !== 'undefined';
+/** Build a fetch URL pair (`fetchUrl`, `targetUrl`) that routes through
+ *  the slicc-server proxy in CLI/Electron and hits SwiftLM directly in
+ *  extension mode. The proxy adds an `X-Target-URL` header that the server
+ *  forwards transparently. */
+function proxyURL(targetUrl: string): { url: string; headers: Record<string, string> } {
+  if (isExtension) {
+    return { url: targetUrl, headers: {} };
+  }
+  return { url: '/api/fetch-proxy', headers: { 'X-Target-URL': targetUrl } };
+}
 
 /** Best-effort fetch of `GET /v1/models` + `GET /health`. Refreshes the
  *  local cache on success; clears it on any error so SwiftLM transparently
- *  disappears from the model dropdown when the server stops. The two
- *  requests are issued in parallel and a small abort budget keeps boot
- *  fast when SwiftLM isn't running. */
+ *  disappears from the model dropdown when the server stops. */
 async function refreshModelsCache(): Promise<void> {
   if (!isBrowser) return;
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 2000);
+
+    const modelsTarget = proxyURL(`${SWIFTLM_BASE_URL}/v1/models`);
+    const healthTarget = proxyURL(`${SWIFTLM_BASE_URL}/health`);
     const [modelsRes, healthRes] = await Promise.all([
-      fetch(`${SWIFTLM_BASE_URL}/models`, { signal: controller.signal }),
-      fetch('http://localhost:5413/health', { signal: controller.signal }).catch(() => null),
+      fetch(modelsTarget.url, { signal: controller.signal, headers: modelsTarget.headers }),
+      fetch(healthTarget.url, { signal: controller.signal, headers: healthTarget.headers }).catch(
+        () => null
+      ),
     ]);
     clearTimeout(timeout);
+
     if (!modelsRes.ok) {
       localStorage.removeItem(MODELS_CACHE_KEY);
       return;
@@ -110,16 +134,9 @@ function readCachedModels(): Array<{ id: string; name?: string } & ModelMetadata
       name: m.name ?? m.id,
       api: 'openai',
       // Sliccstart launches SwiftLM at the model's declared
-      // `max_position_embeddings` (Gemma 4 / Qwen 3.6 ship at 262 144),
-      // capped only by the per-model fallback when probe fails. Mirror
-      // that ceiling here so the chat panel's context-budget UI reflects
-      // what the server will actually accept. SwiftLM doesn't expose ctx
-      // via /v1/models or /health yet — once it does, we can read the
-      // real value from the cached payload instead of hardcoding.
+      // `max_position_embeddings` (Gemma 4 / Qwen 3.6 ship at 262 144).
       context_window: 262_144,
       max_tokens: 8_192,
-      // SwiftLM's `--vision` flag flips this; detected via `/health` at
-      // boot and persisted in the cache. Non-VLMs stay text-only.
       input: m.supportsVision ? ['text', 'image'] : ['text'],
     }));
 }
@@ -133,41 +150,450 @@ export const config: ProviderConfig = {
   getModelIds: readCachedModels,
 };
 
-/** Wrap pi-ai's OpenAI Completions streamer with the SwiftLM baseURL and
- *  the `openai-completions` api type the streamer expects. The original
- *  `Model<Api>` arrives tagged `swiftlm-openai`; we shallow-clone and
- *  retag for the underlying call. */
-function withSwiftLMBaseURL(model: Model<Api>): Model<'openai-completions'> {
-  const cloned: Model<Api> = {
-    ...model,
-    baseUrl: SWIFTLM_BASE_URL,
-    api: 'openai-completions' as Api,
-  };
-  return cloned as unknown as Model<'openai-completions'>;
+// ── Message conversion (OpenAI Chat Completions) ────────────────────
+
+interface ContentBlock {
+  type: string;
+  text?: string;
+  mimeType?: string;
+  data?: string;
+  id?: string;
+  name?: string;
+  arguments?: Record<string, unknown>;
+  toolCallId?: string;
+  isError?: boolean;
+  content?: ContentBlock[];
 }
 
-const streamSwiftLM: StreamFunction<Api, StreamOptions> = (model, context, options) => {
-  // SwiftLM is unauthenticated by default; the OpenAI SDK still wants an
-  // apiKey arg so we pass a sentinel.
-  const opts = { ...(options ?? {}), apiKey: 'sk-swiftlm-no-auth' };
-  return streamOpenAICompletions(
-    withSwiftLMBaseURL(model),
-    context as Context,
-    opts as Parameters<typeof streamOpenAICompletions>[2]
-  );
+interface TransformedMessage {
+  role: string;
+  content: string | ContentBlock[];
+  toolCallId?: string;
+  isError?: boolean;
+}
+
+interface OpenAIChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content?: string | Array<Record<string, unknown>> | null;
+  tool_call_id?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: { name: string; arguments: string };
+  }>;
+}
+
+function normalizeToolCallId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+}
+
+function convertMessages(context: Context, model: Model<Api>): OpenAIChatMessage[] {
+  const transformed = transformMessages(
+    context.messages,
+    model,
+    normalizeToolCallId
+  ) as TransformedMessage[];
+  const result: OpenAIChatMessage[] = [];
+
+  for (const m of transformed) {
+    if (m.role === 'user') {
+      if (typeof m.content === 'string') {
+        result.push({ role: 'user', content: m.content });
+      } else {
+        const parts = (m.content as ContentBlock[]).map((c) => {
+          if (c.type === 'text') return { type: 'text', text: c.text ?? '' };
+          if (c.type === 'image') {
+            return {
+              type: 'image_url',
+              image_url: { url: `data:${c.mimeType};base64,${c.data}` },
+            };
+          }
+          return { type: 'text', text: JSON.stringify(c) };
+        });
+        result.push({ role: 'user', content: parts });
+      }
+    } else if (m.role === 'assistant') {
+      const blocks = m.content as ContentBlock[];
+      const text = blocks
+        .filter((c) => c.type === 'text')
+        .map((c) => c.text ?? '')
+        .join('');
+      const toolCalls = blocks
+        .filter((c) => c.type === 'toolCall')
+        .map((c) => ({
+          id: c.id ?? '',
+          type: 'function' as const,
+          function: {
+            name: c.name ?? '',
+            arguments: JSON.stringify(c.arguments ?? {}),
+          },
+        }));
+      if (toolCalls.length) {
+        result.push({ role: 'assistant', content: text || null, tool_calls: toolCalls });
+      } else {
+        result.push({ role: 'assistant', content: text });
+      }
+    } else if (m.role === 'toolResult') {
+      const blocks = m.content as ContentBlock[] | undefined;
+      result.push({
+        role: 'tool',
+        tool_call_id: m.toolCallId ?? '',
+        content:
+          blocks?.map((c) => (c.type === 'text' ? (c.text ?? '') : JSON.stringify(c))).join('') ||
+          '',
+      });
+    }
+  }
+  return result;
+}
+
+interface OpenAITool {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+}
+
+function convertTools(tools: Context['tools']): OpenAITool[] | undefined {
+  if (!tools?.length) return undefined;
+  return tools.map((t) => ({
+    type: 'function' as const,
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters as Record<string, unknown>,
+    },
+  }));
+}
+
+// ── Stream output helpers ───────────────────────────────────────────
+
+interface ToolCallAccumulator extends ToolCall {
+  /** Concatenated `function.arguments` strings as they arrive. Parsed into
+   *  `arguments` JSON at the end (or every delta when valid). */
+  _partialJson: string;
+  /** Index in the assistant's content array (set when first emitted). */
+  _contentIndex: number;
+}
+
+function findOrCreateTextBlock(
+  output: AssistantMessage,
+  stream: AssistantMessageEventStream
+): { block: TextContent; index: number; created: boolean } {
+  const existing = output.content.find((b): b is TextContent => b.type === 'text');
+  if (existing) {
+    return { block: existing, index: output.content.indexOf(existing), created: false };
+  }
+  const block: TextContent = { type: 'text', text: '' };
+  output.content.push(block);
+  const index = output.content.length - 1;
+  stream.push({ type: 'text_start', contentIndex: index, partial: output });
+  return { block, index, created: true };
+}
+
+function findOrCreateThinkingBlock(
+  output: AssistantMessage,
+  stream: AssistantMessageEventStream
+): { block: ThinkingContent; index: number; created: boolean } {
+  const existing = output.content.find((b): b is ThinkingContent => b.type === 'thinking');
+  if (existing) {
+    return { block: existing, index: output.content.indexOf(existing), created: false };
+  }
+  const block: ThinkingContent = { type: 'thinking', thinking: '' };
+  output.content.push(block);
+  const index = output.content.length - 1;
+  stream.push({ type: 'thinking_start', contentIndex: index, partial: output });
+  return { block, index, created: true };
+}
+
+// ── SSE parsing ─────────────────────────────────────────────────────
+
+interface SSEDelta {
+  role?: string;
+  content?: string | null;
+  /** llama-server / SwiftLM emit thinking/reasoning tokens here. */
+  reasoning_content?: string | null;
+  tool_calls?: Array<{
+    index?: number;
+    id?: string;
+    type?: string;
+    function?: { name?: string; arguments?: string };
+  }>;
+}
+
+interface SSEChunk {
+  choices?: Array<{
+    index?: number;
+    delta?: SSEDelta;
+    finish_reason?: string | null;
+  }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+}
+
+async function* iterateSSE(response: Response): AsyncIterable<SSEChunk> {
+  const body = response.body;
+  if (!body) return;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buffer.indexOf('\n\n')) >= 0) {
+      const event = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 2);
+      if (!event) continue;
+      // Each event is one or more lines; only `data: …` carries the JSON.
+      // SwiftLM uses single-line `data:` events but be defensive about
+      // multi-line concatenation.
+      const dataLines = event
+        .split('\n')
+        .filter((l) => l.startsWith('data:'))
+        .map((l) => l.slice(5).trimStart());
+      if (dataLines.length === 0) continue;
+      const payload = dataLines.join('');
+      if (payload === '[DONE]') return;
+      try {
+        yield JSON.parse(payload) as SSEChunk;
+      } catch {
+        // Skip malformed chunks rather than failing the stream.
+      }
+    }
+  }
+}
+
+// ── Stream function ─────────────────────────────────────────────────
+
+const streamSwiftLM = (
+  model: Model<Api>,
+  context: Context,
+  options: StreamOptions = {}
+): AssistantMessageEventStream => {
+  const stream = createAssistantMessageEventStream();
+
+  (async () => {
+    const output: AssistantMessage = {
+      role: 'assistant',
+      content: [],
+      api: SWIFTLM_API_TYPE,
+      provider: PROVIDER_ID,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: 'stop',
+      timestamp: Date.now(),
+    };
+
+    try {
+      const targetUrl = `${SWIFTLM_BASE_URL}/v1/chat/completions`;
+      const { url, headers: proxyHeaders } = proxyURL(targetUrl);
+
+      const tools = convertTools(context.tools);
+      const messages: OpenAIChatMessage[] = [
+        ...(context.systemPrompt
+          ? [{ role: 'system' as const, content: context.systemPrompt }]
+          : []),
+        ...convertMessages(context, model),
+      ];
+
+      const body: Record<string, unknown> = {
+        model: model.id,
+        messages,
+        stream: true,
+        stream_options: { include_usage: true },
+      };
+      if (options.maxTokens) body.max_tokens = options.maxTokens;
+      if (options.temperature !== undefined) body.temperature = options.temperature;
+      if (tools) body.tools = tools;
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        ...proxyHeaders,
+        ...(options.headers ?? {}),
+      };
+
+      stream.push({ type: 'start', partial: output });
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: options.signal,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        throw new Error(`SwiftLM error (${response.status}): ${errText}`);
+      }
+
+      const toolCallsByIndex = new Map<number, ToolCallAccumulator>();
+
+      for await (const chunk of iterateSSE(response)) {
+        if (chunk.usage) {
+          output.usage.input = chunk.usage.prompt_tokens ?? 0;
+          output.usage.output = chunk.usage.completion_tokens ?? 0;
+          output.usage.totalTokens = chunk.usage.total_tokens ?? 0;
+          calculateCost(model, output.usage);
+        }
+
+        for (const choice of chunk.choices ?? []) {
+          const delta = choice.delta ?? {};
+
+          if (delta.reasoning_content) {
+            const thinking = findOrCreateThinkingBlock(output, stream);
+            thinking.block.thinking += delta.reasoning_content;
+            stream.push({
+              type: 'thinking_delta',
+              contentIndex: thinking.index,
+              delta: delta.reasoning_content,
+              partial: output,
+            });
+          }
+
+          if (delta.content) {
+            const text = findOrCreateTextBlock(output, stream);
+            text.block.text += delta.content;
+            stream.push({
+              type: 'text_delta',
+              contentIndex: text.index,
+              delta: delta.content,
+              partial: output,
+            });
+          }
+
+          if (delta.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const tcIndex = tc.index ?? 0;
+              let acc = toolCallsByIndex.get(tcIndex);
+              if (!acc) {
+                acc = {
+                  type: 'toolCall',
+                  id: tc.id ?? `call_${tcIndex}`,
+                  name: tc.function?.name ?? '',
+                  arguments: {},
+                  _partialJson: '',
+                  _contentIndex: output.content.length,
+                } as ToolCallAccumulator;
+                output.content.push(acc);
+                toolCallsByIndex.set(tcIndex, acc);
+                stream.push({
+                  type: 'toolcall_start',
+                  contentIndex: acc._contentIndex,
+                  partial: output,
+                });
+              } else if (tc.id) {
+                acc.id = tc.id;
+              }
+              if (tc.function?.name && !acc.name) acc.name = tc.function.name;
+              if (tc.function?.arguments) {
+                acc._partialJson += tc.function.arguments;
+                try {
+                  acc.arguments = JSON.parse(acc._partialJson);
+                } catch {
+                  /* keep accumulating */
+                }
+                stream.push({
+                  type: 'toolcall_delta',
+                  contentIndex: acc._contentIndex,
+                  delta: tc.function.arguments,
+                  partial: output,
+                });
+              }
+            }
+          }
+
+          if (choice.finish_reason) {
+            output.stopReason =
+              choice.finish_reason === 'tool_calls'
+                ? 'toolUse'
+                : choice.finish_reason === 'length'
+                  ? 'length'
+                  : 'stop';
+          }
+        }
+      }
+
+      // Finalize content blocks
+      for (const block of output.content) {
+        const idx = output.content.indexOf(block);
+        if (block.type === 'toolCall') {
+          const tc = block as ToolCallAccumulator;
+          try {
+            tc.arguments = JSON.parse(tc._partialJson || '{}');
+          } catch {
+            /* leave partial as-is */
+          }
+          delete (tc as Partial<ToolCallAccumulator>)._partialJson;
+          delete (tc as Partial<ToolCallAccumulator>)._contentIndex;
+          stream.push({
+            type: 'toolcall_end',
+            contentIndex: idx,
+            toolCall: block as ToolCall,
+            partial: output,
+          });
+        } else if (block.type === 'text') {
+          stream.push({
+            type: 'text_end',
+            contentIndex: idx,
+            content: (block as TextContent).text,
+            partial: output,
+          });
+        } else if (block.type === 'thinking') {
+          stream.push({
+            type: 'thinking_end',
+            contentIndex: idx,
+            content: (block as ThinkingContent).thinking,
+            partial: output,
+          });
+        }
+      }
+
+      stream.push({
+        type: 'done',
+        reason: output.stopReason as 'stop' | 'length' | 'toolUse',
+        message: output,
+      });
+      stream.end();
+    } catch (error) {
+      output.stopReason = options.signal?.aborted ? 'aborted' : 'error';
+      output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      stream.push({ type: 'error', reason: output.stopReason, error: output });
+      stream.end();
+    }
+  })();
+
+  return stream;
 };
 
-const streamSimpleSwiftLM: StreamFunction<Api, SimpleStreamOptions> = (model, context, options) => {
-  const base = buildBaseOptions(model, options, 'sk-swiftlm-no-auth');
-  return streamOpenAICompletions(
-    withSwiftLMBaseURL(model),
-    context as Context,
-    base as Parameters<typeof streamOpenAICompletions>[2]
-  );
+const streamSimpleSwiftLM = (
+  model: Model<Api>,
+  context: Context,
+  options?: SimpleStreamOptions
+): AssistantMessageEventStream => {
+  const base = buildBaseOptions(model, options, undefined);
+  return streamSwiftLM(model, context, base as StreamOptions);
 };
+
+// ── Registration ────────────────────────────────────────────────────
 
 export function register(): void {
-  // Kick off the cache refresh once at module load. `getModelIds` is sync,
+  // Kick off the cache refresh once at module load. `getModelIds` is sync
   // so the first chat-panel render after boot will see whatever was last
   // cached (or empty); subsequent renders pick up live data.
   void refreshModelsCache();
@@ -179,7 +605,4 @@ export function register(): void {
   });
 }
 
-/** Exposed for tests / future debug commands; refreshes the model cache
- *  on demand. The actual periodic refresh lives in the chat-panel render
- *  cycle (which is fine because models almost never change at runtime). */
 export const __refreshSwiftLMModels = refreshModelsCache;
