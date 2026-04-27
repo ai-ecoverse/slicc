@@ -18,6 +18,67 @@ final class WebKitInstallerTests: XCTestCase {
         XCTAssertEqual(key, "mac14")
     }
 
+    func testResolvePlatformKeyReturnsExactMatch() {
+        let key = WebKitInstaller.resolvePlatformKey(
+            available: ["mac14", "mac14-arm64", "mac15", "mac15-arm64"],
+            osVersion: OperatingSystemVersion(majorVersion: 15, minorVersion: 1, patchVersion: 0),
+            machine: "arm64"
+        )
+        XCTAssertEqual(key, "mac15-arm64")
+    }
+
+    func testResolvePlatformKeyForwardCompatNewerHost() {
+        // Host is macOS 26 (Apple's version-numbering jump). Manifest stops
+        // at mac15 — Apple binary compat means mac15-arm64 runs on mac26.
+        let key = WebKitInstaller.resolvePlatformKey(
+            available: ["mac14", "mac14-arm64", "mac15", "mac15-arm64"],
+            osVersion: OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0),
+            machine: "arm64"
+        )
+        XCTAssertEqual(key, "mac15-arm64")
+    }
+
+    func testResolvePlatformKeyOlderHost() {
+        // Host is macOS 13 but manifest only has mac14/mac15 — pick highest
+        // available rather than failing, matching Playwright behaviour.
+        let key = WebKitInstaller.resolvePlatformKey(
+            available: ["mac14", "mac14-arm64", "mac15", "mac15-arm64"],
+            osVersion: OperatingSystemVersion(majorVersion: 13, minorVersion: 0, patchVersion: 0),
+            machine: "arm64"
+        )
+        XCTAssertEqual(key, "mac15-arm64")
+    }
+
+    func testResolvePlatformKeyFallsBackToHighestLEQHost() {
+        let key = WebKitInstaller.resolvePlatformKey(
+            available: ["mac11-arm64", "mac13-arm64", "mac15-arm64"],
+            osVersion: OperatingSystemVersion(majorVersion: 14, minorVersion: 0, patchVersion: 0),
+            machine: "arm64"
+        )
+        XCTAssertEqual(key, "mac13-arm64")
+    }
+
+    func testResolvePlatformKeyRespectsArch() {
+        // Intel host should not get arm64 builds even if those are the only
+        // ones near the host's mac major.
+        let key = WebKitInstaller.resolvePlatformKey(
+            available: ["mac14-arm64", "mac15-arm64", "mac11"],
+            osVersion: OperatingSystemVersion(majorVersion: 26, minorVersion: 0, patchVersion: 0),
+            machine: "x86_64"
+        )
+        XCTAssertEqual(key, "mac11")
+    }
+
+    func testResolvePlatformKeyReturnsNilWhenArchMissing() {
+        // Intel host with arm64-only manifest — nothing fits.
+        let key = WebKitInstaller.resolvePlatformKey(
+            available: ["mac14-arm64", "mac15-arm64"],
+            osVersion: OperatingSystemVersion(majorVersion: 15, minorVersion: 0, patchVersion: 0),
+            machine: "x86_64"
+        )
+        XCTAssertNil(key)
+    }
+
     func testManifestContainsCurrentMacosPlatforms() {
         // Sliccstart targets macOS 14+. We don't ship to older macOS, so we
         // only need mac14 / mac15 keys to exist. If Renovate bumps the
@@ -28,6 +89,57 @@ final class WebKitInstallerTests: XCTestCase {
         XCTAssertTrue(keys.contains("mac14-arm64"), "mac14-arm64 missing from generated manifest")
         XCTAssertTrue(keys.contains("mac15"), "mac15 missing from generated manifest")
         XCTAssertTrue(keys.contains("mac15-arm64"), "mac15-arm64 missing from generated manifest")
+    }
+
+    func testFormatBytesScalesUnits() {
+        XCTAssertEqual(WebKitInstaller.formatBytes(0), "0 B")
+        XCTAssertEqual(WebKitInstaller.formatBytes(512), "512 B")
+        XCTAssertEqual(WebKitInstaller.formatBytes(2 * 1024), "2.0 KB")
+        XCTAssertEqual(WebKitInstaller.formatBytes(5 * 1024 * 1024), "5.0 MB")
+        XCTAssertEqual(WebKitInstaller.formatBytes(3 * 1024 * 1024 * 1024), "3.0 GB")
+    }
+
+    func testFormatDurationRanges() {
+        XCTAssertEqual(WebKitInstaller.formatDuration(5), "5s")
+        XCTAssertEqual(WebKitInstaller.formatDuration(59.4), "59s")
+        XCTAssertEqual(WebKitInstaller.formatDuration(60), "1m")
+        XCTAssertEqual(WebKitInstaller.formatDuration(83), "1m 23s")
+        XCTAssertEqual(WebKitInstaller.formatDuration(3600), "1h")
+        XCTAssertEqual(WebKitInstaller.formatDuration(3725), "1h 2m")
+    }
+
+    func testFormatDownloadProgressWithKnownTotal() {
+        let result = WebKitInstaller.formatDownloadProgress(
+            bytesDone: 10 * 1024 * 1024,
+            totalBytes: 100 * 1024 * 1024,
+            elapsed: 5.0
+        )
+        XCTAssertTrue(result.contains("10%"), result)
+        XCTAssertTrue(result.contains("10.0 MB/100.0 MB"), result)
+        XCTAssertTrue(result.contains("/s"), result)
+        // 90 MB at 2 MB/s = 45s
+        XCTAssertTrue(result.contains("s") && !result.contains("0s"), result)
+    }
+
+    func testFormatDownloadProgressWithUnknownTotal() {
+        // Server didn't send Content-Length — totalBytes == -1 from the
+        // URLSession callback. We should still emit a useful message.
+        let result = WebKitInstaller.formatDownloadProgress(
+            bytesDone: 5 * 1024 * 1024,
+            totalBytes: -1,
+            elapsed: 2.0
+        )
+        XCTAssertTrue(result.contains("5.0 MB"), result)
+        XCTAssertFalse(result.contains("%"), result) // no percent
+    }
+
+    func testFormatDownloadProgressBeforeFirstChunk() {
+        let result = WebKitInstaller.formatDownloadProgress(
+            bytesDone: 0,
+            totalBytes: 1_000_000,
+            elapsed: 0.1
+        )
+        XCTAssertEqual(result, "Starting download...")
     }
 
     func testManifestUrlsAreHttps() {

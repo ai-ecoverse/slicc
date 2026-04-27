@@ -239,9 +239,14 @@ struct WebKitRow: View {
                         .font(.system(size: 13))
                         .foregroundStyle(webKitManager.isInstalled ? .primary : .secondary)
                     if webKitManager.isInstalling {
-                        Text("Installing...")
+                        Text(webKitManager.installProgress.isEmpty
+                             ? "Installing..."
+                             : webKitManager.installProgress)
                             .font(.system(size: 9))
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(webKitManager.installProgress)
                     } else if !webKitManager.isInstalled {
                         Text("Click to install")
                             .font(.system(size: 9))
