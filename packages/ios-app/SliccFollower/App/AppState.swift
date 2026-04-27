@@ -124,6 +124,13 @@ class AppState: ObservableObject {
     /// ID of the message currently being streamed.
     private var streamingMessageId: String?
 
+    // MARK: - CDP / federated targets
+
+    /// CDP bridge — owns hidden WKWebViews, dispatches CDP commands.
+    private var cdpBridge: CDPBridge?
+    /// Periodic timer for re-advertising targets.
+    private var targetsAdvertiseTimer: Timer?
+
     // MARK: - Connection Lifecycle
 
     /// Attempt to connect to the tray using the current joinUrl.
@@ -484,6 +491,20 @@ class AppState: ObservableObject {
         connectionState = .connected
         connectedSince = Date()
 
+        // Spin up the CDP bridge and advertise (initially empty) targets so
+        // the leader knows we can host federated WKWebView targets.
+        let bridge = CDPBridge(runtimeId: controllerId) { [weak self] msg in
+            self?.sendToLeader(msg)
+        }
+        if let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene }).first,
+           let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first {
+            bridge.attach(to: window)
+        }
+        cdpBridge = bridge
+        bridge.advertiseTargets()
+        startTargetsAdvertiseTimer()
+
         // Start keepalive.
         let rtc = webRTCManager
         keepalive = DataChannelKeepalive(
@@ -616,6 +637,25 @@ class AppState: ObservableObject {
                 sprinkleUpdates[sprinkleName] = data
             }
 
+        case let .cdpRequest(requestId, localTargetId, method, params, sessionId):
+            logger.debug("CDP request \(method) target=\(localTargetId)")
+            cdpBridge?.handleRequest(
+                requestId: requestId,
+                localTargetId: localTargetId,
+                method: method,
+                params: params,
+                sessionId: sessionId
+            )
+
+        case let .tabOpen(requestId, url):
+            logger.info("Leader requested new tab: \(url)")
+            cdpBridge?.handleTabOpen(requestId: requestId, url: url)
+
+        case .targetsRegistry:
+            // Informational — registry of all federated targets across the tray.
+            // We don't act on it locally; relevant only for cross-runtime CDP.
+            break
+
         case .ping:
             sendToLeader(.pong)
             Task { await keepalive?.receivedPing() }
@@ -627,6 +667,23 @@ class AppState: ObservableObject {
             logger.debug("Unknown message type received")
             break  // Silently ignore unhandled message types
         }
+    }
+
+    // MARK: - CDP advertise timer
+
+    private func startTargetsAdvertiseTimer() {
+        targetsAdvertiseTimer?.invalidate()
+        targetsAdvertiseTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) {
+            [weak self] _ in
+            Task { @MainActor in
+                self?.cdpBridge?.advertiseTargets()
+            }
+        }
+    }
+
+    private func stopTargetsAdvertiseTimer() {
+        targetsAdvertiseTimer?.invalidate()
+        targetsAdvertiseTimer = nil
     }
 
     /// Apply a snapshot payload for `scoopJid` to the per-scoop buffer, and
@@ -783,6 +840,10 @@ class AppState: ObservableObject {
         webRTCDelegate = nil
         signalingClient = nil
         snapshotChunks.removeAll()
+        // Drop CDP bridge state.
+        stopTargetsAdvertiseTimer()
+        cdpBridge?.reset()
+        cdpBridge = nil
     }
 
     // MARK: - Private: History
