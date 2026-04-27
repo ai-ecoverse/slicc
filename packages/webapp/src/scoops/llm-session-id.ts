@@ -29,7 +29,15 @@ function todayUtc(): string {
 
 function safeLocalStorage(): Storage | null {
   try {
-    return globalThis.localStorage ?? null;
+    const ls = globalThis.localStorage as Storage | undefined;
+    // Node 24+ exposes an experimental `globalThis.localStorage = {}`
+    // shim that's truthy but lacks `getItem` / `setItem`. Feature-test
+    // before returning so the truthy guard at the call site doesn't
+    // attempt to invoke methods that don't exist.
+    if (ls && typeof ls.getItem === 'function' && typeof ls.setItem === 'function') {
+      return ls;
+    }
+    return null;
   } catch {
     return null;
   }

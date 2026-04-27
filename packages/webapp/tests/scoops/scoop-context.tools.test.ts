@@ -30,6 +30,11 @@ const mocks = vi.hoisted(() => {
       return {};
     }),
     getApiKey: vi.fn(() => 'test-api-key'),
+    // scoop-context.init() reads the provider's `requiresApiKey` flag to
+    // decide whether to short-circuit when no api key is configured (the
+    // local SwiftLM provider opts out). Stub it to the strict default so
+    // the existing test cases keep their api-key path.
+    getProviderConfig: vi.fn(() => ({ requiresApiKey: true })),
     getSelectedProvider: vi.fn(() => 'anthropic'),
     resolveCurrentModel: vi.fn(() => ({ id: 'test-model' })),
     resolveModelById: vi.fn(() => ({ id: 'test-model' })),
@@ -57,6 +62,7 @@ vi.mock('../../src/shell/index.js', () => ({
 
 vi.mock('../../src/ui/provider-settings.js', () => ({
   getApiKey: mocks.getApiKey,
+  getProviderConfig: mocks.getProviderConfig,
   getSelectedProvider: mocks.getSelectedProvider,
   resolveCurrentModel: mocks.resolveCurrentModel,
   resolveModelById: mocks.resolveModelById,
