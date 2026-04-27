@@ -12,7 +12,14 @@ struct ModelCapabilities: Equatable {
     /// instead of the text-only path.
     let supportsVision: Bool
 
-    static let unknown = ModelCapabilities(supportsVision: false)
+    /// Max context window the model declares. Read from the snapshot's
+    /// `config.json` (top-level `max_position_embeddings`, falling back to
+    /// `text_config.max_position_embeddings` for multimodal configs).
+    /// `nil` when neither key is present — caller should use a defensive
+    /// default in that case.
+    let maxContextSize: Int?
+
+    static let unknown = ModelCapabilities(supportsVision: false, maxContextSize: nil)
 }
 
 /// Mirrors `ModelArchitectureProbe` in SwiftLM (Sources/MLXInferenceCore).
@@ -84,7 +91,18 @@ enum ModelArchProbe {
             || config?["vision_config"] != nil
             || preprocessor?["image_processor_type"] != nil
 
-        return ModelCapabilities(supportsVision: supportsVision)
+        // Some configs put context length at the top level (text-only
+        // models), others tuck it into `text_config` (Gemma 4, Qwen-VL).
+        // Try both before giving up.
+        let textConfig = config?["text_config"] as? [String: Any]
+        let maxContext =
+            (config?["max_position_embeddings"] as? Int)
+            ?? (textConfig?["max_position_embeddings"] as? Int)
+
+        return ModelCapabilities(
+            supportsVision: supportsVision,
+            maxContextSize: maxContext
+        )
     }
 
     /// Most recent snapshot directory under `models--<org>--<name>/snapshots/`.

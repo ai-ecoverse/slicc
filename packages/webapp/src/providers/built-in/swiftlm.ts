@@ -109,11 +109,14 @@ function readCachedModels(): Array<{ id: string; name?: string } & ModelMetadata
       id: m.id,
       name: m.name ?? m.id,
       api: 'openai',
-      // Mirror the SwiftLM CLI defaults Sliccstart sets: 32 768 ctx, 8 192
-      // max output. Both can be raised once SwiftLM exposes them via
-      // `/v1/models` (currently it doesn't), and individual mlx-community
-      // releases may report tighter limits via their HF metadata.
-      context_window: 32_768,
+      // Sliccstart launches SwiftLM at the model's declared
+      // `max_position_embeddings` (Gemma 4 / Qwen 3.6 ship at 262 144),
+      // capped only by the per-model fallback when probe fails. Mirror
+      // that ceiling here so the chat panel's context-budget UI reflects
+      // what the server will actually accept. SwiftLM doesn't expose ctx
+      // via /v1/models or /health yet — once it does, we can read the
+      // real value from the cached payload instead of hardcoding.
+      context_window: 262_144,
       max_tokens: 8_192,
       // SwiftLM's `--vision` flag flips this; detected via `/health` at
       // boot and persisted in the cache. Non-VLMs stay text-only.
