@@ -405,6 +405,22 @@ export function createChatFixture(): ChatMessage[] {
     channel: 'session-reload',
   });
 
+  messages.push({
+    id: 'fx-lick-upgrade',
+    role: 'user',
+    content:
+      '[Upgrade Event: 0.4.1\u21920.5.0]\n\n' +
+      'SLICC was upgraded from `0.4.1` to `0.5.0`.\n' +
+      'Released: 2026-04-15T12:00:00Z\n\n' +
+      'Use the **upgrade** skill (`/workspace/skills/upgrade/SKILL.md`) to:\n' +
+      '- Show the user the changelog between these tags from GitHub\n' +
+      '- Offer to merge new bundled vfs-root content into their workspace ' +
+      "(three-way merge: bundled snapshot vs user's VFS, reconciled with the GitHub tag-to-tag diff).",
+    timestamp: tsAt(17),
+    source: 'lick',
+    channel: 'upgrade',
+  });
+
   // ── 6. Queued messages (before the streaming tail) ────────────────
   messages.push({
     id: 'fx-queued-1',

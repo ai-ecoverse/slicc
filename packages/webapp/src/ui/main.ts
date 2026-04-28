@@ -90,6 +90,7 @@ import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
 import { recoverMounts, formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
+import { detectUpgrade } from '../scoops/upgrade-detection.js';
 
 const log = createLogger('main');
 
@@ -1483,6 +1484,7 @@ async function main(): Promise<void> {
     const isFsWatch = event.type === 'fswatch';
     const isSessionReload = event.type === 'session-reload';
     const isNavigate = event.type === 'navigate';
+    const isUpgrade = event.type === 'upgrade';
     const eventName = isWebhook
       ? event.webhookName
       : isSprinkle
@@ -1493,7 +1495,9 @@ async function main(): Promise<void> {
             ? 'session-reload'
             : isNavigate
               ? event.navigateUrl
-              : event.cronName;
+              : isUpgrade
+                ? `${event.upgradeFromVersion ?? 'unknown'}\u2192${event.upgradeToVersion ?? 'unknown'}`
+                : event.cronName;
     const eventId = isWebhook
       ? event.webhookId
       : isSprinkle
@@ -1504,7 +1508,9 @@ async function main(): Promise<void> {
             ? 'session-reload'
             : isNavigate
               ? event.navigateUrl
-              : event.cronId;
+              : isUpgrade
+                ? `upgrade-${event.upgradeToVersion ?? 'unknown'}`
+                : event.cronId;
     const channel = event.type;
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
@@ -1593,7 +1599,9 @@ async function main(): Promise<void> {
               ? 'Session Reload'
               : isNavigate
                 ? 'Navigate Event'
-                : 'Cron Event';
+                : isUpgrade
+                  ? 'Upgrade Event'
+                  : 'Cron Event';
       let content: string | null = null;
       if (isSessionReload) {
         const body = event.body as
@@ -1612,6 +1620,20 @@ async function main(): Promise<void> {
             return;
           }
         }
+      }
+      if (isUpgrade) {
+        const from = event.upgradeFromVersion ?? 'unknown';
+        const to = event.upgradeToVersion ?? 'unknown';
+        const releasedAt =
+          (event.body as { releasedAt?: string | null } | null | undefined)?.releasedAt ?? null;
+        const releaseLine = releasedAt ? `\nReleased: ${releasedAt}` : '';
+        content =
+          `[${eventLabel}: ${from}\u2192${to}]\n\n` +
+          `SLICC was upgraded from \`${from}\` to \`${to}\`.${releaseLine}\n\n` +
+          `Use the **upgrade** skill (\`/workspace/skills/upgrade/SKILL.md\`) to:\n` +
+          `- Show the user the changelog between these tags from GitHub\n` +
+          `- Offer to merge new bundled vfs-root content into their workspace ` +
+          `(three-way merge: bundled snapshot vs user's VFS, reconciled with the GitHub tag-to-tag diff).`;
       }
       if (content === null) {
         content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
@@ -1716,6 +1738,32 @@ async function main(): Promise<void> {
         routeLickToScoop(event);
       })
       .catch((err) => log.warn('Failed to restore persisted mounts', err));
+  }
+
+  // ── Upgrade detection ────────────────────────────────────────────────
+  // Compares the bundled SLICC version (baked into /shared/version.json
+  // at release time) against the value last seen on a previous boot and
+  // emits an `upgrade` lick when it bumped. The detection helper records
+  // the new version itself; we just route the event.
+  if (sharedFs) {
+    detectUpgrade(sharedFs)
+      .then((result) => {
+        if (!result.isUpgrade || result.lastSeen === null) return;
+        const event: LickEvent = {
+          type: 'upgrade',
+          targetScoop: undefined,
+          timestamp: new Date().toISOString(),
+          upgradeFromVersion: result.lastSeen,
+          upgradeToVersion: result.bundled.version,
+          body: {
+            from: result.lastSeen,
+            to: result.bundled.version,
+            releasedAt: result.bundled.releasedAt,
+          },
+        };
+        routeLickToScoop(event);
+      })
+      .catch((err) => log.warn('Upgrade detection failed', err));
   }
 
   // Wire inline sprinkle lick callback — routes to cone as a sprinkle lick event

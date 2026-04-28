@@ -63,13 +63,14 @@ describe('ChatPanel.addLickMessage', () => {
     expect(container.querySelector('.msg--user')).toBeNull();
   });
 
-  it('renders sprinkle / navigate / fswatch / session-reload as lick widgets', () => {
+  it('renders sprinkle / navigate / fswatch / session-reload / upgrade as lick widgets', () => {
     panel.addLickMessage('sp-1', 'sprinkle content', 'sprinkle');
     panel.addLickMessage('nv-1', 'navigate content', 'navigate');
     panel.addLickMessage('fw-1', 'fswatch content', 'fswatch');
     panel.addLickMessage('sr-1', 'reload content', 'session-reload');
+    panel.addLickMessage('up-1', 'upgrade content', 'upgrade');
     const licks = container.querySelectorAll('details.lick');
-    expect(licks.length).toBe(4);
+    expect(licks.length).toBe(5);
   });
 
   it('preserves history-replay timestamp ordering when licks arrive out of order', () => {

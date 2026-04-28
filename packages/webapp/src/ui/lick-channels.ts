@@ -5,7 +5,7 @@
  * This set is a SUPERSET of `LickEvent.type` in
  * `scoops/lick-manager.ts`: it covers the external-event types emitted
  * by the LickManager (webhook, cron, sprinkle, fswatch, session-reload,
- * navigate) AND the synthetic scoop-lifecycle channels
+ * navigate, upgrade) AND the synthetic scoop-lifecycle channels
  * (`scoop-notify`, `scoop-idle`, `scoop-wait`) the Orchestrator fires
  * when a scoop completes, stays idle, or when a previously scheduled
  * `scoop_wait` resolves. We render all of them with the same widget so
@@ -24,6 +24,7 @@ export type LickChannel =
   | 'fswatch'
   | 'session-reload'
   | 'navigate'
+  | 'upgrade'
   | 'scoop-notify'
   | 'scoop-idle'
   | 'scoop-wait';
@@ -35,6 +36,7 @@ export const LICK_CHANNELS: ReadonlySet<LickChannel> = new Set<LickChannel>([
   'fswatch',
   'session-reload',
   'navigate',
+  'upgrade',
   'scoop-notify',
   'scoop-idle',
   'scoop-wait',

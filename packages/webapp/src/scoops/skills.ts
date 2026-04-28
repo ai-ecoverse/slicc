@@ -333,6 +333,14 @@ export async function createDefaultSkills(
 }
 
 /**
+ * Files under /shared/ that should always reflect the bundled (build-time)
+ * version, even if they already exist in the user's VFS. Used by the
+ * upgrade-detection flow (see ui/main.ts) so the bundled SLICC version
+ * is the source of truth for "which version is currently installed".
+ */
+const ALWAYS_OVERWRITE_SHARED = new Set<string>(['/shared/version.json']);
+
+/**
  * Create default shared files (like /shared/CLAUDE.md) from bundled defaults.
  */
 export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
@@ -345,20 +353,28 @@ export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
     // Only copy files that belong under /shared/
     if (!vfsPath.startsWith('/shared/')) continue;
 
-    try {
-      // Check if file already exists
-      await fs.stat(vfsPath);
-      // File exists, skip
-    } catch {
-      // File doesn't exist, create it
-      const parentDir = vfsPath.substring(0, vfsPath.lastIndexOf('/'));
+    const alwaysOverwrite = ALWAYS_OVERWRITE_SHARED.has(vfsPath);
+
+    if (!alwaysOverwrite) {
       try {
-        await fs.mkdir(parentDir, { recursive: true });
+        // Check if file already exists
+        await fs.stat(vfsPath);
+        // File exists, skip
+        continue;
       } catch {
-        // Directory exists
+        // File doesn't exist — fall through to create it.
       }
-      await fs.writeFile(vfsPath, content);
-      log.info('Created default shared file', { path: vfsPath });
     }
+
+    const parentDir = vfsPath.substring(0, vfsPath.lastIndexOf('/'));
+    try {
+      await fs.mkdir(parentDir, { recursive: true });
+    } catch {
+      // Directory exists
+    }
+    await fs.writeFile(vfsPath, content);
+    log.info(alwaysOverwrite ? 'Refreshed bundled shared file' : 'Created default shared file', {
+      path: vfsPath,
+    });
   }
 }
