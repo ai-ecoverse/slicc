@@ -1,12 +1,28 @@
 ---
 name: welcome
-description: Handle onboarding lick from the welcome sprinkle
+description: Render the welcome wizard on first run and handle the onboarding lick when the user completes it
 allowed-tools: bash
 ---
 
 # Welcome Onboarding
 
-When you receive a `[Sprinkle Event: welcome]` with `onboarding-complete`, follow these steps in order. Do NOT skip any step.
+The welcome wizard is an **inline dip** — it lives directly in chat, not in a side panel. When the user completes it, you receive a lick and respond conversationally in the same thread. You can ask follow-up questions, clarify sparse profiles, and continue the conversation naturally.
+
+## Trigger 1: First-run welcome lick
+
+When you receive a `[Sprinkle Event: welcome]` lick whose body has `action: 'first-run'`, this is the user's very first launch of SLICC. Render the welcome wizard as an inline dip by replying with a one-line greeting and the dip image reference:
+
+```
+Welcome to SLICC — let's get you set up.
+
+![](/shared/sprinkles/welcome/welcome.shtml)
+```
+
+The chat panel auto-detects `.shtml` image references and mounts them as sandboxed dip iframes — no `read_file`, no fenced code block, no panel commands. Do NOT save a profile, update `/shared/CLAUDE.md`, or run `upskill recommendations` yet. Those happen in Trigger 2 below, after the user actually finishes the wizard.
+
+## Trigger 2: Onboarding-complete sprinkle lick
+
+When you receive a `[Sprinkle Event: welcome]` lick with `action: 'onboarding-complete'` (the wizard fires this from inside the dip), follow these steps in order. Do NOT skip any step.
 
 The lick payload contains the user's profile:
 
@@ -25,7 +41,7 @@ The lick payload contains the user's profile:
 
 ## IMPORTANT RULES
 
-- **Do NOT close the welcome panel.** Never run `sprinkle close welcome`. The user will close it themselves.
+- **Do NOT open or close any panel.** This is inline — never run `sprinkle open welcome` or `sprinkle close welcome`.
 - **Do NOT use `update_global_memory`.** Use `edit_file` to update `/shared/CLAUDE.md`.
 - **You MUST include the shtml table below.** Do not skip it, do not replace it with cards.
 
@@ -59,7 +75,7 @@ This outputs progress lines like `[1/N] Installed "skill-name"…`. Let the outp
 
 **Step 2.** Use `edit_file` on `/shared/CLAUDE.md` to add a `## User Profile` section right after the `# sliccy` heading with the user's name, purpose, role, and interests from the profile data.
 
-**Step 3.** Write a one-sentence greeting using their name, matching tone to purpose (professional for work, playful for exploring, encouraging for school).
+**Step 3.** Write a one-sentence greeting using their name, matching tone to purpose (professional for work, playful for exploring, encouraging for school). If the profile is sparse (most fields skipped), keep the greeting brief and ask one follow-up question to learn more.
 
 **Step 4.** Immediately after the greeting, include a ` ```shtml ` code block with a capability table. Copy this template exactly, changing only the task names and descriptions to match the user's profile. Use 3-4 rows:
 
@@ -71,7 +87,7 @@ This outputs progress lines like `[1/N] Installed "skill-name"…`. Let the outp
 </table>
 ```
 
-**Step 5.** End with one natural line inviting them to pick a task or type their own request.
+**Step 5.** End with one natural line inviting them to pick a task or just tell you what they need.
 
 ## Handling shortcut-migrate
 
