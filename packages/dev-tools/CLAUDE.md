@@ -11,7 +11,7 @@ This file covers the repo's developer-tooling surface.
 - **Prompt/build helpers**: `packages/dev-tools/tools/slicc-prompt.mjs`
 - **Build configs**: `packages/webapp/vite.config.ts`, `packages/chrome-extension/vite.config.ts`, `eslint.config.js`
 - **QA setup**: `packages/node-server/src/qa-setup.ts` plus the root `npm run qa:*` scripts
-- **Visual/integration helpers**: `tests/test-inline-sprinkles.mjs` and related targeted test utilities
+- **Visual/integration helpers**: `tests/test-dips.mjs` and related targeted test utilities
 
 ## What Lives Here Conceptually
 

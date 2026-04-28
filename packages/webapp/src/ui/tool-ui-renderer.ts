@@ -1,17 +1,17 @@
 /**
  * Tool UI Renderer — renders tool UI elements in the chat.
  *
- * Uses the inline sprinkle iframe architecture for consistent rendering.
- * In CLI mode, renders via mountInlineSprinkle (srcdoc iframe with S2 theme).
+ * Uses the dip iframe architecture for consistent rendering.
+ * In CLI mode, renders via mountDip (srcdoc iframe with S2 theme).
  * In extension mode, renders inside a sandbox iframe (CSP-exempt).
  *
- * Supports both slicc.lick() (inline sprinkle bridge) and data-action
+ * Supports both slicc.lick() (dip bridge) and data-action
  * attributes (Tool UI blocking pattern). When a lick event fires, it's
  * forwarded to the toolUIRegistry so sprinkle-chat can resolve.
  */
 
 import { toolUIRegistry } from '../tools/tool-ui.js';
-import { mountInlineSprinkle, type InlineSprinkleInstance } from './inline-sprinkle.js';
+import { mountDip, type DipInstance } from './dip.js';
 import { collectThemeCSS } from './sprinkle-renderer.js';
 import { isThemeLight } from './theme.js';
 import { createLogger } from '../core/logger.js';
@@ -23,7 +23,7 @@ const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 export class ToolUIRenderer {
   private container: HTMLElement;
   private iframe: HTMLIFrameElement | null = null;
-  private inlineSprinkle: InlineSprinkleInstance | null = null;
+  private dip: DipInstance | null = null;
   private messageHandler: ((event: MessageEvent) => void) | null = null;
   private requestId: string;
   private nonce: string;
@@ -39,7 +39,7 @@ export class ToolUIRenderer {
     if (isExtension) {
       await this.renderInSandbox(html);
     } else {
-      this.renderWithInlineSprinkle(html);
+      this.renderWithDip(html);
     }
   }
 
@@ -127,17 +127,17 @@ export class ToolUIRenderer {
   }
 
   /**
-   * CLI mode: render using inline sprinkle iframe.
+   * CLI mode: render using dip iframe.
    * Uses the same srcdoc template, S2 theme, and slicc.lick() bridge.
    * Lick events resolve the Tool UI promise via toolUIRegistry.
    */
-  private renderWithInlineSprinkle(html: string): void {
+  private renderWithDip(html: string): void {
     const wrapper = document.createElement('div');
-    wrapper.className = 'msg__inline-sprinkle';
+    wrapper.className = 'msg__dip';
     this.container.appendChild(wrapper);
 
-    this.inlineSprinkle = mountInlineSprinkle(wrapper, html, (action, data) => {
-      log.info('Tool UI action (inline sprinkle)', { id: this.requestId, action });
+    this.dip = mountDip(wrapper, html, (action, data) => {
+      log.info('Tool UI action (dip)', { id: this.requestId, action });
       toolUIRegistry.handleAction(this.requestId, { action, data });
     });
   }
@@ -183,9 +183,9 @@ export class ToolUIRenderer {
       this.iframe.remove();
       this.iframe = null;
     }
-    if (this.inlineSprinkle) {
-      this.inlineSprinkle.dispose();
-      this.inlineSprinkle = null;
+    if (this.dip) {
+      this.dip.dispose();
+      this.dip = null;
     }
   }
 }

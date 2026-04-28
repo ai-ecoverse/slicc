@@ -98,9 +98,9 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 - CLI mode renders fragments directly or full docs in `srcdoc` iframes.
 - Extension mode routes rendering through `sprinkle-sandbox.html`; see the extension guide for CSP specifics.
 
-### Inline Sprinkles
+### Dips
 
-- Main file: `packages/webapp/src/ui/inline-sprinkle.ts`
+- Main file: `packages/webapp/src/ui/dip.ts`
 - Hydrates assistant `shtml` code blocks into sandboxed iframes after streaming completes.
 - Uses a minimal lick bridge and auto-height reporting.
 

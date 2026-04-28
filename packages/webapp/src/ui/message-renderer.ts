@@ -26,7 +26,7 @@ export function escapeHtml(text: string): string {
 function highlightCode(code: string, lang: string): string {
   let html = escapeHtml(code);
 
-  if (lang === 'shtml') return html; // preserve raw content for inline sprinkle hydration
+  if (lang === 'shtml') return html; // preserve raw content for dip hydration
 
   if (['js', 'javascript', 'ts', 'typescript', 'jsx', 'tsx'].includes(lang)) {
     html = highlightJS(html);
@@ -189,6 +189,15 @@ const marked = new Marked({
       const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
       const text = this.parser.parseInline(tokens);
       return `<a href="${escapeHtml(url)}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
+    },
+    image({ href, title, text }: Tokens.Image): string {
+      const url = href ?? '';
+      // .shtml image references render as dip iframes during hydration.
+      // Emit a standard <img> tag -- hydrateDips() will detect img[src$=".shtml"]
+      // and replace it with a sandboxed iframe that loads the referenced file.
+      const altAttr = text ? ` alt="${escapeHtml(text)}"` : '';
+      const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+      return `<img src="${escapeHtml(url)}"${altAttr}${titleAttr}>`;
     },
   },
 });
