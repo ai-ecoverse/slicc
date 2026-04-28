@@ -94,6 +94,32 @@ describe('MountCommands', () => {
     });
   });
 
+  describe('scoop (non-interactive) context', () => {
+    it('fails fast with exitCode 1 when invoked from a scoop', async () => {
+      const cmd = new MountCommands({ fs: makeFs(), isScoop: () => true });
+      const result = await cmd.execute(['/workspace/myapp'], '/workspace');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('cannot mount from a scoop');
+    });
+
+    it('does not invoke the file picker in scoop context', async () => {
+      const mount = vi.fn();
+      const cmd = new MountCommands({ fs: makeFs({ mount }), isScoop: () => true });
+      const result = await cmd.execute(['/workspace/myapp'], '/workspace');
+      expect(result.exitCode).toBe(1);
+      expect(mount).not.toHaveBeenCalled();
+    });
+
+    it('still allows list/unmount/refresh subcommands inside a scoop', async () => {
+      const cmd = new MountCommands({
+        fs: makeFs({ listMounts: vi.fn(() => []) }),
+        isScoop: () => true,
+      });
+      const result = await cmd.execute(['list'], '/workspace');
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
   describe('--help', () => {
     it('returns exitCode 0', async () => {
       const cmd = new MountCommands({ fs: makeFs() });

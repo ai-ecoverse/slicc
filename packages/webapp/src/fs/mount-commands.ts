@@ -30,6 +30,34 @@ export interface MountCommandResult {
 
 export interface MountCommandsOptions {
   fs: VirtualFS;
+  /**
+   * Returns true when the command is running inside a non-interactive scoop
+   * context (no human at the keyboard to approve a directory picker). When
+   * true, mount fails fast instead of hanging on a tool UI prompt nobody
+   * will see. Defaults to false (interactive).
+   */
+  isScoop?: () => boolean;
+}
+
+/**
+ * Maximum time the agent-driven (cone) mount flow waits for the user to
+ * resolve the approval / picker UI. Five minutes matches the slowest
+ * realistic human response while preventing indefinite hangs.
+ */
+const MOUNT_TOOL_UI_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Race a promise against a timeout that resolves with a sentinel value. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | { __timeout: true }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<{ __timeout: true }>((resolve) => {
+    timer = setTimeout(() => resolve({ __timeout: true }), ms);
+  });
+  return Promise.race([
+    promise.finally(() => {
+      if (timer) clearTimeout(timer);
+    }),
+    timeout,
+  ]);
 }
 
 type ShowDirectoryPickerFn = (opts?: object) => Promise<FileSystemDirectoryHandle>;
@@ -101,6 +129,19 @@ export class MountCommands {
       };
     }
 
+    // Fail fast when invoked from a non-interactive scoop: there is no human
+    // attached to the scoop's chat to approve the picker, so the tool UI
+    // would hang indefinitely. Cone (interactive) keeps the existing flow.
+    if (this.options.isScoop?.()) {
+      return {
+        stdout: '',
+        stderr:
+          'mount: cannot mount from a scoop (non-interactive context). ' +
+          'Ask the cone to mount the directory and share the path.\n',
+        exitCode: 1,
+      };
+    }
+
     if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
       return {
         stdout: '',
@@ -124,7 +165,7 @@ export class MountCommands {
 
     if (toolContext) {
       // Agent-driven: show approval UI before opening picker
-      const result = await showToolUIFromContext({
+      const uiPromise = showToolUIFromContext({
         html: `
           <div class="sprinkle-action-card">
             <div class="sprinkle-action-card__header">Mount at <code>${escapeHtml(targetPath)}</code> <span class="sprinkle-badge sprinkle-badge--notice">approval</span></div>
@@ -168,6 +209,24 @@ export class MountCommands {
           return { denied: true };
         },
       });
+
+      const raced = await withTimeout(
+        // showToolUIFromContext returns Promise<unknown | null> — keep that shape
+        Promise.resolve(uiPromise),
+        MOUNT_TOOL_UI_TIMEOUT_MS
+      );
+
+      if (raced && typeof raced === 'object' && '__timeout' in raced) {
+        return {
+          stdout: '',
+          stderr:
+            `mount: timed out after ${Math.round(MOUNT_TOOL_UI_TIMEOUT_MS / 60000)} minute(s) ` +
+            'waiting for user approval\n',
+          exitCode: 1,
+        };
+      }
+
+      const result = raced;
 
       if (!result) {
         return { stdout: '', stderr: 'mount: tool UI not available', exitCode: 1 };
