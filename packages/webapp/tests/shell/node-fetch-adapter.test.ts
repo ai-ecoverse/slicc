@@ -229,4 +229,132 @@ describe('createNodeFetchAdapter', () => {
     const resp = await fetch('https://api.example.com/x');
     expect(resp.url).toBe('https://api.example.com/x');
   });
+
+  it('uses URL, method, headers, and body from a Request input', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
+
+    const request = new Request('https://api.example.com/request', {
+      method: 'patch',
+      headers: {
+        'Content-Type': 'text/plain',
+        Authorization: 'Bearer from-request',
+      },
+      body: 'from-request-body',
+    });
+
+    await fetch(request);
+
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      method: string;
+      headers: Record<string, string>;
+      body?: string;
+    };
+    expect((secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe(
+      'https://api.example.com/request'
+    );
+    expect(opts.method).toBe('PATCH');
+    expect(opts.headers['content-type']).toBe('text/plain');
+    expect(opts.headers['authorization']).toBe('Bearer from-request');
+    expect(opts.body).toBe('from-request-body');
+  });
+
+  it('lets init override method, headers, and body from a Request input', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
+
+    const request = new Request('https://api.example.com/request', {
+      method: 'patch',
+      headers: {
+        'Content-Type': 'text/plain',
+        Authorization: 'Bearer from-request',
+      },
+      body: 'from-request-body',
+    });
+
+    await fetch(request, {
+      method: 'post',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer from-init' },
+      body: '{"from":"init"}',
+    });
+
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      method: string;
+      headers: Record<string, string>;
+      body?: string;
+    };
+    expect(opts.method).toBe('POST');
+    expect(opts.headers['Content-Type']).toBe('application/json');
+    expect(opts.headers['Authorization']).toBe('Bearer from-init');
+    expect(opts.body).toBe('{"from":"init"}');
+  });
+
+  it('auto-sets Content-Type for URLSearchParams bodies (matches native fetch)', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
+
+    const params = new URLSearchParams();
+    params.set('grant_type', 'refresh_token');
+    await fetch('https://oauth2.googleapis.com/token', { method: 'POST', body: params });
+
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      headers: Record<string, string>;
+    };
+    expect(opts.headers['Content-Type']).toBe('application/x-www-form-urlencoded;charset=UTF-8');
+  });
+
+  it('does not override an explicit Content-Type when body is URLSearchParams', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
+
+    await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'refresh_token' }),
+    });
+
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      headers: Record<string, string>;
+    };
+    expect(opts.headers['content-type']).toBe('application/x-www-form-urlencoded');
+    // Should not also have a 'Content-Type' (different case) — the explicit
+    // header is preserved as-is.
+    expect(opts.headers['Content-Type']).toBeUndefined();
+  });
+
+  it('rejects ReadableStream request bodies with a clear message', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
+
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('hi'));
+        controller.close();
+      },
+    });
+
+    await expect(
+      // The native Request type for body when streaming requires an extra
+      // option in some environments; we cast to BodyInit so the test
+      // exercises the adapter's runtime check.
+      fetch('https://api.example.com/x', {
+        method: 'POST',
+        body: stream as unknown as BodyInit,
+        // @ts-expect-error duplex is required for stream bodies in some envs
+        duplex: 'half',
+      })
+    ).rejects.toThrow(/ReadableStream request bodies are not supported/);
+  });
+
+  it('rejects unknown body shapes instead of stringifying them', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
+
+    await expect(
+      fetch('https://api.example.com/x', {
+        method: 'POST',
+        body: { foo: 'bar' } as unknown as BodyInit,
+      })
+    ).rejects.toThrow(/unsupported request body type/);
+  });
 });
