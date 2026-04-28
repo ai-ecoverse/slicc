@@ -90,7 +90,7 @@ import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
 import { recoverMounts, formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
-import { detectUpgrade } from '../scoops/upgrade-detection.js';
+import { detectUpgrade, recordVersionSeen } from '../scoops/upgrade-detection.js';
 
 const log = createLogger('main');
 
@@ -1743,11 +1743,15 @@ async function main(): Promise<void> {
   // ── Upgrade detection ────────────────────────────────────────────────
   // Compares the bundled SLICC version (baked into /shared/version.json
   // at release time) against the value last seen on a previous boot and
-  // emits an `upgrade` lick when it bumped. The detection helper records
-  // the new version itself; we just route the event.
+  // emits an `upgrade` lick when it bumped. Aligned with the session-
+  // reload (mount-recovery) lick above: both fire after the orchestrator
+  // is fully initialized so a cone is guaranteed to be present as a
+  // routable target. The "last seen" marker is only advanced AFTER the
+  // lick has actually been routed — otherwise a transient no-cone state
+  // would silently lose the upgrade notification for that version.
   if (sharedFs) {
     detectUpgrade(sharedFs)
-      .then((result) => {
+      .then(async (result) => {
         if (!result.isUpgrade || result.lastSeen === null) return;
         const event: LickEvent = {
           type: 'upgrade',
@@ -1762,6 +1766,7 @@ async function main(): Promise<void> {
           },
         };
         routeLickToScoop(event);
+        await recordVersionSeen(result.bundled.version);
       })
       .catch((err) => log.warn('Upgrade detection failed', err));
   }

@@ -68,15 +68,22 @@ export async function setLastSeenVersion(version: string): Promise<void> {
 }
 
 /**
- * Detect upgrades against the previously-stored "last seen" version and
- * advance the marker. Returns a structured result so the caller can
- * decide whether to emit a lick.
+ * Detect upgrades against the previously-stored "last seen" version.
+ *
+ * IMPORTANT: This function does **not** advance the marker for the
+ * upgrade case. The caller is responsible for invoking
+ * {@link recordVersionSeen} only after the upgrade lick has actually
+ * been routed to a target (i.e., after a cone exists). Otherwise the
+ * lick can be silently dropped while the marker is already advanced,
+ * permanently losing the upgrade notification for that version.
  *
  * Behavior matrix:
  *   - bundled is the dev placeholder → never an upgrade; do not record.
- *   - lastSeen is null (first boot) → record bundled, do not fire lick.
- *   - lastSeen === bundled → no change, no lick.
- *   - lastSeen !== bundled → upgrade, record new value, fire lick.
+ *   - lastSeen is null (first boot) → record bundled silently, do not
+ *     fire lick (the caller has nothing to route).
+ *   - lastSeen === bundled → no change, no lick, no record.
+ *   - lastSeen !== bundled → upgrade detected; caller MUST call
+ *     {@link recordVersionSeen} after routing the lick.
  */
 export async function detectUpgrade(fs: VirtualFS): Promise<UpgradeDetection> {
   const bundled = await readBundledVersion(fs);
@@ -89,7 +96,8 @@ export async function detectUpgrade(fs: VirtualFS): Promise<UpgradeDetection> {
   }
 
   if (lastSeen === null) {
-    // First boot on a real release — record silently.
+    // First boot on a real release — record silently. There is no prior
+    // version to upgrade FROM, so the lick has nothing meaningful to say.
     await setLastSeenVersion(bundled.version);
     return { bundled, lastSeen: null, isUpgrade: false };
   }
@@ -98,9 +106,19 @@ export async function detectUpgrade(fs: VirtualFS): Promise<UpgradeDetection> {
     return { bundled, lastSeen, isUpgrade: false };
   }
 
-  // Genuine upgrade — advance the marker and let the caller fire the lick.
-  await setLastSeenVersion(bundled.version);
+  // Genuine upgrade — DO NOT advance the marker here. Let the caller
+  // record the new version only after the lick has been routed.
   return { bundled, lastSeen, isUpgrade: true };
+}
+
+/**
+ * Persist the bundled version as "seen" once the upgrade lick has
+ * actually been delivered to a target. Pairs with {@link detectUpgrade}
+ * to avoid losing upgrade notifications when no cone exists at the
+ * moment detection runs.
+ */
+export async function recordVersionSeen(version: string): Promise<void> {
+  await setLastSeenVersion(version);
 }
 
 export const __test__ = {

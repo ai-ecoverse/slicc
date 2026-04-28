@@ -58,23 +58,26 @@ Show the conventional-commit messages grouped by type (`feat`, `fix`, `chore`, .
 
 ## Three-way merge (`action: 'merge-vfs-root'`)
 
-The user's VFS may have local edits to bundled skills, sprinkles, or scripts. We treat the **previous bundled snapshot** (which lives in their VFS today) as the merge base. The user's actual VFS content is one branch; the **GitHub tag-to-tag diff** is the other.
+The user's VFS may have local edits to bundled skills, sprinkles, or scripts. The three inputs to the merge are:
+
+- **base** = the bundled vfs-root file at the **previous** release tag (`v${FROM_VERSION}`). This is what the user originally received and is the common ancestor of both sides.
+- **ours** = the file currently in the user's VFS (which may equal `base` if untouched, or may carry local edits).
+- **theirs** = the bundled vfs-root file at the **new** release tag (`v${TO_VERSION}`).
 
 Concretely:
 
-1. Identify candidate paths under `/workspace/skills/` and `/shared/sprinkles/` that match the names of bundled files in this release. Per file:
-   - **base** = the file currently in the VFS (representing the previous bundled snapshot the user has been running on)
-   - **theirs** = the version from the new release tag fetched via `curl https://raw.githubusercontent.com/ai-ecoverse/slicc/v${TO_VERSION}/packages/vfs-root/<rest-of-path>`
-   - **ours** = the same VFS file (since base and ours are the same starting point unless the user has edited it). The previous-release version is recovered from `https://raw.githubusercontent.com/ai-ecoverse/slicc/v${FROM_VERSION}/packages/vfs-root/<rest-of-path>`.
-2. For each file, run a 3-way merge:
-   - If `previous-release == VFS` and `previous-release != new-release`: the user has not edited this file → safe to fast-forward to `new-release`.
-   - If `previous-release == new-release`: nothing changed upstream → leave the user's file alone.
-   - If `previous-release != VFS` and `previous-release != new-release`: 3-way merge. Use `git merge-file` inside the WasmShell:
+1. Identify candidate paths under `/workspace/skills/` and `/shared/sprinkles/` that match bundled files. Per file:
+   - Fetch `base` from `https://raw.githubusercontent.com/ai-ecoverse/slicc/v${FROM_VERSION}/packages/vfs-root/<rest-of-path>`.
+   - Fetch `theirs` from `https://raw.githubusercontent.com/ai-ecoverse/slicc/v${TO_VERSION}/packages/vfs-root/<rest-of-path>`.
+   - Read `ours` from the user's VFS at the equivalent runtime path (e.g. `/workspace/skills/<name>/SKILL.md`).
+2. Decide per file:
+   - If `base == theirs`: nothing changed upstream → leave the user's file alone (no merge needed).
+   - If `ours == base` and `base != theirs`: the user has not edited this file → safe fast-forward to `theirs`.
+   - If `ours != base` and `base != theirs`: real 3-way merge. Write the three sides to `/tmp` and let `git merge-file` produce the result:
      ```bash
-     # write the three sides to /tmp and let git merge-file produce the result
      git merge-file --stdout /tmp/ours /tmp/base /tmp/theirs > /tmp/merged
      ```
-     If the merge succeeds cleanly, write the merged result to the VFS path and tell the user. If conflicts remain (non-zero exit + `<<<<<<<` markers), surface the conflicting hunks and let the user pick.
+     Exit code 0 → clean merge; write `/tmp/merged` back to the VFS path. Non-zero exit means conflicts (`<<<<<<<` markers in the output) — surface the conflicting hunks and let the user pick.
 3. Present the per-file outcome as a summary table (`auto-applied`, `kept-local`, `needs-review`) and stop. Do not silently overwrite anything.
 
 ## Do not
@@ -82,4 +85,4 @@ Concretely:
 - Do not run a merge without showing the action card first. The user must explicitly click `Update workspace files`.
 - Do not delete files that no longer exist in the new release — many users name-collide their own scripts with bundled ones; deletion is too dangerous to automate.
 - Do not modify files outside `/workspace/skills/`, `/shared/sprinkles/`, and `/shared/sounds/` without the user explicitly extending the scope.
-- Do not advance the bundled version marker yourself. The runtime already advanced it before firing this lick; if the user dismisses, the lick will not fire again until the next upgrade.
+- Do not advance the bundled version marker yourself. The runtime advances it automatically once this lick has been routed; if the user dismisses, the lick will not fire again until the next upgrade.

@@ -280,35 +280,6 @@ async function init(): Promise<void> {
     return false;
   });
 
-  // ── Upgrade detection ─────────────────────────────────────────────
-  // Mirrors the boot-time check in packages/webapp/src/ui/main.ts so
-  // the extension float also fires `upgrade` licks when the bundled
-  // SLICC version differs from the previously-stored marker.
-  {
-    const sharedFsForUpgrade = orchestrator.getSharedFS();
-    if (sharedFsForUpgrade) {
-      const { detectUpgrade } =
-        await import('../../../packages/webapp/src/scoops/upgrade-detection.js');
-      detectUpgrade(sharedFsForUpgrade)
-        .then((result) => {
-          if (!result.isUpgrade || result.lastSeen === null) return;
-          lickManager.emitEvent({
-            type: 'upgrade',
-            targetScoop: undefined,
-            timestamp: new Date().toISOString(),
-            upgradeFromVersion: result.lastSeen,
-            upgradeToVersion: result.bundled.version,
-            body: {
-              from: result.lastSeen,
-              to: result.bundled.version,
-              releasedAt: result.bundled.releasedAt,
-            },
-          });
-        })
-        .catch((err) => console.warn('[slicc-offscreen] Upgrade detection failed', err));
-    }
-  }
-
   // Ensure cone exists
   const allScoops = orchestrator.getScoops();
   const hasCone = allScoops.some((s) => s.isCone);
@@ -329,6 +300,38 @@ async function init(): Promise<void> {
       addedAt: new Date().toISOString(),
     });
     console.log('[slicc-offscreen] Created cone');
+  }
+
+  // ── Upgrade detection ─────────────────────────────────────────────
+  // Aligned with the boot-time check in packages/webapp/src/ui/main.ts:
+  // both run only after a cone is guaranteed to exist as a routable
+  // target. We also defer advancing the "last seen" marker until the
+  // lick has been routed — otherwise a transient no-cone state would
+  // silently lose the upgrade notification for that version.
+  {
+    const sharedFsForUpgrade = orchestrator.getSharedFS();
+    if (sharedFsForUpgrade) {
+      const { detectUpgrade, recordVersionSeen } =
+        await import('../../../packages/webapp/src/scoops/upgrade-detection.js');
+      detectUpgrade(sharedFsForUpgrade)
+        .then(async (result) => {
+          if (!result.isUpgrade || result.lastSeen === null) return;
+          lickManager.emitEvent({
+            type: 'upgrade',
+            targetScoop: undefined,
+            timestamp: new Date().toISOString(),
+            upgradeFromVersion: result.lastSeen,
+            upgradeToVersion: result.bundled.version,
+            body: {
+              from: result.lastSeen,
+              to: result.bundled.version,
+              releasedAt: result.bundled.releasedAt,
+            },
+          });
+          await recordVersionSeen(result.bundled.version);
+        })
+        .catch((err) => console.warn('[slicc-offscreen] Upgrade detection failed', err));
+    }
   }
 
   let stopTrayRuntime: (() => void) | null = null;

@@ -12,6 +12,7 @@ import {
   getLastSeenVersion,
   setLastSeenVersion,
   readBundledVersion,
+  recordVersionSeen,
 } from '../../src/scoops/upgrade-detection.js';
 import { setState } from '../../src/scoops/db.js';
 import { __test__ } from '../../src/scoops/upgrade-detection.js';
@@ -79,7 +80,7 @@ describe('upgrade-detection', () => {
       expect(await getLastSeenVersion()).toBe('1.0.0');
     });
 
-    it('reports an upgrade and advances the marker when the bundled version bumped', async () => {
+    it('reports an upgrade WITHOUT advancing the marker so the caller can defer it until the lick is routed', async () => {
       await writeVersionFile(vfs, {
         version: '1.1.0',
         releasedAt: '2026-04-15T00:00:00Z',
@@ -90,7 +91,10 @@ describe('upgrade-detection', () => {
       expect(result.lastSeen).toBe('1.0.0');
       expect(result.bundled.version).toBe('1.1.0');
       expect(result.bundled.releasedAt).toBe('2026-04-15T00:00:00Z');
-      expect(await getLastSeenVersion()).toBe('1.1.0');
+      // Marker is intentionally NOT advanced here — caller controls
+      // when to record so we don't lose the lick on transient no-cone
+      // boots (extension fresh-install, deleted-cone reload, etc.).
+      expect(await getLastSeenVersion()).toBe('1.0.0');
     });
 
     it('never fires on dev builds (and does not record the placeholder)', async () => {
@@ -102,15 +106,35 @@ describe('upgrade-detection', () => {
       expect(await getLastSeenVersion()).toBe('1.0.0');
     });
 
-    it('records the bundled version on first boot of a dev build', async () => {
-      // Dev build, no last-seen yet → still no lick, but also no marker
-      // (so the first real release a dev encounters is treated as first-boot).
+    it('does not record the dev placeholder on first boot of a dev build', async () => {
+      // Dev build, no last-seen yet → still no lick, and crucially no
+      // marker write (so the first real release a dev encounters is
+      // treated as a regular first-boot).
       await writeVersionFile(vfs, { version: __test__.DEV_VERSION });
       const result = await detectUpgrade(vfs);
       expect(result.isUpgrade).toBe(false);
       expect(result.lastSeen).toBeNull();
-      // We deliberately do not write the placeholder.
       expect(await getLastSeenVersion()).toBeNull();
+    });
+  });
+
+  describe('recordVersionSeen', () => {
+    it('advances the last-seen marker (used by callers after routing the upgrade lick)', async () => {
+      await writeVersionFile(vfs, { version: '2.0.0' });
+      await setLastSeenVersion('1.0.0');
+      const detected = await detectUpgrade(vfs);
+      expect(detected.isUpgrade).toBe(true);
+      // Marker is unchanged immediately after detection…
+      expect(await getLastSeenVersion()).toBe('1.0.0');
+      // …and only advances once the caller acknowledges the route.
+      await recordVersionSeen(detected.bundled.version);
+      expect(await getLastSeenVersion()).toBe('2.0.0');
+    });
+
+    it('is a no-op when called repeatedly with the same version', async () => {
+      await recordVersionSeen('3.0.0');
+      await recordVersionSeen('3.0.0');
+      expect(await getLastSeenVersion()).toBe('3.0.0');
     });
   });
 });
