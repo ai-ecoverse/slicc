@@ -2105,9 +2105,15 @@ describe('GitCommands', () => {
 // `RestrictedFS` confirms the adapter no longer crashes on the missing
 // method.
 describe('GitCommands with RestrictedFS (scoop sandbox, issue #507)', () => {
+  // Generate unique DB names per run to avoid leaking the cached
+  // `globalFsByDbName` entry across tests / watch-mode reruns. Mirrors
+  // the `dbCounter` pattern used by the main `GitCommands` suite above.
+  let dbCounter = 0;
+
   it('runs init/status/add/commit through a RestrictedFS without "isPathUnderMount is not a function"', async () => {
     const { RestrictedFS } = await import('../../src/fs/restricted-fs.js');
-    const vfs = await VirtualFS.create({ dbName: 'git-restricted-fs-507', wipe: true });
+    const testId = dbCounter++;
+    const vfs = await VirtualFS.create({ dbName: `git-restricted-fs-507-${testId}`, wipe: true });
     await vfs.mkdir('/scoops/regression-507', { recursive: true });
     const restricted = new RestrictedFS(vfs, ['/scoops/regression-507/', '/shared/']);
     // The cone's WasmShell does the same cast — we mirror it here so
@@ -2116,12 +2122,20 @@ describe('GitCommands with RestrictedFS (scoop sandbox, issue #507)', () => {
       fs: restricted as unknown as VirtualFS,
       authorName: 'Test User',
       authorEmail: 'test@example.com',
-      globalDbName: 'git-restricted-fs-global-507',
+      globalDbName: `git-restricted-fs-global-507-${testId}`,
     });
 
     const initResult = await git.execute(['init'], '/scoops/regression-507');
     expect(initResult.exitCode).toBe(0);
     expect(initResult.stdout).toContain('Initialized empty Git repository');
+
+    // `status` exercises a different isomorphic-git code path than
+    // `init` — it walks the working tree via the fs adapter, which is
+    // exactly where `isPathUnderMount` is invoked per file. Run it
+    // explicitly so the regression covers that path too.
+    const statusResult = await git.execute(['status'], '/scoops/regression-507');
+    expect(statusResult.exitCode).toBe(0);
+    expect(statusResult.stdout).toContain('On branch');
 
     await restricted.writeFile('/scoops/regression-507/readme.txt', 'hello scoop');
     const addResult = await git.execute(['add', 'readme.txt'], '/scoops/regression-507');

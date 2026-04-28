@@ -426,21 +426,29 @@ describe('RestrictedFS', () => {
     // missing method threw "e.isPathUnderMount is not a function" and
     // broke ALL git operations inside scoops. The method must exist and
     // delegate to the underlying VirtualFS.
-    it('delegates to the underlying VirtualFS', () => {
-      // Scoops typically have no mounts — so any path returns false.
+    it('returns false when there are no mounts (scoops are mountless by default)', () => {
       expect(restricted.isPathUnderMount('/scoops/andy-scoop/file.txt')).toBe(false);
       expect(restricted.isPathUnderMount('/shared/data.txt')).toBe(false);
       expect(restricted.isPathUnderMount('/anywhere/else')).toBe(false);
     });
 
-    it('returns true when the underlying VFS reports the path is under a mount', () => {
+    it('forwards the call to the underlying VFS with the original path', () => {
+      const calls: string[] = [];
       const stubVfs = {
-        isPathUnderMount: (p: string) => p.startsWith('/mnt/'),
+        isPathUnderMount: (p: string) => {
+          calls.push(p);
+          return p.startsWith('/mnt/');
+        },
         listMounts: () => ['/mnt'],
       } as unknown as VirtualFS;
       const r = new RestrictedFS(stubVfs, ['/scoops/andy-scoop/']);
+
       expect(r.isPathUnderMount('/mnt/foo')).toBe(true);
       expect(r.isPathUnderMount('/scoops/andy-scoop/file.txt')).toBe(false);
+      // Proves delegation: the underlying VFS must have been invoked with
+      // each input path verbatim. A no-op `return false` implementation
+      // would fail the `/mnt/foo` assertion above AND leave `calls` empty.
+      expect(calls).toEqual(['/mnt/foo', '/scoops/andy-scoop/file.txt']);
     });
   });
 });
