@@ -2098,3 +2098,37 @@ describe('GitCommands', () => {
     });
   });
 });
+
+// Regression for issue #507: git ops in a scoop sandbox failed because
+// `RestrictedFS` (which scoops pass to `WasmShell`/`GitCommands`) was
+// missing `isPathUnderMount`. Exercising every basic git op through a
+// `RestrictedFS` confirms the adapter no longer crashes on the missing
+// method.
+describe('GitCommands with RestrictedFS (scoop sandbox, issue #507)', () => {
+  it('runs init/status/add/commit through a RestrictedFS without "isPathUnderMount is not a function"', async () => {
+    const { RestrictedFS } = await import('../../src/fs/restricted-fs.js');
+    const vfs = await VirtualFS.create({ dbName: 'git-restricted-fs-507', wipe: true });
+    await vfs.mkdir('/scoops/regression-507', { recursive: true });
+    const restricted = new RestrictedFS(vfs, ['/scoops/regression-507/', '/shared/']);
+    // The cone's WasmShell does the same cast — we mirror it here so
+    // the test reproduces the exact runtime configuration that crashed.
+    const git = new GitCommands({
+      fs: restricted as unknown as VirtualFS,
+      authorName: 'Test User',
+      authorEmail: 'test@example.com',
+      globalDbName: 'git-restricted-fs-global-507',
+    });
+
+    const initResult = await git.execute(['init'], '/scoops/regression-507');
+    expect(initResult.exitCode).toBe(0);
+    expect(initResult.stdout).toContain('Initialized empty Git repository');
+
+    await restricted.writeFile('/scoops/regression-507/readme.txt', 'hello scoop');
+    const addResult = await git.execute(['add', 'readme.txt'], '/scoops/regression-507');
+    expect(addResult.exitCode).toBe(0);
+
+    const commitResult = await git.execute(['commit', '-m', 'initial'], '/scoops/regression-507');
+    expect(commitResult.exitCode).toBe(0);
+    expect(commitResult.stdout).toContain('initial');
+  });
+});

@@ -418,4 +418,29 @@ describe('RestrictedFS', () => {
       expect(readOnly.canWrite('/scoops/andy-scoop/foo.txt')).toBe(true);
     });
   });
+
+  describe('isPathUnderMount', () => {
+    // Regression for issue #507 — git fs adapter calls
+    // `vfs.isPathUnderMount(path)` on whatever fs the WasmShell was
+    // constructed with. When that's a `RestrictedFS` (every scoop), the
+    // missing method threw "e.isPathUnderMount is not a function" and
+    // broke ALL git operations inside scoops. The method must exist and
+    // delegate to the underlying VirtualFS.
+    it('delegates to the underlying VirtualFS', () => {
+      // Scoops typically have no mounts — so any path returns false.
+      expect(restricted.isPathUnderMount('/scoops/andy-scoop/file.txt')).toBe(false);
+      expect(restricted.isPathUnderMount('/shared/data.txt')).toBe(false);
+      expect(restricted.isPathUnderMount('/anywhere/else')).toBe(false);
+    });
+
+    it('returns true when the underlying VFS reports the path is under a mount', () => {
+      const stubVfs = {
+        isPathUnderMount: (p: string) => p.startsWith('/mnt/'),
+        listMounts: () => ['/mnt'],
+      } as unknown as VirtualFS;
+      const r = new RestrictedFS(stubVfs, ['/scoops/andy-scoop/']);
+      expect(r.isPathUnderMount('/mnt/foo')).toBe(true);
+      expect(r.isPathUnderMount('/scoops/andy-scoop/file.txt')).toBe(false);
+    });
+  });
 });
