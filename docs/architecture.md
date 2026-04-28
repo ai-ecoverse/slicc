@@ -224,7 +224,7 @@ Native `/workspace/skills` entries are the only install-managed skills. Compatib
 | `sprinkle-manager.ts`       | Registry of available and open `.shtml` sprinkle panels with placement and lifecycle management                                                                                                      |
 | `sprinkle-discovery.ts`     | Scans VirtualFS for `.shtml` sprinkle files and builds a map of names to metadata (path, title)                                                                                                      |
 | `sprinkle-renderer.ts`      | Loads `.shtml` content from VFS and renders into DOM. CLI: direct DOM injection (fragments) or srcdoc iframe (full docs). Extension: ALL content routes through `sprinkle-sandbox.html` (CSP-exempt) |
-| `dip.ts`        | Hydrates ` ```shtml ` code blocks in chat into sandboxed iframes. CLI: direct srcdoc. Extension: routes through `sprinkle-sandbox.html`                                                              |
+| `dip.ts`                    | Hydrates ` ```shtml ` code blocks in chat into sandboxed iframes. CLI: direct srcdoc. Extension: routes through `sprinkle-sandbox.html`                                                              |
 | `sprinkle-bridge.ts`        | API available to `.shtml` sprinkle scripts for communicating with the agent via lick events and state persistence                                                                                    |
 | `sprinkle-picker.ts`        | Popup menu listing closed panels and unopened sprinkles for opening in a zone                                                                                                                        |
 | `index.ts`                  | Re-exports                                                                                                                                                                                           |
@@ -565,16 +565,16 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 
 ### Sprinkles System
 
-| I need to...                              | Modify                                                                                                              |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Add/change sprinkle discovery             | `packages/webapp/src/ui/sprinkle-discovery.ts`                                                                      |
+| I need to...                              | Modify                                                                                                  |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Add/change sprinkle discovery             | `packages/webapp/src/ui/sprinkle-discovery.ts`                                                          |
 | Change sprinkle rendering or CSP handling | `packages/webapp/src/ui/sprinkle-renderer.ts`, `packages/webapp/src/ui/dip.ts`, `sprinkle-sandbox.html` |
-| Change the sprinkle↔agent bridge API      | `packages/webapp/src/ui/sprinkle-bridge.ts`                                                                         |
-| Change sprinkle lifecycle/placement       | `packages/webapp/src/ui/sprinkle-manager.ts`                                                                        |
-| Add sprinkle picker UI features           | `packages/webapp/src/ui/sprinkle-picker.ts`                                                                         |
-| Change extension sprinkle message proxy   | `packages/chrome-extension/src/sprinkle-proxy.ts`                                                                   |
-| Change `sprinkle` shell command           | `packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts`                                               |
-| Add a default sprinkle                    | `packages/vfs-root/shared/sprinkles/`                                                                               |
+| Change the sprinkle↔agent bridge API      | `packages/webapp/src/ui/sprinkle-bridge.ts`                                                             |
+| Change sprinkle lifecycle/placement       | `packages/webapp/src/ui/sprinkle-manager.ts`                                                            |
+| Add sprinkle picker UI features           | `packages/webapp/src/ui/sprinkle-picker.ts`                                                             |
+| Change extension sprinkle message proxy   | `packages/chrome-extension/src/sprinkle-proxy.ts`                                                       |
+| Change `sprinkle` shell command           | `packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts`                                   |
+| Add a default sprinkle                    | `packages/vfs-root/shared/sprinkles/`                                                                   |
 
 ### Providers
 

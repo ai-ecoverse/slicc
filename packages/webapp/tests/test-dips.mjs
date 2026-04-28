@@ -122,8 +122,7 @@ async function main() {
     if (result.error) {
       fail('Hydration failed', result.error);
     } else {
-      if (result.instanceCount === 1)
-        ok(`Created ${result.instanceCount} dip instance`);
+      if (result.instanceCount === 1) ok(`Created ${result.instanceCount} dip instance`);
       else fail(`Expected 1 instance, got ${result.instanceCount}`);
 
       if (result.hasIframe) ok('iframe was created inside .msg__dip');
