@@ -622,32 +622,125 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     client.sendSprinkleLick('inline', { action, data });
   };
 
+  // ── Onboarding orchestrator (extension) ─────────────────────────
+  // Mirrors the standalone wiring in mainCli — instantiated lazily so
+  // it has access to layout/chatPanel + provider settings + the
+  // OffscreenClient sprinkle-lick relay.
+  const { OnboardingOrchestrator: OnboardingOrchestratorExt } =
+    await import('../scoops/onboarding-orchestrator.js');
+  const { broadcastToDips: broadcastToDipsExt } = await import('./dip.js');
+  const {
+    getAvailableProviders: getAvailableProvidersExt,
+    getProviderConfig: getProviderConfigExt,
+    getProviderModels: getProviderModelsExt,
+    addAccount: addAccountExt,
+    setSelectedModelId: setSelectedModelIdExt,
+  } = await import('./provider-settings.js');
+  const buildExtProviderCatalogue = () => {
+    const ids = getAvailableProvidersExt();
+    const providers = ids.map((id) => {
+      const cfg = getProviderConfigExt(id);
+      return {
+        id: cfg.id,
+        name: cfg.name,
+        description: cfg.description,
+        requiresApiKey: cfg.requiresApiKey ?? true,
+        requiresBaseUrl: cfg.requiresBaseUrl ?? false,
+        defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+      };
+    });
+    const models: Record<string, Array<{ id: string; name?: string }>> = {};
+    for (const id of ids) {
+      try {
+        models[id] = getProviderModelsExt(id).map((m) => ({ id: m.id, name: m.name }));
+      } catch {
+        models[id] = [];
+      }
+    }
+    return { providers, models };
+  };
+  let extOnboardingOrchestrator: InstanceType<typeof OnboardingOrchestratorExt> | null = null;
+  const getExtOnboardingOrchestrator = () => {
+    if (extOnboardingOrchestrator) return extOnboardingOrchestrator;
+    extOnboardingOrchestrator = new OnboardingOrchestratorExt({
+      fs: localFs,
+      postSystemMessage: (line) => layout.panels.chat.addSystemMessage(line),
+      postDipReference: (md) => layout.panels.chat.addSystemMessage(md),
+      getProviderCatalogue: buildExtProviderCatalogue,
+      saveAccount: (id, key, baseUrl) => addAccountExt(id, key, baseUrl),
+      setSelectedModel: (id) => setSelectedModelIdExt(id),
+      resolveModelLabel: (provider, modelId) => {
+        try {
+          const found = getProviderModelsExt(provider).find((m) => m.id === modelId);
+          return found?.name ?? null;
+        } catch {
+          return null;
+        }
+      },
+      broadcastToDip: (payload) => broadcastToDipsExt(payload),
+      fireFinalLick: (data) => {
+        // Forward the synthetic completion event through the same
+        // relay any other sprinkle lick would use, so the offscreen
+        // cone receives it as a regular `[Sprinkle Event: welcome]`.
+        client.sendSprinkleLick('welcome', data);
+      },
+      // Skill install isn't wired through to the offscreen agent
+      // shell yet in the extension float — the cone's reply on the
+      // final lick can request `upskill recommendations --install`
+      // explicitly if it sees no installed skills.
+    });
+    return extOnboardingOrchestrator;
+  };
+
   // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
   const sprinkleManager = new SprinkleManager(
     localFs,
     async (event: LickEvent) => {
       // Route sprinkle licks to the offscreen orchestrator's cone
       if (event.type === 'sprinkle') {
-        // Handle welcome sprinkle lifecycle events
+        // Welcome lifecycle — same deterministic flow as standalone.
         if (event.sprinkleName === 'welcome') {
           const body = event.body as Record<string, unknown> | null;
           const action = body?.action;
-          if (action === 'onboarding-complete' || action === 'shortcut-migrate') {
+
+          if (action === 'onboarding-complete') {
+            const orch = getExtOnboardingOrchestrator();
+            const profile = (body?.data as Record<string, unknown> | undefined) ?? {};
+            if ((profile as Record<string, unknown>).mountWorkspace) {
+              applyPendingMount(localFs).catch((err) =>
+                log.warn('Failed to mount workspace from onboarding', err)
+              );
+            }
+            void orch
+              .handleOnboardingComplete(profile as Record<string, unknown>)
+              .catch((err) => log.warn('OnboardingOrchestrator failed', err));
+            return; // Suppress cone-routing — LLM isn't configured yet.
+          }
+          if (action === 'connect-ready') {
+            getExtOnboardingOrchestrator().handleConnectReady();
+            return;
+          }
+          if (action === 'connect-attempt') {
+            const data = body?.data as Record<string, unknown> | undefined;
+            if (data) {
+              void getExtOnboardingOrchestrator()
+                .handleConnectAttempt({
+                  provider: String(data.provider ?? ''),
+                  apiKey: String(data.apiKey ?? ''),
+                  baseUrl:
+                    typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+                  model: data.model == null ? null : String(data.model),
+                })
+                .catch((err) => log.warn('handleConnectAttempt failed', err));
+            }
+            return;
+          }
+          // Legacy / shortcut flows still flow straight through.
+          if (action === 'shortcut-migrate') {
             void localFs
               .writeFile('/shared/.welcomed', '1')
               .catch((err) => log.warn('Failed to persist welcome completion marker', err));
-          }
-          if (action === 'shortcut-migrate') {
             sprinkleManager.close('welcome');
-          }
-          // Perform the actual mount if user selected a folder during onboarding
-          if (
-            action === 'onboarding-complete' &&
-            (body?.data as Record<string, unknown> | undefined)?.mountWorkspace
-          ) {
-            applyPendingMount(localFs).catch((err) =>
-              log.warn('Failed to mount workspace from onboarding', err)
-            );
           }
         }
         // Handle request-mount from welcome sprinkle (sandbox can't call showDirectoryPicker)
