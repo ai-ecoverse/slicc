@@ -119,6 +119,16 @@ struct RemoteTargetInfo: Codable, Hashable {
     let url: String
 }
 
+// MARK: - CDPTargetSummary
+
+/// Lightweight description of a local CDP target (a hosted WKWebView). Used
+/// by the iOS UI's tabs carousel; not part of the wire protocol.
+struct CDPTargetSummary: Identifiable, Hashable {
+    let id: String
+    var title: String
+    var url: String
+}
+
 /// Mirrors TrayTargetEntry from tray-sync-protocol.ts (received in targets.registry)
 struct TrayTargetEntry: Codable, Hashable {
     let targetId: String

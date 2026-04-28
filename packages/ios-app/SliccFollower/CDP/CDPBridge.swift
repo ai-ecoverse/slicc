@@ -28,12 +28,16 @@ final class CDPBridge {
     /// Send a follower→leader message. Provided by AppState.
     private let send: (FollowerToLeaderMessage) -> Void
 
+    /// Called whenever the set of targets — or any target's title/url —
+    /// changes. AppState uses this to refresh its `cdpTargets` published
+    /// list which feeds the tabs carousel.
+    var onTargetsChanged: (() -> Void)?
+
     // MARK: - Targets
 
     private var targets: [String: CDPTarget] = [:]
-    /// Hidden host view to keep WKWebViews in the view hierarchy. We size it
-    /// to be off-screen and isUserInteractionEnabled = false.
-    private weak var hostView: UIView?
+    /// Insertion order, so the carousel has a stable left-to-right ordering.
+    private var targetOrder: [String] = []
     /// Monotonic context-id source for evaluate() calls.
     private var nextContextId: Int = 1
     /// Monotonic suffix for new target ids.
@@ -46,15 +50,10 @@ final class CDPBridge {
         self.send = send
     }
 
-    /// Attach to a window so off-screen WKWebViews load reliably.
-    func attach(to window: UIWindow) {
-        if hostView != nil { return }
-        let host = UIView(frame: CGRect(x: -10000, y: -10000, width: 1, height: 1))
-        host.isHidden = true
-        host.isUserInteractionEnabled = false
-        window.addSubview(host)
-        hostView = host
-    }
+    /// No-op shim retained for source compatibility — WKWebViews are now
+    /// hosted directly inside the SwiftUI carousel cells, so no off-screen
+    /// host view is needed.
+    func attach(to window: UIWindow) {}
 
     // MARK: - Public lifecycle
 
@@ -65,12 +64,36 @@ final class CDPBridge {
             target.webView.stopLoading()
         }
         targets.removeAll()
+        targetOrder.removeAll()
+        notifyTargetsChanged()
     }
 
     /// Send the current set of targets to the leader.
     func advertiseTargets() {
-        let advertised = targets.values.map { $0.remoteInfo() }
+        let advertised = orderedTargets().map { $0.remoteInfo() }
         send(.targetsAdvertise(targets: advertised, runtimeId: runtimeId))
+    }
+
+    /// Snapshot of all current targets (preserving creation order) for the UI.
+    func currentTargets() -> [CDPTargetSummary] {
+        orderedTargets().map {
+            CDPTargetSummary(id: $0.targetId, title: $0.currentTitle, url: $0.currentURL)
+        }
+    }
+
+    /// Get the underlying WKWebView for a target id, for the carousel cell.
+    func webView(for targetId: String) -> WKWebView? {
+        targets[targetId]?.webView
+    }
+
+    /// Called by CDPTarget when a navigation finishes, so AppState can refresh
+    /// the carousel labels.
+    func notifyTargetsChanged() {
+        onTargetsChanged?()
+    }
+
+    private func orderedTargets() -> [CDPTarget] {
+        targetOrder.compactMap { targets[$0] }
     }
 
     // MARK: - Inbound dispatch
@@ -128,12 +151,11 @@ final class CDPBridge {
         let target = CDPTarget(targetId: id, webView: webView, contextId: mintContextId())
         target.bridge = self
         targets[id] = target
-        if let host = hostView {
-            host.addSubview(webView)
-        }
+        targetOrder.append(id)
         _ = target.navigate(to: url)
         send(.tabOpened(requestId: requestId, targetId: id))
         advertiseTargets()
+        notifyTargetsChanged()
     }
 
     // MARK: - Domain handlers
@@ -149,9 +171,10 @@ final class CDPBridge {
             let target = CDPTarget(targetId: id, webView: webView, contextId: mintContextId())
             target.bridge = self
             targets[id] = target
-            hostView?.addSubview(webView)
+            targetOrder.append(id)
             _ = target.navigate(to: url)
             advertiseTargets()
+            notifyTargetsChanged()
             respond(requestId: requestId, result: ["targetId": id])
 
         case "Target.closeTarget":
@@ -160,9 +183,11 @@ final class CDPBridge {
                 respond(requestId: requestId, result: ["success": false])
                 return
             }
+            targetOrder.removeAll { $0 == targetId }
             target.webView.stopLoading()
             target.webView.removeFromSuperview()
             advertiseTargets()
+            notifyTargetsChanged()
             respond(requestId: requestId, result: ["success": true])
 
         case "Target.getTargets":

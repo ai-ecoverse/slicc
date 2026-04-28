@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import WebKit
 import WebRTC
 import os
 
@@ -126,10 +127,12 @@ class AppState: ObservableObject {
 
     // MARK: - CDP / federated targets
 
-    /// CDP bridge — owns hidden WKWebViews, dispatches CDP commands.
+    /// CDP bridge — owns WKWebViews, dispatches CDP commands.
     private var cdpBridge: CDPBridge?
     /// Periodic timer for re-advertising targets.
     private var targetsAdvertiseTimer: Timer?
+    /// Visible carousel of locally-hosted CDP targets (one per WKWebView).
+    @Published var cdpTargets: [CDPTargetSummary] = []
 
     // MARK: - Connection Lifecycle
 
@@ -496,13 +499,12 @@ class AppState: ObservableObject {
         let bridge = CDPBridge(runtimeId: controllerId) { [weak self] msg in
             self?.sendToLeader(msg)
         }
-        if let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene }).first,
-           let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first {
-            bridge.attach(to: window)
+        bridge.onTargetsChanged = { [weak self] in
+            Task { @MainActor in self?.refreshCDPTargets() }
         }
         cdpBridge = bridge
         bridge.advertiseTargets()
+        refreshCDPTargets()
         startTargetsAdvertiseTimer()
 
         // Start keepalive.
@@ -686,6 +688,44 @@ class AppState: ObservableObject {
         targetsAdvertiseTimer = nil
     }
 
+    /// Refresh the published `cdpTargets` from the bridge.
+    private func refreshCDPTargets() {
+        cdpTargets = cdpBridge?.currentTargets() ?? []
+    }
+
+    /// Accessor for the live WKWebView backing a CDP target. Returns nil if
+    /// the target is gone or the bridge isn't running.
+    func cdpWebView(for targetId: String) -> WKWebView? {
+        cdpBridge?.webView(for: targetId)
+    }
+
+    /// Manually open a new tab (e.g. from a UI button). Mirrors `tab.open`.
+    func cdpOpenTab(url: String = "about:blank") {
+        cdpBridge?.handleTabOpen(requestId: "ui-\(UUID().uuidString)", url: url)
+    }
+
+    /// Manually close a tab from the carousel.
+    func cdpCloseTab(_ targetId: String) {
+        cdpBridge?.handleRequest(
+            requestId: "ui-close-\(UUID().uuidString)",
+            localTargetId: targetId,
+            method: "Target.closeTarget",
+            params: AnyCodable(["targetId": targetId]),
+            sessionId: nil
+        )
+    }
+
+    /// Reload a tab.
+    func cdpBridgeReload(_ targetId: String) {
+        cdpBridge?.handleRequest(
+            requestId: "ui-reload-\(UUID().uuidString)",
+            localTargetId: targetId,
+            method: "Page.reload",
+            params: nil,
+            sessionId: nil
+        )
+    }
+
     /// Apply a snapshot payload for `scoopJid` to the per-scoop buffer, and
     /// refresh `messages` if it matches the currently-viewed scoop.
     private func ingestSnapshot(messages chatMessages: [ChatMessage], scoopJid: String) {
@@ -844,6 +884,7 @@ class AppState: ObservableObject {
         stopTargetsAdvertiseTimer()
         cdpBridge?.reset()
         cdpBridge = nil
+        cdpTargets.removeAll()
     }
 
     // MARK: - Private: History
