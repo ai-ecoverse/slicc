@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { hydrateDips, disposeDips, type DipInstance } from '../../src/ui/dip.js';
 
@@ -7,16 +8,43 @@ vi.mock('./sprinkle-renderer.js', () => ({
   collectThemeCSS: () => ':root { --s2-spacing-200: 12px; }',
 }));
 
+/**
+ * Pretend the preview service worker is controlling the page so the
+ * image-fetch branch goes through `fetch()` (which the tests stub) and
+ * not the LightningFS fallback used by uncontrolled boots.
+ */
+function installFakeSWController(): () => void {
+  const original = (navigator as Record<string, unknown>).serviceWorker;
+  Object.defineProperty(navigator, 'serviceWorker', {
+    configurable: true,
+    value: { controller: { scriptURL: 'http://localhost/preview-sw.js' } },
+  });
+  return () => {
+    if (original === undefined) {
+      delete (navigator as Record<string, unknown>).serviceWorker;
+    } else {
+      Object.defineProperty(navigator, 'serviceWorker', {
+        configurable: true,
+        value: original,
+      });
+    }
+  };
+}
+
 describe('hydrateDips', () => {
   let container: HTMLElement;
+  let restoreSW: (() => void) | null = null;
 
   beforeEach(() => {
     container = document.createElement('div');
     document.body.appendChild(container);
+    restoreSW = installFakeSWController();
   });
 
   afterEach(() => {
     container.remove();
+    restoreSW?.();
+    restoreSW = null;
   });
 
   it('returns empty array when no shtml blocks present', () => {
@@ -123,6 +151,67 @@ describe('hydrateDips', () => {
     // No iframe should have been mounted because dispose ran first.
     expect(container.querySelector('iframe')).toBeNull();
 
+    fetchSpy.mockRestore();
+  });
+});
+
+describe('hydrateDips — LightningFS fallback for uncontrolled boots', () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    // Force "no controller" — this is the realistic state on the very
+    // first boot before the SW claims the page.
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: { controller: null },
+    });
+  });
+
+  afterEach(() => {
+    container.remove();
+    delete (navigator as Record<string, unknown>).serviceWorker;
+  });
+
+  it('reads .shtml content directly from LightningFS when SW is not controlling, bypassing fetch entirely', async () => {
+    // Lazy-import LightningFS so the fake-indexeddb shim is in place.
+    const FS = (await import('@isomorphic-git/lightning-fs')).default;
+    const lfs = new FS('slicc-fs').promises;
+    await lfs.mkdir('/shared').catch(() => {});
+    await lfs.mkdir('/shared/sprinkles').catch(() => {});
+    await lfs.mkdir('/shared/sprinkles/welcome').catch(() => {});
+    await lfs.writeFile(
+      '/shared/sprinkles/welcome/welcome.shtml',
+      '<button onclick="slicc.lick(\'go\')">Go</button>'
+    );
+
+    // Tripwire: if the code mistakenly calls fetch, fail loudly.
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(() => Promise.reject(new Error('fetch should not be called')));
+
+    container.innerHTML = '<img src="/shared/sprinkles/welcome/welcome.shtml" alt="Welcome">';
+    const instances = hydrateDips(container, vi.fn());
+    expect(instances).toHaveLength(1);
+
+    // Poll for the async LFS read + mountDip — LightningFS init runs
+    // its own microtask chain, so a single setTimeout(0) sometimes
+    // races ahead of the readFile + then(mountDip) sequence.
+    const wrapper = container.querySelector<HTMLElement>('.msg__dip')!;
+    let iframe: HTMLIFrameElement | null = null;
+    for (let i = 0; i < 100; i++) {
+      iframe = wrapper.querySelector('iframe');
+      if (iframe || wrapper.textContent?.includes('Failed to load dip')) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(wrapper.textContent).not.toContain('Failed to load dip');
+    expect(iframe).not.toBeNull();
+
+    // fetch was not called.
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    disposeDips(instances);
     fetchSpy.mockRestore();
   });
 });

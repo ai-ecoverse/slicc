@@ -8,10 +8,35 @@
  * route to the cone via the onLick callback. Auto-height via ResizeObserver.
  */
 
+import FS from '@isomorphic-git/lightning-fs';
 import { collectThemeCSS } from './sprinkle-renderer.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
+
+/**
+ * Fallback VFS reader for `.shtml` dips. The preview service worker is
+ * the canonical way to fetch VFS content (it normalizes mounts, MIME
+ * types, etc.), but on the very first install of a page the SW may not
+ * be controlling yet — `clients.claim()` happens asynchronously, so
+ * `/preview/*` requests fall through to the dev server and 404. This
+ * direct reader bypasses the network entirely and reads the same
+ * LightningFS database the SW uses, so dips render correctly even on
+ * the first uncontrolled boot.
+ */
+let lfsReader: FS.PromisifiedFS | null = null;
+function getLfsReader(): FS.PromisifiedFS {
+  if (!lfsReader) lfsReader = new FS('slicc-fs').promises;
+  return lfsReader;
+}
+
+async function readShtmlFromVFS(vfsPath: string, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+  const lfs = getLfsReader();
+  const raw = await lfs.readFile(vfsPath, 'utf8');
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
+  return typeof raw === 'string' ? raw : new TextDecoder().decode(raw as Uint8Array);
+}
 
 /** Minimal bridge script: lick-only + auto-height reporting. */
 const BRIDGE_SCRIPT = `(function() {
@@ -242,13 +267,31 @@ export function hydrateDips(
     };
     instances.push(placeholder);
 
-    // Fetch the .shtml content from VFS via the preview service worker
-    const fetchUrl = src.startsWith('/') ? `/preview${src}` : src;
-    fetch(fetchUrl, { signal: controller.signal })
-      .then((resp) => {
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        return resp.text();
-      })
+    // Resolve the .shtml content. Prefer the preview service worker
+    // (handles mounts, MIME types, project-serve mode, etc.), but fall
+    // back to a direct LightningFS read for VFS-rooted paths so dips
+    // still render on the very first boot before the SW claims the
+    // page. Only paths starting with `/` are read directly; relative
+    // / cross-origin URLs always go through the network.
+    const isVfsPath = src.startsWith('/');
+    const swControlled = typeof navigator !== 'undefined' && !!navigator.serviceWorker?.controller;
+    const fetchUrl = isVfsPath ? `/preview${src}` : src;
+
+    const resolveContent = async (): Promise<string> => {
+      if (isVfsPath && !swControlled) {
+        // SW isn't controlling — go straight to LightningFS.
+        return readShtmlFromVFS(src, controller.signal);
+      }
+      const resp = await fetch(fetchUrl, { signal: controller.signal });
+      if (resp.ok) return resp.text();
+      // Some dev-server responses bypass the SW even when it claims to
+      // be controlling (e.g. extension boot, stale registration).
+      // Retry once via direct LightningFS for VFS paths before failing.
+      if (isVfsPath) return readShtmlFromVFS(src, controller.signal);
+      throw new Error(`HTTP ${resp.status}`);
+    };
+
+    resolveContent()
       .then((shtmlContent) => {
         // Skip mounting if dispose() ran while the fetch was in flight, or
         // if the wrapper was detached from the DOM by some other path.

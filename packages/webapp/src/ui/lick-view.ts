@@ -10,6 +10,7 @@ import {
   Webhook,
   CalendarClock,
   Sparkles,
+  DoorOpen,
   FolderSync,
   Compass,
   RotateCcw,
@@ -83,9 +84,31 @@ const DESCRIPTORS: Record<string, LickDescriptor> = {
   },
 };
 
+/**
+ * Per-sprinkle icon overrides keyed by sprinkle name (parsed from the
+ * `[Sprinkle Event: <name>]` header). Sprinkles with bespoke
+ * onboarding semantics get their own glyph so the chat row reads as a
+ * narrative beat instead of a generic Sparkles tile.
+ */
+const SPRINKLE_ICON_BY_NAME: Record<string, IconNode> = {
+  welcome: DoorOpen as unknown as IconNode,
+};
+
 export function getLickDescriptor(msg: ChatMessage): LickDescriptor {
   const key = msg.channel ?? '';
-  return DESCRIPTORS[key] ?? DEFAULT;
+  const base = DESCRIPTORS[key] ?? DEFAULT;
+  if (key === 'sprinkle') {
+    const sprinkleName = parseSprinkleName(msg.content);
+    const icon = sprinkleName ? SPRINKLE_ICON_BY_NAME[sprinkleName] : undefined;
+    if (icon) return { ...base, icon };
+  }
+  return base;
+}
+
+/** Extract the sprinkle name from a `[Sprinkle Event: <name>]` header. */
+function parseSprinkleName(content: string): string | null {
+  const match = /^\[Sprinkle Event:\s*([^\]]+?)\]/.exec(content);
+  return match ? match[1].trim() : null;
 }
 
 /** Matches the `[Xyz Event: name]` or `[Session Reload: name]` header

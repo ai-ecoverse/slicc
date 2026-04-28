@@ -91,6 +91,7 @@ import { initTelemetry } from './telemetry.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
 import { recoverMounts, formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
 import { detectUpgrade, recordVersionSeen } from '../scoops/upgrade-detection.js';
+import { detectWelcomeFirstRun } from '../scoops/welcome-detection.js';
 
 const log = createLogger('main');
 
@@ -773,17 +774,19 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     localStorage.removeItem('slicc-welcomed');
   }
 
-  // Open welcome sprinkle on first run (extension mode)
-  if (
-    !(await localFs.exists('/shared/.welcomed')) &&
-    !hasStoredTrayJoinUrl(window.localStorage) &&
-    sprinkleManager.available().some((p) => p.name === 'welcome')
-  ) {
-    try {
-      await sprinkleManager.open('welcome');
-    } catch (e) {
-      log.warn('Failed to open welcome sprinkle', e);
-    }
+  // Fire a first-run welcome lick to the offscreen cone instead of
+  // auto-opening the legacy panel. The cone renders the welcome dip
+  // inline via the `![](/shared/sprinkles/welcome/welcome.shtml)`
+  // image syntax. Marker is written by the existing
+  // `onboarding-complete` / `shortcut-migrate` handlers, so reloading
+  // mid-onboarding still re-fires the lick.
+  if (!hasStoredTrayJoinUrl(window.localStorage)) {
+    detectWelcomeFirstRun(localFs)
+      .then((result) => {
+        if (!result.isFirstRun) return;
+        client.sendSprinkleLick('welcome', { action: 'first-run' });
+      })
+      .catch((err) => log.warn('Welcome detection failed', err));
   }
 
   log.info('SprinkleManager initialized (extension mode)');
@@ -884,13 +887,40 @@ async function main(): Promise<void> {
   if (!app) throw new Error('#app element not found');
 
   // Register preview service worker (serves VFS content at /preview/*)
+  // and ensure it is controlling this page before we proceed. If the SW
+  // was just installed for the first time, `navigator.serviceWorker.
+  // controller` will be null even after activation — `clients.claim()`
+  // attaches the page asynchronously. Without a controller, /preview/*
+  // fetches fall through to the dev server and 404, which breaks dips
+  // that load .shtml files (welcome dip, etc.). The standard fix is a
+  // one-shot reload right after the first activation; we gate it on
+  // sessionStorage to avoid loops.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker
-      .register('/preview-sw.js', { scope: '/preview/' })
-      .then(() => log.info('Preview SW registered'))
-      .catch((err) =>
-        log.error('Preview SW registration failed — preview feature will not work', err)
-      );
+    try {
+      await navigator.serviceWorker.register('/preview-sw.js', { scope: '/preview/' });
+      log.info('Preview SW registered');
+      if (!navigator.serviceWorker.controller) {
+        // Wait briefly for clients.claim() to attach the page.
+        await Promise.race([
+          new Promise<void>((resolve) =>
+            navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), {
+              once: true,
+            })
+          ),
+          new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+        ]);
+      }
+      if (!navigator.serviceWorker.controller && !sessionStorage.getItem('slicc-sw-reloaded')) {
+        // Still uncontrolled — force one reload so the SW can claim us.
+        sessionStorage.setItem('slicc-sw-reloaded', '1');
+        log.info('Reloading once to gain preview SW control');
+        location.reload();
+        return;
+      }
+      sessionStorage.removeItem('slicc-sw-reloaded');
+    } catch (err) {
+      log.error('Preview SW registration failed — preview feature will not work', err);
+    }
   }
 
   // Apply providers.json defaults before checking for API key
@@ -1635,6 +1665,24 @@ async function main(): Promise<void> {
           `- Offer to merge new bundled vfs-root content into their workspace ` +
           `(three-way merge: bundled snapshot vs user's VFS, reconciled with the GitHub tag-to-tag diff).`;
       }
+      if (
+        isSprinkle &&
+        event.sprinkleName === 'welcome' &&
+        (event.body as Record<string, unknown> | null)?.action === 'first-run'
+      ) {
+        // First-run welcome — render the welcome dip inline in chat
+        // instead of auto-opening the legacy panel. The welcome skill
+        // already covers profile collection + skill recommendations.
+        content =
+          `[${eventLabel}: welcome]\n\n` +
+          `New user — no \`/shared/.welcomed\` marker yet. Greet them by ` +
+          `rendering the welcome onboarding inline:\n\n` +
+          `\`\`\`markdown\n![Welcome to slicc](/shared/sprinkles/welcome/welcome.shtml)\n\`\`\`\n\n` +
+          `Send that as your reply (no extra prose). The dip emits ` +
+          `\`onboarding-complete\` / \`shortcut-migrate\` licks back to you ` +
+          `when the user finishes — see \`/workspace/skills/welcome/SKILL.md\` ` +
+          `for the follow-up flow.`;
+      }
       if (content === null) {
         content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
       }
@@ -1832,17 +1880,25 @@ async function main(): Promise<void> {
       localStorage.removeItem('slicc-welcomed');
     }
 
-    // Open welcome sprinkle on first run (flag set when onboarding-complete lick fires)
-    if (
-      !(await sharedFs.exists('/shared/.welcomed')) &&
-      !allowProviderlessTrayJoin &&
-      sprinkleManager.available().some((p) => p.name === 'welcome')
-    ) {
-      try {
-        await sprinkleManager.open('welcome');
-      } catch (e) {
-        log.warn('Failed to open welcome sprinkle', e);
-      }
+    // Fire a first-run welcome lick to the cone instead of auto-opening
+    // the legacy panel. The cone renders the welcome dip inline via the
+    // `![](/shared/sprinkles/welcome/welcome.shtml)` image syntax. Marker
+    // is written by the existing `onboarding-complete` / `shortcut-migrate`
+    // handlers above, so reloading mid-onboarding still re-fires the lick.
+    if (!allowProviderlessTrayJoin) {
+      detectWelcomeFirstRun(sharedFs)
+        .then((result) => {
+          if (!result.isFirstRun) return;
+          const event: LickEvent = {
+            type: 'sprinkle',
+            sprinkleName: 'welcome',
+            targetScoop: undefined,
+            timestamp: new Date().toISOString(),
+            body: { action: 'first-run' },
+          };
+          routeLickToScoop(event);
+        })
+        .catch((err) => log.warn('Welcome detection failed', err));
     }
 
     await sprinkleManager.restoreOpenSprinkles();
