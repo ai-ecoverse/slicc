@@ -1,4 +1,5 @@
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+export type BrowserEngine = 'chrome' | 'webkit';
 
 export interface CliRuntimeFlags {
   dev: boolean;
@@ -21,6 +22,8 @@ export interface CliRuntimeFlags {
   /** Path to a .env file for secrets */
   envFile: string | null;
   version: boolean;
+  /** Browser engine to use: 'chrome' (default) or 'webkit' */
+  browser: BrowserEngine;
 }
 
 export const DEFAULT_CLI_CDP_PORT = 9222;
@@ -50,6 +53,7 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
   let prompt: string | null = null;
   let envFile: string | null = null;
   let version = false;
+  let browser: BrowserEngine = 'chrome';
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
@@ -176,6 +180,16 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
       electronApp = arg.slice('--electron-app='.length).trim() || null;
       continue;
     }
+    if (arg.startsWith('--browser=')) {
+      const value = arg.slice('--browser='.length).trim().toLowerCase();
+      if (value === 'webkit' || value === 'chrome') {
+        browser = value;
+      } else if (value.length > 0) {
+        // Surface invalid values instead of silently falling back to chrome.
+        throw new Error(`Invalid --browser value "${value}". Expected one of: chrome, webkit.`);
+      }
+      continue;
+    }
     if (electron && !arg.startsWith('--') && !electronApp) {
       electronApp = arg.trim() || null;
     }
@@ -203,5 +217,6 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     prompt,
     envFile,
     version,
+    browser,
   };
 }

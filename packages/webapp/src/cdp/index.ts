@@ -9,6 +9,12 @@ export { NavigationWatcher, extractSliccHeader, decodeSliccHeader } from './navi
 export type { NavigationEvent, NavigationEventHandler } from './navigation-watcher.js';
 export { RemoteCDPTransport } from './remote-cdp-transport.js';
 export type { RemoteCDPSender } from './remote-cdp-transport.js';
+export { WebKitCDPAdapter } from './webkit-cdp-adapter.js';
+export type {
+  WebKitCDPAdapterOptions,
+  WebKitWritable,
+  WebKitReadable,
+} from './webkit-cdp-adapter.js';
 export type { CDPTransport } from './transport.js';
 export type {
   CDPCommand,

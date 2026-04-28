@@ -113,6 +113,7 @@ final class SecretAPIRoutesTests: XCTestCase {
             logDir: nil,
             logDirectoryURL: nil,
             prompt: nil,
+            browser: "chrome",
             staticRoot: nil,
             envFile: nil,
             envFileURL: nil

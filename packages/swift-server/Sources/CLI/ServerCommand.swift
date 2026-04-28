@@ -56,6 +56,9 @@ struct ServerCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Auto-submit prompt")
     var prompt: String?
 
+    @Option(name: .long, help: "Browser engine (chrome or webkit)")
+    var browser: String = "chrome"
+
     @Option(name: .long, help: "Path to static UI files (dist/ui)")
     var staticRoot: String?
 
@@ -64,6 +67,14 @@ struct ServerCommand: AsyncParsableCommand {
 
     mutating func run() async throws {
         let config = ServerConfig.resolve(from: self)
+        // Validate the browser engine selection up front so a typo surfaces
+        // as a clear ValidationError rather than silently launching Chrome.
+        let supportedBrowsers: Set<String> = ["chrome", "webkit"]
+        guard supportedBrowsers.contains(config.browser) else {
+            throw ValidationError(
+                "Invalid --browser value \"\(self.browser)\". Expected one of: chrome, webkit."
+            )
+        }
         let logLevel = Self.loggerLevel(from: config.logLevel)
         let logDirectory = config.logDirectoryURL ?? FileLogger.defaultLogDirectory
         let fileLoggerConfiguration = FileLoggerConfiguration(
@@ -87,8 +98,9 @@ struct ServerCommand: AsyncParsableCommand {
         let serveOrigin = "http://localhost:\(servePort)"
 
         var browserProcess: Process?
-        var browserLabel = config.electron ? "Electron" : "Chrome"
+        var browserLabel = config.electron ? "Electron" : (config.webkitMode ? "WebKit" : "Chrome")
         var overlayInjector: ElectronOverlayInjector?
+        var webkitProcess: WebKitProcess?
 
         // Read the Keychain before launching the browser so the macOS ACL
         // prompt appears in front of the still-focused terminal instead of
@@ -99,7 +111,30 @@ struct ServerCommand: AsyncParsableCommand {
         let envFileSecrets: [Secret] = config.envFileURL.flatMap { Self.parseEnvFileSecrets(at: $0) } ?? []
         let secretInjector = SecretInjector(sessionId: UUID().uuidString, envFileSecrets: envFileSecrets)
 
-        if config.electron, !config.serveOnly {
+        if config.webkitMode, !config.serveOnly {
+            let webkitLauncher = WebKitLauncher(logger: Logger(label: "slicc.webkit-launcher"))
+            guard let webkitPath = webkitLauncher.findWebKitExecutable() else {
+                throw ValidationError(
+                    "Could not find WebKit binary. Set WEBKIT_PATH or install Playwright WebKit: npx playwright install webkit"
+                )
+            }
+            logger.info("Found WebKit: \(webkitPath)")
+
+            let frameworkPath = environment["DYLD_FRAMEWORK_PATH"]
+                ?? webkitLauncher.resolveFrameworkPath(binaryPath: webkitPath)
+            // Open a visible MiniBrowser window pointed at the SLICC UI.
+            // The same window is also the CDP target the agent drives via
+            // the inspector pipe, so the user sees what the agent is doing
+            // in real time.
+            let launched = try webkitLauncher.launch(
+                binaryPath: webkitPath,
+                frameworkPath: frameworkPath,
+                startupURL: serveOrigin
+            )
+            webkitProcess = launched
+            browserLabel = "WebKit"
+            print("WebKit launched with inspector pipe; window at \(serveOrigin)")
+        } else if config.electron, !config.serveOnly {
             guard let electronApp = config.electronApp else {
                 throw ValidationError(
                     "Electron mode requires an app path. Pass --electron <path> or --electron-app=<path>."
@@ -158,6 +193,11 @@ struct ServerCommand: AsyncParsableCommand {
             )
         )
         registerAPIRoutes(router: router, lickSystem: lickSystem, config: config, httpClient: httpClient, secretInjector: secretInjector)
+
+        // Install WebKit pipe bridge on the CDP proxy before setting up routes
+        if let webkitProcess {
+            await cdpProxy.installPipeMode(pipeWrite: webkitProcess.pipeWrite, pipeRead: webkitProcess.pipeRead)
+        }
 
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
         await cdpProxy.install(on: wsRouter, cdpPort: cdpPort)
@@ -218,7 +258,10 @@ struct ServerCommand: AsyncParsableCommand {
             }
 
             let consoleForwarder: ConsoleForwarder?
-            if config.electron {
+            if config.webkitMode {
+                // WebKit mode: no console forwarder or overlay needed
+                consoleForwarder = nil
+            } else if config.electron {
                 let injector = ElectronOverlayInjector(
                     cdpPort: cdpPort,
                     servePort: servePort,
@@ -237,6 +280,7 @@ struct ServerCommand: AsyncParsableCommand {
             await shutdownHandler.install(
                 context: ShutdownContext(
                     browserProcess: browserProcess,
+                    webkitProcess: webkitProcess,
                     browserLabel: browserLabel,
                     cdpPort: cdpPort,
                     fileLogger: fileLogger,
@@ -248,7 +292,11 @@ struct ServerCommand: AsyncParsableCommand {
             )
 
             print("Serving UI at \(serveOrigin)")
-            print("CDP proxy at ws://localhost:\(servePort)/cdp")
+            if config.webkitMode {
+                print("WebKit pipe proxy at ws://localhost:\(servePort)/cdp")
+            } else {
+                print("CDP proxy at ws://localhost:\(servePort)/cdp")
+            }
 
             try await appTask.value
             await consoleForwarder?.stop()
@@ -287,9 +335,12 @@ struct ServerConfig: Sendable, Equatable {
     let logDir: String?
     let logDirectoryURL: URL?
     let prompt: String?
+    let browser: String
     let staticRoot: String?
     let envFile: String?
     let envFileURL: URL?
+
+    var webkitMode: Bool { browser == "webkit" }
 
     static func resolve(from command: ServerCommand) -> ServerConfig {
         resolve(from: command, arguments: ProcessInfo.processInfo.arguments)
@@ -306,6 +357,7 @@ struct ServerConfig: Sendable, Equatable {
         let normalizedJoinUrl = normalizedText(command.joinUrl)
         let normalizedLogDir = normalizedText(command.logDir)
         let normalizedPrompt = normalizedText(command.prompt)
+        let normalizedBrowser = command.browser.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedStaticRoot = normalizedText(command.staticRoot)
         let normalizedEnvFile = normalizedText(command.envFile)
 
@@ -337,6 +389,7 @@ struct ServerConfig: Sendable, Equatable {
             logDir: normalizedLogDir,
             logDirectoryURL: resolvedFileURL(from: normalizedLogDir),
             prompt: normalizedPrompt,
+            browser: normalizedBrowser,
             staticRoot: normalizedStaticRoot,
             envFile: normalizedEnvFile,
             envFileURL: resolvedFileURL(from: normalizedEnvFile)

@@ -24,6 +24,7 @@ extension LickSystem: GracefulShutdownClientSocketControlling {}
 
 struct ShutdownContext: @unchecked Sendable {
     var browserProcess: Process?
+    var webkitProcess: WebKitProcess?
     var browserLabel: String
     var cdpPort: Int
     var fileLogger: FileLogger?
@@ -34,6 +35,7 @@ struct ShutdownContext: @unchecked Sendable {
 
     init(
         browserProcess: Process? = nil,
+        webkitProcess: WebKitProcess? = nil,
         browserLabel: String,
         cdpPort: Int,
         fileLogger: FileLogger? = nil,
@@ -43,6 +45,7 @@ struct ShutdownContext: @unchecked Sendable {
         server: (any GracefulShutdownServer)? = nil
     ) {
         self.browserProcess = browserProcess
+        self.webkitProcess = webkitProcess
         self.browserLabel = browserLabel
         self.cdpPort = cdpPort
         self.fileLogger = fileLogger
@@ -92,7 +95,10 @@ actor GracefulShutdownHandler {
 
     func install(context: ShutdownContext) {
         self.context = context
-        GracefulShutdownLastResortRegistry.register(browserProcess: context.browserProcess)
+        GracefulShutdownLastResortRegistry.register(
+            browserProcess: context.browserProcess,
+            webkitPid: context.webkitProcess?.pid
+        )
 
         guard !installed else { return }
         installed = true
@@ -140,7 +146,9 @@ actor GracefulShutdownHandler {
             await server.stop()
         }
 
-        if let browserProcess = context.browserProcess {
+        if let webkitProcess = context.webkitProcess {
+            await closeWebKit(webkitProcess: webkitProcess, browserLabel: context.browserLabel)
+        } else if let browserProcess = context.browserProcess {
             await closeBrowser(process: browserProcess, browserLabel: context.browserLabel, cdpPort: context.cdpPort)
         }
 
@@ -167,9 +175,34 @@ actor GracefulShutdownHandler {
         print("\(browserLabel) closed")
     }
 
+    private func closeWebKit(webkitProcess: WebKitProcess, browserLabel: String) async {
+        if webkitProcess.isRunning {
+            // Send Playwright.close via the inspector pipe
+            let closeMsg = #"{"id":99999,"method":"Playwright.close","params":{}}"# + "\0"
+            if let data = closeMsg.data(using: .utf8) {
+                webkitProcess.pipeWrite.write(data)
+            }
+
+            await waitForWebKitExit(webkitProcess)
+
+            if webkitProcess.isRunning {
+                webkitProcess.forceKill()
+            }
+        }
+
+        print("\(browserLabel) closed")
+    }
+
     private func waitForBrowserExit(_ process: Process) async {
         let deadline = DispatchTime.now().uptimeNanoseconds + browserExitTimeoutNanoseconds
         while process.isRunning && DispatchTime.now().uptimeNanoseconds < deadline {
+            try? await sleep(browserExitPollNanoseconds)
+        }
+    }
+
+    private func waitForWebKitExit(_ webkitProcess: WebKitProcess) async {
+        let deadline = DispatchTime.now().uptimeNanoseconds + browserExitTimeoutNanoseconds
+        while webkitProcess.isRunning && DispatchTime.now().uptimeNanoseconds < deadline {
             try? await sleep(browserExitPollNanoseconds)
         }
     }
@@ -200,12 +233,14 @@ private struct BrowserVersionPayload: Decodable {
 enum GracefulShutdownLastResortRegistry {
     private static let lock = NSLock()
     private static var browserProcess: Process?
+    private static var webkitPid: pid_t?
     private static var gracefulShutdownStarted = false
     private static var didRegisterExitHandler = false
 
-    static func register(browserProcess: Process?) {
+    static func register(browserProcess: Process?, webkitPid: pid_t? = nil) {
         lock.lock()
         self.browserProcess = browserProcess
+        self.webkitPid = webkitPid
         if !didRegisterExitHandler {
             didRegisterExitHandler = true
             atexit(gracefulShutdownLastResortCleanup)
@@ -222,32 +257,38 @@ enum GracefulShutdownLastResortRegistry {
     static func clearBrowserProcess() {
         lock.lock()
         browserProcess = nil
+        webkitPid = nil
         lock.unlock()
     }
 
     static func performCleanup() {
         let process: Process?
+        let wkPid: pid_t?
         let shouldCleanup: Bool
 
         lock.lock()
         process = browserProcess
+        wkPid = webkitPid
         shouldCleanup = !gracefulShutdownStarted
         browserProcess = nil
+        webkitPid = nil
         lock.unlock()
 
-        guard shouldCleanup,
-              let process,
-              process.isRunning,
-              process.processIdentifier > 0 else {
-            return
-        }
+        guard shouldCleanup else { return }
 
-        _ = Darwin.kill(process.processIdentifier, SIGKILL)
+        if let wkPid, kill(wkPid, 0) == 0 {
+            _ = Darwin.kill(wkPid, SIGKILL)
+        } else if let process,
+                  process.isRunning,
+                  process.processIdentifier > 0 {
+            _ = Darwin.kill(process.processIdentifier, SIGKILL)
+        }
     }
 
     static func resetForTesting() {
         lock.lock()
         browserProcess = nil
+        webkitPid = nil
         gracefulShutdownStarted = false
         lock.unlock()
     }

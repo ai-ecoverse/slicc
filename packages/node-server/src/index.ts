@@ -22,6 +22,7 @@ import {
 } from './chrome-launch.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
+import { findWebKitExecutable, spawnWebKit } from './webkit-launch.js';
 import { FileLogger } from './file-logger.js';
 import { CliLogDedup } from './cli-log-dedup.js';
 import { EnvSecretStore } from './secrets/env-secret-store.js';
@@ -44,6 +45,7 @@ const SERVE_ONLY = RUNTIME_FLAGS.serveOnly;
 const ELECTRON_MODE = RUNTIME_FLAGS.electron;
 const ELECTRON_APP = RUNTIME_FLAGS.electronApp;
 const KILL_EXISTING_ELECTRON_APP = RUNTIME_FLAGS.kill;
+const WEBKIT_MODE = RUNTIME_FLAGS.browser === 'webkit';
 
 // ---------------------------------------------------------------------------
 // File logger — persistent log file in ~/.slicc/logs/
@@ -373,6 +375,9 @@ async function main() {
   if (SERVE_ONLY) {
     console.log(`Starting in serve-only mode (reusing external CDP on port ${CDP_PORT})`);
   }
+  if (WEBKIT_MODE) {
+    console.log('Starting in WebKit mode (inspector pipe)');
+  }
   if (ELECTRON_MODE) {
     console.log('Starting in Electron mode');
   }
@@ -385,8 +390,43 @@ async function main() {
   // Populated in Electron mode when auto-discovering the leader's tray.
   let discoveredTrayJoinUrl: string | null = RUNTIME_FLAGS.joinUrl ?? null;
 
-  // 1. Launch Chrome unless an external CDP provider is already running.
-  if (ELECTRON_MODE && !SERVE_ONLY) {
+  // WebKit pipe state — when in WebKit mode, the CDP proxy bridges
+  // WebSocket clients to the WebKit inspector pipe instead of Chrome's WS.
+  let webkitWritable: NodeJS.WritableStream | null = null;
+  let webkitReadable: NodeJS.ReadableStream | null = null;
+  /** Byte buffer for incomplete null-byte delimited messages from WebKit pipe.
+   *  Buffer raw bytes (not strings) so a multi-byte UTF-8 codepoint split
+   *  across reads doesn't get corrupted by premature decode. */
+  let webkitPipeBuffer: Buffer = Buffer.alloc(0);
+
+  // 1. Launch browser unless an external CDP provider is already running.
+  if (WEBKIT_MODE && !SERVE_ONLY) {
+    const webkitPath = findWebKitExecutable();
+    if (!webkitPath) {
+      console.error(
+        'Could not find WebKit binary. Set WEBKIT_PATH or install Playwright WebKit:\n' +
+          '  npx playwright install webkit'
+      );
+      process.exit(1);
+    }
+    console.log(`Found WebKit: ${webkitPath}`);
+
+    const wkResult = spawnWebKit(webkitPath);
+    launchedBrowserProcess = wkResult.child;
+    launchedBrowserLabel = 'WebKit';
+    webkitWritable = wkResult.writable;
+    webkitReadable = wkResult.readable;
+
+    pipeChildOutput(launchedBrowserProcess, 'webkit');
+
+    launchedBrowserProcess.on('exit', (code) => {
+      if (shuttingDown) return;
+      console.log(`WebKit exited with code ${code}`);
+      process.exit(0);
+    });
+
+    console.log('WebKit launched with inspector pipe');
+  } else if (ELECTRON_MODE && !SERVE_ONLY) {
     if (!ELECTRON_APP) {
       console.error(
         'Electron mode requires an app path. Pass --electron <path> or --electron-app=<path>.'
@@ -1271,19 +1311,31 @@ async function main() {
         browserExited = true;
       });
 
-      try {
-        const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-        const json = (await res.json()) as { webSocketDebuggerUrl: string };
-        const browserWs = new WebSocket(json.webSocketDebuggerUrl);
-        await new Promise<void>((resolve, reject) => {
-          browserWs.on('open', () => {
-            browserWs.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
-            resolve();
+      if (WEBKIT_MODE) {
+        // WebKit: send Playwright.close via the pipe, then kill
+        if (webkitWritable) {
+          try {
+            const closeMsg = JSON.stringify({ id: 99999, method: 'Playwright.close', params: {} });
+            (webkitWritable as NodeJS.WritableStream).write(closeMsg + '\0');
+          } catch {
+            /* ignore */
+          }
+        }
+      } else {
+        try {
+          const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
+          const json = (await res.json()) as { webSocketDebuggerUrl: string };
+          const browserWs = new WebSocket(json.webSocketDebuggerUrl);
+          await new Promise<void>((resolve, reject) => {
+            browserWs.on('open', () => {
+              browserWs.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+              resolve();
+            });
+            browserWs.on('error', reject);
           });
-          browserWs.on('error', reject);
-        });
-      } catch {
-        // CDP not available — the launched browser may still be starting up; fall through to kill.
+        } catch {
+          // CDP not available — the launched browser may still be starting up; fall through to kill.
+        }
       }
 
       const deadline = Date.now() + 3000;
@@ -1453,6 +1505,33 @@ async function main() {
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // WebKit pipe → WebSocket bridge
+  // ---------------------------------------------------------------------------
+  if (WEBKIT_MODE && webkitReadable) {
+    // Read null-byte delimited JSON from WebKit pipe and forward to active
+    // client. Operate on bytes so we never decode a partial UTF-8 sequence:
+    // each frame is decoded only once we've seen its terminating 0x00.
+    webkitReadable.on('data', (chunk: Buffer | Uint8Array) => {
+      const buf = typeof chunk === 'string' ? Buffer.from(chunk, 'utf-8') : Buffer.from(chunk);
+      webkitPipeBuffer =
+        webkitPipeBuffer.length === 0 ? buf : Buffer.concat([webkitPipeBuffer, buf]);
+      let nullIdx: number;
+      while ((nullIdx = webkitPipeBuffer.indexOf(0)) !== -1) {
+        const frame = webkitPipeBuffer.subarray(0, nullIdx);
+        webkitPipeBuffer = webkitPipeBuffer.subarray(nullIdx + 1);
+        if (frame.length === 0) continue;
+        const raw = frame.toString('utf-8');
+        const preview = raw.slice(0, 200);
+        const msg = `[cdp-proxy] WebKit→Client: ${preview}`;
+        if (cdpDedup.shouldLog(msg)) console.debug(msg);
+        if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
+          activeClientWs.send(raw);
+        }
+      }
+    });
+  }
+
   wss.on('connection', async (clientWs) => {
     try {
       // Close previous client connection — only one client active at a time
@@ -1464,51 +1543,98 @@ async function main() {
 
       console.log('[cdp-proxy] New client connected');
 
-      // Initialize buffer BEFORE any await so messages arriving during
-      // waitForCDP or ensureChromeConnection are captured, not dropped.
-      if (messageBuffer === null) {
-        messageBuffer = [];
-      }
-
-      // Register ALL handlers BEFORE any async work so no messages are lost
-      clientWs.on('message', (data) => {
-        const preview = String(data).slice(0, 200);
-        if (chromeWs && chromeWs.readyState === WebSocket.OPEN && messageBuffer === null) {
-          const msg = `[cdp-proxy] Client→Chrome: ${preview}`;
+      if (WEBKIT_MODE) {
+        // WebKit mode: bridge WebSocket messages to the pipe
+        clientWs.on('message', (data) => {
+          const text = String(data);
+          const preview = text.slice(0, 200);
+          const msg = `[cdp-proxy] Client→WebKit: ${preview}`;
           if (cdpDedup.shouldLog(msg)) console.debug(msg);
-          chromeWs.send(String(data));
-        } else if (messageBuffer !== null) {
-          messageBuffer.push(data);
-          const msg = `[cdp-proxy] Client→Chrome (buffered): ${preview}`;
-          if (cdpDedup.shouldLog(msg)) console.debug(msg);
-        } else {
-          // Chrome not connected and no buffer — this shouldn't happen but log it
-          console.log(`[cdp-proxy] Client→Chrome (DROPPED — no connection): ${preview}`);
-        }
-      });
+          if (webkitWritable) {
+            try {
+              (webkitWritable as NodeJS.WritableStream).write(text + '\0');
+            } catch (err) {
+              console.error('[cdp-proxy] Failed to write to WebKit pipe:', err);
+            }
+          }
+        });
 
-      clientWs.on('close', () => {
-        console.log('[cdp-proxy] Client disconnected');
-        if (activeClientWs === clientWs) {
-          activeClientWs = null;
-        }
-        // Don't close chromeWs — keep it alive for the next client
-      });
+        clientWs.on('close', () => {
+          console.log('[cdp-proxy] Client disconnected');
+          if (activeClientWs === clientWs) {
+            activeClientWs = null;
+          }
+        });
 
-      clientWs.on('error', (err) => {
-        console.log(`[cdp-proxy] Client WS error: ${err}`);
-        if (activeClientWs === clientWs) {
-          activeClientWs = null;
-        }
-      });
+        clientWs.on('error', (err) => {
+          console.log(`[cdp-proxy] Client WS error: ${err}`);
+          if (activeClientWs === clientWs) {
+            activeClientWs = null;
+          }
+        });
 
-      // NOW do async work — messages arriving during these awaits are buffered
-      if (!cdpUrl) {
-        cdpUrl = await waitForCDP(CDP_PORT);
-        console.log(`[cdp-proxy] CDP available at: ${cdpUrl}`);
+        // Flush any buffered messages to the pipe
+        if (messageBuffer) {
+          for (const msg of messageBuffer) {
+            const text = String(msg);
+            if (webkitWritable) {
+              try {
+                (webkitWritable as NodeJS.WritableStream).write(text + '\0');
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+          messageBuffer = null;
+        }
+      } else {
+        // Chrome mode: original proxy behavior
+        // Initialize buffer BEFORE any await so messages arriving during
+        // waitForCDP or ensureChromeConnection are captured, not dropped.
+        if (messageBuffer === null) {
+          messageBuffer = [];
+        }
+
+        // Register ALL handlers BEFORE any async work so no messages are lost
+        clientWs.on('message', (data) => {
+          const preview = String(data).slice(0, 200);
+          if (chromeWs && chromeWs.readyState === WebSocket.OPEN && messageBuffer === null) {
+            const msg = `[cdp-proxy] Client→Chrome: ${preview}`;
+            if (cdpDedup.shouldLog(msg)) console.debug(msg);
+            chromeWs.send(String(data));
+          } else if (messageBuffer !== null) {
+            messageBuffer.push(data);
+            const msg = `[cdp-proxy] Client→Chrome (buffered): ${preview}`;
+            if (cdpDedup.shouldLog(msg)) console.debug(msg);
+          } else {
+            // Chrome not connected and no buffer — this shouldn't happen but log it
+            console.log(`[cdp-proxy] Client→Chrome (DROPPED — no connection): ${preview}`);
+          }
+        });
+
+        clientWs.on('close', () => {
+          console.log('[cdp-proxy] Client disconnected');
+          if (activeClientWs === clientWs) {
+            activeClientWs = null;
+          }
+          // Don't close chromeWs — keep it alive for the next client
+        });
+
+        clientWs.on('error', (err) => {
+          console.log(`[cdp-proxy] Client WS error: ${err}`);
+          if (activeClientWs === clientWs) {
+            activeClientWs = null;
+          }
+        });
+
+        // NOW do async work — messages arriving during these awaits are buffered
+        if (!cdpUrl) {
+          cdpUrl = await waitForCDP(CDP_PORT);
+          console.log(`[cdp-proxy] CDP available at: ${cdpUrl}`);
+        }
+
+        await ensureChromeConnection(cdpUrl);
       }
-
-      await ensureChromeConnection(cdpUrl);
     } catch (err) {
       console.error('[cdp-proxy] Connection error:', err);
       clientWs.close();
@@ -1517,26 +1643,35 @@ async function main() {
 
   server.listen(SERVE_PORT, '127.0.0.1', () => {
     console.log(`Serving UI at ${SERVE_ORIGIN}`);
-    console.log(`CDP proxy at ws://localhost:${SERVE_PORT}/cdp`);
+    if (WEBKIT_MODE) {
+      console.log(`WebKit pipe proxy at ws://localhost:${SERVE_PORT}/cdp`);
+    } else {
+      console.log(`CDP proxy at ws://localhost:${SERVE_PORT}/cdp`);
+    }
     fileLogger.log('info', 'CLI server started', {
       port: SERVE_PORT,
       cdpPort: CDP_PORT,
       devMode: DEV_MODE,
       electronMode: ELECTRON_MODE,
+      webkitMode: WEBKIT_MODE,
     });
 
-    // Pre-connect to Chrome's CDP so the proxy is warm when the first client connects.
-    // Without this, the first browser automation command has to wait for CDP discovery + WS handshake.
-    (async () => {
-      try {
-        cdpUrl = await waitForCDP(CDP_PORT);
-        console.log(`[cdp-proxy] Pre-connected: CDP available at ${cdpUrl}`);
-        await ensureChromeConnection(cdpUrl);
-        console.log('[cdp-proxy] Chrome WebSocket ready (pre-warmed)');
-      } catch (err) {
-        console.log('[cdp-proxy] Pre-connect failed (will retry on first client):', err);
-      }
-    })();
+    if (!WEBKIT_MODE) {
+      // Pre-connect to Chrome's CDP so the proxy is warm when the first client connects.
+      // Without this, the first browser automation command has to wait for CDP discovery + WS handshake.
+      (async () => {
+        try {
+          cdpUrl = await waitForCDP(CDP_PORT);
+          console.log(`[cdp-proxy] Pre-connected: CDP available at ${cdpUrl}`);
+          await ensureChromeConnection(cdpUrl);
+          console.log('[cdp-proxy] Chrome WebSocket ready (pre-warmed)');
+        } catch (err) {
+          console.log('[cdp-proxy] Pre-connect failed (will retry on first client):', err);
+        }
+      })();
+    } else {
+      console.log('[cdp-proxy] WebKit pipe bridge ready');
+    }
 
     if (ELECTRON_MODE) {
       void (async () => {
@@ -1556,7 +1691,7 @@ async function main() {
       })();
     }
 
-    if (!ELECTRON_MODE) {
+    if (!ELECTRON_MODE && !WEBKIT_MODE) {
       setTimeout(() => {
         attachConsoleForwarder(CDP_PORT, String(SERVE_PORT)).catch((err) => {
           console.error('[page] Console forwarder error:', err);

@@ -2,6 +2,7 @@ import AppKit
 
 enum AppTargetType: String, Codable {
     case chromiumBrowser
+    case webkitBrowser
     case electronApp
 }
 
