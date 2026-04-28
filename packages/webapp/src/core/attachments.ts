@@ -12,6 +12,12 @@ export interface MessageAttachment {
   data?: string;
   /** UTF-8 content for text-like file attachments. */
   text?: string;
+  /**
+   * VFS path (e.g. `/tmp/attachment-…`) when the file was persisted to the
+   * virtual filesystem because it was too large to inline. The agent can
+   * `read_file`/`bash cat` this path to access the full content.
+   */
+  path?: string;
   /** Human-readable reason when the payload could not be included. */
   error?: string;
 }
@@ -46,6 +52,12 @@ export function formatAttachmentForPrompt(attachment: MessageAttachment): string
       attachment.text,
       `----- END ATTACHMENT ${attachment.name} -----`,
     ].join('\n');
+  }
+
+  if (attachment.path) {
+    const kindLabel =
+      attachment.kind === 'image' ? 'image' : attachment.kind === 'text' ? 'text file' : 'file';
+    return `[Attached ${kindLabel} saved to ${attachment.path} — ${summary}. Read it from the virtual filesystem when you need its contents.]`;
   }
 
   if (attachment.error) {

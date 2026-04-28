@@ -86,6 +86,54 @@ describe('ChatPanel attachments', () => {
     );
   });
 
+  it('off-loads oversized text files to /tmp via the attachment writer', async () => {
+    const writer = vi.fn(async (file: File) => `/tmp/written-${file.name}`);
+    panel.setAttachmentWriter(writer);
+
+    // 600 KB text file — well above the 512 KB inline cap.
+    const big = new File([new Uint8Array(600 * 1024).fill(65)], 'big.log', {
+      type: 'text/plain',
+    });
+
+    await panel.addAttachmentsFromFiles([big]);
+
+    expect(writer).toHaveBeenCalledTimes(1);
+    expect(writer).toHaveBeenCalledWith(big);
+
+    expect(container.querySelector('.attachment-chip__path')?.textContent).toBe(
+      '/tmp/written-big.log'
+    );
+
+    (container.querySelector('.chat__send-btn') as HTMLButtonElement).click();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const [, , attachments] = sendMessage.mock.calls[0];
+    expect(attachments[0]).toMatchObject({
+      name: 'big.log',
+      kind: 'text',
+      path: '/tmp/written-big.log',
+    });
+    expect(attachments[0].text).toBeUndefined();
+  });
+
+  it('off-loads unsupported binaries to /tmp via the attachment writer', async () => {
+    const writer = vi.fn(async () => '/tmp/written-archive.zip');
+    panel.setAttachmentWriter(writer);
+
+    const blob = new File([new Uint8Array([1, 2, 3, 4])], 'archive.zip', {
+      type: 'application/zip',
+    });
+
+    await panel.addAttachmentsFromFiles([blob]);
+    (container.querySelector('.chat__send-btn') as HTMLButtonElement).click();
+
+    const [, , attachments] = sendMessage.mock.calls[0];
+    expect(attachments[0]).toMatchObject({
+      name: 'archive.zip',
+      kind: 'file',
+      path: '/tmp/written-archive.zip',
+    });
+  });
+
   it('can send an image-only message', async () => {
     // Smallest valid 1x1 transparent PNG, expressed as raw bytes to avoid
     // tripping secret scanners on the base64 form.

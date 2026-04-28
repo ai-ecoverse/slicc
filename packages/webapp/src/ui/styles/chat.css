@@ -397,7 +397,8 @@
   gap: 1px;
 }
 .attachment-chip__name,
-.attachment-chip__meta {
+.attachment-chip__meta,
+.attachment-chip__path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -409,7 +410,13 @@
   color: var(--s2-content-tertiary);
   font-size: 11px;
 }
-.msg--user .attachment-chip__meta {
+.attachment-chip__path {
+  color: var(--s2-content-tertiary);
+  font-size: 11px;
+  font-family: var(--s2-font-mono, ui-monospace, monospace);
+}
+.msg--user .attachment-chip__meta,
+.msg--user .attachment-chip__path {
   color: rgba(255, 255, 255, 0.7);
 }
 .attachment-chip__remove {

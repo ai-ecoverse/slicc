@@ -35,6 +35,7 @@ import {
   findDroppedSkillTransferFile,
   hasDroppedFiles,
 } from './skill-drop.js';
+import { createAttachmentTmpWriter } from './attachment-vfs.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
@@ -566,6 +567,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   // Wire local VFS to client so memory panel can read CLAUDE.md files
   client.setLocalFS(localFs);
+
+  // Off-load oversized attachments to /tmp on the local VFS so the
+  // offscreen agent can read them via the shared IndexedDB.
+  layout.panels.chat.setAttachmentWriter(createAttachmentTmpWriter(localFs));
 
   // Wire agent handle
   const agentHandle = client.createAgentHandle();
@@ -1433,6 +1438,13 @@ async function main(): Promise<void> {
   };
 
   layout.panels.chat.setAgent(coneAgentHandle);
+
+  // Off-load oversized attachments to /tmp on the orchestrator's VFS so
+  // the agent can `read_file`/`cat` them instead of inlining the whole
+  // payload in the prompt.
+  if (sharedFs) {
+    layout.panels.chat.setAttachmentWriter(createAttachmentTmpWriter(sharedFs));
+  }
 
   // Wire delete callback for queued messages
   layout.panels.chat.setDeleteQueuedMessageCallback((messageId: string) => {

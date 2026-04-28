@@ -10,7 +10,7 @@ import type { AgentHandle, AgentEvent, ChatMessage, ToolCall } from './types.js'
 import { renderAssistantMessageContent, renderMessageContent } from './message-renderer.js';
 import { SessionStore } from './session-store.js';
 import { createLogger } from '../core/logger.js';
-import type { MessageAttachment } from '../core/attachments.js';
+import type { MessageAttachment, MessageAttachmentKind } from '../core/attachments.js';
 import { formatAttachmentSize, formatAttachmentSummary } from '../core/attachments.js';
 import { getMimeType } from '../core/mime-types.js';
 import { processImageContent, isSupportedImageFormat } from '../core/image-processor.js';
@@ -36,8 +36,18 @@ const log = createLogger('chat-panel');
 
 type IconNode = [tag: string, attrs: Record<string, string | number>][];
 
-const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
-const MAX_TEXT_ATTACHMENT_BYTES = 512 * 1024;
+/**
+ * Writes a dropped/picked file somewhere the agent can reach (typically
+ * `/tmp` on the virtual filesystem) and returns the resulting absolute
+ * VFS path. Used by ChatPanel to off-load attachments that are too large
+ * to inline as base64/text into the prompt.
+ */
+export type AttachmentWriter = (file: File) => Promise<string>;
+
+/** Above this size, images are saved to the VFS instead of inlined. */
+const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
+/** Above this size, text files are saved to the VFS instead of inlined. */
+const MAX_INLINE_TEXT_BYTES = 512 * 1024;
 
 /** Generate a simple unique ID. */
 function uid(): string {
@@ -114,6 +124,7 @@ export class ChatPanel {
   private attachmentsEl!: HTMLElement;
   private pendingAttachments: MessageAttachment[] = [];
   private attachmentReadInProgress = false;
+  private attachmentWriter: AttachmentWriter | null = null;
   private voiceInput: VoiceInput | null = null;
   private voiceMode = false;
   private keydownListener: ((e: KeyboardEvent) => void) | null = null;
@@ -160,6 +171,17 @@ export class ChatPanel {
   /** Set a callback for terminal output events. */
   onTerminalOutput(cb: (text: string) => void): void {
     this.terminalOutputCallback = cb;
+  }
+
+  /**
+   * Provide a writer used to off-load oversized or unsupported binary
+   * attachments to the virtual filesystem (typically `/tmp`). When set,
+   * files that exceed the inline limits — or non-text/non-image binaries
+   * — are written to disk and surface in the prompt as a path the agent
+   * can read instead of being skipped.
+   */
+  setAttachmentWriter(writer: AttachmentWriter | null): void {
+    this.attachmentWriter = writer;
   }
 
   /** Set a callback for deleting queued messages (removes from orchestrator DB + queue). */
@@ -436,14 +458,12 @@ export class ChatPanel {
 
   private async createAttachmentFromFile(file: File): Promise<MessageAttachment | null> {
     const mimeType = file.type || getMimeType(file.name);
-    if (file.size > MAX_ATTACHMENT_BYTES) {
-      this.addSystemMessage(
-        `Attachment skipped: ${file.name} is ${formatAttachmentSize(file.size)}, above the ${formatAttachmentSize(MAX_ATTACHMENT_BYTES)} limit.`
-      );
-      return null;
-    }
+    const isImage = isSupportedImageFormat(mimeType);
+    const isText = isTextLikeFile(file, mimeType);
 
-    if (isSupportedImageFormat(mimeType)) {
+    // Inline path: small text files become prompt blocks; small images become
+    // image content for the LLM.
+    if (isImage && file.size <= MAX_INLINE_IMAGE_BYTES) {
       const processed = await processImageContent({
         type: 'image',
         mimeType,
@@ -459,27 +479,10 @@ export class ChatPanel {
           data: processed.data,
         };
       }
-      return {
-        id: uid(),
-        name: file.name,
-        mimeType,
-        size: file.size,
-        kind: 'file',
-        error: processed.text,
-      };
+      // Fall through to off-loading path on image-processing failure.
     }
 
-    if (isTextLikeFile(file, mimeType)) {
-      if (file.size > MAX_TEXT_ATTACHMENT_BYTES) {
-        return {
-          id: uid(),
-          name: file.name,
-          mimeType,
-          size: file.size,
-          kind: 'file',
-          error: `Text attachment is above the ${formatAttachmentSize(MAX_TEXT_ATTACHMENT_BYTES)} inline limit.`,
-        };
-      }
+    if (isText && file.size <= MAX_INLINE_TEXT_BYTES) {
       return {
         id: uid(),
         name: file.name,
@@ -488,6 +491,55 @@ export class ChatPanel {
         kind: 'text',
         text: await readFileText(file),
       };
+    }
+
+    // Off-load path: write to the VFS and reference the resulting path so
+    // the agent can read the file with read_file/cat. Falls back to a
+    // metadata-only attachment when no writer is wired up.
+    const kind: MessageAttachmentKind = isImage ? 'image' : isText ? 'text' : 'file';
+
+    if (this.attachmentWriter) {
+      try {
+        const path = await this.attachmentWriter(file);
+        return {
+          id: uid(),
+          name: file.name,
+          mimeType,
+          size: file.size,
+          kind,
+          path,
+        };
+      } catch (err) {
+        log.error('Failed to persist attachment to VFS', err);
+        const message = err instanceof Error ? err.message : String(err);
+        this.addSystemMessage(`Could not save attachment ${file.name} to /tmp: ${message}`);
+        return {
+          id: uid(),
+          name: file.name,
+          mimeType,
+          size: file.size,
+          kind,
+          error: `Could not be saved to the virtual filesystem: ${message}`,
+        };
+      }
+    }
+
+    if (isText && file.size > MAX_INLINE_TEXT_BYTES) {
+      return {
+        id: uid(),
+        name: file.name,
+        mimeType,
+        size: file.size,
+        kind: 'text',
+        error: `Text attachment is above the ${formatAttachmentSize(MAX_INLINE_TEXT_BYTES)} inline limit.`,
+      };
+    }
+
+    if (isImage && file.size > MAX_INLINE_IMAGE_BYTES) {
+      this.addSystemMessage(
+        `Attachment skipped: ${file.name} is ${formatAttachmentSize(file.size)}, above the ${formatAttachmentSize(MAX_INLINE_IMAGE_BYTES)} inline image limit.`
+      );
+      return null;
     }
 
     return {
@@ -1330,6 +1382,13 @@ export class ChatPanel {
       ? 'not included'
       : `${attachment.mimeType || 'file'} · ${formatAttachmentSize(attachment.size)}`;
     body.appendChild(meta);
+    if (attachment.path) {
+      const pathLine = document.createElement('span');
+      pathLine.className = 'attachment-chip__path';
+      pathLine.textContent = attachment.path;
+      pathLine.title = attachment.path;
+      body.appendChild(pathLine);
+    }
     chip.appendChild(body);
 
     if (options.removable) {
