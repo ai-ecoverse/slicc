@@ -307,6 +307,62 @@ describe('scoop_mute / scoop_unmute / scoop_wait tools', () => {
     expect(result.content).toContain('Unknown (skipped): ghost');
   });
 
+  it('scoop_wait surfaces scoops dropped between resolve and schedule', async () => {
+    // Race: the scoop existed when resolveScoopNames ran but was
+    // dropped before the orchestrator could install the wait. The
+    // orchestrator reports it back via `unknown`; the tool must use
+    // that — not the resolved list — to build the ack so the cone
+    // doesn't believe the wait is active for a vanished scoop.
+    const onScheduleScoopWait = vi.fn(() => ({
+      scheduled: [],
+      unknown: [targetScoop.jid],
+    }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, targetScoop],
+      onMuteScoops: vi.fn(),
+      onUnmuteScoops: vi.fn(async () => []),
+      onScheduleScoopWait,
+    });
+    const tool = tools.find((t) => t.name === 'scoop_wait');
+    const result = await tool!.execute({ scoop_names: ['alpha-scoop'] });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('could not be scheduled');
+    expect(result.content).toContain('alpha-scoop');
+  });
+
+  it('scoop_wait reports partial schedule when some jids are dropped', async () => {
+    const otherScoop: RegisteredScoop = {
+      ...targetScoop,
+      jid: 'scoop_beta_1',
+      name: 'beta',
+      folder: 'beta-scoop',
+      assistantLabel: 'beta-scoop',
+    };
+    const onScheduleScoopWait = vi.fn(() => ({
+      scheduled: [targetScoop.jid],
+      unknown: [otherScoop.jid],
+    }));
+    const tools = createScoopManagementTools({
+      scoop: cone,
+      onSendMessage: vi.fn(),
+      getScoops: () => [cone, targetScoop, otherScoop],
+      onMuteScoops: vi.fn(),
+      onUnmuteScoops: vi.fn(async () => []),
+      onScheduleScoopWait,
+    });
+    const tool = tools.find((t) => t.name === 'scoop_wait');
+    const result = await tool!.execute({
+      scoop_names: ['alpha-scoop', 'beta-scoop'],
+      timeout_ms: 500,
+    });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain('scoop_wait scheduled for: alpha-scoop');
+    expect(result.content).toContain('timeout: 500ms');
+    expect(result.content).toContain('Dropped before schedule (skipped): beta-scoop');
+  });
+
   it('scoop_wait rejects non-finite or negative timeouts', async () => {
     const { tools, onScheduleScoopWait } = buildConeTools();
     const tool = tools.find((t) => t.name === 'scoop_wait');

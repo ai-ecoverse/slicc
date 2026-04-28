@@ -918,8 +918,12 @@ export class Orchestrator {
     // sync setup (mute install, pending-completion drain, waiter
     // registration) before its first await, so by the time control
     // returns to us the scoops are already muted and any race with a
-    // just-completed scoop is closed.
-    void this.waitForScoops(jids, timeoutMs)
+    // just-completed scoop is closed. Pass the de-duped, known-scheduled
+    // list (NOT the raw `jids`) so the emitted `scoop-wait` lick matches
+    // the synchronous ack: duplicates are collapsed into one row and
+    // unknown jids are excluded entirely instead of showing up as
+    // timed-out rows the caller already saw in the ack.
+    void this.waitForScoops(scheduled, timeoutMs)
       .then((results) => this.deliverWaitResultsToCone(results))
       .catch((err) => {
         log.error('scheduleScoopWait failed', {
@@ -962,8 +966,16 @@ export class Orchestrator {
     const summary = `${completedCount} completed, ${timedOutCount} timed out`;
     lines.splice(1, 0, summary);
 
+    // ID needs entropy beyond `Date.now()` because the lick path now
+    // settles asynchronously: two waits scheduled in the same tick
+    // (e.g. timeout_ms: 0, or all targets already pending in
+    // `pendingCompletions`) can resolve in the same millisecond. Lick
+    // rendering de-dupes by id in `chat-panel.ts` and persistence uses
+    // `put` keyed by id in `db.ts`, so a colliding id silently drops
+    // one of the lick payloads. Mirror the `delegate-...` id shape
+    // used elsewhere in this file: timestamp + random suffix.
     const msg: ChannelMessage = {
-      id: `scoop-wait-${Date.now()}`,
+      id: `scoop-wait-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       chatJid: cone.jid,
       senderId: 'scoop-wait',
       senderName: 'scoop-wait',

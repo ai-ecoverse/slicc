@@ -1858,6 +1858,12 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
   });
 
   it('scheduleScoopWait reports unknown jids in the sync ack and skips them in the lick', async () => {
+    // The lick body must match the synchronous ack: unknown jids stay
+    // in the ack only and are NOT re-rendered as timed-out rows in the
+    // eventual lick. Without this contract the cone sees the same
+    // unknown scoop twice (once in the tool result, once in the lick),
+    // contradicting the "ack tells you what's scheduled, lick tells
+    // you what completed" split.
     const scoop: RegisteredScoop = {
       jid: 'scoop_sched_partial_1',
       name: 'sched-partial',
@@ -1871,18 +1877,134 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     };
     await saveScoop(scoop);
 
+    const incoming: ChannelMessage[] = [];
     const container =
       typeof document !== 'undefined'
         ? document.createElement('div')
         : ({ appendChild: () => {} } as unknown as HTMLElement);
     orch = new Orchestrator(
       container,
-      noopCallbacksWith(() => {})
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
     );
     await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
 
     const ack = orch.scheduleScoopWait([scoop.jid, 'scoop_unknown_42'], 10);
     expect(ack.scheduled).toEqual([scoop.jid]);
     expect(ack.unknown).toEqual(['scoop_unknown_42']);
+
+    // Let the timeout fire and the lick land.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(incoming).toHaveLength(1);
+    const lick = incoming[0];
+    expect(lick.channel).toBe('scoop-wait');
+    // Unknown jid must NOT appear in the lick — only the scheduled one.
+    expect(lick.content).not.toContain('scoop_unknown_42');
+    expect(lick.content).toContain('--- sched-partial-scoop (timed out) ---');
+    expect(lick.content).toContain('0 completed, 1 timed out');
+  });
+
+  it('scheduleScoopWait collapses duplicate jids into a single lick row', async () => {
+    // `waitForScoops` already dedupes its input, but `scheduleScoopWait`
+    // must also pass the de-duped list so the lick body has one row
+    // per scoop instead of N copies. The synchronous ack reflects the
+    // same de-duplication.
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_sched_dedup_1',
+      name: 'sched-dedup',
+      folder: 'sched-dedup-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'sched-dedup-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    const ack = orch.scheduleScoopWait([scoop.jid, scoop.jid], 30);
+    expect(ack.scheduled).toEqual([scoop.jid]);
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(incoming).toHaveLength(1);
+    const lick = incoming[0];
+    // Exactly one row for the duplicated jid.
+    const rowCount = (lick.content.match(/--- sched-dedup-scoop /g) ?? []).length;
+    expect(rowCount).toBe(1);
+    expect(lick.content).toContain('0 completed, 1 timed out');
+  });
+
+  it('scheduleScoopWait stamps unique message IDs for back-to-back schedules', async () => {
+    // Date.now() alone is not enough entropy: two waits scheduled in
+    // the same tick (e.g. timeout_ms: 0) can resolve in the same
+    // millisecond, and the chat panel + persistence layer dedupe by
+    // msg.id. A collision drops one lick. Verify each wait gets a
+    // distinct id.
+    const scoopA: RegisteredScoop = {
+      jid: 'scoop_sched_id_a',
+      name: 'sched-id-a',
+      folder: 'sched-id-a-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'sched-id-a-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    const scoopB: RegisteredScoop = {
+      ...scoopA,
+      jid: 'scoop_sched_id_b',
+      folder: 'sched-id-b-scoop',
+      assistantLabel: 'sched-id-b-scoop',
+    };
+    await saveScoop(scoopA);
+    await saveScoop(scoopB);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    // Two zero-timeout waits scheduled in the same tick; both will
+    // resolve essentially simultaneously.
+    orch.scheduleScoopWait([scoopA.jid], 0);
+    orch.scheduleScoopWait([scoopB.jid], 0);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(incoming).toHaveLength(2);
+    expect(incoming[0].id).not.toBe(incoming[1].id);
+    expect(incoming[0].id.startsWith('scoop-wait-')).toBe(true);
+    expect(incoming[1].id.startsWith('scoop-wait-')).toBe(true);
   });
 });

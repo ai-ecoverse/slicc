@@ -536,17 +536,47 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
             };
           }
           const jids = resolved.map((s) => s.jid);
-          onScheduleScoopWait(jids, timeout_ms);
+          // Use the orchestrator's return value to build the
+          // acknowledgement: a scoop can be dropped between name
+          // resolution and the schedule call, in which case the
+          // orchestrator will report it as `unknown` even though
+          // `resolveScoopNames` accepted it. Trusting only the
+          // tool-side resolution would tell the cone "scheduled for X"
+          // when X is no longer registered and will never produce a
+          // result row in the eventual lick.
+          const ack = onScheduleScoopWait(jids, timeout_ms);
+          const jidToFolder = new Map(resolved.map((s) => [s.jid, s.folder]));
+          const scheduledFolders = ack.scheduled
+            .map((jid) => jidToFolder.get(jid) ?? jid)
+            .join(', ');
+          const droppedFolders = ack.unknown.map((jid) => jidToFolder.get(jid) ?? jid).join(', ');
           log.info('Wait scheduled', {
-            names: resolved.map((s) => s.folder),
+            scheduled: ack.scheduled.map((jid) => jidToFolder.get(jid) ?? jid),
+            droppedAtSchedule: droppedFolders ? droppedFolders.split(', ') : [],
+            unknownNames: unknown,
             timeout_ms,
           });
-          const folders = resolved.map((s) => s.folder).join(', ');
+          if (ack.scheduled.length === 0) {
+            // Every resolved jid was dropped between resolution and
+            // scheduling; nothing to wait on. Report this as an error
+            // so the cone retries instead of waiting on a lick that
+            // will never fire.
+            const dropped = droppedFolders || ack.unknown.join(', ');
+            const unknownTail = unknown.length > 0 ? ` Unknown names: ${unknown.join(', ')}.` : '';
+            return {
+              content: `scoop_wait could not be scheduled — every listed scoop was unregistered before the wait could start (dropped: ${dropped}).${unknownTail}`,
+              isError: true,
+            };
+          }
           const tail = timeout_ms !== undefined ? ` (timeout: ${timeout_ms}ms)` : ' (no timeout)';
-          const warn = unknown.length > 0 ? ` Unknown (skipped): ${unknown.join(', ')}.` : '';
+          const warnUnknown =
+            unknown.length > 0 ? ` Unknown (skipped): ${unknown.join(', ')}.` : '';
+          const warnDropped = droppedFolders
+            ? ` Dropped before schedule (skipped): ${droppedFolders}.`
+            : '';
           return {
             content:
-              `scoop_wait scheduled for: ${folders}${tail}.${warn} ` +
+              `scoop_wait scheduled for: ${scheduledFolders}${tail}.${warnUnknown}${warnDropped} ` +
               `Continue with other work — a 'scoop-wait' lick will be delivered when all listed scoops complete or the timeout fires.`,
           };
         },
