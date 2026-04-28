@@ -115,6 +115,29 @@ describe('ChatPanel attachments', () => {
     expect(attachments[0].text).toBeUndefined();
   });
 
+  it('returns an error image attachment when no writer is wired and the file is too large', async () => {
+    // 6 MB image, exceeds the 5 MB inline cap. With no writer, instead of
+    // dropping the file silently, the composer should keep an "error"
+    // image chip so the user can see what happened.
+    const big = new File([new Uint8Array(6 * 1024 * 1024)], 'huge.png', {
+      type: 'image/png',
+    });
+
+    await panel.addAttachmentsFromFiles([big]);
+
+    const meta = container.querySelector('.attachment-chip__meta')?.textContent;
+    expect(meta).toBe('not included');
+
+    (container.querySelector('.chat__send-btn') as HTMLButtonElement).click();
+    const [, , attachments] = sendMessage.mock.calls[0];
+    expect(attachments[0]).toMatchObject({
+      name: 'huge.png',
+      kind: 'image',
+    });
+    expect(attachments[0].error).toMatch(/inline limit/);
+    expect(attachments[0].data).toBeUndefined();
+  });
+
   it('off-loads unsupported binaries to /tmp via the attachment writer', async () => {
     const writer = vi.fn(async () => '/tmp/written-archive.zip');
     panel.setAttachmentWriter(writer);

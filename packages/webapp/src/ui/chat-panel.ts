@@ -44,8 +44,13 @@ type IconNode = [tag: string, attrs: Record<string, string | number>][];
  */
 export type AttachmentWriter = (file: File) => Promise<string>;
 
-/** Above this size, images are saved to the VFS instead of inlined. */
-const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
+/**
+ * Above this size, images are saved to the VFS instead of inlined.
+ * Kept conservative because inlined images are base64-encoded (≈33%
+ * expansion) and forwarded through chrome.runtime / tray sync message
+ * buses, both of which have transport-size ceilings.
+ */
+const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
 /** Above this size, text files are saved to the VFS instead of inlined. */
 const MAX_INLINE_TEXT_BYTES = 512 * 1024;
 
@@ -76,13 +81,18 @@ function createLucideIcon(node: IconNode, size = 18): SVGElement {
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
+  // Accumulate chunks into an array and join once instead of building
+  // the binary string with `+=`. Repeated string concatenation over a
+  // multi-MB image causes quadratic-ish allocations and noticeable UI
+  // hitches when attaching larger images.
   const chunkSize = 0x8000;
+  const chunks: string[] = new Array(Math.ceil(bytes.length / chunkSize));
+  let chunkIndex = 0;
   for (let i = 0; i < bytes.length; i += chunkSize) {
     const chunk = bytes.subarray(i, i + chunkSize);
-    binary += String.fromCharCode(...chunk);
+    chunks[chunkIndex++] = String.fromCharCode(...chunk);
   }
-  return btoa(binary);
+  return btoa(chunks.join(''));
 }
 
 async function readFileBase64(file: File): Promise<string> {
@@ -536,10 +546,14 @@ export class ChatPanel {
     }
 
     if (isImage && file.size > MAX_INLINE_IMAGE_BYTES) {
-      this.addSystemMessage(
-        `Attachment skipped: ${file.name} is ${formatAttachmentSize(file.size)}, above the ${formatAttachmentSize(MAX_INLINE_IMAGE_BYTES)} inline image limit.`
-      );
-      return null;
+      return {
+        id: uid(),
+        name: file.name,
+        mimeType,
+        size: file.size,
+        kind: 'image',
+        error: `Image attachment is above the ${formatAttachmentSize(MAX_INLINE_IMAGE_BYTES)} inline limit.`,
+      };
     }
 
     return {
@@ -1357,7 +1371,7 @@ export class ChatPanel {
     if (attachment.kind === 'image' && attachment.data) {
       const img = document.createElement('img');
       img.src = `data:${attachment.mimeType};base64,${attachment.data}`;
-      img.alt = '';
+      img.alt = attachment.name || 'Attached image';
       visual.appendChild(img);
     } else {
       const icon =

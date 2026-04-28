@@ -59,6 +59,7 @@ export {
   formatAttachmentSummary,
   formatPromptWithAttachments,
   imageContentFromAttachments,
+  stripLocalPathsForRemote,
 } from './attachments.js';
 export type { MessageAttachment, MessageAttachmentKind } from './attachments.js';
 

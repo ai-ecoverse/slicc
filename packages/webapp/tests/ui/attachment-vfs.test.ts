@@ -26,9 +26,15 @@ describe('attachment-vfs', () => {
 
   describe('makeAttachmentPath', () => {
     it('produces deterministic, collision-resistant /tmp paths', () => {
-      const a = makeAttachmentPath('hello world.txt', 1, 1);
-      const b = makeAttachmentPath('hello world.txt', 1, 2);
-      expect(a).toMatch(/^\/tmp\/attachment-1-1-hello_world\.txt$/);
+      const a = makeAttachmentPath('hello world.txt', 1, 1, 'abcd1234');
+      const b = makeAttachmentPath('hello world.txt', 1, 2, 'abcd1234');
+      expect(a).toMatch(/^\/tmp\/attachment-1-1-abcd1234-hello_world\.txt$/);
+      expect(a).not.toBe(b);
+    });
+
+    it('disambiguates across writer instances via the random segment', () => {
+      const a = makeAttachmentPath('same.txt', 1, 1, 'aaaaaaaa');
+      const b = makeAttachmentPath('same.txt', 1, 1, 'bbbbbbbb');
       expect(a).not.toBe(b);
     });
   });
@@ -45,6 +51,9 @@ describe('attachment-vfs', () => {
     afterEach(async () => {
       // Best-effort cleanup; ignore errors on already-removed dirs.
       await fs.rm('/tmp', { recursive: true }).catch(() => {});
+      // Close IndexedDB connections / drop the fake-indexeddb DB to
+      // avoid spurious AbortError rejections leaking between tests.
+      await fs.dispose();
     });
 
     it('writes the file bytes into /tmp and returns the path', async () => {

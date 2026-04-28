@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatPromptWithAttachments,
   imageContentFromAttachments,
+  stripLocalPathsForRemote,
 } from '../../src/core/attachments.js';
 import type { MessageAttachment } from '../../src/core/attachments.js';
 
@@ -69,5 +70,69 @@ describe('attachment prompt formatting', () => {
     expect(prompt).toContain('saved to /tmp/attachment-abc-2-huge.bin');
     // Path-only attachments should not surface as ImageContent.
     expect(imageContentFromAttachments(attachments)).toEqual([]);
+  });
+});
+
+describe('stripLocalPathsForRemote', () => {
+  it('preserves attachments without paths untouched (cloned)', () => {
+    const attachments: MessageAttachment[] = [
+      {
+        id: 'a1',
+        name: 'notes.txt',
+        mimeType: 'text/plain',
+        size: 5,
+        kind: 'text',
+        text: 'hello',
+      },
+    ];
+
+    const stripped = stripLocalPathsForRemote(attachments);
+    expect(stripped).toEqual(attachments);
+    expect(stripped[0]).not.toBe(attachments[0]);
+  });
+
+  it('keeps inline content but drops the local path', () => {
+    const stripped = stripLocalPathsForRemote([
+      {
+        id: 'a1',
+        name: 'photo.png',
+        mimeType: 'image/png',
+        size: 1234,
+        kind: 'image',
+        data: 'AAAA',
+        path: '/tmp/attachment-x',
+      },
+    ]);
+
+    expect(stripped[0]).toEqual({
+      id: 'a1',
+      name: 'photo.png',
+      mimeType: 'image/png',
+      size: 1234,
+      kind: 'image',
+      data: 'AAAA',
+    });
+    expect(stripped[0].path).toBeUndefined();
+  });
+
+  it('demotes path-only attachments to a not-included error placeholder', () => {
+    const stripped = stripLocalPathsForRemote([
+      {
+        id: 'a1',
+        name: 'huge.bin',
+        mimeType: 'application/octet-stream',
+        size: 60_000_000,
+        kind: 'file',
+        path: '/tmp/attachment-x',
+      },
+    ]);
+
+    expect(stripped[0].path).toBeUndefined();
+    expect(stripped[0].error).toMatch(/remote runtime/);
+  });
+
+  it('returns an empty array for undefined or empty input', () => {
+    expect(stripLocalPathsForRemote(undefined)).toEqual([]);
+    expect(stripLocalPathsForRemote([])).toEqual([]);
   });
 });

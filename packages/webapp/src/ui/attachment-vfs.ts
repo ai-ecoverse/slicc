@@ -23,15 +23,38 @@ export function sanitizeAttachmentName(name: string): string {
   return cleaned.length > 0 ? cleaned : 'attachment';
 }
 
+/** Generate a short random suffix to disambiguate paths across writer
+ *  instances (multiple tabs/windows sharing the same VFS). */
+function randomSuffix(): string {
+  const cryptoObj =
+    typeof globalThis.crypto !== 'undefined' &&
+    typeof globalThis.crypto.getRandomValues === 'function'
+      ? globalThis.crypto
+      : null;
+  if (cryptoObj) {
+    const buf = new Uint8Array(4);
+    cryptoObj.getRandomValues(buf);
+    return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  return Math.random().toString(36).slice(2, 10);
+}
+
 /**
- * Build a unique `/tmp/...` path for `name`. The counter ensures we
- * never collide with another attachment dropped in the same millisecond.
+ * Build a unique `/tmp/...` path for `name`. The counter and random
+ * suffix together ensure we never collide with another attachment
+ * dropped in the same millisecond — even across writer instances in
+ * separate tabs/windows that share the same VFS.
  */
-export function makeAttachmentPath(name: string, now: number, counter: number): string {
+export function makeAttachmentPath(
+  name: string,
+  now: number,
+  counter: number,
+  randomSegment: string = randomSuffix()
+): string {
   const safe = sanitizeAttachmentName(name);
   const stamp = now.toString(36);
   const seq = counter.toString(36);
-  return `${ATTACHMENT_DIR}/attachment-${stamp}-${seq}-${safe}`;
+  return `${ATTACHMENT_DIR}/attachment-${stamp}-${seq}-${randomSegment}-${safe}`;
 }
 
 /**

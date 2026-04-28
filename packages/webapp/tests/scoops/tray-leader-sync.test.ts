@@ -221,6 +221,34 @@ describe('LeaderSyncManager', () => {
     expect(onFollowerMessage).toHaveBeenCalledWith('from follower', 'fm1', attachments);
   });
 
+  it('strips path-only attachments from follower messages before forwarding', () => {
+    const { manager, onFollowerMessage } = createManager();
+    const channel = new FakeChannel();
+    manager.addFollower('b1', channel);
+
+    channel.simulateMessage({
+      type: 'user_message',
+      text: 'from follower',
+      messageId: 'fm2',
+      attachments: [
+        {
+          id: 'a1',
+          name: 'huge.bin',
+          mimeType: 'application/octet-stream',
+          size: 60_000_000,
+          kind: 'file',
+          path: '/tmp/attachment-follower-only',
+        },
+      ],
+    });
+
+    const forwarded = onFollowerMessage.mock.calls[0][2] as
+      | { path?: string; error?: string }[]
+      | undefined;
+    expect(forwarded?.[0].path).toBeUndefined();
+    expect(forwarded?.[0].error).toMatch(/remote runtime/);
+  });
+
   it('handles follower abort', () => {
     const { manager, onFollowerAbort } = createManager();
     const channel = new FakeChannel();

@@ -102,6 +102,53 @@ describe('FollowerSyncManager', () => {
       });
     });
 
+    it('strips local paths from path-only attachments before sending', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      follower.sendMessage('check this', 'msg-2', [
+        {
+          id: 'a1',
+          name: 'huge.bin',
+          mimeType: 'application/octet-stream',
+          size: 60_000_000,
+          kind: 'file',
+          path: '/tmp/attachment-follower-only',
+        },
+      ]);
+
+      const sent = channel.parseSent() as Array<{
+        attachments?: { path?: string; error?: string }[];
+      }>;
+      const sentAttachments = sent[0].attachments;
+      expect(sentAttachments?.[0].path).toBeUndefined();
+      expect(sentAttachments?.[0].error).toMatch(/remote runtime/);
+    });
+
+    it('strips local paths but keeps inline content for hybrid attachments', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      follower.sendMessage('look', 'msg-3', [
+        {
+          id: 'a1',
+          name: 'note.txt',
+          mimeType: 'text/plain',
+          size: 5,
+          kind: 'text',
+          text: 'hello',
+          // Should never normally happen, but defend against it anyway.
+          path: '/tmp/attachment-follower-local',
+        },
+      ]);
+
+      const sent = channel.parseSent() as Array<{
+        attachments?: { path?: string; text?: string }[];
+      }>;
+      expect(sent[0].attachments?.[0].path).toBeUndefined();
+      expect(sent[0].attachments?.[0].text).toBe('hello');
+    });
+
     it('generates a messageId when not provided', () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);
@@ -225,7 +272,7 @@ describe('FollowerSyncManager', () => {
     it('passes user_message_echo attachments to onUserMessage', () => {
       const channel = new FakeChannel();
       const onUserMessage = vi.fn();
-      const follower = new FollowerSyncManager(channel, { onUserMessage });
+      new FollowerSyncManager(channel, { onUserMessage });
       const attachments = [
         {
           id: 'a1',

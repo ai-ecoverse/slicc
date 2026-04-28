@@ -4,6 +4,7 @@
  */
 
 import type { AgentEvent, ChatMessage } from '../ui/types.js';
+import { stripLocalPathsForRemote } from '../core/attachments.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 import {
@@ -278,10 +279,18 @@ export class LeaderSyncManager {
    */
   private handleFollowerMessage(bootstrapId: string, message: FollowerToLeaderMessage): void {
     switch (message.type) {
-      case 'user_message':
+      case 'user_message': {
         log.info('Follower user message received', { bootstrapId, messageId: message.messageId });
-        this.options.onFollowerMessage(message.text, message.messageId, message.attachments);
+        // Defense in depth: even though followers strip their local
+        // `path` values before sending, scrub again here so older or
+        // mis-behaving peers cannot trick the cone into trying to read
+        // a follower-local path that does not exist on this runtime.
+        const safeAttachments = message.attachments?.length
+          ? stripLocalPathsForRemote(message.attachments)
+          : message.attachments;
+        this.options.onFollowerMessage(message.text, message.messageId, safeAttachments);
         break;
+      }
       case 'abort':
         log.info('Follower abort received', { bootstrapId });
         this.options.onFollowerAbort();

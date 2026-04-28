@@ -89,3 +89,30 @@ export function imageContentFromAttachments(
       mimeType: attachment.mimeType,
     }));
 }
+
+/**
+ * Strip `path` from attachments before they cross a runtime boundary
+ * (typically tray follower → leader). The path was generated against
+ * the sender's VFS and is meaningless on the receiver — keeping it
+ * would mislead the agent into trying to read a non-existent file.
+ *
+ * Attachments that still carry inline `data`/`text` keep their content
+ * and lose only the path. Path-only attachments are demoted to a
+ * `not-included` placeholder with an explanatory error so the prompt
+ * accurately reflects what the agent can and cannot reach.
+ */
+export function stripLocalPathsForRemote(
+  attachments: readonly MessageAttachment[] | undefined,
+  reason = 'The original file lives on a remote runtime and is not accessible here.'
+): MessageAttachment[] {
+  if (!attachments?.length) return [];
+  return attachments.map((attachment) => {
+    if (!attachment.path) return { ...attachment };
+    const { path: _omitted, ...rest } = attachment;
+    const hasInline =
+      (attachment.kind === 'image' && !!attachment.data) ||
+      (attachment.kind === 'text' && attachment.text !== undefined);
+    if (hasInline) return rest;
+    return { ...rest, error: rest.error ?? reason };
+  });
+}

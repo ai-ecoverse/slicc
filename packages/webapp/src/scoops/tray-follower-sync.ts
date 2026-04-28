@@ -4,6 +4,7 @@
  */
 
 import type { AgentEvent, AgentHandle, ChatMessage } from '../ui/types.js';
+import { stripLocalPathsForRemote } from '../core/attachments.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 import {
@@ -138,7 +139,18 @@ export class FollowerSyncManager implements AgentHandle {
   sendMessage(text: string, messageId?: string, attachments?: MessageAttachment[]): void {
     const id = messageId ?? `follower-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.sentMessageIds.add(id);
-    this.sync.send({ type: 'user_message', text, messageId: id, attachments });
+    // Off-loaded `path` values point at this follower's VFS — they are
+    // not reachable from the leader. Strip them (preserving inline
+    // text/data) so the cone never sees a stale path it cannot read.
+    const safeAttachments = attachments?.length
+      ? stripLocalPathsForRemote(attachments)
+      : attachments;
+    this.sync.send({
+      type: 'user_message',
+      text,
+      messageId: id,
+      attachments: safeAttachments,
+    });
     log.info('Sent user message to leader', { messageId: id });
   }
 
