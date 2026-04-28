@@ -32,9 +32,7 @@ describe('maskSecrets()', () => {
     });
 
     it('masks ACCESS_TOKEN=value', () => {
-      expect(maskSecrets('ACCESS_TOKEN=eyJhbGciOiJIUzI1NiJ9.payload.sig')).toBe(
-        'ACCESS_TOKEN=***'
-      );
+      expect(maskSecrets('ACCESS_TOKEN=eyJhbGciOiJIUzI1NiJ9.payload.sig')).toBe('ACCESS_TOKEN=***');
     });
 
     it('masks AUTH=value', () => {
@@ -56,14 +54,28 @@ describe('maskSecrets()', () => {
     it('handles colon separator', () => {
       expect(maskSecrets('SECRET: myverylongsecretvalue')).toBe('SECRET: ***');
     });
+
+    it('masks double-quoted values', () => {
+      expect(maskSecrets(`export API_KEY="sk-ant-abcdefghijk"`)).toBe('export API_KEY="***"');
+    });
+
+    it('masks single-quoted values', () => {
+      expect(maskSecrets(`TOKEN='supersecretvalue123'`)).toBe("TOKEN='***'");
+    });
+
+    it('masks double-quoted values with spaces inside', () => {
+      expect(maskSecrets(`PASSWORD="my long pass phrase"`)).toBe('PASSWORD="***"');
+    });
+
+    it('does not mask short quoted values', () => {
+      expect(maskSecrets('TOKEN="short"')).toBe('TOKEN="short"');
+    });
   });
 
   // ── Authorization: Bearer header ──────────────────────────────────
   describe('Authorization Bearer header', () => {
     it('masks Authorization: Bearer <token>', () => {
-      expect(maskSecrets(`Authorization: Bearer ${FAKE_GHP}`)).toBe(
-        'Authorization: Bearer ***'
-      );
+      expect(maskSecrets(`Authorization: Bearer ${FAKE_GHP}`)).toBe('Authorization: Bearer ***');
     });
 
     it('masks with varying whitespace', () => {
@@ -95,9 +107,19 @@ describe('maskSecrets()', () => {
       expect(maskSecrets(`commit ${FAKE_HEX} done`)).toBe('commit *** done');
     });
 
+    it('masks uppercase hex hashes', () => {
+      const upperHex = 'BBD8BA177E3FB597355C4C3054DDB3B7D1EA27CF';
+      expect(maskSecrets(`commit ${upperHex} done`)).toBe('commit *** done');
+    });
+
     it('masks long alphanumeric strings (40+ chars)', () => {
       const longStr = 'A'.repeat(45);
       expect(maskSecrets(`value=${longStr}`)).toBe('value=***');
+    });
+
+    it('masks base64-ish strings with trailing = padding', () => {
+      const b64 = 'A'.repeat(40) + '==';
+      expect(maskSecrets(`payload ${b64} end`)).toBe('payload *** end');
     });
 
     it('does not mask normal text', () => {
