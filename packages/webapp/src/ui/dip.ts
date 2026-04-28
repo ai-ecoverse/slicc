@@ -52,8 +52,18 @@ const BRIDGE_SCRIPT = `(function() {
       height: document.documentElement.scrollHeight }, '*');
   }
   window.addEventListener('message', function(e) {
-    if (e.data && e.data.type === 'slicc-theme') {
+    if (!e.data || typeof e.data.type !== 'string') return;
+    if (e.data.type === 'slicc-theme') {
       document.documentElement.classList.toggle('theme-light', !!e.data.isLight);
+      return;
+    }
+    /* Forward any other slicc-* message to in-page listeners via a
+       CustomEvent. Dips can opt in with
+       window.addEventListener('slicc-message', (ev) => ev.detail). */
+    if (e.data.type.indexOf('slicc-') === 0) {
+      try {
+        document.dispatchEvent(new CustomEvent('slicc-message', { detail: e.data }));
+      } catch (ex) {}
     }
   });
   window.addEventListener('load', function() {
@@ -94,6 +104,33 @@ const BRIDGE_SCRIPT = `(function() {
 
 export interface DipInstance {
   dispose(): void;
+}
+
+/**
+ * Live dip iframes. Used by `broadcastToDips` so the host UI can post
+ * a message to every mounted dip — handy for cases where a workflow
+ * spans multiple turns (e.g. the onboarding `connect-llm` dip needs
+ * to learn whether the parent's API-key probe succeeded).
+ */
+const liveDipWindows = new Set<Window>();
+
+/**
+ * Post a `slicc-*` payload to every live dip iframe. Dips listen for
+ * matching `slicc-message` CustomEvents on `document` (see
+ * `BRIDGE_SCRIPT`). Closed/detached iframes are ignored automatically
+ * because they're removed from the registry on dispose().
+ */
+export function broadcastToDips(payload: { type: string; [k: string]: unknown }): void {
+  if (typeof payload?.type !== 'string' || payload.type.indexOf('slicc-') !== 0) {
+    throw new Error("broadcastToDips: payload.type must start with 'slicc-'");
+  }
+  for (const win of liveDipWindows) {
+    try {
+      win.postMessage(payload, '*');
+    } catch {
+      /* Closed iframes throw — ignore. */
+    }
+  }
 }
 
 /**
@@ -170,9 +207,16 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
   iframe.style.cssText = 'width:100%;border:none;overflow:hidden;display:block;';
   iframe.srcdoc = srcdoc;
   container.appendChild(iframe);
-  iframe.addEventListener('load', () => registerSprinkleWindow(iframe.contentWindow), {
-    once: true,
-  });
+  iframe.addEventListener(
+    'load',
+    () => {
+      registerSprinkleWindow(iframe.contentWindow);
+      if (iframe.contentWindow) liveDipWindows.add(iframe.contentWindow);
+    },
+    {
+      once: true,
+    }
+  );
 
   const messageHandler = (event: MessageEvent) => {
     if (event.source !== iframe.contentWindow) return;
@@ -193,6 +237,7 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
     dispose() {
       window.removeEventListener('message', messageHandler);
       unregisterSprinkleWindow(iframe.contentWindow);
+      if (iframe.contentWindow) liveDipWindows.delete(iframe.contentWindow);
       iframe.remove();
     },
   };
@@ -359,6 +404,7 @@ function mountDipExtension(
     'load',
     () => {
       registerSprinkleWindow(iframe.contentWindow);
+      if (iframe.contentWindow) liveDipWindows.add(iframe.contentWindow);
       iframe.contentWindow?.postMessage(
         { type: 'dip-render', srcdoc, isLight: isThemeLight() },
         '*'
@@ -371,6 +417,7 @@ function mountDipExtension(
     dispose() {
       window.removeEventListener('message', messageHandler);
       unregisterSprinkleWindow(iframe.contentWindow);
+      if (iframe.contentWindow) liveDipWindows.delete(iframe.contentWindow);
       iframe.remove();
     },
   };

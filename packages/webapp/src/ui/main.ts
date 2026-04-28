@@ -1516,6 +1516,90 @@ async function main(): Promise<void> {
   await lickManager.init();
   orchestrator.setLickManager(lickManager);
 
+  // Onboarding orchestrator — owns the deterministic post-welcome flow.
+  // Instantiated here so we can route the welcome wizard's licks
+  // through it before falling back to cone-routing.
+  const { OnboardingOrchestrator } = await import('../scoops/onboarding-orchestrator.js');
+  const { broadcastToDips } = await import('./dip.js');
+  const {
+    getAvailableProviders,
+    getProviderConfig,
+    getProviderModels,
+    addAccount,
+    setSelectedModelId,
+  } = await import('./provider-settings.js');
+  const buildProviderCatalogue = () => {
+    const ids = getAvailableProviders();
+    const providers = ids.map((id) => {
+      const cfg = getProviderConfig(id);
+      return {
+        id: cfg.id,
+        name: cfg.name,
+        description: cfg.description,
+        requiresApiKey: cfg.requiresApiKey ?? true,
+        requiresBaseUrl: cfg.requiresBaseUrl ?? false,
+        defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+      };
+    });
+    const models: Record<string, Array<{ id: string; name?: string }>> = {};
+    for (const id of ids) {
+      try {
+        models[id] = getProviderModels(id).map((m) => ({ id: m.id, name: m.name }));
+      } catch {
+        models[id] = [];
+      }
+    }
+    return { providers, models };
+  };
+  let onboardingOrchestrator: InstanceType<typeof OnboardingOrchestrator> | null = null;
+  const getOnboardingOrchestrator = () => {
+    if (onboardingOrchestrator) return onboardingOrchestrator;
+    if (!sharedFs) return null;
+    onboardingOrchestrator = new OnboardingOrchestrator({
+      fs: sharedFs,
+      postSystemMessage: (line) => layout.panels.chat.addSystemMessage(line),
+      postDipReference: (md) => layout.panels.chat.addSystemMessage(md),
+      getProviderCatalogue: buildProviderCatalogue,
+      saveAccount: (id, key, baseUrl) => addAccount(id, key, baseUrl),
+      setSelectedModel: (id) => setSelectedModelId(id),
+      resolveModelLabel: (provider, modelId) => {
+        try {
+          const found = getProviderModels(provider).find((m) => m.id === modelId);
+          return found?.name ?? null;
+        } catch {
+          return null;
+        }
+      },
+      broadcastToDip: (payload) => broadcastToDips(payload),
+      fireFinalLick: (data) => {
+        const completionEvent = {
+          type: 'sprinkle',
+          sprinkleName: 'welcome',
+          body: data,
+          timestamp: new Date().toISOString(),
+        } as unknown as LickEvent;
+        // Re-enter the router. The interceptor at the top of
+        // routeLickToScoop only matches the wizard-side actions
+        // (`onboarding-complete`, `connect-ready`, `connect-attempt`),
+        // so this synthetic `onboarding-complete-with-provider` lick
+        // falls straight through to the cone like a regular sprinkle.
+        routeLickToScoop(completionEvent);
+      },
+      runShellSilently: async (cmd) => {
+        try {
+          // Use the shared shell from main.ts. It runs in offscreen for
+          // extension or directly in standalone — either way, fire-and-forget.
+          const sh = (window as { __slicc_shell?: { run?: (c: string) => Promise<unknown> } })
+            .__slicc_shell;
+          if (sh?.run) await sh.run(cmd);
+        } catch (err) {
+          log.warn('Background shell command failed', { cmd, err });
+        }
+      },
+    });
+    return onboardingOrchestrator;
+  };
+
   // Route lick events to scoops
   const routeLickToScoop = (event: LickEvent) => {
     const isWebhook = event.type === 'webhook';
@@ -1554,27 +1638,59 @@ async function main(): Promise<void> {
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
 
-    // Handle welcome sprinkle lifecycle events
+    // Handle welcome sprinkle lifecycle events. The deterministic
+    // onboarding flow lives in OnboardingOrchestrator: it intercepts
+    // the wizard's `onboarding-complete`, fires three deterministic
+    // sliccy lines + the connect-llm dip, then routes a synthetic
+    // `onboarding-complete-with-provider` lick back through here so
+    // the cone (now LLM-backed) can comment on the choice.
     if (isSprinkle && event.sprinkleName === 'welcome') {
       const body = event.body as Record<string, unknown> | null;
       const action = body?.action;
-      if (action === 'onboarding-complete' || action === 'shortcut-migrate') {
+
+      // ── Deterministic phase: hand off to the orchestrator. ──
+      if (action === 'onboarding-complete') {
+        const orch = getOnboardingOrchestrator();
+        if (orch) {
+          const profile = (body?.data as Record<string, unknown> | undefined) ?? {};
+          if ((profile as Record<string, unknown>).mountWorkspace && sharedFs) {
+            applyPendingMount(sharedFs).catch((err) =>
+              log.warn('Failed to mount workspace from onboarding', err)
+            );
+          }
+          void orch
+            .handleOnboardingComplete(profile as Record<string, unknown>)
+            .catch((err) => log.warn('OnboardingOrchestrator failed', err));
+          return; // Do NOT route to cone yet — the LLM isn't configured.
+        }
+      }
+      if (action === 'connect-ready') {
+        getOnboardingOrchestrator()?.handleConnectReady();
+        return;
+      }
+      if (action === 'connect-attempt') {
+        const data = body?.data as Record<string, unknown> | undefined;
+        const orch = getOnboardingOrchestrator();
+        if (orch && data) {
+          void orch
+            .handleConnectAttempt({
+              provider: String(data.provider ?? ''),
+              apiKey: String(data.apiKey ?? ''),
+              baseUrl:
+                typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+              model: data.model == null ? null : String(data.model),
+            })
+            .catch((err) => log.warn('handleConnectAttempt failed', err));
+        }
+        return;
+      }
+
+      // ── Legacy / shortcut flows still flow straight through. ──
+      if (action === 'shortcut-migrate') {
         void sharedFs
           ?.writeFile('/shared/.welcomed', '1')
           .catch((err) => log.warn('Failed to persist welcome marker', err));
-      }
-      if (action === 'shortcut-migrate') {
         sprinkleManager?.close('welcome');
-      }
-      // Perform the actual mount if user selected a folder during onboarding
-      if (
-        action === 'onboarding-complete' &&
-        (body?.data as Record<string, unknown> | undefined)?.mountWorkspace &&
-        sharedFs
-      ) {
-        applyPendingMount(sharedFs).catch((err) =>
-          log.warn('Failed to mount workspace from onboarding', err)
-        );
       }
     }
 

@@ -1,0 +1,276 @@
+/**
+ * OnboardingOrchestrator — owns the post-welcome flow.
+ *
+ * Phases:
+ *
+ *   1. **collect-profile** — handled by `welcome.shtml`. Produces
+ *      `onboarding-complete` lick with a `OnboardingProfile`.
+ *   2. **deterministic-intro** — `handleOnboardingComplete()` saves
+ *      the profile, kicks off `upskill recommendations --install`
+ *      *silently in the background*, posts three deterministic
+ *      sliccy lines into chat (no LLM), then renders the
+ *      `connect-llm.shtml` dip.
+ *   3. **connect-llm** — the dip emits `connect-ready` (we reply with
+ *      the live provider catalogue) then `connect-attempt` with the
+ *      user's chosen provider + key. We validate, save, and finally
+ *      fire the `onboarding-complete-with-provider` lick to the
+ *      cone — at THIS point an LLM is wired up, so the cone's
+ *      response (per `welcome` SKILL.md) is purely a brief greeting
+ *      that comments on the model+provider choice. Everything else
+ *      that used to be LLM-driven (profile save, skill install,
+ *      capability table) now happens deterministically up-front.
+ *
+ * The orchestrator deliberately **does not** import any UI surface
+ * directly — the host wires in callbacks. That keeps it testable
+ * and keeps the standalone/extension paths in `main.ts` symmetric.
+ */
+
+import { createLogger } from '../core/logger.js';
+import type { VirtualFS } from '../fs/index.js';
+import { recordWelcomed } from './welcome-detection.js';
+import type { OnboardingProfile, RandomFn } from './onboarding-messages.js';
+import { buildIntroMessages } from './onboarding-messages.js';
+import { validateApiKey, type ValidationResult } from './api-key-validator.js';
+
+const log = createLogger('onboarding-orchestrator');
+
+/** Snapshot describing a single provider, dip-safe (no functions). */
+export interface ProviderEntry {
+  id: string;
+  name: string;
+  description?: string;
+  requiresApiKey: boolean;
+  requiresBaseUrl: boolean;
+  defaultBaseUrl?: string;
+}
+
+/** Snapshot of a single model, dip-safe. */
+export interface ProviderModel {
+  id: string;
+  name?: string;
+}
+
+/** Combined provider + model catalogue handed to the dip. */
+export interface ProviderCatalogue {
+  providers: ProviderEntry[];
+  models: Record<string, ProviderModel[]>;
+}
+
+export interface ConnectAttemptPayload {
+  provider: string;
+  apiKey: string;
+  baseUrl?: string | null;
+  model?: string | null;
+}
+
+export interface OrchestratorDeps {
+  /** Shared filesystem for profile + welcomed-marker writes. */
+  fs: VirtualFS;
+  /** Append a sliccy-styled message into the chat without invoking the LLM. */
+  postSystemMessage: (line: string) => void;
+  /**
+   * Append a markdown line that contains a `.shtml` image reference,
+   * which the chat-panel hydrates into an inline dip.
+   */
+  postDipReference: (markdown: string) => void;
+  /** Get the live provider catalogue snapshot. */
+  getProviderCatalogue: () => ProviderCatalogue;
+  /** Persist credentials. Mirrors `provider-settings.addAccount`. */
+  saveAccount: (providerId: string, apiKey: string, baseUrl?: string) => void;
+  /** Set the active model id (mirrors `setSelectedModelId`). */
+  setSelectedModel: (modelId: string) => void;
+  /** Optional human label for the model that gets selected. */
+  resolveModelLabel?: (providerId: string, modelId: string) => string | null;
+  /** Send a message into the open `connect-llm` dip. */
+  broadcastToDip: (payload: { type: string; [k: string]: unknown }) => void;
+  /** Fire the FINAL onboarding-complete-with-provider lick to the cone. */
+  fireFinalLick: (data: Record<string, unknown>) => void;
+  /**
+   * Run a shell command silently in the background. Used to install
+   * recommended skills without blocking onboarding. Errors are logged
+   * and swallowed.
+   */
+  runShellSilently?: (command: string) => Promise<void>;
+  /** Optional fetch override for tests. */
+  fetchImpl?: typeof fetch;
+  /** Optional RNG for deterministic message picking in tests. */
+  rand?: RandomFn;
+}
+
+type Stage = 'idle' | 'awaiting-connect' | 'connecting' | 'complete';
+
+export class OnboardingOrchestrator {
+  private deps: OrchestratorDeps;
+  private stage: Stage = 'idle';
+  private profile: OnboardingProfile = {};
+
+  constructor(deps: OrchestratorDeps) {
+    this.deps = deps;
+  }
+
+  getStage(): Stage {
+    return this.stage;
+  }
+
+  getProfile(): OnboardingProfile {
+    return { ...this.profile };
+  }
+
+  /**
+   * Phase transition: collect-profile → deterministic-intro.
+   * Called when the welcome wizard fires `onboarding-complete`. Returns
+   * `true` when handled by the orchestrator (caller MUST suppress the
+   * default cone-routing for this lick); `false` if the caller should
+   * fall back to the legacy path.
+   */
+  async handleOnboardingComplete(profile: OnboardingProfile): Promise<boolean> {
+    if (this.stage !== 'idle') {
+      log.debug('Ignoring duplicate onboarding-complete', { stage: this.stage });
+      return true;
+    }
+    this.profile = profile ?? {};
+    this.stage = 'awaiting-connect';
+
+    // Persist the welcome marker + profile in parallel. We don't
+    // wait for the writes — even if they fail, the on-screen flow
+    // continues so the user is never blocked by a transient FS hiccup.
+    void recordWelcomed(this.deps.fs).catch((err) => log.warn('recordWelcomed failed', err));
+    void this.persistProfile(this.profile).catch((err) => log.warn('persistProfile failed', err));
+
+    // Kick off skill install in the background — no UI block.
+    if (this.deps.runShellSilently) {
+      void this.deps
+        .runShellSilently('upskill recommendations --install')
+        .catch((err) => log.warn('upskill recommendations --install failed', err));
+    }
+
+    // Three deterministic lines, then the connect-llm dip.
+    const lines = buildIntroMessages(this.profile, this.deps.rand);
+    for (const line of lines) {
+      this.deps.postSystemMessage(line);
+    }
+    this.deps.postDipReference('![Connect a model](/shared/sprinkles/welcome/connect-llm.shtml)');
+    return true;
+  }
+
+  /** Dip is mounted and asking for the provider catalogue. */
+  handleConnectReady(): void {
+    if (this.stage !== 'awaiting-connect' && this.stage !== 'connecting') return;
+    const catalogue = this.deps.getProviderCatalogue();
+    this.deps.broadcastToDip({
+      type: 'slicc-providers',
+      providers: catalogue.providers,
+      models: catalogue.models,
+    });
+  }
+
+  /** User submitted a provider + key. */
+  async handleConnectAttempt(payload: ConnectAttemptPayload): Promise<void> {
+    if (this.stage !== 'awaiting-connect' && this.stage !== 'connecting') return;
+    this.stage = 'connecting';
+
+    const { provider, apiKey, baseUrl, model } = payload;
+    if (!provider || typeof apiKey !== 'string' || !apiKey.trim()) {
+      this.deps.broadcastToDip({
+        type: 'slicc-connect-result',
+        ok: false,
+        kind: 'failed',
+        message: 'Provider and API key are required.',
+      });
+      this.stage = 'awaiting-connect';
+      return;
+    }
+
+    let result: ValidationResult;
+    try {
+      result = await validateApiKey({
+        provider,
+        apiKey: apiKey.trim(),
+        baseUrl: baseUrl ?? undefined,
+        fetchImpl: this.deps.fetchImpl,
+      });
+    } catch (err) {
+      log.warn('validateApiKey threw', err);
+      this.deps.broadcastToDip({
+        type: 'slicc-connect-result',
+        ok: false,
+        kind: 'failed',
+        message: 'Validation request was aborted.',
+      });
+      this.stage = 'awaiting-connect';
+      return;
+    }
+
+    // Authentication failure surfaces in the dip; we leave the user
+    // in `awaiting-connect` so they can correct the key and retry.
+    if (result.kind === 'failed') {
+      this.deps.broadcastToDip({
+        type: 'slicc-connect-result',
+        ok: false,
+        kind: 'failed',
+        message: result.message,
+      });
+      this.stage = 'awaiting-connect';
+      return;
+    }
+
+    // Both `ok` and `skipped` count as accept-and-save for the
+    // orchestrator; the dip surfaces the difference inline.
+    try {
+      this.deps.saveAccount(provider, apiKey.trim(), baseUrl ?? undefined);
+      if (model) this.deps.setSelectedModel(model);
+    } catch (err) {
+      log.warn('saveAccount failed', err);
+      this.deps.broadcastToDip({
+        type: 'slicc-connect-result',
+        ok: false,
+        kind: 'failed',
+        message: 'Failed to save credentials locally.',
+      });
+      this.stage = 'awaiting-connect';
+      return;
+    }
+
+    const note =
+      result.kind === 'skipped'
+        ? `Saved — ${result.reason}`
+        : 'Validated against the provider. Ready when you are.';
+    this.deps.broadcastToDip({
+      type: 'slicc-connect-result',
+      ok: true,
+      kind: result.kind,
+      note,
+    });
+
+    // Hand off to the cone — now that an LLM is configured, the cone
+    // can comment on the choice. SKILL.md spells out the exact reply.
+    const modelLabel =
+      model && this.deps.resolveModelLabel?.(provider, model)
+        ? this.deps.resolveModelLabel?.(provider, model)
+        : model || null;
+    this.stage = 'complete';
+    this.deps.fireFinalLick({
+      action: 'onboarding-complete-with-provider',
+      data: {
+        profile: this.profile,
+        provider,
+        model: model ?? null,
+        modelLabel,
+        validation: result.kind,
+      },
+    });
+  }
+
+  /** Internal — write the user's profile to /home/<name>/.welcome.json. */
+  private async persistProfile(profile: OnboardingProfile): Promise<void> {
+    const slug =
+      (profile.name || 'user')
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-+|-+$)/g, '') || 'user';
+    // writeFile auto-creates parent directories so we don't need a
+    // separate mkdir call.
+    await this.deps.fs.writeFile(`/home/${slug}/.welcome.json`, JSON.stringify(profile, null, 2));
+  }
+}

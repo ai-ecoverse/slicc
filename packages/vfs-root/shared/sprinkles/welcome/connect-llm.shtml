@@ -1,0 +1,331 @@
+<html lang="en">
+  <head>
+    <title>Connect an LLM</title>
+    <meta charset="utf-8" />
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: var(--s2-font-family, -apple-system, BlinkMacSystemFont, sans-serif);
+        font-size: 13px;
+        color: var(--s2-content-default, #e8e8e8);
+        background: transparent;
+      }
+      .step { display: none; animation: fadeUp 0.18s ease both; }
+      .step.active { display: block; }
+      @keyframes fadeUp {
+        from { opacity: 0; transform: translateY(6px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+      .step-heading {
+        font-size: 15px;
+        font-weight: 700;
+        line-height: 1.3;
+      }
+      .step-sub {
+        font-size: 12px;
+        color: var(--s2-content-secondary, #a1a1a1);
+        margin-top: 4px;
+      }
+
+      /* Provider list */
+      .providers {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-top: 14px;
+        max-height: 280px;
+        overflow-y: auto;
+        padding-right: 2px;
+      }
+      .provider {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 14px;
+        border-radius: 10px;
+        background: var(--s2-bg-elevated, #2c2c2c);
+        border: 1px solid var(--s2-border-subtle, #3a3a3a);
+        cursor: pointer;
+        transition: background 0.12s, border-color 0.12s;
+      }
+      .provider:hover {
+        background: var(--s2-bg-layer-2, #252525);
+        border-color: var(--s2-accent, #3562ff);
+      }
+      .provider__name {
+        font-weight: 600;
+        font-size: 13px;
+      }
+      .provider__desc {
+        font-size: 11px;
+        color: var(--s2-content-secondary, #a1a1a1);
+        margin-top: 2px;
+      }
+      .provider__chevron {
+        color: var(--s2-content-secondary, #a1a1a1);
+        font-size: 14px;
+      }
+
+      /* Credential form */
+      .form {
+        margin-top: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .form label {
+        display: block;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--s2-content-secondary, #a1a1a1);
+        margin-bottom: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .form input[type="text"],
+      .form input[type="password"] {
+        width: 100%;
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 14px;
+        align-items: center;
+      }
+      .actions .spacer { flex: 1; }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 14px;
+        border-radius: 9999px;
+        background: transparent;
+        border: 1px solid var(--s2-border-default, #4a4a4a);
+        color: var(--s2-content-default, #e8e8e8);
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .btn:hover { background: color-mix(in srgb, var(--s2-content-default) 6%, transparent); }
+      .btn:disabled { opacity: 0.5; cursor: default; }
+      .btn--primary {
+        background: var(--s2-accent, #3562ff);
+        border-color: var(--s2-accent, #3562ff);
+        color: white;
+      }
+      .btn--primary:hover { filter: brightness(1.05); }
+
+      .status {
+        margin-top: 10px;
+        font-size: 12px;
+        min-height: 16px;
+      }
+      .status.busy { color: var(--s2-content-secondary, #a1a1a1); }
+      .status.ok { color: var(--s2-positive, #3aa763); }
+      .status.warn { color: var(--s2-notice, #d49d10); }
+      .status.error { color: var(--s2-negative, #c83a3a); }
+
+      .meta {
+        font-size: 11px;
+        color: var(--s2-content-secondary, #a1a1a1);
+        margin-top: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Step 1: pick provider -->
+    <section id="sProvider" class="step active">
+      <div class="step-heading">Pick an LLM provider</div>
+      <div class="step-sub">All accounts you've configured stay editable later in Settings.</div>
+      <div id="providerList" class="providers"></div>
+    </section>
+
+    <!-- Step 2: credentials -->
+    <section id="sCreds" class="step">
+      <div class="step-heading">
+        Connect to <span id="providerName">…</span>
+      </div>
+      <div class="step-sub" id="providerDesc"></div>
+      <div class="form">
+        <div>
+          <label for="apiKeyIn">API Key</label>
+          <input id="apiKeyIn" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" />
+        </div>
+        <div id="baseUrlRow" hidden>
+          <label for="baseUrlIn">Base URL</label>
+          <input id="baseUrlIn" type="text" autocomplete="off" spellcheck="false" placeholder="https://…" />
+        </div>
+        <div id="modelRow">
+          <label for="modelSel">Model</label>
+          <select id="modelSel"></select>
+        </div>
+      </div>
+      <div id="status" class="status"></div>
+      <div class="actions">
+        <button id="backBtn" class="btn" type="button">Back</button>
+        <span class="spacer"></span>
+        <button id="connectBtn" class="btn btn--primary" type="button">Connect</button>
+      </div>
+      <div class="meta" id="meta"></div>
+    </section>
+
+    <!-- Step 3: success -->
+    <section id="sDone" class="step">
+      <div class="step-heading">Connected.</div>
+      <div class="step-sub" id="doneSub">Booting your model…</div>
+    </section>
+
+    <script>
+      // Provider catalogue is injected by the parent via slicc-message.
+      // Until it arrives we render a tiny placeholder.
+      var providers = [];
+      var modelsByProvider = {};
+      var current = { provider: null, providerConfig: null };
+
+      var providerListEl = document.getElementById('providerList');
+      var providerNameEl = document.getElementById('providerName');
+      var providerDescEl = document.getElementById('providerDesc');
+      var apiKeyIn = document.getElementById('apiKeyIn');
+      var baseUrlRow = document.getElementById('baseUrlRow');
+      var baseUrlIn = document.getElementById('baseUrlIn');
+      var modelSel = document.getElementById('modelSel');
+      var statusEl = document.getElementById('status');
+      var connectBtn = document.getElementById('connectBtn');
+      var backBtn = document.getElementById('backBtn');
+      var metaEl = document.getElementById('meta');
+
+      function renderProviders() {
+        providerListEl.innerHTML = '';
+        if (!providers.length) {
+          var empty = document.createElement('div');
+          empty.className = 'meta';
+          empty.textContent = 'Loading providers…';
+          providerListEl.appendChild(empty);
+          return;
+        }
+        providers.forEach(function (p) {
+          var row = document.createElement('div');
+          row.className = 'provider';
+          row.dataset.providerId = p.id;
+          var info = document.createElement('div');
+          var name = document.createElement('div');
+          name.className = 'provider__name';
+          name.textContent = p.name;
+          info.appendChild(name);
+          if (p.description) {
+            var desc = document.createElement('div');
+            desc.className = 'provider__desc';
+            desc.textContent = p.description;
+            info.appendChild(desc);
+          }
+          row.appendChild(info);
+          var chev = document.createElement('span');
+          chev.className = 'provider__chevron';
+          chev.textContent = '›';
+          row.appendChild(chev);
+          row.onclick = function () { selectProvider(p); };
+          providerListEl.appendChild(row);
+        });
+      }
+
+      function go(stepId) {
+        ['sProvider', 'sCreds', 'sDone'].forEach(function (id) {
+          document.getElementById(id).classList.toggle('active', id === stepId);
+        });
+      }
+
+      function selectProvider(p) {
+        current.provider = p.id;
+        current.providerConfig = p;
+        providerNameEl.textContent = p.name;
+        providerDescEl.textContent = p.description || '';
+        baseUrlRow.hidden = !p.requiresBaseUrl;
+        baseUrlIn.value = p.defaultBaseUrl || '';
+        statusEl.className = 'status';
+        statusEl.textContent = '';
+        metaEl.textContent = '';
+        apiKeyIn.value = '';
+        // Populate model list (if known up-front).
+        modelSel.innerHTML = '';
+        var models = modelsByProvider[p.id] || [];
+        if (models.length === 0) {
+          var opt = document.createElement('option');
+          opt.value = '';
+          opt.textContent = '(default)';
+          modelSel.appendChild(opt);
+        } else {
+          models.forEach(function (m) {
+            var opt = document.createElement('option');
+            opt.value = m.id;
+            opt.textContent = m.name || m.id;
+            modelSel.appendChild(opt);
+          });
+        }
+        connectBtn.disabled = false;
+        connectBtn.textContent = 'Connect';
+        go('sCreds');
+        setTimeout(function () { apiKeyIn.focus(); }, 60);
+      }
+
+      backBtn.onclick = function () { go('sProvider'); };
+
+      connectBtn.onclick = function () {
+        var key = (apiKeyIn.value || '').trim();
+        if (!key) {
+          statusEl.className = 'status error';
+          statusEl.textContent = 'Please enter an API key.';
+          apiKeyIn.focus();
+          return;
+        }
+        connectBtn.disabled = true;
+        connectBtn.textContent = 'Validating…';
+        statusEl.className = 'status busy';
+        statusEl.textContent = 'Talking to ' + (current.providerConfig.name || current.provider) + '…';
+        slicc.lick({
+          action: 'connect-attempt',
+          data: {
+            provider: current.provider,
+            apiKey: key,
+            baseUrl: (baseUrlIn.value || '').trim() || null,
+            model: modelSel.value || null,
+          },
+        });
+      };
+
+      apiKeyIn.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') connectBtn.click();
+      });
+
+      // Listen for parent → dip messages.
+      document.addEventListener('slicc-message', function (e) {
+        var msg = e.detail || {};
+        if (msg.type === 'slicc-providers') {
+          providers = (msg.providers || []).slice();
+          modelsByProvider = msg.models || {};
+          renderProviders();
+        } else if (msg.type === 'slicc-connect-result') {
+          if (msg.ok) {
+            connectBtn.textContent = 'Connected';
+            statusEl.className = 'status ok';
+            statusEl.textContent = msg.note || 'Connected.';
+            go('sDone');
+          } else {
+            connectBtn.disabled = false;
+            connectBtn.textContent = 'Try again';
+            statusEl.className = 'status ' + (msg.kind === 'skipped' ? 'warn' : 'error');
+            statusEl.textContent = msg.message || 'Could not save credentials.';
+          }
+        }
+      });
+
+      // Tell the parent we're ready so it can flush the provider catalogue.
+      slicc.lick({ action: 'connect-ready' });
+      renderProviders();
+    </script>
+  </body>
+</html>
