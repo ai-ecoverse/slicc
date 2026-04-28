@@ -114,7 +114,12 @@ export function mountDip(
 <style>${themeCSS}</style>
 <style>html,body{margin:0;padding:0;overflow:hidden;background:transparent;box-sizing:border-box}
 *,*::before,*::after{box-sizing:inherit}
-body{font-family:var(--s2-font-family, sans-serif);font-size:13px;color:var(--s2-content-default)}</style>
+/* Vertical breathing room around dip content. Horizontal padding is owned
+   by the dip's own content (e.g. .sprinkle-action-card__body) so shtml
+   widgets that already pad themselves don't end up double-indented. The
+   ResizeObserver on document.body reports the post-padding scrollHeight
+   correctly, so auto-height continues to work. */
+body{padding:12px 0;font-family:var(--s2-font-family, sans-serif);font-size:13px;color:var(--s2-content-default)}</style>
 <style>.sprinkle-inline{padding:var(--s2-spacing-100) 0}
 .sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px;box-shadow:none}
 .sprinkle-inline .sprinkle-btn:not([class*="sprinkle-btn--"]){background:var(--s2-bg-elevated)}

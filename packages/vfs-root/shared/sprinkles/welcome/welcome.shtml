@@ -79,9 +79,11 @@
         border: 1px solid var(--s2-border-subtle, #3a3a3a);
         border-radius: var(--s2-radius-pill, 9999px);
         padding: 6px 6px 6px 14px;
-        transition: border-color 0.15s;
       }
-      .input-row:focus-within { border-color: var(--s2-accent, #3562ff); }
+      /* Intentionally no `:focus-within` accent on .input-row — the
+         input's own focus ring (from the dip's global form styles)
+         already signals focus. A second ring on the wrapper reads as
+         "this whole row is selected" and looks like a bug. */
       .input-row input {
         flex: 1;
         border: none;
@@ -186,7 +188,7 @@
     <div class="sprinkle-action-card">
 
       <!-- Back -->
-      <div class="sprinkle-action-card__body" style="padding-bottom:0">
+      <div class="sprinkle-action-card__body" style="padding: 16px 24px 0">
         <button class="back-btn" id="backBtn" hidden onclick="goBack()">
           <i data-lucide="arrow-left" style="width:12px;height:12px"></i> Back
         </button>
@@ -280,6 +282,22 @@
         'designer':     'Papyrus, fantasy',
         'product-pm':   '"Comic Sans MS", "Comic Sans", cursive',
       };
+
+      // Role-specific phrasing for step 3 ("what do you want to do
+      // here") so the wizard reads less like a generic survey and
+      // more like it knows who's typing. Falls back to a neutral
+      // prompt when the role doesn't have a flavor of its own.
+      var TASK_HEADINGS_BY_ROLE = {
+        'developer':       'What are you hacking?',
+        'designer':        'What do you dream of?',
+        'product-pm':      "What's your mission?",
+        'content-creator': "What's your story?",
+        'marketer':        "What's your ambition?",
+        'founder':         'What do you want to create?',
+        'student':         'What are you learning?',
+        'researcher':      'What are you researching?',
+      };
+      var TASK_HEADING_DEFAULT = 'What do you want to tackle?';
 
       var PURPOSES = [
         { id: 'work',        label: 'Work',           icon: 'briefcase' },
@@ -498,6 +516,8 @@
         if (n === 3) {
           var s3 = document.getElementById('s3');
           applyFontJoke(s3);
+          var taskHeading = TASK_HEADINGS_BY_ROLE[profile.role] || TASK_HEADING_DEFAULT;
+          document.getElementById('s3Heading').textContent = taskHeading;
           buildPills('taskPills', TASKS, true, function(item) {
             profile.tasks = [];
             document.querySelectorAll('#taskPills .pill.selected').forEach(function(p){
