@@ -9,6 +9,7 @@
  */
 
 import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
+import type { MessageAttachment } from '../core/attachments.js';
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 import type { VirtualFS } from '../fs/index.js';
 import type {
@@ -65,7 +66,7 @@ export class OffscreenClient {
 
   createAgentHandle(): AgentHandle {
     return {
-      sendMessage: (text: string, messageId?: string) => {
+      sendMessage: (text: string, messageId?: string, attachments?: MessageAttachment[]) => {
         if (!this.selectedScoopJid) {
           this.emitToUI({ type: 'error', error: 'No scoop selected' });
           return;
@@ -74,6 +75,7 @@ export class OffscreenClient {
           type: 'user-message',
           scoopJid: this.selectedScoopJid,
           text,
+          attachments,
           messageId: messageId ?? `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         });
       },

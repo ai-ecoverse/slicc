@@ -48,10 +48,21 @@ describe('UI types', () => {
       id: 'm1',
       role: 'user',
       content: 'Hello',
+      attachments: [
+        {
+          id: 'a1',
+          name: 'notes.txt',
+          mimeType: 'text/plain',
+          size: 5,
+          kind: 'text',
+          text: 'hello',
+        },
+      ],
       timestamp: Date.now(),
     };
     expect(msg.id).toBe('m1');
     expect(msg.role).toBe('user');
+    expect(msg.attachments?.[0].name).toBe('notes.txt');
   });
 
   it('ChatMessage supports tool calls', () => {

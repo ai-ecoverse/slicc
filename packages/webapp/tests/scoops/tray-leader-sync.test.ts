@@ -193,7 +193,32 @@ describe('LeaderSyncManager', () => {
 
     channel.simulateMessage({ type: 'user_message', text: 'from follower', messageId: 'fm1' });
 
-    expect(onFollowerMessage).toHaveBeenCalledWith('from follower', 'fm1');
+    expect(onFollowerMessage).toHaveBeenCalledWith('from follower', 'fm1', undefined);
+  });
+
+  it('handles follower user_message attachments', () => {
+    const { manager, onFollowerMessage } = createManager();
+    const channel = new FakeChannel();
+    manager.addFollower('b1', channel);
+    const attachments = [
+      {
+        id: 'a1',
+        name: 'notes.txt',
+        mimeType: 'text/plain',
+        size: 5,
+        kind: 'text' as const,
+        text: 'hello',
+      },
+    ];
+
+    channel.simulateMessage({
+      type: 'user_message',
+      text: 'from follower',
+      messageId: 'fm1',
+      attachments,
+    });
+
+    expect(onFollowerMessage).toHaveBeenCalledWith('from follower', 'fm1', attachments);
   });
 
   it('handles follower abort', () => {

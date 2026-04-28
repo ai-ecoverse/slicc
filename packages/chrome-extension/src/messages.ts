@@ -6,6 +6,7 @@
  */
 
 import type { ScoopTabState } from './types.js';
+import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
 
 // ---------------------------------------------------------------------------
 // Side Panel → Offscreen (via service worker relay)
@@ -16,6 +17,7 @@ export interface UserMessageMsg {
   scoopJid: string;
   text: string;
   messageId: string;
+  attachments?: MessageAttachment[];
 }
 
 /**
@@ -192,6 +194,7 @@ export interface IncomingMessageMsg {
   message: {
     id: string;
     content: string;
+    attachments?: MessageAttachment[];
     channel: string;
     senderName: string;
     fromAssistant: boolean;

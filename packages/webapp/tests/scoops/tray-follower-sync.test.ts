@@ -77,6 +77,31 @@ describe('FollowerSyncManager', () => {
       expect(sent[0]).toEqual({ type: 'user_message', text: 'hello', messageId: 'msg-1' });
     });
 
+    it('sends attachments with user_message payloads', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+      const attachments = [
+        {
+          id: 'a1',
+          name: 'notes.txt',
+          mimeType: 'text/plain',
+          size: 5,
+          kind: 'text' as const,
+          text: 'hello',
+        },
+      ];
+
+      follower.sendMessage('hello', 'msg-1', attachments);
+
+      const sent = channel.parseSent();
+      expect(sent[0]).toEqual({
+        type: 'user_message',
+        text: 'hello',
+        messageId: 'msg-1',
+        attachments,
+      });
+    });
+
     it('generates a messageId when not provided', () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);
@@ -194,7 +219,38 @@ describe('FollowerSyncManager', () => {
         scoopJid: 'cone',
       });
 
-      expect(onUserMessage).toHaveBeenCalledWith('hello from leader', 'msg-42', 'cone');
+      expect(onUserMessage).toHaveBeenCalledWith('hello from leader', 'msg-42', 'cone', undefined);
+    });
+
+    it('passes user_message_echo attachments to onUserMessage', () => {
+      const channel = new FakeChannel();
+      const onUserMessage = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onUserMessage });
+      const attachments = [
+        {
+          id: 'a1',
+          name: 'notes.txt',
+          mimeType: 'text/plain',
+          size: 5,
+          kind: 'text' as const,
+          text: 'hello',
+        },
+      ];
+
+      channel.simulateLeaderMessage({
+        type: 'user_message_echo',
+        text: 'hello from leader',
+        messageId: 'msg-42',
+        scoopJid: 'cone',
+        attachments,
+      });
+
+      expect(onUserMessage).toHaveBeenCalledWith(
+        'hello from leader',
+        'msg-42',
+        'cone',
+        attachments
+      );
     });
 
     it('does not crash when onUserMessage is not provided', () => {
@@ -244,7 +300,7 @@ describe('FollowerSyncManager', () => {
       });
 
       // Should trigger onUserMessage
-      expect(onUserMessage).toHaveBeenCalledWith('hello from leader', 'msg-456', 'cone');
+      expect(onUserMessage).toHaveBeenCalledWith('hello from leader', 'msg-456', 'cone', undefined);
     });
 
     it('only deduplicates each message ID once (single use)', () => {
@@ -272,7 +328,7 @@ describe('FollowerSyncManager', () => {
         scoopJid: 'cone',
       });
       expect(onUserMessage).toHaveBeenCalledTimes(1);
-      expect(onUserMessage).toHaveBeenCalledWith('repeat test', 'msg-789', 'cone');
+      expect(onUserMessage).toHaveBeenCalledWith('repeat test', 'msg-789', 'cone', undefined);
     });
   });
 

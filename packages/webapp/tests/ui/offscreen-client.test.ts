@@ -68,6 +68,26 @@ describe('OffscreenClient', () => {
     expect(envelope.payload.messageId).toBe('msg-1');
   });
 
+  it('sends attachments with user-message payloads', () => {
+    client.selectedScoopJid = 'cone_123';
+    const handle = client.createAgentHandle();
+    const attachments = [
+      {
+        id: 'a1',
+        name: 'notes.txt',
+        mimeType: 'text/plain',
+        size: 5,
+        kind: 'text' as const,
+        text: 'hello',
+      },
+    ];
+
+    handle.sendMessage('Hello world', 'msg-1', attachments);
+
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    expect(envelope.payload.attachments).toEqual(attachments);
+  });
+
   it('sends abort on stop', () => {
     client.selectedScoopJid = 'cone_123';
     const handle = client.createAgentHandle();

@@ -5,13 +5,15 @@
  * an interface contract here that both sides will converge on.
  */
 
+import type { MessageAttachment } from '../core/attachments.js';
+
 // ---------------------------------------------------------------------------
 // Agent interface — the UI's view of the agent core
 // ---------------------------------------------------------------------------
 
 export interface AgentHandle {
   /** Send a user message to the agent. */
-  sendMessage(text: string, messageId?: string): void;
+  sendMessage(text: string, messageId?: string, attachments?: MessageAttachment[]): void;
   /** Subscribe to agent events. Returns an unsubscribe function. */
   onEvent(callback: (event: AgentEvent) => void): () => void;
   /** Stop the current agent response. */
@@ -46,6 +48,7 @@ export interface ChatMessage {
   role: MessageRole;
   content: string;
   timestamp: number;
+  attachments?: MessageAttachment[];
   toolCalls?: ToolCall[];
   isStreaming?: boolean;
   /** Source of the message: 'cone' for main agent, scoop name for sub-agents, 'lick' for async events */

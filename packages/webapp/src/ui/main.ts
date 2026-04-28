@@ -25,11 +25,16 @@ import { getApiKey, showProviderSettings, applyProviderDefaults } from './provid
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
+import type { MessageAttachment } from '../core/attachments.js';
 import { isLickChannel, type LickChannel } from './lick-channels.js';
 import { createLogger } from '../core/index.js';
 import type { VirtualFS } from '../fs/index.js';
 import { installSkillFromDrop } from '../skills/install-from-drop.js';
-import { findDroppedSkillTransferFile, hasDroppedFiles } from './skill-drop.js';
+import {
+  findDroppedNonSkillTransferFiles,
+  findDroppedSkillTransferFile,
+  hasDroppedFiles,
+} from './skill-drop.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
@@ -223,7 +228,8 @@ function createSkillDropToast(): (message: string, kind: SkillDropNoticeKind) =>
 function registerSkillDropInstall(
   fs: VirtualFS,
   onNotice: (message: string, kind: SkillDropNoticeKind) => void,
-  onInstalled: () => Promise<void>
+  onInstalled: () => Promise<void>,
+  onAttachFiles?: (files: File[]) => Promise<void>
 ): void {
   const overlay = createSkillDropOverlay();
   let dragDepth = 0;
@@ -241,7 +247,7 @@ function registerSkillDropInstall(
     event.preventDefault();
     dragDepth += 1;
     if (!installInProgress) {
-      overlay.show('Drop .skill to install', 'Unpack into /workspace/skills/{name}.');
+      overlay.show('Drop files', '.skill archives install; other files attach to chat.');
     }
   });
 
@@ -251,7 +257,7 @@ function registerSkillDropInstall(
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
     if (!installInProgress) {
-      overlay.show('Drop .skill to install', 'Unpack into /workspace/skills/{name}.');
+      overlay.show('Drop files', '.skill archives install; other files attach to chat.');
     }
   });
 
@@ -268,8 +274,9 @@ function registerSkillDropInstall(
 
   window.addEventListener('drop', async (event) => {
     const skillFile = findDroppedSkillTransferFile(event.dataTransfer);
+    const attachmentFiles = findDroppedNonSkillTransferFiles<File>(event.dataTransfer);
 
-    if (!skillFile) {
+    if (!skillFile && attachmentFiles.length === 0) {
       resetDrag();
       return;
     }
@@ -277,27 +284,40 @@ function registerSkillDropInstall(
     event.preventDefault();
     dragDepth = 0;
 
-    if (installInProgress) {
+    if (skillFile && installInProgress) {
       overlay.hide();
       onNotice('Another .skill installation is already in progress.', 'error');
       return;
     }
 
-    installInProgress = true;
-    overlay.show('Installing skill…', skillFile.name);
+    if (attachmentFiles.length > 0 && onAttachFiles) {
+      try {
+        await onAttachFiles(attachmentFiles);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        onNotice(`Failed to attach dropped files: ${message}`, 'error');
+      }
+    }
 
-    try {
-      const result = await installSkillFromDrop(fs, skillFile);
-      await onInstalled();
-      onNotice(
-        `Installed "${result.skillName}" to ${result.destinationPath} (${result.fileCount} files). Run "skill install ${result.skillName}" to apply it.`,
-        'success'
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      onNotice(`Failed to install dropped skill: ${message}`, 'error');
-    } finally {
-      installInProgress = false;
+    if (skillFile) {
+      installInProgress = true;
+      overlay.show('Installing skill…', skillFile.name);
+
+      try {
+        const result = await installSkillFromDrop(fs, skillFile);
+        await onInstalled();
+        onNotice(
+          `Installed "${result.skillName}" to ${result.destinationPath} (${result.fileCount} files). Run "skill install ${result.skillName}" to apply it.`,
+          'success'
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        onNotice(`Failed to install dropped skill: ${message}`, 'error');
+      } finally {
+        installInProgress = false;
+        overlay.hide();
+      }
+    } else {
       overlay.hide();
     }
   });
@@ -356,9 +376,14 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   // Wire skill drop install with toast feedback
   const skillDropToast = createSkillDropToast();
-  registerSkillDropInstall(localFs, skillDropToast, async () => {
-    await layout.panels.fileBrowser.refresh();
-  });
+  registerSkillDropInstall(
+    localFs,
+    skillDropToast,
+    async () => {
+      await layout.panels.fileBrowser.refresh();
+    },
+    (files) => layout.panels.chat.addAttachmentsFromFiles(files)
+  );
 
   // Mount a terminal shell on the local VFS with BrowserAPI via CDP proxy
   try {
@@ -504,7 +529,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           message.channel === 'delegation'
             ? `**[Instructions from sliccy]**\n\n${message.content}`
             : message.content;
-        layout.panels.chat.addUserMessage(content);
+        layout.panels.chat.addUserMessage(content, message.attachments);
       }
     },
     onReady: async () => {
@@ -1209,6 +1234,7 @@ async function main(): Promise<void> {
           message.channel === 'delegation'
             ? `**[Instructions from sliccy]**\n\n${message.content}`
             : message.content,
+        attachments: message.attachments,
         timestamp: new Date(message.timestamp).getTime(),
         source: message.channel === 'delegation' ? 'delegation' : undefined,
         channel: message.channel,
@@ -1282,7 +1308,8 @@ async function main(): Promise<void> {
       },
       async () => {
         await layout.panels.fileBrowser.refresh();
-      }
+      },
+      (files) => layout.panels.chat.addAttachmentsFromFiles(files)
     );
 
     try {
@@ -1353,7 +1380,7 @@ async function main(): Promise<void> {
 
   // Build the cone agent handle — all user input routes through orchestrator
   const coneAgentHandle: AgentHandle = {
-    sendMessage(text: string, messageId?: string): void {
+    sendMessage(text: string, messageId?: string, attachments?: MessageAttachment[]): void {
       if (!selectedScoop) {
         emitToUI({ type: 'error', error: 'No scoop selected' });
         return;
@@ -1365,6 +1392,7 @@ async function main(): Promise<void> {
         senderId: 'user',
         senderName: 'User',
         content: text,
+        attachments,
         timestamp: new Date().toISOString(),
         fromAssistant: false,
         channel: 'web',
@@ -1375,11 +1403,12 @@ async function main(): Promise<void> {
         id: msg.id,
         role: 'user',
         content: text,
+        attachments,
         timestamp: Date.now(),
       });
 
       // Broadcast user message to all followers (leader mode)
-      leaderSyncRef?.broadcastUserMessage(text, msg.id);
+      leaderSyncRef?.broadcastUserMessage(text, msg.id, attachments);
 
       orchestrator.handleMessage(msg);
       orchestrator.createScoopTab(selectedScoop.jid);
@@ -2133,8 +2162,8 @@ async function main(): Promise<void> {
         onSnapshot: (messages) => {
           layout.panels.chat.loadMessages(messages);
         },
-        onUserMessage: (text) => {
-          layout.panels.chat.addUserMessage(text);
+        onUserMessage: (text, _messageId, _scoopJid, attachments) => {
+          layout.panels.chat.addUserMessage(text, attachments);
         },
         onStatus: (status) => {
           layout.panels.chat.setProcessing(status === 'processing');
@@ -2226,12 +2255,12 @@ async function main(): Promise<void> {
             return layout.panels.chat.getMessages();
           },
           getScoopJid: () => selectedScoop?.jid ?? 'cone',
-          onFollowerMessage: (text, messageId) => {
+          onFollowerMessage: (text, messageId, attachments) => {
             // Display the follower's message in the leader's chat panel
-            layout.panels.chat.addUserMessage(text);
+            layout.panels.chat.addUserMessage(text, attachments);
             // Route follower messages through the same path as local user messages.
             // coneAgentHandle.sendMessage broadcasts user_message_echo to all followers.
-            coneAgentHandle.sendMessage(text, messageId);
+            coneAgentHandle.sendMessage(text, messageId, attachments);
           },
           onFollowerAbort: () => {
             coneAgentHandle.stop();

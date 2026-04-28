@@ -31,6 +31,7 @@ import type {
 import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
 import { toolUIRegistry } from '../../../packages/webapp/src/tools/tool-ui.js';
 import type { ChatMessage } from '../../../packages/webapp/src/ui/types.js';
+import type { MessageAttachment } from '../../../packages/webapp/src/core/attachments.js';
 import type { BrowserAPI } from '../../../packages/webapp/src/cdp/index.js';
 
 /** Buffered message for state sync */
@@ -38,6 +39,7 @@ interface BufferedChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  attachments?: MessageAttachment[];
   timestamp: number;
   source?: string;
   channel?: string;
@@ -241,6 +243,7 @@ export class OffscreenBridge {
             message.channel === 'delegation'
               ? `**[Instructions from sliccy]**\n\n${message.content}`
               : message.content,
+          attachments: message.attachments,
           timestamp: new Date(message.timestamp).getTime(),
           source: message.channel === 'delegation' ? 'delegation' : undefined,
           channel: message.channel,
@@ -254,6 +257,7 @@ export class OffscreenBridge {
           message: {
             id: message.id,
             content: message.content,
+            attachments: message.attachments,
             channel: message.channel,
             senderName: message.senderName,
             fromAssistant: message.fromAssistant,
@@ -395,6 +399,7 @@ export class OffscreenBridge {
           senderId: 'user',
           senderName: 'User',
           content: msg.text,
+          attachments: msg.attachments,
           timestamp: new Date().toISOString(),
           fromAssistant: false,
           channel: 'web',
@@ -403,6 +408,7 @@ export class OffscreenBridge {
           id: msg.messageId,
           role: 'user',
           content: msg.text,
+          attachments: msg.attachments,
           timestamp: Date.now(),
         });
         this.persistScoop(msg.scoopJid);

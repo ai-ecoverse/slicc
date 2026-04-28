@@ -5,10 +5,15 @@
  * Connects to an AgentHandle for sending messages and receiving events.
  */
 
+import { File as FileIcon, FileText, Image as ImageIcon, Paperclip, X } from 'lucide';
 import type { AgentHandle, AgentEvent, ChatMessage, ToolCall } from './types.js';
 import { renderAssistantMessageContent, renderMessageContent } from './message-renderer.js';
 import { SessionStore } from './session-store.js';
 import { createLogger } from '../core/logger.js';
+import type { MessageAttachment } from '../core/attachments.js';
+import { formatAttachmentSize, formatAttachmentSummary } from '../core/attachments.js';
+import { getMimeType } from '../core/mime-types.js';
+import { processImageContent, isSupportedImageFormat } from '../core/image-processor.js';
 import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
 import {
   hydrateInlineSprinkles,
@@ -29,9 +34,64 @@ import {
 
 const log = createLogger('chat-panel');
 
+type IconNode = [tag: string, attrs: Record<string, string | number>][];
+
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const MAX_TEXT_ATTACHMENT_BYTES = 512 * 1024;
+
 /** Generate a simple unique ID. */
 function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function createLucideIcon(node: IconNode, size = 18): SVGElement {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  svg.setAttribute('width', String(size));
+  svg.setAttribute('height', String(size));
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  for (const [tag, attrs] of node) {
+    const child = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [key, value] of Object.entries(attrs)) {
+      child.setAttribute(key, String(value));
+    }
+    svg.appendChild(child);
+  }
+  return svg;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+async function readFileBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return bytesToBase64(bytes);
+}
+
+async function readFileText(file: File): Promise<string> {
+  if (typeof file.text === 'function') return file.text();
+  return new TextDecoder().decode(await file.arrayBuffer());
+}
+
+function isTextLikeFile(file: File, mimeType: string): boolean {
+  if (mimeType.startsWith('text/')) return true;
+  if (mimeType === 'application/json' || mimeType === 'application/xml') return true;
+  if (mimeType === 'image/svg+xml') return true;
+  return /\.(?:md|markdown|txt|csv|tsv|json|jsonl|yaml|yml|xml|html|css|js|mjs|ts|tsx|jsx|py|rb|go|rs|java|c|cc|cpp|h|hpp|sh|bash|zsh|sql)$/i.test(
+    file.name
+  );
 }
 
 function renderChatMessageContent(msg: ChatMessage): string {
@@ -49,6 +109,11 @@ export class ChatPanel {
   private sendBtn!: HTMLButtonElement;
   private stopBtn!: HTMLButtonElement;
   private micBtn!: HTMLButtonElement;
+  private attachBtn!: HTMLButtonElement;
+  private fileInput!: HTMLInputElement;
+  private attachmentsEl!: HTMLElement;
+  private pendingAttachments: MessageAttachment[] = [];
+  private attachmentReadInProgress = false;
   private voiceInput: VoiceInput | null = null;
   private voiceMode = false;
   private keydownListener: ((e: KeyboardEvent) => void) | null = null;
@@ -334,15 +399,104 @@ export class ChatPanel {
   }
 
   /** Add a user message to the display (for history loading). */
-  addUserMessage(content: string): void {
+  addUserMessage(content: string, attachments?: MessageAttachment[]): void {
     const msg: ChatMessage = {
       id: uid(),
       role: 'user',
       content,
+      attachments,
       timestamp: Date.now(),
     };
     this.messages.push(msg);
     this.appendMessageEl(msg);
+  }
+
+  /** Add files to the pending composer attachments. */
+  async addAttachmentsFromFiles(files: Iterable<File> | ArrayLike<File>): Promise<void> {
+    const dropped = Array.from(files).filter((file) => file instanceof File);
+    if (dropped.length === 0) return;
+
+    this.attachmentReadInProgress = true;
+    this.attachBtn?.classList.add('chat__attach-btn--busy');
+    try {
+      for (const file of dropped) {
+        const attachment = await this.createAttachmentFromFile(file);
+        if (attachment) {
+          this.pendingAttachments.push(attachment);
+        }
+      }
+      this.renderPendingAttachments();
+      this.updateSendButtonState();
+    } finally {
+      this.attachmentReadInProgress = false;
+      this.attachBtn?.classList.remove('chat__attach-btn--busy');
+      this.updateSendButtonState();
+    }
+  }
+
+  private async createAttachmentFromFile(file: File): Promise<MessageAttachment | null> {
+    const mimeType = file.type || getMimeType(file.name);
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      this.addSystemMessage(
+        `Attachment skipped: ${file.name} is ${formatAttachmentSize(file.size)}, above the ${formatAttachmentSize(MAX_ATTACHMENT_BYTES)} limit.`
+      );
+      return null;
+    }
+
+    if (isSupportedImageFormat(mimeType)) {
+      const processed = await processImageContent({
+        type: 'image',
+        mimeType,
+        data: await readFileBase64(file),
+      });
+      if (processed.type === 'image') {
+        return {
+          id: uid(),
+          name: file.name,
+          mimeType: processed.mimeType,
+          size: file.size,
+          kind: 'image',
+          data: processed.data,
+        };
+      }
+      return {
+        id: uid(),
+        name: file.name,
+        mimeType,
+        size: file.size,
+        kind: 'file',
+        error: processed.text,
+      };
+    }
+
+    if (isTextLikeFile(file, mimeType)) {
+      if (file.size > MAX_TEXT_ATTACHMENT_BYTES) {
+        return {
+          id: uid(),
+          name: file.name,
+          mimeType,
+          size: file.size,
+          kind: 'file',
+          error: `Text attachment is above the ${formatAttachmentSize(MAX_TEXT_ATTACHMENT_BYTES)} inline limit.`,
+        };
+      }
+      return {
+        id: uid(),
+        name: file.name,
+        mimeType,
+        size: file.size,
+        kind: 'text',
+        text: await readFileText(file),
+      };
+    }
+
+    return {
+      id: uid(),
+      name: file.name,
+      mimeType,
+      size: file.size,
+      kind: 'file',
+    };
   }
 
   /** Remove a queued message from the UI and notify the orchestrator to remove it from DB/queue. */
@@ -415,6 +569,18 @@ export class ChatPanel {
     this.stopBtn.dataset.tooltip = 'Stop generation';
     this.stopBtn.style.display = 'none';
 
+    this.attachBtn = document.createElement('button');
+    this.attachBtn.className = 'chat__attach-btn';
+    this.attachBtn.type = 'button';
+    this.attachBtn.appendChild(createLucideIcon(Paperclip as unknown as IconNode, 18));
+    this.attachBtn.dataset.tooltip = 'Attach files';
+
+    this.fileInput = document.createElement('input');
+    this.fileInput.className = 'chat__file-input';
+    this.fileInput.type = 'file';
+    this.fileInput.multiple = true;
+    this.fileInput.tabIndex = -1;
+
     this.micBtn = document.createElement('button');
     this.micBtn.className = 'chat__mic-btn';
     // Static SVG mic icon — safe, no user content
@@ -450,6 +616,10 @@ export class ChatPanel {
     const inputWrapper = document.createElement('div');
     inputWrapper.className = 'chat__input-wrapper';
 
+    this.attachmentsEl = document.createElement('div');
+    this.attachmentsEl.className = 'chat__attachments';
+    inputWrapper.appendChild(this.attachmentsEl);
+
     // Top: text input area
     inputWrapper.appendChild(this.textarea);
 
@@ -459,6 +629,7 @@ export class ChatPanel {
 
     const actionBarLeft = document.createElement('div');
     actionBarLeft.className = 'chat__action-bar-left';
+    actionBarLeft.appendChild(this.attachBtn);
     actionBarLeft.appendChild(this.micBtn);
     actionBar.appendChild(actionBarLeft);
 
@@ -475,6 +646,7 @@ export class ChatPanel {
     actionBar.appendChild(actionBarRight);
 
     inputWrapper.appendChild(actionBar);
+    inputWrapper.appendChild(this.fileInput);
 
     inputAreaInner.appendChild(inputWrapper);
     inputArea.appendChild(inputAreaInner);
@@ -501,9 +673,18 @@ export class ChatPanel {
 
     this.textarea.addEventListener('input', () => {
       this.adjustTextareaHeight();
+      this.updateSendButtonState();
     });
 
     this.sendBtn.addEventListener('click', () => this.sendMessage());
+    this.attachBtn.addEventListener('click', () => this.fileInput.click());
+    this.fileInput.addEventListener('change', () => {
+      const files = this.fileInput.files;
+      if (files?.length) {
+        void this.addAttachmentsFromFiles(files);
+      }
+      this.fileInput.value = '';
+    });
     this.stopBtn.addEventListener('click', () => {
       this.agent?.stop();
       // Clear all remaining queued badges since these messages won't be processed
@@ -569,6 +750,8 @@ export class ChatPanel {
       }
     };
     document.addEventListener('keydown', this.keydownListener);
+    this.renderPendingAttachments();
+    this.updateSendButtonState();
   }
 
   private toggleVoiceMode(): void {
@@ -606,8 +789,10 @@ export class ChatPanel {
   }
 
   private sendMessage(): void {
+    if (this.attachmentReadInProgress) return;
     const text = this.textarea.value.trim();
-    if (!text) return;
+    const attachments = this.pendingAttachments.map((attachment) => ({ ...attachment }));
+    if (!text && attachments.length === 0) return;
 
     // User action — always re-attach auto-scroll
     this.autoScrollAttached = true;
@@ -618,6 +803,7 @@ export class ChatPanel {
       id: uid(),
       role: 'user',
       content: text,
+      attachments: attachments.length > 0 ? attachments : undefined,
       timestamp: Date.now(),
       queued: isQueued || undefined,
     };
@@ -627,7 +813,10 @@ export class ChatPanel {
 
     // Clear input and shrink back to a single row
     this.textarea.value = '';
+    this.pendingAttachments = [];
+    this.renderPendingAttachments();
     this.resetTextareaHeight();
+    this.updateSendButtonState();
 
     // Only lock input if not already streaming (first message triggers streaming)
     if (!this.isStreaming) {
@@ -635,7 +824,7 @@ export class ChatPanel {
     }
 
     // Send to agent (orchestrator persists & queues if the cone is busy)
-    this.agent?.sendMessage(text, msg.id);
+    this.agent?.sendMessage(text, msg.id, attachments);
   }
 
   private handleAgentEvent(event: AgentEvent): void {
@@ -877,6 +1066,7 @@ export class ChatPanel {
     // Show stop button during streaming, send button otherwise — but keep textarea enabled
     this.stopBtn.style.display = streaming ? 'flex' : 'none';
     this.sendBtn.style.display = streaming ? 'none' : 'flex';
+    this.updateSendButtonState();
     // Textarea stays enabled so the user can queue follow-up messages
     this.textarea.disabled = false;
     // Mic button stays enabled during streaming so user can toggle voice mode off
@@ -1062,6 +1252,101 @@ export class ChatPanel {
       return;
     }
     this.scrollToBottom();
+  }
+
+  private updateSendButtonState(): void {
+    if (!this.sendBtn || !this.textarea) return;
+    const hasText = this.textarea.value.trim().length > 0;
+    this.sendBtn.disabled =
+      this.attachmentReadInProgress || (!hasText && this.pendingAttachments.length === 0);
+    if (this.attachBtn) this.attachBtn.disabled = this.attachmentReadInProgress;
+  }
+
+  private renderPendingAttachments(): void {
+    if (!this.attachmentsEl) return;
+    this.attachmentsEl.innerHTML = '';
+    this.attachmentsEl.classList.toggle(
+      'chat__attachments--visible',
+      this.pendingAttachments.length > 0
+    );
+    for (const attachment of this.pendingAttachments) {
+      this.attachmentsEl.appendChild(
+        this.createAttachmentChip(attachment, {
+          removable: true,
+          onRemove: () => {
+            this.pendingAttachments = this.pendingAttachments.filter((a) => a.id !== attachment.id);
+            this.renderPendingAttachments();
+            this.updateSendButtonState();
+          },
+        })
+      );
+    }
+  }
+
+  private createAttachmentList(attachments: readonly MessageAttachment[]): HTMLElement {
+    const list = document.createElement('div');
+    list.className = 'msg__attachments';
+    for (const attachment of attachments) {
+      list.appendChild(this.createAttachmentChip(attachment));
+    }
+    return list;
+  }
+
+  private createAttachmentChip(
+    attachment: MessageAttachment,
+    options: { removable?: boolean; onRemove?: () => void } = {}
+  ): HTMLElement {
+    const chip = document.createElement('div');
+    chip.className = `attachment-chip attachment-chip--${attachment.kind}`;
+    chip.title = formatAttachmentSummary(attachment);
+
+    const visual = document.createElement('span');
+    visual.className = 'attachment-chip__visual';
+    if (attachment.kind === 'image' && attachment.data) {
+      const img = document.createElement('img');
+      img.src = `data:${attachment.mimeType};base64,${attachment.data}`;
+      img.alt = '';
+      visual.appendChild(img);
+    } else {
+      const icon =
+        attachment.kind === 'text'
+          ? (FileText as unknown as IconNode)
+          : attachment.mimeType.startsWith('image/')
+            ? (ImageIcon as unknown as IconNode)
+            : (FileIcon as unknown as IconNode);
+      visual.appendChild(createLucideIcon(icon, 16));
+    }
+    chip.appendChild(visual);
+
+    const body = document.createElement('span');
+    body.className = 'attachment-chip__body';
+    const name = document.createElement('span');
+    name.className = 'attachment-chip__name';
+    name.textContent = attachment.name;
+    body.appendChild(name);
+    const meta = document.createElement('span');
+    meta.className = 'attachment-chip__meta';
+    meta.textContent = attachment.error
+      ? 'not included'
+      : `${attachment.mimeType || 'file'} · ${formatAttachmentSize(attachment.size)}`;
+    body.appendChild(meta);
+    chip.appendChild(body);
+
+    if (options.removable) {
+      const remove = document.createElement('button');
+      remove.className = 'attachment-chip__remove';
+      remove.type = 'button';
+      remove.title = `Remove ${attachment.name}`;
+      remove.appendChild(createLucideIcon(X as unknown as IconNode, 14));
+      remove.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        options.onRemove?.();
+      });
+      chip.appendChild(remove);
+    }
+
+    return chip;
   }
 
   // -- DOM rendering --
@@ -1282,12 +1567,18 @@ export class ChatPanel {
       const contentEl = document.createElement('div');
       contentEl.className = 'msg__content';
       contentEl.innerHTML = renderChatMessageContent(msg);
+      if (msg.attachments?.length) {
+        details.appendChild(this.createAttachmentList(msg.attachments));
+      }
       if (!msg.isStreaming) this.hydrateInlineSprinklesInEl(contentEl, msg.id);
       details.appendChild(contentEl);
 
       el.appendChild(details);
     } else {
       // Normal expanded content
+      if (msg.attachments?.length) {
+        el.appendChild(this.createAttachmentList(msg.attachments));
+      }
       const contentEl = document.createElement('div');
       contentEl.className = 'msg__content';
       contentEl.innerHTML = renderChatMessageContent(msg);
@@ -1302,7 +1593,7 @@ export class ChatPanel {
     }
 
     // Only show the message bubble if there's actual content
-    const hasContent = msg.content.trim().length > 0;
+    const hasContent = msg.content.trim().length > 0 || !!msg.attachments?.length;
     if (hasContent) {
       wrapper.appendChild(el);
     }
@@ -1346,6 +1637,11 @@ export class ChatPanel {
       for (const msg of messages) {
         const heading = msg.role === 'user' ? 'User' : 'Assistant';
         formatted += `## ${heading}\n${msg.content}\n\n`;
+        if (msg.attachments?.length) {
+          formatted += `Attachments:\n${msg.attachments
+            .map((attachment) => `- ${formatAttachmentSummary(attachment)}`)
+            .join('\n')}\n\n`;
+        }
         if (msg.toolCalls) {
           for (const tc of msg.toolCalls) {
             formatted += `### Tool: ${tc.name}\nInput: ${JSON.stringify(tc.input, null, 2)}\nResult: ${tc.result ?? ''}\n\n`;

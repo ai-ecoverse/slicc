@@ -340,6 +340,34 @@ describe('ScoopContext prompt queueing', () => {
     await promptPromise;
   });
 
+  it('preserves image attachments when queueing follow-up prompts', async () => {
+    let resolveFirst: () => void;
+    const firstPromptDone = new Promise<void>((r) => {
+      resolveFirst = r;
+    });
+
+    injectMockAgent(ctx, async (text) => {
+      if (text === 'first') {
+        await firstPromptDone;
+      }
+    });
+
+    const promptPromise = ctx.prompt('first');
+    await ctx.prompt('second', [{ type: 'image', mimeType: 'image/png', data: 'abc123' }]);
+
+    expect((ctx as any).agent.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: [
+          { type: 'text', text: 'second' },
+          { type: 'image', mimeType: 'image/png', data: 'abc123' },
+        ],
+      })
+    );
+
+    resolveFirst!();
+    await promptPromise;
+  });
+
   it('stop() clears the queue and aborts', async () => {
     let resolveFirst: () => void;
     const firstPromptDone = new Promise<void>((r) => {

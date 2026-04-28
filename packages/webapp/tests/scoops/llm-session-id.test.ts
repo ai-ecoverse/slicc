@@ -118,4 +118,12 @@ describe('getAdobeSessionId', () => {
     expect(prefix).toMatch(/^[0-9a-f]{8}-/); // a UUID
     expect(suffix).toMatch(/^[0-9a-f]{16}$/);
   });
+
+  it('falls back when global localStorage is not a usable Storage object', async () => {
+    vi.stubGlobal('localStorage', {});
+
+    const id = await getAdobeSessionId(cone('cone_invalid_storage'), 'cone_invalid_storage');
+
+    expect(id).toMatch(/^[0-9a-f]{8}-/);
+  });
 });
