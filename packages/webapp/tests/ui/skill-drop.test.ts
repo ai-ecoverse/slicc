@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   findDroppedSkillFile,
+  findDroppedNonSkillTransferFiles,
   findDroppedSkillTransferFile,
   isSkillArchiveName,
 } from '../../src/ui/skill-drop.js';
@@ -49,5 +50,26 @@ describe('skill-drop helpers', () => {
         ],
       })
     ).toBeNull();
+  });
+
+  it('returns dropped non-skill files for chat attachment handling', () => {
+    const files = findDroppedNonSkillTransferFiles({
+      files: [{ name: 'notes.txt' }, { name: 'pack.skill' }, { name: 'photo.png' }],
+    });
+
+    expect(files.map((file) => file.name)).toEqual(['notes.txt', 'photo.png']);
+  });
+
+  it('returns non-skill files from dataTransfer items when files is empty', () => {
+    const files = findDroppedNonSkillTransferFiles({
+      files: [],
+      items: [
+        { kind: 'string', getAsFile: () => ({ name: 'ignored.txt' }) },
+        { kind: 'file', getAsFile: () => ({ name: 'dragged.skill' }) },
+        { kind: 'file', getAsFile: () => ({ name: 'diagram.png' }) },
+      ],
+    });
+
+    expect(files.map((file) => file.name)).toEqual(['diagram.png']);
   });
 });

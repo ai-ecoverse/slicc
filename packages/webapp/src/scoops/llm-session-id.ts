@@ -29,7 +29,15 @@ function todayUtc(): string {
 
 function safeLocalStorage(): Storage | null {
   try {
-    return globalThis.localStorage ?? null;
+    const storage = globalThis.localStorage;
+    if (
+      !storage ||
+      typeof storage.getItem !== 'function' ||
+      typeof storage.setItem !== 'function'
+    ) {
+      return null;
+    }
+    return storage;
   } catch {
     return null;
   }
@@ -41,7 +49,12 @@ function getDailyUuid(coneJid: string): string {
   const key = DAILY_UUID_KEY_PREFIX + coneJid;
 
   if (storage) {
-    const raw = storage.getItem(key);
+    let raw: string | null = null;
+    try {
+      raw = storage.getItem(key);
+    } catch {
+      raw = null;
+    }
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as { uuid?: string; date?: string };

@@ -59,3 +59,30 @@ export function findDroppedSkillTransferFile<T extends NamedFileLike = NamedFile
 
   return null;
 }
+
+export function findDroppedNonSkillTransferFiles<T extends NamedFileLike = NamedFileLike>(
+  transfer: SkillDropTransferLike<T> | null | undefined
+): T[] {
+  if (!transfer) return [];
+
+  const files: T[] = [];
+  const seen = new Set<T>();
+  const add = (file: T | null | undefined): void => {
+    if (!file || seen.has(file) || isSkillArchiveName(file.name)) return;
+    seen.add(file);
+    files.push(file);
+  };
+
+  if (transfer.files) {
+    for (const file of Array.from(transfer.files)) add(file);
+  }
+
+  if (transfer.items) {
+    for (const item of Array.from(transfer.items)) {
+      if (item.kind && item.kind !== 'file') continue;
+      add(item.getAsFile?.());
+    }
+  }
+
+  return files;
+}

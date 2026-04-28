@@ -26,12 +26,13 @@ import type { BrowserAPI } from '../cdp/index.js';
 import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
 import { buildActiveLicksError, type LickManager } from './lick-manager.js';
 import { SessionStore } from '../core/session.js';
+import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
 import { trackChatSend } from '../ui/telemetry.js';
 import {
   registerSessionCostsProvider,
   type ScoopCostData,
 } from '../shell/supplemental-commands/cost-command.js';
-import type { AssistantMessage } from '../core/types.js';
+import type { AssistantMessage, ImageContent } from '../core/types.js';
 
 const log = createLogger('orchestrator');
 
@@ -1509,7 +1510,13 @@ export class Orchestrator {
   }
 
   /** Send a prompt to a scoop */
-  async sendPrompt(jid: string, text: string, senderId: string, senderName: string): Promise<void> {
+  async sendPrompt(
+    jid: string,
+    text: string,
+    senderId: string,
+    senderName: string,
+    images: ImageContent[] = []
+  ): Promise<void> {
     let context = this.contexts.get(jid);
 
     // Create context if needed
@@ -1548,10 +1555,10 @@ export class Orchestrator {
       this.dispatchScoopEvent(jid, 'onStatusChange', 'processing');
     }
 
-    log.debug('Prompt sent to scoop', { jid, textLength: text.length });
+    log.debug('Prompt sent to scoop', { jid, textLength: text.length, imageCount: images.length });
 
     // Send to the scoop context
-    await context.prompt(text);
+    await context.prompt(text, images);
   }
 
   /** Process queued messages for a scoop */
@@ -1602,9 +1609,10 @@ export class Orchestrator {
           minute: '2-digit',
           hour12: true,
         });
-        return `[${time}] ${m.senderName}: ${m.content}`;
+        return `[${time}] ${m.senderName}: ${formatPromptWithAttachments(m.content, m.attachments)}`;
       })
       .join('\n');
+    const images = messages.flatMap((m) => imageContentFromAttachments(m.attachments));
 
     // Clear queue and update high-water mark
     this.messageQueues.set(jid, []);
@@ -1613,7 +1621,7 @@ export class Orchestrator {
     this.lastAgentTimestamp.set(jid, lastMsg.timestamp);
     await db.setState(`lastAgentTs_${jid}`, lastMsg.timestamp);
 
-    await this.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName);
+    await this.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName, images);
   }
 
   /** Start the message polling loop */

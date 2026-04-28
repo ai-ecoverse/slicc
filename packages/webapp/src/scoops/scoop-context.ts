@@ -22,6 +22,7 @@ import type {
   AssistantMessage,
   AssistantMessageEvent,
   TextContent,
+  ImageContent,
   Model,
 } from '../core/index.js';
 import { isContextOverflow, streamSimple } from '@mariozechner/pi-ai';
@@ -397,7 +398,7 @@ export class ScoopContext {
   }
 
   /** Send a prompt to this scoop's agent. If already processing, queues it via followUp(). */
-  async prompt(text: string): Promise<void> {
+  async prompt(text: string, images: ImageContent[] = []): Promise<void> {
     if (!this.agent) {
       this.callbacks.onError('Agent not initialized');
       return;
@@ -415,7 +416,7 @@ export class ScoopContext {
       // Use pi-agent-core's followUp() to queue message for after current turn
       this.agent.followUp({
         role: 'user',
-        content: [{ type: 'text', text }],
+        content: [{ type: 'text', text }, ...images],
         timestamp: Date.now(),
       });
       return;
@@ -447,7 +448,7 @@ export class ScoopContext {
         this.didStreamDeltas = false;
 
         try {
-          await agent.prompt(text);
+          await agent.prompt(text, images);
           // Success - exit retry loop
           lastError = null;
           break;

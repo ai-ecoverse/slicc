@@ -53,6 +53,15 @@ export type { Logger } from './logger.js';
 export { compactContext, createCompactContext } from './context-compaction.js';
 export type { CompactionConfig } from './context-compaction.js';
 export { getMimeType } from './mime-types.js';
+export {
+  formatAttachmentForPrompt,
+  formatAttachmentSize,
+  formatAttachmentSummary,
+  formatPromptWithAttachments,
+  imageContentFromAttachments,
+  stripLocalPathsForRemote,
+} from './attachments.js';
+export type { MessageAttachment, MessageAttachmentKind } from './attachments.js';
 
 // Local types
 export type {
