@@ -184,18 +184,22 @@ function openDipLink(url: unknown): void {
 }
 
 /**
- * Find all `code.language-shtml` blocks in a container, replace them with
- * sandboxed dip iframes. Returns instances for lifecycle tracking.
+ * Find all `code.language-shtml` blocks and `img[src$=".shtml"]` elements in
+ * a container, replace them with sandboxed dip iframes. Image references are
+ * loaded asynchronously via the VFS preview path. Returns instances for
+ * lifecycle tracking — image-path entries are placeholders whose `dispose()`
+ * aborts the in-flight fetch and tears down whatever iframe (if any) was
+ * eventually mounted, so callers can rely on disposal even when hydration is
+ * still in flight.
  */
 export function hydrateDips(
   containerEl: HTMLElement,
   onLick: (action: string, data: unknown) => void
 ): DipInstance[] {
-  const codeEls = containerEl.querySelectorAll<HTMLElement>('pre > code.language-shtml');
-  if (codeEls.length === 0) return [];
-
   const instances: DipInstance[] = [];
 
+  //    Fenced ```shtml code blocks
+  const codeEls = containerEl.querySelectorAll<HTMLElement>('pre > code.language-shtml');
   for (const codeEl of codeEls) {
     const preEl = codeEl.parentElement!;
     const shtmlContent = codeEl.textContent ?? '';
@@ -206,7 +210,6 @@ export function hydrateDips(
 
     instances.push(mountDip(wrapper, shtmlContent, onLick));
   }
-
 
   //    ![alt](/path/to/file.shtml) image references                  
   const imgEls = containerEl.querySelectorAll<HTMLImageElement>('img[src$=".shtml"]');
@@ -219,17 +222,41 @@ export function hydrateDips(
     if (imgEl.alt) wrapper.setAttribute('title', imgEl.alt);
     imgEl.replaceWith(wrapper);
 
+    // Each pending image becomes a placeholder DipInstance immediately so
+    // the caller's lifecycle bookkeeping (chat-panel's per-message map) sees
+    // a non-empty array even before the async fetch resolves. The placeholder
+    // owns an AbortController + a flag so dispose() cancels the fetch and
+    // tears down whatever iframe (if any) was eventually mounted.
+    const controller = new AbortController();
+    let mounted: DipInstance | null = null;
+    let disposed = false;
+    const placeholder: DipInstance = {
+      dispose() {
+        disposed = true;
+        controller.abort();
+        if (mounted) {
+          mounted.dispose();
+          mounted = null;
+        }
+      },
+    };
+    instances.push(placeholder);
+
     // Fetch the .shtml content from VFS via the preview service worker
     const fetchUrl = src.startsWith('/') ? `/preview${src}` : src;
-    fetch(fetchUrl)
+    fetch(fetchUrl, { signal: controller.signal })
       .then((resp) => {
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         return resp.text();
       })
       .then((shtmlContent) => {
-        instances.push(mountDip(wrapper, shtmlContent, onLick));
+        // Skip mounting if dispose() ran while the fetch was in flight, or
+        // if the wrapper was detached from the DOM by some other path.
+        if (disposed || !wrapper.isConnected) return;
+        mounted = mountDip(wrapper, shtmlContent, onLick);
       })
       .catch((err) => {
+        if (disposed || (err as { name?: string })?.name === 'AbortError') return;
         wrapper.textContent = `Failed to load dip: ${src}`;
         wrapper.style.cssText =
           'padding:8px;font-size:12px;color:var(--s2-negative);font-family:var(--s2-font-mono)';

@@ -73,6 +73,58 @@ describe('hydrateDips', () => {
     // The code block should remain untouched
     expect(container.querySelector('code.language-javascript')).not.toBeNull();
   });
+
+  it('returns a placeholder instance for img[src$=".shtml"] before the fetch resolves', () => {
+    // Make fetch hang forever so we can observe the synchronous placeholder.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise(() => {}));
+
+    container.innerHTML = '<img src="/shared/dips/welcome.shtml" alt="Welcome">';
+    const instances = hydrateDips(container, vi.fn());
+
+    expect(instances).toHaveLength(1);
+    expect(typeof instances[0].dispose).toBe('function');
+    // The img element is replaced with the wrapper synchronously.
+    expect(container.querySelector('img')).toBeNull();
+    const wrapper = container.querySelector<HTMLElement>('.msg__dip');
+    expect(wrapper?.getAttribute('title')).toBe('Welcome');
+
+    // Disposing the placeholder must abort the in-flight fetch.
+    const callArgs = fetchSpy.mock.calls[0];
+    const init = callArgs[1] as RequestInit | undefined;
+    const signal = init?.signal as AbortSignal | undefined;
+    expect(signal?.aborted).toBe(false);
+    instances[0].dispose();
+    expect(signal?.aborted).toBe(true);
+
+    fetchSpy.mockRestore();
+  });
+
+  it('does not call mountDip if the placeholder is disposed before fetch resolves', async () => {
+    // Resolve fetch on demand so we can interleave dispose + resolution.
+    let resolveFetch!: (resp: Response) => void;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+
+    container.innerHTML = '<img src="/shared/dips/welcome.shtml">';
+    const instances = hydrateDips(container, vi.fn());
+    expect(instances).toHaveLength(1);
+
+    // Dispose BEFORE the fetch resolves.
+    instances[0].dispose();
+
+    // Now resolve the fetch; the .then() must skip mountDip and not throw.
+    resolveFetch(new Response('<p>too late</p>', { status: 200 }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // No iframe should have been mounted because dispose ran first.
+    expect(container.querySelector('iframe')).toBeNull();
+
+    fetchSpy.mockRestore();
+  });
 });
 
 describe('disposeDips', () => {

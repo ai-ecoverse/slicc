@@ -1883,8 +1883,13 @@ export class ChatPanel {
   }
 
   private hydrateDipsInEl(contentEl: HTMLElement, msgId: string): void {
+    // Always register the array — hydrateDips() may push placeholder
+    // instances asynchronously when img[src$=".shtml"] dips are still
+    // fetching, so an empty-at-call-time array can grow later. Storing it
+    // unconditionally keeps those placeholders tied to the message
+    // lifecycle for proper disposal on re-render / session switch.
     const instances = hydrateDips(contentEl, (action, data) => this.onDipLick?.(action, data));
-    if (instances.length) this.dips.set(msgId, instances);
+    this.dips.set(msgId, instances);
   }
 
   /** Dispose the panel. */
