@@ -1,5 +1,6 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { createNodeFetchAdapter } from './node-fetch-adapter.js';
 import { NODE_VERSION, NodeExitError, formatConsoleArg, nodeRuntimeState } from './shared.js';
 
 const NODE_BUILTINS_UNAVAILABLE = new Set([
@@ -181,6 +182,17 @@ export function createNodeCommand(): Command {
       const result = await ctx.exec(command, { cwd: ctx.cwd });
       return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
     };
+
+    // Build a `fetch` shim that routes through the same proxied SecureFetch
+    // the curl shim uses (i.e. /api/fetch-proxy in CLI mode), so masked
+    // secret values are substituted server-side and domain allow-listing is
+    // enforced. Without this, `fetch` inside `node -e` would resolve to the
+    // browser's native global and bypass secret injection — leading to
+    // upstream APIs receiving the literal masked value (e.g. `e5be41af...`)
+    // and rejecting it with `invalid_client` / 401 / 403.
+    const nodeFetch: typeof globalThis.fetch = ctx.fetch
+      ? createNodeFetchAdapter(ctx.fetch)
+      : globalThis.fetch.bind(globalThis);
 
     const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
@@ -554,7 +566,8 @@ export function createNodeCommand(): Command {
         module: typeof moduleShim,
         exports: Record<string, unknown>,
         __state: Record<string, unknown>,
-        exec: typeof execBridge
+        exec: typeof execBridge,
+        fetch: typeof globalThis.fetch
       ) => Promise<unknown>;
       const fn = new AsyncFunction(
         'fs',
@@ -565,6 +578,7 @@ export function createNodeCommand(): Command {
         'exports',
         '__state',
         'exec',
+        'fetch',
         `"use strict";\nconst globalThis = __state;\nconst global = __state;\n${code}`
       );
       await fn(
@@ -575,7 +589,8 @@ export function createNodeCommand(): Command {
         moduleShim,
         moduleShim.exports,
         nodeRuntimeState,
-        execBridge
+        execBridge,
+        nodeFetch
       );
       return {
         stdout: stdoutChunks.join(''),
