@@ -7,7 +7,7 @@
  * shifts horizontally to stay within viewport.
  */
 
-const DELAY = 300; // ms before showing
+const DELAY = 100; // ms before showing
 const GAP = 6; // px between trigger and tooltip
 
 let el: HTMLDivElement | null = null;

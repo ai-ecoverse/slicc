@@ -124,7 +124,7 @@ describe('RailZone', () => {
     expect(onFullpageToggle).toHaveBeenCalledWith(true);
   });
 
-  it('long-press (>=2s) activates AND switches to fullpage; mouseup before threshold does not', async () => {
+  it('long-press activates AND switches to fullpage; mouseup before threshold does not', () => {
     vi.useFakeTimers();
     const { railEl, contentEl } = makeRail();
     const onFullpageToggle = vi.fn();
@@ -134,16 +134,55 @@ describe('RailZone', () => {
 
     // Quick click — no fullpage, just normal toggle.
     btn.dispatchEvent(new MouseEvent('mousedown', { button: 0 }));
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(rail.__test__.longPressMs - 100);
     btn.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
     btn.dispatchEvent(new MouseEvent('click'));
     expect(rail.isFullpage()).toBe(false);
 
-    // Long press — over the 2s threshold without releasing → fullpage.
+    // Long press — past the threshold without releasing → fullpage.
     btn.dispatchEvent(new MouseEvent('mousedown', { button: 0 }));
     vi.advanceTimersByTime(rail.__test__.longPressMs + 1);
     expect(rail.isFullpage()).toBe(true);
     expect(onFullpageToggle).toHaveBeenCalledWith(true);
+  });
+
+  it('long-press still goes fullpage even when the item is already expanded', () => {
+    vi.useFakeTimers();
+    const { railEl, contentEl } = makeRail();
+    const onFullpageToggle = vi.fn();
+    const rail = new RailZone(railEl, contentEl, 'primary', { onFullpageToggle });
+    rail.addItem(makeItem('terminal', 'bottom'));
+    const btn = railEl.querySelector<HTMLButtonElement>('[data-item-id="terminal"]')!;
+
+    // First, plain click expands without going fullpage.
+    btn.dispatchEvent(new MouseEvent('click'));
+    expect(rail.getActiveItemId()).toBe('terminal');
+    expect(rail.isFullpage()).toBe(false);
+
+    // Long-press while already-active should promote to fullpage.
+    btn.dispatchEvent(new MouseEvent('mousedown', { button: 0 }));
+    vi.advanceTimersByTime(rail.__test__.longPressMs + 1);
+    expect(rail.isFullpage()).toBe(true);
+    expect(onFullpageToggle).toHaveBeenLastCalledWith(true);
+  });
+
+  it('long-press paints a growing ripple inside a clipped press layer', () => {
+    vi.useFakeTimers();
+    const { railEl, contentEl } = makeRail();
+    const rail = new RailZone(railEl, contentEl, 'primary');
+    rail.addItem(makeItem('terminal', 'bottom'));
+    const btn = railEl.querySelector<HTMLButtonElement>('[data-item-id="terminal"]')!;
+
+    expect(btn.querySelector('.rail__item-press-layer')).not.toBeNull();
+    btn.dispatchEvent(new MouseEvent('mousedown', { button: 0, clientX: 5, clientY: 5 }));
+
+    const ripple = btn.querySelector<HTMLElement>('.rail__item-press');
+    expect(ripple).not.toBeNull();
+    expect(ripple!.style.transitionDuration).toBe(`${rail.__test__.longPressMs}ms`);
+
+    // Releasing before threshold removes the ripple.
+    btn.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
+    expect(btn.querySelector('.rail__item-press')).toBeNull();
   });
 
   it('removing an item that was active collapses the panel', () => {
@@ -192,7 +231,7 @@ describe('RailZone', () => {
     expect(addBtn.style.display).toBe('none');
   });
 
-  it('closable items render an inline close affordance that fires onItemClose', () => {
+  it('closable items do NOT render a close affordance — sprinkles can only be hidden via collapse', () => {
     const { railEl, contentEl } = makeRail();
     const onItemClose = vi.fn();
     const rail = new RailZone(railEl, contentEl, 'primary', { onItemClose });
@@ -205,12 +244,8 @@ describe('RailZone', () => {
       closable: true,
     });
 
-    const close = railEl.querySelector<HTMLElement>(
-      '[data-item-id="sprinkle-x"] .rail__item-close'
-    )!;
-    expect(close).not.toBeNull();
-    close.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    expect(onItemClose).toHaveBeenCalledWith('sprinkle-x');
+    expect(railEl.querySelector('[data-item-id="sprinkle-x"] .rail__item-close')).toBeNull();
+    expect(onItemClose).not.toHaveBeenCalled();
   });
 
   it('persists and restores the last active item across constructor calls', () => {

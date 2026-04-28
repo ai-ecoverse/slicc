@@ -346,6 +346,34 @@
   width: 16px;
   height: 16px;
   flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+}
+/* Long-press ripple — fills the button as the user holds. The layer
+   is clipped to the button radius so the growing circle never
+   escapes the button shape. */
+.rail__item-press-layer {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.rail__item-press {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--s2-accent);
+  opacity: 0.85;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  transition-property: width, height;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: width, height;
+}
+.rail__item--active .rail__item-press {
+  background: var(--s2-accent);
+  opacity: 1;
 }
 .rail__item:hover {
   background: var(--s2-gray-200);
@@ -369,31 +397,6 @@
   color: var(--s2-content-default);
   background: var(--s2-gray-75);
 }
-/* Close affordance overlaid on hover for closable rail items. */
-.rail__item-close {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  width: 14px;
-  height: 14px;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--s2-bg-base);
-  color: var(--s2-content-tertiary);
-  border: 1px solid var(--s2-border-subtle);
-  font-size: 10px;
-  line-height: 1;
-}
-.rail__item:hover .rail__item-close {
-  display: inline-flex;
-}
-.rail__item-close:hover {
-  color: var(--s2-negative);
-  border-color: var(--s2-negative);
-}
-
 /* The collapsible content panel rendered LEFT of the rail. */
 .rail-content {
   display: flex;
