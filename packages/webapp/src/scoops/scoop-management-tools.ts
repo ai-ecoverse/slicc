@@ -33,12 +33,15 @@ export interface ScoopManagementToolsConfig {
   ) => Promise<
     Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
   >;
-  /** Block until a list of scoops completes (or timeout). Returns each scoop's
-   *  captured summary (or null on timeout). Cone only. */
-  onWaitForScoops?: (
+  /** Schedule a non-blocking wait for a list of scoops to complete.
+   *  Returns synchronously; when the wait resolves (every listed scoop
+   *  completes or the timeout fires) the orchestrator delivers a
+   *  `scoop-wait` channel lick to the cone with the per-scoop summary.
+   *  Cone only. */
+  onScheduleScoopWait?: (
     jids: readonly string[],
     timeoutMs?: number
-  ) => Promise<Array<{ jid: string; summary: string | null; timedOut: boolean }>>;
+  ) => { scheduled: string[]; unknown: string[] };
 }
 
 /** Resolve a list of user-supplied scoop names (folder or display name) to
@@ -76,7 +79,7 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
     getGlobalMemory,
     onMuteScoops,
     onUnmuteScoops,
-    onWaitForScoops,
+    onScheduleScoopWait,
   } = config;
 
   const tools: ToolDefinition[] = [];
@@ -479,15 +482,18 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
       });
     }
 
-    // Cone only: scoop_wait — block until a set of scoops completes, with
-    // an optional timeout. Target scoops are implicitly muted for the
-    // duration so the cone gets a single tool result summarizing all of
-    // them instead of one cone turn per completion.
-    if (onWaitForScoops) {
+    // Cone only: scoop_wait — schedule a NON-BLOCKING wait for a set of
+    // scoops. The tool returns immediately so the cone can keep working;
+    // when all listed scoops complete (or the optional timeout expires)
+    // the orchestrator delivers a `scoop-wait` channel lick to the cone
+    // with each scoop's summary. Target scoops are implicitly muted for
+    // the duration so individual `scoop-notify` events don't fire on top
+    // of the eventual `scoop-wait` lick.
+    if (onScheduleScoopWait) {
       tools.push({
         name: 'scoop_wait',
         description:
-          'Block until the given scoops complete or an optional timeout expires. Use this to coordinate parallel work: you feed several scoops, then call scoop_wait to receive all their results in one go without the cone being pinged for each individual completion. Already-completed scoops (including those whose completion arrived while you were processing your previous turn) are returned immediately.',
+          "Schedule a non-blocking wait for the given scoops. Returns immediately — the cone keeps its turn — and a `scoop-wait` lick is delivered when every listed scoop completes or the optional timeout fires. Use this to coordinate parallel work without freezing the cone: feed several scoops, call scoop_wait, then continue with other work; you'll be woken by the lick with all per-scoop summaries in one shot. Already-completed scoops (including those whose completion arrived while you were processing your previous turn) are folded into the same lick.",
         inputSchema: {
           type: 'object',
           properties: {
@@ -500,7 +506,7 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
             timeout_ms: {
               type: 'number',
               description:
-                'Optional timeout in milliseconds. If any listed scoop has not completed by the deadline, it is reported as timed-out in the result and the wait returns. Omit for no timeout.',
+                'Optional timeout in milliseconds. If any listed scoop has not completed by the deadline, it is reported as timed-out in the eventual `scoop-wait` lick. Omit for no timeout.',
             },
           },
           required: ['scoop_names'],
@@ -530,27 +536,19 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
             };
           }
           const jids = resolved.map((s) => s.jid);
-          const jidToFolder = new Map(resolved.map((s) => [s.jid, s.folder]));
-          const results = await onWaitForScoops(jids, timeout_ms);
-          log.info('Wait completed', {
+          onScheduleScoopWait(jids, timeout_ms);
+          log.info('Wait scheduled', {
             names: resolved.map((s) => s.folder),
             timeout_ms,
-            timedOut: results.filter((r) => r.timedOut).length,
           });
-          const lines: string[] = [];
-          if (unknown.length > 0) {
-            lines.push(`Unknown scoops (skipped): ${unknown.join(', ')}`);
-          }
-          for (const r of results) {
-            const folder = jidToFolder.get(r.jid) ?? r.jid;
-            if (r.timedOut) {
-              lines.push(`--- ${folder} (timed out) ---`);
-            } else {
-              lines.push(`--- ${folder} ---`);
-              lines.push(r.summary ?? '(no output)');
-            }
-          }
-          return { content: lines.join('\n') };
+          const folders = resolved.map((s) => s.folder).join(', ');
+          const tail = timeout_ms !== undefined ? ` (timeout: ${timeout_ms}ms)` : ' (no timeout)';
+          const warn = unknown.length > 0 ? ` Unknown (skipped): ${unknown.join(', ')}.` : '';
+          return {
+            content:
+              `scoop_wait scheduled for: ${folders}${tail}.${warn} ` +
+              `Continue with other work — a 'scoop-wait' lick will be delivered when all listed scoops complete or the timeout fires.`,
+          };
         },
       });
     }

@@ -1735,4 +1735,154 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     // null out the suite-level orch so afterEach doesn't double-shutdown.
     orch = undefined as unknown as Orchestrator;
   });
+
+  it('scheduleScoopWait returns synchronously, mutes targets, and fires a scoop-wait lick on completion', async () => {
+    // The whole point of the refactor: scoop_wait must NOT freeze the
+    // cone. scheduleScoopWait kicks the wait off in the background and
+    // returns immediately; when every listed scoop has completed, the
+    // orchestrator must fire a single `scoop-wait` channel message
+    // through onIncomingMessage so the UI renders the lick.
+    const a: RegisteredScoop = {
+      jid: 'scoop_sched_a',
+      name: 'sched-a',
+      folder: 'sched-a-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'sched-a-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    const b: RegisteredScoop = {
+      ...a,
+      jid: 'scoop_sched_b',
+      folder: 'sched-b-scoop',
+      assistantLabel: 'sched-b-scoop',
+    };
+    await saveScoop(a);
+    await saveScoop(b);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    const start = Date.now();
+    const ack = orch.scheduleScoopWait([a.jid, b.jid], 2000);
+    const elapsed = Date.now() - start;
+    // Sync return — must not have done any actual waiting.
+    expect(elapsed).toBeLessThan(50);
+    expect(ack.scheduled).toEqual([a.jid, b.jid]);
+    expect(ack.unknown).toEqual([]);
+    // Mute is installed synchronously by waitForScoops' sync setup.
+    expect(priv.mutedScoops.has(a.jid)).toBe(true);
+    expect(priv.mutedScoops.has(b.jid)).toBe(true);
+
+    priv.scoopResponseBuffer.set(a.jid, 'result A');
+    await priv.maybeNotifyConeOnScoopComplete(a.jid);
+    priv.scoopResponseBuffer.set(b.jid, 'result B');
+    await priv.maybeNotifyConeOnScoopComplete(b.jid);
+
+    // Allow the background `void this.waitForScoops(...).then(...)` to
+    // settle and emit the scoop-wait lick.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Exactly one scoop-wait lick — completed scoops must NOT also
+    // fire individual scoop-notify licks while a wait is active.
+    expect(incoming).toHaveLength(1);
+    const lick = incoming[0];
+    expect(lick.channel).toBe('scoop-wait');
+    expect(lick.content).toContain('[scoop_wait completed]');
+    expect(lick.content).toContain('2 completed, 0 timed out');
+    expect(lick.content).toContain('--- sched-a-scoop ---');
+    expect(lick.content).toContain('result A');
+    expect(lick.content).toContain('--- sched-b-scoop ---');
+    expect(lick.content).toContain('result B');
+
+    // Mute released after completion.
+    expect(priv.mutedScoops.has(a.jid)).toBe(false);
+    expect(priv.mutedScoops.has(b.jid)).toBe(false);
+  });
+
+  it('scheduleScoopWait fires a scoop-wait lick when the timeout elapses', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_sched_timeout_1',
+      name: 'sched-timeout',
+      folder: 'sched-timeout-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'sched-timeout-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const incoming: ChannelMessage[] = [];
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith((_jid, msg) => {
+        incoming.push(msg);
+      })
+    );
+    await orch.init();
+
+    const priv = orch as unknown as OrchestratorPrivate;
+    priv.handleMessage = async () => {};
+
+    orch.scheduleScoopWait([scoop.jid], 30);
+    // Wait long enough for the timer to fire and the lick to be
+    // dispatched on the microtask queue.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(incoming).toHaveLength(1);
+    const lick = incoming[0];
+    expect(lick.channel).toBe('scoop-wait');
+    expect(lick.content).toContain('0 completed, 1 timed out');
+    expect(lick.content).toContain('--- sched-timeout-scoop (timed out) ---');
+  });
+
+  it('scheduleScoopWait reports unknown jids in the sync ack and skips them in the lick', async () => {
+    const scoop: RegisteredScoop = {
+      jid: 'scoop_sched_partial_1',
+      name: 'sched-partial',
+      folder: 'sched-partial-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'sched-partial-scoop',
+      addedAt: new Date().toISOString(),
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(scoop);
+
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(
+      container,
+      noopCallbacksWith(() => {})
+    );
+    await orch.init();
+
+    const ack = orch.scheduleScoopWait([scoop.jid, 'scoop_unknown_42'], 10);
+    expect(ack.scheduled).toEqual([scoop.jid]);
+    expect(ack.unknown).toEqual(['scoop_unknown_42']);
+  });
 });

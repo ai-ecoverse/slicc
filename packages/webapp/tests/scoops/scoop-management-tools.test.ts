@@ -192,18 +192,19 @@ describe('scoop_mute / scoop_unmute / scoop_wait tools', () => {
   ) {
     const onMuteScoops = vi.fn();
     const onUnmuteScoops = vi.fn(async () => options.unmuteReturns ?? []);
-    const onWaitForScoops = vi.fn(async (jids: readonly string[]) =>
-      jids.map((jid) => ({ jid, summary: `summary-${jid}`, timedOut: false }))
-    );
+    const onScheduleScoopWait = vi.fn((jids: readonly string[]) => ({
+      scheduled: [...jids],
+      unknown: [],
+    }));
     const tools = createScoopManagementTools({
       scoop: cone,
       onSendMessage: vi.fn(),
       getScoops: () => [cone, targetScoop],
       onMuteScoops,
       onUnmuteScoops,
-      onWaitForScoops,
+      onScheduleScoopWait,
     });
-    return { tools, onMuteScoops, onUnmuteScoops, onWaitForScoops };
+    return { tools, onMuteScoops, onUnmuteScoops, onScheduleScoopWait };
   }
 
   it('scoop_mute forwards resolved jids and reports unknown names', async () => {
@@ -272,42 +273,48 @@ describe('scoop_mute / scoop_unmute / scoop_wait tools', () => {
     );
   });
 
-  it('scoop_wait awaits completion and formats per-scoop output', async () => {
-    const { tools, onWaitForScoops } = buildConeTools();
+  it('scoop_wait schedules a non-blocking wait and returns immediately', async () => {
+    // The whole point of the refactor: scoop_wait MUST NOT freeze the
+    // cone. The tool returns a synchronous acknowledgement and the
+    // orchestrator delivers a `scoop-wait` lick later when the wait
+    // resolves. The mock `onScheduleScoopWait` is intentionally sync —
+    // wrapping its call in a never-resolving promise here would still
+    // return immediately because the tool no longer awaits the result.
+    const { tools, onScheduleScoopWait } = buildConeTools();
     const tool = tools.find((t) => t.name === 'scoop_wait');
     expect(tool).toBeDefined();
 
+    const start = Date.now();
     const result = await tool!.execute({ scoop_names: ['alpha-scoop'], timeout_ms: 1000 });
-    expect(onWaitForScoops).toHaveBeenCalledWith([targetScoop.jid], 1000);
-    expect(result.content).toContain('--- alpha-scoop ---');
-    expect(result.content).toContain('summary-scoop_alpha_1');
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(50);
+    expect(onScheduleScoopWait).toHaveBeenCalledWith([targetScoop.jid], 1000);
+    expect(result.content).toContain('scoop_wait scheduled for: alpha-scoop');
+    expect(result.content).toContain('timeout: 1000ms');
+    expect(result.content).toContain("'scoop-wait' lick");
+    expect(result.isError).toBeUndefined();
   });
 
-  it('scoop_wait marks timed-out scoops distinctly', async () => {
-    const onWaitForScoops = vi.fn(async () => [
-      { jid: targetScoop.jid, summary: null, timedOut: true },
-    ]);
-    const tools = createScoopManagementTools({
-      scoop: cone,
-      onSendMessage: vi.fn(),
-      getScoops: () => [cone, targetScoop],
-      onMuteScoops: vi.fn(),
-      onUnmuteScoops: vi.fn(async () => []),
-      onWaitForScoops,
-    });
+  it('scoop_wait reports unknown names but still schedules known ones', async () => {
+    const { tools, onScheduleScoopWait } = buildConeTools();
     const tool = tools.find((t) => t.name === 'scoop_wait');
-    const result = await tool!.execute({ scoop_names: ['alpha-scoop'], timeout_ms: 10 });
-    expect(result.content).toContain('--- alpha-scoop (timed out) ---');
+
+    const result = await tool!.execute({ scoop_names: ['alpha-scoop', 'ghost'] });
+    expect(onScheduleScoopWait).toHaveBeenCalledWith([targetScoop.jid], undefined);
+    expect(result.content).toContain('scoop_wait scheduled for: alpha-scoop');
+    expect(result.content).toContain('no timeout');
+    expect(result.content).toContain('Unknown (skipped): ghost');
   });
 
   it('scoop_wait rejects non-finite or negative timeouts', async () => {
-    const { tools, onWaitForScoops } = buildConeTools();
+    const { tools, onScheduleScoopWait } = buildConeTools();
     const tool = tools.find((t) => t.name === 'scoop_wait');
     const neg = await tool!.execute({ scoop_names: ['alpha-scoop'], timeout_ms: -5 });
     expect(neg.isError).toBe(true);
     const nan = await tool!.execute({ scoop_names: ['alpha-scoop'], timeout_ms: Number.NaN });
     expect(nan.isError).toBe(true);
-    expect(onWaitForScoops).not.toHaveBeenCalled();
+    expect(onScheduleScoopWait).not.toHaveBeenCalled();
   });
 
   it('mute/unmute/wait tools are absent on non-cone scoops', async () => {
@@ -318,7 +325,7 @@ describe('scoop_mute / scoop_unmute / scoop_wait tools', () => {
       getScoops: () => [cone, nonCone],
       onMuteScoops: vi.fn(),
       onUnmuteScoops: vi.fn(async () => []),
-      onWaitForScoops: vi.fn(async () => []),
+      onScheduleScoopWait: vi.fn(() => ({ scheduled: [], unknown: [] })),
     });
     expect(tools.find((t) => t.name === 'scoop_mute')).toBeUndefined();
     expect(tools.find((t) => t.name === 'scoop_unmute')).toBeUndefined();

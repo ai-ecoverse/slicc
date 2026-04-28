@@ -154,11 +154,13 @@ export interface ScoopContextCallbacks {
   ) => Promise<
     Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
   >;
-  /** Wait for a batch of scoops to complete (cone only). */
-  onWaitForScoops?: (
+  /** Schedule a non-blocking wait for a batch of scoops (cone only).
+   *  Returns synchronously; the orchestrator emits a `scoop-wait` lick
+   *  to the cone when all listed scoops complete or the timeout fires. */
+  onScheduleScoopWait?: (
     jids: readonly string[],
     timeoutMs?: number
-  ) => Promise<Array<{ jid: string; summary: string | null; timedOut: boolean }>>;
+  ) => { scheduled: string[]; unknown: string[] };
   /** Get global CLAUDE.md content (shared across all scoops) */
   getGlobalMemory: () => Promise<string>;
   /** Update global CLAUDE.md (cone only) */
@@ -269,7 +271,7 @@ export class ScoopContext {
         onDropScoop: this.callbacks.onDropScoop,
         onMuteScoops: this.callbacks.onMuteScoops,
         onUnmuteScoops: this.callbacks.onUnmuteScoops,
-        onWaitForScoops: this.callbacks.onWaitForScoops,
+        onScheduleScoopWait: this.callbacks.onScheduleScoopWait,
         onSetGlobalMemory: this.callbacks.setGlobalMemory,
         getGlobalMemory: this.callbacks.getGlobalMemory,
       };

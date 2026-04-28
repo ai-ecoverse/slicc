@@ -16,6 +16,7 @@ import {
   Bell,
   IceCream,
   Hourglass,
+  ListChecks,
 } from 'lucide';
 import type { ChatMessage } from './types.js';
 
@@ -67,6 +68,14 @@ const DESCRIPTORS: Record<string, LickDescriptor> = {
     icon: Hourglass as unknown as IconNode,
     label: 'idle',
   },
+  'scoop-wait': {
+    // ListChecks visually echoes the lick body — a per-scoop checklist
+    // of completions / timeouts — and distinguishes scoop_wait (a
+    // fan-in barrier across multiple scoops) from `scoop-idle`'s
+    // single-scoop hourglass.
+    icon: ListChecks as unknown as IconNode,
+    label: 'wait',
+  },
 };
 
 export function getLickDescriptor(msg: ChatMessage): LickDescriptor {
@@ -85,6 +94,13 @@ const HEADER_RE = /^\[([^\]:]+?)(?:\s+Event)?:\s*([^\]]+?)\]\s*\n?/;
  *  instead of the first body line. */
 const SCOOP_HEADER_RE = /^\[@([^\]]+?)\s+(completed|idle)\]\s*:?\s*\n?/;
 
+/** Matches the `[scoop_wait completed]\nN completed, M timed out\n…`
+ *  header that the orchestrator writes when a scheduled `scoop_wait`
+ *  resolves. Captures the count-summary line so the collapsed row
+ *  surfaces e.g. "2 completed, 0 timed out" instead of the raw
+ *  `[scoop_wait completed]` literal. */
+const SCOOP_WAIT_HEADER_RE = /^\[scoop_wait completed\]\s*\n([^\n]+)\n?/;
+
 export interface ParsedLick {
   /** Human-readable event name (e.g. "github-push", "daily-digest",
    *  full URL for navigate). Used for the collapsed row preview. */
@@ -97,8 +113,16 @@ export interface ParsedLick {
 /** Parse a lick message's content into { preview, body }. Falls back to
  *  the first non-empty line if the expected header pattern is missing.
  *  Recognizes both the generic `[Xyz Event: name]` header and the
- *  scoop-specific `[@name completed]` / `[@name idle]` headers. */
+ *  scoop-specific `[@name completed]` / `[@name idle]` /
+ *  `[scoop_wait completed]` headers. */
 export function parseLickContent(content: string): ParsedLick {
+  const waitMatch = SCOOP_WAIT_HEADER_RE.exec(content);
+  if (waitMatch) {
+    return {
+      preview: waitMatch[1].trim(),
+      body: content.slice(waitMatch[0].length).replace(/^\s+/, ''),
+    };
+  }
   const scoopMatch = SCOOP_HEADER_RE.exec(content);
   if (scoopMatch) {
     return {
