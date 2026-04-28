@@ -66,39 +66,7 @@ The cone will send you a message with the lick action and your sprinkle name. On
 
 ## Built-in Sprinkles
 
-These sprinkles ship with SLICC at `/shared/sprinkles/`. They are full-document HTML apps rendered in sandboxed iframes.
-
-| Sprinkle name      | Open with                        | Use when the user asks for...                                         |
-| ------------------ | -------------------------------- | --------------------------------------------------------------------- |
-| `page-editor`      | `sprinkle open page-editor`      | WYSIWYG editor, page editor, edit sections, visual editing            |
-| `content-tree`     | `sprinkle open content-tree`     | content tree, page tree, site structure, page browser, navigate pages |
-| `review-workflow`  | `sprinkle open review-workflow`  | review, approval workflow, annotations, comments on content           |
-| `seo-dashboard`    | `sprinkle open seo-dashboard`    | SEO audit, meta tags, SERP preview, SEO issues                        |
-| `schema-editor`    | `sprinkle open schema-editor`    | schema, structured data, JSON-LD, rich results                        |
-| `readability`      | `sprinkle open readability`      | readability, reading level, text analysis, simplify text              |
-| `brand-compliance` | `sprinkle open brand-compliance` | brand check, brand compliance, style guide violations                 |
-| `tone-voice`       | `sprinkle open tone-voice`       | tone, voice, writing style, formality, tone analysis                  |
-| `performance`      | `sprinkle open performance`      | performance, Core Web Vitals, page speed, lighthouse                  |
-| `funnels`          | `sprinkle open funnels`          | funnels, conversion, A/B test, analytics                              |
-
-### When a user request matches a built-in sprinkle
-
-When the user's request matches a built-in sprinkle (see table above), **ask the user which approach they prefer** before proceeding:
-
-> I can help with that. Would you like me to:
->
-> 1. **Open the built-in [sprinkle name]** — ready to use immediately, I'll populate it with your data
-> 2. **Build a custom one from scratch** — tailored exactly to your needs, but takes a moment to create
->
-> Which do you prefer?
-
-**If the user says "open" / "use the built-in" / picks option 1** — use the built-in sprinkle (see "Using Built-in Sprinkles" in style-guide.md for the scoop brief template).
-
-**If the user says "build" / "create" / "custom" / picks option 2** — create a new sprinkle from scratch following the "Creating a sprinkle" flow above.
-
-**If the user explicitly says "open the page editor"** (or any built-in name directly) — skip the question and use the built-in immediately.
-
-**If the request is clearly novel** (no matching built-in) — create from scratch without asking.
+SLICC no longer ships with a catalog of pre-built sprinkles. The only `.shtml` under `/shared/sprinkles/` is `welcome/` which backs the inline first-run welcome dip — not a panel sprinkle. **Always create sprinkles from scratch** for what the user is asking for, following the "Creating a sprinkle" flow above. Do not assume a built-in sprinkle name exists.
 
 ### Cone orchestration for sprinkles
 

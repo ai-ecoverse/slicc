@@ -98,6 +98,15 @@ const log = createLogger('main');
 const PENDING_MOUNT_DB = 'slicc-pending-mount';
 const PENDING_MOUNT_KEY = 'pendingMount';
 
+/**
+ * Sprinkle names whose `.shtml` file backs an inline dip rather than a
+ * panel sprinkle. They live under `/shared/sprinkles/` for path-stability
+ * reasons (the markdown image syntax `![](/shared/sprinkles/...)`
+ * references them) but should never appear in the rail/picker, since the
+ * inline dip is the sole intended rendering.
+ */
+const INLINE_DIP_SPRINKLES: ReadonlySet<string> = new Set(['welcome']);
+
 /** True when the current URL requests the design-time UI fixture
  *  (`?ui-fixture=1`). Accepts `1`, `true`, and the bare presence of the key
  *  so both `?ui-fixture` and `?ui-fixture=1` work for quick toggling. */
@@ -761,7 +770,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     const opened = new Set(sprinkleManager.opened());
     return sprinkleManager
       .available()
-      .filter((p) => !opened.has(p.name))
+      .filter((p) => !opened.has(p.name) && !INLINE_DIP_SPRINKLES.has(p.name))
       .map((p) => ({ name: p.name, title: p.title }));
   };
   layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
@@ -1868,7 +1877,7 @@ async function main(): Promise<void> {
       const opened = new Set(sprinkleManager!.opened());
       return sprinkleManager!
         .available()
-        .filter((p) => !opened.has(p.name))
+        .filter((p) => !opened.has(p.name) && !INLINE_DIP_SPRINKLES.has(p.name))
         .map((p) => ({ name: p.name, title: p.title }));
     };
     layout.onOpenSprinkle = (name, zone) => sprinkleManager!.open(name, zone);

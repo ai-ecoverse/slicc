@@ -636,26 +636,26 @@ Every built-in sprinkle has three view states: **empty** (URL input form), **loa
 ### Scoop brief template
 
 ```
-scoop_scoop("seo-dashboard")
-feed_scoop("seo-dashboard", "You own the built-in sprinkle 'seo-dashboard'.
+scoop_scoop("<sprinkle-name>")
+feed_scoop("<sprinkle-name>", "You own the sprinkle '<sprinkle-name>'.
 1. Run: read_file /workspace/skills/sprinkles/style-guide.md
-2. Run: sprinkle open seo-dashboard
-3. Read the DATA CONTRACT at the top of the <script> in /shared/sprinkles/seo-dashboard/seo-dashboard.shtml to learn the expected JSON format.
-4. IMMEDIATELY push status: sprinkle send seo-dashboard '{\"status\":\"analyzing\",\"url\":\"<the-url>\"}'
-5. Gather the data the user needs (e.g. fetch the page, run an SEO audit).
+2. Write the sprinkle to /shared/sprinkles/<sprinkle-name>/<sprinkle-name>.shtml — define the DATA CONTRACT at the top of the <script>.
+3. Run: sprinkle open <sprinkle-name>
+4. IMMEDIATELY push status: sprinkle send <sprinkle-name> '{\"status\":\"loading\",\"context\":\"<what>\"}'
+5. Gather the data the user needs.
 6. Push results to the sprinkle in the format specified by the DATA CONTRACT.
 7. Stay ready — you will receive lick events when the user clicks buttons in the sprinkle.
-8. When the user confirms a fix, attempt to apply it to the site (see 'Applying Changes' section below).
+8. When the user confirms an edit, attempt to apply it to the underlying source (see 'Applying Changes' below).
 Do not send a completion message.")
 ```
 
-The scoop opens the sprinkle, pushes analyzing status, gathers real data, pushes results via `sprinkle send`, and handles lick events from the user.
+The scoop creates and opens the sprinkle, pushes loading status, gathers real data, pushes results via `sprinkle send`, and handles lick events from the user.
 
 ---
 
 ## Applying Changes
 
-Content-editing sprinkles (page-editor, seo-dashboard, schema-editor, review-workflow) should attempt to apply user-confirmed changes to the actual site. Sprinkle edits are not just local UI state — the scoop must try to write them back.
+Content-editing sprinkles should attempt to apply user-confirmed changes to the actual site. Sprinkle edits are not just local UI state — the scoop must try to write them back.
 
 ### When to apply
 
