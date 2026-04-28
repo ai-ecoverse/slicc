@@ -31,6 +31,7 @@ import { createFileTools, createBashTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import {
   getApiKey,
+  getProviderConfig,
   resolveCurrentModel,
   resolveModelById,
   getSelectedProvider,
@@ -313,8 +314,12 @@ export class ScoopContext {
 
       // Create agent
       const apiKey = getApiKey();
-      if (!apiKey) {
-        const provider = getSelectedProvider();
+      const provider = getSelectedProvider();
+      const providerConfig = getProviderConfig(provider);
+      // Providers that explicitly opt out of auth (e.g. local SwiftLM)
+      // are allowed to proceed with no api key. Everyone else still
+      // hard-fails so we don't paper over a misconfigured account.
+      if (!apiKey && providerConfig.requiresApiKey !== false) {
         throw new Error(`No API key configured for provider "${provider}"`);
       }
 

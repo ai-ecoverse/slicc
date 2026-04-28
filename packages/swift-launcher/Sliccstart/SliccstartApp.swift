@@ -6,13 +6,20 @@ import AppUpdater
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "App")
 
 /// Delegate that terminates all launched SLICC processes when the app quits.
-/// Owns the SliccProcess instance so it stays alive for the entire app lifetime.
+/// Owns the long-lived process / download instances so they stay alive for
+/// the entire app lifetime — Settings views are recreated on every open
+/// and would otherwise orphan child processes or cancel downloads.
 final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
     let sliccProcess = SliccProcess()
+    let swiftLMProcess = SwiftLMProcess()
+
+    @MainActor
+    let modelDownloads = ModelDownloadManager()
 
     func applicationWillTerminate(_ notification: Notification) {
         log.info("applicationWillTerminate: stopping all processes")
         sliccProcess.stopAll()
+        swiftLMProcess.stop()
     }
 }
 
@@ -37,6 +44,8 @@ struct SliccstartApp: App {
     }
 
     private var sliccProcess: SliccProcess { appDelegate.sliccProcess }
+    private var swiftLMProcess: SwiftLMProcess { appDelegate.swiftLMProcess }
+    private var modelDownloads: ModelDownloadManager { appDelegate.modelDownloads }
 
     var body: some Scene {
         WindowGroup {
@@ -145,6 +154,8 @@ struct SliccstartApp: App {
 
         Settings {
             SettingsView()
+                .environment(swiftLMProcess)
+                .environment(modelDownloads)
         }
     }
 

@@ -5,6 +5,17 @@
   "automerge": true,
   "automergeType": "pr",
   "platformAutomerge": true,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": ["^packages/swift-launcher/Sliccstart/Models/SwiftLMVersion\\.swift$"],
+      "matchStrings": [
+        "// renovate: datasource=(?<datasource>.+?) depName=(?<depName>.+?)(?: versioning=(?<versioning>.+?))?\\s+static let pinned = \"(?<currentValue>.+?)\""
+      ],
+      "datasourceTemplate": "{{datasource}}",
+      "versioningTemplate": "{{#if versioning}}{{versioning}}{{else}}semver{{/if}}"
+    }
+  ],
   "packageRules": [
     {
       "matchPackageNames": ["pyodide"],

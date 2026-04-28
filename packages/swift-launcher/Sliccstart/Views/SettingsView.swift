@@ -13,6 +13,8 @@ struct SettingsView: View {
         TabView {
             StartupSettingsView()
                 .tabItem { Label("Startup", systemImage: "power") }
+            ModelsSettingsView()
+                .tabItem { Label("Models", systemImage: "cube") }
             SecretsSettingsView()
                 .tabItem { Label("Secrets", systemImage: "key.fill") }
         }
