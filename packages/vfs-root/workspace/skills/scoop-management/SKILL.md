@@ -128,22 +128,25 @@ These three cone-only tools let you collapse that fan-out into a single follow-u
 
 - **`scoop_mute({ scoop_names })`** — suspends `scoop-notify` delivery for the listed scoops. A completion that arrives while muted is stashed (full response persisted to `/shared/scoop-notifications/*.md`); it does NOT trigger a cone turn.
 - **`scoop_unmute({ scoop_names })`** — resumes notifications AND returns every stashed completion inline as this tool's result. The cone reads the summaries in the current turn instead of taking one extra turn per scoop.
-- **`scoop_wait({ scoop_names, timeout_ms? })`** — implicitly mutes the listed scoops, blocks until each completes (or times out), and returns all captured summaries as the tool result. Completions that arrived before the call are consumed immediately. `timeout_ms: 0` means "return only the scoops that are already done". Omit `timeout_ms` to wait indefinitely. After the wait resolves, only scoops muted by this call are unmuted — pre-existing `scoop_mute` state survives.
+- **`scoop_wait({ scoop_names, timeout_ms? })`** — schedules a NON-BLOCKING wait. The tool returns immediately so the cone can keep working; when every listed scoop has completed (or the timeout fires) the orchestrator delivers a single `scoop-wait` channel lick containing all captured summaries. Target scoops are implicitly muted for the duration so individual `scoop-notify` events don't pre-empt the eventual `scoop-wait` lick. Completions that arrived before the call are folded into the same lick. `timeout_ms: 0` means "fire the lick on the next tick with whatever is already done". Omit `timeout_ms` to wait indefinitely. After the wait resolves, only scoops muted by this call are unmuted — pre-existing `scoop_mute` state survives.
 
 ### When to use which
 
 - **Fire-and-forget background work you'll check later** → `scoop_mute` now, do other work, `scoop_unmute` when you want the summaries.
-- **Fan-out with synthesis** (you delegate to several scoops and your next useful step depends on all of them) → `scoop_wait`. One tool call, one cone turn after they all finish.
+- **Fan-out with synthesis** (you delegate to several scoops and your next useful step depends on all of them) → `scoop_wait`. One tool call schedules the wait without blocking the cone; a single `scoop-wait` lick wakes the cone once they all finish (or the timeout fires) with every summary in one payload.
 - **Single delegation, no parallelism** → don't mute. The default `scoop-notify` path is fine.
 
 ### Examples
 
 ```
-# Fan-out + synthesize in one extra turn:
+# Fan-out + synthesize:
 feed_scoop({ scoop_name: "writer-a", prompt: "Draft intro" })
 feed_scoop({ scoop_name: "writer-b", prompt: "Draft outro" })
 scoop_wait({ scoop_names: ["writer-a", "writer-b"], timeout_ms: 600000 })
-# -> tool result contains both summaries; merge them in the next message.
+# -> Returns immediately. Cone can keep working, ask the user follow-ups,
+#    or end its turn. When both scoops finish (or 10 min elapses) a
+#    single `scoop-wait` lick is delivered with both summaries; the
+#    cone's next turn synthesizes them.
 
 # Start background work, poll non-blockingly:
 scoop_mute({ scoop_names: ["scraper"] })
