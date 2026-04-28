@@ -275,13 +275,6 @@ export interface WasmShellOptions {
    * shells that have no scoop owner.
    */
   getParentJid?: () => string | undefined;
-  /**
-   * Returns true when this shell is owned by a non-interactive scoop. Used by
-   * commands like `mount` that need a human at the keyboard to approve a
-   * picker — in scoop context they should fail fast instead of hanging on a
-   * tool UI nobody will see. Defaults to undefined (interactive).
-   */
-  isScoop?: () => boolean;
 }
 
 type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
@@ -352,7 +345,7 @@ export class WasmShell {
     });
 
     // Initialize mount commands with VirtualFS
-    this.mountCommands = new MountCommands({ fs: options.fs, isScoop: options.isScoop });
+    this.mountCommands = new MountCommands({ fs: options.fs });
 
     const scriptDiscoveryFs = options.jshDiscoveryFs ?? options.fs;
     const bshDiscoveryFs = options.bshDiscoveryFs ?? options.fs;

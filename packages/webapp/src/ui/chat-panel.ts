@@ -15,11 +15,7 @@ import { formatAttachmentSize, formatAttachmentSummary } from '../core/attachmen
 import { getMimeType } from '../core/mime-types.js';
 import { processImageContent, isSupportedImageFormat } from '../core/image-processor.js';
 import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
-import {
-  hydrateInlineSprinkles,
-  disposeInlineSprinkles,
-  type InlineSprinkleInstance,
-} from './inline-sprinkle.js';
+import { hydrateDips, disposeDips, type DipInstance } from './dip.js';
 import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
 import { getToolDescriptor, createToolIcon, createToolBody, toolStatus } from './tool-call-view.js';
 import { getLickDescriptor, createLickIcon, parseLickContent } from './lick-view.js';
@@ -154,8 +150,8 @@ export class ChatPanel {
   private onDeleteQueuedMessage: ((messageId: string) => void) | null = null;
   private pendingDeltaText = '';
   private streamingRafId: number | null = null;
-  private inlineSprinkles = new Map<string, InlineSprinkleInstance[]>();
-  public onInlineSprinkleLick?: (action: string, data: unknown) => void;
+  private dips = new Map<string, DipInstance[]>();
+  public onDipLick?: (action: string, data: unknown) => void;
   private modelSelectorEl!: HTMLElement;
   public onModelChange?: (modelId: string) => void;
   // Per-sessionId write queue for `persistLickToSession`. Chains concurrent
@@ -1425,7 +1421,7 @@ export class ChatPanel {
   // -- DOM rendering --
 
   private renderMessages(): void {
-    this.disposeAllInlineSprinkles();
+    this.disposeAllDips();
     this.messagesInner.innerHTML = '';
     let prevRole: string | null = null;
     let prevTimestamp = 0;
@@ -1495,7 +1491,7 @@ export class ChatPanel {
     if (!msg) return;
     const existing = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
     if (existing) {
-      this.disposeInlineSprinklesForMessage(messageId);
+      this.disposeDipsForMessage(messageId);
       // Determine showLabel based on previous message in the list
       const idx = this.messages.indexOf(msg);
       const prev = idx > 0 ? this.messages[idx - 1] : null;
@@ -1643,7 +1639,7 @@ export class ChatPanel {
       if (msg.attachments?.length) {
         details.appendChild(this.createAttachmentList(msg.attachments));
       }
-      if (!msg.isStreaming) this.hydrateInlineSprinklesInEl(contentEl, msg.id);
+      if (!msg.isStreaming) this.hydrateDipsInEl(contentEl, msg.id);
       details.appendChild(contentEl);
 
       el.appendChild(details);
@@ -1660,7 +1656,7 @@ export class ChatPanel {
         cursor.className = 'streaming-cursor';
         contentEl.appendChild(cursor);
       } else {
-        this.hydrateInlineSprinklesInEl(contentEl, msg.id);
+        this.hydrateDipsInEl(contentEl, msg.id);
       }
       el.appendChild(contentEl);
     }
@@ -1871,32 +1867,30 @@ export class ChatPanel {
     });
   }
 
-  private disposeInlineSprinklesForMessage(messageId: string): void {
-    const instances = this.inlineSprinkles.get(messageId);
+  private disposeDipsForMessage(messageId: string): void {
+    const instances = this.dips.get(messageId);
     if (instances) {
-      disposeInlineSprinkles(instances);
-      this.inlineSprinkles.delete(messageId);
+      disposeDips(instances);
+      this.dips.delete(messageId);
     }
   }
 
-  private disposeAllInlineSprinkles(): void {
-    for (const [, instances] of this.inlineSprinkles) {
-      disposeInlineSprinkles(instances);
+  private disposeAllDips(): void {
+    for (const [, instances] of this.dips) {
+      disposeDips(instances);
     }
-    this.inlineSprinkles.clear();
+    this.dips.clear();
   }
 
-  private hydrateInlineSprinklesInEl(contentEl: HTMLElement, msgId: string): void {
-    const instances = hydrateInlineSprinkles(contentEl, (action, data) =>
-      this.onInlineSprinkleLick?.(action, data)
-    );
-    if (instances.length) this.inlineSprinkles.set(msgId, instances);
+  private hydrateDipsInEl(contentEl: HTMLElement, msgId: string): void {
+    const instances = hydrateDips(contentEl, (action, data) => this.onDipLick?.(action, data));
+    if (instances.length) this.dips.set(msgId, instances);
   }
 
   /** Dispose the panel. */
   dispose(): void {
     this.cancelPendingDelta();
-    this.disposeAllInlineSprinkles();
+    this.disposeAllDips();
     this.unsubscribe?.();
     this.voiceInput?.destroy();
     if (this.keydownListener) {

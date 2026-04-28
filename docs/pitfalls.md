@@ -22,7 +22,7 @@ All dynamic code execution (JavaScript tool, `node -e`) routes through a sandbox
 | **Node command**     | Direct constructor usage                              | Wraps user code, posts to sandbox iframe                    |
 | **Fetch proxy**      | `/api/fetch-proxy` endpoint                           | Same sandbox iframe postMessage                             |
 | **Panel sprinkles**  | Fragments: direct DOM; Full docs: srcdoc iframe       | ALL: routes through `sprinkle-sandbox.html` via postMessage |
-| **Inline sprinkles** | Direct srcdoc iframe                                  | Routes through `sprinkle-sandbox.html` via postMessage      |
+| **Dips** | Direct srcdoc iframe                                  | Routes through `sprinkle-sandbox.html` via postMessage      |
 
 **Code Pattern: Three-Branch Detection**
 

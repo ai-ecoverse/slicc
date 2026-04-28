@@ -10,7 +10,7 @@
  */
 
 import type { VirtualFS } from './virtual-fs.js';
-import { getToolExecutionContext, showToolUI, toolUIRegistry } from '../tools/tool-ui.js';
+import { getToolExecutionContext, showToolUIFromContext } from '../tools/tool-ui.js';
 
 /** Escape HTML special characters to prevent XSS */
 function escapeHtml(text: string): string {
@@ -30,29 +30,7 @@ export interface MountCommandResult {
 
 export interface MountCommandsOptions {
   fs: VirtualFS;
-  /**
-   * Returns true when the command is running inside a non-interactive scoop
-   * context (no human at the keyboard to approve a directory picker). When
-   * true, mount fails fast instead of hanging on a tool UI prompt nobody
-   * will see. Omit this option in interactive (cone / standalone) contexts;
-   * when omitted it is treated as undefined / not a scoop.
-   */
-  isScoop?: () => boolean;
 }
-
-/**
- * Maximum time the agent-driven (cone) mount flow waits for the user to
- * resolve the approval / picker UI. Five minutes matches the slowest
- * realistic human response while preventing indefinite hangs.
- */
-const MOUNT_TOOL_UI_TIMEOUT_MS = 5 * 60 * 1000;
-
-/**
- * Unique sentinel returned by the timeout race so it can never be confused
- * with a legitimate tool UI result (which is `unknown`). Compared by
- * reference identity, not structural shape.
- */
-const MOUNT_TIMEOUT_SENTINEL: unique symbol = Symbol('mount:timeout');
 
 type ShowDirectoryPickerFn = (opts?: object) => Promise<FileSystemDirectoryHandle>;
 
@@ -123,19 +101,6 @@ export class MountCommands {
       };
     }
 
-    // Fail fast when invoked from a non-interactive scoop: there is no human
-    // attached to the scoop's chat to approve the picker, so the tool UI
-    // would hang indefinitely. Cone (interactive) keeps the existing flow.
-    if (this.options.isScoop?.()) {
-      return {
-        stdout: '',
-        stderr:
-          'mount: cannot mount from a scoop (non-interactive context). ' +
-          'Ask the cone to mount the directory and share the path.\n',
-        exitCode: 1,
-      };
-    }
-
     if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
       return {
         stdout: '',
@@ -158,18 +123,9 @@ export class MountCommands {
     let dirHandle: FileSystemDirectoryHandle;
 
     if (toolContext) {
-      // Agent-driven: show approval UI before opening picker. We drive
-      // showToolUI directly (rather than the helper) so we own the request
-      // id and can cancel the registry entry when the timeout fires —
-      // otherwise a late click would still run the picker callback after
-      // the command has already exited.
-      const uiRequestId = toolUIRegistry.generateId();
-      let timedOut = false;
-
-      const rawUiPromise = showToolUI(
-        {
-          id: uiRequestId,
-          html: `
+      // Agent-driven: show approval UI before opening picker
+      const result = await showToolUIFromContext({
+        html: `
           <div class="sprinkle-action-card">
             <div class="sprinkle-action-card__header">Mount at <code>${escapeHtml(targetPath)}</code> <span class="sprinkle-badge sprinkle-badge--notice">approval</span></div>
             <div class="sprinkle-action-card__actions">
@@ -178,74 +134,40 @@ export class MountCommands {
             </div>
           </div>
         `,
-          onAction: async (action, data) => {
-            if (action === 'approve') {
-              const d = data as Record<string, unknown> | undefined;
+        onAction: async (action, data) => {
+          if (action === 'approve') {
+            const d = data as Record<string, unknown> | undefined;
 
-              if (d?.handleInIdb && typeof d.idbKey === 'string') {
-                try {
-                  const handle = await loadAndClearPendingHandle(d.idbKey);
-                  if (!handle) return { error: 'No directory handle found in storage' };
-                  await reactivateHandle(handle);
-                  return { approved: true, handle };
-                } catch (err: unknown) {
-                  return { error: err instanceof Error ? err.message : String(err) };
-                }
-              }
-
-              if (d?.cancelled) return { cancelled: true };
-              if (d?.error) return { error: String(d.error) };
-
+            if (d?.handleInIdb && typeof d.idbKey === 'string') {
               try {
-                const handle = await (
-                  window as Window &
-                    typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
-                ).showDirectoryPicker({ mode: 'readwrite' });
+                const handle = await loadAndClearPendingHandle(d.idbKey);
+                if (!handle) return { error: 'No directory handle found in storage' };
+                await reactivateHandle(handle);
                 return { approved: true, handle };
               } catch (err: unknown) {
-                if (err instanceof Error && err.name === 'AbortError') {
-                  return { cancelled: true };
-                }
                 return { error: err instanceof Error ? err.message : String(err) };
               }
             }
-            return { denied: true };
-          },
+
+            if (d?.cancelled) return { cancelled: true };
+            if (d?.error) return { error: String(d.error) };
+
+            try {
+              const handle = await (
+                window as Window &
+                  typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
+              ).showDirectoryPicker({ mode: 'readwrite' });
+              return { approved: true, handle };
+            } catch (err: unknown) {
+              if (err instanceof Error && err.name === 'AbortError') {
+                return { cancelled: true };
+              }
+              return { error: err instanceof Error ? err.message : String(err) };
+            }
+          }
+          return { denied: true };
         },
-        toolContext.onUpdate
-      );
-
-      // Swallow the registry rejection produced by our own cancel() call so
-      // it doesn't surface as an unhandled promise rejection. Other
-      // rejections (e.g. agent abort) are still observable via the race.
-      const safeUiPromise = rawUiPromise.catch((err: unknown) => {
-        if (timedOut) return MOUNT_TIMEOUT_SENTINEL;
-        throw err;
       });
-
-      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-      const timeoutPromise = new Promise<typeof MOUNT_TIMEOUT_SENTINEL>((resolve) => {
-        timeoutHandle = setTimeout(() => {
-          timedOut = true;
-          // Cancelling rejects the pending UI, removes the registry entry,
-          // and lets showToolUI emit tool_ui_done so the panel cleans up.
-          toolUIRegistry.cancel(uiRequestId, 'mount: timed out');
-          resolve(MOUNT_TIMEOUT_SENTINEL);
-        }, MOUNT_TOOL_UI_TIMEOUT_MS);
-      });
-
-      const result = await Promise.race([safeUiPromise, timeoutPromise]);
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-
-      if (result === MOUNT_TIMEOUT_SENTINEL) {
-        return {
-          stdout: '',
-          stderr:
-            `mount: timed out after ${Math.round(MOUNT_TOOL_UI_TIMEOUT_MS / 60000)} minute(s) ` +
-            'waiting for user approval\n',
-          exitCode: 1,
-        };
-      }
 
       if (!result) {
         return { stdout: '', stderr: 'mount: tool UI not available', exitCode: 1 };

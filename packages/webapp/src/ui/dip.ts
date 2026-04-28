@@ -1,5 +1,7 @@
+// dips module
 /**
- * Inline Sprinkles — hydrates ```shtml fenced code blocks in chat messages
+ * Dips — hydrates ```shtml fenced code blocks and ![](/path.shtml) image
+ * references in chat messages
  * into sandboxed srcdoc iframes with a minimal lick-only bridge.
  *
  * Cards are ephemeral (no state persistence, no readFile). Lick events
@@ -17,11 +19,11 @@ const BRIDGE_SCRIPT = `(function() {
     lick: function(event) {
       var action = typeof event === 'string' ? event : event.action;
       var data = typeof event === 'string' ? undefined : ('data' in event ? event.data : event);
-      parent.postMessage({ type: 'inline-sprinkle-lick', action: action, data: data }, '*');
+      parent.postMessage({ type: 'dip-lick', action: action, data: data }, '*');
     }
   };
   function reportHeight() {
-    parent.postMessage({ type: 'inline-sprinkle-height',
+    parent.postMessage({ type: 'dip-height',
       height: document.documentElement.scrollHeight }, '*');
   }
   window.addEventListener('message', function(e) {
@@ -55,7 +57,7 @@ const BRIDGE_SCRIPT = `(function() {
         /* Resolve relative URLs against the iframe's base. */
         var resolved;
         try { resolved = new URL(href, document.baseURI).href; } catch(ex) { resolved = href; }
-        parent.postMessage({ type: 'inline-sprinkle-open-link', url: resolved }, '*');
+        parent.postMessage({ type: 'dip-open-link', url: resolved }, '*');
         e.preventDefault();
         e.stopPropagation();
         return;
@@ -65,19 +67,19 @@ const BRIDGE_SCRIPT = `(function() {
   });
 })();`;
 
-export interface InlineSprinkleInstance {
+export interface DipInstance {
   dispose(): void;
 }
 
 /**
- * Mount an inline sprinkle iframe in the given container element.
+ * Mount an dip iframe in the given container element.
  * Exported for reuse by tool-ui-renderer (sprinkle chat).
  */
-export function mountInlineSprinkle(
+export function mountDip(
   container: HTMLElement,
   content: string,
   onLick: (action: string, data: unknown) => void
-): InlineSprinkleInstance {
+): DipInstance {
   const themeCSS = collectThemeCSS();
   const htmlClass = isThemeLight() ? ' class="theme-light"' : '';
 
@@ -119,9 +121,9 @@ mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inheri
 <script>${BRIDGE_SCRIPT}</script>
 ${
   // Custom element bundles are loaded via src in CLI mode (same-origin).
-  // In extension mode, inline sprinkles route through sprinkle-sandbox.html
+  // In extension mode, dips route through sprinkle-sandbox.html
   // which handles lazy-loading for fragment content. Full custom element
-  // support in extension inline sprinkles requires the full-doc inlining path.
+  // support in extension dips requires the full-doc inlining path.
   content.includes('<slicc-editor') ? '<script src="/slicc-editor.js"></script>' : ''
 }
 ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : ''}
@@ -130,7 +132,7 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
 <body class="sprinkle-inline">${content}</body></html>`;
 
   if (isExtension) {
-    return mountInlineSprinkleExtension(container, srcdoc, onLick);
+    return mountDipExtension(container, srcdoc, onLick);
   }
 
   const iframe = document.createElement('iframe');
@@ -147,12 +149,12 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
     const msg = event.data;
     if (!msg?.type) return;
 
-    if (msg.type === 'inline-sprinkle-lick') {
+    if (msg.type === 'dip-lick') {
       onLick(msg.action, msg.data);
-    } else if (msg.type === 'inline-sprinkle-height') {
+    } else if (msg.type === 'dip-height') {
       iframe.style.height = msg.height + 'px';
-    } else if (msg.type === 'inline-sprinkle-open-link') {
-      openInlineSprinkleLink(msg.url);
+    } else if (msg.type === 'dip-open-link') {
+      openDipLink(msg.url);
     }
   };
   window.addEventListener('message', messageHandler);
@@ -167,11 +169,11 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
 }
 
 /**
- * Open a link from a sandboxed inline sprinkle in a new tab. Only http(s)
+ * Open a link from a sandboxed dip in a new tab. Only http(s)
  * and mailto: URLs are allowed to avoid navigating the host page through
  * javascript:/data: schemes relayed from the iframe.
  */
-function openInlineSprinkleLink(url: unknown): void {
+function openDipLink(url: unknown): void {
   if (typeof url !== 'string' || !url) return;
   if (!/^(https?:|mailto:)/i.test(url)) return;
   try {
@@ -183,33 +185,62 @@ function openInlineSprinkleLink(url: unknown): void {
 
 /**
  * Find all `code.language-shtml` blocks in a container, replace them with
- * sandboxed inline sprinkle iframes. Returns instances for lifecycle tracking.
+ * sandboxed dip iframes. Returns instances for lifecycle tracking.
  */
-export function hydrateInlineSprinkles(
+export function hydrateDips(
   containerEl: HTMLElement,
   onLick: (action: string, data: unknown) => void
-): InlineSprinkleInstance[] {
+): DipInstance[] {
   const codeEls = containerEl.querySelectorAll<HTMLElement>('pre > code.language-shtml');
   if (codeEls.length === 0) return [];
 
-  const instances: InlineSprinkleInstance[] = [];
+  const instances: DipInstance[] = [];
 
   for (const codeEl of codeEls) {
     const preEl = codeEl.parentElement!;
     const shtmlContent = codeEl.textContent ?? '';
 
     const wrapper = document.createElement('div');
-    wrapper.className = 'msg__inline-sprinkle';
+    wrapper.className = 'msg__dip';
     preEl.replaceWith(wrapper);
 
-    instances.push(mountInlineSprinkle(wrapper, shtmlContent, onLick));
+    instances.push(mountDip(wrapper, shtmlContent, onLick));
+  }
+
+
+  //    ![alt](/path/to/file.shtml) image references                  
+  const imgEls = containerEl.querySelectorAll<HTMLImageElement>('img[src$=".shtml"]');
+  for (const imgEl of imgEls) {
+    const src = imgEl.getAttribute('src');
+    if (!src) continue;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'msg__dip';
+    if (imgEl.alt) wrapper.setAttribute('title', imgEl.alt);
+    imgEl.replaceWith(wrapper);
+
+    // Fetch the .shtml content from VFS via the preview service worker
+    const fetchUrl = src.startsWith('/') ? `/preview${src}` : src;
+    fetch(fetchUrl)
+      .then((resp) => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp.text();
+      })
+      .then((shtmlContent) => {
+        instances.push(mountDip(wrapper, shtmlContent, onLick));
+      })
+      .catch((err) => {
+        wrapper.textContent = `Failed to load dip: ${src}`;
+        wrapper.style.cssText =
+          'padding:8px;font-size:12px;color:var(--s2-negative);font-family:var(--s2-font-mono)';
+      });
   }
 
   return instances;
 }
 
-/** Dispose all inline sprinkle instances and clear the array. */
-export function disposeInlineSprinkles(instances: InlineSprinkleInstance[]): void {
+/** Dispose all dip instances and clear the array. */
+export function disposeDips(instances: DipInstance[]): void {
   for (const inst of instances) {
     try {
       inst.dispose();
@@ -221,14 +252,14 @@ export function disposeInlineSprinkles(instances: InlineSprinkleInstance[]): voi
 }
 
 /**
- * Extension mode: route inline sprinkle through the manifest sandbox (CSP-exempt).
+ * Extension mode: route dip through the manifest sandbox (CSP-exempt).
  * The sandbox creates a nested srcdoc iframe and relays messages back.
  */
-function mountInlineSprinkleExtension(
+function mountDipExtension(
   container: HTMLElement,
   srcdoc: string,
   onLick: (action: string, data: unknown) => void
-): InlineSprinkleInstance {
+): DipInstance {
   const iframe = document.createElement('iframe');
   iframe.src = chrome.runtime.getURL('sprinkle-sandbox.html');
   iframe.style.cssText = 'width:100%;border:none;overflow:hidden;display:block;';
@@ -239,12 +270,12 @@ function mountInlineSprinkleExtension(
     const msg = event.data;
     if (!msg?.type) return;
 
-    if (msg.type === 'inline-sprinkle-lick') {
+    if (msg.type === 'dip-lick') {
       onLick(msg.action, msg.data);
-    } else if (msg.type === 'inline-sprinkle-height') {
+    } else if (msg.type === 'dip-height') {
       iframe.style.height = msg.height + 'px';
-    } else if (msg.type === 'inline-sprinkle-open-link') {
-      openInlineSprinkleLink(msg.url);
+    } else if (msg.type === 'dip-open-link') {
+      openDipLink(msg.url);
     }
   };
   window.addEventListener('message', messageHandler);
@@ -254,7 +285,7 @@ function mountInlineSprinkleExtension(
     () => {
       registerSprinkleWindow(iframe.contentWindow);
       iframe.contentWindow?.postMessage(
-        { type: 'inline-sprinkle-render', srcdoc, isLight: isThemeLight() },
+        { type: 'dip-render', srcdoc, isLight: isThemeLight() },
         '*'
       );
     },

@@ -367,8 +367,8 @@ var bridgeTypes = [
   'sprinkle-storage-set',
   'sprinkle-storage-remove',
   'sprinkle-storage-clear',
-  'inline-sprinkle-lick',
-  'inline-sprinkle-height',
+  'dip-lick',
+  'dip-height',
   'sprinkle-fetch-script',
 ];
 ```

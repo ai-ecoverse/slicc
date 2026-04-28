@@ -607,7 +607,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   };
 
   // Wire inline sprinkle lick callback (extension mode)
-  layout.panels.chat.onInlineSprinkleLick = (action: string, data: unknown) => {
+  layout.panels.chat.onDipLick = (action: string, data: unknown) => {
     client.sendSprinkleLick('inline', { action, data });
   };
 
@@ -1719,7 +1719,7 @@ async function main(): Promise<void> {
   }
 
   // Wire inline sprinkle lick callback — routes to cone as a sprinkle lick event
-  layout.panels.chat.onInlineSprinkleLick = (action: string, data: unknown) => {
+  layout.panels.chat.onDipLick = (action: string, data: unknown) => {
     const event: LickEvent = {
       type: 'sprinkle',
       sprinkleName: 'inline',

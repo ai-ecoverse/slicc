@@ -1,11 +1,11 @@
 /**
- * E2E test for inline sprinkles feature.
+ * E2E test for dips feature.
  * Connects to the dev server's Chrome via CDP and verifies that
  * ```shtml code blocks are hydrated into sandboxed iframes.
  *
  * Usage:
  *   1. npm run dev:full
- *   2. node packages/webapp/tests/test-inline-sprinkles.mjs
+ *   2. node packages/webapp/tests/test-dips.mjs
  */
 
 import puppeteer from 'puppeteer-core';
@@ -52,7 +52,7 @@ async function main() {
     await page.goto(APP_URL, { waitUntil: 'networkidle2', timeout: 15000 });
   }
 
-  console.log(`${YELLOW}Running inline sprinkle tests...${RESET}\n`);
+  console.log(`${YELLOW}Running dip tests...${RESET}\n`);
 
   // ── Test 1: Inject a fake assistant message with shtml and verify hydration ──
   console.log('Test 1: shtml code block is hydrated into an iframe');
@@ -97,27 +97,25 @@ async function main() {
   }
 
   // ── Test 2: Use the actual hydration function ──
-  console.log('\nTest 2: hydrateInlineSprinkles replaces code blocks with iframes');
+  console.log('\nTest 2: hydrateDips replaces code blocks with iframes');
   try {
     const result = await page.evaluate(async () => {
-      // Dynamically import the inline-sprinkle module
-      const mod = await import('/packages/webapp/src/ui/inline-sprinkle.ts');
+      // Dynamically import the dip module
+      const mod = await import('/packages/webapp/src/ui/dip.ts');
       const wrapper = document.querySelector('[data-msg-id="test-inline-1"] .msg__content');
       if (!wrapper) return { error: 'Test message not found' };
 
       const licks = [];
-      const instances = mod.hydrateInlineSprinkles(wrapper, (action, data) => {
+      const instances = mod.hydrateDips(wrapper, (action, data) => {
         licks.push({ action, data });
       });
 
       return {
         instanceCount: instances.length,
-        hasIframe: !!wrapper.querySelector('.msg__inline-sprinkle iframe'),
-        iframeSandbox: wrapper
-          .querySelector('.msg__inline-sprinkle iframe')
-          ?.getAttribute('sandbox'),
+        hasIframe: !!wrapper.querySelector('.msg__dip iframe'),
+        iframeSandbox: wrapper.querySelector('.msg__dip iframe')?.getAttribute('sandbox'),
         noCodeBlock: !wrapper.querySelector('code.language-shtml'),
-        hasWrapper: !!wrapper.querySelector('.msg__inline-sprinkle'),
+        hasWrapper: !!wrapper.querySelector('.msg__dip'),
       };
     });
 
@@ -125,10 +123,10 @@ async function main() {
       fail('Hydration failed', result.error);
     } else {
       if (result.instanceCount === 1)
-        ok(`Created ${result.instanceCount} inline sprinkle instance`);
+        ok(`Created ${result.instanceCount} dip instance`);
       else fail(`Expected 1 instance, got ${result.instanceCount}`);
 
-      if (result.hasIframe) ok('iframe was created inside .msg__inline-sprinkle');
+      if (result.hasIframe) ok('iframe was created inside .msg__dip');
       else fail('No iframe found');
 
       if (result.iframeSandbox === 'allow-scripts') ok('iframe has sandbox="allow-scripts"');
@@ -137,8 +135,8 @@ async function main() {
       if (result.noCodeBlock) ok('Original code block was removed');
       else fail('Code block still exists after hydration');
 
-      if (result.hasWrapper) ok('.msg__inline-sprinkle wrapper was created');
-      else fail('No .msg__inline-sprinkle wrapper');
+      if (result.hasWrapper) ok('.msg__dip wrapper was created');
+      else fail('No .msg__dip wrapper');
     }
   } catch (e) {
     fail('Hydration test failed', e.message);
@@ -148,25 +146,23 @@ async function main() {
   console.log('\nTest 3: iframe srcdoc renders the shtml content');
   try {
     // Wait for iframe to load
-    await page.waitForSelector('[data-msg-id="test-inline-1"] .msg__inline-sprinkle iframe', {
+    await page.waitForSelector('[data-msg-id="test-inline-1"] .msg__dip iframe', {
       timeout: 3000,
     });
     await new Promise((r) => setTimeout(r, 500)); // give iframe time to render
 
     const result = await page.evaluate(() => {
-      const iframe = document.querySelector(
-        '[data-msg-id="test-inline-1"] .msg__inline-sprinkle iframe'
-      );
+      const iframe = document.querySelector('[data-msg-id="test-inline-1"] .msg__dip iframe');
       if (!iframe) return { error: 'No iframe found' };
 
       // Check srcdoc contains the expected content
       const srcdoc = iframe.srcdoc || '';
       return {
-        hasBridgeScript: srcdoc.includes('inline-sprinkle-lick'),
+        hasBridgeScript: srcdoc.includes('dip-lick'),
         hasThemeCSS: srcdoc.includes(':root'),
         hasActionCard: srcdoc.includes('sprinkle-action-card'),
         hasSprinkleInlineClass: srcdoc.includes('sprinkle-inline'),
-        hasAutoHeight: srcdoc.includes('inline-sprinkle-height'),
+        hasAutoHeight: srcdoc.includes('dip-height'),
         iframeHeight: iframe.style.height,
         iframeDisplay: iframe.style.display,
       };
@@ -175,7 +171,7 @@ async function main() {
     if (result.error) {
       fail('iframe check failed', result.error);
     } else {
-      if (result.hasBridgeScript) ok('Bridge script with inline-sprinkle-lick is in srcdoc');
+      if (result.hasBridgeScript) ok('Bridge script with dip-lick is in srcdoc');
       else fail('Bridge script missing from srcdoc');
 
       if (result.hasThemeCSS) ok('Theme CSS variables are injected');
@@ -203,16 +199,14 @@ async function main() {
         // Listen for the lick postMessage
         const handler = (event) => {
           const msg = event.data;
-          if (msg?.type === 'inline-sprinkle-lick') {
+          if (msg?.type === 'dip-lick') {
             licks.push({ action: msg.action, data: msg.data });
           }
         };
         window.addEventListener('message', handler);
 
         // Find the iframe and simulate a click on its button
-        const iframe = document.querySelector(
-          '[data-msg-id="test-inline-1"] .msg__inline-sprinkle iframe'
-        );
+        const iframe = document.querySelector('[data-msg-id="test-inline-1"] .msg__dip iframe');
         if (!iframe?.contentWindow) {
           resolve({ error: 'No iframe contentWindow' });
           return;
@@ -226,7 +220,7 @@ async function main() {
         // Directly test the bridge by simulating what the button onclick would do
         window.postMessage(
           {
-            type: 'inline-sprinkle-lick',
+            type: 'dip-lick',
             action: 'test-action',
             data: { env: 'prod' },
           },
@@ -263,7 +257,7 @@ async function main() {
   console.log('\nTest 5: Multiple shtml blocks in one message');
   try {
     const result = await page.evaluate(async () => {
-      const mod = await import('/packages/webapp/src/ui/inline-sprinkle.ts');
+      const mod = await import('/packages/webapp/src/ui/dip.ts');
       const messagesEl = document.querySelector('.chat__messages');
 
       const wrapper = document.createElement('div');
@@ -282,11 +276,11 @@ async function main() {
       messagesEl.appendChild(wrapper);
 
       const contentEl = wrapper.querySelector('.msg__content');
-      const instances = mod.hydrateInlineSprinkles(contentEl, () => {});
+      const instances = mod.hydrateDips(contentEl, () => {});
 
       return {
         instanceCount: instances.length,
-        iframeCount: contentEl.querySelectorAll('.msg__inline-sprinkle iframe').length,
+        iframeCount: contentEl.querySelectorAll('.msg__dip iframe').length,
         remainingCodeBlocks: contentEl.querySelectorAll('code.language-shtml').length,
         paragraphCount: contentEl.querySelectorAll('p').length, // should still have 2 text paragraphs
       };
@@ -312,14 +306,14 @@ async function main() {
   console.log('\nTest 6: Non-shtml code blocks are left untouched');
   try {
     const result = await page.evaluate(async () => {
-      const mod = await import('/packages/webapp/src/ui/inline-sprinkle.ts');
+      const mod = await import('/packages/webapp/src/ui/dip.ts');
       const container = document.createElement('div');
       container.innerHTML = `
         <pre><code class="language-javascript">const x = 1;</code></pre>
         <pre><code class="language-html">&lt;p&gt;Hello&lt;/p&gt;</code></pre>
       `;
 
-      const instances = mod.hydrateInlineSprinkles(container, () => {});
+      const instances = mod.hydrateDips(container, () => {});
       return {
         instanceCount: instances.length,
         codeBlockCount: container.querySelectorAll('pre > code').length,
@@ -339,15 +333,15 @@ async function main() {
   console.log('\nTest 7: Dispose removes iframes and cleans up');
   try {
     const result = await page.evaluate(async () => {
-      const mod = await import('/packages/webapp/src/ui/inline-sprinkle.ts');
+      const mod = await import('/packages/webapp/src/ui/dip.ts');
       const container = document.createElement('div');
       container.innerHTML = `<pre><code class="language-shtml">&lt;p&gt;Disposable&lt;/p&gt;</code></pre>`;
       document.body.appendChild(container);
 
-      const instances = mod.hydrateInlineSprinkles(container, () => {});
+      const instances = mod.hydrateDips(container, () => {});
       const hadIframe = !!container.querySelector('iframe');
 
-      mod.disposeInlineSprinkles(instances);
+      mod.disposeDips(instances);
 
       const hasIframeAfter = !!container.querySelector('iframe');
       const instancesEmpty = instances.length === 0;
@@ -373,13 +367,13 @@ async function main() {
   console.log('\nTest 8: iframe auto-height via ResizeObserver');
   try {
     const result = await page.evaluate(async () => {
-      const mod = await import('/packages/webapp/src/ui/inline-sprinkle.ts');
+      const mod = await import('/packages/webapp/src/ui/dip.ts');
       const container = document.createElement('div');
       container.style.width = '400px';
       container.innerHTML = `<pre><code class="language-shtml">&lt;div style="height:150px"&gt;Tall content&lt;/div&gt;</code></pre>`;
       document.body.appendChild(container);
 
-      const instances = mod.hydrateInlineSprinkles(container, () => {});
+      const instances = mod.hydrateDips(container, () => {});
       const iframe = container.querySelector('iframe');
       if (!iframe) return { error: 'No iframe' };
 
@@ -387,7 +381,7 @@ async function main() {
       await new Promise((r) => setTimeout(r, 1000));
 
       const height = iframe.style.height;
-      mod.disposeInlineSprinkles(instances);
+      mod.disposeDips(instances);
       container.remove();
 
       return { height, hasHeight: !!height && height !== '' && height !== '0px' };

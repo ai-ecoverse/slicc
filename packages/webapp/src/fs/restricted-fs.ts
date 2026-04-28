@@ -141,17 +141,6 @@ export class RestrictedFS {
     return this.vfs.getLightningFS();
   }
 
-  /**
-   * Mount-membership query — needed by the isomorphic-git fs adapter,
-   * which routes mount-backed paths through the async VFS API instead of
-   * raw LightningFS. Delegates to the underlying VirtualFS; this is a
-   * read-only query with no sandbox security implications (scoops
-   * typically have no mounts, so it returns `false` for all their paths).
-   */
-  isPathUnderMount(path: string): boolean {
-    return this.vfs.isPathUnderMount(path);
-  }
-
   // ── Read operations: return "not found" for outside paths ────────────
 
   async readFile(path: string, options?: ReadFileOptions): Promise<FileContent> {

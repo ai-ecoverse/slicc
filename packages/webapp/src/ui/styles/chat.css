@@ -152,14 +152,14 @@
   font-size: inherit;
 }
 
-/* Inline sprinkle container — shtml code blocks hydrated into iframes */
-.msg__inline-sprinkle {
+/* Dip container — shtml code blocks and image references hydrated into iframes */
+.msg__dip {
   margin: 0.6em 0;
   border-radius: var(--s2-radius-default);
   overflow: hidden;
   min-height: 32px;
 }
-.msg__inline-sprinkle iframe {
+.msg__dip iframe {
   display: block;
   width: 100%;
   border: none;
