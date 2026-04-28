@@ -254,6 +254,10 @@ export class ScoopContext {
         // tell the AgentBridge which scoop is the parent of any nested
         // `agent <cwd> ... <prompt>` invocation — used for model inheritance.
         getParentJid: () => this.scoop.jid,
+        // Mark non-cone scoops as non-interactive so commands like `mount`
+        // that need a human gesture fail fast instead of hanging on a tool
+        // UI nobody will see (issue #508).
+        isScoop: () => !this.scoop.isCone,
       });
       log.info('WasmShell initialized', { folder: this.scoop.folder });
       const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
