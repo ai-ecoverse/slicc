@@ -1,41 +1,45 @@
 import SwiftUI
 
+// MARK: - DetailRoute
+
+/// Discriminator for what to show in the NavigationSplitView's detail column.
+enum DetailRoute: Hashable {
+    case conversation
+    case tabs
+    case sprinkle(name: String)
+}
+
 // MARK: - SprinkleSidebarView
 
-/// Sidebar listing available sprinkles. Used as the leading column of
-/// `NavigationSplitView` in `ChatView`.
+/// Sidebar listing chat / browser tabs / sprinkles. Used as the leading column
+/// of `NavigationSplitView` in `ChatView`.
 struct SprinkleSidebarView: View {
     @EnvironmentObject var appState: AppState
-    @Binding var selectedSprinkle: SprinkleSummary?
+    @Binding var route: DetailRoute
 
     var body: some View {
-        List(selection: $selectedSprinkle) {
+        // List uses an optional binding; we adapt to/from the non-optional
+        // route binding so an empty selection (clear) lands on .conversation.
+        let selectionBinding = Binding<DetailRoute?>(
+            get: { route },
+            set: { route = $0 ?? .conversation }
+        )
+        List(selection: selectionBinding) {
             Section("Chat") {
-                Button {
-                    selectedSprinkle = nil
-                } label: {
-                    HStack {
-                        Image(systemName: "bubble.left.and.bubble.right.fill")
-                            .foregroundStyle(.purple)
-                        Text("Conversation")
-                            .foregroundStyle(.primary)
-                        Spacer()
-                        if let activeJid = appState.leaderActiveScoopJid,
-                           let active = appState.scoops.first(where: { $0.jid == activeJid }) {
-                            Text(active.assistantLabel)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
+                conversationRow
+                    .tag(DetailRoute.conversation)
+            }
+
+            Section("Browser") {
+                tabsRow
+                    .tag(DetailRoute.tabs)
             }
 
             if !appState.sprinkles.isEmpty {
                 Section("Sprinkles") {
                     ForEach(appState.sprinkles) { sprinkle in
                         sprinkleRow(sprinkle)
-                            .tag(sprinkle as SprinkleSummary?)
+                            .tag(DetailRoute.sprinkle(name: sprinkle.name))
                     }
                 }
             } else {
@@ -61,6 +65,56 @@ struct SprinkleSidebarView: View {
         .refreshable {
             appState.refreshSprinkles()
         }
+    }
+
+    // MARK: - Rows
+
+    @ViewBuilder
+    private var conversationRow: some View {
+        HStack {
+            Image(systemName: "bubble.left.and.bubble.right.fill")
+                .foregroundStyle(.purple)
+                .frame(width: 22)
+            Text("Conversation")
+                .foregroundStyle(.primary)
+            Spacer()
+            if let activeJid = appState.leaderActiveScoopJid,
+               let active = appState.scoops.first(where: { $0.jid == activeJid }) {
+                Text(active.assistantLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var tabsRow: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "rectangle.stack.fill")
+                .foregroundStyle(.blue)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Tabs")
+                    .foregroundStyle(.primary)
+                if let primary = appState.cdpTargets.first {
+                    Text(primary.title.isEmpty ? primary.url : primary.title)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer()
+            if !appState.cdpTargets.isEmpty {
+                Text("\(appState.cdpTargets.count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.blue.opacity(0.4)))
+            }
+        }
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder

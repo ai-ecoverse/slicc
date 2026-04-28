@@ -22,6 +22,7 @@
 		487756D13ED6B5D4FB9FF6A0 /* TrayFollowerConnector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93EE217FAA3F9F7DD3A0B07F /* TrayFollowerConnector.swift */; };
 		4BA93B0DC88934132A09F1D6 /* FollowerSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82060520ADE3CE44E0D0FAE0 /* FollowerSyncManager.swift */; };
 		532EBF4FC79CF40ABCD366F0 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4E99369A8A6B1A9B8EBE996E /* WebKit.framework */; };
+		58AACC678F1000C41BC7AA1A /* TabsCarouselView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39ADD0645C7DD3B30664E997 /* TabsCarouselView.swift */; };
 		5A678420A08BBB43297E1D8D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F0583BDF50B1A1B9CE68AE67 /* Assets.xcassets */; };
 		5DBC389110F337A40762C4E1 /* MessageListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E727142147B0FB449F418D1 /* MessageListView.swift */; };
 		73CC65978EB7E4B1818441ED /* MessageWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 293EF6D00AE2A86081777881 /* MessageWebView.swift */; };
@@ -48,6 +49,7 @@
 		1F8BFCDA8C3F71C0A853D573 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		293EF6D00AE2A86081777881 /* MessageWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageWebView.swift; sourceTree = "<group>"; };
 		2EDB6F858D918DBBE06D4702 /* TrayTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayTypes.swift; sourceTree = "<group>"; };
+		39ADD0645C7DD3B30664E997 /* TabsCarouselView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsCarouselView.swift; sourceTree = "<group>"; };
 		3FE6B46ECEC5C79FA6D986F9 /* CDPTarget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDPTarget.swift; sourceTree = "<group>"; };
 		407939337779F91986E8DAB3 /* SprinkleSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SprinkleSidebarView.swift; sourceTree = "<group>"; };
 		434BBAD25E91BD0B7D626821 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -145,6 +147,7 @@
 				438577405ABBCA33F117862C /* SliccIcons.swift */,
 				407939337779F91986E8DAB3 /* SprinkleSidebarView.swift */,
 				C9C3A976D441E4BB628F2183 /* SprinkleWebView.swift */,
+				39ADD0645C7DD3B30664E997 /* TabsCarouselView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -316,6 +319,7 @@
 				BBF4C5A147E77FE534564A87 /* SprinkleSidebarView.swift in Sources */,
 				F5AC500C53CC1A9251A5718B /* SprinkleWebView.swift in Sources */,
 				7BEE859F6C68FEAFD63D1FBB /* SyncProtocol.swift in Sources */,
+				58AACC678F1000C41BC7AA1A /* TabsCarouselView.swift in Sources */,
 				487756D13ED6B5D4FB9FF6A0 /* TrayFollowerConnector.swift in Sources */,
 				D2A85DC611A43443DEC75989 /* TraySignaling.swift in Sources */,
 				8A4DC8067E31936EA9C475BC /* TrayTypes.swift in Sources */,

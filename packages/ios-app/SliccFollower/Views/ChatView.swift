@@ -1,23 +1,30 @@
 import SwiftUI
 
 /// Top-level container view with a NavigationSplitView whose sidebar lists
-/// available sprinkles and whose detail column is either the conversation or
-/// a selected sprinkle's WKWebView.
+/// chat / browser tabs / sprinkles and whose detail column shows the selected
+/// route (conversation, tabs carousel, or a sprinkle's WKWebView).
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
-    @State private var selectedSprinkle: SprinkleSummary?
+    @State private var route: DetailRoute = .conversation
     @State private var showSettings = false
     @State private var hasAppeared = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            SprinkleSidebarView(selectedSprinkle: $selectedSprinkle)
+            SprinkleSidebarView(route: $route)
         } detail: {
-            if let sprinkle = selectedSprinkle {
-                SprinkleDetailView(sprinkle: sprinkle)
-            } else {
+            switch route {
+            case .conversation:
                 ConversationView(showSettings: $showSettings)
+            case .tabs:
+                TabsCarouselView()
+            case let .sprinkle(name):
+                if let sprinkle = appState.sprinkles.first(where: { $0.name == name }) {
+                    SprinkleDetailView(sprinkle: sprinkle)
+                } else {
+                    ConversationView(showSettings: $showSettings)
+                }
             }
         }
         .navigationSplitViewStyle(.balanced)

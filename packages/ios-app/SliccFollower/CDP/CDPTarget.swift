@@ -310,12 +310,14 @@ extension CDPTarget: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         if let url = webView.url?.absoluteString { currentURL = url }
+        bridge?.notifyTargetsChanged()
         guard pageEnabled else { return }
         emitLifecycle("init")
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         if let url = webView.url?.absoluteString { currentURL = url }
+        bridge?.notifyTargetsChanged()
         guard pageEnabled else { return }
         emitFrameNavigated()
     }
@@ -323,6 +325,7 @@ extension CDPTarget: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if let url = webView.url?.absoluteString { currentURL = url }
         currentTitle = webView.title ?? ""
+        bridge?.notifyTargetsChanged()
         guard pageEnabled else { return }
         emit("Page.loadEventFired", ["timestamp": Date().timeIntervalSince1970])
         emitLifecycle("load")
