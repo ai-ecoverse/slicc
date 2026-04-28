@@ -4,6 +4,21 @@ import { homedir } from 'os';
 import { dirname, join } from 'path';
 import type { ChildProcess } from 'child_process';
 
+/**
+ * Default startup timeout for Chrome's CDP listener. Overridable via the
+ * `SLICC_CDP_LAUNCH_TIMEOUT_MS` environment variable so cold/contended CI
+ * runners can give Chrome a longer cold-start window without code changes.
+ */
+export const DEFAULT_CDP_LAUNCH_TIMEOUT_MS = 15000;
+
+export function getDefaultCdpLaunchTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.SLICC_CDP_LAUNCH_TIMEOUT_MS;
+  if (!raw) return DEFAULT_CDP_LAUNCH_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_CDP_LAUNCH_TIMEOUT_MS;
+  return parsed;
+}
+
 export const CLI_PROFILE_NAMES = ['leader', 'follower', 'extension'] as const;
 export type CliProfileName = (typeof CLI_PROFILE_NAMES)[number];
 
@@ -407,8 +422,18 @@ export function parseCdpPortFromStderr(line: string): number | null {
  * Watch a Chrome child process's stderr for the `DevTools listening on` line
  * and resolve with the actual CDP port. Rejects after `timeoutMs` if the line
  * never appears (e.g. Chrome failed to start).
+ *
+ * Buffers across chunk boundaries: stderr data events split on arbitrary
+ * byte boundaries (not on newlines), so the original "split each chunk by
+ * \n and regex each line" approach silently dropped the DevTools line
+ * whenever it spanned two chunks. We accumulate a rolling buffer and only
+ * parse complete lines (everything before the last `\n`); the trailing
+ * partial line is carried forward to the next chunk.
  */
-export function waitForCdpPortFromStderr(child: ChildProcess, timeoutMs = 15000): Promise<number> {
+export function waitForCdpPortFromStderr(
+  child: ChildProcess,
+  timeoutMs: number = getDefaultCdpLaunchTimeoutMs()
+): Promise<number> {
   return new Promise((resolve, reject) => {
     if (!child.stderr) {
       reject(new Error('Chrome process has no stderr stream'));
@@ -416,6 +441,7 @@ export function waitForCdpPortFromStderr(child: ChildProcess, timeoutMs = 15000)
     }
 
     let settled = false;
+    let buffer = '';
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
@@ -425,9 +451,12 @@ export function waitForCdpPortFromStderr(child: ChildProcess, timeoutMs = 15000)
 
     const onData = (chunk: Buffer) => {
       if (settled) return;
-      const text = chunk.toString('utf-8');
-      // stderr may deliver multiple lines in one chunk
-      for (const line of text.split('\n')) {
+      buffer += chunk.toString('utf-8');
+      // Parse all complete lines; keep the trailing partial in the buffer.
+      let nlIdx = buffer.indexOf('\n');
+      while (nlIdx !== -1) {
+        const line = buffer.slice(0, nlIdx);
+        buffer = buffer.slice(nlIdx + 1);
         const port = parseCdpPortFromStderr(line);
         if (port !== null) {
           settled = true;
@@ -436,6 +465,19 @@ export function waitForCdpPortFromStderr(child: ChildProcess, timeoutMs = 15000)
           resolve(port);
           return;
         }
+        nlIdx = buffer.indexOf('\n');
+      }
+      // Also try parsing the trailing partial: Chrome's DevTools line is
+      // typically flushed with a newline, but if the process exits before
+      // the newline reaches us we still want to recover the port. This is
+      // a no-op for normal traffic since `parseCdpPortFromStderr` requires
+      // a trailing `/` in the regex, which precedes the newline anyway.
+      const tailPort = parseCdpPortFromStderr(buffer);
+      if (tailPort !== null) {
+        settled = true;
+        clearTimeout(timer);
+        child.stderr!.off('data', onData);
+        resolve(tailPort);
       }
     };
 
@@ -448,5 +490,105 @@ export function waitForCdpPortFromStderr(child: ChildProcess, timeoutMs = 15000)
         reject(new Error(`Chrome exited with code ${code} before reporting CDP port`));
       }
     });
+  });
+}
+
+/**
+ * Poll `<userDataDir>/DevToolsActivePort` for the CDP port. Chrome writes
+ * this file as soon as the DevTools listener is up — its first line is
+ * the port, the second is the websocket path. This is the canonical way
+ * Chromium itself recommends discovering the chosen port and is far more
+ * reliable than scraping stderr.
+ *
+ * Resolves with the parsed port. Rejects on timeout or process exit.
+ *
+ * @param userDataDir absolute path Chrome was launched with via `--user-data-dir=`
+ * @param child       the Chrome child process (used to bail out on early exit)
+ * @param timeoutMs   total budget before giving up
+ * @param pollMs      polling cadence (default 50ms)
+ */
+export function waitForCdpPortFromActivePortFile(
+  userDataDir: string,
+  child: ChildProcess,
+  timeoutMs: number = getDefaultCdpLaunchTimeoutMs(),
+  pollMs = 50
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const path = join(userDataDir, 'DevToolsActivePort');
+    const startedAt = Date.now();
+
+    const finish = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      action();
+    };
+
+    const tick = async (): Promise<void> => {
+      if (settled) return;
+      try {
+        const contents = await readFile(path, 'utf-8');
+        // First line is the port; second is the WS path. Chrome writes both
+        // atomically once the listener is up. If we read it mid-write we'll
+        // either get an empty file or the port-only first line — both fall
+        // through to the next tick.
+        const firstLine = contents.split('\n', 1)[0]?.trim();
+        if (firstLine) {
+          const port = Number.parseInt(firstLine, 10);
+          if (Number.isFinite(port) && port > 0) {
+            finish(() => resolve(port));
+            return;
+          }
+        }
+      } catch (err) {
+        // ENOENT before Chrome writes the file — keep polling. Anything
+        // else is ignored too: we'd rather fall back to the stderr path
+        // racing alongside this poller than reject early.
+        void err;
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        finish(() =>
+          reject(new Error(`Timed out waiting for DevToolsActivePort at ${path} (${timeoutMs}ms)`))
+        );
+        return;
+      }
+      setTimeout(() => {
+        void tick();
+      }, pollMs);
+    };
+
+    child.on('exit', (code) => {
+      finish(() =>
+        reject(new Error(`Chrome exited with code ${code} before writing DevToolsActivePort`))
+      );
+    });
+
+    void tick();
+  });
+}
+
+/**
+ * Race the stderr scraper and the `DevToolsActivePort` poller. Whichever
+ * resolves first wins; the loser is silently ignored. This is the
+ * recommended entry point for callers who already have a `--user-data-dir`
+ * on hand (which is the usual case in tests and CLI launches).
+ */
+export function waitForCdpPort(
+  child: ChildProcess,
+  options: { userDataDir?: string; timeoutMs?: number } = {}
+): Promise<number> {
+  const timeoutMs = options.timeoutMs ?? getDefaultCdpLaunchTimeoutMs();
+  const stderrPromise = waitForCdpPortFromStderr(child, timeoutMs);
+  if (!options.userDataDir) return stderrPromise;
+  const filePromise = waitForCdpPortFromActivePortFile(options.userDataDir, child, timeoutMs);
+  // Suppress unhandled-rejection warnings on the loser.
+  stderrPromise.catch(() => {});
+  filePromise.catch(() => {});
+  return Promise.any([stderrPromise, filePromise]).catch((agg: AggregateError) => {
+    // If both legs failed, surface the first error so callers see a
+    // meaningful message (timeout / exit) rather than an opaque AggregateError.
+    const first = agg.errors[0];
+    throw first instanceof Error ? first : new Error(String(first));
   });
 }
