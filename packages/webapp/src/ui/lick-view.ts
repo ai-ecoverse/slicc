@@ -17,6 +17,7 @@ import {
   IceCream,
   Hourglass,
   ListChecks,
+  ArrowUpCircle,
 } from 'lucide';
 import type { ChatMessage } from './types.js';
 
@@ -59,6 +60,10 @@ const DESCRIPTORS: Record<string, LickDescriptor> = {
   'session-reload': {
     icon: RotateCcw as unknown as IconNode,
     label: 'reload',
+  },
+  upgrade: {
+    icon: ArrowUpCircle as unknown as IconNode,
+    label: 'upgrade',
   },
   'scoop-notify': {
     icon: IceCream as unknown as IconNode,

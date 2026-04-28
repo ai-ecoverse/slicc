@@ -33,7 +33,7 @@ export interface CronTaskEntry {
 }
 
 export interface LickEvent {
-  type: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate';
+  type: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload' | 'navigate' | 'upgrade';
   webhookId?: string;
   webhookName?: string;
   cronId?: string;
@@ -45,6 +45,9 @@ export interface LickEvent {
   changes?: Array<{ type: string; path: string }>;
   /** For navigate events: the URL whose response carried the x-slicc header. */
   navigateUrl?: string;
+  /** For upgrade events: the previously-seen and current bundled SLICC versions. */
+  upgradeFromVersion?: string;
+  upgradeToVersion?: string;
   targetScoop?: string;
   timestamp: string;
   headers?: Record<string, string>;

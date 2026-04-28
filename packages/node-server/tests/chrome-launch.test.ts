@@ -1,5 +1,5 @@
 import { type existsSync, type readdirSync } from 'fs';
-import { mkdtemp, readFile, rm } from 'fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -7,10 +7,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   buildChromeLaunchArgs,
+  DEFAULT_CDP_LAUNCH_TIMEOUT_MS,
   ensureQaProfileScaffold,
   findChromeExecutable,
+  getDefaultCdpLaunchTimeoutMs,
   parseCdpPortFromStderr,
   resolveChromeLaunchProfile,
+  waitForCdpPort,
+  waitForCdpPortFromActivePortFile,
   waitForCdpPortFromStderr,
 } from '../src/chrome-launch.js';
 
@@ -333,5 +337,138 @@ describe('waitForCdpPortFromStderr', () => {
     const promise = waitForCdpPortFromStderr(child, 50);
 
     await expect(promise).rejects.toThrow(/Timed out/);
+  });
+
+  it('parses the DevTools line when it spans multiple chunks (the original flake)', async () => {
+    // Regression: stderr `data` events split on byte boundaries, not on
+    // newlines. The original implementation regex'd each chunk in
+    // isolation, so a line like "DevTools listening on ws://…" arriving
+    // as ["DevTools listening", " on ws://127.0.0.1:9222/devtools/…\n"]
+    // was silently dropped and the watcher waited forever (until the
+    // timeout). Buffering across chunks prevents this.
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPortFromStderr(child, 5000);
+
+    stderr.emit('data', Buffer.from('[noise] starting up\nDevTools listening'));
+    stderr.emit('data', Buffer.from(' on ws://127.0.0.1:'));
+    stderr.emit('data', Buffer.from('57321/devtools/browser/abc-123\n'));
+
+    await expect(promise).resolves.toBe(57321);
+  });
+});
+
+describe('getDefaultCdpLaunchTimeoutMs', () => {
+  it('returns the built-in default when the env var is unset', () => {
+    expect(getDefaultCdpLaunchTimeoutMs({})).toBe(DEFAULT_CDP_LAUNCH_TIMEOUT_MS);
+  });
+
+  it('honors a positive integer override', () => {
+    expect(getDefaultCdpLaunchTimeoutMs({ SLICC_CDP_LAUNCH_TIMEOUT_MS: '45000' })).toBe(45000);
+  });
+
+  it('falls back to the default for non-positive or non-numeric overrides', () => {
+    expect(getDefaultCdpLaunchTimeoutMs({ SLICC_CDP_LAUNCH_TIMEOUT_MS: '0' })).toBe(
+      DEFAULT_CDP_LAUNCH_TIMEOUT_MS
+    );
+    expect(getDefaultCdpLaunchTimeoutMs({ SLICC_CDP_LAUNCH_TIMEOUT_MS: '-100' })).toBe(
+      DEFAULT_CDP_LAUNCH_TIMEOUT_MS
+    );
+    expect(getDefaultCdpLaunchTimeoutMs({ SLICC_CDP_LAUNCH_TIMEOUT_MS: 'not-a-number' })).toBe(
+      DEFAULT_CDP_LAUNCH_TIMEOUT_MS
+    );
+  });
+});
+
+describe('waitForCdpPortFromActivePortFile', () => {
+  it('resolves with the port written to DevToolsActivePort', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+
+    const promise = waitForCdpPortFromActivePortFile(dir, child, 2000, 10);
+    // Simulate Chrome writing the file shortly after launch.
+    setTimeout(() => {
+      void writeFile(join(dir, 'DevToolsActivePort'), '49321\n/devtools/browser/abc-123\n');
+    }, 30);
+
+    await expect(promise).resolves.toBe(49321);
+  });
+
+  it('rejects on timeout when the file never appears', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+
+    await expect(waitForCdpPortFromActivePortFile(dir, child, 100, 10)).rejects.toThrow(
+      /Timed out waiting for DevToolsActivePort/
+    );
+  });
+
+  it('rejects when Chrome exits before writing the file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+
+    const promise = waitForCdpPortFromActivePortFile(dir, child, 5000, 10);
+    setTimeout(() => child.emit('exit', 1), 20);
+
+    await expect(promise).rejects.toThrow(/exited with code 1/);
+  });
+});
+
+describe('waitForCdpPort (race)', () => {
+  it('resolves from stderr when the active-port file is delayed', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPort(child, { userDataDir: dir, timeoutMs: 5000 });
+    stderr.emit(
+      'data',
+      Buffer.from('DevTools listening on ws://127.0.0.1:11111/devtools/browser/id\n')
+    );
+
+    await expect(promise).resolves.toBe(11111);
+  });
+
+  it('resolves from the active-port file when stderr never prints the line', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPort(child, { userDataDir: dir, timeoutMs: 2000 });
+    setTimeout(() => {
+      void writeFile(join(dir, 'DevToolsActivePort'), '22222\n/devtools/browser/zzz\n');
+    }, 30);
+
+    await expect(promise).resolves.toBe(22222);
+  });
+
+  it('falls back to plain stderr-only waiting when no userDataDir is provided', async () => {
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPort(child, { timeoutMs: 5000 });
+    stderr.emit(
+      'data',
+      Buffer.from('DevTools listening on ws://127.0.0.1:33333/devtools/browser/id\n')
+    );
+
+    await expect(promise).resolves.toBe(33333);
   });
 });
