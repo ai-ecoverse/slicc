@@ -180,7 +180,7 @@ async function fetchUserProfile(accessToken: string): Promise<{ name?: string; a
 async function writeGitToken(token: string): Promise<void> {
   try {
     const { VirtualFS } = await import('../src/fs/index.js');
-    const fs = VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
     await fs.writeFile('/workspace/.git/github-token', token);
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('github-token-changed'));
@@ -197,7 +197,7 @@ async function writeGitToken(token: string): Promise<void> {
 async function clearGitToken(): Promise<void> {
   try {
     const { VirtualFS } = await import('../src/fs/index.js');
-    const fs = VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
     await fs.rm('/workspace/.git/github-token');
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('github-token-changed'));
