@@ -780,10 +780,9 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     client.clearFilesystem();
   };
 
-  // Wire inline sprinkle lick callback (extension mode)
-  layout.panels.chat.onDipLick = (action: string, data: unknown) => {
-    client.sendSprinkleLick('inline', { action, data });
-  };
+  // The chat-panel `onDipLick` wiring lives further down (after the
+  // welcome-flow interceptor is defined) so inline dips can short-
+  // circuit welcome actions before they reach the cone.
 
   // ── Onboarding orchestrator (extension) ─────────────────────────
   // Mirrors the standalone wiring in mainCli — instantiated lazily so
@@ -903,131 +902,174 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // the standalone path. See DEDUPED_WELCOME_ACTIONS for the rationale.
   const firedWelcomeActions = loadFiredWelcomeActions();
 
+  // ── Welcome lick interception (shared between SprinkleManager and inline dips) ──
+  //
+  // The deterministic welcome flow is driven by the on-panel
+  // `OnboardingOrchestrator`, NOT by the cone — the cone has no API
+  // key configured at this point and any lick that reaches it would
+  // fatal with "No API key configured for provider …". Both lick
+  // entry points (the SprinkleManager handler for panel-mounted
+  // sprinkles, and chat-panel `onDipLick` for inline dips in the
+  // chat history) need to short-circuit welcome-flow actions and
+  // hand them to the orchestrator instead. This helper does the
+  // dedup + dispatch and returns true when the lick was intercepted.
+  //
+  // Mirrors the standalone interception block inside
+  // `routeLickToScoop` further down — keep them in sync.
+  const interceptWelcomeLickExt = (event: LickEvent): boolean => {
+    if (event.type !== 'sprinkle') return false;
+    const welcomeAction =
+      event.sprinkleName === 'welcome' || event.sprinkleName === 'inline'
+        ? ((event.body as Record<string, unknown> | null)?.action as string | undefined)
+        : undefined;
+    if (welcomeAction && DEDUPED_WELCOME_ACTIONS.has(welcomeAction)) {
+      if (firedWelcomeActions.has(welcomeAction)) {
+        log.debug('Suppressing duplicate welcome lick (ext)', { action: welcomeAction });
+        return true;
+      }
+      firedWelcomeActions.add(welcomeAction);
+      persistFiredWelcomeActions(firedWelcomeActions);
+    }
+    const isWelcomeFlowAction =
+      welcomeAction === 'first-run' ||
+      welcomeAction === 'onboarding-complete' ||
+      welcomeAction === 'connect-ready' ||
+      welcomeAction === 'connect-attempt' ||
+      welcomeAction === 'oauth-attempt' ||
+      welcomeAction === 'shortcut-migrate';
+    if (!isWelcomeFlowAction) return false;
+
+    const body = event.body as Record<string, unknown> | null;
+    const action = welcomeAction;
+
+    if (action === 'first-run') {
+      getExtOnboardingOrchestrator().handleFirstRun();
+      return true;
+    }
+    if (action === 'onboarding-complete') {
+      const orch = getExtOnboardingOrchestrator();
+      const profile = (body?.data as Record<string, unknown> | undefined) ?? {};
+      if ((profile as Record<string, unknown>).mountWorkspace) {
+        applyPendingMount(localFs).catch((err) =>
+          log.warn('Failed to mount workspace from onboarding', err)
+        );
+      }
+      void orch
+        .handleOnboardingComplete(profile as Record<string, unknown>)
+        .catch((err) => log.warn('OnboardingOrchestrator failed', err));
+      return true; // Suppress cone-routing — LLM isn't configured yet.
+    }
+    if (action === 'connect-ready') {
+      // Reload short-circuit: if the user already configured a
+      // provider in a previous session, the connect-llm dip is
+      // being re-mounted from chat history. Don't ask them to
+      // reconfigure — tell the dip to fast-forward to its done
+      // card.
+      const accounts = getAccountsExt();
+      if (accounts.length > 0) {
+        const primary = accounts[0];
+        const cfg = (() => {
+          try {
+            return getProviderConfigExt(primary.providerId);
+          } catch {
+            return null;
+          }
+        })();
+        broadcastToDipsExt({
+          type: 'slicc-already-connected',
+          provider: primary.providerId,
+          note: cfg?.name ? `Already connected to ${cfg.name}.` : 'Already connected.',
+        });
+        // Same final-lick advance as the standalone path —
+        // see comment there for the chat-history gate. Routed
+        // through `dispatchWelcomeLickOnce` so the persistent
+        // ledger gates duplicate fires across reloads.
+        void fireFastForwardFinalLick(localFs, primary.providerId, (data) => {
+          const finalAction = String((data as { action?: unknown }).action ?? '');
+          dispatchWelcomeLickOnce(
+            finalAction,
+            firedWelcomeActions,
+            () => client.sendSprinkleLick('welcome', data),
+            'fast-forward-ext'
+          );
+        }).catch((err) => log.warn('Failed to fire fast-forward final lick', err));
+        return true;
+      }
+      getExtOnboardingOrchestrator().handleConnectReady();
+      return true;
+    }
+    if (action === 'connect-attempt') {
+      const data = body?.data as Record<string, unknown> | undefined;
+      if (data) {
+        void getExtOnboardingOrchestrator()
+          .handleConnectAttempt({
+            provider: String(data.provider ?? ''),
+            apiKey: String(data.apiKey ?? ''),
+            baseUrl: typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+            model: data.model == null ? null : String(data.model),
+          })
+          .catch((err) => log.warn('handleConnectAttempt failed', err));
+      }
+      return true;
+    }
+    if (action === 'oauth-attempt') {
+      const data = body?.data as Record<string, unknown> | undefined;
+      if (data) {
+        void getExtOnboardingOrchestrator()
+          .handleOAuthAttempt({
+            provider: String(data.provider ?? ''),
+            baseUrl: typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+          })
+          .catch((err) => log.warn('handleOAuthAttempt failed', err));
+      }
+      return true;
+    }
+    // `shortcut-migrate` only fires from the panel-mounted welcome
+    // sprinkle; the inline-dip path can't reach it. Treat it as
+    // intercepted so the dip path doesn't accidentally forward it
+    // to the cone either.
+    if (action === 'shortcut-migrate') {
+      void localFs
+        .writeFile('/shared/.welcomed', '1')
+        .catch((err) => log.warn('Failed to persist welcome completion marker', err));
+      // sprinkleManager.close happens in the SprinkleManager handler
+      // below — only reachable from the panel-sprinkle path.
+      return true;
+    }
+    return false;
+  };
+
+  // Inline sprinkle lick callback. The welcome dip is mounted as an
+  // inline `<img>`-hydrated dip in chat history, so its licks reach
+  // us through this path rather than the SprinkleManager. Run them
+  // through the same welcome-flow interceptor before falling back
+  // to the cone-bound `client.sendSprinkleLick`.
+  layout.panels.chat.onDipLick = (action: string, data: unknown) => {
+    const event: LickEvent = {
+      type: 'sprinkle',
+      sprinkleName: 'inline',
+      targetScoop: undefined,
+      timestamp: new Date().toISOString(),
+      body: { action, data },
+    };
+    if (interceptWelcomeLickExt(event)) return;
+    client.sendSprinkleLick('inline', { action, data });
+  };
+
   // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
   const sprinkleManager = new SprinkleManager(
     localFs,
     async (event: LickEvent) => {
       // Route sprinkle licks to the offscreen orchestrator's cone
       if (event.type === 'sprinkle') {
-        // Welcome lifecycle — same deterministic flow as standalone.
-        // Inline-mounted welcome dip emits licks with `sprinkleName: 'inline'`;
-        // the legacy welcome panel emits `'welcome'`. Match either when the
-        // action is part of the welcome flow.
-        const welcomeAction =
-          event.sprinkleName === 'welcome' || event.sprinkleName === 'inline'
-            ? ((event.body as Record<string, unknown> | null)?.action as string | undefined)
-            : undefined;
-        if (welcomeAction && DEDUPED_WELCOME_ACTIONS.has(welcomeAction)) {
-          if (firedWelcomeActions.has(welcomeAction)) {
-            log.debug('Suppressing duplicate welcome lick (ext)', { action: welcomeAction });
-            return;
-          }
-          firedWelcomeActions.add(welcomeAction);
-          persistFiredWelcomeActions(firedWelcomeActions);
-        }
-        const isWelcomeFlowAction =
-          welcomeAction === 'first-run' ||
-          welcomeAction === 'onboarding-complete' ||
-          welcomeAction === 'connect-ready' ||
-          welcomeAction === 'connect-attempt' ||
-          welcomeAction === 'oauth-attempt' ||
-          welcomeAction === 'shortcut-migrate' ||
-          welcomeAction === 'request-mount';
-        if (isWelcomeFlowAction) {
-          const body = event.body as Record<string, unknown> | null;
-          const action = welcomeAction;
-
-          if (action === 'first-run') {
-            getExtOnboardingOrchestrator().handleFirstRun();
-            return;
-          }
-          if (action === 'onboarding-complete') {
-            const orch = getExtOnboardingOrchestrator();
-            const profile = (body?.data as Record<string, unknown> | undefined) ?? {};
-            if ((profile as Record<string, unknown>).mountWorkspace) {
-              applyPendingMount(localFs).catch((err) =>
-                log.warn('Failed to mount workspace from onboarding', err)
-              );
-            }
-            void orch
-              .handleOnboardingComplete(profile as Record<string, unknown>)
-              .catch((err) => log.warn('OnboardingOrchestrator failed', err));
-            return; // Suppress cone-routing — LLM isn't configured yet.
-          }
-          if (action === 'connect-ready') {
-            // Reload short-circuit: if the user already configured a
-            // provider in a previous session, the connect-llm dip is
-            // being re-mounted from chat history. Don't ask them to
-            // reconfigure — tell the dip to fast-forward to its done
-            // card.
-            const accounts = getAccountsExt();
-            if (accounts.length > 0) {
-              const primary = accounts[0];
-              const cfg = (() => {
-                try {
-                  return getProviderConfigExt(primary.providerId);
-                } catch {
-                  return null;
-                }
-              })();
-              broadcastToDipsExt({
-                type: 'slicc-already-connected',
-                provider: primary.providerId,
-                note: cfg?.name ? `Already connected to ${cfg.name}.` : 'Already connected.',
-              });
-              // Same final-lick advance as the standalone path —
-              // see comment there for the chat-history gate. Routed
-              // through `dispatchWelcomeLickOnce` so the persistent
-              // ledger gates duplicate fires across reloads.
-              void fireFastForwardFinalLick(localFs, primary.providerId, (data) => {
-                const finalAction = String((data as { action?: unknown }).action ?? '');
-                dispatchWelcomeLickOnce(
-                  finalAction,
-                  firedWelcomeActions,
-                  () => client.sendSprinkleLick('welcome', data),
-                  'fast-forward-ext'
-                );
-              }).catch((err) => log.warn('Failed to fire fast-forward final lick', err));
-              return;
-            }
-            getExtOnboardingOrchestrator().handleConnectReady();
-            return;
-          }
-          if (action === 'connect-attempt') {
-            const data = body?.data as Record<string, unknown> | undefined;
-            if (data) {
-              void getExtOnboardingOrchestrator()
-                .handleConnectAttempt({
-                  provider: String(data.provider ?? ''),
-                  apiKey: String(data.apiKey ?? ''),
-                  baseUrl:
-                    typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
-                  model: data.model == null ? null : String(data.model),
-                })
-                .catch((err) => log.warn('handleConnectAttempt failed', err));
-            }
-            return;
-          }
-          if (action === 'oauth-attempt') {
-            const data = body?.data as Record<string, unknown> | undefined;
-            if (data) {
-              void getExtOnboardingOrchestrator()
-                .handleOAuthAttempt({
-                  provider: String(data.provider ?? ''),
-                  baseUrl:
-                    typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
-                })
-                .catch((err) => log.warn('handleOAuthAttempt failed', err));
-            }
-            return;
-          }
-          // Legacy / shortcut flows still flow straight through.
-          if (action === 'shortcut-migrate') {
-            void localFs
-              .writeFile('/shared/.welcomed', '1')
-              .catch((err) => log.warn('Failed to persist welcome completion marker', err));
+        if (interceptWelcomeLickExt(event)) {
+          // `shortcut-migrate` needs to close the welcome panel —
+          // the helper marks it intercepted but doesn't have a
+          // sprinkleManager reference. Do the close here.
+          if ((event.body as Record<string, unknown> | null)?.action === 'shortcut-migrate') {
             sprinkleManager.close('welcome');
           }
+          return;
         }
         // Handle request-mount from welcome sprinkle (sandbox can't call showDirectoryPicker)
         if (
@@ -1059,8 +1101,8 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       }
     },
     {
-      addSprinkle: (name, title, element, zone) =>
-        layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
+      addSprinkle: (name, title, element, zone, options) =>
+        layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined, options),
       removeSprinkle: (name) => layout.removeSprinkle(name),
     },
     () => {
@@ -1068,6 +1110,12 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       if (cone) {
         client.stopScoop(cone.jid);
       }
+    },
+    {
+      // Extension side panel: auto-installed sprinkles must NOT pop
+      // open over chat (covers the welcome flow mid-flight). The
+      // rail icon pulses to invite the user to click when ready.
+      autoOpenBehavior: 'attention',
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
@@ -1162,24 +1210,23 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     localStorage.removeItem('slicc-welcomed');
   }
 
-  // Fire a first-run welcome lick to the offscreen cone instead of
-  // auto-opening the legacy panel. The cone renders the welcome dip
-  // inline via the `![](/shared/sprinkles/welcome/welcome.shtml)`
-  // image syntax. Marker is written by the existing
-  // `onboarding-complete` / `shortcut-migrate` handlers, so reloading
-  // mid-onboarding still re-fires the lick.
+  // Drive the first-run flow locally. The deterministic onboarding
+  // orchestrator owns the welcome dip + intro lines until the user
+  // configures a provider — handing it to the cone would fatal with
+  // "No API key configured for provider …" before the wizard even
+  // appears. The persistent dedup ledger guards against reload
+  // double-fires (see DEDUPED_WELCOME_ACTIONS).
   if (!hasStoredTrayJoinUrl(window.localStorage)) {
     detectWelcomeFirstRun(localFs)
       .then((result) => {
         if (!result.isFirstRun) return;
-        // Persistent dedup so a reload with a wiped chat history
-        // can't refire `first-run` on top of the existing welcome dip.
-        dispatchWelcomeLickOnce(
-          'first-run',
-          firedWelcomeActions,
-          () => client.sendSprinkleLick('welcome', { action: 'first-run' }),
-          'detect-first-run-ext'
-        );
+        if (firedWelcomeActions.has('first-run')) {
+          log.debug('Suppressing duplicate welcome lick (detect-first-run-ext)');
+          return;
+        }
+        firedWelcomeActions.add('first-run');
+        persistFiredWelcomeActions(firedWelcomeActions);
+        getExtOnboardingOrchestrator().handleFirstRun();
       })
       .catch((err) => log.warn('Welcome detection failed', err));
   }

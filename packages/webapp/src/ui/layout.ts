@@ -1021,7 +1021,13 @@ export class Layout {
   private dynamicSprinkles = new Map<string, HTMLElement>();
 
   /** Add a dynamic .shtml sprinkle to the rail. */
-  addSprinkle(name: string, title: string, element: HTMLElement, targetZone?: ZoneId): void {
+  addSprinkle(
+    name: string,
+    title: string,
+    element: HTMLElement,
+    targetZone?: ZoneId,
+    options?: { attention?: boolean }
+  ): void {
     const zone = targetZone ?? 'primary';
     const tabId = `sprinkle-${name}`;
 
@@ -1049,8 +1055,17 @@ export class Layout {
     });
     this.dynamicSprinkles.set(name, container);
 
-    // Auto-activate the new sprinkle.
-    this.primaryRail.activateItem(tabId);
+    if (options?.attention) {
+      // Auto-installed sprinkle in extension mode: leave the panel
+      // collapsed so we don't cover chat mid-onboarding. Pulse the
+      // rail icon so the user notices it and clicks when ready.
+      // The pulse class self-clears the first time the user
+      // activates the item.
+      this.primaryRail.markItemAttention(tabId);
+    } else {
+      // Auto-activate the new sprinkle.
+      this.primaryRail.activateItem(tabId);
+    }
     this.updateAddButtons();
   }
 

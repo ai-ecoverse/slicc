@@ -449,7 +449,21 @@ export function hydrateDips(
         // SW isn't controlling — go straight to LightningFS.
         return readShtmlFromVFS(src, controller.signal);
       }
-      const resp = await fetch(fetchUrl, { signal: controller.signal });
+      // The extension side panel registers its own
+      // chrome-extension:// service worker that handles routing for
+      // the extension UI but doesn't intercept `/preview/*` like the
+      // standalone dev-server SW does. `navigator.serviceWorker.
+      // controller` is still truthy, so we can't rely on `swControlled`
+      // alone — wrap the fetch and treat any rejection as a signal to
+      // fall back to the direct LightningFS read for VFS paths.
+      let resp: Response;
+      try {
+        resp = await fetch(fetchUrl, { signal: controller.signal });
+      } catch (err) {
+        if ((err as { name?: string })?.name === 'AbortError') throw err;
+        if (isVfsPath) return readShtmlFromVFS(src, controller.signal);
+        throw err;
+      }
       if (resp.ok) return resp.text();
       // Some dev-server responses bypass the SW even when it claims to
       // be controlling (e.g. extension boot, stale registration).

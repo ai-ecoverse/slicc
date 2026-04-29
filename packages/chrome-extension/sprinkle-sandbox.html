@@ -362,6 +362,19 @@ addEventListener('message', function(e) {
     return;
   }
 
+  // Forward arbitrary `slicc-*` messages from the parent (panel) into
+  // the nested srcdoc iframe so dip listeners can receive them. The
+  // standalone path lets the parent post directly to the dip iframe;
+  // in extension mode the sandbox sits in between, so we relay here.
+  // Examples used by the welcome flow: `slicc-providers`,
+  // `slicc-already-connected`, `slicc-connect-result`.
+  if (e.source === parent && typeof msg.type === 'string' && msg.type.indexOf('slicc-') === 0) {
+    if (window.__slicc_childIframe && window.__slicc_childIframe.contentWindow) {
+      window.__slicc_childIframe.contentWindow.postMessage(msg, '*');
+    }
+    return;
+  }
+
   if (msg.type === 'sprinkle-render') {
     // Apply initial theme class so CSS variables resolve correctly on first paint.
     if (typeof msg.isLight === 'boolean') {

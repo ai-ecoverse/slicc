@@ -425,6 +425,41 @@
   color: var(--s2-content-default);
   background: var(--s2-gray-75);
 }
+/* Attention-pulse for auto-installed sprinkles in extension mode.
+   The icon glows in accent colour and gently breathes until the user
+   acknowledges it by clicking — see `RailZone.markItemAttention`. */
+.rail__item--attention {
+  color: var(--s2-accent);
+  animation: rail-item-attention 1.6s ease-in-out infinite;
+}
+.rail__item--attention:hover {
+  animation: none;
+  background: var(--s2-gray-200);
+}
+.rail__item--attention::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--s2-accent);
+  box-shadow: 0 0 0 2px var(--s2-bg-layer-1);
+  pointer-events: none;
+  z-index: 2;
+}
+@keyframes rail-item-attention {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.85;
+  }
+}
 /* The collapsible content panel rendered LEFT of the rail. */
 .rail-content {
   display: flex;

@@ -156,10 +156,32 @@ export class RailZone {
     return this.entries.has(id);
   }
 
+  /**
+   * Mark a rail item as needing attention — the icon pulses until
+   * the user clicks it (or `activateItem` runs for any reason). Used
+   * for auto-installed sprinkles in the extension where popping the
+   * panel mid-flow is disruptive.
+   */
+  markItemAttention(id: string): void {
+    const target = this.entries.get(id);
+    if (!target) return;
+    target.btn.classList.add('rail__item--attention');
+  }
+
+  private clearItemAttention(id: string): void {
+    const target = this.entries.get(id);
+    if (!target) return;
+    target.btn.classList.remove('rail__item--attention');
+  }
+
   /** Activate an item and expand the content panel. */
   activateItem(id: string, options: { fullpage?: boolean } = {}): void {
     const target = this.entries.get(id);
     if (!target) return;
+
+    // Clear the attention pulse — the user has acknowledged the new
+    // sprinkle by clicking it (or some code path activated it).
+    this.clearItemAttention(id);
 
     this.activeId = id;
     for (const [itemId, { btn, container }] of this.entries) {
