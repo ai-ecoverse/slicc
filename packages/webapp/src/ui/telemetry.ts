@@ -70,7 +70,10 @@ export async function initTelemetry(): Promise<void> {
         });
       }
     } else {
-      // CLI / Electron — keep existing behavior.
+      // CLI / Electron — use @adobe/helix-rum-js with its auto-loaded enhancer
+      // (CWV, auto-click). The extension can't load the enhancer at runtime
+      // because the manifest CSP blocks external script loads, which is why
+      // the extension branch above uses the inlined rum.js instead.
       if (typeof window !== 'undefined') {
         window.SAMPLE_PAGEVIEWS_AT_RATE = 'high';
       }
@@ -126,6 +129,7 @@ export function trackSettingsOpen(trigger: string): void {
  * - Truncate to 200 characters.
  * - Collapse VFS-style paths (/<root>/...) past their first segment to /<root>/.../
  *   so `/workspace/skills/foo/bar.ts` becomes `/workspace/.../`.
+ *   The regex uses the `i` flag, so `/Workspace/...` and `/SHARED/...` collapse too.
  */
 function sanitizeError(msg: string): string {
   const truncated = (msg ?? '').slice(0, 200);

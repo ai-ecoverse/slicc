@@ -138,6 +138,15 @@ describe('telemetry', () => {
     expect(mockSampleRUM).not.toHaveBeenCalled();
   });
 
+  it('initTelemetry is idempotent — second call is a no-op', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    const callsAfterFirst = mockSampleRUM.mock.calls.length;
+
+    await initTelemetry();
+    expect(mockSampleRUM.mock.calls.length).toBe(callsAfterFirst);
+  });
+
   it('does NOT register window error listeners in CLI branch', async () => {
     const { initTelemetry } = await import('../../src/ui/telemetry.js');
     await initTelemetry();
@@ -335,6 +344,22 @@ describe('telemetry — extension branch', () => {
       expect.objectContaining({ source: 'js', target: 'plain string reason' })
     );
   });
+
+  it('sanitizeError collapses uppercase VFS paths (regex i flag)', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRumJs.mockClear();
+
+    const errorEvent = new Event('error') as ErrorEvent;
+    Object.defineProperty(errorEvent, 'message', {
+      value: 'failed at /WORKSPACE/Skills/Foo/Bar.ts',
+    });
+    window.dispatchEvent(errorEvent);
+
+    const target = mockSampleRumJs.mock.calls[0][1].target as string;
+    expect(target).toContain('/WORKSPACE/.../');
+    expect(target).not.toContain('/Foo/Bar.ts');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -344,15 +369,25 @@ describe('telemetry — extension branch', () => {
 // ---------------------------------------------------------------------------
 
 describe('telemetry — electron branch', () => {
+  const mockSampleRumJs = vi.fn();
+
   beforeEach(() => {
     mockLocalStorage.clear();
     mockSampleRUM.mockClear();
+    mockSampleRumJs.mockClear();
     vi.resetModules();
     document.documentElement.dataset.electronOverlay = 'true';
+    // Mock rum.js so we can prove it was NOT used in the electron branch
+    // — a refactor that accidentally routed electron through rum.js would
+    // call this mock instead of mockSampleRUM, which the negative assertion
+    // below catches.
+    vi.doMock('../../src/ui/rum.js', () => ({ default: mockSampleRumJs }));
   });
 
   afterEach(() => {
     delete document.documentElement.dataset.electronOverlay;
+    vi.doUnmock('../../src/ui/rum.js');
+    vi.resetModules();
   });
 
   it('sets RUM_GENERATION=slicc-electron and uses helix-rum-js with SAMPLE_PAGEVIEWS_AT_RATE=high', async () => {
@@ -365,5 +400,7 @@ describe('telemetry — electron branch', () => {
       'navigate',
       expect.objectContaining({ target: 'electron' })
     );
+    // Negative: the inlined rum.js must NOT be the active sampler in this branch.
+    expect(mockSampleRumJs).not.toHaveBeenCalled();
   });
 });

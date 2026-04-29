@@ -108,4 +108,41 @@ describe('rum.js', () => {
 
     expect(() => sampleRUM('formsubmit')).not.toThrow();
   });
+
+  it('bails silently when window is undefined', async () => {
+    // Simulate non-browser context (e.g., SSR, worker without window).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (globalThis as any).window;
+    const { default: sampleRUM } = await import('../../src/ui/rum.js');
+
+    expect(() => sampleRUM('formsubmit')).not.toThrow();
+    expect(sendBeaconSpy).not.toHaveBeenCalled();
+  });
+
+  it('bails silently when navigator is undefined', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (globalThis as any).navigator;
+    randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.05);
+    const { default: sampleRUM } = await import('../../src/ui/rum.js');
+
+    expect(() => sampleRUM('formsubmit')).not.toThrow();
+  });
+
+  it('falls back to default weight when localStorage.getItem throws', async () => {
+    // Simulate restricted privacy context where localStorage access throws.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (globalThis as any).localStorage = {
+      getItem: () => {
+        throw new Error('SecurityError: storage blocked');
+      },
+    };
+    randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.05);
+    const { default: sampleRUM } = await import('../../src/ui/rum.js');
+
+    expect(() => sampleRUM('formsubmit')).not.toThrow();
+    // Default weight (10) is used, beacon URL reflects that.
+    expect(sendBeaconSpy).toHaveBeenCalledTimes(1);
+    const [url] = sendBeaconSpy.mock.calls[0];
+    expect(url).toBe('https://rum.hlx.page/.rum/10');
+  });
 });
