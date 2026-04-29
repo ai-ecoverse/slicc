@@ -243,6 +243,21 @@ export const config: ProviderConfig = {
       if (meta?.max_tokens !== undefined) entry.max_tokens = meta.max_tokens;
       if (meta?.reasoning !== undefined) entry.reasoning = meta.reasoning;
       if (meta?.input) entry.input = meta.input;
+      // Adobe's IMS proxy forwards Anthropic-Messages requests to AWS Bedrock.
+      // Bedrock's Haiku endpoints currently 400 on `tools[].eager_input_streaming`
+      // ("Extra inputs are not permitted"); the same field works on Opus and
+      // Sonnet. pi-ai 0.70+ adds the field to every tool definition by default,
+      // so we turn it off only for Haiku here. pi-ai's anthropic provider then
+      // omits the field and sends the legacy
+      // `fine-grained-tool-streaming-2025-05-14` beta header instead, which
+      // Haiku-on-Bedrock accepts. The compat object travels with the
+      // ModelMetadata returned by getModelIds and is merged onto the streaming
+      // Model<Api> by provider-settings.ts:applyModelMetadata. Both
+      // getProviderModels (the picker / fallback path) and resolveModelById /
+      // resolveCurrentModel (the streaming path) preserve it.
+      if (/haiku/i.test(m.id)) {
+        entry.compat = { supportsEagerToolInputStreaming: false };
+      }
       return entry;
     };
 

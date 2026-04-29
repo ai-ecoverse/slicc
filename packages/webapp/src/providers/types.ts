@@ -2,6 +2,12 @@
  * Shared provider configuration type used by both built-in and external providers.
  */
 
+import type {
+  AnthropicMessagesCompat,
+  OpenAICompletionsCompat,
+  OpenAIResponsesCompat,
+} from '@mariozechner/pi-ai';
+
 /**
  * Opens a browser window/flow for the given authorize URL and returns the
  * redirect URL (with token/code in fragment or query) once the flow completes.
@@ -28,6 +34,32 @@ export interface OAuthLoginOptions {
  * Merged into Model<Api> objects (camelCase) via applyModelMetadata()
  * in provider-settings.ts. Priority: pi-ai registry < modelOverrides < getModelIds.
  */
+/**
+ * Per-model compatibility overrides — the union of pi-ai's actual compat
+ * interfaces, so callers get autocomplete on the keys that any of pi-ai's
+ * stream functions actually consume. Imported as a union (not a conditional
+ * type keyed on the API) because SLICC's custom API names (`adobe-anthropic`,
+ * `bedrock-camp-converse`, etc.) aren't in pi-ai's `KnownApi` union, so the
+ * conditional would resolve to `never`. Providers may set fields belonging
+ * to any single API's compat shape — pi-ai reads by property name and
+ * silently ignores fields it doesn't recognize for the active API.
+ *
+ * Notable knobs:
+ * - `supportsEagerToolInputStreaming` (Anthropic): pi-ai 0.70+ adds
+ *   `tools[].eager_input_streaming: true` by default. Set false to fall back
+ *   to the `fine-grained-tool-streaming-2025-05-14` beta header — required
+ *   for Adobe's Bedrock-Haiku path (Bedrock 400s on the field).
+ * - `supportsLongCacheRetention` (Anthropic, OpenAIResponses): controls
+ *   `cache_control.ttl: "1h"` / `prompt_cache_retention: "24h"`.
+ * - OpenAI-completions has a much larger surface (`supportsStore`,
+ *   `supportsDeveloperRole`, `maxTokensField`, `cacheControlFormat`, …)
+ *   inherited from pi-ai's `OpenAICompletionsCompat`.
+ */
+export type CompatOverrides =
+  | AnthropicMessagesCompat
+  | OpenAICompletionsCompat
+  | OpenAIResponsesCompat;
+
 export interface ModelMetadata {
   /** API format: 'anthropic' (default) or 'openai' for OpenAI-compatible backends. */
   api?: 'anthropic' | 'openai';
@@ -39,6 +71,14 @@ export interface ModelMetadata {
   reasoning?: boolean;
   /** Supported input modalities (e.g., ['text', 'image']). */
   input?: string[];
+  /**
+   * Per-model API compatibility overrides; matches pi-ai's `Model.compat`
+   * field. Used to opt models out of provider features the upstream backend
+   * rejects — e.g. Adobe sets `{ supportsEagerToolInputStreaming: false }`
+   * on Haiku entries because Bedrock's Haiku endpoints 400 on that field.
+   * See {@link CompatOverrides} for the full list of supported keys per API.
+   */
+  compat?: CompatOverrides;
 }
 
 export interface ProviderConfig {

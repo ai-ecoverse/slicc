@@ -953,6 +953,79 @@ describe('OAuth API routing uses api from getModelIds', () => {
   });
 });
 
+describe('compat propagation through resolveModelById and resolveCurrentModel', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  function setupOAuthProviderWithCompat() {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('adobe', {
+      id: 'adobe',
+      name: 'Adobe',
+      description: 'Adobe provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      // Mirrors Adobe's real shape: Haiku gets supportsEagerToolInputStreaming:
+      // false (Bedrock 400s on the field), Opus does not.
+      getModelIds: () => [
+        {
+          id: 'claude-haiku-4-5',
+          name: 'Claude Haiku 4.5',
+          compat: { supportsEagerToolInputStreaming: false },
+        },
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    mockGetModel.mockImplementation((provider: string, modelId: string) => ({
+      id: modelId,
+      name: modelId,
+      provider,
+      api: 'mock-api',
+      baseUrl: 'https://default.example.com',
+    }));
+
+    saveOAuthAccount({ providerId: 'adobe', accessToken: 'tok-adobe' });
+  }
+
+  it('resolveModelById preserves compat from getModelIds for Haiku (regression)', () => {
+    // Regression for the bug where resolveModelById cherry-picked only `api`
+    // from the provider model and dropped compat — letting eager_input_streaming
+    // leak through to Bedrock and 400 the request.
+    setupOAuthProviderWithCompat();
+    storage.set('selected-model', 'adobe:claude-haiku-4-5');
+
+    const model = resolveModelById('claude-haiku-4-5');
+    expect(model.id).toBe('claude-haiku-4-5');
+    expect((model as any).compat).toEqual({ supportsEagerToolInputStreaming: false });
+  });
+
+  it('resolveCurrentModel preserves compat from getModelIds for Haiku (regression)', () => {
+    setupOAuthProviderWithCompat();
+    storage.set('selected-model', 'adobe:claude-haiku-4-5');
+
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('claude-haiku-4-5');
+    expect((model as any).compat).toEqual({ supportsEagerToolInputStreaming: false });
+  });
+
+  it('resolveModelById leaves compat undefined for models without overrides', () => {
+    setupOAuthProviderWithCompat();
+    storage.set('selected-model', 'adobe:claude-opus-4-6');
+
+    const model = resolveModelById('claude-opus-4-6');
+    expect(model.id).toBe('claude-opus-4-6');
+    expect((model as any).compat).toBeUndefined();
+  });
+});
+
 describe('resolveCurrentModel with getModelDynamic returning undefined', () => {
   beforeEach(() => {
     storage.clear();
@@ -1382,6 +1455,61 @@ describe('model metadata overrides', () => {
     const models = getProviderModels('test-proxy');
     // getModelIds (layer 3) wins over modelOverrides (layer 2)
     expect(models[0].contextWindow).toBe(1000000);
+  });
+
+  it('compat from modelOverrides and getModelIds merges across the three layers', () => {
+    // Verifies applyModelMetadata's merge behavior: each successive layer
+    // (pi-ai base → modelOverrides → getModelIds) can override individual
+    // compat flags without clobbering siblings set by an earlier layer.
+    mockGetModels.mockImplementation(((providerId: string) => {
+      if (providerId === 'anthropic') {
+        return [
+          {
+            id: 'claude-haiku-4-5',
+            name: 'Claude Haiku 4.5',
+            contextWindow: 200000,
+            maxTokens: 16384,
+            // Layer 1: pi-ai base — provides one compat flag
+            compat: { supportsLongCacheRetention: true },
+          },
+        ];
+      }
+      return [];
+    }) as unknown as (providerId: string) => { id: string; name: string; reasoning: boolean }[]);
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      // Layer 2: modelOverrides — adds a different flag
+      modelOverrides: {
+        'claude-haiku-4-5': {
+          compat: { supportsEagerToolInputStreaming: true } as any,
+        },
+      },
+      // Layer 3: getModelIds — overrides one flag from layer 2 but leaves
+      // layer 1's flag alone
+      getModelIds: () => [
+        {
+          id: 'claude-haiku-4-5',
+          name: 'Claude Haiku 4.5',
+          compat: { supportsEagerToolInputStreaming: false },
+        },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    expect(models).toHaveLength(1);
+    // Layer 1 flag survives, layer 3 flag wins over layer 2
+    expect((models[0] as any).compat).toEqual({
+      supportsLongCacheRetention: true,
+      supportsEagerToolInputStreaming: false,
+    });
   });
 
   it('models without api field default to anthropic routing', () => {

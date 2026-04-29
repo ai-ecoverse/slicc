@@ -16,6 +16,7 @@ import {
   shouldIncludeProvider,
 } from '../providers/index.js';
 import type { ProviderConfig } from '../providers/index.js';
+import type { CompatOverrides } from '../providers/types.js';
 import {
   isBedrockCampCompatible,
   getBedrockCampExtraModels,
@@ -116,12 +117,30 @@ export function getProviderConfig(providerId: string): ProviderConfig {
 /** Apply ModelMetadata overrides to a model object (mutates in place). */
 function applyModelMetadata(
   model: Record<string, any>,
-  metadata: { context_window?: number; max_tokens?: number; reasoning?: boolean; input?: string[] }
+  metadata: {
+    context_window?: number;
+    max_tokens?: number;
+    reasoning?: boolean;
+    input?: string[];
+    compat?: CompatOverrides;
+  }
 ): void {
   if (metadata.context_window !== undefined) model.contextWindow = metadata.context_window;
   if (metadata.max_tokens !== undefined) model.maxTokens = metadata.max_tokens;
   if (metadata.reasoning !== undefined) model.reasoning = metadata.reasoning;
   if (metadata.input !== undefined) model.input = metadata.input;
+  // Merge compat onto whatever pi-ai's base model already declared (or any
+  // compat from a prior modelOverrides layer). Each successive layer can
+  // override individual flags without clobbering siblings. Cast to a generic
+  // record on both sides because pi-ai's compat shapes are disjoint interfaces
+  // (no shared index signature) but in practice providers may set fields from
+  // any of them — pi-ai reads by property name and ignores unknown fields.
+  if (metadata.compat !== undefined) {
+    model.compat = {
+      ...((model.compat as Record<string, unknown> | undefined) ?? {}),
+      ...(metadata.compat as Record<string, unknown>),
+    };
+  }
 }
 
 // Get models for a provider
@@ -565,8 +584,16 @@ export function resolveModelById(modelId?: string): Model<Api> {
     if (providerConfig.isOAuth) {
       const providerModels = getProviderModels(providerId);
       const providerModel = providerModels.find((m) => m.id === modelId);
-      const correctApi = providerModel?.api ?? (`${providerId}-anthropic` as Api);
-      resolved = { ...resolved, api: correctApi, provider: providerId };
+      if (providerModel) {
+        // Prefer providerModel — it's already built by getProviderModels
+        // with the correct api, provider, and any compat overrides applied
+        // via applyModelMetadata (e.g. Adobe Haiku's
+        // supportsEagerToolInputStreaming: false). The previous pattern of
+        // cherry-picking only `api` here silently dropped compat.
+        resolved = providerModel;
+      } else {
+        resolved = { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
+      }
     } else if (providerId === 'bedrock-camp') {
       resolved = { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
@@ -609,10 +636,17 @@ export function resolveCurrentModel(): Model<Api> {
 
     // Override api and provider for custom routing
     if (providerConfig.isOAuth) {
-      // Look up the correct api from the provider's model list (may be -openai or -anthropic)
+      // Prefer the providerModel built by getProviderModels — it carries
+      // the correct api plus any compat overrides (e.g. Adobe Haiku's
+      // supportsEagerToolInputStreaming: false). Cherry-picking only `api`
+      // here would silently drop compat. See resolveModelById for the
+      // matching change.
       const providerModel = models.find((m) => m.id === effectiveModelId);
-      const correctApi = providerModel?.api ?? (`${providerId}-anthropic` as Api);
-      resolved = { ...resolved, api: correctApi, provider: providerId };
+      if (providerModel) {
+        resolved = providerModel;
+      } else {
+        resolved = { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
+      }
     } else if (providerId === 'bedrock-camp') {
       resolved = { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
