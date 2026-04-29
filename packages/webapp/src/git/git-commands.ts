@@ -10,6 +10,7 @@ import '../shims/buffer-polyfill.js';
 
 import * as git from 'isomorphic-git';
 import { VirtualFS } from '../fs/index.js';
+import { GLOBAL_FS_DB_NAME } from '../fs/global-db.js';
 import { gitHttp } from './git-http.js';
 import { unifiedDiff, diffStat } from './diff.js';
 import { createIsomorphicGitFs, type IsoGitFsPromises } from './vfs-fs-adapter.js';
@@ -55,7 +56,7 @@ export class GitCommands {
     this.corsProxy = options.corsProxy;
     this.authorName = options.authorName ?? 'User';
     this.authorEmail = options.authorEmail ?? 'user@example.com';
-    this.globalDbName = options.globalDbName ?? 'slicc-fs-global';
+    this.globalDbName = options.globalDbName ?? GLOBAL_FS_DB_NAME;
   }
 
   /**

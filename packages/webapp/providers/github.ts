@@ -41,6 +41,7 @@ import {
   revokeOAuthToken,
   getWorkerBaseUrl,
 } from '../src/providers/oauth-code-exchange.js';
+import { GLOBAL_FS_DB_NAME } from '../src/fs/global-db.js';
 
 // ── Config ─────────────────────────────────────────────────────────
 
@@ -179,7 +180,7 @@ async function fetchUserProfile(accessToken: string): Promise<{ name?: string; a
 async function writeGitToken(token: string): Promise<void> {
   try {
     const { VirtualFS } = await import('../src/fs/index.js');
-    const fs = VirtualFS.create({ dbName: 'browser-coding-agent' });
+    const fs = VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
     await fs.writeFile('/workspace/.git/github-token', token);
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('github-token-changed'));
@@ -196,7 +197,7 @@ async function writeGitToken(token: string): Promise<void> {
 async function clearGitToken(): Promise<void> {
   try {
     const { VirtualFS } = await import('../src/fs/index.js');
-    const fs = VirtualFS.create({ dbName: 'browser-coding-agent' });
+    const fs = VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
     await fs.rm('/workspace/.git/github-token');
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('github-token-changed'));
