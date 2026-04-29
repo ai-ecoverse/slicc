@@ -21,6 +21,7 @@ import {
   getBedrockCampExtraModels,
   bedrockCampRegionFromBaseUrl,
 } from '../providers/built-in/bedrock-camp.js';
+import { trackSettingsOpen } from './telemetry.js';
 
 export type { ProviderConfig } from '../providers/index.js';
 
@@ -682,6 +683,7 @@ export interface ShowProviderSettingsOptions {
  * `false` if the user closed without changes (so callers can skip reload).
  */
 export function showProviderSettings(options?: ShowProviderSettingsOptions): Promise<boolean> {
+  trackSettingsOpen('button');
   return new Promise((resolve) => {
     const accountsBefore = localStorage.getItem(ACCOUNTS_KEY) ?? '';
 
