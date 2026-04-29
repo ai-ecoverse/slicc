@@ -638,17 +638,19 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   } = await import('./provider-settings.js');
   const buildExtProviderCatalogue = () => {
     const ids = getAvailableProvidersExt();
-    const providers = ids.map((id) => {
-      const cfg = getProviderConfigExt(id);
-      return {
-        id: cfg.id,
-        name: cfg.name,
-        description: cfg.description,
-        requiresApiKey: cfg.requiresApiKey ?? true,
-        requiresBaseUrl: cfg.requiresBaseUrl ?? false,
-        defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
-      };
-    });
+    const providers = ids
+      .map((id) => {
+        const cfg = getProviderConfigExt(id);
+        return {
+          id: cfg.id,
+          name: cfg.name,
+          description: cfg.description,
+          requiresApiKey: cfg.requiresApiKey ?? true,
+          requiresBaseUrl: cfg.requiresBaseUrl ?? false,
+          defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
     const models: Record<string, Array<{ id: string; name?: string }>> = {};
     for (const id of ids) {
       try {
@@ -1623,17 +1625,19 @@ async function main(): Promise<void> {
   } = await import('./provider-settings.js');
   const buildProviderCatalogue = () => {
     const ids = getAvailableProviders();
-    const providers = ids.map((id) => {
-      const cfg = getProviderConfig(id);
-      return {
-        id: cfg.id,
-        name: cfg.name,
-        description: cfg.description,
-        requiresApiKey: cfg.requiresApiKey ?? true,
-        requiresBaseUrl: cfg.requiresBaseUrl ?? false,
-        defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
-      };
-    });
+    const providers = ids
+      .map((id) => {
+        const cfg = getProviderConfig(id);
+        return {
+          id: cfg.id,
+          name: cfg.name,
+          description: cfg.description,
+          requiresApiKey: cfg.requiresApiKey ?? true,
+          requiresBaseUrl: cfg.requiresBaseUrl ?? false,
+          defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
     const models: Record<string, Array<{ id: string; name?: string }>> = {};
     for (const id of ids) {
       try {
