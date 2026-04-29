@@ -27,44 +27,55 @@
         margin-top: 4px;
       }
 
-      /* Provider list */
+      /* Provider list — responsive grid that adapts to the dip width.
+         Each cell is at least ~180px so labels stay readable; the
+         browser flows extra columns automatically when there's room. */
       .providers {
-        display: flex;
-        flex-direction: column;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
         gap: 6px;
         margin-top: 14px;
-        max-height: 280px;
-        overflow-y: auto;
-        padding-right: 2px;
       }
       .provider {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 12px;
-        padding: 10px 14px;
+        gap: 8px;
+        padding: 8px 12px;
         border-radius: 10px;
         background: var(--s2-bg-elevated, #2c2c2c);
         border: 1px solid var(--s2-border-subtle, #3a3a3a);
         cursor: pointer;
         transition: background 0.12s, border-color 0.12s;
+        min-width: 0;
       }
       .provider:hover {
         background: var(--s2-bg-layer-2, #252525);
         border-color: var(--s2-accent, #3562ff);
       }
+      .provider > div {
+        min-width: 0;
+        flex: 1 1 auto;
+      }
       .provider__name {
         font-weight: 600;
         font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .provider__desc {
         font-size: 11px;
         color: var(--s2-content-secondary, #a1a1a1);
         margin-top: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .provider__chevron {
         color: var(--s2-content-secondary, #a1a1a1);
         font-size: 14px;
+        flex: 0 0 auto;
       }
 
       /* Credential form */
@@ -217,7 +228,10 @@
           name.className = 'provider__name';
           name.textContent = p.name;
           info.appendChild(name);
-          if (p.description) {
+          // Suppress auto-generated `<id> provider` descriptions — they
+          // repeat the id and add visual noise in the multi-column grid.
+          var fallbackDesc = (p.id || '') + ' provider';
+          if (p.description && p.description !== fallbackDesc) {
             var desc = document.createElement('div');
             desc.className = 'provider__desc';
             desc.textContent = p.description;
