@@ -4,6 +4,8 @@
  */
 
 import type { AgentEvent, ChatMessage } from '../ui/types.js';
+import { stripLocalPathsForRemote } from '../core/attachments.js';
+import type { MessageAttachment } from '../core/attachments.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 import {
   createLeaderSyncChannel,
@@ -35,7 +37,7 @@ export interface LeaderSyncManagerOptions {
   /** Get the active scoop JID. */
   getScoopJid: () => string;
   /** Handle a user message arriving from a follower. */
-  onFollowerMessage: (text: string, messageId: string) => void;
+  onFollowerMessage: (text: string, messageId: string, attachments?: MessageAttachment[]) => void;
   /** Handle an abort request from a follower. */
   onFollowerAbort: () => void;
   /** Optional CDP transport for executing local CDP commands (leader's browser). */
@@ -233,7 +235,7 @@ export class LeaderSyncManager {
    * Broadcast a user message to all connected followers.
    * Called when any user message enters the leader (local or from a follower).
    */
-  broadcastUserMessage(text: string, messageId: string): void {
+  broadcastUserMessage(text: string, messageId: string, attachments?: MessageAttachment[]): void {
     if (this.followers.size === 0) return;
     const scoopJid = this.options.getScoopJid();
     const message: LeaderToFollowerMessage = {
@@ -241,6 +243,7 @@ export class LeaderSyncManager {
       text,
       messageId,
       scoopJid,
+      attachments,
     };
     for (const follower of this.followers.values()) {
       follower.sync.send(message);
@@ -276,10 +279,18 @@ export class LeaderSyncManager {
    */
   private handleFollowerMessage(bootstrapId: string, message: FollowerToLeaderMessage): void {
     switch (message.type) {
-      case 'user_message':
+      case 'user_message': {
         log.info('Follower user message received', { bootstrapId, messageId: message.messageId });
-        this.options.onFollowerMessage(message.text, message.messageId);
+        // Defense in depth: even though followers strip their local
+        // `path` values before sending, scrub again here so older or
+        // mis-behaving peers cannot trick the cone into trying to read
+        // a follower-local path that does not exist on this runtime.
+        const safeAttachments = message.attachments?.length
+          ? stripLocalPathsForRemote(message.attachments)
+          : message.attachments;
+        this.options.onFollowerMessage(message.text, message.messageId, safeAttachments);
         break;
+      }
       case 'abort':
         log.info('Follower abort received', { bootstrapId });
         this.options.onFollowerAbort();

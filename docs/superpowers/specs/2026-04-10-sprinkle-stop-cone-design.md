@@ -61,6 +61,6 @@ Add a test verifying `stopCone()` calls the handler callback.
 
 ## Out of scope
 
-- Inline sprinkles (`inline-sprinkle.ts`): ephemeral chat widgets with a minimal lick-only bridge. Stop controls don't fit their use case.
+- Dips (`dip.ts`): ephemeral chat widgets with a minimal lick-only bridge. Stop controls don't fit their use case.
 - Stopping scoops from sprinkles. Only the cone is targeted.
 - Pause/resume or other control verbs. If needed later, refactor then.

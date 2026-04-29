@@ -6,6 +6,8 @@
  * and restricted filesystem access.
  */
 
+import type { MessageAttachment } from '../core/attachments.js';
+
 /**
  * Current `ScoopConfig` schema generation. Bumped whenever a new field is
  * introduced that demands a compat backfill for records saved before it
@@ -110,6 +112,7 @@ export interface ChannelMessage {
   senderId: string;
   senderName: string;
   content: string;
+  attachments?: MessageAttachment[];
   timestamp: string;
   fromAssistant: boolean;
   channel: string;

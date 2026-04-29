@@ -51,6 +51,9 @@ describe('ChatPanel — trackChatSend wiring', () => {
 
     const textarea = container.querySelector('textarea')!;
     textarea.value = 'hello';
+    // The panel disables the send button until the textarea has content;
+    // dispatching `input` mirrors what real typing would do and re-enables it.
+    textarea.dispatchEvent(new Event('input'));
     const sendBtn = container.querySelector('.chat__send-btn')!;
     (sendBtn as HTMLButtonElement).click();
 
@@ -70,6 +73,7 @@ describe('ChatPanel — trackChatSend wiring', () => {
 
     const textarea = container.querySelector('textarea')!;
     textarea.value = 'do thing';
+    textarea.dispatchEvent(new Event('input'));
     const sendBtn = container.querySelector('.chat__send-btn')!;
     (sendBtn as HTMLButtonElement).click();
 

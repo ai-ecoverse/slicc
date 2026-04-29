@@ -10,6 +10,11 @@ interface ExtensionManifest {
   [key: string]: unknown;
 }
 
+interface VfsRootVersionFile {
+  version: string;
+  releasedAt: string | null;
+}
+
 export function updateManifestVersionContents(contents: string, version: string): string {
   const manifest = JSON.parse(contents) as Partial<ExtensionManifest>;
 
@@ -30,6 +35,19 @@ export function writeManifestVersion(manifestPath: string, version: string): voi
   );
 }
 
+export function buildVfsRootVersionContents(version: string, releasedAt: string): string {
+  const payload: VfsRootVersionFile = { version, releasedAt };
+  return `${JSON.stringify(payload, null, 2)}\n`;
+}
+
+export function writeVfsRootVersion(
+  versionFilePath: string,
+  version: string,
+  releasedAt: string
+): void {
+  writeFileSync(versionFilePath, buildVfsRootVersionContents(version, releasedAt));
+}
+
 function main(): void {
   const version = process.argv[2];
 
@@ -39,6 +57,14 @@ function main(): void {
 
   writeManifestVersion(resolve(PROJECT_ROOT, 'packages/chrome-extension/manifest.json'), version);
   console.log(`Updated manifest.json version to ${version}`);
+
+  const releasedAt = new Date().toISOString();
+  writeVfsRootVersion(
+    resolve(PROJECT_ROOT, 'packages/vfs-root/shared/version.json'),
+    version,
+    releasedAt
+  );
+  console.log(`Updated vfs-root/shared/version.json to ${version} (releasedAt=${releasedAt})`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {

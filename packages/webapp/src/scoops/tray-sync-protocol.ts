@@ -6,6 +6,7 @@
  */
 
 import type { AgentEvent, ChatMessage } from '../ui/types.js';
+import type { MessageAttachment } from '../core/attachments.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 import { createLogger } from '../core/logger.js';
 
@@ -25,7 +26,13 @@ export type LeaderToFollowerMessage =
       scoopJid: string;
     }
   | { type: 'agent_event'; event: AgentEvent; scoopJid: string }
-  | { type: 'user_message_echo'; text: string; messageId: string; scoopJid: string }
+  | {
+      type: 'user_message_echo';
+      text: string;
+      messageId: string;
+      scoopJid: string;
+      attachments?: MessageAttachment[];
+    }
   | { type: 'status'; scoopStatus: string }
   | { type: 'error'; error: string }
   | { type: 'targets.registry'; targets: TrayTargetEntry[] }
@@ -56,7 +63,7 @@ export type LeaderToFollowerMessage =
   | { type: 'pong' };
 
 export type FollowerToLeaderMessage =
-  | { type: 'user_message'; text: string; messageId: string }
+  | { type: 'user_message'; text: string; messageId: string; attachments?: MessageAttachment[] }
   | { type: 'abort' }
   | { type: 'request_snapshot' }
   | { type: 'targets.advertise'; targets: RemoteTargetInfo[]; runtimeId: string }

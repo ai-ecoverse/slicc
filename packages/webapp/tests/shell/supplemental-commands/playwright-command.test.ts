@@ -3114,7 +3114,8 @@ import { WebSocket as NodeWebSocket } from 'ws';
 import { BrowserAPI as RealBrowserAPI } from '../../../src/cdp/browser-api.js';
 import {
   findChromeExecutable,
-  waitForCdpPortFromStderr,
+  getDefaultCdpLaunchTimeoutMs,
+  waitForCdpPort,
 } from '../../../../node-server/src/chrome-launch.js';
 import type { CDPTransport } from '../../../src/cdp/transport.js';
 import type {
@@ -3335,7 +3336,17 @@ describeIntegration('iframe integration', { timeout: 60_000 }, () => {
       `--user-data-dir=${tmpDir}`,
       'about:blank',
     ]);
-    const cdpPort = await waitForCdpPortFromStderr(chromeProcess, 15000);
+    // Race the stderr scraper against the canonical
+    // `DevToolsActivePort` file (Chrome writes it into --user-data-dir
+    // as soon as the listener is up). The honored timeout is overridable
+    // via `SLICC_CDP_LAUNCH_TIMEOUT_MS` so cold/contended CI runners can
+    // give Chrome a longer cold-start window without code changes; we
+    // also pick a more generous default here than the production 15s
+    // because GitHub runners commonly pay a 10+ second cold-start tax.
+    const cdpPort = await waitForCdpPort(chromeProcess, {
+      userDataDir: tmpDir,
+      timeoutMs: Math.max(getDefaultCdpLaunchTimeoutMs(), 25_000),
+    });
 
     // 3. Fetch the browser WS URL from /json/version
     const versionRes = await fetch(`http://127.0.0.1:${cdpPort}/json/version`);

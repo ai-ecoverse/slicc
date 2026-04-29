@@ -30,6 +30,7 @@ import {
 } from 'lucide';
 import type { ToolCall } from './types.js';
 import { escapeHtml } from './message-renderer.js';
+import { maskSecrets } from './preview-masking.js';
 
 type IconNode = [tag: string, attrs: Record<string, string | number>][];
 
@@ -75,7 +76,7 @@ const DESCRIPTORS: Record<string, ToolDescriptor> = {
     title: 'bash',
     preview: (input) => {
       const cmd = getField(input, 'command') ?? '';
-      return cmd ? `$ ${truncate(cmd, 120)}` : '';
+      return cmd ? maskSecrets(`$ ${truncate(cmd, 120)}`) : '';
     },
     renderBody: renderBashBody,
   },

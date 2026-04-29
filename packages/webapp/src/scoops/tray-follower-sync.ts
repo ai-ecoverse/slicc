@@ -4,6 +4,8 @@
  */
 
 import type { AgentEvent, AgentHandle, ChatMessage } from '../ui/types.js';
+import { stripLocalPathsForRemote } from '../core/attachments.js';
+import type { MessageAttachment } from '../core/attachments.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 import {
   createFollowerSyncChannel,
@@ -37,7 +39,12 @@ export interface FollowerSyncManagerOptions {
   /** Called when the leader sends a snapshot (full state replacement). */
   onSnapshot?: (messages: ChatMessage[], scoopJid: string) => void;
   /** Called when the leader echoes a user message (local or from any follower). */
-  onUserMessage?: (text: string, messageId: string, scoopJid: string) => void;
+  onUserMessage?: (
+    text: string,
+    messageId: string,
+    scoopJid: string,
+    attachments?: MessageAttachment[]
+  ) => void;
   /** Called when the leader sends a status update. */
   onStatus?: (scoopStatus: string) => void;
   /** Called when the leader sends an updated target registry. */
@@ -129,10 +136,21 @@ export class FollowerSyncManager implements AgentHandle {
   // AgentHandle implementation
   // ---------------------------------------------------------------------------
 
-  sendMessage(text: string, messageId?: string): void {
+  sendMessage(text: string, messageId?: string, attachments?: MessageAttachment[]): void {
     const id = messageId ?? `follower-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     this.sentMessageIds.add(id);
-    this.sync.send({ type: 'user_message', text, messageId: id });
+    // Off-loaded `path` values point at this follower's VFS — they are
+    // not reachable from the leader. Strip them (preserving inline
+    // text/data) so the cone never sees a stale path it cannot read.
+    const safeAttachments = attachments?.length
+      ? stripLocalPathsForRemote(attachments)
+      : attachments;
+    this.sync.send({
+      type: 'user_message',
+      text,
+      messageId: id,
+      attachments: safeAttachments,
+    });
     log.info('Sent user message to leader', { messageId: id });
   }
 
@@ -255,7 +273,12 @@ export class FollowerSyncManager implements AgentHandle {
           messageId: message.messageId,
           scoopJid: message.scoopJid,
         });
-        this.options.onUserMessage?.(message.text, message.messageId, message.scoopJid);
+        this.options.onUserMessage?.(
+          message.text,
+          message.messageId,
+          message.scoopJid,
+          message.attachments
+        );
         break;
 
       case 'status':

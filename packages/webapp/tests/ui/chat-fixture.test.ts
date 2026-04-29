@@ -42,7 +42,7 @@ describe('createChatFixture', () => {
       .map((m) => m.channel)
       .sort();
     expect(channels).toEqual(
-      ['cron', 'fswatch', 'navigate', 'session-reload', 'sprinkle', 'webhook'].sort()
+      ['cron', 'fswatch', 'navigate', 'session-reload', 'sprinkle', 'upgrade', 'webhook'].sort()
     );
   });
 
@@ -52,6 +52,12 @@ describe('createChatFixture', () => {
 
   it('includes a queued message with the `queued` flag set', () => {
     expect(msgs.some((m) => m.queued === true)).toBe(true);
+  });
+
+  it('includes a user message with image and text attachments', () => {
+    const attachmentMsg = byId.get('fx-user-attachment');
+    expect(attachmentMsg).toBeDefined();
+    expect(attachmentMsg!.attachments?.map((a) => a.kind).sort()).toEqual(['image', 'text']);
   });
 
   it('includes tool calls in all four display states', () => {

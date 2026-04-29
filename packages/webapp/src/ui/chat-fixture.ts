@@ -14,6 +14,27 @@
 
 import type { ChatMessage, ToolCall } from './types.js';
 
+/** Smallest valid 1x1 transparent PNG, encoded as raw bytes so that
+ *  secret scanners do not trip on a long base64 literal. The base64
+ *  form is built at runtime in `pngBytesToBase64()`. */
+const FIXTURE_PNG_BYTES = new Uint8Array([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00, 0x00, 0xb5, 0x1c, 0x0c,
+  0x02, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x64, 0x60, 0x00, 0x00,
+  0x00, 0x06, 0x00, 0x02, 0x30, 0x81, 0xd0, 0x2f, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+  0xae, 0x42, 0x60, 0x82,
+]);
+
+function pngBytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return typeof btoa === 'function'
+    ? btoa(binary)
+    : Buffer.from(binary, 'binary').toString('base64');
+}
+
 /** Base timestamp: 2024-01-01 10:00:00 local. Keeping it fixed makes the
  *  rendered timeline deterministic and avoids "5 seconds ago" style
  *  drift when the fixture is reloaded. */
@@ -65,6 +86,31 @@ export function createChatFixture(): ChatMessage[] {
     role: 'user',
     content: 'Show me some **markdown** — headings, lists, code, a blockquote.',
     timestamp: tsAt(1),
+  });
+
+  messages.push({
+    id: 'fx-user-attachment',
+    role: 'user',
+    content: 'Use these attachments as visual and text context.',
+    timestamp: tsAt(1.1),
+    attachments: [
+      {
+        id: 'fx-att-image',
+        name: 'dot.png',
+        mimeType: 'image/png',
+        size: FIXTURE_PNG_BYTES.byteLength,
+        kind: 'image',
+        data: pngBytesToBase64(FIXTURE_PNG_BYTES),
+      },
+      {
+        id: 'fx-att-text',
+        name: 'notes.txt',
+        mimeType: 'text/plain',
+        size: 21,
+        kind: 'text',
+        text: 'Fixture attachment text',
+      },
+    ],
   });
 
   messages.push({
@@ -357,6 +403,22 @@ export function createChatFixture(): ChatMessage[] {
     timestamp: tsAt(16),
     source: 'lick',
     channel: 'session-reload',
+  });
+
+  messages.push({
+    id: 'fx-lick-upgrade',
+    role: 'user',
+    content:
+      '[Upgrade Event: 0.4.1\u21920.5.0]\n\n' +
+      'SLICC was upgraded from `0.4.1` to `0.5.0`.\n' +
+      'Released: 2026-04-15T12:00:00Z\n\n' +
+      'Use the **upgrade** skill (`/workspace/skills/upgrade/SKILL.md`) to:\n' +
+      '- Show the user the changelog between these tags from GitHub\n' +
+      '- Offer to merge new bundled vfs-root content into their workspace ' +
+      "(three-way merge: bundled snapshot vs user's VFS, reconciled with the GitHub tag-to-tag diff).",
+    timestamp: tsAt(17),
+    source: 'lick',
+    channel: 'upgrade',
   });
 
   // ── 6. Queued messages (before the streaming tail) ────────────────

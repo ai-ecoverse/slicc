@@ -26,11 +26,12 @@ import type { BrowserAPI } from '../cdp/index.js';
 import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
 import { buildActiveLicksError, type LickManager } from './lick-manager.js';
 import { SessionStore } from '../core/session.js';
+import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
 import {
   registerSessionCostsProvider,
   type ScoopCostData,
 } from '../shell/supplemental-commands/cost-command.js';
-import type { AssistantMessage } from '../core/types.js';
+import type { AssistantMessage, ImageContent } from '../core/types.js';
 
 const log = createLogger('orchestrator');
 
@@ -886,6 +887,120 @@ export class Orchestrator {
     });
   }
 
+  /**
+   * Non-blocking variant of {@link waitForScoops}. Kicks off the wait
+   * in the background and emits a `scoop-wait` channel message to the
+   * cone when the wait resolves (all listed scoops complete or the
+   * timeout expires). Returns synchronously so the caller — typically
+   * the `scoop_wait` tool — can release its turn immediately and let
+   * the cone keep working until the lick fires.
+   *
+   * Sandbox / mute semantics are inherited from `waitForScoops`: the
+   * listed scoops are muted during the wait so individual completions
+   * flow into this lick instead of firing extra cone turns. The mute is
+   * installed synchronously by the time this method returns (the first
+   * await in `waitForScoops` is the actual wait — all setup is sync).
+   *
+   * @returns the breakdown of which jids were registered and which were
+   * unknown — so the tool can summarize the schedule in its synchronous
+   * result without having to wait for completion.
+   */
+  scheduleScoopWait(
+    jids: readonly string[],
+    timeoutMs?: number
+  ): { scheduled: string[]; unknown: string[] } {
+    const uniqueJids = Array.from(new Set(jids));
+    const scheduled = uniqueJids.filter((jid) => this.scoops.has(jid));
+    const unknown = uniqueJids.filter((jid) => !this.scoops.has(jid));
+
+    // Kick off the wait in the background. `waitForScoops` runs its
+    // sync setup (mute install, pending-completion drain, waiter
+    // registration) before its first await, so by the time control
+    // returns to us the scoops are already muted and any race with a
+    // just-completed scoop is closed. Pass the de-duped, known-scheduled
+    // list (NOT the raw `jids`) so the emitted `scoop-wait` lick matches
+    // the synchronous ack: duplicates are collapsed into one row and
+    // unknown jids are excluded entirely instead of showing up as
+    // timed-out rows the caller already saw in the ack.
+    void this.waitForScoops(scheduled, timeoutMs)
+      .then((results) => this.deliverWaitResultsToCone(results))
+      .catch((err) => {
+        log.error('scheduleScoopWait failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+
+    return { scheduled, unknown };
+  }
+
+  /**
+   * Build the `scoop-wait` lick payload from a finished
+   * `waitForScoops` result and deliver it to the cone via the same
+   * onIncomingMessage + handleMessage wiring used by `scoop-notify`.
+   * Skips silently when no cone is registered or the result list is
+   * empty.
+   */
+  private async deliverWaitResultsToCone(
+    results: Array<{ jid: string; summary: string | null; timedOut: boolean }>
+  ): Promise<void> {
+    if (results.length === 0) return;
+    const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+    if (!cone) return;
+
+    const lines: string[] = ['[scoop_wait completed]'];
+    let timedOutCount = 0;
+    let completedCount = 0;
+    for (const r of results) {
+      const target = this.scoops.get(r.jid);
+      const label = target?.folder ?? r.jid;
+      if (r.timedOut) {
+        timedOutCount += 1;
+        lines.push(`--- ${label} (timed out) ---`);
+      } else {
+        completedCount += 1;
+        lines.push(`--- ${label} ---`);
+        lines.push(r.summary ?? '(no output)');
+      }
+    }
+    const summary = `${completedCount} completed, ${timedOutCount} timed out`;
+    lines.splice(1, 0, summary);
+
+    // ID needs entropy beyond `Date.now()` because the lick path now
+    // settles asynchronously: two waits scheduled in the same tick
+    // (e.g. timeout_ms: 0, or all targets already pending in
+    // `pendingCompletions`) can resolve in the same millisecond. Lick
+    // rendering de-dupes by id in `chat-panel.ts` and persistence uses
+    // `put` keyed by id in `db.ts`, so a colliding id silently drops
+    // one of the lick payloads. Mirror the `delegate-...` id shape
+    // used elsewhere in this file: timestamp + random suffix.
+    const msg: ChannelMessage = {
+      id: `scoop-wait-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      chatJid: cone.jid,
+      senderId: 'scoop-wait',
+      senderName: 'scoop-wait',
+      content: lines.join('\n'),
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'scoop-wait',
+    };
+
+    try {
+      this.callbacks.onIncomingMessage?.(cone.jid, msg);
+    } catch (err) {
+      log.warn('onIncomingMessage for scoop-wait threw', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      await this.handleMessage(msg);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      log.error('Failed to route scoop-wait result to cone', { error: errMsg });
+      this.callbacks.onError(cone.jid, `scoop_wait completed but notification failed: ${errMsg}`);
+    }
+  }
+
   private dispatchScoopEvent<K extends keyof ScoopObserver>(
     jid: string,
     event: K,
@@ -1379,8 +1494,8 @@ export class Orchestrator {
         : undefined,
       onMuteScoops: scoop.isCone ? (jids) => this.muteScoops(jids) : undefined,
       onUnmuteScoops: scoop.isCone ? (jids) => this.unmuteScoops(jids) : undefined,
-      onWaitForScoops: scoop.isCone
-        ? (jids, timeoutMs) => this.waitForScoops(jids, timeoutMs)
+      onScheduleScoopWait: scoop.isCone
+        ? (jids, timeoutMs) => this.scheduleScoopWait(jids, timeoutMs)
         : undefined,
       getGlobalMemory: () => this.getGlobalMemory(),
       setGlobalMemory: scoop.isCone ? (content) => this.setGlobalMemory(content) : undefined,
@@ -1503,7 +1618,13 @@ export class Orchestrator {
   }
 
   /** Send a prompt to a scoop */
-  async sendPrompt(jid: string, text: string, senderId: string, senderName: string): Promise<void> {
+  async sendPrompt(
+    jid: string,
+    text: string,
+    senderId: string,
+    senderName: string,
+    images: ImageContent[] = []
+  ): Promise<void> {
     let context = this.contexts.get(jid);
 
     // Create context if needed
@@ -1542,10 +1663,10 @@ export class Orchestrator {
       this.dispatchScoopEvent(jid, 'onStatusChange', 'processing');
     }
 
-    log.debug('Prompt sent to scoop', { jid, textLength: text.length });
+    log.debug('Prompt sent to scoop', { jid, textLength: text.length, imageCount: images.length });
 
     // Send to the scoop context
-    await context.prompt(text);
+    await context.prompt(text, images);
   }
 
   /** Process queued messages for a scoop */
@@ -1596,9 +1717,10 @@ export class Orchestrator {
           minute: '2-digit',
           hour12: true,
         });
-        return `[${time}] ${m.senderName}: ${m.content}`;
+        return `[${time}] ${m.senderName}: ${formatPromptWithAttachments(m.content, m.attachments)}`;
       })
       .join('\n');
+    const images = messages.flatMap((m) => imageContentFromAttachments(m.attachments));
 
     // Clear queue and update high-water mark
     this.messageQueues.set(jid, []);
@@ -1607,7 +1729,7 @@ export class Orchestrator {
     this.lastAgentTimestamp.set(jid, lastMsg.timestamp);
     await db.setState(`lastAgentTs_${jid}`, lastMsg.timestamp);
 
-    await this.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName);
+    await this.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName, images);
   }
 
   /** Start the message polling loop */

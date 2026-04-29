@@ -163,6 +163,7 @@ async function init(): Promise<void> {
     const isSprinkle = event.type === 'sprinkle';
     const isFsWatch = event.type === 'fswatch';
     const isNavigate = event.type === 'navigate';
+    const isUpgrade = event.type === 'upgrade';
     const eventName = isWebhook
       ? event.webhookName
       : isSprinkle
@@ -171,7 +172,9 @@ async function init(): Promise<void> {
           ? (event as any).fswatchName
           : isNavigate
             ? (event as any).navigateUrl
-            : event.cronName;
+            : isUpgrade
+              ? `${(event as any).upgradeFromVersion ?? 'unknown'}\u2192${(event as any).upgradeToVersion ?? 'unknown'}`
+              : event.cronName;
     const eventId = isWebhook
       ? event.webhookId
       : isSprinkle
@@ -180,7 +183,9 @@ async function init(): Promise<void> {
           ? (event as any).fswatchId
           : isNavigate
             ? (event as any).navigateUrl
-            : event.cronId;
+            : isUpgrade
+              ? `upgrade-${(event as any).upgradeToVersion ?? 'unknown'}`
+              : event.cronId;
     const channel = event.type;
 
     const scoops = orchestrator.getScoops();
@@ -208,8 +213,26 @@ async function init(): Promise<void> {
             ? 'File Watch Event'
             : isNavigate
               ? 'Navigate Event'
-              : 'Cron Event';
-      const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
+              : isUpgrade
+                ? 'Upgrade Event'
+                : 'Cron Event';
+      let content: string;
+      if (isUpgrade) {
+        const from = (event as any).upgradeFromVersion ?? 'unknown';
+        const to = (event as any).upgradeToVersion ?? 'unknown';
+        const releasedAt =
+          (event.body as { releasedAt?: string | null } | null | undefined)?.releasedAt ?? null;
+        const releaseLine = releasedAt ? `\nReleased: ${releasedAt}` : '';
+        content =
+          `[${eventLabel}: ${from}\u2192${to}]\n\n` +
+          `SLICC was upgraded from \`${from}\` to \`${to}\`.${releaseLine}\n\n` +
+          `Use the **upgrade** skill (\`/workspace/skills/upgrade/SKILL.md\`) to:\n` +
+          `- Show the user the changelog between these tags from GitHub\n` +
+          `- Offer to merge new bundled vfs-root content into their workspace ` +
+          `(three-way merge: bundled snapshot vs user's VFS, reconciled with the GitHub tag-to-tag diff).`;
+      } else {
+        content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
+      }
 
       const channelMsg: import('../../../packages/webapp/src/scoops/types.js').ChannelMessage = {
         id: msgId,
@@ -277,6 +300,38 @@ async function init(): Promise<void> {
       addedAt: new Date().toISOString(),
     });
     console.log('[slicc-offscreen] Created cone');
+  }
+
+  // ── Upgrade detection ─────────────────────────────────────────────
+  // Aligned with the boot-time check in packages/webapp/src/ui/main.ts:
+  // both run only after a cone is guaranteed to exist as a routable
+  // target. We also defer advancing the "last seen" marker until the
+  // lick has been routed — otherwise a transient no-cone state would
+  // silently lose the upgrade notification for that version.
+  {
+    const sharedFsForUpgrade = orchestrator.getSharedFS();
+    if (sharedFsForUpgrade) {
+      const { detectUpgrade, recordVersionSeen } =
+        await import('../../../packages/webapp/src/scoops/upgrade-detection.js');
+      detectUpgrade(sharedFsForUpgrade)
+        .then(async (result) => {
+          if (!result.isUpgrade || result.lastSeen === null) return;
+          lickManager.emitEvent({
+            type: 'upgrade',
+            targetScoop: undefined,
+            timestamp: new Date().toISOString(),
+            upgradeFromVersion: result.lastSeen,
+            upgradeToVersion: result.bundled.version,
+            body: {
+              from: result.lastSeen,
+              to: result.bundled.version,
+              releasedAt: result.bundled.releasedAt,
+            },
+          });
+          await recordVersionSeen(result.bundled.version);
+        })
+        .catch((err) => console.warn('[slicc-offscreen] Upgrade detection failed', err));
+    }
   }
 
   let stopTrayRuntime: (() => void) | null = null;

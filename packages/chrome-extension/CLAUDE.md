@@ -41,7 +41,7 @@ Offscreen Document
 ## CSP Workarounds
 
 - Use `sandbox.html` for dynamic code paths that cannot run directly under extension CSP.
-- Use `sprinkle-sandbox.html` for sprinkle panels and inline sprinkle rendering.
+- Use `sprinkle-sandbox.html` for sprinkle panels and dip rendering.
 - `tool-ui-sandbox.html` and related HTML shells exist for specialized extension UI surfaces.
 - When loading bundled assets, prefer `chrome.runtime.getURL(...)`.
 - **External CDN scripts in sprinkles** are fetch-and-inlined by `sprinkle-renderer.ts` (full-doc) or via `sprinkle-fetch-script` parent relay (partial-content). Never use `<script src="https://...">` directly in sandbox HTML.

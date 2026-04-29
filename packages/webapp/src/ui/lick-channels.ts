@@ -5,10 +5,11 @@
  * This set is a SUPERSET of `LickEvent.type` in
  * `scoops/lick-manager.ts`: it covers the external-event types emitted
  * by the LickManager (webhook, cron, sprinkle, fswatch, session-reload,
- * navigate) AND the synthetic scoop-lifecycle channels
- * (`scoop-notify`, `scoop-idle`) the Orchestrator fires when a scoop
- * completes or stays idle. We render both with the same widget so the
- * cone's chat history stays visually coherent across "something
+ * navigate, upgrade) AND the synthetic scoop-lifecycle channels
+ * (`scoop-notify`, `scoop-idle`, `scoop-wait`) the Orchestrator fires
+ * when a scoop completes, stays idle, or when a previously scheduled
+ * `scoop_wait` resolves. We render all of them with the same widget so
+ * the cone's chat history stays visually coherent across "something
  * external happened" and "a scoop finished" events.
  *
  * Anything rendering lick messages (chat panel, main.ts history
@@ -23,8 +24,10 @@ export type LickChannel =
   | 'fswatch'
   | 'session-reload'
   | 'navigate'
+  | 'upgrade'
   | 'scoop-notify'
-  | 'scoop-idle';
+  | 'scoop-idle'
+  | 'scoop-wait';
 
 export const LICK_CHANNELS: ReadonlySet<LickChannel> = new Set<LickChannel>([
   'webhook',
@@ -33,8 +36,10 @@ export const LICK_CHANNELS: ReadonlySet<LickChannel> = new Set<LickChannel>([
   'fswatch',
   'session-reload',
   'navigate',
+  'upgrade',
   'scoop-notify',
   'scoop-idle',
+  'scoop-wait',
 ]);
 
 export function isLickChannel(channel: string | null | undefined): channel is LickChannel {

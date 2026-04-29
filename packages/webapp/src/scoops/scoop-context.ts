@@ -22,6 +22,7 @@ import type {
   AssistantMessage,
   AssistantMessageEvent,
   TextContent,
+  ImageContent,
   Model,
 } from '../core/index.js';
 import { isContextOverflow, streamSimple } from '@mariozechner/pi-ai';
@@ -153,11 +154,13 @@ export interface ScoopContextCallbacks {
   ) => Promise<
     Array<{ jid: string; summary: string; timestamp: string; notificationPath: string | null }>
   >;
-  /** Wait for a batch of scoops to complete (cone only). */
-  onWaitForScoops?: (
+  /** Schedule a non-blocking wait for a batch of scoops (cone only).
+   *  Returns synchronously; the orchestrator emits a `scoop-wait` lick
+   *  to the cone when all listed scoops complete or the timeout fires. */
+  onScheduleScoopWait?: (
     jids: readonly string[],
     timeoutMs?: number
-  ) => Promise<Array<{ jid: string; summary: string | null; timedOut: boolean }>>;
+  ) => { scheduled: string[]; unknown: string[] };
   /** Get global CLAUDE.md content (shared across all scoops) */
   getGlobalMemory: () => Promise<string>;
   /** Update global CLAUDE.md (cone only) */
@@ -253,6 +256,10 @@ export class ScoopContext {
         // tell the AgentBridge which scoop is the parent of any nested
         // `agent <cwd> ... <prompt>` invocation — used for model inheritance.
         getParentJid: () => this.scoop.jid,
+        // Mark non-cone scoops as non-interactive so commands like `mount`
+        // that need a human gesture fail fast instead of hanging on a tool
+        // UI nobody will see (issue #508).
+        isScoop: () => !this.scoop.isCone,
       });
       log.info('WasmShell initialized', { folder: this.scoop.folder });
       const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
@@ -268,7 +275,7 @@ export class ScoopContext {
         onDropScoop: this.callbacks.onDropScoop,
         onMuteScoops: this.callbacks.onMuteScoops,
         onUnmuteScoops: this.callbacks.onUnmuteScoops,
-        onWaitForScoops: this.callbacks.onWaitForScoops,
+        onScheduleScoopWait: this.callbacks.onScheduleScoopWait,
         onSetGlobalMemory: this.callbacks.setGlobalMemory,
         getGlobalMemory: this.callbacks.getGlobalMemory,
       };
@@ -397,7 +404,7 @@ export class ScoopContext {
   }
 
   /** Send a prompt to this scoop's agent. If already processing, queues it via followUp(). */
-  async prompt(text: string): Promise<void> {
+  async prompt(text: string, images: ImageContent[] = []): Promise<void> {
     if (!this.agent) {
       this.callbacks.onError('Agent not initialized');
       return;
@@ -415,7 +422,7 @@ export class ScoopContext {
       // Use pi-agent-core's followUp() to queue message for after current turn
       this.agent.followUp({
         role: 'user',
-        content: [{ type: 'text', text }],
+        content: [{ type: 'text', text }, ...images],
         timestamp: Date.now(),
       });
       return;
@@ -447,7 +454,7 @@ export class ScoopContext {
         this.didStreamDeltas = false;
 
         try {
-          await agent.prompt(text);
+          await agent.prompt(text, images);
           // Success - exit retry loop
           lastError = null;
           break;
