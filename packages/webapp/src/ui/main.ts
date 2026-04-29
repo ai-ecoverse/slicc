@@ -642,6 +642,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     getProviderModels: getProviderModelsExt,
     addAccount: addAccountExt,
     setSelectedModelId: setSelectedModelIdExt,
+    getAccounts: getAccountsExt,
   } = await import('./provider-settings.js');
   const buildExtProviderCatalogue = () => {
     const ids = getAvailableProvidersExt();
@@ -750,6 +751,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
             : undefined;
         const isWelcomeFlowAction =
           welcomeAction === 'first-run' ||
+          welcomeAction === 'welcome-ready' ||
           welcomeAction === 'onboarding-complete' ||
           welcomeAction === 'connect-ready' ||
           welcomeAction === 'connect-attempt' ||
@@ -762,6 +764,22 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
           if (action === 'first-run') {
             getExtOnboardingOrchestrator().handleFirstRun();
+            return;
+          }
+          if (action === 'welcome-ready') {
+            // The welcome dip is asking whether the user has already
+            // finished onboarding (chat-history re-mount on reload).
+            // If `.welcomed` is present we tell it to skip the wizard.
+            void localFs
+              .exists('/shared/.welcomed')
+              .catch(() => false)
+              .then((welcomed) => {
+                broadcastToDipsExt({
+                  type: 'slicc-welcome-state',
+                  complete: !!welcomed,
+                  note: welcomed ? "You're all set." : undefined,
+                });
+              });
             return;
           }
           if (action === 'onboarding-complete') {
@@ -778,6 +796,28 @@ async function mainExtension(app: HTMLElement): Promise<void> {
             return; // Suppress cone-routing — LLM isn't configured yet.
           }
           if (action === 'connect-ready') {
+            // Reload short-circuit: if the user already configured a
+            // provider in a previous session, the connect-llm dip is
+            // being re-mounted from chat history. Don't ask them to
+            // reconfigure — tell the dip to fast-forward to its done
+            // card.
+            const accounts = getAccountsExt();
+            if (accounts.length > 0) {
+              const primary = accounts[0];
+              const cfg = (() => {
+                try {
+                  return getProviderConfigExt(primary.providerId);
+                } catch {
+                  return null;
+                }
+              })();
+              broadcastToDipsExt({
+                type: 'slicc-already-connected',
+                provider: primary.providerId,
+                note: cfg?.name ? `Already connected to ${cfg.name}.` : 'Already connected.',
+              });
+              return;
+            }
             getExtOnboardingOrchestrator().handleConnectReady();
             return;
           }
@@ -1675,6 +1715,7 @@ async function main(): Promise<void> {
     getProviderModels,
     addAccount,
     setSelectedModelId,
+    getAccounts,
   } = await import('./provider-settings.js');
   const buildProviderCatalogue = () => {
     const ids = getAvailableProviders();
@@ -1834,6 +1875,7 @@ async function main(): Promise<void> {
         : undefined;
     const isWelcomeFlowAction =
       welcomeAction === 'first-run' ||
+      welcomeAction === 'welcome-ready' ||
       welcomeAction === 'onboarding-complete' ||
       welcomeAction === 'connect-ready' ||
       welcomeAction === 'connect-attempt' ||
@@ -1849,6 +1891,29 @@ async function main(): Promise<void> {
       // "No API key configured" before the wizard even appears.
       if (action === 'first-run') {
         getOnboardingOrchestrator()?.handleFirstRun();
+        return;
+      }
+
+      // ── Reload short-circuit for the welcome dip. The dip is the
+      // first thing the chat history re-renders after a refresh; if
+      // `.welcomed` is already on disk the user has been here before
+      // and we tell the dip to render its finished card instead of
+      // the wizard.
+      if (action === 'welcome-ready') {
+        if (sharedFs) {
+          void sharedFs
+            .exists('/shared/.welcomed')
+            .catch(() => false)
+            .then((welcomed) => {
+              broadcastToDips({
+                type: 'slicc-welcome-state',
+                complete: !!welcomed,
+                note: welcomed ? "You're all set." : undefined,
+              });
+            });
+        } else {
+          broadcastToDips({ type: 'slicc-welcome-state', complete: false });
+        }
         return;
       }
 
@@ -1869,6 +1934,26 @@ async function main(): Promise<void> {
         }
       }
       if (action === 'connect-ready') {
+        // Reload short-circuit: provider is already configured →
+        // the dip is being re-mounted from chat history; show the
+        // finished card instead of the provider list.
+        const accounts = getAccounts();
+        if (accounts.length > 0) {
+          const primary = accounts[0];
+          const cfg = (() => {
+            try {
+              return getProviderConfig(primary.providerId);
+            } catch {
+              return null;
+            }
+          })();
+          broadcastToDips({
+            type: 'slicc-already-connected',
+            provider: primary.providerId,
+            note: cfg?.name ? `Already connected to ${cfg.name}.` : 'Already connected.',
+          });
+          return;
+        }
         getOnboardingOrchestrator()?.handleConnectReady();
         return;
       }

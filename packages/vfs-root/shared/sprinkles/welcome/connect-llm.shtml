@@ -363,6 +363,14 @@
           providers = (msg.providers || []).slice();
           modelsByProvider = msg.models || {};
           renderProviders();
+        } else if (msg.type === 'slicc-already-connected') {
+          // Reload of a chat that already finished onboarding —
+          // skip the provider list entirely and show a finished card.
+          go('sDone');
+          var doneSub = document.getElementById('doneSub');
+          if (doneSub) {
+            doneSub.textContent = msg.note || 'Already connected.';
+          }
         } else if (msg.type === 'slicc-connect-result') {
           if (msg.ok) {
             connectBtn.textContent = 'Connected';
