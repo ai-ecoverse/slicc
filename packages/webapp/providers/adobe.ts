@@ -250,9 +250,11 @@ export const config: ProviderConfig = {
       // so we turn it off only for Haiku here. pi-ai's anthropic provider then
       // omits the field and sends the legacy
       // `fine-grained-tool-streaming-2025-05-14` beta header instead, which
-      // Haiku-on-Bedrock accepts. The compat propagates through
-      // ModelMetadata → applyModelMetadata → Model.compat in
-      // provider-settings.ts:getProviderModels.
+      // Haiku-on-Bedrock accepts. The compat object travels with the
+      // ModelMetadata returned by getModelIds and is merged onto the streaming
+      // Model<Api> by provider-settings.ts:applyModelMetadata. Both
+      // getProviderModels (the picker / fallback path) and resolveModelById /
+      // resolveCurrentModel (the streaming path) preserve it.
       if (/haiku/i.test(m.id)) {
         entry.compat = { supportsEagerToolInputStreaming: false };
       }

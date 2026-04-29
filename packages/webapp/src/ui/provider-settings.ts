@@ -16,6 +16,7 @@ import {
   shouldIncludeProvider,
 } from '../providers/index.js';
 import type { ProviderConfig } from '../providers/index.js';
+import type { CompatOverrides } from '../providers/types.js';
 import {
   isBedrockCampCompatible,
   getBedrockCampExtraModels,
@@ -121,7 +122,7 @@ function applyModelMetadata(
     max_tokens?: number;
     reasoning?: boolean;
     input?: string[];
-    compat?: Record<string, unknown>;
+    compat?: CompatOverrides;
   }
 ): void {
   if (metadata.context_window !== undefined) model.contextWindow = metadata.context_window;
@@ -130,11 +131,14 @@ function applyModelMetadata(
   if (metadata.input !== undefined) model.input = metadata.input;
   // Merge compat onto whatever pi-ai's base model already declared (or any
   // compat from a prior modelOverrides layer). Each successive layer can
-  // override individual flags without clobbering siblings.
+  // override individual flags without clobbering siblings. Cast to a generic
+  // record on both sides because pi-ai's compat shapes are disjoint interfaces
+  // (no shared index signature) but in practice providers may set fields from
+  // any of them — pi-ai reads by property name and ignores unknown fields.
   if (metadata.compat !== undefined) {
     model.compat = {
       ...((model.compat as Record<string, unknown> | undefined) ?? {}),
-      ...metadata.compat,
+      ...(metadata.compat as Record<string, unknown>),
     };
   }
 }
