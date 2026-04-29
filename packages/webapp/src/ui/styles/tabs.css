@@ -323,17 +323,28 @@
 .rail__section--bottom {
   flex: none;
 }
-/* Rail header slot — hosts the user avatar in extension mode. Sits
-   above the top section with a hairline separator so it doesn't
-   look like another sprinkle item. */
+/* Rail header slot — hosts the user avatar in extension mode. Sized
+   to match the thread header (56px) so the hairline separator below
+   the avatar visually continues the gradient line at the bottom of
+   the chat thread header on the left. */
 .rail__section--header {
   flex: none;
-  padding-bottom: var(--s2-spacing-100);
+  height: var(--uxc-thread-header-height);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-bottom: 1px solid var(--s2-border-subtle);
   margin-bottom: var(--s2-spacing-100);
 }
 .rail__section--header .header__avatar {
   margin: 0 auto;
+}
+/* When the rail mounts a header widget we drop its own top padding
+   so the widget aligns to Y=0 — the section's `height` matches the
+   thread header so the separator lines up with the gradient on the
+   left. */
+.rail:has(.rail__section--header) {
+  padding-top: 0;
 }
 .rail__avatar {
   /* The avatar already carries `.header__avatar` styles; this class
