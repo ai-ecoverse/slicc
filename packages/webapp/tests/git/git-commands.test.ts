@@ -170,6 +170,22 @@ describe('GitCommands', () => {
     expect(getResult.stdout.trim()).toBe('ghp_shared_token');
   });
 
+  it('picks up github token written by another writer after a git command has run', async () => {
+    // Reproduces the bug where the OAuth login provider writes the token to
+    // the global VFS but a GitCommands instance whose token-load already ran
+    // (and saw no file) keeps a stale "no token" cache and ignores it.
+    await git.execute(['init'], '/project');
+
+    // OAuth provider would write here — bypassing setGithubToken on this
+    // instance, exactly as github.ts:writeGitToken() does.
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_post_login_token');
+
+    const getResult = await git.execute(['config', 'github.token'], '/project');
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout.trim()).toBe('ghp_post_login_token');
+  });
+
   it('supports --no-single-branch for clone', async () => {
     const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
     const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
