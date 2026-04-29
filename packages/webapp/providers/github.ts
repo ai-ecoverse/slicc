@@ -36,7 +36,11 @@ import type {
   OpenAICompletionsOptions,
 } from '@mariozechner/pi-ai';
 import { saveOAuthAccount, getAccounts } from '../src/ui/provider-settings.js';
-import { exchangeOAuthCode, revokeOAuthToken } from '../src/providers/oauth-code-exchange.js';
+import {
+  exchangeOAuthCode,
+  revokeOAuthToken,
+  getWorkerBaseUrl,
+} from '../src/providers/oauth-code-exchange.js';
 
 // ── Config ─────────────────────────────────────────────────────────
 
@@ -63,6 +67,25 @@ let runtimeWorkerBaseUrl: string | null = null;
 
 async function resolveClientId(): Promise<string> {
   if (runtimeClientId) return runtimeClientId;
+
+  // Extension mode: there is no local server, so go straight to the worker.
+  // (A relative /api/runtime-config would resolve to chrome-extension://<id>/...
+  // and 404.)
+  if (isExtension) {
+    try {
+      const res = await fetch(`${getWorkerBaseUrl()}/api/runtime-config`);
+      if (res.ok) {
+        const data = (await res.json()) as { oauth?: { github?: string } };
+        if (data.oauth?.github) {
+          runtimeClientId = data.oauth.github;
+          return runtimeClientId;
+        }
+      }
+    } catch {
+      // Fall through to build-time config
+    }
+    return githubConfig.clientId;
+  }
 
   // Try fetching from the local runtime-config first (works when served from
   // the worker directly — the worker injects oauth.github into the response).
@@ -350,24 +373,27 @@ export const config: ProviderConfig = {
 
     const scopes = options?.scopes ?? githubConfig.scopes;
 
-    // The redirect URI must match the GitHub App's configured callback URL.
-    // In dev mode, runtimeWorkerBaseUrl points to staging; in production the
-    // worker serves the app directly so we use the page origin.
+    // Both flows redirect through the worker's /auth/callback relay. The relay
+    // reads the `state` param (source=local|extension) and forwards to the
+    // correct final destination. Using one registered URL per OAuth App lets
+    // GitHub OAuth Apps (single-callback) work for both CLI and extension.
     const redirectUri = isExtension
-      ? `https://${(chrome as any).runtime.id}.chromiumapp.org/`
+      ? `${getWorkerBaseUrl()}/auth/callback`
       : `${runtimeWorkerBaseUrl ?? window.location.origin}/auth/callback`;
 
-    // Build OAuth state with port and CSRF nonce for the sliccy.ai relay (CLI only)
-    const oauthState = !isExtension
-      ? btoa(
-          JSON.stringify({
-            port: parseInt(new URL(window.location.href).port || '5710', 10),
-            path: '/auth/callback',
-            nonce: crypto.randomUUID(),
-          })
-        )
-      : undefined;
-    const expectedNonce = oauthState ? JSON.parse(atob(oauthState)).nonce : null;
+    const nonce = crypto.randomUUID();
+    const extensionId = isExtension
+      ? (chrome as unknown as { runtime: { id: string } }).runtime.id
+      : '';
+    const stateData = isExtension
+      ? { source: 'extension', extensionId, path: '/github', nonce }
+      : {
+          port: parseInt(new URL(window.location.href).port || '5710', 10),
+          path: '/auth/callback',
+          nonce,
+        };
+    const oauthState = btoa(JSON.stringify(stateData));
+    const expectedNonce = nonce;
 
     const params = new URLSearchParams({
       client_id: clientId,

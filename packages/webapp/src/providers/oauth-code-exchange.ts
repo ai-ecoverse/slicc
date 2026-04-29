@@ -15,7 +15,7 @@ import {
 } from '../scoops/tray-runtime-config.js';
 
 /** Resolve the worker base URL (localStorage override → production default). */
-function getWorkerBaseUrl(): string {
+export function getWorkerBaseUrl(): string {
   try {
     const stored = localStorage.getItem(TRAY_WORKER_STORAGE_KEY);
     if (stored) return stored.replace(/\/$/, '');
