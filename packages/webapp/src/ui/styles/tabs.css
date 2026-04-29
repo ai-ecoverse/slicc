@@ -323,6 +323,23 @@
 .rail__section--bottom {
   flex: none;
 }
+/* Rail header slot — hosts the user avatar in extension mode. Sits
+   above the top section with a hairline separator so it doesn't
+   look like another sprinkle item. */
+.rail__section--header {
+  flex: none;
+  padding-bottom: var(--s2-spacing-100);
+  border-bottom: 1px solid var(--s2-border-subtle);
+  margin-bottom: var(--s2-spacing-100);
+}
+.rail__section--header .header__avatar {
+  margin: 0 auto;
+}
+.rail__avatar {
+  /* The avatar already carries `.header__avatar` styles; this class
+     just lets us re-target hover affordances if we ever want a
+     rail-specific look. */
+}
 .rail__item {
   position: relative;
   width: 32px;

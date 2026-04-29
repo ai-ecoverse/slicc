@@ -258,11 +258,12 @@ export class Layout {
 
   // ── Shared: Header ──────────────────────────────────────────────────
 
-  private buildHeader(parent: HTMLElement): void {
-    const header = document.createElement('div');
-    header.className = 'header';
-
-    // ── Auto-select first model if none set ────────────────────────
+  /**
+   * Auto-select a model on boot and wire `refreshModels` for downstream
+   * callers. Runs in both modes — the extension drops the visible
+   * header but still needs the model bookkeeping.
+   */
+  private initModelSelection(): void {
     const ensureModelSelected = () => {
       const currentModelId = getSelectedModelId();
       if (currentModelId) return;
@@ -285,6 +286,34 @@ export class Layout {
       this.panels?.chat?.refreshModelSelector();
       this.refreshAvatar();
     };
+  }
+
+  /** Construct the scoop switcher dropdown (used in extension mode). */
+  private buildScoopSwitcher(): HTMLElement {
+    this.scoopSwitcherEl = document.createElement('div');
+    this.scoopSwitcherEl.className = 'scoop-switcher';
+    this.scoopSwitcher = new ScoopSwitcher(this.scoopSwitcherEl, {
+      onScoopSelect: (scoop) => this.onScoopSelect?.(scoop),
+      onDeleteScoop: (jid) => {
+        this.panels?.scoops?.deleteScoop?.(jid);
+      },
+    });
+    return this.scoopSwitcherEl;
+  }
+
+  private buildHeader(parent: HTMLElement): void {
+    this.initModelSelection();
+    if (this.isExtension) {
+      // Extension mode: no top-of-panel grey bar at all. The chrome
+      // toolbar icon carries the brand, the scoop-switcher migrates
+      // into the thread header (next to the scoop name), and the
+      // user avatar drops into the rail's top slot. See
+      // `buildSplitLayout` for the DOM wiring.
+      return;
+    }
+
+    const header = document.createElement('div');
+    header.className = 'header';
 
     const row = document.createElement('div');
     row.className = 'header__row';
@@ -292,14 +321,7 @@ export class Layout {
     const brand = document.createElement('div');
     brand.className = 'header__brand';
 
-    if (this.isExtension) {
-      // Extension mode: the chrome.action toolbar icon already shows
-      // the sliccy cone (and N-scoops variant via updateFaviconForScoops).
-      // Repeating it inside the side panel's header just produces the
-      // duplicate-cone effect users complained about, so the in-panel
-      // brand row is empty here — the scoop switcher placed below
-      // carries the active-scoop affordance.
-    } else {
+    {
       // Standalone mode: hamburger toggle for the scoops panel
       const hamburger = document.createElement('button');
       hamburger.className = 'scoops-hamburger';
@@ -320,34 +342,20 @@ export class Layout {
       brand.appendChild(hamburger);
     }
 
-    if (!this.isExtension) {
-      // Wordmark only in standalone — chrome's toolbar icon plus the
-      // window title carry brand recognition for the extension mode.
-      const title = document.createElement('div');
-      title.className = 'header__title';
-      title.textContent = 'slicc';
-      brand.appendChild(title);
-    }
+    // Wordmark — only reachable in standalone since extension
+    // returned early.
+    const title = document.createElement('div');
+    title.className = 'header__title';
+    title.textContent = 'slicc';
+    brand.appendChild(title);
 
     row.appendChild(brand);
-
-    if (this.isExtension) {
-      this.scoopSwitcherEl = document.createElement('div');
-      this.scoopSwitcherEl.className = 'scoop-switcher';
-      this.scoopSwitcher = new ScoopSwitcher(this.scoopSwitcherEl, {
-        onScoopSelect: (scoop) => this.onScoopSelect?.(scoop),
-        onDeleteScoop: (jid) => {
-          this.panels?.scoops?.deleteScoop?.(jid);
-        },
-      });
-      row.appendChild(this.scoopSwitcherEl);
-    }
 
     const spacer = document.createElement('div');
     spacer.className = 'header__spacer';
     row.appendChild(spacer);
 
-    // Avatar
+    // Avatar (standalone only — extension routes the avatar into the rail).
     this.avatarEl = this.buildUserAvatar();
     row.appendChild(this.avatarEl);
 
@@ -680,18 +688,33 @@ export class Layout {
     // Thread header (sub-header with scoop name)
     this.threadHeaderEl = document.createElement('div');
     this.threadHeaderEl.className = 'thread-header';
+    if (this.isExtension) this.threadHeaderEl.classList.add('thread-header--with-switcher');
     const threadHeaderTitle = document.createElement('div');
     threadHeaderTitle.className = 'thread-header__title';
-    // Chat history icon
-    const threadIcon = document.createElement('span');
-    threadIcon.className = 'thread-header__icon';
-    threadIcon.innerHTML =
-      '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h14a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H7l-4 3V5a1 1 0 0 1 1-1z"/><path d="M7 8h6"/><path d="M7 11h3"/></svg>';
-    threadHeaderTitle.appendChild(threadIcon);
-    this.threadHeaderName = document.createElement('span');
-    this.threadHeaderName.className = 'thread-header__name';
-    this.threadHeaderName.textContent = 'sliccy';
-    threadHeaderTitle.appendChild(this.threadHeaderName);
+
+    if (this.isExtension) {
+      // Extension mode: the scoop-switcher dropdown replaces the
+      // static "sliccy" label — the dropdown trigger already shows
+      // the active scoop's name (e.g. "cone") and lets the user
+      // switch scoops directly from the thread header.
+      const switcher = this.buildScoopSwitcher();
+      threadHeaderTitle.appendChild(switcher);
+      // Keep `threadHeaderName` defined so callers that mutate it
+      // (scoop selection in standalone) don't blow up — it's a
+      // detached node in extension mode.
+      this.threadHeaderName = document.createElement('span');
+    } else {
+      // Chat history icon
+      const threadIcon = document.createElement('span');
+      threadIcon.className = 'thread-header__icon';
+      threadIcon.innerHTML =
+        '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h14a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H7l-4 3V5a1 1 0 0 1 1-1z"/><path d="M7 8h6"/><path d="M7 11h3"/></svg>';
+      threadHeaderTitle.appendChild(threadIcon);
+      this.threadHeaderName = document.createElement('span');
+      this.threadHeaderName.className = 'thread-header__name';
+      this.threadHeaderName.textContent = 'sliccy';
+      threadHeaderTitle.appendChild(this.threadHeaderName);
+    }
     this.threadHeaderEl.appendChild(threadHeaderTitle);
 
     // Clear chat button — the rail now owns panel toggling, so the
@@ -743,20 +766,41 @@ export class Layout {
     // panel so existing toggleable-panel logic continues to work.
     this.rightEl = this.rightContentEl;
 
-    this.primaryRail = new RailZone(this.railEl, this.rightContentEl, 'primary', {
-      onItemActivate: (id) => {
-        if (id === 'terminal') this.panels?.terminal?.refit();
-        if (id === 'memory') this.panels?.memory?.refresh();
+    this.primaryRail = new RailZone(
+      this.railEl,
+      this.rightContentEl,
+      'primary',
+      {
+        onItemActivate: (id) => {
+          if (id === 'terminal') this.panels?.terminal?.refit();
+          if (id === 'memory') this.panels?.memory?.refresh();
+        },
+        onItemClose: (id) => {
+          const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
+          this.onSprinkleClose?.(name);
+        },
+        onAddClick: () => this.showPickerForZone('primary', this.railEl),
+        onFullpageToggle: (isFullpage) => {
+          this.layoutRootEl.classList.toggle('layout--rail-fullpage', isFullpage);
+        },
       },
-      onItemClose: (id) => {
-        const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
-        this.onSprinkleClose?.(name);
-      },
-      onAddClick: () => this.showPickerForZone('primary', this.railEl),
-      onFullpageToggle: (isFullpage) => {
-        this.layoutRootEl.classList.toggle('layout--rail-fullpage', isFullpage);
-      },
-    });
+      {
+        // Extension mode: the side panel is too narrow to host both
+        // chat and a second column, so any rail activation takes
+        // over the full panel width. Standalone keeps the legacy
+        // expand-beside-chat behaviour.
+        defaultFullpage: this.isExtension,
+      }
+    );
+
+    if (this.isExtension) {
+      // Extension mode: the user avatar lives at the top of the rail
+      // (above sprinkles) since the grey header is gone. It opens the
+      // same account popover the standalone header avatar does.
+      this.avatarEl = this.buildUserAvatar();
+      this.avatarEl.classList.add('rail__avatar');
+      this.primaryRail.mountTopWidget(this.avatarEl);
+    }
 
     // Dev panel containers
     this.terminalContainer = document.createElement('div');

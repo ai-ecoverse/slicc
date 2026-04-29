@@ -148,6 +148,18 @@
   flex-shrink: 0;
 }
 
+/* Extension mode: the thread header hosts the scoop-switcher
+   dropdown in place of the static chat icon + scoop name. The
+   dropdown sets its own internal styles so we just need to make
+   sure the title slot doesn't squeeze it. */
+.thread-header--with-switcher .thread-header__title {
+  gap: 0;
+}
+.thread-header--with-switcher .scoop-switcher {
+  display: flex;
+  align-items: center;
+}
+
 /* ── Horizontal divider ── */
 .layout__right-divider {
   height: 1px;

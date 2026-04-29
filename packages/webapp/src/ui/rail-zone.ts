@@ -47,6 +47,17 @@ export interface RailZoneCallbacks {
   onFullpageToggle?: (isFullpage: boolean) => void;
 }
 
+export interface RailZoneOptions {
+  /**
+   * When true, plain clicks on a rail item activate the panel in
+   * fullpage mode instead of expanding beside the existing layout.
+   * The extension side panel uses this — there's not enough width
+   * to host both chat and an expanded rail content panel side by
+   * side. Standalone keeps the default (false).
+   */
+  defaultFullpage?: boolean;
+}
+
 /** Long-press threshold in milliseconds for the click-and-hold gesture. */
 const LONG_PRESS_MS = 1000;
 
@@ -74,18 +85,23 @@ export class RailZone {
   private activeId: string | null = null;
   private fullpage = false;
   private overflowObserver: ResizeObserver | null = null;
+  private defaultFullpage = false;
+  /** Header slot above the top section (e.g. user avatar in the extension rail). */
+  private headerSection: HTMLElement | null = null;
 
   constructor(
     railEl: HTMLElement,
     contentEl: HTMLElement,
     zoneId: ZoneId,
-    callbacks: RailZoneCallbacks = {}
+    callbacks: RailZoneCallbacks = {},
+    options: RailZoneOptions = {}
   ) {
     this.rail = railEl;
     this.contentArea = contentEl;
     this.zoneId = zoneId;
     this.callbacks = callbacks;
     this.storageKey = `slicc-${zoneId}-rail`;
+    this.defaultFullpage = options.defaultFullpage ?? false;
 
     this.rail.classList.add('rail');
     this.topSection = document.createElement('div');
@@ -361,13 +377,35 @@ export class RailZone {
         this.activateItem(id, { fullpage: true });
         return;
       }
-      // Plain click: toggle.
-      if (this.activeId === id && !this.fullpage) {
+      // Plain click: toggle. In `defaultFullpage` mode (extension
+      // side panel) the active rail item already covers the panel,
+      // so collapsing on a second click on the same icon takes the
+      // user back to chat naturally.
+      const wantsFullpage = this.defaultFullpage;
+      if (this.activeId === id && (wantsFullpage ? this.fullpage : !this.fullpage)) {
         this.collapse();
       } else {
-        this.activateItem(id, { fullpage: false });
+        this.activateItem(id, { fullpage: wantsFullpage });
       }
     });
+  }
+
+  /**
+   * Mount a custom widget above the top section. Used by the
+   * extension layout to host the user avatar at the rail's top edge.
+   * Pass null to remove the previously-mounted widget.
+   */
+  mountTopWidget(widget: HTMLElement | null): void {
+    if (this.headerSection) {
+      this.headerSection.remove();
+      this.headerSection = null;
+    }
+    if (!widget) return;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'rail__section rail__section--header';
+    wrapper.appendChild(widget);
+    this.rail.insertBefore(wrapper, this.topSection);
+    this.headerSection = wrapper;
   }
 
   /** Restore the last-active item from localStorage, if it still exists. */
