@@ -705,7 +705,24 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
           // Determine API type from metadata or default to anthropic
           const apiType = pm.api === 'openai' ? 'openai' : 'anthropic';
           const customApi = `adobe-${apiType}` as Api;
-          if (base) return { ...base, provider: 'adobe', api: customApi };
+          // Adobe's IMS proxy forwards Anthropic-Messages requests to AWS
+          // Bedrock, which 400s on `tools[].eager_input_streaming` (a field
+          // pi-ai 0.70+ adds to tool definitions by default). Setting
+          // `supportsEagerToolInputStreaming: false` makes pi-ai's anthropic
+          // provider omit the field and send the legacy
+          // `fine-grained-tool-streaming-2025-05-14` beta header instead,
+          // which Bedrock accepts. OpenAI-routed Adobe models are unaffected.
+          const adobeCompat =
+            apiType === 'anthropic' ? { supportsEagerToolInputStreaming: false } : null;
+          if (base) {
+            const baseCompat = (base as Model<Api> & { compat?: object }).compat;
+            return {
+              ...base,
+              provider: 'adobe',
+              api: customApi,
+              ...(adobeCompat && { compat: { ...(baseCompat ?? {}), ...adobeCompat } }),
+            } as unknown as Model<Api>;
+          }
           return {
             id: pm.id,
             name: pm.name ?? pm.id,
@@ -721,6 +738,7 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
             cacheReadCost: 0,
             cacheWriteCost: 0,
             reasoning: true,
+            ...(adobeCompat && { compat: adobeCompat }),
           } as unknown as Model<Api>;
         });
       }
@@ -737,7 +755,21 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
   }
 
   const anthropicModels = getModels('anthropic' as any) as Model<Api>[];
-  return anthropicModels.map((m) => ({ ...m, provider: 'adobe', api: 'adobe-anthropic' as Api }));
+  // Same compat override as the proxy-models path above — every model in this
+  // fallback routes through `adobe-anthropic`, so all of them need
+  // `supportsEagerToolInputStreaming: false` to keep Bedrock from 400ing.
+  return anthropicModels.map(
+    (m) =>
+      ({
+        ...m,
+        provider: 'adobe',
+        api: 'adobe-anthropic' as Api,
+        compat: {
+          ...((m as Model<Api> & { compat?: object }).compat ?? {}),
+          supportsEagerToolInputStreaming: false,
+        },
+      }) as unknown as Model<Api>
+  );
 }
 
 const modelsCache = new Map<string, Model<Api>[]>();
