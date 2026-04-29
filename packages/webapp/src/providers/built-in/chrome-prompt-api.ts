@@ -15,7 +15,7 @@
  * Tools are not supported by the Prompt API and are silently ignored.
  */
 
-import type { ProviderConfig } from '../types.js';
+import type { ProviderConfig, ModelMetadata } from '../types.js';
 import { registerApiProvider, createAssistantMessageEventStream } from '@mariozechner/pi-ai';
 import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
 import type {
@@ -31,28 +31,13 @@ import type {
 
 const PROVIDER_ID = 'chrome-prompt-api';
 const API_NAME = 'chrome-prompt-api-openai' as Api;
+const MODEL_ID = 'gemini-nano';
+const MODELS_CACHE_KEY = 'chrome-prompt-api:models';
 
-export const config: ProviderConfig = {
-  id: PROVIDER_ID,
-  name: 'Chrome (Gemini Nano)',
-  description: 'On-device Prompt API — runs locally in Chrome (no API key)',
-  requiresApiKey: false,
-  requiresBaseUrl: false,
-  // The Prompt API only ever exposes one local model at a time. Mark it as
-  // openai-flavoured purely so getProviderModels routes through our custom
-  // api name; the streaming function we register handles the real shape.
-  getModelIds: () => [
-    {
-      id: 'gemini-nano',
-      name: 'Gemini Nano (on-device)',
-      api: 'openai',
-      input: ['text', 'image'],
-      context_window: 6144,
-      max_tokens: 1024,
-      reasoning: false,
-    },
-  ],
-};
+const isBrowser =
+  typeof localStorage !== 'undefined' &&
+  typeof window !== 'undefined' &&
+  typeof globalThis !== 'undefined';
 
 // ── Prompt API typings (subset of the origin trial) ────────────────
 
@@ -109,6 +94,88 @@ function getLanguageModel(): LanguageModelGlobal | undefined {
   }
   return undefined;
 }
+
+// ── Availability cache (mirrors swiftlm.ts) ────────────────────────
+
+interface CachedModel {
+  /** Whether the local model can accept image inputs (multimodal flag on). */
+  supportsVision?: boolean;
+}
+
+/** Read the cached availability snapshot. Same shape contract as
+ *  `swiftlm.ts`: when the entry is absent, the provider's model list is
+ *  empty and the entry silently disappears from the chat dropdown. */
+function readCachedModels(): Array<{ id: string; name?: string } & ModelMetadata> {
+  if (!isBrowser) return [];
+  const raw = localStorage.getItem(MODELS_CACHE_KEY);
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return [];
+  const entry = parsed[0] as CachedModel;
+  return [
+    {
+      id: MODEL_ID,
+      name: 'Gemini Nano (on-device)',
+      api: 'openai',
+      input: entry.supportsVision ? ['text', 'image'] : ['text'],
+      // Gemini Nano on Chrome ships a 6 144-token context window with a
+      // 1 024-token output cap; matches the documented Prompt API limits.
+      context_window: 6144,
+      max_tokens: 1024,
+      reasoning: false,
+    },
+  ];
+}
+
+/** Best-effort probe of `window.LanguageModel.availability(...)`. Refreshes
+ *  the cache on success; clears it on absence/unavailable so the provider
+ *  transparently disappears from the dropdown when the API isn't reachable
+ *  (flags off, browser too old, model failed to download, …). */
+async function refreshModelsCache(): Promise<void> {
+  if (!isBrowser) return;
+  const lm = getLanguageModel();
+  if (!lm) {
+    localStorage.removeItem(MODELS_CACHE_KEY);
+    return;
+  }
+  try {
+    // Probe text first (cheap), then escalate to image; if the multimodal
+    // origin trial flag is off, the second probe will return 'unavailable'
+    // and we fall back to text-only.
+    const textOk = await lm.availability({ expectedInputs: [{ type: 'text' }] });
+    if (textOk === 'unavailable') {
+      localStorage.removeItem(MODELS_CACHE_KEY);
+      return;
+    }
+    let supportsVision = false;
+    try {
+      const imageOk = await lm.availability({
+        expectedInputs: [{ type: 'text' }, { type: 'image' }],
+      });
+      supportsVision = imageOk !== 'unavailable';
+    } catch {
+      supportsVision = false;
+    }
+    const cached: CachedModel[] = [{ supportsVision }];
+    localStorage.setItem(MODELS_CACHE_KEY, JSON.stringify(cached));
+  } catch {
+    if (isBrowser) localStorage.removeItem(MODELS_CACHE_KEY);
+  }
+}
+
+export const config: ProviderConfig = {
+  id: PROVIDER_ID,
+  name: 'Chrome (Gemini Nano)',
+  description: 'On-device Prompt API — runs locally in Chrome (no API key)',
+  requiresApiKey: false,
+  requiresBaseUrl: false,
+  getModelIds: readCachedModels,
+};
 
 // ── Message conversion ─────────────────────────────────────────────
 
@@ -325,6 +392,12 @@ const streamChromePromptApi = (
 // ── Registration ───────────────────────────────────────────────────
 
 export function register(): void {
+  // Kick off the availability probe once at module load. `getModelIds` is
+  // sync so the first chat-panel render after boot will see whatever was
+  // last cached (or empty); subsequent renders pick up live data — same
+  // pattern as `swiftlm.ts`.
+  void refreshModelsCache();
+
   registerApiProvider({
     api: API_NAME,
     stream: streamChromePromptApi as Parameters<typeof registerApiProvider>[0]['stream'],
@@ -333,3 +406,5 @@ export function register(): void {
     >[0]['streamSimple'],
   });
 }
+
+export const __refreshChromePromptApiModels = refreshModelsCache;
