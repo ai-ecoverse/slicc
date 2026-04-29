@@ -37,8 +37,7 @@ import {
   getProviderConfig,
   removeAccount,
 } from './provider-settings.js';
-import { EXTENSION_TAB_SPECS, setHiddenTabs, type ExtensionTabId } from './tabbed-ui.js';
-import { TabZone } from './tab-zone.js';
+import { getHiddenTabs, setHiddenTabs, type ExtensionTabId } from './tabbed-ui.js';
 import { RailZone } from './rail-zone.js';
 import { PanelRegistry } from './panel-registry.js';
 import { showSprinklePicker } from './sprinkle-picker.js';
@@ -89,11 +88,22 @@ export class Layout {
   /** Cached layout root for fullpage class toggling. */
   private layoutRootEl!: HTMLElement;
 
-  // Tabbed-layout elements (extension only)
+  // Tabbed-layout legacy state — kept around so `setActiveTab` /
+  // `getActiveTab` callers (Electron overlay routing, deep links)
+  // continue to work even though the actual tab bar is gone.
   private tabContainers = new Map<TabId, HTMLElement>();
   private activeTab: TabId = 'chat';
-  /** Pre-created containers for debug tabs (terminal, memory) — always created, tab added on demand. */
+  /** Pre-created containers for debug tabs (terminal, memory) — always created, rail items added on demand. */
   private debugTabContainers: { terminal: HTMLElement; memory: HTMLElement } | null = null;
+  /**
+   * Cached element handle for the Memory rail container — needed so
+   * `setDebugTabs(true)` can re-mount the rail item without losing
+   * the existing MemoryPanel mount.
+   */
+  private memoryContainer!: HTMLElement;
+  /** Cached SVGs reused when re-mounting pinned rail items. */
+  private terminalIconSvg = '';
+  private memoryIconSvg = '';
 
   // Scoop switcher (extension mode)
   private scoopSwitcher: ScoopSwitcher | null = null;
@@ -128,11 +138,10 @@ export class Layout {
   constructor(root: HTMLElement, isExtension = false) {
     this.root = root;
     this.isExtension = isExtension;
-    if (isExtension) {
-      this.buildTabbedLayout();
-    } else {
-      this.buildSplitLayout();
-    }
+    // Single layout path — chat on the left, rail on the right.
+    // The legacy tabbed layout (Chrome extension + Electron overlay)
+    // has been retired; both modes now share the standalone rail UX.
+    this.buildSplitLayout();
   }
 
   /** Set the orchestrator on the scoop switcher (extension mode). */
@@ -157,9 +166,21 @@ export class Layout {
     this.scoopSwitcher?.refresh();
   }
 
+  /**
+   * Activate a built-in panel by tab id. Held over from the legacy
+   * tabbed layout — callers (Electron overlay routing, deep-linking)
+   * still pass `'chat' | 'terminal' | 'files' | 'memory' | 'sprinkle-*'`
+   * ids. In the unified rail layout `chat` is the default left
+   * content and the rest are rail items, so we collapse the rail for
+   * `chat` and activate the matching rail item otherwise.
+   */
   setActiveTab(id: TabId): void {
-    if (!this.isExtension) return;
-    this.extensionZone?.activateTab(id);
+    this.activeTab = id;
+    if (id === 'chat') {
+      this.primaryRail?.collapse?.();
+      return;
+    }
+    this.primaryRail?.activateItem(id);
   }
 
   getActiveTab(): TabId {
@@ -168,7 +189,6 @@ export class Layout {
 
   /** Check if the terminal panel is currently open in a zone. */
   isTerminalOpen(): boolean {
-    if (this.isExtension) return true;
     return this.primaryRail.getActiveItemId() === 'terminal';
   }
 
@@ -177,45 +197,63 @@ export class Layout {
     this.threadHeaderEl?.classList.toggle('thread-header--processing', busy);
   }
 
-  /** Open the terminal panel (rail-driven in standalone mode). */
+  /** Open the terminal panel (rail-driven). */
   openTerminal(): void {
-    if (this.isExtension) return;
     // Don't steal focus from an active sprinkle.
     const active = this.primaryRail.getActiveItemId();
     if (active && active.startsWith('sprinkle-')) return;
     this.primaryRail.activateItem('terminal');
   }
 
-  /** Show or hide debug tabs (terminal, memory) in extension mode. */
+  /**
+   * Show or hide the Terminal + Memory rail items.
+   *
+   * The `debug` shell command used to flip the visibility of these
+   * tabs in the legacy tabbed extension layout. With the unified rail
+   * the items are addable/removable like sprinkles, so we mirror the
+   * same on/off semantics by adding or removing them from the rail.
+   * Files stays pinned in the rail in either mode.
+   */
   setDebugTabs(show: boolean): void {
-    if (!this.isExtension || !this.debugTabContainers) return;
-
-    const DEBUG_TABS = [
-      {
-        id: 'terminal' as const,
-        label: 'Terminal',
-        container: this.debugTabContainers.terminal,
-        onActivate: () => this.panels?.terminal?.refit?.(),
-      },
-      {
-        id: 'memory' as const,
-        label: 'Memory',
-        container: this.debugTabContainers.memory,
-        onActivate: () => this.panels?.memory?.refresh(),
-      },
-    ];
-
-    for (const { id, label, container, onActivate } of DEBUG_TABS) {
-      if (show && !this.extensionZone.hasTab(id)) {
-        this.extensionZone.addTab({ id, label, closable: false, element: container, onActivate });
-        this.tabContainers.set(id, container);
-      } else if (!show && this.extensionZone.hasTab(id)) {
-        this.extensionZone.removeTab(id);
-        this.tabContainers.delete(id);
-      }
-    }
-
     setHiddenTabs(show ? [] : ['terminal', 'memory']);
+    if (!this.primaryRail) return;
+    if (show) {
+      // Re-add only if missing — addItem is a no-op when the id
+      // already exists, so this is safe to call repeatedly.
+      this.ensurePinnedRailItem('terminal');
+      this.ensurePinnedRailItem('memory');
+    } else {
+      this.primaryRail.removeItem('terminal');
+      this.primaryRail.removeItem('memory');
+    }
+  }
+
+  /**
+   * Re-mount a previously-removed pinned rail item without losing
+   * the cached panel container. Called from `setDebugTabs(true)` to
+   * restore terminal/memory after the user enabled debug mode.
+   */
+  private ensurePinnedRailItem(id: 'terminal' | 'memory'): void {
+    if (!this.primaryRail || this.primaryRail.hasItem(id)) return;
+    if (id === 'terminal') {
+      this.primaryRail.addItem({
+        id: 'terminal',
+        label: 'Terminal',
+        icon: this.terminalIconSvg,
+        element: this.terminalContainer,
+        position: 'bottom',
+        onActivate: () => this.panels?.terminal?.refit(),
+      });
+    } else {
+      this.primaryRail.addItem({
+        id: 'memory',
+        label: 'Memory',
+        icon: this.memoryIconSvg,
+        element: this.memoryContainer,
+        position: 'bottom',
+        onActivate: () => this.panels?.memory?.refresh(),
+      });
+    }
   }
 
   // ── Shared: Header ──────────────────────────────────────────────────
@@ -255,10 +293,12 @@ export class Layout {
     brand.className = 'header__brand';
 
     if (this.isExtension) {
-      // Extension mode: no scoops rail visible, show logo instead
-      const logoSize = 24;
-      const logo = this.sliccLogo(logoSize);
-      brand.appendChild(logo);
+      // Extension mode: the chrome.action toolbar icon already shows
+      // the sliccy cone (and N-scoops variant via updateFaviconForScoops).
+      // Repeating it inside the side panel's header just produces the
+      // duplicate-cone effect users complained about, so the in-panel
+      // brand row is empty here — the scoop switcher placed below
+      // carries the active-scoop affordance.
     } else {
       // Standalone mode: hamburger toggle for the scoops panel
       const hamburger = document.createElement('button');
@@ -280,10 +320,14 @@ export class Layout {
       brand.appendChild(hamburger);
     }
 
-    const title = document.createElement('div');
-    title.className = 'header__title';
-    title.textContent = 'slicc';
-    brand.appendChild(title);
+    if (!this.isExtension) {
+      // Wordmark only in standalone — chrome's toolbar icon plus the
+      // window title carry brand recognition for the extension mode.
+      const title = document.createElement('div');
+      title.className = 'header__title';
+      title.textContent = 'slicc';
+      brand.appendChild(title);
+    }
 
     row.appendChild(brand);
 
@@ -600,154 +644,12 @@ export class Layout {
     });
   }
 
-  // ── Extension: Tabbed Layout ────────────────────────────────────────
-
-  /** Extension-mode TabZone (single zone for all tabs). */
-  private extensionZone!: TabZone;
-
-  private buildTabbedLayout(): void {
-    while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
-
-    this.buildHeader(this.root);
-
-    // Tab bar
-    const tabBar = document.createElement('div');
-    tabBar.className = 'tab-bar';
-    this.root.appendChild(tabBar);
-
-    // Tab content area
-    const content = document.createElement('div');
-    content.className = 'tab-content';
-    this.root.appendChild(content);
-
-    this.extensionZone = new TabZone(
-      tabBar,
-      content,
-      'primary',
-      {
-        onTabActivate: (id) => {
-          this.activeTab = id;
-          if (id === 'terminal') this.panels?.terminal?.refit?.();
-          if (id === 'memory') this.panels?.memory?.refresh();
-        },
-        onTabClose: (id) => {
-          const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
-          this.onSprinkleClose?.(name);
-        },
-        onAddClick: () => this.showExtensionPicker(tabBar),
-      },
-      { classPrefix: 'tab-bar' }
-    );
-
-    // Create containers for built-in tabs
-    const chatContainer = document.createElement('div');
-    chatContainer.className = 'tab-content__panel';
-
-    const terminalContainer = document.createElement('div');
-    terminalContainer.className = 'tab-content__panel';
-
-    const filesContainer = document.createElement('div');
-    filesContainer.className = 'tab-content__panel';
-
-    const memoryContainer = document.createElement('div');
-    memoryContainer.className = 'tab-content__panel';
-
-    // Add built-in tabs
-    for (const { id, label } of EXTENSION_TAB_SPECS) {
-      const container =
-        id === 'chat'
-          ? chatContainer
-          : id === 'terminal'
-            ? terminalContainer
-            : id === 'files'
-              ? filesContainer
-              : memoryContainer;
-      this.extensionZone.addTab({
-        id,
-        label,
-        closable: false,
-        element: container,
-        onActivate:
-          id === 'terminal'
-            ? () => this.panels?.terminal?.refit?.()
-            : id === 'memory'
-              ? () => this.panels?.memory?.refresh()
-              : undefined,
-      });
-      // Keep tabContainers in sync for backward compat
-      this.tabContainers.set(id, container);
-    }
-
-    // Store debug tab containers for dynamic add/remove
-    this.debugTabContainers = { terminal: terminalContainer, memory: memoryContainer };
-
-    this.extensionZone.enableAddButton();
-
-    // Hidden container for scoop iframes
-    this.iframeContainer = document.createElement('div');
-    this.iframeContainer.id = 'scoop-iframes';
-    this.iframeContainer.style.display = 'none';
-    this.root.appendChild(this.iframeContainer);
-
-    // Create a dummy scoops element for extension mode (hidden — switcher is in header)
-    this.scoopsEl = document.createElement('div');
-    this.scoopsEl.style.display = 'none';
-    this.root.appendChild(this.scoopsEl);
-
-    // Create panels in their tab containers
-    this.panels = {
-      chat: new ChatPanel(chatContainer),
-      terminal: new TerminalPanel(terminalContainer, {
-        onClearTerminal: () => {
-          this.panels.terminal.clearTerminal();
-        },
-      }),
-      fileBrowser: new FileBrowserPanel(filesContainer, {
-        onRunCommand: async (command) => {
-          await this.runFileBrowserCommand(command);
-          this.extensionZone.activateTab('terminal');
-        },
-      }),
-      memory: new MemoryPanel(memoryContainer),
-      scoops: new ScoopsPanel(this.scoopsEl, {
-        onScoopSelect: (scoop) => this.onScoopSelect?.(scoop),
-        onSendMessage: () => {},
-        onScoopsChanged: (scoops) => this.updateLogoScoops(scoops),
-      }),
-    };
-
-    // Wire chat panel model selector to layout's onModelChange
-    this.panels.chat.onModelChange = (modelId) => this.onModelChange?.(modelId);
-  }
-
-  /** Show the [+] picker in extension mode. */
-  private showExtensionPicker(anchor: HTMLElement): void {
-    const availableSprinkles = this.getAvailableSprinkles?.() ?? [];
-    // In extension mode, all panels are in one zone — filter already-open ones
-    const openIds = new Set(this.extensionZone.getTabIds());
-    const available = availableSprinkles.filter((p) => !openIds.has(`sprinkle-${p.name}`));
-
-    if (available.length === 0) return;
-
-    showSprinklePicker(anchor, 'primary', {
-      registry: this.registry,
-      callbacks: {
-        onSelectPanel: () => {},
-        onSelectSprinkle: (name) => {
-          this.onOpenSprinkle?.(name);
-        },
-      },
-      getAvailableSprinkles: () => available,
-    });
-  }
-
-  private switchTab(id: TabId): void {
-    if (this.extensionZone) {
-      this.extensionZone.activateTab(id);
-    }
-  }
-
-  // ── Standalone: Split Layout ────────────────────────────────────────
+  // ── Split Layout (single layout path) ───────────────────────────────
+  // The legacy tabbed layout (Chrome extension + Electron overlay) and
+  // its supporting helpers (`showExtensionPicker`, `switchTab`,
+  // `extensionZone`, dual-zone TabZone wiring) have been retired.
+  // Both modes now mount the same split layout below — the only
+  // mode-specific tweaks live in `buildSplitLayout` / `buildHeader`.
 
   private buildSplitLayout(): void {
     while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
@@ -759,9 +661,16 @@ export class Layout {
     layout.className = 'layout';
     this.layoutRootEl = layout;
 
-    // Scoops panel (leftmost — icon rail, 58px fixed)
+    // Scoops panel (leftmost — icon rail, 58px fixed). In extension
+    // mode the rail is hidden (the side panel is too narrow for both
+    // a scoop rail and the right rail) — the header's scoop-switcher
+    // dropdown carries the active-scoop affordance instead. The
+    // ScoopsPanel itself stays mounted off-screen so its
+    // `onScoopsChanged` callback (which drives `updateLogoScoops` and
+    // therefore the chrome.action icon) keeps firing.
     this.scoopsEl = document.createElement('div');
     this.scoopsEl.className = 'layout__scoops';
+    if (this.isExtension) this.scoopsEl.style.display = 'none';
     layout.appendChild(this.scoopsEl);
 
     // Left panel (chat) — includes thread header
@@ -858,28 +767,35 @@ export class Layout {
     fileBrowserContainer.style.cssText =
       'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
 
-    const memoryContainer = document.createElement('div');
-    memoryContainer.style.cssText =
+    this.memoryContainer = document.createElement('div');
+    this.memoryContainer.style.cssText =
       'display: flex; flex-direction: column; min-height: 0; flex: 1;';
 
     // 16×16 lucide icons for built-in rail tools.
-    const codeIcon =
+    this.terminalIconSvg =
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>';
     const folderIcon =
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>';
     // Memory → BrainCircuit (lucide). Replaces the old gear icon.
-    const brainIcon =
+    this.memoryIconSvg =
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path><path d="M9 13a4.5 4.5 0 0 0 3-4"></path><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"></path><path d="M3.477 10.896a4 4 0 0 1 .585-.396"></path><path d="M6 18a4 4 0 0 1-1.967-.516"></path><path d="M12 13h4"></path><path d="M12 18h6a2 2 0 0 1 2 2v1"></path><path d="M12 8h8"></path><path d="M16 8V5a2 2 0 0 1 2-2"></path><circle cx="16" cy="13" r=".5"></circle><circle cx="18" cy="3" r=".5"></circle><circle cx="20" cy="21" r=".5"></circle><circle cx="20" cy="8" r=".5"></circle></svg>';
 
+    // In extension mode the panel is too narrow to host the legacy
+    // debug surfaces by default — terminal + memory live behind the
+    // shell's `debug` toggle. Files remains pinned in either mode.
+    const showDebugByDefault = !this.isExtension || !getHiddenTabs().has('terminal');
+
     // Pinned bottom-section tools — always present, mounted from boot.
-    this.primaryRail.addItem({
-      id: 'terminal',
-      label: 'Terminal',
-      icon: codeIcon,
-      element: this.terminalContainer,
-      position: 'bottom',
-      onActivate: () => this.panels?.terminal?.refit(),
-    });
+    if (showDebugByDefault) {
+      this.primaryRail.addItem({
+        id: 'terminal',
+        label: 'Terminal',
+        icon: this.terminalIconSvg,
+        element: this.terminalContainer,
+        position: 'bottom',
+        onActivate: () => this.panels?.terminal?.refit(),
+      });
+    }
     this.primaryRail.addItem({
       id: 'files',
       label: 'Files',
@@ -887,14 +803,16 @@ export class Layout {
       element: fileBrowserContainer,
       position: 'bottom',
     });
-    this.primaryRail.addItem({
-      id: 'memory',
-      label: 'Memory',
-      icon: brainIcon,
-      element: memoryContainer,
-      position: 'bottom',
-      onActivate: () => this.panels?.memory?.refresh(),
-    });
+    if (showDebugByDefault) {
+      this.primaryRail.addItem({
+        id: 'memory',
+        label: 'Memory',
+        icon: this.memoryIconSvg,
+        element: this.memoryContainer,
+        position: 'bottom',
+        onActivate: () => this.panels?.memory?.refresh(),
+      });
+    }
 
     // [+] only appears when sprinkles overflow the available rail height.
     this.primaryRail.enableAddButton();
@@ -922,7 +840,7 @@ export class Layout {
           this.openTerminal();
         },
       }),
-      memory: new MemoryPanel(memoryContainer),
+      memory: new MemoryPanel(this.memoryContainer),
       scoops: new ScoopsPanel(this.scoopsEl, {
         onScoopSelect: (scoop) => {
           this.onScoopSelect?.(scoop);
@@ -998,22 +916,11 @@ export class Layout {
 
   /** Update [+] button enabled state based on available panels. */
   updateAddButtons(): void {
-    // Rail decides [+] visibility based on overflow, not on whether
-    // panels are available — keeping the API for backward compat with
-    // the extension flow but it's a no-op for the standalone rail.
-    if (this.isExtension) {
-      const closedCount = this.registry.getClosed().length;
-      const availableSprinkles = this.getAvailableSprinkles?.() ?? [];
-      const openSprinkles = new Set<string>();
-      for (const id of this.registry.ids()) {
-        if (id.startsWith('sprinkle-') && this.registry.get(id)?.descriptor.zone !== null) {
-          openSprinkles.add(id.slice(9));
-        }
-      }
-      const unopenedSprinkles = availableSprinkles.filter((p) => !openSprinkles.has(p.name)).length;
-      const hasAvailable = closedCount + unopenedSprinkles > 0;
-      this.extensionZone?.setAddButtonEnabled?.(hasAvailable);
-    }
+    // The rail decides [+] visibility from its own overflow logic —
+    // the legacy tabbed layout used to compute it from the registry,
+    // but with a single layout path the rail handles it. Keep the
+    // method as a no-op so existing callers (sprinkle add/remove) can
+    // call it without branching.
   }
 
   /** Show the [+] panel picker for a zone. */
@@ -1043,36 +950,25 @@ export class Layout {
     });
   }
 
-  /** Open a closed registry panel in a specific zone. */
+  /** Open a closed registry panel via the rail. */
   private openPanelInZone(id: string, zone: ZoneId): void {
     const entry = this.registry.get(id);
     if (!entry) return;
 
     this.registry.setZone(id, zone);
-    if (this.isExtension) {
-      this.extensionZone.addTab({
-        id: entry.descriptor.id,
-        label: entry.descriptor.label,
-        closable: entry.descriptor.closable,
-        element: entry.descriptor.element,
-        onActivate: entry.descriptor.onActivate,
-      });
-      this.extensionZone.activateTab(id);
-    } else {
-      // Standalone: rail items keep a generic Sparkles icon for
-      // anything routed through the registry — these are sprinkle-
-      // backed panels, so the visual lives next to the rest.
-      this.primaryRail.addItem({
-        id: entry.descriptor.id,
-        label: entry.descriptor.label,
-        icon: SPRINKLE_DEFAULT_ICON,
-        element: entry.descriptor.element,
-        position: 'top',
-        closable: entry.descriptor.closable,
-        onActivate: entry.descriptor.onActivate,
-      });
-      this.primaryRail.activateItem(id);
-    }
+    // Sprinkle-backed registry panels share the same generic
+    // sparkles icon as dynamic sprinkles — they all live in the
+    // rail's top section.
+    this.primaryRail.addItem({
+      id: entry.descriptor.id,
+      label: entry.descriptor.label,
+      icon: SPRINKLE_DEFAULT_ICON,
+      element: entry.descriptor.element,
+      position: 'top',
+      closable: entry.descriptor.closable,
+      onActivate: entry.descriptor.onActivate,
+    });
+    this.primaryRail.activateItem(id);
   }
 
   // ── Dynamic Sprinkles ────────────────────────────────────────────
@@ -1080,79 +976,52 @@ export class Layout {
   /** Track dynamic sprinkle sections in standalone mode. */
   private dynamicSprinkles = new Map<string, HTMLElement>();
 
-  /** Add a dynamic .shtml sprinkle to the layout. */
+  /** Add a dynamic .shtml sprinkle to the rail. */
   addSprinkle(name: string, title: string, element: HTMLElement, targetZone?: ZoneId): void {
-    if (this.isExtension) {
-      // Extension mode: add as a new tab via TabZone
-      const tabId = `sprinkle-${name}`;
+    const zone = targetZone ?? 'primary';
+    const tabId = `sprinkle-${name}`;
 
-      const container = document.createElement('div');
-      container.className = 'tab-content__panel';
-      container.appendChild(element);
+    const container = document.createElement('div');
+    container.style.cssText =
+      'display: flex; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
+    container.appendChild(element);
 
-      this.extensionZone.addTab({
-        id: tabId,
-        label: title,
-        closable: true,
-        element: container,
-      });
-      this.tabContainers.set(tabId, container);
-      this.dynamicSprinkles.set(name, container);
+    this.registry.register({
+      id: tabId,
+      label: title,
+      zone,
+      closable: true,
+      element: container,
+      onClose: () => this.onSprinkleClose?.(name),
+    });
 
-      // Auto-switch to the new tab
-      this.extensionZone.activateTab(tabId);
-    } else {
-      // Standalone mode: rail item.
-      const zone = targetZone ?? 'primary';
-      const tabId = `sprinkle-${name}`;
+    this.primaryRail.addItem({
+      id: tabId,
+      label: title,
+      icon: SPRINKLE_DEFAULT_ICON,
+      element: container,
+      position: 'top',
+      closable: true,
+    });
+    this.dynamicSprinkles.set(name, container);
 
-      const container = document.createElement('div');
-      container.style.cssText =
-        'display: flex; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
-      container.appendChild(element);
-
-      this.registry.register({
-        id: tabId,
-        label: title,
-        zone,
-        closable: true,
-        element: container,
-        onClose: () => this.onSprinkleClose?.(name),
-      });
-
-      this.primaryRail.addItem({
-        id: tabId,
-        label: title,
-        icon: SPRINKLE_DEFAULT_ICON,
-        element: container,
-        position: 'top',
-        closable: true,
-      });
-      this.dynamicSprinkles.set(name, container);
-
-      // Auto-activate the new sprinkle.
-      this.primaryRail.activateItem(tabId);
-      this.updateAddButtons();
-    }
+    // Auto-activate the new sprinkle.
+    this.primaryRail.activateItem(tabId);
+    this.updateAddButtons();
   }
 
-  /** Remove a dynamic .shtml sprinkle from the layout. */
+  /** Remove a dynamic .shtml sprinkle from the rail. */
   removeSprinkle(name: string): void {
-    if (this.isExtension) {
-      const tabId = `sprinkle-${name}`;
-      this.extensionZone.removeTab(tabId);
-      this.tabContainers.delete(tabId);
-      this.dynamicSprinkles.delete(name);
-    } else {
-      const tabId = `sprinkle-${name}`;
-      this.primaryRail.removeItem(tabId);
-      this.registry.unregister(tabId);
-      this.dynamicSprinkles.delete(name);
-      this.updateAddButtons();
-    }
+    const tabId = `sprinkle-${name}`;
+    this.primaryRail.removeItem(tabId);
+    this.registry.unregister(tabId);
+    this.dynamicSprinkles.delete(name);
+    this.updateAddButtons();
   }
 
-  // switchPrimaryTab and switchDrawerTab are now handled by TabZone instances
+  // The legacy switchPrimaryTab/switchDrawerTab helpers were removed
+  // when the tabbed layout was retired — see `setActiveTab` for the
+  // current API surface.
 
   // ── Cleanup ─────────────────────────────────────────────────────────
 

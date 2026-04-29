@@ -10,7 +10,7 @@ const HIDDEN_TABS_KEY = 'slicc-hidden-tabs';
 const DEFAULT_HIDDEN_TABS = ['terminal', 'memory'];
 
 /** Read hidden tab IDs from localStorage. */
-function getHiddenTabs(): Set<string> {
+export function getHiddenTabs(): Set<string> {
   try {
     const raw = localStorage.getItem(HIDDEN_TABS_KEY);
     if (!raw) return new Set(DEFAULT_HIDDEN_TABS);
