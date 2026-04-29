@@ -10,6 +10,7 @@ import '../shims/buffer-polyfill.js';
 
 import * as git from 'isomorphic-git';
 import { VirtualFS } from '../fs/index.js';
+import { GLOBAL_FS_DB_NAME } from '../fs/global-db.js';
 import { gitHttp } from './git-http.js';
 import { unifiedDiff, diffStat } from './diff.js';
 import { createIsomorphicGitFs, type IsoGitFsPromises } from './vfs-fs-adapter.js';
@@ -46,7 +47,6 @@ export class GitCommands {
   private globalDbName: string;
   /** GitHub token for authentication (avoids rate limits on public repos, required for private). */
   private githubToken?: string;
-  private githubTokenLoaded = false;
 
   constructor(private options: GitCommandsOptions) {
     // Route through a VirtualFS-backed adapter so isomorphic-git sees mount
@@ -56,7 +56,7 @@ export class GitCommands {
     this.corsProxy = options.corsProxy;
     this.authorName = options.authorName ?? 'User';
     this.authorEmail = options.authorEmail ?? 'user@example.com';
-    this.globalDbName = options.globalDbName ?? 'slicc-fs-global';
+    this.globalDbName = options.globalDbName ?? GLOBAL_FS_DB_NAME;
   }
 
   /**
@@ -81,10 +81,13 @@ export class GitCommands {
     return created;
   }
 
-  /** Load GitHub token from global VFS if not loaded in-memory yet. */
-  private async ensureGithubTokenLoaded(): Promise<void> {
-    if (this.githubTokenLoaded) return;
-    this.githubTokenLoaded = true;
+  /**
+   * Load the GitHub token from the global VFS. Re-reads on every call: the
+   * file is the source of truth and may be updated by other writers (notably
+   * the GitHub OAuth provider after login) without going through this
+   * instance, so we cannot cache absence or presence.
+   */
+  private async loadGithubToken(): Promise<void> {
     try {
       const globalFs = await this.getGlobalFs();
       const token = (await globalFs.readTextFile('/workspace/.git/github-token')).trim();
@@ -105,12 +108,10 @@ export class GitCommands {
         // ignore if not present
       }
       this.githubToken = undefined;
-      this.githubTokenLoaded = true;
       return;
     }
     await globalFs.writeFile('/workspace/.git/github-token', trimmed);
     this.githubToken = trimmed;
-    this.githubTokenLoaded = true;
   }
 
   /**
@@ -126,7 +127,7 @@ export class GitCommands {
     const [command, ...rest] = args;
 
     try {
-      await this.ensureGithubTokenLoaded();
+      await this.loadGithubToken();
       switch (command) {
         case 'init':
           return this.init(cwd, rest);

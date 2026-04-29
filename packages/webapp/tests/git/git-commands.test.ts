@@ -6,6 +6,7 @@ import 'fake-indexeddb/auto';
 vi.mock('isomorphic-git', async (importOriginal) => ({ ...(await importOriginal()) }));
 import * as isoGit from 'isomorphic-git';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { GLOBAL_FS_DB_NAME } from '../../src/fs/global-db.js';
 import { GitCommands } from '../../src/git/git-commands.js';
 
 describe('GitCommands', () => {
@@ -168,6 +169,47 @@ describe('GitCommands', () => {
     const getResult = await second.execute(['config', 'github.token'], '/another');
     expect(getResult.exitCode).toBe(0);
     expect(getResult.stdout.trim()).toBe('ghp_shared_token');
+  });
+
+  it('picks up github token written by another writer after a git command has run', async () => {
+    // Reproduces the bug where the OAuth login provider writes the token to
+    // the global VFS but a GitCommands instance whose token-load already ran
+    // (and saw no file) keeps a stale "no token" cache and ignores it.
+    await git.execute(['init'], '/project');
+
+    // OAuth provider would write here — bypassing setGithubToken on this
+    // instance, exactly as github.ts:writeGitToken() does.
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_post_login_token');
+
+    const getResult = await git.execute(['config', 'github.token'], '/project');
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout.trim()).toBe('ghp_post_login_token');
+  });
+
+  it('reads token written via the shared GLOBAL_FS_DB_NAME (writer/reader contract)', async () => {
+    // Asserts the wiring: the OAuth provider writes to GLOBAL_FS_DB_NAME, and
+    // a GitCommands constructed with no explicit globalDbName must read from
+    // the same database. Catches drift between the writer's hardcoded DB and
+    // the reader's default.
+    const isolatedFs = await VirtualFS.create({
+      dbName: `git-test-isolated-${dbCounter++}`,
+      wipe: true,
+    });
+    const defaultGit = new GitCommands({
+      fs: isolatedFs,
+      authorName: 'Test',
+      authorEmail: 'test@example.com',
+      // intentionally no globalDbName — exercises the default
+    });
+    await defaultGit.execute(['init'], '/project');
+
+    const sharedGlobalFs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await sharedGlobalFs.writeFile('/workspace/.git/github-token', 'ghp_via_shared_const');
+
+    const getResult = await defaultGit.execute(['config', 'github.token'], '/project');
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout.trim()).toBe('ghp_via_shared_const');
   });
 
   it('supports --no-single-branch for clone', async () => {

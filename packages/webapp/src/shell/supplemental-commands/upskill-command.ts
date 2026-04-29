@@ -2,6 +2,7 @@ import { defineCommand } from 'just-bash';
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { VirtualFS as SharedVirtualFS } from '../../fs/index.js';
+import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
 import type { DiscoveredSkill } from '../../skills/types.js';
 import { SLICC_DIR, STATE_FILE } from '../../skills/constants.js';
 import { unzipSync } from 'fflate';
@@ -12,7 +13,7 @@ import { decodeFetchBody, getFetchBodyBytes, parseFetchJson } from '../fetch-bod
 const CLAWHUB_API = 'https://wry-manatee-359.convex.site/api/v1';
 const TESSL_API = 'https://api.tessl.io';
 const SKILLS_DIR = '/workspace/skills';
-const GITHUB_GLOBAL_DB = 'slicc-fs-global';
+const GITHUB_GLOBAL_DB = GLOBAL_FS_DB_NAME;
 const GITHUB_TOKEN_PATH = '/workspace/.git/github-token';
 const GITHUB_API_ACCEPT = 'application/vnd.github.v3+json';
 const SKILL_CATALOG_URL = 'https://www.sliccy.com/skills/catalog.json';
