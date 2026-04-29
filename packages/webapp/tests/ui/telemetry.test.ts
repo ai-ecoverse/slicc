@@ -109,6 +109,23 @@ describe('telemetry', () => {
     trackShellCommand('ls');
     expect(mockSampleRUM).not.toHaveBeenCalled();
   });
+
+  it('does NOT register window error listeners in CLI branch', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+
+    const before = mockSampleRUM.mock.calls.length;
+    const errorEvent = new Event('error') as ErrorEvent;
+    Object.defineProperty(errorEvent, 'message', { value: 'oops' });
+    window.dispatchEvent(errorEvent);
+
+    // SLICC's listener would emit `{source:'js', target:'oops'}`. Helix's mock
+    // is a stub and won't auto-listen. So no SLICC-shape error call should appear.
+    const sliccShape = mockSampleRUM.mock.calls
+      .slice(before)
+      .filter(([cp, data]) => cp === 'error' && data?.source === 'js');
+    expect(sliccShape).toHaveLength(0);
+  });
 });
 
 describe('isTelemetryEnabled / setTelemetryEnabled', () => {
@@ -188,5 +205,41 @@ describe('telemetry — extension branch', () => {
       source: 'cone',
       target: 'claude-sonnet',
     });
+  });
+
+  it('registers window error listeners that call trackError("js", sanitized)', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRumJs.mockClear();
+
+    const errorEvent = new Event('error') as ErrorEvent;
+    Object.defineProperty(errorEvent, 'message', {
+      value: 'TypeError: x is not a function at /workspace/skills/foo/bar.ts:10',
+    });
+    window.dispatchEvent(errorEvent);
+
+    expect(mockSampleRumJs).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({
+        source: 'js',
+        target: expect.stringContaining('/workspace/.../'),
+      })
+    );
+    expect(mockSampleRumJs.mock.calls[0][1].target).not.toContain('/foo/bar.ts');
+  });
+
+  it('registers unhandledrejection listener that calls trackError("js", sanitized)', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRumJs.mockClear();
+
+    const rejection = new Event('unhandledrejection') as PromiseRejectionEvent;
+    Object.defineProperty(rejection, 'reason', { value: new Error('boom') });
+    window.dispatchEvent(rejection);
+
+    expect(mockSampleRumJs).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ source: 'js', target: expect.stringContaining('boom') })
+    );
   });
 });

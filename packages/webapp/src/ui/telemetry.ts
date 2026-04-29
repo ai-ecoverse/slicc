@@ -54,6 +54,21 @@ export async function initTelemetry(): Promise<void> {
     if (mode === 'extension') {
       const mod = await import('./rum.js');
       sampleRUM = mod.default as SampleRUM;
+
+      // Helix-rum-js auto-registers its own error/unhandledrejection listeners
+      // for selected sessions. The inlined rum.js does not — register equivalents
+      // here so the extension panel still records JS errors. Do NOT add these to
+      // the CLI/Electron branch (would double-fire alongside helix's listeners).
+      if (typeof window !== 'undefined') {
+        window.addEventListener('error', (e) => {
+          trackError('js', sanitizeError((e as ErrorEvent).message ?? ''));
+        });
+        window.addEventListener('unhandledrejection', (e) => {
+          const reason = (e as PromiseRejectionEvent).reason;
+          const msg = reason instanceof Error ? reason.message : String(reason);
+          trackError('js', sanitizeError(msg));
+        });
+      }
     } else {
       // CLI / Electron — keep existing behavior.
       if (typeof window !== 'undefined') {
@@ -104,6 +119,17 @@ export function trackError(errorType: string, details?: string): void {
 /** Settings dialog opened. source=trigger (button/shortcut) */
 export function trackSettingsOpen(trigger: string): void {
   sampleRUM?.('signup', { source: trigger });
+}
+
+/**
+ * Reduce error messages to a privacy-safe form.
+ * - Truncate to 200 characters.
+ * - Collapse VFS-style paths (/<root>/...) past their first segment to /<root>/.../
+ *   so `/workspace/skills/foo/bar.ts` becomes `/workspace/.../`.
+ */
+function sanitizeError(msg: string): string {
+  const truncated = (msg ?? '').slice(0, 200);
+  return truncated.replace(/(\/[a-z]+)(?:\/[^\s/]+)+/gi, '$1/.../');
 }
 
 /**
