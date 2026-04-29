@@ -16,15 +16,23 @@
  * re-prompt for permission before using the handle.
  */
 
+import { createLogger } from '../core/logger.js';
+
+const log = createLogger('mount-picker-popup');
+
 const PENDING_MOUNT_DB = 'slicc-pending-mount';
 const POPUP_TIMEOUT_MS = 60_000;
 
 /**
  * Opens `mount-popup.html` and resolves with the popup's response message.
  * The response shape is one of:
- *   - `{ handleInIdb: true, idbKey, dirName }` — handle was stored in IDB
+ *   - `{ handleInIdb: true, idbKey, dirName }` — handle was stored in IDB;
+ *     callers must use {@link loadAndClearPendingHandle} to retrieve it,
+ *     then {@link reactivateHandle} before using it. The handle itself is
+ *     never sent through the runtime message channel — only the IDB key.
  *   - `{ cancelled: true }` — user closed the popup or aborted the picker
- *   - `{ error: string }` — popup failed (e.g. window.create rejected)
+ *   - `{ error: string }` — popup failed (e.g. window.create rejected); the
+ *     full error is logged separately, callers get a generic message
  *
  * @param requestId Optional request id used to correlate the popup result
  *   with a caller-managed registry entry. Generated if omitted.
@@ -56,8 +64,13 @@ export function openMountPickerPopup(requestId?: string): Promise<Record<string,
 
     chrome.windows
       .create({ url, type: 'popup', width: 300, height: 80, focused: true })
-      .catch(() => {
+      .catch((err: unknown) => {
         cleanup();
+        log.error('chrome.windows.create failed for mount picker popup', {
+          requestId: popupRequestId,
+          error: err instanceof Error ? err.message : String(err),
+          name: err instanceof Error ? err.name : undefined,
+        });
         resolve({ error: 'Failed to open directory picker window' });
       });
   });
@@ -84,8 +97,11 @@ export async function loadAndClearPendingHandle(
   const store = tx.objectStore('handles');
   const getReq = store.get(idbKey);
   const deleteReq = store.delete(idbKey);
+  // Non-fatal: the handle was retrieved successfully; failing to clean up the
+  // IDB entry leaves an orphan keyed by an ephemeral request id but doesn't
+  // affect this mount. Log via project logger so it surfaces in collected logs.
   deleteReq.onerror = () => {
-    console.warn('[mount] Failed to delete pending handle from IDB', idbKey, deleteReq.error);
+    log.warn('Failed to delete pending handle from IDB', { idbKey, error: deleteReq.error });
   };
   const handle = await new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
     tx.oncomplete = () => resolve(getReq.result ?? null);

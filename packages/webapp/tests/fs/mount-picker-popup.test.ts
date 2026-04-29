@@ -100,6 +100,21 @@ describe('reactivateHandle', () => {
       'Permission denied for "denied-folder" (denied)'
     );
   });
+
+  it('throws when permission stays in "prompt" state (user dismissed without choosing)', async () => {
+    // The File System Access API spec defines `prompt` alongside granted/denied
+    // — Chromium can return it when the user closes the permission dialog
+    // without making a choice. Treat it the same as denied: no readwrite
+    // access, fail fast with a useful message.
+    const handle = {
+      kind: 'directory',
+      name: 'unresolved-folder',
+      requestPermission: vi.fn().mockResolvedValue('prompt'),
+    } as unknown as FileSystemDirectoryHandle;
+    await expect(reactivateHandle(handle)).rejects.toThrow(
+      'Permission denied for "unresolved-folder" (prompt)'
+    );
+  });
 });
 
 describe('openMountPickerPopup', () => {
