@@ -92,6 +92,13 @@ import { getAllMountEntries } from '../fs/mount-table-store.js';
 import { recoverMounts, formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
 import { detectUpgrade, recordVersionSeen } from '../scoops/upgrade-detection.js';
 import { detectWelcomeFirstRun } from '../scoops/welcome-detection.js';
+// Static-import dip helpers used by the onboarding orchestrator. dip.ts is
+// already pulled into the main entry chunk via chat-panel.ts/tool-ui-renderer.ts
+// — dynamic-importing it here only confused rollup's chunk graph (and triggered
+// the INEFFECTIVE_DYNAMIC_IMPORT warning), occasionally surfacing as a runtime
+// "o is not a function" error in the fs chunk because of the resulting
+// circular module-evaluation order.
+import { broadcastToDips } from './dip.js';
 
 const log = createLogger('main');
 
@@ -628,7 +635,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // OffscreenClient sprinkle-lick relay.
   const { OnboardingOrchestrator: OnboardingOrchestratorExt } =
     await import('../scoops/onboarding-orchestrator.js');
-  const { broadcastToDips: broadcastToDipsExt } = await import('./dip.js');
+  const broadcastToDipsExt = broadcastToDips;
   const {
     getAvailableProviders: getAvailableProvidersExt,
     getProviderConfig: getProviderConfigExt,
@@ -1615,7 +1622,6 @@ async function main(): Promise<void> {
   // Instantiated here so we can route the welcome wizard's licks
   // through it before falling back to cone-routing.
   const { OnboardingOrchestrator } = await import('../scoops/onboarding-orchestrator.js');
-  const { broadcastToDips } = await import('./dip.js');
   const {
     getAvailableProviders,
     getProviderConfig,
