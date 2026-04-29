@@ -15,6 +15,7 @@ import { mountDip, type DipInstance } from './dip.js';
 import { collectThemeCSS } from './sprinkle-renderer.js';
 import { isThemeLight } from './theme.js';
 import { createLogger } from '../core/logger.js';
+import { openMountPickerPopup } from '../fs/mount-picker-popup.js';
 
 const log = createLogger('tool-ui-renderer');
 
@@ -150,7 +151,7 @@ export class ToolUIRenderer {
     let actionData = data;
 
     if (picker === 'directory') {
-      actionData = await openMountPopup(this.requestId);
+      actionData = await openMountPickerPopup(this.requestId);
     }
 
     chrome.runtime
@@ -188,39 +189,6 @@ export class ToolUIRenderer {
       this.dip = null;
     }
   }
-}
-
-function openMountPopup(requestId: string): Promise<Record<string, unknown>> {
-  return new Promise((resolve) => {
-    const url = chrome.runtime.getURL(
-      `mount-popup.html?requestId=${encodeURIComponent(requestId)}`
-    );
-
-    const cleanup = () => {
-      clearTimeout(timer);
-      chrome.runtime.onMessage.removeListener(listener);
-    };
-
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve({ cancelled: true });
-    }, 60_000);
-
-    const listener = (msg: unknown) => {
-      const m = msg as Record<string, unknown>;
-      if (!m || m.source !== 'mount-popup' || m.requestId !== requestId) return;
-      cleanup();
-      resolve(m);
-    };
-    chrome.runtime.onMessage.addListener(listener);
-
-    chrome.windows
-      .create({ url, type: 'popup', width: 300, height: 80, focused: true })
-      .catch(() => {
-        cleanup();
-        resolve({ error: 'Failed to open directory picker window' });
-      });
-  });
 }
 
 /** Map of active renderers by request ID */

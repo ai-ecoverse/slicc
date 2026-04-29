@@ -89,7 +89,7 @@ Manifest sandbox pages (`sandbox.html`, `sprinkle-sandbox.html`, `tool-ui-sandbo
 
 **macOS TCC and Side Panel Crashes**
 
-Chrome's side panel cannot host macOS TCC (Transparency, Consent, and Control) permission dialogs. If code in the side panel triggers a TCC dialog (e.g., iterating a `FileSystemDirectoryHandle` for `~/Downloads`), Chrome's renderer crashes instead of showing the dialog. Solution: route operations that might trigger TCC through a popup window (`chrome.windows.create({ type: 'popup' })`) — see `mount-popup.html` for the pattern.
+Chrome's side panel cannot host macOS TCC (Transparency, Consent, and Control) permission dialogs, and it also crashes (rather than throwing a normal error) when `showDirectoryPicker()` is called against a system folder Chrome refuses to share (Documents, Downloads, Desktop, the home directory). Solution: never call `showDirectoryPicker()` from the side panel — route directory selection through a popup window where TCC and the system-folder rejection render correctly. The pattern is implemented by `packages/chrome-extension/mount-popup.html` and the shared helpers in `packages/webapp/src/fs/mount-picker-popup.ts` (`openMountPickerPopup` + `loadAndClearPendingHandle` + `reactivateHandle`). All three extension-side mount entry points use it: the shell `mount` command, agent-driven approval dips, and the welcome sprinkle's `request-mount` lick.
 
 ## WASM & Bundled Assets in Extension Mode
 
