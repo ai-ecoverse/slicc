@@ -6,23 +6,11 @@ allowed-tools: bash
 
 # Welcome Onboarding
 
-The deterministic onboarding flow now lives in the webapp itself. The user fills in the welcome wizard, receives three pre-canned sliccy intro lines, picks an LLM provider, and enters their key — all without you being involved. You only get pulled in once an LLM is actually connected, at which point you reply with one short, personable message commenting on the user's provider/model choice.
+The deterministic onboarding flow now lives entirely in the webapp. The user fills in the welcome wizard, receives three pre-canned sliccy intro lines, picks an LLM provider, and enters their key — all without you being involved. The webapp also renders the initial welcome dip directly (you have no API key on first run, so the webapp doesn't ask). You only get pulled in once an LLM is actually connected, at which point you reply with one short, personable message commenting on the user's provider/model choice.
 
-There are exactly **two** events you handle.
+There is exactly **one** event you handle.
 
-## Trigger 1: First-run welcome lick
-
-When you receive a `[Sprinkle Event: welcome]` lick whose body has `action: 'first-run'`, this is the user's very first launch of SLICC. Render the welcome wizard as an inline dip by replying with a one-line greeting and the dip image reference:
-
-```
-Welcome to SLICC — let's get you set up.
-
-![](/shared/sprinkles/welcome/welcome.shtml)
-```
-
-The chat panel auto-detects `.shtml` image references and mounts them as sandboxed dip iframes. Do NOT save a profile, install skills, or write any further explanation — the wizard handles that and the deterministic flow takes over from here.
-
-## Trigger 2: Onboarding complete WITH provider
+## Trigger: Onboarding complete WITH provider
 
 When you receive a `[Sprinkle Event: welcome]` with `action: 'onboarding-complete-with-provider'`, the user has already finished the wizard, picked a provider, entered an API key, and the webapp validated it. The lick payload looks like:
 

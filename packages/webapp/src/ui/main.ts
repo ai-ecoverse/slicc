@@ -21,7 +21,7 @@ import './styles/feedback.css';
  */
 
 import { Layout } from './layout.js';
-import { getApiKey, showProviderSettings, applyProviderDefaults } from './provider-settings.js';
+import { getApiKey, applyProviderDefaults } from './provider-settings.js';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
@@ -703,6 +703,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           const body = event.body as Record<string, unknown> | null;
           const action = body?.action;
 
+          if (action === 'first-run') {
+            getExtOnboardingOrchestrator().handleFirstRun();
+            return;
+          }
           if (action === 'onboarding-complete') {
             const orch = getExtOnboardingOrchestrator();
             const profile = (body?.data as Record<string, unknown> | undefined) ?? {};
@@ -1028,29 +1032,11 @@ async function main(): Promise<void> {
   // Apply providers.json defaults before checking for API key
   applyProviderDefaults();
 
-  // Check for API key (first-run dialog)
-  // Skip the dialog if the user already has a stored tray join URL (providerless follower mode)
-  let apiKey = getApiKey();
-  const hasTrayJoin = hasStoredTrayJoinUrl(window.localStorage);
-  if (!apiKey && !hasTrayJoin) {
-    // Three modes based on runtime context:
-    // 1. Port 5710/3000: leader/production — default to account login
-    // 2. Port '' (443/HTTPS) with /join/ path: remote tray UI — auto-join confirmation
-    // 3. Any other port: follower — default to "Join a tray" paste form
-    const isDefaultPort = window.location.port === '5710' || window.location.port === '3000';
-    const isRemoteTrayUI =
-      window.location.port === '' && window.location.pathname.includes('/join/');
-
-    if (isRemoteTrayUI) {
-      const joinUrl = window.location.origin + window.location.pathname;
-      await showProviderSettings({ autoJoinUrl: joinUrl });
-    } else if (!isDefaultPort && window.location.port !== '') {
-      await showProviderSettings({ preferTrayJoin: true });
-    } else {
-      await showProviderSettings();
-    }
-    apiKey = getApiKey();
-  }
+  // First-run no longer auto-opens the legacy "Add Account" dialog.
+  // Provider configuration is owned by the deterministic onboarding flow
+  // (welcome wizard → connect-llm dip → OnboardingOrchestrator). The user
+  // can still open the legacy dialog later from the accounts/settings UI.
+  const apiKey = getApiKey();
   const allowProviderlessTrayJoin = !apiKey && hasStoredTrayJoinUrl(window.localStorage);
 
   // Build the layout — tabbed in extension mode, split panels in standalone
@@ -1741,6 +1727,14 @@ async function main(): Promise<void> {
       const body = event.body as Record<string, unknown> | null;
       const action = body?.action;
 
+      // ── First-run: render the welcome dip directly. The cone has
+      // no API key yet, so any LLM-driven path here would fatal with
+      // "No API key configured" before the wizard even appears.
+      if (action === 'first-run') {
+        getOnboardingOrchestrator()?.handleFirstRun();
+        return;
+      }
+
       // ── Deterministic phase: hand off to the orchestrator. ──
       if (action === 'onboarding-complete') {
         const orch = getOnboardingOrchestrator();
@@ -2049,6 +2043,10 @@ async function main(): Promise<void> {
     routeLickToScoop(event);
   };
 
+  // Welcome-detection result captured during sprinkle-manager init,
+  // consumed once the chat panel has swapped onto the cone session.
+  let pendingFirstRunDetection: Promise<{ isFirstRun: boolean }> | null = null;
+
   // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
   let sprinkleManager: SprinkleManager | null = null;
   if (sharedFs) {
@@ -2098,25 +2096,18 @@ async function main(): Promise<void> {
       localStorage.removeItem('slicc-welcomed');
     }
 
-    // Fire a first-run welcome lick to the cone instead of auto-opening
-    // the legacy panel. The cone renders the welcome dip inline via the
-    // `![](/shared/sprinkles/welcome/welcome.shtml)` image syntax. Marker
-    // is written by the existing `onboarding-complete` / `shortcut-migrate`
-    // handlers above, so reloading mid-onboarding still re-fires the lick.
+    // Run welcome detection NOW but defer firing the first-run lick
+    // until after `handleScoopSelect(cone)` has finished swapping the
+    // chat panel onto session-cone. Otherwise switchToContext can race
+    // with the orchestrator's `addSystemMessage` writes: it persists
+    // the current (empty) `messages` and loads an empty session
+    // before the first-run write completes, leaving the dip messages
+    // saved in IDB but invisible in the panel.
     if (!allowProviderlessTrayJoin) {
-      detectWelcomeFirstRun(sharedFs)
-        .then((result) => {
-          if (!result.isFirstRun) return;
-          const event: LickEvent = {
-            type: 'sprinkle',
-            sprinkleName: 'welcome',
-            targetScoop: undefined,
-            timestamp: new Date().toISOString(),
-            body: { action: 'first-run' },
-          };
-          routeLickToScoop(event);
-        })
-        .catch((err) => log.warn('Welcome detection failed', err));
+      pendingFirstRunDetection = detectWelcomeFirstRun(sharedFs).catch((err) => {
+        log.warn('Welcome detection failed', err);
+        return { isFirstRun: false };
+      });
     }
 
     await sprinkleManager.restoreOpenSprinkles();
@@ -2432,6 +2423,23 @@ async function main(): Promise<void> {
     orchestrator.createScoopTab(selectedScoop.jid);
     // Trigger scoop select to properly load the chat context
     await handleScoopSelect(selectedScoop);
+  }
+
+  // Fire the deferred first-run lick now that the chat panel has
+  // settled on `session-cone`. Routing through the same lick handler
+  // hits the orchestrator's interceptor which posts the welcome dip.
+  if (pendingFirstRunDetection) {
+    void pendingFirstRunDetection.then((result) => {
+      if (!result.isFirstRun) return;
+      const event: LickEvent = {
+        type: 'sprinkle',
+        sprinkleName: 'welcome',
+        targetScoop: undefined,
+        timestamp: new Date().toISOString(),
+        body: { action: 'first-run' },
+      };
+      routeLickToScoop(event);
+    });
   }
 
   // `?ui-fixture=1` — design-time override: replace the live chat context

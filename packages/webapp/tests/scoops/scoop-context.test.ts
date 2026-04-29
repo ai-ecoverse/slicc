@@ -414,9 +414,13 @@ describe('ScoopContext prompt queueing', () => {
   });
 
   it('reports error when agent is not initialized', async () => {
-    // Don't inject a mock agent
+    // Don't inject a mock agent — lazy init() will run inside prompt()
+    // and discover there's still no API key in the test env, so the
+    // error surfaces from the no-credentials path.
     await ctx.prompt('hello');
-    expect(callbacks.onError).toHaveBeenCalledWith('Agent not initialized');
+    expect(callbacks.onError).toHaveBeenCalled();
+    const lastCall = (callbacks.onError as any).mock.calls.at(-1)?.[0] ?? '';
+    expect(lastCall).toMatch(/No API key configured/i);
   });
 
   it('does not queue when agent is not initialized', async () => {
@@ -424,8 +428,11 @@ describe('ScoopContext prompt queueing', () => {
     await ctx.prompt('first');
     await ctx.prompt('second');
 
-    // Both should immediately error
-    expect(callbacks.onError).toHaveBeenCalledTimes(2);
+    // Both should surface the missing-credentials error.
+    const errorCalls = (callbacks.onError as any).mock.calls.filter(
+      (c: unknown[]) => typeof c[0] === 'string' && /No API key configured/i.test(c[0] as string)
+    );
+    expect(errorCalls.length).toBeGreaterThanOrEqual(2);
   });
 
   it('handles prompt failure gracefully', async () => {

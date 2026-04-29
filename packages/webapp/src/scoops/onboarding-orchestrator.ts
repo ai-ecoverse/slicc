@@ -117,6 +117,20 @@ export class OnboardingOrchestrator {
   }
 
   /**
+   * Phase transition: idle → collect-profile.
+   * Called when the boot detects no `.welcomed` marker. Posts the
+   * welcome dip directly into the chat without invoking the cone.
+   * The cone has no API key on first run, so any LLM-driven path
+   * here would surface a "No API key configured" error before the
+   * user even gets a chance to type.
+   */
+  handleFirstRun(): void {
+    if (this.stage !== 'idle') return;
+    this.deps.postDipReference("Welcome to SLICC — let's get you set up.");
+    this.deps.postDipReference('![Welcome](/shared/sprinkles/welcome/welcome.shtml)');
+  }
+
+  /**
    * Phase transition: collect-profile → deterministic-intro.
    * Called when the welcome wizard fires `onboarding-complete`. Returns
    * `true` when handled by the orchestrator (caller MUST suppress the

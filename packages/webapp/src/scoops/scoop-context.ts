@@ -321,8 +321,17 @@ export class ScoopContext {
       // Create agent
       const apiKey = getApiKey();
       if (!apiKey) {
-        const provider = getSelectedProvider();
-        throw new Error(`No API key configured for provider "${provider}"`);
+        // No credentials configured yet — defer agent creation rather
+        // than surfacing a hard error. The deterministic onboarding
+        // flow (welcome wizard → connect-llm dip) is expected to
+        // collect a key before the user tries to chat. `prompt()`
+        // performs a lazy re-init so the agent comes up the moment
+        // a key lands.
+        log.info('ScoopContext init deferred — no API key yet', {
+          folder: this.scoop.folder,
+        });
+        this.setStatus('ready');
+        return;
       }
 
       const model = this.scoop.config?.modelId
@@ -406,8 +415,23 @@ export class ScoopContext {
   /** Send a prompt to this scoop's agent. If already processing, queues it via followUp(). */
   async prompt(text: string, images: ImageContent[] = []): Promise<void> {
     if (!this.agent) {
-      this.callbacks.onError('Agent not initialized');
-      return;
+      // Lazy-init: credentials may have been added since the initial
+      // init() — re-run it so the agent comes up on first prompt.
+      await this.init();
+      if (!this.agent) {
+        let provider = '';
+        try {
+          provider = getSelectedProvider();
+        } catch {
+          /* test env may have no localStorage — fall back to a generic message */
+        }
+        this.callbacks.onError(
+          provider
+            ? `No API key configured for provider "${provider}". Open Settings to add one.`
+            : 'No API key configured. Open Settings to add one.'
+        );
+        return;
+      }
     }
 
     // Check both our flag AND the agent's internal state to avoid race conditions.
