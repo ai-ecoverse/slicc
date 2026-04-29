@@ -87,8 +87,30 @@
         letter-spacing: 0.04em;
       }
       .form input[type="text"],
-      .form input[type="password"] {
+      .form input[type="password"],
+      .form select {
         width: 100%;
+        height: 32px;
+        padding: 0 10px;
+        border-radius: 8px;
+        border: 1px solid var(--s2-border-default, #4a4a4a);
+        background: var(--s2-bg-elevated, #2c2c2c);
+        color: var(--s2-content-default, #e8e8e8);
+        font-family: inherit;
+        font-size: 13px;
+        line-height: 1.4;
+        outline: none;
+        transition: border-color 0.12s, box-shadow 0.12s;
+      }
+      .form input[type="text"]:focus,
+      .form input[type="password"]:focus,
+      .form select:focus {
+        border-color: var(--s2-accent, #3562ff);
+        box-shadow: 0 0 0 1px var(--s2-accent, #3562ff);
+      }
+      .form input[type="text"]::placeholder,
+      .form input[type="password"]::placeholder {
+        color: var(--s2-content-tertiary, #717171);
       }
 
       .actions {
@@ -155,7 +177,7 @@
       </div>
       <div class="step-sub" id="providerDesc"></div>
       <div class="form">
-        <div>
+        <div id="apiKeyRow">
           <label for="apiKeyIn">API Key</label>
           <input id="apiKeyIn" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" />
         </div>
@@ -193,9 +215,11 @@
       var providerListEl = document.getElementById('providerList');
       var providerNameEl = document.getElementById('providerName');
       var providerDescEl = document.getElementById('providerDesc');
+      var apiKeyRow = document.getElementById('apiKeyRow');
       var apiKeyIn = document.getElementById('apiKeyIn');
       var baseUrlRow = document.getElementById('baseUrlRow');
       var baseUrlIn = document.getElementById('baseUrlIn');
+      var modelRow = document.getElementById('modelRow');
       var modelSel = document.getElementById('modelSel');
       var statusEl = document.getElementById('status');
       var connectBtn = document.getElementById('connectBtn');
@@ -247,13 +271,25 @@
         current.provider = p.id;
         current.providerConfig = p;
         providerNameEl.textContent = p.name;
-        providerDescEl.textContent = p.description || '';
+        // Suppress auto-generated `<id> provider` descriptions.
+        var fallback = (p.id || '') + ' provider';
+        providerDescEl.textContent =
+          p.description && p.description !== fallback ? p.description : '';
         baseUrlRow.hidden = !p.requiresBaseUrl;
         baseUrlIn.value = p.defaultBaseUrl || '';
         statusEl.className = 'status';
         statusEl.textContent = '';
         metaEl.textContent = '';
         apiKeyIn.value = '';
+
+        // OAuth providers don't take an API key OR a model — they
+        // delegate everything to a popup login flow handled by the
+        // host page. The dip just emits an `oauth-attempt` and waits
+        // for `slicc-connect-result`.
+        var isOAuth = !!p.isOAuth;
+        apiKeyRow.hidden = isOAuth;
+        modelRow.hidden = isOAuth;
+
         // Populate model list (if known up-front).
         modelSel.innerHTML = '';
         var models = modelsByProvider[p.id] || [];
@@ -271,14 +307,29 @@
           });
         }
         connectBtn.disabled = false;
-        connectBtn.textContent = 'Connect';
+        connectBtn.textContent = isOAuth ? 'Login with ' + p.name : 'Connect';
         go('sCreds');
-        setTimeout(function () { apiKeyIn.focus(); }, 60);
+        if (!isOAuth) setTimeout(function () { apiKeyIn.focus(); }, 60);
       }
 
       backBtn.onclick = function () { go('sProvider'); };
 
       connectBtn.onclick = function () {
+        var p = current.providerConfig || {};
+        if (p.isOAuth) {
+          connectBtn.disabled = true;
+          connectBtn.textContent = 'Opening login…';
+          statusEl.className = 'status busy';
+          statusEl.textContent = 'Opening ' + (p.name || current.provider) + ' login window…';
+          slicc.lick({
+            action: 'oauth-attempt',
+            data: {
+              provider: current.provider,
+              baseUrl: (baseUrlIn.value || '').trim() || null,
+            },
+          });
+          return;
+        }
         var key = (apiKeyIn.value || '').trim();
         if (!key) {
           statusEl.className = 'status error';
@@ -289,7 +340,7 @@
         connectBtn.disabled = true;
         connectBtn.textContent = 'Validating…';
         statusEl.className = 'status busy';
-        statusEl.textContent = 'Talking to ' + (current.providerConfig.name || current.provider) + '…';
+        statusEl.textContent = 'Talking to ' + (p.name || current.provider) + '…';
         slicc.lick({
           action: 'connect-attempt',
           data: {

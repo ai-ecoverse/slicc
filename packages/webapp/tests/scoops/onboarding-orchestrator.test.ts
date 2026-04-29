@@ -108,8 +108,14 @@ describe('OnboardingOrchestrator', () => {
         purpose: 'school',
         tasks: ['research'],
       });
-      // Allow the persistence promises to settle.
-      await new Promise((r) => setTimeout(r, 5));
+      // Allow the persistence promises to settle. Two concurrent
+      // writes (recordWelcomed + persistProfile) on a fresh
+      // LightningFS instance can take longer than a single tick under
+      // load — poll for up to 500ms before failing.
+      const deadline = Date.now() + 500;
+      while (Date.now() < deadline && !(await h.fs.exists('/shared/.welcomed'))) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
       expect(await h.fs.exists('/shared/.welcomed')).toBe(true);
       expect(await h.fs.exists('/home/lars/.welcome.json')).toBe(true);
       const raw = await h.fs.readFile('/home/lars/.welcome.json', 'utf8');
@@ -121,7 +127,10 @@ describe('OnboardingOrchestrator', () => {
     it('falls back to /home/user when the user skipped the name', async () => {
       const h = makeHarness();
       await h.orchestrator.handleOnboardingComplete({});
-      await new Promise((r) => setTimeout(r, 5));
+      const deadline = Date.now() + 500;
+      while (Date.now() < deadline && !(await h.fs.exists('/home/user/.welcome.json'))) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
       expect(await h.fs.exists('/home/user/.welcome.json')).toBe(true);
     });
 

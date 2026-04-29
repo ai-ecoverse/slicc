@@ -42,6 +42,8 @@ export interface ProviderEntry {
   requiresApiKey: boolean;
   requiresBaseUrl: boolean;
   defaultBaseUrl?: string;
+  /** True when this provider authenticates via an OAuth popup. */
+  isOAuth?: boolean;
 }
 
 /** Snapshot of a single model, dip-safe. */
@@ -61,6 +63,19 @@ export interface ConnectAttemptPayload {
   apiKey: string;
   baseUrl?: string | null;
   model?: string | null;
+}
+
+export interface OAuthAttemptPayload {
+  provider: string;
+  baseUrl?: string | null;
+}
+
+/** Result returned by the host's OAuth launcher callback. */
+export interface OAuthLaunchResult {
+  ok: boolean;
+  /** Optional model id to set as selected after OAuth completes. */
+  model?: string | null;
+  message?: string;
 }
 
 export interface OrchestratorDeps {
@@ -85,6 +100,12 @@ export interface OrchestratorDeps {
   broadcastToDip: (payload: { type: string; [k: string]: unknown }) => void;
   /** Fire the FINAL onboarding-complete-with-provider lick to the cone. */
   fireFinalLick: (data: Record<string, unknown>) => void;
+  /**
+   * Launch the provider's OAuth flow. Resolves once the popup
+   * completes and the host has saved the OAuth account locally.
+   * Optional — providers without OAuth support can skip this.
+   */
+  launchOAuth?: (providerId: string, baseUrl?: string | null) => Promise<OAuthLaunchResult>;
   /**
    * Run a shell command silently in the background. Used to install
    * recommended skills without blocking onboarding. Errors are logged
@@ -271,6 +292,78 @@ export class OnboardingOrchestrator {
         model: model ?? null,
         modelLabel,
         validation: result.kind,
+      },
+    });
+  }
+
+  /** User picked an OAuth provider and clicked "Login". */
+  async handleOAuthAttempt(payload: OAuthAttemptPayload): Promise<void> {
+    if (this.stage !== 'awaiting-connect' && this.stage !== 'connecting') return;
+    if (!this.deps.launchOAuth) {
+      this.deps.broadcastToDip({
+        type: 'slicc-connect-result',
+        ok: false,
+        kind: 'failed',
+        message: 'OAuth login is not available in this runtime.',
+      });
+      return;
+    }
+    this.stage = 'connecting';
+
+    let result: OAuthLaunchResult;
+    try {
+      result = await this.deps.launchOAuth(payload.provider, payload.baseUrl ?? null);
+    } catch (err) {
+      log.warn('launchOAuth threw', err);
+      this.deps.broadcastToDip({
+        type: 'slicc-connect-result',
+        ok: false,
+        kind: 'failed',
+        message: err instanceof Error ? err.message : 'Login was cancelled.',
+      });
+      this.stage = 'awaiting-connect';
+      return;
+    }
+
+    if (!result.ok) {
+      this.deps.broadcastToDip({
+        type: 'slicc-connect-result',
+        ok: false,
+        kind: 'failed',
+        message: result.message || 'Login was cancelled.',
+      });
+      this.stage = 'awaiting-connect';
+      return;
+    }
+
+    if (result.model) {
+      try {
+        this.deps.setSelectedModel(result.model);
+      } catch (err) {
+        log.warn('setSelectedModel after OAuth failed', err);
+      }
+    }
+
+    this.deps.broadcastToDip({
+      type: 'slicc-connect-result',
+      ok: true,
+      kind: 'ok',
+      note: result.message || 'Logged in.',
+    });
+
+    const modelLabel =
+      result.model && this.deps.resolveModelLabel?.(payload.provider, result.model)
+        ? this.deps.resolveModelLabel?.(payload.provider, result.model)
+        : (result.model ?? null);
+    this.stage = 'complete';
+    this.deps.fireFinalLick({
+      action: 'onboarding-complete-with-provider',
+      data: {
+        profile: this.profile,
+        provider: payload.provider,
+        model: result.model ?? null,
+        modelLabel,
+        validation: 'oauth',
       },
     });
   }

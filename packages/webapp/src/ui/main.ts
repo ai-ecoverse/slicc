@@ -655,6 +655,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           requiresApiKey: cfg.requiresApiKey ?? true,
           requiresBaseUrl: cfg.requiresBaseUrl ?? false,
           defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+          isOAuth: !!cfg.isOAuth,
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
@@ -693,6 +694,24 @@ async function mainExtension(app: HTMLElement): Promise<void> {
         // cone receives it as a regular `[Sprinkle Event: welcome]`.
         client.sendSprinkleLick('welcome', data);
       },
+      launchOAuth: async (providerId, baseUrl) => {
+        try {
+          const cfg = getProviderConfigExt(providerId);
+          if (!cfg.isOAuth || !cfg.onOAuthLogin) {
+            return { ok: false, message: 'Provider does not support OAuth.' };
+          }
+          if (cfg.requiresBaseUrl && baseUrl) addAccountExt(providerId, '', baseUrl);
+          const { createOAuthLauncher } = await import('../providers/oauth-service.js');
+          const launcher = createOAuthLauncher();
+          await cfg.onOAuthLogin(launcher, () => undefined);
+          return { ok: true };
+        } catch (err) {
+          return {
+            ok: false,
+            message: err instanceof Error ? err.message : 'OAuth login failed.',
+          };
+        }
+      },
       // Skill install isn't wired through to the offscreen agent
       // shell yet in the extension float — the cone's reply on the
       // final lick can request `upskill recommendations --install`
@@ -720,6 +739,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           welcomeAction === 'onboarding-complete' ||
           welcomeAction === 'connect-ready' ||
           welcomeAction === 'connect-attempt' ||
+          welcomeAction === 'oauth-attempt' ||
           welcomeAction === 'shortcut-migrate' ||
           welcomeAction === 'request-mount';
         if (isWelcomeFlowAction) {
@@ -759,6 +779,19 @@ async function mainExtension(app: HTMLElement): Promise<void> {
                   model: data.model == null ? null : String(data.model),
                 })
                 .catch((err) => log.warn('handleConnectAttempt failed', err));
+            }
+            return;
+          }
+          if (action === 'oauth-attempt') {
+            const data = body?.data as Record<string, unknown> | undefined;
+            if (data) {
+              void getExtOnboardingOrchestrator()
+                .handleOAuthAttempt({
+                  provider: String(data.provider ?? ''),
+                  baseUrl:
+                    typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+                })
+                .catch((err) => log.warn('handleOAuthAttempt failed', err));
             }
             return;
           }
@@ -1641,6 +1674,7 @@ async function main(): Promise<void> {
           requiresApiKey: cfg.requiresApiKey ?? true,
           requiresBaseUrl: cfg.requiresBaseUrl ?? false,
           defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+          isOAuth: !!cfg.isOAuth,
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
@@ -1697,6 +1731,27 @@ async function main(): Promise<void> {
           if (sh?.run) await sh.run(cmd);
         } catch (err) {
           log.warn('Background shell command failed', { cmd, err });
+        }
+      },
+      launchOAuth: async (providerId, baseUrl) => {
+        try {
+          const cfg = getProviderConfig(providerId);
+          if (!cfg.isOAuth || !cfg.onOAuthLogin) {
+            return { ok: false, message: 'Provider does not support OAuth.' };
+          }
+          // Persist baseUrl placeholder before the popup runs so the
+          // provider's onOAuthLogin can read it (mirrors the legacy
+          // settings dialog behavior).
+          if (cfg.requiresBaseUrl && baseUrl) addAccount(providerId, '', baseUrl);
+          const { createOAuthLauncher } = await import('../providers/oauth-service.js');
+          const launcher = createOAuthLauncher();
+          await cfg.onOAuthLogin(launcher, () => undefined);
+          return { ok: true };
+        } catch (err) {
+          return {
+            ok: false,
+            message: err instanceof Error ? err.message : 'OAuth login failed.',
+          };
         }
       },
     });
@@ -1762,6 +1817,7 @@ async function main(): Promise<void> {
       welcomeAction === 'onboarding-complete' ||
       welcomeAction === 'connect-ready' ||
       welcomeAction === 'connect-attempt' ||
+      welcomeAction === 'oauth-attempt' ||
       welcomeAction === 'shortcut-migrate' ||
       welcomeAction === 'request-mount';
     if (isSprinkle && isWelcomeFlowAction) {
@@ -1809,6 +1865,20 @@ async function main(): Promise<void> {
               model: data.model == null ? null : String(data.model),
             })
             .catch((err) => log.warn('handleConnectAttempt failed', err));
+        }
+        return;
+      }
+      if (action === 'oauth-attempt') {
+        const data = body?.data as Record<string, unknown> | undefined;
+        const orch = getOnboardingOrchestrator();
+        if (orch && data) {
+          void orch
+            .handleOAuthAttempt({
+              provider: String(data.provider ?? ''),
+              baseUrl:
+                typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+            })
+            .catch((err) => log.warn('handleOAuthAttempt failed', err));
         }
         return;
       }
