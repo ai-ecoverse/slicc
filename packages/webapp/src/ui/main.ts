@@ -90,6 +90,11 @@ import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
 import { recoverMounts, formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
+import {
+  openMountPickerPopup,
+  loadAndClearPendingHandle,
+  reactivateHandle,
+} from '../fs/mount-picker-popup.js';
 import { detectUpgrade, recordVersionSeen } from '../scoops/upgrade-detection.js';
 
 const log = createLogger('main');
@@ -640,28 +645,45 @@ async function mainExtension(app: HTMLElement): Promise<void> {
             );
           }
         }
-        // Handle request-mount from welcome sprinkle (sandbox can't call showDirectoryPicker)
+        // Handle request-mount from welcome sprinkle (sandbox can't call showDirectoryPicker).
+        // Route through mount-popup.html — calling showDirectoryPicker directly from the
+        // side panel context crashes the renderer when the user picks a TCC-protected
+        // folder (Documents, Downloads, Desktop, home). The popup is a regular browser
+        // window where TCC dialogs and Chrome's system-folder rejection render correctly.
         if (
           event.sprinkleName === 'welcome' &&
           (event.body as Record<string, unknown> | null)?.action === 'request-mount'
         ) {
           try {
-            const w = window as Window & {
-              showDirectoryPicker?: (
-                opts: Record<string, unknown>
-              ) => Promise<FileSystemDirectoryHandle>;
-            };
-            if (!w.showDirectoryPicker) throw new Error('showDirectoryPicker not supported');
-            const handle = await w.showDirectoryPicker({ mode: 'readwrite' });
+            const result = await openMountPickerPopup();
+            if (result.cancelled) {
+              sprinkleManager.sendToSprinkle('welcome', { action: 'mount-cancelled' });
+              return;
+            }
+            if (result.error) {
+              log.warn('Mount picker popup failed', result.error);
+              sprinkleManager.sendToSprinkle('welcome', { action: 'mount-cancelled' });
+              return;
+            }
+            if (!result.handleInIdb || typeof result.idbKey !== 'string') {
+              log.warn('Mount picker popup returned unexpected result', result);
+              sprinkleManager.sendToSprinkle('welcome', { action: 'mount-cancelled' });
+              return;
+            }
+            const handle = await loadAndClearPendingHandle(result.idbKey);
+            if (!handle) {
+              log.warn('Mount picker popup did not store a handle');
+              sprinkleManager.sendToSprinkle('welcome', { action: 'mount-cancelled' });
+              return;
+            }
+            await reactivateHandle(handle);
             await storePendingMount(handle);
             sprinkleManager.sendToSprinkle('welcome', {
               action: 'mount-complete',
               dirName: handle.name,
             });
           } catch (err: unknown) {
-            if ((err as { name?: string }).name !== 'AbortError') {
-              log.warn('Mount picker failed', err);
-            }
+            log.warn('Mount picker failed', err);
             sprinkleManager.sendToSprinkle('welcome', { action: 'mount-cancelled' });
           }
           return; // Don't forward to orchestrator

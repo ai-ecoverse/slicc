@@ -11,6 +11,11 @@
 
 import type { VirtualFS } from './virtual-fs.js';
 import { getToolExecutionContext, showToolUI, toolUIRegistry } from '../tools/tool-ui.js';
+import {
+  openMountPickerPopup,
+  loadAndClearPendingHandle,
+  reactivateHandle,
+} from './mount-picker-popup.js';
 
 /** Escape HTML special characters to prevent XSS */
 function escapeHtml(text: string): string {
@@ -378,81 +383,4 @@ export class MountCommands {
       exitCode: 0,
     };
   }
-}
-
-async function reactivateHandle(handle: FileSystemDirectoryHandle): Promise<void> {
-  type HandleWithPermission = FileSystemDirectoryHandle & {
-    requestPermission?: (opts: { mode: string }) => Promise<string>;
-  };
-  const h = handle as HandleWithPermission;
-  if (h.requestPermission) {
-    const state = await h.requestPermission({ mode: 'readwrite' });
-    if (state !== 'granted') {
-      throw new Error(`Permission denied for "${handle.name}" (${state})`);
-    }
-  }
-}
-
-function openMountPickerPopup(): Promise<Record<string, unknown>> {
-  const popupRequestId = `mount-${Date.now().toString(36)}`;
-  return new Promise((resolve) => {
-    const url = chrome.runtime.getURL(
-      `mount-popup.html?requestId=${encodeURIComponent(popupRequestId)}`
-    );
-
-    const cleanup = () => {
-      clearTimeout(timer);
-      chrome.runtime.onMessage.removeListener(listener);
-    };
-
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve({ cancelled: true });
-    }, 60_000);
-
-    const listener = (msg: unknown) => {
-      const m = msg as Record<string, unknown>;
-      if (!m || m.source !== 'mount-popup' || m.requestId !== popupRequestId) return;
-      cleanup();
-      resolve(m);
-    };
-    chrome.runtime.onMessage.addListener(listener);
-
-    chrome.windows
-      .create({ url, type: 'popup', width: 300, height: 80, focused: true })
-      .catch(() => {
-        cleanup();
-        resolve({ error: 'Failed to open directory picker window' });
-      });
-  });
-}
-
-async function loadAndClearPendingHandle(
-  idbKey: string
-): Promise<FileSystemDirectoryHandle | null> {
-  const db = await new Promise<IDBDatabase>((resolve, reject) => {
-    const req = indexedDB.open('slicc-pending-mount', 1);
-    req.onupgradeneeded = () => {
-      if (!req.result.objectStoreNames.contains('handles')) {
-        req.result.createObjectStore('handles');
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-  const tx = db.transaction('handles', 'readwrite');
-  const store = tx.objectStore('handles');
-  const getReq = store.get(idbKey);
-  const deleteReq = store.delete(idbKey);
-  deleteReq.onerror = () => {
-    console.warn('[mount] Failed to delete pending handle from IDB', idbKey, deleteReq.error);
-  };
-  const handle = await new Promise<FileSystemDirectoryHandle | null>((resolve, reject) => {
-    tx.oncomplete = () => resolve(getReq.result ?? null);
-    getReq.onerror = () => reject(getReq.error ?? new Error('IDB get failed'));
-    tx.onerror = () => reject(tx.error ?? new Error('IDB transaction failed'));
-    tx.onabort = () => reject(tx.error ?? new Error('IDB transaction aborted'));
-  });
-  db.close();
-  return handle;
 }
