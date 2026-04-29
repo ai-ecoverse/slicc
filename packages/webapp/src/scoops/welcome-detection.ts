@@ -58,7 +58,7 @@ interface PersistedChatSession {
   messages?: PersistedChatMessage[];
 }
 
-function openChatDb(): Promise<IDBDatabase> {
+function openChatDbOnce(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(CHAT_DB_NAME, CHAT_DB_VERSION);
     req.onupgradeneeded = () => {
@@ -69,7 +69,31 @@ function openChatDb(): Promise<IDBDatabase> {
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
+    // `onblocked` fires when another tab/worker still holds an old
+    // version open. The upgrade will retry once the holder closes.
+    req.onblocked = () => {
+      /* leave the promise pending — onsuccess/onerror will fire eventually */
+    };
   });
+}
+
+/**
+ * Open the chat DB with a single retry after a short backoff. Boot
+ * paths that race with `nuke`'s pending `deleteDatabase` requests can
+ * surface as `AbortError: Version change transaction was aborted in
+ * upgradeneeded event handler` — the second attempt almost always
+ * succeeds because the delete has completed by then. We swallow the
+ * first failure rather than blocking welcome detection on it.
+ */
+function openChatDb(): Promise<IDBDatabase> {
+  return openChatDbOnce().catch(
+    () =>
+      new Promise<IDBDatabase>((resolve, reject) => {
+        setTimeout(() => {
+          openChatDbOnce().then(resolve, reject);
+        }, 120);
+      })
+  );
 }
 
 async function loadConeChatSession(): Promise<PersistedChatSession | null> {
