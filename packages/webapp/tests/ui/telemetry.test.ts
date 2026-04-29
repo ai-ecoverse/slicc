@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 
 const mockSampleRUM = vi.fn();
@@ -47,6 +48,12 @@ describe('telemetry', () => {
         target: expect.stringMatching(/^(cli|extension|electron)$/),
       })
     );
+  });
+
+  it('sets RUM_GENERATION=slicc-cli in the CLI branch', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    expect((globalThis as any).window?.RUM_GENERATION).toBe('slicc-cli');
   });
 
   it('respects telemetry-disabled flag', async () => {
@@ -130,5 +137,56 @@ describe('isTelemetryEnabled / setTelemetryEnabled', () => {
 
     setTelemetryEnabled(true);
     expect(mockLocalStorage.getItem('telemetry-disabled')).toBeNull();
+  });
+});
+
+describe('telemetry — extension branch', () => {
+  const mockSampleRumJs = vi.fn();
+
+  beforeEach(() => {
+    mockLocalStorage.clear();
+    mockSampleRUM.mockClear();
+    mockSampleRumJs.mockClear();
+    vi.resetModules();
+    vi.stubGlobal('chrome', { runtime: { id: 'test-extension' } });
+    vi.doMock('../../src/ui/rum.js', () => ({ default: mockSampleRumJs }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.doUnmock('../../src/ui/rum.js');
+    vi.resetModules();
+  });
+
+  it('uses the inlined rum.js (default export) and sets RUM_GENERATION=slicc-extension', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    expect(mockSampleRumJs).toHaveBeenCalledWith(
+      'navigate',
+      expect.objectContaining({ target: 'extension' })
+    );
+    expect(mockSampleRUM).not.toHaveBeenCalled();
+    expect((globalThis as any).window?.RUM_GENERATION).toBe('slicc-extension');
+  });
+
+  it('does NOT set SAMPLE_PAGEVIEWS_AT_RATE in the extension branch', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    if ((globalThis as any).window) {
+      delete (globalThis as any).window.SAMPLE_PAGEVIEWS_AT_RATE;
+    }
+    await initTelemetry();
+    expect((globalThis as any).window?.SAMPLE_PAGEVIEWS_AT_RATE).toBeUndefined();
+  });
+
+  it('forwards trackChatSend through the extension sampleRUM', async () => {
+    const { initTelemetry, trackChatSend } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRumJs.mockClear();
+
+    trackChatSend('cone', 'claude-sonnet');
+    expect(mockSampleRumJs).toHaveBeenCalledWith('formsubmit', {
+      source: 'cone',
+      target: 'claude-sonnet',
+    });
   });
 });

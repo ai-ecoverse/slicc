@@ -45,19 +45,30 @@ export async function initTelemetry(): Promise<void> {
     return;
 
   try {
-    // High sampling rate (1-in-10) for beta. Remove for GA (defaults to 1-in-100).
+    const mode = getModeLabel();
+
     if (typeof window !== 'undefined') {
-      window.SAMPLE_PAGEVIEWS_AT_RATE = 'high';
+      window.RUM_GENERATION = `slicc-${mode}`;
     }
 
-    const mod = await import('@adobe/helix-rum-js');
-    sampleRUM = mod.sampleRUM;
+    if (mode === 'extension') {
+      const mod = await import('./rum.js');
+      sampleRUM = mod.default as SampleRUM;
+    } else {
+      // CLI / Electron — keep existing behavior.
+      if (typeof window !== 'undefined') {
+        window.SAMPLE_PAGEVIEWS_AT_RATE = 'high';
+      }
+      const mod = await import('@adobe/helix-rum-js');
+      sampleRUM = mod.sampleRUM;
+    }
+
     initialized = true;
 
     if (sampleRUM) {
       sampleRUM('navigate', {
         source: typeof document !== 'undefined' ? document.referrer : '',
-        target: getModeLabel(),
+        target: mode,
       });
     }
   } catch {
