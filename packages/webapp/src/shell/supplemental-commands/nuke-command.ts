@@ -33,6 +33,15 @@ export function createNukeCommand(): Command {
           /* ignore — best effort */
         }
         try {
+          // Drop the welcome-flow dedup ledger so the welcome dip
+          // and its follow-up licks fire fresh on the next boot.
+          // (Other localStorage entries — provider keys, layout prefs
+          // — survive nuke by design.)
+          localStorage.removeItem('slicc:welcome-flow-fired');
+        } catch {
+          /* localStorage disabled — ignore */
+        }
+        try {
           const dbs = await indexedDB.databases();
           await Promise.all(
             dbs

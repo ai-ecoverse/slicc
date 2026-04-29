@@ -105,6 +105,73 @@ import { broadcastToDips } from './dip.js';
 
 const log = createLogger('main');
 
+/**
+ * Welcome-flow lick actions that must fire at most ONCE per browser
+ * profile (not per session — reloads share the same ledger). Each one
+ * is a state transition (post deterministic intro lines, post the
+ * cone's greeting, etc.) rather than an idempotent read, so re-firing
+ * after a reload would double up the chat. Mount-time queries that
+ * are safe to repeat (`connect-ready` for the catalogue probe,
+ * `request-mount` for picker re-tries) are deliberately omitted.
+ *
+ * The ledger is persisted to localStorage under
+ * `WELCOME_FLOW_LEDGER_KEY` so the guard survives page reloads, HMR,
+ * and chat-history wipes. The `nuke` command explicitly removes this
+ * key so a full reset re-enables the welcome flow.
+ */
+const DEDUPED_WELCOME_ACTIONS = new Set<string>([
+  'first-run',
+  'onboarding-complete',
+  'onboarding-complete-with-provider',
+  'shortcut-migrate',
+]);
+
+const WELCOME_FLOW_LEDGER_KEY = 'slicc:welcome-flow-fired';
+
+function loadFiredWelcomeActions(): Set<string> {
+  try {
+    const raw =
+      typeof localStorage !== 'undefined' ? localStorage.getItem(WELCOME_FLOW_LEDGER_KEY) : null;
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function persistFiredWelcomeActions(set: Set<string>): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(WELCOME_FLOW_LEDGER_KEY, JSON.stringify([...set]));
+  } catch {
+    /* quota / disabled — fall back to in-memory dedup only */
+  }
+}
+
+/**
+ * Run `fire` only if the given welcome-flow action hasn't been fired
+ * yet for this profile. Updates the persistent ledger on first fire.
+ * Used at every welcome-lick dispatch site that doesn't go through
+ * `routeLickToScoop` (extension `client.sendSprinkleLick` paths).
+ */
+function dispatchWelcomeLickOnce(
+  action: string,
+  set: Set<string>,
+  fire: () => void,
+  contextLabel: string
+): void {
+  if (DEDUPED_WELCOME_ACTIONS.has(action) && set.has(action)) {
+    log.debug(`Suppressing duplicate welcome lick (${contextLabel})`, { action });
+    return;
+  }
+  if (DEDUPED_WELCOME_ACTIONS.has(action)) {
+    set.add(action);
+    persistFiredWelcomeActions(set);
+  }
+  fire();
+}
+
 const PENDING_MOUNT_DB = 'slicc-pending-mount';
 const PENDING_MOUNT_KEY = 'pendingMount';
 
@@ -782,7 +849,15 @@ async function mainExtension(app: HTMLElement): Promise<void> {
         // Forward the synthetic completion event through the same
         // relay any other sprinkle lick would use, so the offscreen
         // cone receives it as a regular `[Sprinkle Event: welcome]`.
-        client.sendSprinkleLick('welcome', data);
+        // Dedup-gated so a stray re-fire (HMR, double-mount) can't
+        // double the cone's greeting.
+        const action = String((data as { action?: unknown })?.action ?? '');
+        dispatchWelcomeLickOnce(
+          action,
+          firedWelcomeActions,
+          () => client.sendSprinkleLick('welcome', data),
+          'orchestrator-ext'
+        );
       },
       launchOAuth: async (providerId, baseUrl) => {
         try {
@@ -824,6 +899,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     return extOnboardingOrchestrator;
   };
 
+  // Persistent dedup ledger of welcome-flow licks — same contract as
+  // the standalone path. See DEDUPED_WELCOME_ACTIONS for the rationale.
+  const firedWelcomeActions = loadFiredWelcomeActions();
+
   // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
   const sprinkleManager = new SprinkleManager(
     localFs,
@@ -838,6 +917,14 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           event.sprinkleName === 'welcome' || event.sprinkleName === 'inline'
             ? ((event.body as Record<string, unknown> | null)?.action as string | undefined)
             : undefined;
+        if (welcomeAction && DEDUPED_WELCOME_ACTIONS.has(welcomeAction)) {
+          if (firedWelcomeActions.has(welcomeAction)) {
+            log.debug('Suppressing duplicate welcome lick (ext)', { action: welcomeAction });
+            return;
+          }
+          firedWelcomeActions.add(welcomeAction);
+          persistFiredWelcomeActions(firedWelcomeActions);
+        }
         const isWelcomeFlowAction =
           welcomeAction === 'first-run' ||
           welcomeAction === 'onboarding-complete' ||
@@ -889,10 +976,18 @@ async function mainExtension(app: HTMLElement): Promise<void> {
                 note: cfg?.name ? `Already connected to ${cfg.name}.` : 'Already connected.',
               });
               // Same final-lick advance as the standalone path —
-              // see comment there for the chat-history gate.
-              void fireFastForwardFinalLick(localFs, primary.providerId, (data) =>
-                client.sendSprinkleLick('welcome', data)
-              ).catch((err) => log.warn('Failed to fire fast-forward final lick', err));
+              // see comment there for the chat-history gate. Routed
+              // through `dispatchWelcomeLickOnce` so the persistent
+              // ledger gates duplicate fires across reloads.
+              void fireFastForwardFinalLick(localFs, primary.providerId, (data) => {
+                const finalAction = String((data as { action?: unknown }).action ?? '');
+                dispatchWelcomeLickOnce(
+                  finalAction,
+                  firedWelcomeActions,
+                  () => client.sendSprinkleLick('welcome', data),
+                  'fast-forward-ext'
+                );
+              }).catch((err) => log.warn('Failed to fire fast-forward final lick', err));
               return;
             }
             getExtOnboardingOrchestrator().handleConnectReady();
@@ -1077,7 +1172,14 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     detectWelcomeFirstRun(localFs)
       .then((result) => {
         if (!result.isFirstRun) return;
-        client.sendSprinkleLick('welcome', { action: 'first-run' });
+        // Persistent dedup so a reload with a wiped chat history
+        // can't refire `first-run` on top of the existing welcome dip.
+        dispatchWelcomeLickOnce(
+          'first-run',
+          firedWelcomeActions,
+          () => client.sendSprinkleLick('welcome', { action: 'first-run' }),
+          'detect-first-run-ext'
+        );
       })
       .catch((err) => log.warn('Welcome detection failed', err));
   }
@@ -1896,6 +1998,11 @@ async function main(): Promise<void> {
     return onboardingOrchestrator;
   };
 
+  // Persistent dedup ledger for welcome-flow licks. Loaded from
+  // localStorage so the guard survives reloads. See
+  // DEDUPED_WELCOME_ACTIONS for the full contract.
+  const firedWelcomeActions = loadFiredWelcomeActions();
+
   // Route lick events to scoops
   const routeLickToScoop = (event: LickEvent) => {
     const isWebhook = event.type === 'webhook';
@@ -1950,6 +2057,20 @@ async function main(): Promise<void> {
       isSprinkle && (event.sprinkleName === 'welcome' || event.sprinkleName === 'inline')
         ? ((event.body as Record<string, unknown> | null)?.action as string | undefined)
         : undefined;
+    // Per-session dedup. The welcome dip is re-mounted on every chat
+    // re-render (HMR, scoop switch, history reload) and each remount
+    // can fire `welcome-ready` / `onboarding-complete-with-provider`
+    // again — without a guard we'd post the deterministic intro lines
+    // twice or queue duplicate cone replies. One fire per action per
+    // session is the contract.
+    if (welcomeAction && DEDUPED_WELCOME_ACTIONS.has(welcomeAction)) {
+      if (firedWelcomeActions.has(welcomeAction)) {
+        log.debug('Suppressing duplicate welcome lick', { action: welcomeAction });
+        return;
+      }
+      firedWelcomeActions.add(welcomeAction);
+      persistFiredWelcomeActions(firedWelcomeActions);
+    }
     const isWelcomeFlowAction =
       welcomeAction === 'first-run' ||
       welcomeAction === 'onboarding-complete' ||
