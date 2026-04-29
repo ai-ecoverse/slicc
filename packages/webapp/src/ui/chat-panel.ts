@@ -589,8 +589,8 @@ export class ChatPanel {
     // Telemetry — fire trackImageView('chat') exactly once per <img> attached
     // to the messages tree. Covers markdown images, screenshots, and tool-result
     // images uniformly. UI chrome outside messagesEl (avatars, branding, file
-    // browser thumbnails, inline-sprinkle imagery) is intentionally excluded
-    // because it's not a chat-content image.
+    // browser thumbnails, dip imagery, attachment chips in the input area) is
+    // intentionally excluded because it's not a chat-content image.
     const imgObserver = new MutationObserver((records) => {
       for (const r of records) {
         r.addedNodes.forEach((node) => {
@@ -876,9 +876,11 @@ export class ChatPanel {
     const attachments = this.pendingAttachments.map((attachment) => ({ ...attachment }));
     if (!text && attachments.length === 0) return;
 
-    // Telemetry — fire once per send. `currentScoopName` is null for the cone
-    // and a string for any named scoop; see the field's own declaration for
-    // the contract (kept here so this hook doesn't carry a duplicate of it).
+    // Telemetry — fire once per *effective* send: only after the
+    // attachmentReadInProgress and empty-and-no-attachments guards above
+    // have let us through. `currentScoopName` is null for the cone and a
+    // string for any named scoop; see the field's own declaration for the
+    // contract.
     const scoopName = this.currentScoopName ?? 'cone';
     const modelId = localStorage.getItem('selected-model') ?? 'unknown';
     trackChatSend(scoopName, modelId);

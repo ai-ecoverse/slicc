@@ -62,15 +62,15 @@ SLICC uses helix-rum-js's supported checkpoint types with SLICC-specific semanti
 
 ### Checkpoint mapping
 
-| RUM Checkpoint | SLICC Meaning      | Source                                    | Target                              | Callsite                                                                    |
-| -------------- | ------------------ | ----------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------- |
-| `navigate`     | Page load          | `document.referrer`                       | `cli` / `extension` / `electron`    | `telemetry.ts:initTelemetry()`                                              |
-| `formsubmit`   | User chat message  | scoop name (`'cone'` for cone scoops)     | model id                            | `chat-panel.ts:ChatPanel.sendMessage()`                                     |
-| `fill`         | Shell command      | command name                              | (omitted)                           | `wasm-shell.ts` (panel terminal in extension; both modes in CLI)            |
-| `viewblock`    | Sprinkle displayed | sprinkle name                             | (omitted)                           | `sprinkle-manager.ts:open()`                                                |
-| `viewmedia`    | Image rendered     | context (`'chat'`)                        | (omitted)                           | `chat-panel.ts` — `MutationObserver` on `messagesEl`                        |
-| `error`        | JS error / failure | error type (`'js'` for the auto listener) | sanitized error message (extension) | `telemetry.ts:initTelemetry()` (extension) / helix listeners (CLI/Electron) |
-| `signup`       | Settings opened    | trigger (`'button'`)                      | (omitted)                           | `provider-settings.ts:showProviderSettings()`                               |
+| RUM Checkpoint | SLICC Meaning      | Source                                    | Target                              | Callsite                                                                                                                                                       |
+| -------------- | ------------------ | ----------------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `navigate`     | Page load          | `document.referrer`                       | `cli` / `extension` / `electron`    | `telemetry.ts:initTelemetry()`                                                                                                                                 |
+| `formsubmit`   | User chat message  | scoop name (`'cone'` for cone scoops)     | model id                            | `chat-panel.ts:ChatPanel.sendMessage()` — fires only on effective sends (after the empty-and-no-attachments guard, and never while `attachmentReadInProgress`) |
+| `fill`         | Shell command      | command name                              | (omitted)                           | `wasm-shell.ts` (panel terminal in extension; both modes in CLI)                                                                                               |
+| `viewblock`    | Sprinkle displayed | sprinkle name                             | (omitted)                           | `sprinkle-manager.ts:open()`                                                                                                                                   |
+| `viewmedia`    | Image rendered     | context (`'chat'`)                        | (omitted)                           | `chat-panel.ts` — `MutationObserver` on `messagesEl`                                                                                                           |
+| `error`        | JS error / failure | error type (`'js'` for the auto listener) | sanitized error message (extension) | `telemetry.ts:initTelemetry()` (extension) / helix listeners (CLI/Electron)                                                                                    |
+| `signup`       | Settings opened    | trigger (`'button'`)                      | (omitted)                           | `provider-settings.ts:showProviderSettings()`                                                                                                                  |
 
 ### Auto-instrumented (from enhancer, CLI/Electron only)
 
