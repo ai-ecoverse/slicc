@@ -9,6 +9,7 @@ import {
   createSkillCommand,
   createUpskillCommand,
   _resetGlobalFsCache,
+  installRecommendedSkills,
   scoreSkills,
 } from '../../../src/shell/supplemental-commands/upskill-command.js';
 
@@ -853,5 +854,212 @@ describe('upskill recommendations subcommand', () => {
     // AEM should be filtered out since it's already installed
     expect(result.stdout).toContain('all matching skills are already installed');
     expect(result.stdout).not.toContain('AEM');
+  });
+});
+
+describe('installRecommendedSkills helper (no-shell entry point)', () => {
+  let fs: VirtualFS;
+  let createdFileSystems: VirtualFS[];
+  let dbCounter = 400;
+
+  beforeEach(async () => {
+    createdFileSystems = [];
+    const originalCreate = VirtualFS.create.bind(VirtualFS);
+    vi.spyOn(VirtualFS, 'create').mockImplementation(async (options) => {
+      const instance = await originalCreate(options);
+      createdFileSystems.push(instance);
+      return instance;
+    });
+
+    fs = await VirtualFS.create({ dbName: `install-helper-${dbCounter++}`, wipe: true });
+    await VirtualFS.create({ dbName: 'slicc-fs-global', wipe: true });
+  });
+
+  afterEach(async () => {
+    _resetGlobalFsCache();
+    await Promise.allSettled(
+      createdFileSystems.map((instance) =>
+        (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()
+      )
+    );
+    vi.restoreAllMocks();
+  });
+
+  it('returns skipped="no-profile" when /home is empty', async () => {
+    const fetchMock = vi.fn();
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBe('no-profile');
+    expect(result.installedNames).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('uses an in-memory profileOverride without scanning /home', async () => {
+    // /home is empty — without the override this would skip with no-profile.
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'skills-main/aem/SKILL.md': encoder.encode('---\nname: aem\n---\n# AEM\n'),
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return response(
+          200,
+          JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          })
+        );
+      }
+      if (url.includes('codeload.github.com')) {
+        return response(200, zipBytes);
+      }
+      if (url.includes('api.github.com')) {
+        return response(403, JSON.stringify({ message: 'rate limited' }), {}, 'Forbidden');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch, {
+      purpose: 'work',
+      role: 'developer',
+      tasks: ['build-websites'],
+      apps: ['aem'],
+    });
+    expect(result.skipped).toBeNull();
+    expect(result.installedNames).toEqual(['aem']);
+  });
+
+  it('returns skipped="catalog-fetch" when the catalog request fails', async () => {
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({ purpose: 'work', role: 'developer', tasks: ['x'], apps: ['y'] })
+    );
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      status: 503,
+      body: '',
+      headers: {},
+    });
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBe('catalog-fetch');
+    expect(result.errors[0]).toContain('failed to fetch skill catalog');
+  });
+
+  it('installs a recommended skill end-to-end and reports it in installedNames', async () => {
+    // Profile that scores well against the catalog entry.
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
+
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'skills-main/aem/SKILL.md': encoder.encode('---\nname: aem\n---\n# AEM\n'),
+      'skills-main/aem/helper.js': encoder.encode('console.log("hi");\n'),
+    });
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return response(
+          200,
+          JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          })
+        );
+      }
+      if (url.includes('codeload.github.com')) {
+        return response(200, zipBytes);
+      }
+      if (url.includes('api.github.com')) {
+        return response(403, JSON.stringify({ message: 'rate limited' }), {}, 'Forbidden');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBeNull();
+    expect(result.installedNames).toEqual(['aem']);
+    expect(result.errors).toEqual([]);
+    await expect(fs.readTextFile('/workspace/skills/aem/SKILL.md')).resolves.toContain('# AEM');
+  });
+
+  it('returns skipped="all-installed" when every match is already on disk', async () => {
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
+    await fs.mkdir('/workspace/skills/aem', { recursive: true });
+    await fs.writeFile('/workspace/skills/aem/SKILL.md', '# AEM Skill\n');
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return response(
+          200,
+          JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          })
+        );
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBe('all-installed');
+    expect(result.installedNames).toEqual([]);
   });
 });

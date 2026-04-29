@@ -1,9 +1,13 @@
 // packages/webapp/tests/e2e/preview-serve.test.ts
 import { test, expect } from '@playwright/test';
-import { installVfsFallbackResponder, seedVFS, waitForSW } from './helpers.js';
+import { installVfsFallbackResponder, seedSkipSwReload, seedVFS, waitForSW } from './helpers.js';
 
 test.describe('preview service worker', () => {
   test.beforeEach(async ({ page }) => {
+    // Suppress the bootstrap's one-shot SW-claim reload before the first
+    // navigation. Without this, `main.ts` reloads the page ~1.5s into
+    // boot, racing waitForSW's polling and tearing down its eval context.
+    await seedSkipSwReload(page);
     await page.goto('/');
     await waitForSW(page);
   });

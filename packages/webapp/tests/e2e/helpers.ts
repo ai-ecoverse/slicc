@@ -5,6 +5,33 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const LFS_SCRIPT = require.resolve('@isomorphic-git/lightning-fs/dist/lightning-fs.min.js');
 
+/**
+ * Suppress the one-shot SW-claim reload baked into `main.ts`.
+ *
+ * On a fresh page load the app registers the preview service worker with
+ * scope `/preview/`. Because the bootstrap page lives at `/`, it is outside
+ * that scope and `clients.claim()` will never make it the controller — but
+ * the bootstrap waits 1.5s for `controllerchange` and then forces a single
+ * `location.reload()`, gated by `sessionStorage['slicc-sw-reloaded']`. That
+ * reload races with `waitForSW`'s polling `page.evaluate`, killing its
+ * execution context and producing the spurious "Preview SW did not activate
+ * within 15s" failures we see in CI.
+ *
+ * Pre-seeding the sessionStorage flag short-circuits the reload, which is
+ * harmless here: the only thing the reload buys is a controlled bootstrap
+ * page, which the e2e suite doesn't rely on (every test navigates into
+ * `/preview/...` itself, where the SW does control the page).
+ */
+export async function seedSkipSwReload(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    try {
+      sessionStorage.setItem('slicc-sw-reloaded', '1');
+    } catch {
+      /* sessionStorage may be unavailable for opaque origins */
+    }
+  });
+}
+
 /** Minimal interface for the LightningFS promises API used in seedVFS. */
 interface LightningFSPromises {
   mkdir(path: string): Promise<void>;

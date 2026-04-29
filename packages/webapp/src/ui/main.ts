@@ -21,7 +21,7 @@ import './styles/feedback.css';
  */
 
 import { Layout } from './layout.js';
-import { getApiKey, showProviderSettings, applyProviderDefaults } from './provider-settings.js';
+import { getApiKey, applyProviderDefaults } from './provider-settings.js';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
@@ -96,11 +96,98 @@ import {
   reactivateHandle,
 } from '../fs/mount-picker-popup.js';
 import { detectUpgrade, recordVersionSeen } from '../scoops/upgrade-detection.js';
+import {
+  detectWelcomeFirstRun,
+  hasOnboardingFinalLickInHistory,
+} from '../scoops/welcome-detection.js';
+// Static-import dip helpers used by the onboarding orchestrator. dip.ts is
+// already pulled into the main entry chunk via chat-panel.ts/tool-ui-renderer.ts
+// — dynamic-importing it here only confused rollup's chunk graph (and triggered
+// the INEFFECTIVE_DYNAMIC_IMPORT warning), occasionally surfacing as a runtime
+// "o is not a function" error in the fs chunk because of the resulting
+// circular module-evaluation order.
+import { broadcastToDips } from './dip.js';
 
 const log = createLogger('main');
 
+/**
+ * Welcome-flow lick actions that must fire at most ONCE per browser
+ * profile (not per session — reloads share the same ledger). Each one
+ * is a state transition (post deterministic intro lines, post the
+ * cone's greeting, etc.) rather than an idempotent read, so re-firing
+ * after a reload would double up the chat. Mount-time queries that
+ * are safe to repeat (`connect-ready` for the catalogue probe,
+ * `request-mount` for picker re-tries) are deliberately omitted.
+ *
+ * The ledger is persisted to localStorage under
+ * `WELCOME_FLOW_LEDGER_KEY` so the guard survives page reloads, HMR,
+ * and chat-history wipes. The `nuke` command explicitly removes this
+ * key so a full reset re-enables the welcome flow.
+ */
+const DEDUPED_WELCOME_ACTIONS = new Set<string>([
+  'first-run',
+  'onboarding-complete',
+  'onboarding-complete-with-provider',
+  'shortcut-migrate',
+]);
+
+const WELCOME_FLOW_LEDGER_KEY = 'slicc:welcome-flow-fired';
+
+function loadFiredWelcomeActions(): Set<string> {
+  try {
+    const raw =
+      typeof localStorage !== 'undefined' ? localStorage.getItem(WELCOME_FLOW_LEDGER_KEY) : null;
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function persistFiredWelcomeActions(set: Set<string>): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(WELCOME_FLOW_LEDGER_KEY, JSON.stringify([...set]));
+  } catch {
+    /* quota / disabled — fall back to in-memory dedup only */
+  }
+}
+
+/**
+ * Run `fire` only if the given welcome-flow action hasn't been fired
+ * yet for this profile. Updates the persistent ledger on first fire.
+ * Used at every welcome-lick dispatch site that doesn't go through
+ * `routeLickToScoop` (extension `client.sendSprinkleLick` paths).
+ */
+function dispatchWelcomeLickOnce(
+  action: string,
+  set: Set<string>,
+  fire: () => void,
+  contextLabel: string
+): void {
+  if (DEDUPED_WELCOME_ACTIONS.has(action) && set.has(action)) {
+    log.debug(`Suppressing duplicate welcome lick (${contextLabel})`, { action });
+    return;
+  }
+  if (DEDUPED_WELCOME_ACTIONS.has(action)) {
+    set.add(action);
+    persistFiredWelcomeActions(set);
+  }
+  fire();
+}
+
 const PENDING_MOUNT_DB = 'slicc-pending-mount';
 const PENDING_MOUNT_KEY = 'pendingMount';
+
+/**
+ * Sprinkle names whose `.shtml` file backs an inline dip rather than a
+ * panel sprinkle. They live under `/shared/sprinkles/` for path-stability
+ * reasons (the markdown image syntax `![](/shared/sprinkles/...)`
+ * references them) but should never appear in the rail/picker, since the
+ * inline dip is the sole intended rendering.
+ */
+const INLINE_DIP_SPRINKLES: ReadonlySet<string> = new Set(['welcome']);
 
 /** True when the current URL requests the design-time UI fixture
  *  (`?ui-fixture=1`). Accepts `1`, `true`, and the bare presence of the key
@@ -327,6 +414,92 @@ function registerSkillDropInstall(
     } else {
       overlay.hide();
     }
+  });
+}
+
+/**
+ * Read the most recently-written `/home/<slug>/.welcome.json` so the
+ * fast-forward path can hand the cone the same profile shape the
+ * orchestrator would have. Returns an empty object on any failure —
+ * the cone's welcome SKILL.md is happy to greet without personalization.
+ */
+async function loadPersistedProfile(fs: VirtualFS): Promise<Record<string, unknown>> {
+  try {
+    const homes = await fs.readDir('/home');
+    let best: { profile: Record<string, unknown>; mtime: number } | null = null;
+    for (const entry of homes) {
+      if (entry.type !== 'directory') continue;
+      const path = `/home/${entry.name}/.welcome.json`;
+      try {
+        const stat = await fs.stat(path);
+        const mtime = stat.mtime ?? 0;
+        if (best && mtime <= best.mtime) continue;
+        const raw = await fs.readFile(path, { encoding: 'utf-8' });
+        const parsed = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
+        if (parsed && typeof parsed === 'object') {
+          best = { profile: parsed as Record<string, unknown>, mtime };
+        }
+      } catch {
+        /* skip slugs without a profile */
+      }
+    }
+    return best?.profile ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * When the connect-llm dip is fast-forwarded on reload (provider
+ * already configured), the orchestrator's normal connect-attempt path
+ * never runs and the final `onboarding-complete-with-provider` lick is
+ * never fired. That stalls the welcome sequence — the cone never gets
+ * to greet the user with the model name. Re-fire the lick here with
+ * the on-disk profile + active provider/model. Skipped when the cone
+ * has already received the lick in a previous session (chat history
+ * persists across reloads).
+ */
+async function fireFastForwardFinalLick(
+  fs: VirtualFS | null,
+  providerId: string,
+  fire: (data: Record<string, unknown>) => void
+): Promise<void> {
+  if (await hasOnboardingFinalLickInHistory()) return;
+  const profile = fs ? await loadPersistedProfile(fs) : {};
+  const { getSelectedModelId, getProviderConfig, getProviderModels } =
+    await import('./provider-settings.js');
+  const modelId = (() => {
+    try {
+      return getSelectedModelId() || null;
+    } catch {
+      return null;
+    }
+  })();
+  const modelLabel = (() => {
+    if (!modelId) return null;
+    try {
+      const found = getProviderModels(providerId).find((m) => m.id === modelId);
+      return found?.name ?? modelId;
+    } catch {
+      return modelId;
+    }
+  })();
+  let providerName: string | null = null;
+  try {
+    providerName = getProviderConfig(providerId).name ?? null;
+  } catch {
+    /* keep null */
+  }
+  fire({
+    action: 'onboarding-complete-with-provider',
+    data: {
+      profile,
+      provider: providerId,
+      providerName,
+      model: modelId,
+      modelLabel,
+      validation: 'preexisting',
+    },
   });
 }
 
@@ -612,8 +785,285 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     client.clearFilesystem();
   };
 
-  // Wire inline sprinkle lick callback (extension mode)
+  // The chat-panel `onDipLick` wiring lives further down (after the
+  // welcome-flow interceptor is defined) so inline dips can short-
+  // circuit welcome actions before they reach the cone.
+
+  // ── Onboarding orchestrator (extension) ─────────────────────────
+  // Mirrors the standalone wiring in mainCli — instantiated lazily so
+  // it has access to layout/chatPanel + provider settings + the
+  // OffscreenClient sprinkle-lick relay.
+  const { OnboardingOrchestrator: OnboardingOrchestratorExt } =
+    await import('../scoops/onboarding-orchestrator.js');
+  const broadcastToDipsExt = broadcastToDips;
+  const {
+    getAvailableProviders: getAvailableProvidersExt,
+    getProviderConfig: getProviderConfigExt,
+    getProviderModels: getProviderModelsExt,
+    addAccount: addAccountExt,
+    setSelectedModelId: setSelectedModelIdExt,
+    getAccounts: getAccountsExt,
+    isModelHiddenFromPicker: isModelHiddenFromPickerExt,
+  } = await import('./provider-settings.js');
+  const buildExtProviderCatalogue = () => {
+    const ids = getAvailableProvidersExt();
+    const providers = ids
+      .map((id) => {
+        const cfg = getProviderConfigExt(id);
+        return {
+          id: cfg.id,
+          name: cfg.name,
+          description: cfg.description,
+          requiresApiKey: cfg.requiresApiKey ?? true,
+          requiresBaseUrl: cfg.requiresBaseUrl ?? false,
+          defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+          isOAuth: !!cfg.isOAuth,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    const models: Record<string, Array<{ id: string; name?: string }>> = {};
+    for (const id of ids) {
+      try {
+        // Hide picker-only-denied models (e.g. Haiku) from the
+        // connect-llm wizard list. Programmatic surfaces still see
+        // the full catalogue via `getProviderModels` directly.
+        models[id] = getProviderModelsExt(id)
+          .filter((m) => !isModelHiddenFromPickerExt(m.id))
+          .map((m) => ({ id: m.id, name: m.name }));
+      } catch {
+        models[id] = [];
+      }
+    }
+    return { providers, models };
+  };
+  let extOnboardingOrchestrator: InstanceType<typeof OnboardingOrchestratorExt> | null = null;
+  const getExtOnboardingOrchestrator = () => {
+    if (extOnboardingOrchestrator) return extOnboardingOrchestrator;
+    extOnboardingOrchestrator = new OnboardingOrchestratorExt({
+      fs: localFs,
+      postSystemMessage: (line) => layout.panels.chat.addSystemMessage(line),
+      postDipReference: (md) => layout.panels.chat.addSystemMessage(md),
+      getProviderCatalogue: buildExtProviderCatalogue,
+      saveAccount: (id, key, baseUrl) => addAccountExt(id, key, baseUrl),
+      setSelectedModel: (id) => setSelectedModelIdExt(id),
+      resolveModelLabel: (provider, modelId) => {
+        try {
+          const found = getProviderModelsExt(provider).find((m) => m.id === modelId);
+          return found?.name ?? null;
+        } catch {
+          return null;
+        }
+      },
+      broadcastToDip: (payload) => broadcastToDipsExt(payload),
+      fireFinalLick: (data) => {
+        // Forward the synthetic completion event through the same
+        // relay any other sprinkle lick would use, so the offscreen
+        // cone receives it as a regular `[Sprinkle Event: welcome]`.
+        // Dedup-gated so a stray re-fire (HMR, double-mount) can't
+        // double the cone's greeting.
+        const action = String((data as { action?: unknown })?.action ?? '');
+        dispatchWelcomeLickOnce(
+          action,
+          firedWelcomeActions,
+          () => client.sendSprinkleLick('welcome', data),
+          'orchestrator-ext'
+        );
+      },
+      launchOAuth: async (providerId, baseUrl) => {
+        try {
+          const cfg = getProviderConfigExt(providerId);
+          if (!cfg.isOAuth || !cfg.onOAuthLogin) {
+            return { ok: false, message: 'Provider does not support OAuth.' };
+          }
+          if (cfg.requiresBaseUrl && baseUrl) addAccountExt(providerId, '', baseUrl);
+          const { createOAuthLauncher } = await import('../providers/oauth-service.js');
+          const launcher = createOAuthLauncher();
+          await cfg.onOAuthLogin(launcher, () => undefined);
+          return { ok: true };
+        } catch (err) {
+          return {
+            ok: false,
+            message: err instanceof Error ? err.message : 'OAuth login failed.',
+          };
+        }
+      },
+      installRecommendedSkills: async (profile) => {
+        // Direct (no-shell) skill install — reuses the same code path the
+        // upskill command does, but via a non-shell entry point so it
+        // works from the panel side of the extension where the agent
+        // shell isn't reachable. Profile is forwarded so the installer
+        // doesn't race the parallel persistProfile write.
+        const [{ installRecommendedSkills }, { createProxiedFetch }] = await Promise.all([
+          import('../shell/supplemental-commands/upskill-command.js'),
+          import('../shell/proxied-fetch.js'),
+        ]);
+        const result = await installRecommendedSkills(localFs, createProxiedFetch(), profile);
+        log.info('Recommended skills install finished', {
+          installedNames: result.installedNames,
+          errors: result.errors,
+          skipped: result.skipped,
+          elapsedSeconds: result.elapsedSeconds,
+        });
+      },
+    });
+    return extOnboardingOrchestrator;
+  };
+
+  // Persistent dedup ledger of welcome-flow licks — same contract as
+  // the standalone path. See DEDUPED_WELCOME_ACTIONS for the rationale.
+  const firedWelcomeActions = loadFiredWelcomeActions();
+
+  // ── Welcome lick interception (shared between SprinkleManager and inline dips) ──
+  //
+  // The deterministic welcome flow is driven by the on-panel
+  // `OnboardingOrchestrator`, NOT by the cone — the cone has no API
+  // key configured at this point and any lick that reaches it would
+  // fatal with "No API key configured for provider …". Both lick
+  // entry points (the SprinkleManager handler for panel-mounted
+  // sprinkles, and chat-panel `onDipLick` for inline dips in the
+  // chat history) need to short-circuit welcome-flow actions and
+  // hand them to the orchestrator instead. This helper does the
+  // dedup + dispatch and returns true when the lick was intercepted.
+  //
+  // Mirrors the standalone interception block inside
+  // `routeLickToScoop` further down — keep them in sync.
+  const interceptWelcomeLickExt = (event: LickEvent): boolean => {
+    if (event.type !== 'sprinkle') return false;
+    const welcomeAction =
+      event.sprinkleName === 'welcome' || event.sprinkleName === 'inline'
+        ? ((event.body as Record<string, unknown> | null)?.action as string | undefined)
+        : undefined;
+    if (welcomeAction && DEDUPED_WELCOME_ACTIONS.has(welcomeAction)) {
+      if (firedWelcomeActions.has(welcomeAction)) {
+        log.debug('Suppressing duplicate welcome lick (ext)', { action: welcomeAction });
+        return true;
+      }
+      firedWelcomeActions.add(welcomeAction);
+      persistFiredWelcomeActions(firedWelcomeActions);
+    }
+    const isWelcomeFlowAction =
+      welcomeAction === 'first-run' ||
+      welcomeAction === 'onboarding-complete' ||
+      welcomeAction === 'connect-ready' ||
+      welcomeAction === 'connect-attempt' ||
+      welcomeAction === 'oauth-attempt' ||
+      welcomeAction === 'shortcut-migrate';
+    if (!isWelcomeFlowAction) return false;
+
+    const body = event.body as Record<string, unknown> | null;
+    const action = welcomeAction;
+
+    if (action === 'first-run') {
+      getExtOnboardingOrchestrator().handleFirstRun();
+      return true;
+    }
+    if (action === 'onboarding-complete') {
+      const orch = getExtOnboardingOrchestrator();
+      const profile = (body?.data as Record<string, unknown> | undefined) ?? {};
+      if ((profile as Record<string, unknown>).mountWorkspace) {
+        applyPendingMount(localFs).catch((err) =>
+          log.warn('Failed to mount workspace from onboarding', err)
+        );
+      }
+      void orch
+        .handleOnboardingComplete(profile as Record<string, unknown>)
+        .catch((err) => log.warn('OnboardingOrchestrator failed', err));
+      return true; // Suppress cone-routing — LLM isn't configured yet.
+    }
+    if (action === 'connect-ready') {
+      // Reload short-circuit: if the user already configured a
+      // provider in a previous session, the connect-llm dip is
+      // being re-mounted from chat history. Don't ask them to
+      // reconfigure — tell the dip to fast-forward to its done
+      // card.
+      const accounts = getAccountsExt();
+      if (accounts.length > 0) {
+        const primary = accounts[0];
+        const cfg = (() => {
+          try {
+            return getProviderConfigExt(primary.providerId);
+          } catch {
+            return null;
+          }
+        })();
+        broadcastToDipsExt({
+          type: 'slicc-already-connected',
+          provider: primary.providerId,
+          note: cfg?.name ? `Already connected to ${cfg.name}.` : 'Already connected.',
+        });
+        // Same final-lick advance as the standalone path —
+        // see comment there for the chat-history gate. Routed
+        // through `dispatchWelcomeLickOnce` so the persistent
+        // ledger gates duplicate fires across reloads.
+        void fireFastForwardFinalLick(localFs, primary.providerId, (data) => {
+          const finalAction = String((data as { action?: unknown }).action ?? '');
+          dispatchWelcomeLickOnce(
+            finalAction,
+            firedWelcomeActions,
+            () => client.sendSprinkleLick('welcome', data),
+            'fast-forward-ext'
+          );
+        }).catch((err) => log.warn('Failed to fire fast-forward final lick', err));
+        return true;
+      }
+      getExtOnboardingOrchestrator().handleConnectReady();
+      return true;
+    }
+    if (action === 'connect-attempt') {
+      const data = body?.data as Record<string, unknown> | undefined;
+      if (data) {
+        void getExtOnboardingOrchestrator()
+          .handleConnectAttempt({
+            provider: String(data.provider ?? ''),
+            apiKey: String(data.apiKey ?? ''),
+            baseUrl: typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+            model: data.model == null ? null : String(data.model),
+          })
+          .catch((err) => log.warn('handleConnectAttempt failed', err));
+      }
+      return true;
+    }
+    if (action === 'oauth-attempt') {
+      const data = body?.data as Record<string, unknown> | undefined;
+      if (data) {
+        void getExtOnboardingOrchestrator()
+          .handleOAuthAttempt({
+            provider: String(data.provider ?? ''),
+            baseUrl: typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+          })
+          .catch((err) => log.warn('handleOAuthAttempt failed', err));
+      }
+      return true;
+    }
+    // `shortcut-migrate` only fires from the panel-mounted welcome
+    // sprinkle; the inline-dip path can't reach it. Treat it as
+    // intercepted so the dip path doesn't accidentally forward it
+    // to the cone either.
+    if (action === 'shortcut-migrate') {
+      void localFs
+        .writeFile('/shared/.welcomed', '1')
+        .catch((err) => log.warn('Failed to persist welcome completion marker', err));
+      // sprinkleManager.close happens in the SprinkleManager handler
+      // below — only reachable from the panel-sprinkle path.
+      return true;
+    }
+    return false;
+  };
+
+  // Inline sprinkle lick callback. The welcome dip is mounted as an
+  // inline `<img>`-hydrated dip in chat history, so its licks reach
+  // us through this path rather than the SprinkleManager. Run them
+  // through the same welcome-flow interceptor before falling back
+  // to the cone-bound `client.sendSprinkleLick`.
   layout.panels.chat.onDipLick = (action: string, data: unknown) => {
+    const event: LickEvent = {
+      type: 'sprinkle',
+      sprinkleName: 'inline',
+      targetScoop: undefined,
+      timestamp: new Date().toISOString(),
+      body: { action, data },
+    };
+    if (interceptWelcomeLickExt(event)) return;
     client.sendSprinkleLick('inline', { action, data });
   };
 
@@ -623,27 +1073,14 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     async (event: LickEvent) => {
       // Route sprinkle licks to the offscreen orchestrator's cone
       if (event.type === 'sprinkle') {
-        // Handle welcome sprinkle lifecycle events
-        if (event.sprinkleName === 'welcome') {
-          const body = event.body as Record<string, unknown> | null;
-          const action = body?.action;
-          if (action === 'onboarding-complete' || action === 'shortcut-migrate') {
-            void localFs
-              .writeFile('/shared/.welcomed', '1')
-              .catch((err) => log.warn('Failed to persist welcome completion marker', err));
-          }
-          if (action === 'shortcut-migrate') {
+        if (interceptWelcomeLickExt(event)) {
+          // `shortcut-migrate` needs to close the welcome panel —
+          // the helper marks it intercepted but doesn't have a
+          // sprinkleManager reference. Do the close here.
+          if ((event.body as Record<string, unknown> | null)?.action === 'shortcut-migrate') {
             sprinkleManager.close('welcome');
           }
-          // Perform the actual mount if user selected a folder during onboarding
-          if (
-            action === 'onboarding-complete' &&
-            (body?.data as Record<string, unknown> | undefined)?.mountWorkspace
-          ) {
-            applyPendingMount(localFs).catch((err) =>
-              log.warn('Failed to mount workspace from onboarding', err)
-            );
-          }
+          return;
         }
         // Handle request-mount from welcome sprinkle (sandbox can't call showDirectoryPicker).
         // Route through mount-popup.html — calling showDirectoryPicker directly from the
@@ -692,8 +1129,8 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       }
     },
     {
-      addSprinkle: (name, title, element, zone) =>
-        layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
+      addSprinkle: (name, title, element, zone, options) =>
+        layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined, options),
       removeSprinkle: (name) => layout.removeSprinkle(name),
     },
     () => {
@@ -701,6 +1138,12 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       if (cone) {
         client.stopScoop(cone.jid);
       }
+    },
+    {
+      // Extension side panel: auto-installed sprinkles must NOT pop
+      // open over chat (covers the welcome flow mid-flight). The
+      // rail icon pulses to invite the user to click when ready.
+      autoOpenBehavior: 'attention',
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
@@ -782,7 +1225,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     const opened = new Set(sprinkleManager.opened());
     return sprinkleManager
       .available()
-      .filter((p) => !opened.has(p.name))
+      .filter((p) => !opened.has(p.name) && !INLINE_DIP_SPRINKLES.has(p.name))
       .map((p) => ({ name: p.name, title: p.title }));
   };
   layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
@@ -795,17 +1238,37 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     localStorage.removeItem('slicc-welcomed');
   }
 
-  // Open welcome sprinkle on first run (extension mode)
-  if (
-    !(await localFs.exists('/shared/.welcomed')) &&
-    !hasStoredTrayJoinUrl(window.localStorage) &&
-    sprinkleManager.available().some((p) => p.name === 'welcome')
-  ) {
-    try {
-      await sprinkleManager.open('welcome');
-    } catch (e) {
-      log.warn('Failed to open welcome sprinkle', e);
-    }
+  // Drive the first-run flow locally. The deterministic onboarding
+  // orchestrator owns the welcome dip + intro lines until the user
+  // configures a provider — handing it to the cone would fatal with
+  // "No API key configured for provider …" before the wizard even
+  // appears. The persistent dedup ledger guards against reload
+  // double-fires (see DEDUPED_WELCOME_ACTIONS).
+  if (!hasStoredTrayJoinUrl(window.localStorage)) {
+    detectWelcomeFirstRun(localFs)
+      .then((result) => {
+        if (!result.isFirstRun) return;
+        // If detection insists this is genuinely a fresh boot (no
+        // `/shared/.welcomed` marker AND no welcome lick in chat
+        // history), but our localStorage ledger has a stale
+        // `first-run` entry from a previous install whose state was
+        // wiped (clear-site-data, IndexedDB nuke, manual VFS reset),
+        // suppressing here would leave the user with no welcome and
+        // no deterministic onboarding path. Trust the install state
+        // over the ledger and clear the stale entry. The ledger
+        // still protects against intra-session double-fires (the
+        // detection promise can resolve twice during a noisy boot),
+        // because we re-add it below before handing off.
+        if (firedWelcomeActions.has('first-run')) {
+          log.info('Clearing stale welcome dedup entry — install state is fresh');
+          firedWelcomeActions.delete('first-run');
+          persistFiredWelcomeActions(firedWelcomeActions);
+        }
+        firedWelcomeActions.add('first-run');
+        persistFiredWelcomeActions(firedWelcomeActions);
+        getExtOnboardingOrchestrator().handleFirstRun();
+      })
+      .catch((err) => log.warn('Welcome detection failed', err));
   }
 
   log.info('SprinkleManager initialized (extension mode)');
@@ -906,41 +1369,50 @@ async function main(): Promise<void> {
   if (!app) throw new Error('#app element not found');
 
   // Register preview service worker (serves VFS content at /preview/*)
+  // and ensure it is controlling this page before we proceed. If the SW
+  // was just installed for the first time, `navigator.serviceWorker.
+  // controller` will be null even after activation — `clients.claim()`
+  // attaches the page asynchronously. Without a controller, /preview/*
+  // fetches fall through to the dev server and 404, which breaks dips
+  // that load .shtml files (welcome dip, etc.). The standard fix is a
+  // one-shot reload right after the first activation; we gate it on
+  // sessionStorage to avoid loops.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker
-      .register('/preview-sw.js', { scope: '/preview/' })
-      .then(() => log.info('Preview SW registered'))
-      .catch((err) =>
-        log.error('Preview SW registration failed — preview feature will not work', err)
-      );
+    try {
+      await navigator.serviceWorker.register('/preview-sw.js', { scope: '/preview/' });
+      log.info('Preview SW registered');
+      if (!navigator.serviceWorker.controller) {
+        // Wait briefly for clients.claim() to attach the page.
+        await Promise.race([
+          new Promise<void>((resolve) =>
+            navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), {
+              once: true,
+            })
+          ),
+          new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+        ]);
+      }
+      if (!navigator.serviceWorker.controller && !sessionStorage.getItem('slicc-sw-reloaded')) {
+        // Still uncontrolled — force one reload so the SW can claim us.
+        sessionStorage.setItem('slicc-sw-reloaded', '1');
+        log.info('Reloading once to gain preview SW control');
+        location.reload();
+        return;
+      }
+      sessionStorage.removeItem('slicc-sw-reloaded');
+    } catch (err) {
+      log.error('Preview SW registration failed — preview feature will not work', err);
+    }
   }
 
   // Apply providers.json defaults before checking for API key
   applyProviderDefaults();
 
-  // Check for API key (first-run dialog)
-  // Skip the dialog if the user already has a stored tray join URL (providerless follower mode)
-  let apiKey = getApiKey();
-  const hasTrayJoin = hasStoredTrayJoinUrl(window.localStorage);
-  if (!apiKey && !hasTrayJoin) {
-    // Three modes based on runtime context:
-    // 1. Port 5710/3000: leader/production — default to account login
-    // 2. Port '' (443/HTTPS) with /join/ path: remote tray UI — auto-join confirmation
-    // 3. Any other port: follower — default to "Join a tray" paste form
-    const isDefaultPort = window.location.port === '5710' || window.location.port === '3000';
-    const isRemoteTrayUI =
-      window.location.port === '' && window.location.pathname.includes('/join/');
-
-    if (isRemoteTrayUI) {
-      const joinUrl = window.location.origin + window.location.pathname;
-      await showProviderSettings({ autoJoinUrl: joinUrl });
-    } else if (!isDefaultPort && window.location.port !== '') {
-      await showProviderSettings({ preferTrayJoin: true });
-    } else {
-      await showProviderSettings();
-    }
-    apiKey = getApiKey();
-  }
+  // First-run no longer auto-opens the legacy "Add Account" dialog.
+  // Provider configuration is owned by the deterministic onboarding flow
+  // (welcome wizard → connect-llm dip → OnboardingOrchestrator). The user
+  // can still open the legacy dialog later from the accounts/settings UI.
+  const apiKey = getApiKey();
   const allowProviderlessTrayJoin = !apiKey && hasStoredTrayJoinUrl(window.localStorage);
 
   // Build the layout — tabbed in extension mode, split panels in standalone
@@ -1499,6 +1971,130 @@ async function main(): Promise<void> {
   await lickManager.init();
   orchestrator.setLickManager(lickManager);
 
+  // Onboarding orchestrator — owns the deterministic post-welcome flow.
+  // Instantiated here so we can route the welcome wizard's licks
+  // through it before falling back to cone-routing.
+  const { OnboardingOrchestrator } = await import('../scoops/onboarding-orchestrator.js');
+  const {
+    getAvailableProviders,
+    getProviderConfig,
+    getProviderModels,
+    addAccount,
+    setSelectedModelId,
+    getAccounts,
+    isModelHiddenFromPicker,
+  } = await import('./provider-settings.js');
+  const buildProviderCatalogue = () => {
+    const ids = getAvailableProviders();
+    const providers = ids
+      .map((id) => {
+        const cfg = getProviderConfig(id);
+        return {
+          id: cfg.id,
+          name: cfg.name,
+          description: cfg.description,
+          requiresApiKey: cfg.requiresApiKey ?? true,
+          requiresBaseUrl: cfg.requiresBaseUrl ?? false,
+          defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+          isOAuth: !!cfg.isOAuth,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    const models: Record<string, Array<{ id: string; name?: string }>> = {};
+    for (const id of ids) {
+      try {
+        // Same picker-only filter as the chat header dropdown — see
+        // `isModelHiddenFromPicker` for rationale.
+        models[id] = getProviderModels(id)
+          .filter((m) => !isModelHiddenFromPicker(m.id))
+          .map((m) => ({ id: m.id, name: m.name }));
+      } catch {
+        models[id] = [];
+      }
+    }
+    return { providers, models };
+  };
+  let onboardingOrchestrator: InstanceType<typeof OnboardingOrchestrator> | null = null;
+  const getOnboardingOrchestrator = () => {
+    if (onboardingOrchestrator) return onboardingOrchestrator;
+    if (!sharedFs) return null;
+    onboardingOrchestrator = new OnboardingOrchestrator({
+      fs: sharedFs,
+      postSystemMessage: (line) => layout.panels.chat.addSystemMessage(line),
+      postDipReference: (md) => layout.panels.chat.addSystemMessage(md),
+      getProviderCatalogue: buildProviderCatalogue,
+      saveAccount: (id, key, baseUrl) => addAccount(id, key, baseUrl),
+      setSelectedModel: (id) => setSelectedModelId(id),
+      resolveModelLabel: (provider, modelId) => {
+        try {
+          const found = getProviderModels(provider).find((m) => m.id === modelId);
+          return found?.name ?? null;
+        } catch {
+          return null;
+        }
+      },
+      broadcastToDip: (payload) => broadcastToDips(payload),
+      fireFinalLick: (data) => {
+        const completionEvent = {
+          type: 'sprinkle',
+          sprinkleName: 'welcome',
+          body: data,
+          timestamp: new Date().toISOString(),
+        } as unknown as LickEvent;
+        // Re-enter the router. The interceptor at the top of
+        // routeLickToScoop only matches the wizard-side actions
+        // (`onboarding-complete`, `connect-ready`, `connect-attempt`),
+        // so this synthetic `onboarding-complete-with-provider` lick
+        // falls straight through to the cone like a regular sprinkle.
+        routeLickToScoop(completionEvent);
+      },
+      installRecommendedSkills: async (profile) => {
+        // Direct (no-shell) skill install — see extension wiring above
+        // for why we deliberately avoid going through `__slicc_shell`.
+        // Profile is forwarded so the installer doesn't race persistProfile.
+        if (!sharedFs) return;
+        const [{ installRecommendedSkills }, { createProxiedFetch }] = await Promise.all([
+          import('../shell/supplemental-commands/upskill-command.js'),
+          import('../shell/proxied-fetch.js'),
+        ]);
+        const result = await installRecommendedSkills(sharedFs, createProxiedFetch(), profile);
+        log.info('Recommended skills install finished', {
+          installedNames: result.installedNames,
+          errors: result.errors,
+          skipped: result.skipped,
+          elapsedSeconds: result.elapsedSeconds,
+        });
+      },
+      launchOAuth: async (providerId, baseUrl) => {
+        try {
+          const cfg = getProviderConfig(providerId);
+          if (!cfg.isOAuth || !cfg.onOAuthLogin) {
+            return { ok: false, message: 'Provider does not support OAuth.' };
+          }
+          // Persist baseUrl placeholder before the popup runs so the
+          // provider's onOAuthLogin can read it (mirrors the legacy
+          // settings dialog behavior).
+          if (cfg.requiresBaseUrl && baseUrl) addAccount(providerId, '', baseUrl);
+          const { createOAuthLauncher } = await import('../providers/oauth-service.js');
+          const launcher = createOAuthLauncher();
+          await cfg.onOAuthLogin(launcher, () => undefined);
+          return { ok: true };
+        } catch (err) {
+          return {
+            ok: false,
+            message: err instanceof Error ? err.message : 'OAuth login failed.',
+          };
+        }
+      },
+    });
+    return onboardingOrchestrator;
+  };
+
+  // Persistent dedup ledger for welcome-flow licks. Loaded from
+  // localStorage so the guard survives reloads. See
+  // DEDUPED_WELCOME_ACTIONS for the full contract.
+  const firedWelcomeActions = loadFiredWelcomeActions();
+
   // Route lick events to scoops
   const routeLickToScoop = (event: LickEvent) => {
     const isWebhook = event.type === 'webhook';
@@ -1537,27 +2133,148 @@ async function main(): Promise<void> {
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
 
-    // Handle welcome sprinkle lifecycle events
-    if (isSprinkle && event.sprinkleName === 'welcome') {
+    // Handle welcome sprinkle lifecycle events. The deterministic
+    // onboarding flow lives in OnboardingOrchestrator: it intercepts
+    // the wizard's `onboarding-complete`, fires three deterministic
+    // sliccy lines + the connect-llm dip, then routes a synthetic
+    // `onboarding-complete-with-provider` lick back through here so
+    // the cone (now LLM-backed) can comment on the choice.
+    //
+    // Inline dips (welcome.shtml / connect-llm.shtml mounted via
+    // image-ref hydration in the chat panel) emit licks with
+    // `sprinkleName === 'inline'`, while the standalone wizard panel
+    // emits `sprinkleName === 'welcome'`. We match on the action
+    // name to catch both.
+    const welcomeAction =
+      isSprinkle && (event.sprinkleName === 'welcome' || event.sprinkleName === 'inline')
+        ? ((event.body as Record<string, unknown> | null)?.action as string | undefined)
+        : undefined;
+    // Per-session dedup. The welcome dip is re-mounted on every chat
+    // re-render (HMR, scoop switch, history reload) and each remount
+    // can fire `welcome-ready` / `onboarding-complete-with-provider`
+    // again — without a guard we'd post the deterministic intro lines
+    // twice or queue duplicate cone replies. One fire per action per
+    // session is the contract.
+    if (welcomeAction && DEDUPED_WELCOME_ACTIONS.has(welcomeAction)) {
+      if (firedWelcomeActions.has(welcomeAction)) {
+        log.debug('Suppressing duplicate welcome lick', { action: welcomeAction });
+        return;
+      }
+      firedWelcomeActions.add(welcomeAction);
+      persistFiredWelcomeActions(firedWelcomeActions);
+    }
+    const isWelcomeFlowAction =
+      welcomeAction === 'first-run' ||
+      welcomeAction === 'onboarding-complete' ||
+      welcomeAction === 'connect-ready' ||
+      welcomeAction === 'connect-attempt' ||
+      welcomeAction === 'oauth-attempt' ||
+      welcomeAction === 'shortcut-migrate' ||
+      welcomeAction === 'request-mount';
+    if (isSprinkle && isWelcomeFlowAction) {
       const body = event.body as Record<string, unknown> | null;
-      const action = body?.action;
-      if (action === 'onboarding-complete' || action === 'shortcut-migrate') {
+      const action = welcomeAction;
+
+      // ── First-run: render the welcome dip directly. The cone has
+      // no API key yet, so any LLM-driven path here would fatal with
+      // "No API key configured" before the wizard even appears.
+      if (action === 'first-run') {
+        getOnboardingOrchestrator()?.handleFirstRun();
+        return;
+      }
+
+      // ── Deterministic phase: hand off to the orchestrator. ──
+      if (action === 'onboarding-complete') {
+        const orch = getOnboardingOrchestrator();
+        if (orch) {
+          const profile = (body?.data as Record<string, unknown> | undefined) ?? {};
+          if ((profile as Record<string, unknown>).mountWorkspace && sharedFs) {
+            applyPendingMount(sharedFs).catch((err) =>
+              log.warn('Failed to mount workspace from onboarding', err)
+            );
+          }
+          void orch
+            .handleOnboardingComplete(profile as Record<string, unknown>)
+            .catch((err) => log.warn('OnboardingOrchestrator failed', err));
+          return; // Do NOT route to cone yet — the LLM isn't configured.
+        }
+      }
+      if (action === 'connect-ready') {
+        // Reload short-circuit: provider is already configured →
+        // the dip is being re-mounted from chat history; show the
+        // finished card instead of the provider list.
+        const accounts = getAccounts();
+        if (accounts.length > 0) {
+          const primary = accounts[0];
+          const cfg = (() => {
+            try {
+              return getProviderConfig(primary.providerId);
+            } catch {
+              return null;
+            }
+          })();
+          broadcastToDips({
+            type: 'slicc-already-connected',
+            provider: primary.providerId,
+            note: cfg?.name ? `Already connected to ${cfg.name}.` : 'Already connected.',
+          });
+          // The orchestrator's normal path fires the
+          // `onboarding-complete-with-provider` lick after a
+          // successful connect-attempt — when we short-circuit it
+          // we still need that lick so the cone can close out the
+          // welcome sequence. Skip it if the cone already received
+          // the lick in a previous session (history persists).
+          void fireFastForwardFinalLick(sharedFs, primary.providerId, (data) => {
+            const completionEvent = {
+              type: 'sprinkle',
+              sprinkleName: 'welcome',
+              body: data,
+              timestamp: new Date().toISOString(),
+            } as unknown as LickEvent;
+            routeLickToScoop(completionEvent);
+          }).catch((err) => log.warn('Failed to fire fast-forward final lick', err));
+          return;
+        }
+        getOnboardingOrchestrator()?.handleConnectReady();
+        return;
+      }
+      if (action === 'connect-attempt') {
+        const data = body?.data as Record<string, unknown> | undefined;
+        const orch = getOnboardingOrchestrator();
+        if (orch && data) {
+          void orch
+            .handleConnectAttempt({
+              provider: String(data.provider ?? ''),
+              apiKey: String(data.apiKey ?? ''),
+              baseUrl:
+                typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+              model: data.model == null ? null : String(data.model),
+            })
+            .catch((err) => log.warn('handleConnectAttempt failed', err));
+        }
+        return;
+      }
+      if (action === 'oauth-attempt') {
+        const data = body?.data as Record<string, unknown> | undefined;
+        const orch = getOnboardingOrchestrator();
+        if (orch && data) {
+          void orch
+            .handleOAuthAttempt({
+              provider: String(data.provider ?? ''),
+              baseUrl:
+                typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+            })
+            .catch((err) => log.warn('handleOAuthAttempt failed', err));
+        }
+        return;
+      }
+
+      // ── Legacy / shortcut flows still flow straight through. ──
+      if (action === 'shortcut-migrate') {
         void sharedFs
           ?.writeFile('/shared/.welcomed', '1')
           .catch((err) => log.warn('Failed to persist welcome marker', err));
-      }
-      if (action === 'shortcut-migrate') {
         sprinkleManager?.close('welcome');
-      }
-      // Perform the actual mount if user selected a folder during onboarding
-      if (
-        action === 'onboarding-complete' &&
-        (body?.data as Record<string, unknown> | undefined)?.mountWorkspace &&
-        sharedFs
-      ) {
-        applyPendingMount(sharedFs).catch((err) =>
-          log.warn('Failed to mount workspace from onboarding', err)
-        );
       }
     }
 
@@ -1656,6 +2373,24 @@ async function main(): Promise<void> {
           `- Show the user the changelog between these tags from GitHub\n` +
           `- Offer to merge new bundled vfs-root content into their workspace ` +
           `(three-way merge: bundled snapshot vs user's VFS, reconciled with the GitHub tag-to-tag diff).`;
+      }
+      if (
+        isSprinkle &&
+        event.sprinkleName === 'welcome' &&
+        (event.body as Record<string, unknown> | null)?.action === 'first-run'
+      ) {
+        // First-run welcome — render the welcome dip inline in chat
+        // instead of auto-opening the legacy panel. The welcome skill
+        // already covers profile collection + skill recommendations.
+        content =
+          `[${eventLabel}: welcome]\n\n` +
+          `New user — no \`/shared/.welcomed\` marker yet. Greet them by ` +
+          `rendering the welcome onboarding inline:\n\n` +
+          `\`\`\`markdown\n![Welcome to slicc](/shared/sprinkles/welcome/welcome.shtml)\n\`\`\`\n\n` +
+          `Send that as your reply (no extra prose). The dip emits ` +
+          `\`onboarding-complete\` / \`shortcut-migrate\` licks back to you ` +
+          `when the user finishes — see \`/workspace/skills/welcome/SKILL.md\` ` +
+          `for the follow-up flow.`;
       }
       if (content === null) {
         content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
@@ -1805,6 +2540,10 @@ async function main(): Promise<void> {
     routeLickToScoop(event);
   };
 
+  // Welcome-detection result captured during sprinkle-manager init,
+  // consumed once the chat panel has swapped onto the cone session.
+  let pendingFirstRunDetection: Promise<{ isFirstRun: boolean }> | null = null;
+
   // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
   let sprinkleManager: SprinkleManager | null = null;
   if (sharedFs) {
@@ -1842,7 +2581,7 @@ async function main(): Promise<void> {
       const opened = new Set(sprinkleManager!.opened());
       return sprinkleManager!
         .available()
-        .filter((p) => !opened.has(p.name))
+        .filter((p) => !opened.has(p.name) && !INLINE_DIP_SPRINKLES.has(p.name))
         .map((p) => ({ name: p.name, title: p.title }));
     };
     layout.onOpenSprinkle = (name, zone) => sprinkleManager!.open(name, zone);
@@ -1854,17 +2593,18 @@ async function main(): Promise<void> {
       localStorage.removeItem('slicc-welcomed');
     }
 
-    // Open welcome sprinkle on first run (flag set when onboarding-complete lick fires)
-    if (
-      !(await sharedFs.exists('/shared/.welcomed')) &&
-      !allowProviderlessTrayJoin &&
-      sprinkleManager.available().some((p) => p.name === 'welcome')
-    ) {
-      try {
-        await sprinkleManager.open('welcome');
-      } catch (e) {
-        log.warn('Failed to open welcome sprinkle', e);
-      }
+    // Run welcome detection NOW but defer firing the first-run lick
+    // until after `handleScoopSelect(cone)` has finished swapping the
+    // chat panel onto session-cone. Otherwise switchToContext can race
+    // with the orchestrator's `addSystemMessage` writes: it persists
+    // the current (empty) `messages` and loads an empty session
+    // before the first-run write completes, leaving the dip messages
+    // saved in IDB but invisible in the panel.
+    if (!allowProviderlessTrayJoin) {
+      pendingFirstRunDetection = detectWelcomeFirstRun(sharedFs).catch((err) => {
+        log.warn('Welcome detection failed', err);
+        return { isFirstRun: false };
+      });
     }
 
     await sprinkleManager.restoreOpenSprinkles();
@@ -2180,6 +2920,33 @@ async function main(): Promise<void> {
     orchestrator.createScoopTab(selectedScoop.jid);
     // Trigger scoop select to properly load the chat context
     await handleScoopSelect(selectedScoop);
+  }
+
+  // Fire the deferred first-run lick now that the chat panel has
+  // settled on `session-cone`. Routing through the same lick handler
+  // hits the orchestrator's interceptor which posts the welcome dip.
+  if (pendingFirstRunDetection) {
+    void pendingFirstRunDetection.then((result) => {
+      if (!result.isFirstRun) return;
+      // Same stale-ledger guard as the extension boot path: install
+      // state is canonical (no marker, no welcome lick in chat
+      // history), so a leftover `first-run` entry from a wiped install
+      // must not suppress the welcome dip. routeLickToScoop will
+      // re-add the entry below.
+      if (firedWelcomeActions.has('first-run')) {
+        log.info('Clearing stale welcome dedup entry — install state is fresh');
+        firedWelcomeActions.delete('first-run');
+        persistFiredWelcomeActions(firedWelcomeActions);
+      }
+      const event: LickEvent = {
+        type: 'sprinkle',
+        sprinkleName: 'welcome',
+        targetScoop: undefined,
+        timestamp: new Date().toISOString(),
+        body: { action: 'first-run' },
+      };
+      routeLickToScoop(event);
+    });
   }
 
   // `?ui-fixture=1` — design-time override: replace the live chat context

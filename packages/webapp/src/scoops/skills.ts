@@ -338,7 +338,16 @@ export async function createDefaultSkills(
  * upgrade-detection flow (see ui/main.ts) so the bundled SLICC version
  * is the source of truth for "which version is currently installed".
  */
-const ALWAYS_OVERWRITE_SHARED = new Set<string>(['/shared/version.json']);
+const ALWAYS_OVERWRITE_SHARED = new Set<string>([
+  '/shared/version.json',
+  // Welcome / onboarding sprinkles are system-managed: the dip
+  // markup evolves with the orchestrator so a stale on-disk copy
+  // (seeded once on first install) would freeze the flow on the
+  // version that originally landed in the user's LightningFS.
+  // Re-seed them on every boot.
+  '/shared/sprinkles/welcome/welcome.shtml',
+  '/shared/sprinkles/welcome/connect-llm.shtml',
+]);
 
 /**
  * Create default shared files (like /shared/CLAUDE.md) from bundled defaults.

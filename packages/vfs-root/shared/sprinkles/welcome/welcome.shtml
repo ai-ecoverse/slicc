@@ -5,140 +5,44 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-      * {
-        box-sizing: border-box;
-        margin: 0;
-        padding: 0;
-      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
 
       body {
-        font-family: var(
-          --s2-font-family,
-          'Adobe Clean',
-          -apple-system,
-          BlinkMacSystemFont,
-          'Segoe UI',
-          system-ui,
-          sans-serif
-        );
-        background: var(--s2-bg-base, #1a1a1a);
+        font-family: var(--s2-font-family, 'Adobe Clean', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);
+        background: transparent;
         color: var(--s2-content-default, #e8e8e8);
-        min-height: 100vh;
-        overflow-x: hidden;
-      }
-
-      /* ── Header — compact, no gradient ── */
-      .header {
-        padding: 32px 24px 24px;
-        text-align: center;
-        position: relative;
-      }
-      .header-title {
-        font-size: 28px;
-        font-weight: 800;
-        line-height: 1.2;
-        color: var(--s2-content-default, #e8e8e8);
-        letter-spacing: -0.01em;
-      }
-      .header-back {
-        position: absolute;
-        top: 24px;
-        left: 16px;
-        display: none;
-        align-items: center;
-        gap: 4px;
-        background: none;
-        border: none;
-        font-family: inherit;
-        font-size: 13px;
-        font-weight: 500;
-        color: var(--s2-content-secondary, #a1a1a1);
-        cursor: pointer;
-        padding: 6px 10px;
-        border-radius: 8px;
-        transition:
-          background 0.15s,
-          color 0.15s;
-      }
-      .header-back:hover {
-        background: var(--s2-bg-elevated, #2c2c2c);
-        color: var(--s2-content-default, #e8e8e8);
-      }
-      .header-back.visible {
-        display: inline-flex;
-      }
-
-      /* ── Content area ── */
-      .content {
-        padding: 0 24px 32px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-      }
-
-      /* ── Step heading ── */
-      .step-heading {
-        font-size: 18px;
-        font-weight: 700;
-        color: var(--s2-content-default, #e8e8e8);
-        text-align: center;
-        margin-bottom: 4px;
-        line-height: 1.3;
-      }
-      .step-sub {
-        font-size: 14px;
-        color: var(--s2-content-secondary, #a1a1a1);
-        text-align: center;
-        line-height: 1.5;
       }
 
       /* ── Step visibility ── */
-      .step {
-        display: none;
-        animation: fadeUp 0.2s ease both;
-        width: 100%;
-      }
-      .step.active {
-        display: block;
-      }
+      .step { display: none; animation: fadeUp 0.18s ease both; }
+      .step.active { display: block; }
       @keyframes fadeUp {
-        from {
-          opacity: 0;
-          transform: translateY(8px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
+        from { opacity: 0; transform: translateY(6px); }
+        to   { opacity: 1; transform: translateY(0); }
       }
 
-      /* ── Pills — text-only, dark theme ── */
+      /* ── Pills ── */
       .pills {
         display: flex;
         flex-wrap: wrap;
-        gap: 10px;
-        max-width: 520px;
-        margin: 20px auto 0;
-        justify-content: center;
+        gap: 8px;
+        margin-top: 14px;
       }
       .pill {
         display: inline-flex;
         align-items: center;
-        height: 38px;
-        padding: 0 16px;
-        border-radius: 10px;
+        gap: 6px;
+        height: 34px;
+        padding: 0 14px;
+        border-radius: var(--s2-radius-pill, 9999px);
         background: var(--s2-bg-elevated, #2c2c2c);
         border: 1px solid var(--s2-border-subtle, #3a3a3a);
         cursor: pointer;
         font-family: inherit;
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 500;
-        line-height: 1;
         color: var(--s2-content-default, #e8e8e8);
-        transition:
-          border-color 0.15s,
-          background 0.15s,
-          box-shadow 0.15s;
+        transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
         user-select: none;
         white-space: nowrap;
       }
@@ -146,125 +50,57 @@
         background: var(--s2-bg-layer-2, #252525);
         border-color: var(--s2-border-default, #4a4a4a);
       }
-      .pill:focus-visible {
-        outline: 2px solid var(--s2-accent, #3562ff);
-        outline-offset: 2px;
-      }
       .pill.selected {
-        background: var(--s2-bg-layer-2, #252525);
         border-color: var(--s2-accent, #3562ff);
         box-shadow: 0 0 0 1px var(--s2-accent, #3562ff);
+        background: var(--s2-bg-layer-2, #252525);
+      }
+
+      /* ── Heading + sub ── */
+      .step-heading {
+        font-size: 15px;
+        font-weight: 700;
         color: var(--s2-content-default, #e8e8e8);
+        line-height: 1.3;
+      }
+      .step-sub {
+        font-size: 12px;
+        color: var(--s2-content-secondary, #a1a1a1);
+        margin-top: 3px;
       }
 
-      /* ── Navigation ── */
-      .nav {
+      /* ── Text input row ── */
+      .input-row {
         display: flex;
         align-items: center;
-        justify-content: center;
-        max-width: 520px;
-        margin: 20px auto 0;
-        width: 100%;
         gap: 8px;
-      }
-      .nav-wrapper {
-        position: relative;
-        max-width: 520px;
-        margin: 20px auto 0;
-        width: 100%;
-        display: flex;
-        justify-content: center;
-      }
-
-      /* ── CTA button ── */
-      .cta {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        padding: 10px 28px;
-        border-radius: 9999px;
-        background: var(--s2-accent, #3562ff);
-        color: #fff;
-        border: none;
-        font-family: inherit;
-        font-size: 14px;
-        font-weight: 600;
-        cursor: pointer;
-        transition:
-          background 0.15s,
-          opacity 0.15s;
-      }
-      .cta:hover {
-        background: var(--s2-accent-hover, #4a75ff);
-      }
-      .cta:disabled {
-        opacity: 0.3;
-        cursor: default;
-      }
-
-      /* ── Progress dots ── */
-      .dots {
-        display: flex;
-        justify-content: center;
-        gap: 6px;
-        margin-top: 28px;
-      }
-      .dot {
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        background: var(--s2-gray-300, #4a4a4a);
-        transition:
-          background 0.2s,
-          transform 0.2s;
-      }
-      .dot.active {
-        background: var(--s2-accent, #3562ff);
-        transform: scale(1.3);
-      }
-      .dot.done {
-        background: var(--s2-accent, #3562ff);
-      }
-
-      /* ── Prompt bar — clean, no glow ── */
-      .prompt-bar {
-        margin: 20px auto 0;
-        max-width: 520px;
-        width: 100%;
-      }
-      .prompt-bar-inner {
+        margin-top: 14px;
         background: var(--s2-bg-elevated, #2c2c2c);
         border: 1px solid var(--s2-border-subtle, #3a3a3a);
-        border-radius: 24px;
-        padding: 10px 10px 10px 16px;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        transition: border-color 0.15s;
+        border-radius: var(--s2-radius-pill, 9999px);
+        padding: 6px 6px 6px 14px;
       }
-      .prompt-bar-inner:focus-within {
-        border-color: var(--s2-accent, #3562ff);
-      }
-      .prompt-bar-inner input {
+      /* Intentionally no `:focus-within` accent on .input-row — the
+         input's own focus ring (from the dip's global form styles)
+         already signals focus. A second ring on the wrapper reads as
+         "this whole row is selected" and looks like a bug. */
+      .input-row input {
         flex: 1;
         border: none;
         outline: none;
-        font-family: inherit;
-        font-size: 15px;
-        line-height: 1.5;
-        color: var(--s2-content-default, #e8e8e8);
         background: transparent;
+        font-family: inherit;
+        font-size: 14px;
+        color: var(--s2-content-default, #e8e8e8);
       }
-      .prompt-bar-inner input::placeholder {
-        color: var(--s2-content-tertiary, #8a8a8a);
-      }
-      .send-btn {
-        width: 34px;
-        height: 34px;
+      .input-row input::placeholder { color: var(--s2-content-tertiary, #8a8a8a); }
+      .input-row button {
+        width: 30px;
+        height: 30px;
         border-radius: 50%;
         border: none;
         background: var(--s2-accent, #3562ff);
-        color: #fff;
+        color: var(--s2-gray-25, #f5f5f5);
         cursor: pointer;
         display: flex;
         align-items: center;
@@ -272,663 +108,512 @@
         flex-shrink: 0;
         transition: background 0.15s;
       }
-      .send-btn:hover {
-        background: var(--s2-accent-hover, #4a75ff);
-      }
-      .send-btn svg {
-        width: 16px;
-        height: 16px;
-      }
+      .input-row button:hover { background: var(--s2-accent-hover, #4a75ff); }
 
-      /* ── Skip — small, below dots ── */
-      .skip-row {
-        text-align: center;
+      /* ── Continue button ── */
+      .cta-row { margin-top: 14px; }
+      .cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 8px 22px;
+        border-radius: var(--s2-radius-pill, 9999px);
+        background: var(--s2-accent, #3562ff);
+        color: var(--s2-gray-25, #f5f5f5);
+        border: none;
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .cta:hover { background: var(--s2-accent-hover, #4a75ff); }
+
+      /* ── Footer row: dots + skip ── */
+      .footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
         margin-top: 16px;
       }
-      .skip-link {
+      .dots { display: flex; gap: 5px; }
+      .dot {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--s2-gray-300, #4a4a4a);
+        transition: background 0.2s, transform 0.2s;
+      }
+      .dot.active { background: var(--s2-accent, #3562ff); transform: scale(1.3); }
+      .dot.done   { background: var(--s2-accent, #3562ff); }
+
+      .skip-btn {
         background: none;
         border: none;
         font-family: inherit;
-        font-size: 12px;
-        font-weight: 400;
+        font-size: 11px;
         color: var(--s2-content-tertiary, #8a8a8a);
         cursor: pointer;
-        padding: 4px 8px;
+        padding: 2px 4px;
       }
-      .skip-link:hover {
-        color: var(--s2-content-secondary, #a1a1a1);
-      }
+      .skip-btn:hover { color: var(--s2-content-secondary, #a1a1a1); }
 
-      /* ── Completion state ── */
-      .heading-state {
-        text-align: center;
-        padding: 40px 0;
-        animation: fadeUp 0.2s ease both;
+      /* ── Back button ── */
+      .back-btn {
+        background: none;
+        border: none;
+        font-family: inherit;
+        font-size: 11px;
+        color: var(--s2-content-secondary, #a1a1a1);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 2px 0;
+        margin-bottom: 10px;
       }
-      .heading-state .step-heading {
-        font-size: 18px;
+      .back-btn:hover { color: var(--s2-content-default, #e8e8e8); }
+      .back-btn[hidden] { display: none; }
+
+      /* ── Done state ── */
+      .done-state {
+        text-align: center;
+        padding: 12px 0 4px;
+        font-size: 14px;
+        color: var(--s2-content-secondary, #a1a1a1);
       }
     </style>
   </head>
   <body>
-    <!-- Header -->
-    <div class="header" id="banner">
-      <button class="header-back" id="globalBack" onclick="goBack()">
-        <i data-lucide="arrow-left" style="width: 14px; height: 14px;"></i> Back
-      </button>
-      <div class="header-title">Welcome to slicc</div>
-    </div>
+    <div class="sprinkle-action-card">
 
-    <div class="content">
-      <!-- Step 1: Purpose -->
-      <div class="step active" id="s1">
-        <div class="step-heading">What brings you here?</div>
-        <div class="pills" id="purposePills"></div>
-      </div>
+      <!-- Back -->
+      <div class="sprinkle-action-card__body" style="padding: 16px 24px 0">
+        <button class="back-btn" id="backBtn" hidden onclick="goBack()">
+          <i data-lucide="arrow-left" style="width:12px;height:12px"></i> Back
+        </button>
 
-      <!-- Step 2: Role -->
-      <div class="step" id="s2">
-        <div class="step-heading" id="s2Heading">What do you do?</div>
-        <div class="pills" id="rolePills"></div>
-      </div>
-
-      <!-- Step 3: Tasks -->
-      <div class="step" id="s3">
-        <div class="step-heading">What do you want to tackle?</div>
-        <div class="step-sub">Pick as many as you like</div>
-        <div class="pills" id="taskPills"></div>
-        <div class="nav-wrapper">
-          <button class="cta" id="taskContinue" onclick="goStep(4)">Continue</button>
+        <!-- Step 1: Purpose -->
+        <div class="step active" id="s1">
+          <div class="step-heading">What brings you here?</div>
+          <div class="pills" id="purposePills"></div>
         </div>
-      </div>
 
-      <!-- Step 4: Name -->
-      <div class="step" id="s4">
-        <div class="step-heading">What should I call you?</div>
-        <div class="prompt-bar">
-          <div class="prompt-bar-inner">
-            <input
-              type="text"
-              id="nameIn"
-              placeholder="Your name"
-              autofocus
-              onkeydown="if (event.key === 'Enter') goStep(5);"
-            />
-            <button
-              class="send-btn"
-              onclick="goStep(5)"
-              aria-label="Continue"
-              data-tooltip="Continue"
-            >
-              <i data-lucide="arrow-right" style="width: 16px; height: 16px;"></i>
+        <!-- Step 2: Role -->
+        <div class="step" id="s2">
+          <div class="step-heading" id="s2Heading">What do you do?</div>
+          <div class="pills" id="rolePills"></div>
+        </div>
+
+        <!-- Step 3: Tasks -->
+        <div class="step" id="s3">
+          <div class="step-heading" id="s3Heading">What do you want to tackle?</div>
+          <div class="step-sub">Pick as many as you like</div>
+          <div class="pills" id="taskPills"></div>
+          <div class="cta-row">
+            <button class="cta" onclick="goStep(4)">Continue</button>
+          </div>
+        </div>
+
+        <!-- Step 4: Name -->
+        <div class="step" id="s4">
+          <div class="step-heading">What should I call you?</div>
+          <div class="input-row">
+            <input type="text" id="nameIn" placeholder="Your name"
+              onkeydown="if(event.key==='Enter') advanceFrom(4)" />
+            <button onclick="advanceFrom(4)" aria-label="Continue">
+              <i data-lucide="arrow-right" style="width:14px;height:14px"></i>
             </button>
           </div>
         </div>
-      </div>
 
-      <!-- Step 5: Company -->
-      <div class="step" id="s5">
-        <div class="step-heading">Where do you work?</div>
-        <div class="prompt-bar">
-          <div class="prompt-bar-inner">
-            <input
-              type="text"
-              id="companyIn"
-              placeholder="Company or organization"
-              onkeydown="if (event.key === 'Enter') goStep(6);"
-            />
-            <button
-              class="send-btn"
-              onclick="goStep(6)"
-              aria-label="Continue"
-              data-tooltip="Continue"
-            >
-              <i data-lucide="arrow-right" style="width: 16px; height: 16px;"></i>
+        <!-- Step 5: Company (work only) -->
+        <div class="step" id="s5">
+          <div class="step-heading">Where do you work?</div>
+          <div class="input-row">
+            <input type="text" id="companyIn" placeholder="Company or organization"
+              onkeydown="if(event.key==='Enter') advanceFrom(5)" />
+            <button onclick="advanceFrom(5)" aria-label="Continue">
+              <i data-lucide="arrow-right" style="width:14px;height:14px"></i>
             </button>
           </div>
         </div>
-      </div>
 
-      <!-- Step 6: Mount Workspace -->
-      <div class="step" id="s6">
-        <div class="step-heading">Connect your workspace?</div>
-        <div class="step-sub">Link a local folder so your files persist on disk</div>
-        <div class="pills" id="mountPills"></div>
-      </div>
+        <!-- Step 6: Apps -->
+        <div class="step" id="s6">
+          <div class="step-heading" id="s6Heading">What apps do you use most?</div>
+          <div class="step-sub">Pick any that apply</div>
+          <div class="pills" id="appPills"></div>
+          <div class="cta-row">
+            <button class="cta" onclick="finish()">Let's go</button>
+          </div>
+        </div>
 
-      <!-- Step 7: Apps -->
-      <div class="step" id="s7">
-        <div class="step-heading">What apps do you use most?</div>
-        <div class="step-sub">Pick any that apply</div>
-        <div class="pills" id="appPills"></div>
-        <div class="nav-wrapper">
-          <button class="cta" id="appContinue" onclick="finish()">Continue</button>
+        <!-- Done -->
+        <div class="step" id="sDone">
+          <div class="done-state" id="sDoneText">Setting things up&hellip;</div>
         </div>
       </div>
 
-      <!-- Completion state -->
-      <div class="step" id="sDone">
-        <div class="heading-state">
-          <div class="step-heading">Setting things up&hellip;</div>
+      <!-- Footer: dots + skip -->
+      <div class="sprinkle-action-card__body" style="padding-top:0" id="footerArea">
+        <div class="footer">
+          <div class="dots" id="dots">
+            <div class="dot active"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+            <div class="dot"></div>
+          </div>
+          <button class="skip-btn" id="skipBtn" onclick="skipStep()">skip</button>
         </div>
       </div>
 
-      <!-- Progress dots -->
-      <div class="dots" id="dots">
-        <div class="dot active"></div>
-        <div class="dot"></div>
-        <div class="dot"></div>
-        <div class="dot"></div>
-        <div class="dot"></div>
-        <div class="dot"></div>
-        <div class="dot"></div>
-      </div>
-
-      <!-- Skip — below dots, de-emphasized -->
-      <div class="skip-row" id="skipRow">
-        <button class="skip-link" id="skipBtn" onclick="skipStep()">skip this step</button>
-      </div>
     </div>
 
     <script>
       var cur = 1;
-      var profile = {
-        purpose: '',
-        role: '',
-        roleCustom: '',
-        tasks: [],
-        mountWorkspace: false,
-        name: '',
-        company: '',
-        apps: [],
+      var profile = { purpose: '', role: '', tasks: [], name: '', company: '', apps: [] };
+
+      // Font joke: applied to task/app steps after role selection
+      var ROLE_FONTS = {
+        'developer':    'monospace',
+        'designer':     'Papyrus, fantasy',
+        'product-pm':   '"Comic Sans MS", "Comic Sans", cursive',
       };
 
+      // Role-specific phrasing for step 3 ("what do you want to do
+      // here") so the wizard reads less like a generic survey and
+      // more like it knows who's typing. Falls back to a neutral
+      // prompt when the role doesn't have a flavor of its own.
+      var TASK_HEADINGS_BY_ROLE = {
+        'developer':       'What are you hacking?',
+        'designer':        'What do you dream of?',
+        'product-pm':      "What's your mission?",
+        'content-creator': "What's your story?",
+        'marketer':        "What's your ambition?",
+        'founder':         'What do you want to create?',
+        'student':         'What are you learning?',
+        'researcher':      'What are you researching?',
+      };
+      var TASK_HEADING_DEFAULT = 'What do you want to tackle?';
+
       var PURPOSES = [
-        { id: 'migrate-page', label: 'Migrate a page', icon: 'file-up' },
-        { id: 'work', label: 'Work', icon: 'briefcase' },
-        { id: 'school', label: 'School', icon: 'graduation-cap' },
-        { id: 'personal', label: 'Personal', icon: 'user' },
-        { id: 'side-project', label: 'Side project', icon: 'lightbulb' },
-        { id: 'exploring', label: 'Just exploring', icon: 'compass' },
+        { id: 'work',        label: 'Work',           icon: 'briefcase' },
+        { id: 'school',      label: 'School',         icon: 'graduation-cap' },
+        { id: 'personal',    label: 'Personal',       icon: 'user' },
+        { id: 'side-project',label: 'Side project',   icon: 'lightbulb' },
+        { id: 'exploring',   label: 'Just exploring', icon: 'compass' },
       ];
 
       var ROLES_BY_PURPOSE = {
         work: {
           heading: "What's your role?",
           roles: [
-            { id: 'developer', label: 'Developer', icon: 'code' },
-            { id: 'designer', label: 'Designer', icon: 'palette' },
+            { id: 'developer',    label: 'Developer',      icon: 'code' },
+            { id: 'designer',     label: 'Designer',       icon: 'palette' },
             { id: 'content-creator', label: 'Content creator', icon: 'pen-tool' },
-            { id: 'marketer', label: 'Marketer', icon: 'megaphone' },
-            { id: 'product-pm', label: 'Product / PM', icon: 'layout-dashboard' },
-            { id: 'founder', label: 'Founder', icon: 'rocket' },
-            { id: 'other', label: 'Something else', icon: 'help-circle' },
+            { id: 'marketer',     label: 'Marketer',       icon: 'megaphone' },
+            { id: 'product-pm',   label: 'Product / PM',   icon: 'layout-dashboard' },
+            { id: 'founder',      label: 'Founder',        icon: 'rocket' },
+            { id: 'other',        label: 'Something else', icon: 'help-circle' },
           ],
         },
         school: {
-          heading: 'What are you studying?',
+          heading: "What are you studying?",
           roles: [
-            { id: 'student', label: 'Student', icon: 'book-open' },
+            { id: 'student',    label: 'Student',    icon: 'book-open' },
             { id: 'researcher', label: 'Researcher', icon: 'microscope' },
-            { id: 'developer', label: 'Developer', icon: 'code' },
-            { id: 'designer', label: 'Designer', icon: 'palette' },
-            { id: 'other', label: 'Something else', icon: 'help-circle' },
+            { id: 'developer',  label: 'Developer',  icon: 'code' },
+            { id: 'designer',   label: 'Designer',   icon: 'palette' },
+            { id: 'other',      label: 'Something else', icon: 'help-circle' },
           ],
         },
         _default: {
           heading: "What's your background?",
           roles: [
-            { id: 'developer', label: 'Developer', icon: 'code' },
-            { id: 'designer', label: 'Designer', icon: 'palette' },
+            { id: 'developer',    label: 'Developer',      icon: 'code' },
+            { id: 'designer',     label: 'Designer',       icon: 'palette' },
             { id: 'content-creator', label: 'Content creator', icon: 'pen-tool' },
-            { id: 'marketer', label: 'Marketer', icon: 'megaphone' },
-            { id: 'product-pm', label: 'Product / PM', icon: 'layout-dashboard' },
-            { id: 'student', label: 'Student', icon: 'book-open' },
-            { id: 'researcher', label: 'Researcher', icon: 'microscope' },
-            { id: 'founder', label: 'Founder', icon: 'rocket' },
-            { id: 'other', label: 'Something else', icon: 'help-circle' },
+            { id: 'marketer',     label: 'Marketer',       icon: 'megaphone' },
+            { id: 'product-pm',   label: 'Product / PM',   icon: 'layout-dashboard' },
+            { id: 'student',      label: 'Student',        icon: 'book-open' },
+            { id: 'researcher',   label: 'Researcher',     icon: 'microscope' },
+            { id: 'founder',      label: 'Founder',        icon: 'rocket' },
+            { id: 'other',        label: 'Something else', icon: 'help-circle' },
           ],
         },
       };
 
       var TASKS = [
-        { id: 'build-websites', label: 'Build websites', icon: 'globe' },
-        { id: 'automate', label: 'Automate tasks', icon: 'zap' },
-        { id: 'research', label: 'Research & analyze', icon: 'search' },
-        { id: 'write-content', label: 'Write content', icon: 'file-text' },
-        { id: 'extract-data', label: 'Extract data', icon: 'database' },
-        { id: 'monitor', label: 'Monitor sites', icon: 'activity' },
-        { id: 'seo', label: 'SEO & audits', icon: 'bar-chart' },
-        { id: 'manage-files', label: 'Manage files', icon: 'folder' },
-        { id: 'browser-automation', label: 'Browser automation', icon: 'mouse-pointer' },
-        { id: 'not-sure', label: 'Not sure yet', icon: 'circle-help' },
+        { id: 'build-websites',     label: 'Build websites',      icon: 'globe' },
+        { id: 'automate',           label: 'Automate tasks',      icon: 'zap' },
+        { id: 'research',           label: 'Research & analyze',  icon: 'search' },
+        { id: 'write-content',      label: 'Write content',       icon: 'file-text' },
+        { id: 'extract-data',       label: 'Extract data',        icon: 'database' },
+        { id: 'monitor',            label: 'Monitor sites',       icon: 'activity' },
+        { id: 'seo',                label: 'SEO & audits',        icon: 'bar-chart' },
+        { id: 'manage-files',       label: 'Manage files',        icon: 'folder' },
+        { id: 'browser-automation', label: 'Browser automation',  icon: 'mouse-pointer' },
+        { id: 'not-sure',           label: 'Not sure yet',        icon: 'circle-help' },
       ];
 
-      /* Apps available for installation, with relevance tags */
       var APPS = [
-        {
-          id: 'aem',
-          label: 'Adobe Experience Manager',
-          icon: 'box',
-          relevance: [
-            'build-websites',
-            'write-content',
-            'seo',
-            'content-creator',
-            'marketer',
-            'designer',
-          ],
-        },
-        {
-          id: 'imessage',
-          label: 'iMessage',
-          icon: 'message-circle',
-          relevance: ['personal', 'side-project', 'exploring'],
-        },
-        {
-          id: 'teams',
-          label: 'Microsoft Teams',
-          icon: 'users',
-          relevance: [
-            'work',
-            'school',
-            'side-project',
-            'developer',
-            'designer',
-            'content-creator',
-            'marketer',
-            'product-pm',
-            'founder',
-            'student',
-            'researcher',
-          ],
-        },
-        {
-          id: 'slack',
-          label: 'Slack',
-          icon: 'hash',
-          relevance: [
-            'work',
-            'school',
-            'side-project',
-            'developer',
-            'designer',
-            'content-creator',
-            'marketer',
-            'product-pm',
-            'founder',
-            'student',
-            'researcher',
-          ],
-        },
+        { id: 'aem',      label: 'Adobe Experience Manager', icon: 'box',
+          relevance: ['build-websites','write-content','seo','content-creator','marketer','designer'] },
+        { id: 'imessage', label: 'iMessage',                 icon: 'message-circle',
+          relevance: ['personal','side-project','exploring'] },
+        { id: 'teams',    label: 'Microsoft Teams',          icon: 'users',
+          relevance: ['work','school','developer','designer','marketer','product-pm','founder','student'] },
+        { id: 'slack',    label: 'Slack',                    icon: 'hash',
+          relevance: ['work','school','developer','designer','marketer','product-pm','founder','student'] },
       ];
+
+      // ── Helpers ────────────────────────────────────────────────
+      function applyFontJoke(stepEl) {
+        var font = ROLE_FONTS[profile.role];
+        if (font) stepEl.style.fontFamily = font;
+        else stepEl.style.fontFamily = '';
+      }
+
+      function makePill(item, multiSelect, onSelect, preselected) {
+        var btn = document.createElement('button');
+        btn.className = 'pill';
+        btn.dataset.id = item.id;
+        if (preselected) btn.classList.add('selected');
+        if (item.icon) {
+          var ic = document.createElement('i');
+          ic.setAttribute('data-lucide', item.icon);
+          ic.style.width = '14px';
+          ic.style.height = '14px';
+          btn.appendChild(ic);
+        }
+        btn.appendChild(document.createTextNode(item.label));
+        btn.onclick = function () {
+          if (multiSelect) {
+            btn.classList.toggle('selected');
+          } else {
+            btn.parentElement.querySelectorAll('.pill').forEach(function(p){ p.classList.remove('selected'); });
+            btn.classList.add('selected');
+          }
+          onSelect(item, btn);
+        };
+        return btn;
+      }
+
+      // `selectedIds` (optional) is an array of item ids that should be
+      // pre-marked as selected. Without this, navigating back to a
+      // multi-select step (e.g. step 3 tasks) would visually clear
+      // previously chosen pills while `profile.tasks` still held them,
+      // so a Continue click would submit hidden state the user could
+      // no longer see — exactly the mismatch the user-side review
+      // flagged for step 3.
+      function buildPills(containerId, items, multiSelect, onSelect, selectedIds) {
+        var el = document.getElementById(containerId);
+        el.innerHTML = '';
+        var pre = selectedIds || [];
+        items.forEach(function(item) {
+          el.appendChild(makePill(item, multiSelect, onSelect, pre.indexOf(item.id) >= 0));
+        });
+        if (window.LucideIcons) window.LucideIcons.render();
+      }
 
       function getRelevantApps() {
-        /* Show apps relevant to selected tasks, role, or purpose */
-        var context = profile.tasks.concat([profile.role, profile.purpose]);
-        var scored = APPS.map(function (app) {
-          var score = app.relevance.filter(function (tag) {
-            return context.indexOf(tag) >= 0;
-          }).length;
-          return { app: app, score: score };
-        });
-        /* Show all apps, sorted by relevance */
-        scored.sort(function (a, b) {
-          return b.score - a.score;
-        });
-        return scored.map(function (s) {
-          return s.app;
+        var ctx = profile.tasks.concat([profile.role, profile.purpose]);
+        return APPS.slice().sort(function(a, b) {
+          var sa = a.relevance.filter(function(t){ return ctx.indexOf(t) >= 0; }).length;
+          var sb = b.relevance.filter(function(t){ return ctx.indexOf(t) >= 0; }).length;
+          return sb - sa;
         });
       }
 
-      /* ── Build step 1: Purpose pills ── */
-      var purposeEl = document.getElementById('purposePills');
-      PURPOSES.forEach(function (p) {
-        var btn = document.createElement('button');
-        btn.className = 'pill';
-        if (p.icon) {
-          var icon = document.createElement('i');
-          icon.setAttribute('data-lucide', p.icon);
-          icon.style.width = '16px';
-          icon.style.height = '16px';
-          icon.style.marginRight = '6px';
-          btn.appendChild(icon);
-        }
-        btn.appendChild(document.createTextNode(p.label));
-        btn.dataset.id = p.id;
-        btn.onclick = function () {
-          profile.purpose = p.id;
-          purposeEl.querySelectorAll('.pill').forEach(function (el) {
-            el.classList.remove('selected');
-          });
-          btn.classList.add('selected');
-          if (p.id === 'migrate-page') {
-            setTimeout(function () {
-              startMigrationShortcut();
-            }, 300);
-          } else {
-            setTimeout(function () {
-              goStep(2);
-            }, 300);
-          }
-        };
-        purposeEl.appendChild(btn);
-      });
-      // Render icons after adding to DOM
-      if (window.LucideIcons) window.LucideIcons.render();
-
-      /* ── Build step 3: Task pills ── */
-      var taskEl = document.getElementById('taskPills');
-      var taskBtn = document.getElementById('taskContinue');
-      TASKS.forEach(function (t) {
-        var btn = document.createElement('button');
-        btn.className = 'pill';
-        if (t.icon) {
-          var icon = document.createElement('i');
-          icon.setAttribute('data-lucide', t.icon);
-          icon.style.width = '16px';
-          icon.style.height = '16px';
-          icon.style.marginRight = '6px';
-          btn.appendChild(icon);
-        }
-        btn.appendChild(document.createTextNode(t.label));
-        btn.dataset.id = t.id;
-        btn.onclick = function () {
-          btn.classList.toggle('selected');
-          profile.tasks = [];
-          taskEl.querySelectorAll('.pill.selected').forEach(function (el) {
-            profile.tasks.push(el.dataset.id);
-          });
-        };
-        taskEl.appendChild(btn);
-      });
-      // Render icons after adding to DOM
-      if (window.LucideIcons) window.LucideIcons.render();
-
-      /* ── Build step 7: App pills (built dynamically) ── */
-      function buildAppPills() {
-        var appEl = document.getElementById('appPills');
-        appEl.innerHTML = '';
-        var apps = getRelevantApps();
-        apps.forEach(function (a) {
-          var btn = document.createElement('button');
-          btn.className = 'pill';
-          if (a.icon) {
-            var icon = document.createElement('i');
-            icon.setAttribute('data-lucide', a.icon);
-            icon.style.width = '16px';
-            icon.style.height = '16px';
-            icon.style.marginRight = '6px';
-            btn.appendChild(icon);
-          }
-          btn.appendChild(document.createTextNode(a.label));
-          btn.dataset.id = a.id;
-          btn.onclick = function () {
-            btn.classList.toggle('selected');
-            profile.apps = [];
-            appEl.querySelectorAll('.pill.selected').forEach(function (el) {
-              profile.apps.push(el.dataset.id);
-            });
-          };
-          appEl.appendChild(btn);
-        });
-        // Render icons after adding to DOM
-        if (window.LucideIcons) window.LucideIcons.render();
-      }
-
-      /* ── Build step 6: Mount buttons ── */
-      var mountEl = document.getElementById('mountPills');
-      var pendingMountHandle = null;
-      var mountHandleReady = false;
-
-      var mountBtn = document.createElement('button');
-      mountBtn.className = 'pill';
-      var mountIcon = document.createElement('i');
-      mountIcon.setAttribute('data-lucide', 'folder-open');
-      mountIcon.style.width = '16px';
-      mountIcon.style.height = '16px';
-      mountIcon.style.marginRight = '6px';
-      mountBtn.appendChild(mountIcon);
-      mountBtn.appendChild(document.createTextNode('Yes, connect a folder'));
-      mountBtn.onclick = async function () {
-        try {
-          var handle = await window.showDirectoryPicker({ mode: 'readwrite' });
-          pendingMountHandle = handle;
-          profile.mountWorkspace = true;
-          profile.mountedDirName = handle.name;
-          var db = await new Promise(function (resolve, reject) {
-            var req = indexedDB.open('slicc-pending-mount', 1);
-            req.onupgradeneeded = function () {
-              req.result.createObjectStore('handles');
-            };
-            req.onsuccess = function () {
-              resolve(req.result);
-            };
-            req.onerror = function () {
-              reject(req.error);
-            };
-          });
-          var tx = db.transaction('handles', 'readwrite');
-          tx.objectStore('handles').put(handle, 'pendingMount');
-          await new Promise(function (resolve) {
-            tx.oncomplete = resolve;
-          });
-          db.close();
-          mountHandleReady = true;
-          console.log('[welcome] Stored mount handle for:', handle.name);
-          mountBtn.classList.add('selected');
-          setTimeout(function () {
-            goStep(7);
-          }, 300);
-        } catch (err) {
-          if (err.name === 'AbortError') return;
-          console.log('[welcome] Direct picker failed, trying lick method:', err.name);
-          if (typeof slicc !== 'undefined' && slicc.lick) {
-            slicc.lick({ action: 'request-mount' });
-          }
-        }
-      };
-      mountEl.appendChild(mountBtn);
-
-      var skipMountBtn = document.createElement('button');
-      skipMountBtn.className = 'pill';
-      var skipIcon = document.createElement('i');
-      skipIcon.setAttribute('data-lucide', 'x');
-      skipIcon.style.width = '16px';
-      skipIcon.style.height = '16px';
-      skipIcon.style.marginRight = '6px';
-      skipMountBtn.appendChild(skipIcon);
-      skipMountBtn.appendChild(document.createTextNode('No thanks'));
-      skipMountBtn.onclick = function () {
-        profile.mountWorkspace = false;
-        skipMountBtn.classList.add('selected');
-        setTimeout(function () {
-          goStep(7);
-        }, 300);
-      };
-      mountEl.appendChild(skipMountBtn);
-      // Render icons after adding to DOM
-      if (window.LucideIcons) window.LucideIcons.render();
-
-      function buildRolePills() {
-        var roleEl = document.getElementById('rolePills');
-        roleEl.innerHTML = '';
-        var config = ROLES_BY_PURPOSE[profile.purpose] || ROLES_BY_PURPOSE._default;
-        document.getElementById('s2Heading').textContent = config.heading;
-        config.roles.forEach(function (r) {
-          var btn = document.createElement('button');
-          btn.className = 'pill';
-          if (r.icon) {
-            var icon = document.createElement('i');
-            icon.setAttribute('data-lucide', r.icon);
-            icon.style.width = '16px';
-            icon.style.height = '16px';
-            icon.style.marginRight = '6px';
-            btn.appendChild(icon);
-          }
-          btn.appendChild(document.createTextNode(r.label));
-          btn.dataset.id = r.id;
-          btn.onclick = function () {
-            profile.role = r.id;
-            roleEl.querySelectorAll('.pill').forEach(function (el) {
-              el.classList.remove('selected');
-            });
-            btn.classList.add('selected');
-            setTimeout(function () {
-              goStep(3);
-            }, 300);
-          };
-          roleEl.appendChild(btn);
-        });
-        // Render icons after adding to DOM
-        if (window.LucideIcons) window.LucideIcons.render();
-      }
-
+      // ── Dots ───────────────────────────────────────────────────
       function updateDots(step) {
+        // Steps: 1 purpose, 2 role, 3 tasks, 4 name, 5 company(work), 6 apps
+        // We show 6 dots; if company step skipped, compress
+        var effective = step;
+        if (profile.purpose !== 'work' && step >= 5) effective = step - 1;
         var dots = document.getElementById('dots').children;
-        // Map the logical step number to the visible dot index.
-        // When purpose !== 'work', step 5 is skipped in navigation,
-        // so compress steps after 5 by one when updating dots.
-        var effectiveStep = step;
-        if (profile.purpose !== 'work' && step > 5) {
-          effectiveStep = step - 1;
-        }
         for (var i = 0; i < dots.length; i++) {
-          var dotIndex = i + 1;
           dots[i].className = 'dot';
-          if (dotIndex === effectiveStep) {
-            dots[i].className = 'dot active';
-          } else if (dotIndex < effectiveStep) {
-            dots[i].className = 'dot done';
-          }
+          if (i + 1 === effective) dots[i].className = 'dot active';
+          else if (i + 1 < effective) dots[i].className = 'dot done';
         }
+        // Hide 6th dot if company step won't appear
+        dots[5].style.display = (profile.purpose !== 'work') ? 'none' : '';
       }
 
-      function updateNav(step) {
-        var globalBack = document.getElementById('globalBack');
-        if (step > 1 && step <= 7) {
-          globalBack.classList.add('visible');
-        } else {
-          globalBack.classList.remove('visible');
-        }
-        var skipRow = document.getElementById('skipRow');
-        skipRow.style.display = step <= 7 ? '' : 'none';
-      }
-
+      // ── Navigation ─────────────────────────────────────────────
       function goBack() {
-        if (cur > 1) {
-          var prev = cur - 1;
-          if (prev === 5 && profile.purpose !== 'work') prev = 4;
-          goStep(prev);
+        var prev = cur - 1;
+        if (prev === 5 && profile.purpose !== 'work') prev = 4;
+        if (prev >= 1) goStep(prev);
+      }
+
+      // Skip clears both the in-memory profile field AND the underlying
+      // input value. Without clearing the DOM input, `goStep`'s
+      // "save inputs when leaving" branch would re-read the stale
+      // value the next time the user passes through this step (or via
+      // back-navigation), so "skip" wouldn't actually skip the data.
+      function skipStep() {
+        if (cur === 4) {
+          profile.name = '';
+          var nameIn = document.getElementById('nameIn');
+          if (nameIn) nameIn.value = '';
+          goStep(nextStep(cur));
+        } else if (cur === 5) {
+          profile.company = '';
+          var companyIn = document.getElementById('companyIn');
+          if (companyIn) companyIn.value = '';
+          goStep(nextStep(cur));
+        } else if (cur < 6) {
+          goStep(nextStep(cur));
+        } else {
+          finish();
         }
+      }
+
+      function nextStep(n) {
+        if (n === 4 && profile.purpose !== 'work') return 6; // skip company
+        return n + 1;
+      }
+
+      // Continue-click / Enter-key handler for steps with input fields
+      // and for the work-only company step. Routes through nextStep so
+      // non-work users skip the company question entirely (work-only
+      // step 5) — the original `goStep(5)` / `goStep(6)` literals
+      // bypassed that branch and dropped non-work users straight into
+      // a question intended for work users.
+      function advanceFrom(n) {
+        goStep(nextStep(n));
       }
 
       function goStep(n) {
-        if (n === 5 && profile.purpose !== 'work') n = 6;
-        if (n === 2) buildRolePills();
-        // Hide the 7th dot when company step will be skipped
-        if (n === 2 && profile.purpose !== 'work') {
-          var allDots = document.getElementById('dots').children;
-          if (allDots[6]) allDots[6].style.display = 'none';
-        } else if (n === 2 && profile.purpose === 'work') {
-          var allDots = document.getElementById('dots').children;
-          if (allDots[6]) allDots[6].style.display = '';
-        }
-        if (n === 7) buildAppPills();
+        // Save inputs when leaving
+        if (cur === 4) profile.name    = (document.getElementById('nameIn').value || '').trim();
+        if (cur === 5) profile.company = (document.getElementById('companyIn').value || '').trim();
 
-        // Save name when leaving step 4
-        if (cur === 4) {
-          profile.name = (document.getElementById('nameIn').value || '').trim();
+        // Build dynamic step content. Each rebuild forwards the
+        // previously-saved selection through `buildPills`'s
+        // `selectedIds` arg so back-navigation re-marks pills the
+        // user already chose, instead of clearing them visually
+        // while `profile.*` still holds them.
+        if (n === 1) {
+          buildPills('purposePills', PURPOSES, false, function(item) {
+            profile.purpose = item.id;
+            setTimeout(function(){ goStep(2); }, 280);
+          }, profile.purpose ? [profile.purpose] : []);
         }
-        // Save company when leaving step 5
-        if (cur === 5) {
-          profile.company = (document.getElementById('companyIn').value || '').trim();
+        if (n === 2) {
+          var cfg = ROLES_BY_PURPOSE[profile.purpose] || ROLES_BY_PURPOSE._default;
+          document.getElementById('s2Heading').textContent = cfg.heading;
+          buildPills('rolePills', cfg.roles, false, function(item) {
+            profile.role = item.id;
+            setTimeout(function(){ goStep(3); }, 280);
+          }, profile.role ? [profile.role] : []);
+        }
+        if (n === 3) {
+          var s3 = document.getElementById('s3');
+          applyFontJoke(s3);
+          var taskHeading = TASK_HEADINGS_BY_ROLE[profile.role] || TASK_HEADING_DEFAULT;
+          document.getElementById('s3Heading').textContent = taskHeading;
+          buildPills('taskPills', TASKS, true, function(item) {
+            profile.tasks = [];
+            document.querySelectorAll('#taskPills .pill.selected').forEach(function(p){
+              profile.tasks.push(p.dataset.id);
+            });
+          }, profile.tasks);
+        }
+        if (n === 6) {
+          var s6 = document.getElementById('s6');
+          applyFontJoke(s6);
+          buildPills('appPills', getRelevantApps(), true, function(item) {
+            profile.apps = [];
+            document.querySelectorAll('#appPills .pill.selected').forEach(function(p){
+              profile.apps.push(p.dataset.id);
+            });
+          }, profile.apps);
         }
 
         document.getElementById('s' + cur).classList.remove('active');
         document.getElementById('s' + n).classList.add('active');
         cur = n;
         updateDots(n);
-        updateNav(n);
 
-        if (n === 4) {
-          setTimeout(function () {
-            document.getElementById('nameIn').focus();
-          }, 100);
-        }
-        if (n === 5) {
-          setTimeout(function () {
-            document.getElementById('companyIn').focus();
-          }, 100);
-        }
-      }
+        document.getElementById('backBtn').hidden = (n <= 1 || n > 6);
+        document.getElementById('footerArea').style.display = (n > 6) ? 'none' : '';
 
-      function skipStep() {
-        if (cur < 7) {
-          goStep(cur + 1);
-        } else {
-          finish();
-        }
-      }
-
-      function startMigrationShortcut() {
-        document.getElementById('s' + cur).classList.remove('active');
-        document.getElementById('sDone').classList.add('active');
-        document.querySelector('#sDone .step-heading').textContent =
-          'Setting up migration tools\u2026';
-        document.getElementById('dots').style.display = 'none';
-        document.getElementById('banner').style.display = 'none';
-        document.getElementById('skipRow').style.display = 'none';
-        setTimeout(function () {
-          if (window.slicc) {
-            slicc.lick({ action: 'shortcut-migrate' });
-          }
-        }, 500);
+        if (n === 4) setTimeout(function(){ document.getElementById('nameIn').focus(); }, 80);
+        if (n === 5) setTimeout(function(){ document.getElementById('companyIn').focus(); }, 80);
       }
 
       function finish() {
-        // Capture values if not already saved
-        if (!profile.name) {
-          profile.name = (document.getElementById('nameIn').value || '').trim();
-        }
-        if (!profile.company) {
-          profile.company = (document.getElementById('companyIn').value || '').trim();
-        }
+        if (!profile.name)    profile.name    = (document.getElementById('nameIn').value || '').trim();
+        if (!profile.company) profile.company = (document.getElementById('companyIn').value || '').trim();
 
         document.getElementById('s' + cur).classList.remove('active');
         document.getElementById('sDone').classList.add('active');
-        document.getElementById('dots').style.display = 'none';
-        document.getElementById('banner').style.display = 'none';
-        document.getElementById('skipRow').style.display = 'none';
-        document.getElementById('globalBack').classList.remove('visible');
+        document.getElementById('footerArea').style.display = 'none';
+        document.getElementById('backBtn').hidden = true;
 
         if (window.slicc) {
           slicc.lick({ action: 'onboarding-complete', data: profile });
-          setTimeout(function () {
-            if (slicc.close) slicc.close();
-          }, 500);
         }
       }
 
-      // Handle mount-complete response from extension
-      if (typeof slicc !== 'undefined' && slicc.on) {
-        slicc.on('update', function (data) {
-          if (!data) return;
-          if (data.action === 'mount-complete') {
-            profile.mountWorkspace = true;
-            profile.mountedDirName = data.dirName || 'mnt';
-            mountHandleReady = true;
-            console.log('[welcome] Mount complete:', data.dirName);
-            var btn = document.querySelector('#mountPills .pill');
-            if (btn) btn.classList.add('selected');
-            setTimeout(function () {
-              goStep(7);
-            }, 300);
-          } else if (data.action === 'mount-cancelled') {
-            console.log('[welcome] Mount cancelled by user');
-          }
-        });
+      // ── Wizard bootstrap ───────────────────────────────────────
+      // The dip is re-rendered from chat history on every reload, so
+      // we self-detect onboarding state by reading `/shared/.welcomed`
+      // through the dip VFS bridge. If the marker exists the user has
+      // already finished onboarding and we show a tiny finished card
+      // instead of re-running the wizard. No parent-side handshake
+      // needed — the bridge gives the dip read-only VFS access.
+      function startWizard() {
+        document.getElementById('sDone').classList.remove('active');
+        document.getElementById('s1').classList.add('active');
+        document.getElementById('footerArea').style.display = '';
+
+        buildPills('purposePills', PURPOSES, false, function(item) {
+          profile.purpose = item.id;
+          setTimeout(function(){ goStep(2); }, 280);
+        }, profile.purpose ? [profile.purpose] : []);
+
+        updateDots(1);
+        document.getElementById('backBtn').hidden = true;
+        document.getElementById('dots').children[5].style.display = 'none';
       }
+
+      function showAlreadyComplete(text) {
+        ['s1','s2','s3','s4','s5','s6'].forEach(function(id){
+          var el = document.getElementById(id);
+          if (el) el.classList.remove('active');
+        });
+        document.getElementById('footerArea').style.display = 'none';
+        document.getElementById('backBtn').hidden = true;
+        document.getElementById('sDoneText').textContent = text || "You're all set.";
+        document.getElementById('sDone').classList.add('active');
+      }
+
+      // Hide every step until we know which one to show. We never
+      // leave the user stuck on a blank pane: even if the bridge
+      // fails we fall through to the wizard.
+      ['s1','s2','s3','s4','s5','s6','sDone'].forEach(function(id){
+        var el = document.getElementById(id);
+        if (el) el.classList.remove('active');
+      });
+
+      function bootByMarker() {
+        if (!window.slicc || typeof slicc.exists !== 'function') {
+          startWizard();
+          return;
+        }
+        Promise.resolve(slicc.exists('/shared/.welcomed')).then(
+          function(welcomed) { welcomed ? showAlreadyComplete() : startWizard(); },
+          function() { startWizard(); }
+        );
+      }
+      bootByMarker();
     </script>
   </body>
 </html>

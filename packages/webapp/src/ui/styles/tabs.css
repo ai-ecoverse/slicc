@@ -295,3 +295,200 @@
   color: var(--s2-negative);
   background: color-mix(in srgb, var(--s2-negative) 10%, transparent);
 }
+
+/* ================================================================== */
+/* Rail — vertical icon strip on the right edge (standalone mode)     */
+/* ================================================================== */
+.rail {
+  display: flex;
+  flex-direction: column;
+  width: 48px;
+  flex-shrink: 0;
+  background: var(--s2-bg-layer-1);
+  border-left: 1px solid var(--s2-border-subtle);
+  padding: var(--s2-spacing-200) var(--s2-spacing-100);
+  gap: var(--s2-spacing-100);
+}
+.rail__section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2-spacing-100);
+  align-items: center;
+}
+.rail__section--top {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.rail__section--bottom {
+  flex: none;
+}
+/* Rail header slot — hosts the user avatar in extension mode. Sized
+   to match the thread header (56px) so the hairline separator below
+   the avatar visually continues the gradient line at the bottom of
+   the chat thread header on the left. */
+.rail__section--header {
+  flex: none;
+  height: var(--uxc-thread-header-height);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--s2-border-subtle);
+  margin-bottom: var(--s2-spacing-100);
+}
+.rail__section--header .header__avatar {
+  margin: 0 auto;
+}
+/* When the rail mounts a header widget we drop its own top padding
+   so the widget aligns to Y=0 — the section's `height` matches the
+   thread header so the separator lines up with the gradient on the
+   left. */
+.rail:has(.rail__section--header) {
+  padding-top: 0;
+}
+.rail__avatar {
+  /* The avatar already carries `.header__avatar` styles; this class
+     just lets us re-target hover affordances if we ever want a
+     rail-specific look. */
+}
+.rail__item {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--s2-content-default);
+  border-radius: var(--s2-radius-default);
+  cursor: pointer;
+  transition:
+    background var(--s2-transition-default),
+    color var(--s2-transition-default),
+    border-color var(--s2-transition-default);
+  flex-shrink: 0;
+}
+.rail__item svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+}
+/* Long-press ripple — fills the button as the user holds. The layer
+   is clipped to the button radius so the growing circle never
+   escapes the button shape. */
+.rail__item-press-layer {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+.rail__item-press {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--s2-accent);
+  opacity: 0.85;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  transition-property: width, height;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: width, height;
+}
+.rail__item--active .rail__item-press {
+  background: var(--s2-accent);
+  opacity: 1;
+}
+.rail__item:hover {
+  background: var(--s2-gray-200);
+}
+.rail__item--active {
+  background: var(--s2-gray-800);
+  color: var(--s2-gray-25);
+}
+.rail__item--active:hover {
+  background: var(--s2-gray-800);
+  color: var(--s2-gray-25);
+}
+.rail__item:focus-visible {
+  outline: 2px solid var(--s2-accent);
+  outline-offset: 2px;
+}
+.rail__item--add {
+  color: var(--s2-content-tertiary);
+}
+.rail__item--add:hover {
+  color: var(--s2-content-default);
+  background: var(--s2-gray-75);
+}
+/* Attention-pulse for auto-installed sprinkles in extension mode.
+   The icon glows in accent colour and gently breathes until the user
+   acknowledges it by clicking — see `RailZone.markItemAttention`. */
+.rail__item--attention {
+  color: var(--s2-accent);
+  animation: rail-item-attention 1.6s ease-in-out infinite;
+}
+.rail__item--attention:hover {
+  animation: none;
+  background: var(--s2-gray-200);
+}
+.rail__item--attention::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--s2-accent);
+  box-shadow: 0 0 0 2px var(--s2-bg-layer-1);
+  pointer-events: none;
+  z-index: 2;
+}
+@keyframes rail-item-attention {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.85;
+  }
+}
+/* The collapsible content panel rendered LEFT of the rail. */
+.rail-content {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: 360px;
+  min-width: 280px;
+  max-width: 50vw;
+  overflow: hidden;
+  border-left: 1px solid var(--s2-border-subtle);
+  background: var(--s2-bg-base);
+}
+.rail-content--collapsed {
+  display: none !important;
+}
+/* Hide the chat<->content divider while the content panel is
+   collapsed. Otherwise we'd render a vestigial 1px hairline next to
+   the rail that has nothing to drag against. */
+.layout:has(.rail-content--collapsed) .layout__divider--vertical {
+  display: none;
+}
+/* In fullpage mode the content panel grows to fill the chat area. */
+.layout--rail-fullpage .layout__left,
+.layout--rail-fullpage .layout__divider--vertical,
+.layout--rail-fullpage .layout__scoops {
+  display: none;
+}
+.layout--rail-fullpage .rail-content {
+  flex: 1;
+  width: auto;
+  max-width: none;
+}
