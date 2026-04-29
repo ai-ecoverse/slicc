@@ -103,6 +103,34 @@ describe('telemetry', () => {
     expect(mockSampleRUM).toHaveBeenCalledWith('error', { source: 'llm', target: 'rate_limit' });
   });
 
+  it('trackImageView emits viewmedia', async () => {
+    const { initTelemetry, trackImageView } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackImageView('chat');
+    expect(mockSampleRUM).toHaveBeenCalledWith('viewmedia', { source: 'chat' });
+  });
+
+  it('trackSettingsOpen emits signup', async () => {
+    const { initTelemetry, trackSettingsOpen } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    trackSettingsOpen('button');
+    expect(mockSampleRUM).toHaveBeenCalledWith('signup', { source: 'button' });
+  });
+
+  it('trackError forwards source/target as-is (sanitization happens at the listener)', async () => {
+    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRUM.mockClear();
+
+    const long = 'x'.repeat(250);
+    trackError('js', long);
+    expect(mockSampleRUM).toHaveBeenCalledWith('error', { source: 'js', target: long });
+  });
+
   it('track functions are no-op before init', async () => {
     const { trackChatSend, trackShellCommand } = await import('../../src/ui/telemetry.js');
     trackChatSend('cone', 'claude');
