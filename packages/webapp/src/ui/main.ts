@@ -798,6 +798,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     addAccount: addAccountExt,
     setSelectedModelId: setSelectedModelIdExt,
     getAccounts: getAccountsExt,
+    isModelHiddenFromPicker: isModelHiddenFromPickerExt,
   } = await import('./provider-settings.js');
   const buildExtProviderCatalogue = () => {
     const ids = getAvailableProvidersExt();
@@ -818,7 +819,12 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     const models: Record<string, Array<{ id: string; name?: string }>> = {};
     for (const id of ids) {
       try {
-        models[id] = getProviderModelsExt(id).map((m) => ({ id: m.id, name: m.name }));
+        // Hide picker-only-denied models (e.g. Haiku) from the
+        // connect-llm wizard list. Programmatic surfaces still see
+        // the full catalogue via `getProviderModels` directly.
+        models[id] = getProviderModelsExt(id)
+          .filter((m) => !isModelHiddenFromPickerExt(m.id))
+          .map((m) => ({ id: m.id, name: m.name }));
       } catch {
         models[id] = [];
       }
@@ -1942,6 +1948,7 @@ async function main(): Promise<void> {
     addAccount,
     setSelectedModelId,
     getAccounts,
+    isModelHiddenFromPicker,
   } = await import('./provider-settings.js');
   const buildProviderCatalogue = () => {
     const ids = getAvailableProviders();
@@ -1962,7 +1969,11 @@ async function main(): Promise<void> {
     const models: Record<string, Array<{ id: string; name?: string }>> = {};
     for (const id of ids) {
       try {
-        models[id] = getProviderModels(id).map((m) => ({ id: m.id, name: m.name }));
+        // Same picker-only filter as the chat header dropdown — see
+        // `isModelHiddenFromPicker` for rationale.
+        models[id] = getProviderModels(id)
+          .filter((m) => !isModelHiddenFromPicker(m.id))
+          .map((m) => ({ id: m.id, name: m.name }));
       } catch {
         models[id] = [];
       }
