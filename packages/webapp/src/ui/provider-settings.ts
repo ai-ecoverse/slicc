@@ -580,8 +580,16 @@ export function resolveModelById(modelId?: string): Model<Api> {
     if (providerConfig.isOAuth) {
       const providerModels = getProviderModels(providerId);
       const providerModel = providerModels.find((m) => m.id === modelId);
-      const correctApi = providerModel?.api ?? (`${providerId}-anthropic` as Api);
-      resolved = { ...resolved, api: correctApi, provider: providerId };
+      if (providerModel) {
+        // Prefer providerModel — it's already built by getProviderModels
+        // with the correct api, provider, and any compat overrides applied
+        // via applyModelMetadata (e.g. Adobe Haiku's
+        // supportsEagerToolInputStreaming: false). The previous pattern of
+        // cherry-picking only `api` here silently dropped compat.
+        resolved = providerModel;
+      } else {
+        resolved = { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
+      }
     } else if (providerId === 'bedrock-camp') {
       resolved = { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
@@ -624,10 +632,17 @@ export function resolveCurrentModel(): Model<Api> {
 
     // Override api and provider for custom routing
     if (providerConfig.isOAuth) {
-      // Look up the correct api from the provider's model list (may be -openai or -anthropic)
+      // Prefer the providerModel built by getProviderModels — it carries
+      // the correct api plus any compat overrides (e.g. Adobe Haiku's
+      // supportsEagerToolInputStreaming: false). Cherry-picking only `api`
+      // here would silently drop compat. See resolveModelById for the
+      // matching change.
       const providerModel = models.find((m) => m.id === effectiveModelId);
-      const correctApi = providerModel?.api ?? (`${providerId}-anthropic` as Api);
-      resolved = { ...resolved, api: correctApi, provider: providerId };
+      if (providerModel) {
+        resolved = providerModel;
+      } else {
+        resolved = { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
+      }
     } else if (providerId === 'bedrock-camp') {
       resolved = { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
