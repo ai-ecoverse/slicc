@@ -166,6 +166,67 @@ describe('scoop_scoop tool — config defaults', () => {
     expect(created.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
     expect(result.isError).toBeUndefined();
   });
+
+  // ── Thinking / reasoning level (#518 follow-up) ─────────────────────
+
+  it('forwards a valid thinking level onto the new scoop config', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'thinker', thinking: 'high' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.thinkingLevel).toBe('high');
+  });
+
+  it('omits thinkingLevel from config when the caller does not set it (inherits default)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'default-effort' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    // Mirrors the allowedCommands convention — omission is the canonical
+    // "use the global default" form (which resolves to 'off' downstream).
+    expect(created.config?.thinkingLevel).toBeUndefined();
+  });
+
+  it('rejects an unknown thinking level without invoking the registry callback', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    const result = await tool.execute({ name: 'bad-effort', thinking: 'turbo' });
+
+    expect(result.isError).toBe(true);
+    expect(String(result.content)).toMatch(/Invalid thinking level/);
+    expect(String(result.content)).toMatch(/off, minimal, low, medium, high, xhigh/);
+    expect(onScoopScoop).not.toHaveBeenCalled();
+  });
+
+  it('accepts every valid thinking level', async () => {
+    const levels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+    for (const level of levels) {
+      const { tool, onScoopScoop } = findScoopScoopTool();
+      await tool.execute({ name: `t-${level}`, thinking: level });
+      const created = onScoopScoop.mock.calls[0][0];
+      expect(created.config?.thinkingLevel).toBe(level);
+    }
+  });
+
+  it('combines thinking with model + sandbox params on a single config record', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({
+      name: 'combined-effort',
+      model: 'claude-opus-4-7',
+      visiblePaths: ['/workspace/'],
+      writablePaths: ['/scoops/combined-effort-scoop/'],
+      allowedCommands: ['echo'],
+      thinking: 'xhigh',
+    });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config).toEqual({
+      modelId: 'claude-opus-4-7',
+      visiblePaths: ['/workspace/'],
+      writablePaths: ['/scoops/combined-effort-scoop/'],
+      allowedCommands: ['echo'],
+      thinkingLevel: 'xhigh',
+    });
+  });
 });
 
 describe('scoop_mute / scoop_unmute / scoop_wait tools', () => {
