@@ -23,96 +23,38 @@ SLICC is a browser-based AI coding agent used across three deployment modes (CLI
 
 ## Integration Approach
 
-### Module structure
+`packages/webapp/src/ui/telemetry.ts` is a small dispatcher chosen at init time by `getModeLabel()`:
 
-Create a single telemetry module at `packages/webapp/src/ui/telemetry.ts` that wraps all RUM interactions. Every other module imports checkpoint functions from here -- no direct `sampleRUM` calls scattered through the codebase.
+- **CLI / Electron** load `@adobe/helix-rum-js` (npm dep). Helix's auto-loaded enhancer fetches CWV/auto-click instrumentation from `rum.hlx.page` — there is no extension manifest CSP in this mode (it's a regular page served by the dev server in CLI, an Electron BrowserWindow in Electron), so the cross-origin script load and beacon are unrestricted. `window.SAMPLE_PAGEVIEWS_AT_RATE = 'high'` is set before the import — helix interprets `'high'` as 1-in-10 sampling.
+- **Extension** loads `packages/webapp/src/ui/rum.js` instead — a self-contained ~50-line beacon that fires `navigator.sendBeacon` to `https://rum.hlx.page/.rum/<weight>` (default weight 10). The inlined approach avoids the auto-loaded enhancer (CSP-blocked by `script-src 'self' 'wasm-unsafe-eval'`) and matches `@adobe/aem-sidekick`'s pattern of bundling a tiny RUM utility into the extension itself.
 
-```typescript
-// packages/webapp/src/ui/telemetry.ts
+Both implementations share the `(checkpoint, data)` signature. `window.RUM_GENERATION` is set to `slicc-cli`, `slicc-extension`, or `slicc-electron` so dashboard queries can split by deployment mode.
 
-let sampleRUM: ((checkpoint: string, data?: { source?: string; target?: string }) => void) | null =
-  null;
+### Extension debug override
 
-/**
- * Initialize operational telemetry. Call once from main.ts.
- * No-op if telemetry is disabled via localStorage toggle.
- */
-export async function initTelemetry(): Promise<void> {
-  if (localStorage.getItem('telemetry-disabled') === 'true') return;
+Force 100% sampling in the side panel for verification:
 
-  const mod = await import('@adobe/helix-rum-js');
-  sampleRUM = mod.sampleRUM;
-
-  sampleRUM('navigate', {
-    source: document.referrer,
-    target: getModeLabel(),
-  });
-}
-
-/**
- * Record a custom checkpoint. Safe to call before init (becomes a no-op).
- */
-export function checkpoint(name: string, data?: { source?: string; target?: string }): void {
-  sampleRUM?.(name, data);
-}
-
-function getModeLabel(): string {
-  if (typeof chrome !== 'undefined' && chrome?.runtime?.id) return 'extension';
-  if (document.documentElement.dataset.electronOverlay) return 'electron';
-  return 'cli';
-}
+```js
+// In side-panel DevTools (right-click panel → Inspect → Console):
+localStorage.setItem('slicc-rum-debug', '1');
+// Reload the panel. The next pageview is sampled with weight=1.
+localStorage.removeItem('slicc-rum-debug');
 ```
 
-### CLI mode
+The flag is read by `rum.js` on first call and cached in `window.hlx.rum`. CLI/Electron have no equivalent override.
 
-Straightforward. The UI runs in a regular Chrome tab served from `localhost:5710`. No CSP restrictions beyond what Vite injects. helix-rum-js loads from `rum.hlx.page` or is bundled as an ES module dependency.
+### Why two implementations
 
-**Preferred**: ES module import via npm (`@adobe/helix-rum-js`). This avoids an external script tag and works with Vite's bundler. The enhancer script is auto-loaded by the core at runtime from `rum.hlx.page`.
+- The extension's manifest CSP and the no-target-page-URL nature of the side panel make the inlined approach simpler and avoid an external script load that would silently 404.
+- CLI/Electron benefit from helix-rum-js's enhancer (CWV, auto-click) which is not reproduced manually.
+- The cost is a per-mode sampling decision (independent RNG draws) and an `error`-beacon payload-shape asymmetry (see "Wiring status" below).
 
-In `packages/webapp/src/ui/main.ts`, at the end of the `main()` function:
+### Where init happens
 
-```typescript
-import { initTelemetry } from './telemetry.js';
+- **CLI / Electron**: `packages/webapp/src/ui/main.ts:main()` calls `initTelemetry().catch(() => {})` near the end of bootstrap.
+- **Extension**: `packages/webapp/src/ui/main.ts:mainExtension()` calls `initTelemetry().catch(() => {})` after the panel is connected to the offscreen agent engine. Only the side panel realm initializes; the offscreen document and the service worker never call `initTelemetry`.
 
-// ... existing bootstrap code ...
-
-// Fire-and-forget -- telemetry init must never block the UI
-initTelemetry().catch(() => {});
-```
-
-### Extension mode
-
-The extension has specific CSP constraints defined in `manifest.json`:
-
-```json
-"content_security_policy": {
-  "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
-}
-```
-
-This blocks loading the enhancer script from `rum.hlx.page` at runtime. Two options:
-
-**Option A -- Self-host (recommended)**: Bundle the enhancer into `dist/extension/` at build time. Set `window.RUM_BASE = chrome.runtime.getURL('/')` so the core loads the enhancer from the extension's own origin. The beacon endpoint still points to `rum.hlx.page` (allowed by `host_permissions: ["<all_urls>"]` which covers `connect-src`). Add the enhancer copy to `packages/chrome-extension/vite.config.ts`'s `closeBundle` hook.
-
-**Option B -- CSP allowlist**: Add `rum.hlx.page` to `script-src`:
-
-```json
-"content_security_policy": {
-  "extension_pages": "script-src 'self' 'wasm-unsafe-eval' https://rum.hlx.page; object-src 'self'"
-}
-```
-
-This is simpler but couples the extension to an external CDN for script loading. Option A is preferred because it follows SLICC's existing pattern for bundling external WASM/assets (Pyodide, ImageMagick).
-
-**Where to initialize**: The side panel (`main.ts` via `mainExtension()`) is the right place. The offscreen document runs the agent engine but has no visible page -- CWV metrics would be meaningless there. The service worker cannot use `navigator.sendBeacon()`.
-
-**Navigator.sendBeacon availability**: `sendBeacon` is available in extension pages (side panel, offscreen). If the side panel closes and reopens, `initTelemetry()` runs again on reconnect -- this is fine because each call generates a new pageview ID.
-
-### Electron mode
-
-The Electron BrowserWindow loads `http://localhost:5710` just like CLI mode. The same bundled ES module works. The overlay shell (`electron-overlay.ts`) runs inside an injected iframe -- telemetry should initialize in the main page, not the overlay. `getModeLabel()` detects Electron via the `data-electron-overlay` attribute.
-
-No special permissions needed. Electron's default CSP allows `sendBeacon` to external origins.
+`navigator.sendBeacon` is available in all three contexts where telemetry initializes. Side-panel close/reopen produces a fresh `initTelemetry` run with a new pageview id — fine because each call generates an independent sampling decision and an independent id.
 
 ## Checkpoints
 
@@ -130,12 +72,43 @@ SLICC uses helix-rum-js's supported checkpoint types with SLICC-specific semanti
 | `error`        | Error occurred     | Error type (`js`/`llm`/`tool`) | Details                      | Error handlers                        |
 | `signup`       | Settings opened    | Trigger (`button`/`shortcut`)  | (omitted)                    | `provider-settings.ts`                |
 
-### Auto-instrumented (from enhancer)
+### Auto-instrumented (from enhancer, CLI/Electron only)
 
-These work out of the box with no custom code:
+These work out of the box in CLI/Electron with no custom code. They do NOT fire in extension mode (the inlined `rum.js` deliberately omits the enhancer):
 
 - **CWV** (LCP, CLS, INP) -- measures UI responsiveness
 - **click** -- tracks user interactions with UI elements
+
+### Wiring status (post-2026-04-29)
+
+- `navigate`, `formsubmit`, `fill`, `viewblock` — wired in both CLI/Electron and extension.
+- `signup`, `viewmedia` — newly wired; fire in both modes.
+- `error` — fires in both modes, but the **automatic capture path** differs:
+  - CLI/Electron: helix-rum-js installs its own `window.error` and `unhandledrejection` listeners and emits its native payload shape.
+  - Extension: `telemetry.ts` registers SLICC's listeners after assigning `sampleRUM` from `rum.js`, emitting `{source: 'js', target: sanitizedMessage}`. Sanitization collapses VFS paths to `/<root>/.../` and truncates to 200 characters.
+  - Manual `trackError(...)` calls produce the SLICC shape in both modes.
+  - Cross-mode error queries should split by `RUM_GENERATION` and treat each shape separately.
+
+### Mode-specific shell-command coverage
+
+`fill` beacons fire from `wasm-shell.ts:679`, which runs in two contexts in the extension: the panel terminal and the offscreen agent shell.
+
+- **CLI / Electron:** both contexts are the same realm; every shell command produces a beacon.
+- **Extension:** only the panel-terminal `WasmShell` initializes telemetry. The offscreen agent shell's `trackShellCommand` calls silently no-op. Extension `fill` beacons therefore represent commands the user typed in the panel terminal — not commands the agent ran via its bash tool.
+
+Dashboard readers comparing extension and CLI shell volume should expect this gap.
+
+### `viewmedia` wiring
+
+`trackImageView('chat')` fires once per `<img>` that attaches to `ChatPanel.messagesEl`, captured by a single `MutationObserver` installed in the panel constructor. This catches markdown images (rendered by `message-renderer.ts`), screenshot insertions in chat, and tool-result images — uniformly. UI chrome (avatars, branding, file-browser thumbnails) is excluded because it lives outside `messagesEl`.
+
+### Not instrumented in this iteration
+
+- The offscreen document (`packages/chrome-extension/src/offscreen.ts`). Agent-loop events — turn end, tool-call durations, scoop create/delegate/drop — would require offscreen-side init.
+- The extension service worker (`packages/chrome-extension/src/service-worker.ts`). CDP attach/detach, OAuth completion, navigate-licks, tray-socket lifecycle.
+- Core Web Vitals in the extension. The helix enhancer that captures CWV cannot run under the extension's CSP, and we do not self-host it here.
+
+These are tracked as future work in `docs/superpowers/specs/2026-04-28-extension-telemetry-design.md`.
 
 ## Sampling Strategy
 
