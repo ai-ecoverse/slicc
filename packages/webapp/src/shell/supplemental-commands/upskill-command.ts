@@ -1355,6 +1355,22 @@ async function refreshSprinklesAfterInstall(): Promise<void> {
 }
 
 /**
+ * Coerce a (possibly partial / loosely-typed) profile into the shape
+ * `scoreSkills` expects. `scoreSkills` calls `.includes()` on `apps`
+ * and `tasks` and dereferences `role`/`purpose`/`name`, so missing
+ * fields default to safe empties rather than throwing.
+ */
+function normalizeProfile(profile: Partial<UserProfile>): UserProfile {
+  return {
+    purpose: profile.purpose ?? '',
+    role: profile.role ?? '',
+    tasks: Array.isArray(profile.tasks) ? profile.tasks : [],
+    apps: Array.isArray(profile.apps) ? profile.apps : [],
+    name: profile.name ?? '',
+  };
+}
+
+/**
  * Result of {@link installRecommendedSkills}.
  *
  * - `installedNames`: skills that successfully landed under `/workspace/skills/`.
@@ -1384,13 +1400,20 @@ export interface InstallRecommendationsResult {
  * onboarding orchestrator (which fires this in the background after the
  * welcome wizard completes).
  *
+ * When called from the orchestrator, the in-memory profile is passed
+ * directly via `profileOverride` to avoid racing with the parallel
+ * `persistProfile` write — the install otherwise lands before the
+ * `/home/<user>/.welcome.json` file exists on disk and skips with
+ * `skipped: 'no-profile'`.
+ *
  * Errors are collected into the result; this function does not throw.
  * Post-install hooks (`__slicc_reloadSkills`, sprinkle refresh) run iff
  * at least one skill was installed successfully.
  */
 export async function installRecommendedSkills(
   fs: VirtualFS,
-  fetchFn: SecureFetch
+  fetchFn: SecureFetch,
+  profileOverride?: Partial<UserProfile> | null
 ): Promise<InstallRecommendationsResult> {
   const startTime = Date.now();
   const empty = (
@@ -1404,21 +1427,30 @@ export async function installRecommendedSkills(
     elapsedSeconds: (Date.now() - startTime) / 1000,
   });
 
-  // Read user profile — scan /home/*/.welcome.json
   let profile: UserProfile | null = null;
-  try {
-    const homeDirs = await fs.readDir('/home');
-    for (const entry of homeDirs) {
-      try {
-        const raw = await fs.readTextFile(`/home/${entry.name}/.welcome.json`);
-        profile = JSON.parse(raw) as UserProfile;
-        break;
-      } catch {
-        // no .welcome.json in this dir
+
+  // Fast path — caller (orchestrator) supplied the freshly-collected
+  // profile so we don't have to wait for the parallel persistProfile()
+  // write to land on disk.
+  if (profileOverride) {
+    profile = normalizeProfile(profileOverride);
+  } else {
+    // Fallback path — read from disk (`upskill recommendations --install`
+    // shell command, or any caller that doesn't have the profile in hand).
+    try {
+      const homeDirs = await fs.readDir('/home');
+      for (const entry of homeDirs) {
+        try {
+          const raw = await fs.readTextFile(`/home/${entry.name}/.welcome.json`);
+          profile = normalizeProfile(JSON.parse(raw) as Partial<UserProfile>);
+          break;
+        } catch {
+          // no .welcome.json in this dir
+        }
       }
+    } catch {
+      // /home doesn't exist
     }
-  } catch {
-    // /home doesn't exist
   }
 
   if (!profile) return empty('no-profile');

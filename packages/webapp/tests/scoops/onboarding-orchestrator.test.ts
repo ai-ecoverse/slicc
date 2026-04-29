@@ -49,7 +49,7 @@ function makeHarness(
   const finalLicks: any[] = [];
   const accounts: any[] = [];
   const selectedModels: string[] = [];
-  const skillInstallCalls: number[] = [];
+  const skillInstallCalls: Array<{ at: number; profile: unknown }> = [];
   const orchestrator = new OnboardingOrchestrator({
     fs,
     postSystemMessage: (line) => systemMessages.push(line),
@@ -60,8 +60,8 @@ function makeHarness(
     resolveModelLabel: (_p, m) => m.toUpperCase(),
     broadcastToDip: (msg) => dipInbox.push(msg),
     fireFinalLick: (data) => finalLicks.push(data),
-    installRecommendedSkills: async () => {
-      skillInstallCalls.push(Date.now());
+    installRecommendedSkills: async (profile) => {
+      skillInstallCalls.push({ at: Date.now(), profile });
     },
     fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
     rand: () => 0,
@@ -134,11 +134,14 @@ describe('OnboardingOrchestrator', () => {
       expect(await h.fs.exists('/home/user/.welcome.json')).toBe(true);
     });
 
-    it('kicks off the recommended-skills installer silently in the background', async () => {
+    it('kicks off the recommended-skills installer with the in-memory profile', async () => {
       const h = makeHarness();
-      await h.orchestrator.handleOnboardingComplete({ name: 'Kim' });
+      await h.orchestrator.handleOnboardingComplete({ name: 'Kim', role: 'developer' });
       await new Promise((r) => setTimeout(r, 5));
       expect(h.skillInstallCalls).toHaveLength(1);
+      // Profile is passed by reference so the installer doesn't have to wait
+      // for the parallel persistProfile write to land on disk.
+      expect(h.skillInstallCalls[0].profile).toMatchObject({ name: 'Kim', role: 'developer' });
     });
 
     it('silently no-ops when no skill installer was wired', async () => {

@@ -893,6 +893,54 @@ describe('installRecommendedSkills helper (no-shell entry point)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('uses an in-memory profileOverride without scanning /home', async () => {
+    // /home is empty — without the override this would skip with no-profile.
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'skills-main/aem/SKILL.md': encoder.encode('---\nname: aem\n---\n# AEM\n'),
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return response(
+          200,
+          JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          })
+        );
+      }
+      if (url.includes('codeload.github.com')) {
+        return response(200, zipBytes);
+      }
+      if (url.includes('api.github.com')) {
+        return response(403, JSON.stringify({ message: 'rate limited' }), {}, 'Forbidden');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch, {
+      purpose: 'work',
+      role: 'developer',
+      tasks: ['build-websites'],
+      apps: ['aem'],
+    });
+    expect(result.skipped).toBeNull();
+    expect(result.installedNames).toEqual(['aem']);
+  });
+
   it('returns skipped="catalog-fetch" when the catalog request fails', async () => {
     await fs.mkdir('/home/test', { recursive: true });
     await fs.writeFile(

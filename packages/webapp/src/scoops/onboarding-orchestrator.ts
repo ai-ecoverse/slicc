@@ -111,10 +111,11 @@ export interface OrchestratorDeps {
    * land the user's matching skills immediately after the welcome wizard
    * without going through the wasm shell layer (which lives in a different
    * execution context in extension mode and isn't reachable from the
-   * panel-side orchestrator). Errors are logged and swallowed by the
-   * orchestrator.
+   * panel-side orchestrator). The orchestrator passes the freshly-collected
+   * profile so the installer doesn't race with the parallel `persistProfile`
+   * write. Errors are logged and swallowed by the orchestrator.
    */
-  installRecommendedSkills?: () => Promise<void>;
+  installRecommendedSkills?: (profile: OnboardingProfile) => Promise<void>;
   /** Optional fetch override for tests. */
   fetchImpl?: typeof fetch;
   /** Optional RNG for deterministic message picking in tests. */
@@ -176,11 +177,13 @@ export class OnboardingOrchestrator {
     void this.persistProfile(this.profile).catch((err) => log.warn('persistProfile failed', err));
 
     // Kick off skill install in the background — no UI block, no shell
-    // round-trip. The helper handles "no profile" / "all installed" /
-    // "catalog fetch failed" internally, so we just fire and forget.
+    // round-trip. We pass the in-memory profile directly so the installer
+    // doesn't race the parallel persistProfile write to /home/<user>/.welcome.json.
+    // The helper handles "all installed" / "catalog fetch failed" internally,
+    // so we just fire and forget.
     if (this.deps.installRecommendedSkills) {
       void this.deps
-        .installRecommendedSkills()
+        .installRecommendedSkills(this.profile)
         .catch((err) => log.warn('installRecommendedSkills failed', err));
     }
 
