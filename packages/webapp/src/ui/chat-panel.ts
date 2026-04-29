@@ -26,6 +26,7 @@ import {
   setSelectedModelId,
   getProviderConfig,
 } from './provider-settings.js';
+import { trackChatSend } from './telemetry.js';
 
 const log = createLogger('chat-panel');
 
@@ -608,6 +609,13 @@ export class ChatPanel {
   private sendMessage(): void {
     const text = this.textarea.value.trim();
     if (!text) return;
+
+    // Telemetry — fire once per send, mirroring orchestrator's previous logic.
+    // ChatPanel models the active scoop as `currentScoopName: string | null`
+    // where null === cone (see field declaration around line 64).
+    const scoopName = this.currentScoopName ?? 'cone';
+    const modelId = localStorage.getItem('selected-model') ?? 'unknown';
+    trackChatSend(scoopName, modelId);
 
     // User action — always re-attach auto-scroll
     this.autoScrollAttached = true;
