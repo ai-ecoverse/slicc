@@ -30,6 +30,46 @@ function getLfsReader(): FS.PromisifiedFS {
   return lfsReader;
 }
 
+/**
+ * Path prefixes a dip is allowed to source from AND read from via the
+ * VFS bridge. Inline ```shtml fenced blocks (agent-emitted) are never
+ * trusted because the cone could relay attacker-controlled content.
+ * Image dips loaded from a VFS path under one of these prefixes are
+ * trusted because the user (or the bundled vfs-root) installed them.
+ *
+ * Keep this list short. Adding a prefix grants any .shtml under it
+ * read access to every other path on the same allowlist.
+ */
+const TRUSTED_DIP_SOURCE_PREFIXES = [
+  '/shared/sprinkles/',
+  '/workspace/skills/sprinkles/',
+  '/workspace/sprinkles/',
+];
+
+/**
+ * Path prefixes a trusted dip may read via the VFS bridge. Narrower
+ * than the source allowlist so a compromised welcome dip can't read
+ * arbitrary user files (e.g. /home/**, repository working copies).
+ */
+const TRUSTED_DIP_READ_PREFIXES = [
+  '/shared/',
+  '/workspace/skills/sprinkles/',
+  '/workspace/sprinkles/',
+];
+
+function isTrustedDipSource(path: string): boolean {
+  return TRUSTED_DIP_SOURCE_PREFIXES.some((p) => path.startsWith(p));
+}
+
+function isTrustedDipReadPath(path: string): boolean {
+  if (typeof path !== 'string' || !path.startsWith('/')) return false;
+  if (path.includes('..')) return false;
+  return TRUSTED_DIP_READ_PREFIXES.some((p) => path.startsWith(p));
+}
+
+/** Iframes whose dip source was trusted — eligible for the VFS bridge. */
+const trustedDipWindows = new WeakSet<Window>();
+
 async function readShtmlFromVFS(vfsPath: string, signal?: AbortSignal): Promise<string> {
   if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
   const lfs = getLfsReader();
@@ -171,11 +211,17 @@ export function broadcastToDips(payload: { type: string; [k: string]: unknown })
 /**
  * Mount an dip iframe in the given container element.
  * Exported for reuse by tool-ui-renderer (sprinkle chat).
+ *
+ * `trusted` controls whether the dip's bridge can use the read-only
+ * VFS API (`slicc.readFile` etc.). Inline ```shtml from chat is
+ * never trusted; only dips sourced from a VFS path under
+ * TRUSTED_DIP_SOURCE_PREFIXES get the bridge.
  */
 export function mountDip(
   container: HTMLElement,
   content: string,
-  onLick: (action: string, data: unknown) => void
+  onLick: (action: string, data: unknown) => void,
+  trusted = false
 ): DipInstance {
   const themeCSS = collectThemeCSS();
   const htmlClass = isThemeLight() ? ' class="theme-light"' : '';
@@ -234,7 +280,7 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
 <body class="sprinkle-inline">${content}</body></html>`;
 
   if (isExtension) {
-    return mountDipExtension(container, srcdoc, onLick);
+    return mountDipExtension(container, srcdoc, onLick, trusted);
   }
 
   const iframe = document.createElement('iframe');
@@ -249,6 +295,7 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
   if (iframe.contentWindow) {
     registerSprinkleWindow(iframe.contentWindow);
     liveDipWindows.add(iframe.contentWindow);
+    if (trusted) trustedDipWindows.add(iframe.contentWindow);
   }
   iframe.addEventListener(
     'load',
@@ -256,7 +303,10 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
       // Re-register defensively — some browsers swap contentWindow on
       // the first `load` event for srcdoc iframes.
       registerSprinkleWindow(iframe.contentWindow);
-      if (iframe.contentWindow) liveDipWindows.add(iframe.contentWindow);
+      if (iframe.contentWindow) {
+        liveDipWindows.add(iframe.contentWindow);
+        if (trusted) trustedDipWindows.add(iframe.contentWindow);
+      }
     },
     {
       once: true,
@@ -288,7 +338,10 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
     dispose() {
       window.removeEventListener('message', messageHandler);
       unregisterSprinkleWindow(iframe.contentWindow);
-      if (iframe.contentWindow) liveDipWindows.delete(iframe.contentWindow);
+      if (iframe.contentWindow) {
+        liveDipWindows.delete(iframe.contentWindow);
+        trustedDipWindows.delete(iframe.contentWindow);
+      }
       iframe.remove();
     },
   };
@@ -299,6 +352,15 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
  * dip iframe. Reads from the same LightningFS the preview SW uses, so
  * onboarding markers / profiles / etc. are visible to the dip without
  * a parent-side handshake. Returns `true` when the message was handled.
+ *
+ * Two layers of access control:
+ *
+ * 1. The iframe's contentWindow must be in `trustedDipWindows`. Inline
+ *    ```shtml from chat is never registered there, so an
+ *    attacker-controlled cone reply can't read user files.
+ * 2. The requested path must match a TRUSTED_DIP_READ_PREFIXES entry.
+ *    A compromised welcome dip can't escape its sandbox to read
+ *    `/home/**` / repository working copies / etc.
  */
 async function handleDipVfsRequest(
   iframeWindow: Window | null,
@@ -314,6 +376,15 @@ async function handleDipVfsRequest(
       /* iframe gone — ignore */
     }
   };
+
+  if (!trustedDipWindows.has(iframeWindow)) {
+    respond({ type: `${msg.type}-response`, error: 'VFS access not allowed for this dip' });
+    return true;
+  }
+  if (!isTrustedDipReadPath(path)) {
+    respond({ type: `${msg.type}-response`, error: `VFS path not allowed: ${path}` });
+    return true;
+  }
 
   if (msg.type === 'dip-readfile') {
     try {
@@ -391,6 +462,10 @@ export function hydrateDips(
   const instances: DipInstance[] = [];
 
   //    Fenced ```shtml code blocks
+  // Inline dips come from agent output and are NEVER trusted — even if
+  // the cone is benign today, a future webhook/scoop could relay
+  // attacker-controlled markdown that exfiltrates user files via the
+  // VFS bridge.
   const codeEls = containerEl.querySelectorAll<HTMLElement>('pre > code.language-shtml');
   for (const codeEl of codeEls) {
     const preEl = codeEl.parentElement!;
@@ -400,7 +475,7 @@ export function hydrateDips(
     wrapper.className = 'msg__dip';
     preEl.replaceWith(wrapper);
 
-    instances.push(mountDip(wrapper, shtmlContent, onLick));
+    instances.push(mountDip(wrapper, shtmlContent, onLick, /* trusted */ false));
   }
 
   //    ![alt](/path/to/file.shtml) image references                  
@@ -472,12 +547,18 @@ export function hydrateDips(
       throw new Error(`HTTP ${resp.status}`);
     };
 
+    // Image-sourced dips are trusted only when they live under a known
+    // sprinkles directory — the welcome flow / installed sprinkles. A
+    // .shtml the agent wrote to /scoops/foo/x.shtml does NOT get the
+    // VFS bridge.
+    const trusted = isVfsPath && isTrustedDipSource(src);
+
     resolveContent()
       .then((shtmlContent) => {
         // Skip mounting if dispose() ran while the fetch was in flight, or
         // if the wrapper was detached from the DOM by some other path.
         if (disposed || !wrapper.isConnected) return;
-        mounted = mountDip(wrapper, shtmlContent, onLick);
+        mounted = mountDip(wrapper, shtmlContent, onLick, trusted);
       })
       .catch((err) => {
         if (disposed || (err as { name?: string })?.name === 'AbortError') return;
@@ -509,7 +590,8 @@ export function disposeDips(instances: DipInstance[]): void {
 function mountDipExtension(
   container: HTMLElement,
   srcdoc: string,
-  onLick: (action: string, data: unknown) => void
+  onLick: (action: string, data: unknown) => void,
+  trusted = false
 ): DipInstance {
   const iframe = document.createElement('iframe');
   iframe.src = chrome.runtime.getURL('sprinkle-sandbox.html');
@@ -541,7 +623,10 @@ function mountDipExtension(
     'load',
     () => {
       registerSprinkleWindow(iframe.contentWindow);
-      if (iframe.contentWindow) liveDipWindows.add(iframe.contentWindow);
+      if (iframe.contentWindow) {
+        liveDipWindows.add(iframe.contentWindow);
+        if (trusted) trustedDipWindows.add(iframe.contentWindow);
+      }
       iframe.contentWindow?.postMessage(
         { type: 'dip-render', srcdoc, isLight: isThemeLight() },
         '*'
@@ -554,7 +639,10 @@ function mountDipExtension(
     dispose() {
       window.removeEventListener('message', messageHandler);
       unregisterSprinkleWindow(iframe.contentWindow);
-      if (iframe.contentWindow) liveDipWindows.delete(iframe.contentWindow);
+      if (iframe.contentWindow) {
+        liveDipWindows.delete(iframe.contentWindow);
+        trustedDipWindows.delete(iframe.contentWindow);
+      }
       iframe.remove();
     },
   };

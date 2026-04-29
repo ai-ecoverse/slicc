@@ -1226,9 +1226,21 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     detectWelcomeFirstRun(localFs)
       .then((result) => {
         if (!result.isFirstRun) return;
+        // If detection insists this is genuinely a fresh boot (no
+        // `/shared/.welcomed` marker AND no welcome lick in chat
+        // history), but our localStorage ledger has a stale
+        // `first-run` entry from a previous install whose state was
+        // wiped (clear-site-data, IndexedDB nuke, manual VFS reset),
+        // suppressing here would leave the user with no welcome and
+        // no deterministic onboarding path. Trust the install state
+        // over the ledger and clear the stale entry. The ledger
+        // still protects against intra-session double-fires (the
+        // detection promise can resolve twice during a noisy boot),
+        // because we re-add it below before handing off.
         if (firedWelcomeActions.has('first-run')) {
-          log.debug('Suppressing duplicate welcome lick (detect-first-run-ext)');
-          return;
+          log.info('Clearing stale welcome dedup entry — install state is fresh');
+          firedWelcomeActions.delete('first-run');
+          persistFiredWelcomeActions(firedWelcomeActions);
         }
         firedWelcomeActions.add('first-run');
         persistFiredWelcomeActions(firedWelcomeActions);
@@ -2894,6 +2906,16 @@ async function main(): Promise<void> {
   if (pendingFirstRunDetection) {
     void pendingFirstRunDetection.then((result) => {
       if (!result.isFirstRun) return;
+      // Same stale-ledger guard as the extension boot path: install
+      // state is canonical (no marker, no welcome lick in chat
+      // history), so a leftover `first-run` entry from a wiped install
+      // must not suppress the welcome dip. routeLickToScoop will
+      // re-add the entry below.
+      if (firedWelcomeActions.has('first-run')) {
+        log.info('Clearing stale welcome dedup entry — install state is fresh');
+        firedWelcomeActions.delete('first-run');
+        persistFiredWelcomeActions(firedWelcomeActions);
+      }
       const event: LickEvent = {
         type: 'sprinkle',
         sprinkleName: 'welcome',

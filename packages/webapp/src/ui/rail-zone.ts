@@ -10,7 +10,7 @@
  * - clicking an idle icon activates that item AND expands the content
  *   panel beside the rail,
  * - clicking the active icon collapses the panel,
- * - long-press (>=2s) or click with any modifier key (cmd / ctrl /
+ * - long-press (>=1s, see LONG_PRESS_MS) or click with any modifier key (cmd / ctrl /
  *   shift / alt / option) activates that item AND switches to
  *   fullpage mode (chat hidden, content fills the available space),
  * - the [+] button is rendered only when the top section would
