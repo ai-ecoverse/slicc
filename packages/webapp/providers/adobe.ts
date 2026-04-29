@@ -243,6 +243,19 @@ export const config: ProviderConfig = {
       if (meta?.max_tokens !== undefined) entry.max_tokens = meta.max_tokens;
       if (meta?.reasoning !== undefined) entry.reasoning = meta.reasoning;
       if (meta?.input) entry.input = meta.input;
+      // Adobe's IMS proxy forwards Anthropic-Messages requests to AWS Bedrock.
+      // Bedrock's Haiku endpoints currently 400 on `tools[].eager_input_streaming`
+      // ("Extra inputs are not permitted"); the same field works on Opus and
+      // Sonnet. pi-ai 0.70+ adds the field to every tool definition by default,
+      // so we turn it off only for Haiku here. pi-ai's anthropic provider then
+      // omits the field and sends the legacy
+      // `fine-grained-tool-streaming-2025-05-14` beta header instead, which
+      // Haiku-on-Bedrock accepts. The compat propagates through
+      // ModelMetadata → applyModelMetadata → Model.compat in
+      // provider-settings.ts:getProviderModels.
+      if (/haiku/i.test(m.id)) {
+        entry.compat = { supportsEagerToolInputStreaming: false };
+      }
       return entry;
     };
 
@@ -705,28 +718,7 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
           // Determine API type from metadata or default to anthropic
           const apiType = pm.api === 'openai' ? 'openai' : 'anthropic';
           const customApi = `adobe-${apiType}` as Api;
-          // Adobe's IMS proxy forwards Anthropic-Messages requests to AWS
-          // Bedrock. Bedrock's Haiku endpoints currently 400 on
-          // `tools[].eager_input_streaming` ("Extra inputs are not
-          // permitted"); the same field works on Opus and Sonnet. pi-ai
-          // 0.70+ adds the field to every tool definition by default, so we
-          // turn it off only for Haiku. pi-ai's anthropic provider then
-          // omits the field and sends the legacy
-          // `fine-grained-tool-streaming-2025-05-14` beta header instead,
-          // which Haiku-on-Bedrock accepts. OpenAI-routed Adobe models are
-          // unaffected.
-          const isHaiku = /haiku/i.test(pm.id);
-          const adobeCompat =
-            apiType === 'anthropic' && isHaiku ? { supportsEagerToolInputStreaming: false } : null;
-          if (base) {
-            const baseCompat = (base as Model<Api> & { compat?: object }).compat;
-            return {
-              ...base,
-              provider: 'adobe',
-              api: customApi,
-              ...(adobeCompat && { compat: { ...(baseCompat ?? {}), ...adobeCompat } }),
-            } as unknown as Model<Api>;
-          }
+          if (base) return { ...base, provider: 'adobe', api: customApi };
           return {
             id: pm.id,
             name: pm.name ?? pm.id,
@@ -742,7 +734,6 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
             cacheReadCost: 0,
             cacheWriteCost: 0,
             reasoning: true,
-            ...(adobeCompat && { compat: adobeCompat }),
           } as unknown as Model<Api>;
         });
       }
@@ -759,23 +750,7 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
   }
 
   const anthropicModels = getModels('anthropic' as any) as Model<Api>[];
-  // Same Haiku-only compat override as the proxy-models path above — Bedrock's
-  // Haiku endpoints reject `tools[].eager_input_streaming` ("Extra inputs are
-  // not permitted") while Opus and Sonnet accept it.
-  return anthropicModels.map((m) => {
-    if (!/haiku/i.test(m.id)) {
-      return { ...m, provider: 'adobe', api: 'adobe-anthropic' as Api };
-    }
-    return {
-      ...m,
-      provider: 'adobe',
-      api: 'adobe-anthropic' as Api,
-      compat: {
-        ...((m as Model<Api> & { compat?: object }).compat ?? {}),
-        supportsEagerToolInputStreaming: false,
-      },
-    } as unknown as Model<Api>;
-  });
+  return anthropicModels.map((m) => ({ ...m, provider: 'adobe', api: 'adobe-anthropic' as Api }));
 }
 
 const modelsCache = new Map<string, Model<Api>[]>();

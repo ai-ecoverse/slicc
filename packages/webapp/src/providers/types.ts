@@ -39,6 +39,16 @@ export interface ModelMetadata {
   reasoning?: boolean;
   /** Supported input modalities (e.g., ['text', 'image']). */
   input?: string[];
+  /**
+   * Per-model compatibility overrides for the underlying API (matches pi-ai's
+   * `Model.compat` field; camelCase to align with pi-ai). Used to opt models
+   * out of provider features that the upstream backend rejects — e.g. Adobe's
+   * Bedrock relay returns 400 for `tools[].eager_input_streaming` on Haiku, so
+   * Adobe sets `compat: { supportsEagerToolInputStreaming: false }` for Haiku
+   * model entries. Shape is loosely typed because pi-ai's compat varies by
+   * API (AnthropicMessagesCompat, OpenAICompletionsCompat, …).
+   */
+  compat?: Record<string, unknown>;
 }
 
 export interface ProviderConfig {

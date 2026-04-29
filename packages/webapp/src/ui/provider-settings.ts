@@ -116,12 +116,27 @@ export function getProviderConfig(providerId: string): ProviderConfig {
 /** Apply ModelMetadata overrides to a model object (mutates in place). */
 function applyModelMetadata(
   model: Record<string, any>,
-  metadata: { context_window?: number; max_tokens?: number; reasoning?: boolean; input?: string[] }
+  metadata: {
+    context_window?: number;
+    max_tokens?: number;
+    reasoning?: boolean;
+    input?: string[];
+    compat?: Record<string, unknown>;
+  }
 ): void {
   if (metadata.context_window !== undefined) model.contextWindow = metadata.context_window;
   if (metadata.max_tokens !== undefined) model.maxTokens = metadata.max_tokens;
   if (metadata.reasoning !== undefined) model.reasoning = metadata.reasoning;
   if (metadata.input !== undefined) model.input = metadata.input;
+  // Merge compat onto whatever pi-ai's base model already declared (or any
+  // compat from a prior modelOverrides layer). Each successive layer can
+  // override individual flags without clobbering siblings.
+  if (metadata.compat !== undefined) {
+    model.compat = {
+      ...((model.compat as Record<string, unknown> | undefined) ?? {}),
+      ...metadata.compat,
+    };
+  }
 }
 
 // Get models for a provider
