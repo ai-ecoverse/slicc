@@ -91,7 +91,10 @@ import { initTelemetry } from './telemetry.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
 import { recoverMounts, formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
 import { detectUpgrade, recordVersionSeen } from '../scoops/upgrade-detection.js';
-import { detectWelcomeFirstRun } from '../scoops/welcome-detection.js';
+import {
+  detectWelcomeFirstRun,
+  hasOnboardingFinalLickInHistory,
+} from '../scoops/welcome-detection.js';
 // Static-import dip helpers used by the onboarding orchestrator. dip.ts is
 // already pulled into the main entry chunk via chat-panel.ts/tool-ui-renderer.ts
 // — dynamic-importing it here only confused rollup's chunk graph (and triggered
@@ -339,6 +342,92 @@ function registerSkillDropInstall(
     } else {
       overlay.hide();
     }
+  });
+}
+
+/**
+ * Read the most recently-written `/home/<slug>/.welcome.json` so the
+ * fast-forward path can hand the cone the same profile shape the
+ * orchestrator would have. Returns an empty object on any failure —
+ * the cone's welcome SKILL.md is happy to greet without personalization.
+ */
+async function loadPersistedProfile(fs: VirtualFS): Promise<Record<string, unknown>> {
+  try {
+    const homes = await fs.readDir('/home');
+    let best: { profile: Record<string, unknown>; mtime: number } | null = null;
+    for (const entry of homes) {
+      if (entry.type !== 'directory') continue;
+      const path = `/home/${entry.name}/.welcome.json`;
+      try {
+        const stat = await fs.stat(path);
+        const mtime = stat.mtime ?? 0;
+        if (best && mtime <= best.mtime) continue;
+        const raw = await fs.readFile(path, { encoding: 'utf-8' });
+        const parsed = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
+        if (parsed && typeof parsed === 'object') {
+          best = { profile: parsed as Record<string, unknown>, mtime };
+        }
+      } catch {
+        /* skip slugs without a profile */
+      }
+    }
+    return best?.profile ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * When the connect-llm dip is fast-forwarded on reload (provider
+ * already configured), the orchestrator's normal connect-attempt path
+ * never runs and the final `onboarding-complete-with-provider` lick is
+ * never fired. That stalls the welcome sequence — the cone never gets
+ * to greet the user with the model name. Re-fire the lick here with
+ * the on-disk profile + active provider/model. Skipped when the cone
+ * has already received the lick in a previous session (chat history
+ * persists across reloads).
+ */
+async function fireFastForwardFinalLick(
+  fs: VirtualFS | null,
+  providerId: string,
+  fire: (data: Record<string, unknown>) => void
+): Promise<void> {
+  if (await hasOnboardingFinalLickInHistory()) return;
+  const profile = fs ? await loadPersistedProfile(fs) : {};
+  const { getSelectedModelId, getProviderConfig, getProviderModels } =
+    await import('./provider-settings.js');
+  const modelId = (() => {
+    try {
+      return getSelectedModelId() || null;
+    } catch {
+      return null;
+    }
+  })();
+  const modelLabel = (() => {
+    if (!modelId) return null;
+    try {
+      const found = getProviderModels(providerId).find((m) => m.id === modelId);
+      return found?.name ?? modelId;
+    } catch {
+      return modelId;
+    }
+  })();
+  let providerName: string | null = null;
+  try {
+    providerName = getProviderConfig(providerId).name ?? null;
+  } catch {
+    /* keep null */
+  }
+  fire({
+    action: 'onboarding-complete-with-provider',
+    data: {
+      profile,
+      provider: providerId,
+      providerName,
+      model: modelId,
+      modelLabel,
+      validation: 'preexisting',
+    },
   });
 }
 
@@ -751,7 +840,6 @@ async function mainExtension(app: HTMLElement): Promise<void> {
             : undefined;
         const isWelcomeFlowAction =
           welcomeAction === 'first-run' ||
-          welcomeAction === 'welcome-ready' ||
           welcomeAction === 'onboarding-complete' ||
           welcomeAction === 'connect-ready' ||
           welcomeAction === 'connect-attempt' ||
@@ -764,22 +852,6 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
           if (action === 'first-run') {
             getExtOnboardingOrchestrator().handleFirstRun();
-            return;
-          }
-          if (action === 'welcome-ready') {
-            // The welcome dip is asking whether the user has already
-            // finished onboarding (chat-history re-mount on reload).
-            // If `.welcomed` is present we tell it to skip the wizard.
-            void localFs
-              .exists('/shared/.welcomed')
-              .catch(() => false)
-              .then((welcomed) => {
-                broadcastToDipsExt({
-                  type: 'slicc-welcome-state',
-                  complete: !!welcomed,
-                  note: welcomed ? "You're all set." : undefined,
-                });
-              });
             return;
           }
           if (action === 'onboarding-complete') {
@@ -816,6 +888,11 @@ async function mainExtension(app: HTMLElement): Promise<void> {
                 provider: primary.providerId,
                 note: cfg?.name ? `Already connected to ${cfg.name}.` : 'Already connected.',
               });
+              // Same final-lick advance as the standalone path —
+              // see comment there for the chat-history gate.
+              void fireFastForwardFinalLick(localFs, primary.providerId, (data) =>
+                client.sendSprinkleLick('welcome', data)
+              ).catch((err) => log.warn('Failed to fire fast-forward final lick', err));
               return;
             }
             getExtOnboardingOrchestrator().handleConnectReady();
@@ -1875,7 +1952,6 @@ async function main(): Promise<void> {
         : undefined;
     const isWelcomeFlowAction =
       welcomeAction === 'first-run' ||
-      welcomeAction === 'welcome-ready' ||
       welcomeAction === 'onboarding-complete' ||
       welcomeAction === 'connect-ready' ||
       welcomeAction === 'connect-attempt' ||
@@ -1891,29 +1967,6 @@ async function main(): Promise<void> {
       // "No API key configured" before the wizard even appears.
       if (action === 'first-run') {
         getOnboardingOrchestrator()?.handleFirstRun();
-        return;
-      }
-
-      // ── Reload short-circuit for the welcome dip. The dip is the
-      // first thing the chat history re-renders after a refresh; if
-      // `.welcomed` is already on disk the user has been here before
-      // and we tell the dip to render its finished card instead of
-      // the wizard.
-      if (action === 'welcome-ready') {
-        if (sharedFs) {
-          void sharedFs
-            .exists('/shared/.welcomed')
-            .catch(() => false)
-            .then((welcomed) => {
-              broadcastToDips({
-                type: 'slicc-welcome-state',
-                complete: !!welcomed,
-                note: welcomed ? "You're all set." : undefined,
-              });
-            });
-        } else {
-          broadcastToDips({ type: 'slicc-welcome-state', complete: false });
-        }
         return;
       }
 
@@ -1952,6 +2005,21 @@ async function main(): Promise<void> {
             provider: primary.providerId,
             note: cfg?.name ? `Already connected to ${cfg.name}.` : 'Already connected.',
           });
+          // The orchestrator's normal path fires the
+          // `onboarding-complete-with-provider` lick after a
+          // successful connect-attempt — when we short-circuit it
+          // we still need that lick so the cone can close out the
+          // welcome sequence. Skip it if the cone already received
+          // the lick in a previous session (history persists).
+          void fireFastForwardFinalLick(sharedFs, primary.providerId, (data) => {
+            const completionEvent = {
+              type: 'sprinkle',
+              sprinkleName: 'welcome',
+              body: data,
+              timestamp: new Date().toISOString(),
+            } as unknown as LickEvent;
+            routeLickToScoop(completionEvent);
+          }).catch((err) => log.warn('Failed to fire fast-forward final lick', err));
           return;
         }
         getOnboardingOrchestrator()?.handleConnectReady();

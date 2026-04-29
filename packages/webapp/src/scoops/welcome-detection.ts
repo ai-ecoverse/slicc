@@ -203,6 +203,49 @@ export async function recordWelcomed(fs: VirtualFS): Promise<void> {
   await fs.writeFile(WELCOMED_MARKER_PATH, '1');
 }
 
+/**
+ * Fingerprint of the final onboarding lick body. The cone's persisted
+ * chat history records every lick as a synthetic user message whose
+ * content embeds the JSON body, so a substring match is sufficient.
+ */
+const FINAL_LICK_FINGERPRINT = '"action":"onboarding-complete-with-provider"';
+
+function messageMentionsFinalLick(msg: PersistedChatMessage): boolean {
+  const content = msg.content;
+  if (typeof content === 'string') return content.includes(FINAL_LICK_FINGERPRINT);
+  if (!Array.isArray(content)) return false;
+  return content.some((block) => {
+    if (typeof block === 'string') return block.includes(FINAL_LICK_FINGERPRINT);
+    if (block && typeof block === 'object') {
+      const text = (block as { text?: unknown }).text;
+      if (typeof text === 'string') return text.includes(FINAL_LICK_FINGERPRINT);
+    }
+    return false;
+  });
+}
+
+/**
+ * True when the cone has already received an `onboarding-complete-with-provider`
+ * lick in a previous session. Used by the `connect-ready` reload
+ * short-circuit so we don't re-fire the final lick (and re-greet the
+ * user) when the dip just fast-forwards to its done card.
+ *
+ * Returns `false` on any error so a transient IndexedDB hiccup doesn't
+ * block the lick from firing on a genuine fresh-chat-but-state boot.
+ */
+export async function hasOnboardingFinalLickInHistory(): Promise<boolean> {
+  try {
+    const session = await loadConeChatSession();
+    if (!session || !Array.isArray(session.messages)) return false;
+    return session.messages.some((msg) => messageMentionsFinalLick(msg));
+  } catch (err) {
+    log.warn('Failed to scan cone chat session for final lick', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
+
 export const __test__ = {
   WELCOMED_MARKER_PATH,
   CONE_SESSION_ID,

@@ -563,14 +563,13 @@
       }
 
       // ── Wizard bootstrap ───────────────────────────────────────
-      // The dip can be re-mounted from chat history after the user
-      // already completed onboarding. To avoid showing the wizard
-      // again (or worse, re-firing `onboarding-complete`) we ask the
-      // parent for the current state before rendering anything.
-      // If the parent says onboarding is already complete we jump
-      // straight to a finished card; otherwise we boot step 1.
+      // The dip is re-rendered from chat history on every reload, so
+      // we self-detect onboarding state by reading `/shared/.welcomed`
+      // through the dip VFS bridge. If the marker exists the user has
+      // already finished onboarding and we show a tiny finished card
+      // instead of re-running the wizard. No parent-side handshake
+      // needed — the bridge gives the dip read-only VFS access.
       function startWizard() {
-        // Always reset to step 1 of the visible wizard.
         document.getElementById('sDone').classList.remove('active');
         document.getElementById('s1').classList.add('active');
         document.getElementById('footerArea').style.display = '';
@@ -582,12 +581,10 @@
 
         updateDots(1);
         document.getElementById('backBtn').hidden = true;
-        // Hide the 6th dot until we know purpose
         document.getElementById('dots').children[5].style.display = 'none';
       }
 
       function showAlreadyComplete(text) {
-        // Hide every step + footer; show the done card with custom copy.
         ['s1','s2','s3','s4','s5','s6'].forEach(function(id){
           var el = document.getElementById(id);
           if (el) el.classList.remove('active');
@@ -598,36 +595,25 @@
         document.getElementById('sDone').classList.add('active');
       }
 
-      // Hide all steps until we hear back from the parent. If the
-      // parent doesn't respond within 350ms (older host without the
-      // welcome-state handler) we fall back to the wizard so we
-      // never leave the dip stuck on a blank pane.
+      // Hide every step until we know which one to show. We never
+      // leave the user stuck on a blank pane: even if the bridge
+      // fails we fall through to the wizard.
       ['s1','s2','s3','s4','s5','s6','sDone'].forEach(function(id){
         var el = document.getElementById(id);
         if (el) el.classList.remove('active');
       });
 
-      var bootResolved = false;
-      function resolveBoot(complete, text) {
-        if (bootResolved) return;
-        bootResolved = true;
-        if (complete) showAlreadyComplete(text);
-        else startWizard();
-      }
-
-      document.addEventListener('slicc-message', function(e) {
-        var msg = e.detail || {};
-        if (msg.type === 'slicc-welcome-state') {
-          resolveBoot(!!msg.complete, msg.note);
+      function bootByMarker() {
+        if (!window.slicc || typeof slicc.exists !== 'function') {
+          startWizard();
+          return;
         }
-      });
-
-      if (window.slicc) {
-        slicc.lick({ action: 'welcome-ready' });
+        Promise.resolve(slicc.exists('/shared/.welcomed')).then(
+          function(welcomed) { welcomed ? showAlreadyComplete() : startWizard(); },
+          function() { startWizard(); }
+        );
       }
-      // Defensive fallback: the host might not implement the
-      // welcome-ready handshake — boot the wizard anyway.
-      setTimeout(function(){ resolveBoot(false); }, 350);
+      bootByMarker();
     </script>
   </body>
 </html>

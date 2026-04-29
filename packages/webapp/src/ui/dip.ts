@@ -38,13 +38,41 @@ async function readShtmlFromVFS(vfsPath: string, signal?: AbortSignal): Promise<
   return typeof raw === 'string' ? raw : new TextDecoder().decode(raw as Uint8Array);
 }
 
-/** Minimal bridge script: lick-only + auto-height reporting. */
+/** Minimal bridge script: lick + read-only VFS + auto-height. */
 const BRIDGE_SCRIPT = `(function() {
+  var _cbId = 0;
+  var _callbacks = {};
+
+  function _vfsCall(type, params, extractResult) {
+    return new Promise(function(resolve, reject) {
+      var id = ++_cbId;
+      _callbacks[id] = function(msg) {
+        if (msg.error) reject(new Error(msg.error));
+        else resolve(extractResult ? extractResult(msg) : undefined);
+      };
+      var m = { type: type, id: id };
+      if (params) { for (var k in params) m[k] = params[k]; }
+      parent.postMessage(m, '*');
+    });
+  }
+
   window.slicc = window.bridge = {
     lick: function(event) {
       var action = typeof event === 'string' ? event : event.action;
       var data = typeof event === 'string' ? undefined : ('data' in event ? event.data : event);
       parent.postMessage({ type: 'dip-lick', action: action, data: data }, '*');
+    },
+    /* Read-only VFS access. Mirrors the sprinkle bridge so dips can
+       check onboarding markers, profiles, etc. without a parent-side
+       handshake. */
+    readFile: function(path) {
+      return _vfsCall('dip-readfile', { path: path }, function(m) { return m.content; });
+    },
+    exists: function(path) {
+      return _vfsCall('dip-exists', { path: path }, function(m) { return m.exists; });
+    },
+    stat: function(path) {
+      return _vfsCall('dip-stat', { path: path }, function(m) { return m.stat; });
     }
   };
   function reportHeight() {
@@ -55,6 +83,13 @@ const BRIDGE_SCRIPT = `(function() {
     if (!e.data || typeof e.data.type !== 'string') return;
     if (e.data.type === 'slicc-theme') {
       document.documentElement.classList.toggle('theme-light', !!e.data.isLight);
+      return;
+    }
+    /* VFS callback responses target the originating call by id. */
+    if (e.data.id && _callbacks[e.data.id]) {
+      var cb = _callbacks[e.data.id];
+      delete _callbacks[e.data.id];
+      cb(e.data);
       return;
     }
     /* Forward any other slicc-* message to in-page listeners via a
@@ -239,6 +274,12 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
       iframe.style.height = msg.height + 'px';
     } else if (msg.type === 'dip-open-link') {
       openDipLink(msg.url);
+    } else if (
+      msg.type === 'dip-readfile' ||
+      msg.type === 'dip-exists' ||
+      msg.type === 'dip-stat'
+    ) {
+      void handleDipVfsRequest(iframe.contentWindow, msg);
     }
   };
   window.addEventListener('message', messageHandler);
@@ -251,6 +292,72 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
       iframe.remove();
     },
   };
+}
+
+/**
+ * Handle a `dip-readfile` / `dip-exists` / `dip-stat` request from a
+ * dip iframe. Reads from the same LightningFS the preview SW uses, so
+ * onboarding markers / profiles / etc. are visible to the dip without
+ * a parent-side handshake. Returns `true` when the message was handled.
+ */
+async function handleDipVfsRequest(
+  iframeWindow: Window | null,
+  msg: { type: string; id?: number; path?: string }
+): Promise<boolean> {
+  if (!iframeWindow || typeof msg.id !== 'number') return false;
+  const path = typeof msg.path === 'string' ? msg.path : '';
+  const lfs = getLfsReader();
+  const respond = (payload: Record<string, unknown>) => {
+    try {
+      iframeWindow.postMessage({ ...payload, id: msg.id }, '*');
+    } catch {
+      /* iframe gone — ignore */
+    }
+  };
+
+  if (msg.type === 'dip-readfile') {
+    try {
+      const raw = await lfs.readFile(path, 'utf8');
+      const content = typeof raw === 'string' ? raw : new TextDecoder().decode(raw as Uint8Array);
+      respond({ type: 'dip-readfile-response', content });
+    } catch (err) {
+      respond({
+        type: 'dip-readfile-response',
+        error: err instanceof Error ? err.message : 'Read failed',
+      });
+    }
+    return true;
+  }
+  if (msg.type === 'dip-exists') {
+    try {
+      await lfs.stat(path);
+      respond({ type: 'dip-exists-response', exists: true });
+    } catch {
+      respond({ type: 'dip-exists-response', exists: false });
+    }
+    return true;
+  }
+  if (msg.type === 'dip-stat') {
+    try {
+      const st = await lfs.stat(path);
+      respond({
+        type: 'dip-stat-response',
+        stat: {
+          isFile: st.isFile(),
+          isDirectory: st.isDirectory(),
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+        },
+      });
+    } catch (err) {
+      respond({
+        type: 'dip-stat-response',
+        error: err instanceof Error ? err.message : 'Stat failed',
+      });
+    }
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -406,6 +513,12 @@ function mountDipExtension(
       iframe.style.height = msg.height + 'px';
     } else if (msg.type === 'dip-open-link') {
       openDipLink(msg.url);
+    } else if (
+      msg.type === 'dip-readfile' ||
+      msg.type === 'dip-exists' ||
+      msg.type === 'dip-stat'
+    ) {
+      void handleDipVfsRequest(iframe.contentWindow, msg);
     }
   };
   window.addEventListener('message', messageHandler);

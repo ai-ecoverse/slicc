@@ -494,7 +494,8 @@ addEventListener('message', function(e) {
     'sprinkle-readfile-response', 'sprinkle-writefile-response',
     'sprinkle-readdir-response', 'sprinkle-exists-response',
     'sprinkle-stat-response', 'sprinkle-mkdir-response', 'sprinkle-rm-response',
-    'sprinkle-fetch-script-response'
+    'sprinkle-fetch-script-response',
+    'dip-readfile-response', 'dip-exists-response', 'dip-stat-response'
   ];
   if (responseTypes.indexOf(msg.type) !== -1) {
     if (window.__slicc_childIframe && window.__slicc_childIframe.contentWindow) {
@@ -523,7 +524,8 @@ addEventListener('message', function(e) {
       'sprinkle-stat', 'sprinkle-mkdir', 'sprinkle-rm',
       'sprinkle-storage-set', 'sprinkle-storage-remove', 'sprinkle-storage-clear',
       'sprinkle-fetch-script',
-      'dip-lick', 'dip-height', 'dip-open-link'
+      'dip-lick', 'dip-height', 'dip-open-link',
+      'dip-readfile', 'dip-exists', 'dip-stat'
     ];
     if (bridgeTypes.indexOf(msg.type) !== -1) {
       parent.postMessage(msg, '*');
