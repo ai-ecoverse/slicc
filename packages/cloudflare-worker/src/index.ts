@@ -36,16 +36,29 @@ try {
   var raw = params.get('state') || hashParams.get('state');
   if (!raw) throw new Error('Missing state parameter');
   var state = JSON.parse(atob(raw));
-  var port = Number(state.port);
+  var source = state.source || 'local';
   var path = state.path || '/auth/callback';
   var nonce = state.nonce || '';
-  if (!port || port < 1024 || port > 65535) throw new Error('Invalid port: ' + port);
   if (!path.startsWith('/')) throw new Error('Invalid path');
-  // Forward all original query params (except state, which we consumed) to
-  // localhost so authorization codes (?code=xxx) survive the relay.
+  // Forward all original query params (except state, which we consumed) so
+  // authorization codes (?code=xxx) survive the relay.
   params.delete('state');
   params.set('nonce', nonce);
-  var target = 'http://localhost:' + port + path + '?' + params.toString();
+  var query = '?' + params.toString();
+  var target;
+  if (source === 'local') {
+    var port = Number(state.port);
+    if (!port || port < 1024 || port > 65535) throw new Error('Invalid port: ' + port);
+    target = 'http://localhost:' + port + path + query;
+  } else if (source === 'extension') {
+    // Chrome extension IDs are 32 chars in [a-p]. Strict format check prevents
+    // open-redirect via subdomain injection (e.g. "evil.com.").
+    var extensionId = state.extensionId || '';
+    if (!/^[a-p]{32}$/.test(extensionId)) throw new Error('Invalid extensionId');
+    target = 'https://' + extensionId + '.chromiumapp.org' + path + query;
+  } else {
+    throw new Error('Unknown source: ' + source);
+  }
   location.replace(target + location.hash);
 } catch (e) {
   document.getElementById('msg').textContent = 'OAuth redirect failed: ' + e.message + '. Close this window and try again.';
