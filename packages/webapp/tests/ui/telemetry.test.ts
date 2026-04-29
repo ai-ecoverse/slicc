@@ -270,4 +270,100 @@ describe('telemetry — extension branch', () => {
       expect.objectContaining({ source: 'js', target: expect.stringContaining('boom') })
     );
   });
+
+  // sanitizeError contract — exercised via the extension-branch error listener.
+  // sanitizeError is private to telemetry.ts; the listener is its only invocation
+  // path, so these tests pin its behavior with varied inputs.
+
+  it('sanitizeError truncates messages over 200 characters', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRumJs.mockClear();
+
+    const long = 'x'.repeat(250);
+    const errorEvent = new Event('error') as ErrorEvent;
+    Object.defineProperty(errorEvent, 'message', { value: long });
+    window.dispatchEvent(errorEvent);
+
+    const target = mockSampleRumJs.mock.calls[0][1].target as string;
+    expect(target.length).toBeLessThanOrEqual(200);
+  });
+
+  it('sanitizeError collapses multiple VFS paths in one message', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRumJs.mockClear();
+
+    const errorEvent = new Event('error') as ErrorEvent;
+    Object.defineProperty(errorEvent, 'message', {
+      value: 'failed at /workspace/skills/a/b.ts and again at /shared/notes/c/d.md',
+    });
+    window.dispatchEvent(errorEvent);
+
+    const target = mockSampleRumJs.mock.calls[0][1].target as string;
+    expect(target).toContain('/workspace/.../');
+    expect(target).toContain('/shared/.../');
+    expect(target).not.toContain('/a/b.ts');
+    expect(target).not.toContain('/c/d.md');
+  });
+
+  it('sanitizeError handles a null/empty message without throwing', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRumJs.mockClear();
+
+    const errorEvent = new Event('error') as ErrorEvent;
+    Object.defineProperty(errorEvent, 'message', { value: undefined });
+    expect(() => window.dispatchEvent(errorEvent)).not.toThrow();
+    expect(mockSampleRumJs).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ source: 'js', target: '' })
+    );
+  });
+
+  it('unhandledrejection with a non-Error reason stringifies it', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+    mockSampleRumJs.mockClear();
+
+    const rejection = new Event('unhandledrejection') as PromiseRejectionEvent;
+    Object.defineProperty(rejection, 'reason', { value: 'plain string reason' });
+    window.dispatchEvent(rejection);
+
+    expect(mockSampleRumJs).toHaveBeenCalledWith(
+      'error',
+      expect.objectContaining({ source: 'js', target: 'plain string reason' })
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Electron branch — covers the third arm of the dispatcher (overlay attribute).
+// CLI/Electron share the helix-rum-js code path; the only branch difference
+// from CLI is the mode label that drives RUM_GENERATION.
+// ---------------------------------------------------------------------------
+
+describe('telemetry — electron branch', () => {
+  beforeEach(() => {
+    mockLocalStorage.clear();
+    mockSampleRUM.mockClear();
+    vi.resetModules();
+    document.documentElement.dataset.electronOverlay = 'true';
+  });
+
+  afterEach(() => {
+    delete document.documentElement.dataset.electronOverlay;
+  });
+
+  it('sets RUM_GENERATION=slicc-electron and uses helix-rum-js with SAMPLE_PAGEVIEWS_AT_RATE=high', async () => {
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
+    await initTelemetry();
+
+    expect(window.RUM_GENERATION).toBe('slicc-electron');
+    expect(window.SAMPLE_PAGEVIEWS_AT_RATE).toBe('high');
+    expect(mockSampleRUM).toHaveBeenCalledWith(
+      'navigate',
+      expect.objectContaining({ target: 'electron' })
+    );
+  });
 });
