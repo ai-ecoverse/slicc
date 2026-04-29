@@ -207,9 +207,19 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
   iframe.style.cssText = 'width:100%;border:none;overflow:hidden;display:block;';
   iframe.srcdoc = srcdoc;
   container.appendChild(iframe);
+  // Register the contentWindow synchronously so dips that emit a
+  // `connect-ready`-style lick during their initial inline script can
+  // still receive the parent's response. The `load` event fires AFTER
+  // the script has run, so waiting for it loses the first round-trip.
+  if (iframe.contentWindow) {
+    registerSprinkleWindow(iframe.contentWindow);
+    liveDipWindows.add(iframe.contentWindow);
+  }
   iframe.addEventListener(
     'load',
     () => {
+      // Re-register defensively — some browsers swap contentWindow on
+      // the first `load` event for srcdoc iframes.
       registerSprinkleWindow(iframe.contentWindow);
       if (iframe.contentWindow) liveDipWindows.add(iframe.contentWindow);
     },
