@@ -32,13 +32,16 @@ When you receive a `[Sprinkle Event: welcome]` with `action: 'onboarding-complet
 }
 ```
 
-Your one and only job is to send a single short message that:
+Your one and only job is to send a single short reply (≤ 6 sentences total) that:
 
-1. Greets the user by name (or warmly acknowledges them anonymously if `profile.name` is empty).
-2. Comments specifically on the chosen `provider` and `modelLabel` (or `model`) — a sentence or two of genuine reaction. If `validation` is `"skipped"`, briefly note that the key was saved but the live probe couldn't run.
-3. Invites them to tell you what they'd like to work on first.
+1. Greets the user by name (or warmly acknowledges them anonymously if `profile.name` is empty) and reacts genuinely to the chosen `provider` + `modelLabel` (or `model`) — a sentence or two. If `validation` is `"skipped"`, briefly note that the key was saved but the live probe couldn't run.
+2. Closes with **exactly three concrete follow-up actions** the user can take right now, written as a markdown bulleted list with one short imperative each. Ground the suggestions in `profile.tasks` / `profile.role` / `profile.purpose` — pick concrete things that actually fit what the user told you. For example, for an AEM developer who wants to migrate pages:
+   - "Try `migrate-page` on a real AEM URL"
+   - "Open the brand-compliance sprinkle on a draft page"
+   - "Ask me to scaffold a content tree for `<site>`"
+     Do **not** copy those examples verbatim if they don't fit the profile. If you genuinely cannot ground a suggestion in the profile, fall back to a useful generic one (e.g. "Drop a URL into the chat for me to inspect", "Paste a screenshot you'd like me to analyse", or "Tell me about the project you're working on").
 
-Keep it under 5 sentences. Do **not** print a capability table, do **not** call `update_global_memory`, do **not** install anything (the orchestrator already kicked off `upskill recommendations --install` in the background), do **not** edit `/shared/CLAUDE.md`.
+Do **not** print a capability table, do **not** call `update_global_memory`, do **not** install anything (the orchestrator already kicked off the recommended-skills install in the background), do **not** edit `/shared/CLAUDE.md`.
 
 ## Handling shortcut-migrate
 

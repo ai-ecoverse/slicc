@@ -107,11 +107,14 @@ export interface OrchestratorDeps {
    */
   launchOAuth?: (providerId: string, baseUrl?: string | null) => Promise<OAuthLaunchResult>;
   /**
-   * Run a shell command silently in the background. Used to install
-   * recommended skills without blocking onboarding. Errors are logged
-   * and swallowed.
+   * Direct (no-shell) installer for the recommended-skills set. Used to
+   * land the user's matching skills immediately after the welcome wizard
+   * without going through the wasm shell layer (which lives in a different
+   * execution context in extension mode and isn't reachable from the
+   * panel-side orchestrator). Errors are logged and swallowed by the
+   * orchestrator.
    */
-  runShellSilently?: (command: string) => Promise<void>;
+  installRecommendedSkills?: () => Promise<void>;
   /** Optional fetch override for tests. */
   fetchImpl?: typeof fetch;
   /** Optional RNG for deterministic message picking in tests. */
@@ -172,11 +175,13 @@ export class OnboardingOrchestrator {
     void recordWelcomed(this.deps.fs).catch((err) => log.warn('recordWelcomed failed', err));
     void this.persistProfile(this.profile).catch((err) => log.warn('persistProfile failed', err));
 
-    // Kick off skill install in the background — no UI block.
-    if (this.deps.runShellSilently) {
+    // Kick off skill install in the background — no UI block, no shell
+    // round-trip. The helper handles "no profile" / "all installed" /
+    // "catalog fetch failed" internally, so we just fire and forget.
+    if (this.deps.installRecommendedSkills) {
       void this.deps
-        .runShellSilently('upskill recommendations --install')
-        .catch((err) => log.warn('upskill recommendations --install failed', err));
+        .installRecommendedSkills()
+        .catch((err) => log.warn('installRecommendedSkills failed', err));
     }
 
     // Three deterministic lines, then the connect-llm dip.

@@ -712,10 +712,23 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           };
         }
       },
-      // Skill install isn't wired through to the offscreen agent
-      // shell yet in the extension float — the cone's reply on the
-      // final lick can request `upskill recommendations --install`
-      // explicitly if it sees no installed skills.
+      installRecommendedSkills: async () => {
+        // Direct (no-shell) skill install — reuses the same code path the
+        // upskill command does, but via a non-shell entry point so it
+        // works from the panel side of the extension where the agent
+        // shell isn't reachable.
+        const [{ installRecommendedSkills }, { createProxiedFetch }] = await Promise.all([
+          import('../shell/supplemental-commands/upskill-command.js'),
+          import('../shell/proxied-fetch.js'),
+        ]);
+        const result = await installRecommendedSkills(localFs, createProxiedFetch());
+        log.info('Recommended skills install finished', {
+          installedNames: result.installedNames,
+          errors: result.errors,
+          skipped: result.skipped,
+          elapsedSeconds: result.elapsedSeconds,
+        });
+      },
     });
     return extOnboardingOrchestrator;
   };
@@ -1722,16 +1735,21 @@ async function main(): Promise<void> {
         // falls straight through to the cone like a regular sprinkle.
         routeLickToScoop(completionEvent);
       },
-      runShellSilently: async (cmd) => {
-        try {
-          // Use the shared shell from main.ts. It runs in offscreen for
-          // extension or directly in standalone — either way, fire-and-forget.
-          const sh = (window as { __slicc_shell?: { run?: (c: string) => Promise<unknown> } })
-            .__slicc_shell;
-          if (sh?.run) await sh.run(cmd);
-        } catch (err) {
-          log.warn('Background shell command failed', { cmd, err });
-        }
+      installRecommendedSkills: async () => {
+        // Direct (no-shell) skill install — see extension wiring above
+        // for why we deliberately avoid going through `__slicc_shell`.
+        if (!sharedFs) return;
+        const [{ installRecommendedSkills }, { createProxiedFetch }] = await Promise.all([
+          import('../shell/supplemental-commands/upskill-command.js'),
+          import('../shell/proxied-fetch.js'),
+        ]);
+        const result = await installRecommendedSkills(sharedFs, createProxiedFetch());
+        log.info('Recommended skills install finished', {
+          installedNames: result.installedNames,
+          errors: result.errors,
+          skipped: result.skipped,
+          elapsedSeconds: result.elapsedSeconds,
+        });
       },
       launchOAuth: async (providerId, baseUrl) => {
         try {

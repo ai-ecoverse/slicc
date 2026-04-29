@@ -49,7 +49,7 @@ function makeHarness(
   const finalLicks: any[] = [];
   const accounts: any[] = [];
   const selectedModels: string[] = [];
-  const shellCmds: string[] = [];
+  const skillInstallCalls: number[] = [];
   const orchestrator = new OnboardingOrchestrator({
     fs,
     postSystemMessage: (line) => systemMessages.push(line),
@@ -60,8 +60,8 @@ function makeHarness(
     resolveModelLabel: (_p, m) => m.toUpperCase(),
     broadcastToDip: (msg) => dipInbox.push(msg),
     fireFinalLick: (data) => finalLicks.push(data),
-    runShellSilently: async (cmd) => {
-      shellCmds.push(cmd);
+    installRecommendedSkills: async () => {
+      skillInstallCalls.push(Date.now());
     },
     fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
     rand: () => 0,
@@ -75,7 +75,7 @@ function makeHarness(
     finalLicks,
     accounts,
     selectedModels,
-    shellCmds,
+    skillInstallCalls,
   };
 }
 
@@ -134,11 +134,32 @@ describe('OnboardingOrchestrator', () => {
       expect(await h.fs.exists('/home/user/.welcome.json')).toBe(true);
     });
 
-    it('kicks off `upskill recommendations --install` silently in the background', async () => {
+    it('kicks off the recommended-skills installer silently in the background', async () => {
       const h = makeHarness();
       await h.orchestrator.handleOnboardingComplete({ name: 'Kim' });
       await new Promise((r) => setTimeout(r, 5));
-      expect(h.shellCmds).toEqual(['upskill recommendations --install']);
+      expect(h.skillInstallCalls).toHaveLength(1);
+    });
+
+    it('silently no-ops when no skill installer was wired', async () => {
+      const fs = new VirtualFS('no-installer-' + Math.random());
+      const finalLicks: any[] = [];
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => baseCatalogue,
+        saveAccount: () => {},
+        setSelectedModel: () => {},
+        broadcastToDip: () => {},
+        fireFinalLick: (data) => finalLicks.push(data),
+        // installRecommendedSkills omitted on purpose.
+        rand: () => 0,
+      });
+      const handled = await orch.handleOnboardingComplete({ name: 'NoInstaller' });
+      expect(handled).toBe(true);
+      // No throw, orchestrator still advances to awaiting-connect.
+      expect(orch.getStage()).toBe('awaiting-connect');
     });
 
     it('is idempotent for duplicate complete events in the same session', async () => {
