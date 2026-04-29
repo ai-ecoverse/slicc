@@ -5,10 +5,10 @@ vi.mock('../../src/ui/telemetry.js', async () => {
   const actual = await vi.importActual<typeof import('../../src/ui/telemetry.js')>(
     '../../src/ui/telemetry.js'
   );
-  return { ...actual, trackChatSend: vi.fn() };
+  return { ...actual, trackChatSend: vi.fn(), trackImageView: vi.fn() };
 });
 
-import { trackChatSend } from '../../src/ui/telemetry.js';
+import { trackChatSend, trackImageView } from '../../src/ui/telemetry.js';
 
 describe('ChatPanel — trackChatSend wiring', () => {
   beforeEach(() => {
@@ -93,5 +93,60 @@ describe('ChatPanel — trackChatSend wiring', () => {
     (sendBtn as HTMLButtonElement).click();
 
     expect(trackChatSend).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatPanel — trackImageView wiring', () => {
+  beforeEach(() => {
+    vi.mocked(trackImageView).mockClear();
+  });
+
+  it('fires trackImageView("chat") for each <img> appended to messagesEl', async () => {
+    const { ChatPanel } = await import('../../src/ui/chat-panel.js');
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    new ChatPanel(container);
+
+    const messagesEl = container.querySelector('.chat__messages')!;
+    const img1 = document.createElement('img');
+    img1.src = 'data:image/png;base64,iVBORw0KGgo=';
+    messagesEl.appendChild(img1);
+    const img2 = document.createElement('img');
+    img2.src = 'https://example.test/x.png';
+    messagesEl.appendChild(img2);
+
+    // MutationObserver delivers asynchronously — yield a microtask.
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(trackImageView).toHaveBeenCalledTimes(2);
+    expect(trackImageView).toHaveBeenCalledWith('chat');
+
+    container.remove();
+  });
+
+  it('fires once per <img> even when nested inside other elements', async () => {
+    const { ChatPanel } = await import('../../src/ui/chat-panel.js');
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    new ChatPanel(container);
+
+    const messagesEl = container.querySelector('.chat__messages')!;
+    // Build the wrapper without innerHTML — explicit DOM construction.
+    const wrapper = document.createElement('p');
+    wrapper.append('text ');
+    const img1 = document.createElement('img');
+    img1.src = 'x.png';
+    wrapper.appendChild(img1);
+    wrapper.append(' middle ');
+    const img2 = document.createElement('img');
+    img2.src = 'y.png';
+    wrapper.appendChild(img2);
+    wrapper.append(' end');
+    messagesEl.appendChild(wrapper);
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(trackImageView).toHaveBeenCalledTimes(2);
+
+    container.remove();
   });
 });

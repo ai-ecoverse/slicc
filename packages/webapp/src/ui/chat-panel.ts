@@ -26,7 +26,7 @@ import {
   setSelectedModelId,
   getProviderConfig,
 } from './provider-settings.js';
-import { trackChatSend } from './telemetry.js';
+import { trackChatSend, trackImageView } from './telemetry.js';
 
 const log = createLogger('chat-panel');
 
@@ -369,6 +369,23 @@ export class ChatPanel {
     this.messagesInner.className = 'chat__messages-inner';
     this.messagesEl.appendChild(this.messagesInner);
     this.container.appendChild(this.messagesEl);
+
+    // Telemetry — fire trackImageView('chat') exactly once per <img> attached
+    // to the messages tree. Covers markdown images, screenshots, and tool-result
+    // images uniformly.
+    const imgObserver = new MutationObserver((records) => {
+      for (const r of records) {
+        r.addedNodes.forEach((node) => {
+          if (!(node instanceof Element)) return;
+          if (node.tagName === 'IMG') {
+            trackImageView('chat');
+          } else {
+            node.querySelectorAll?.('img').forEach(() => trackImageView('chat'));
+          }
+        });
+      }
+    });
+    imgObserver.observe(this.messagesEl, { childList: true, subtree: true });
 
     this.messagesEl.addEventListener(
       'scroll',
