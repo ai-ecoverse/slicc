@@ -699,9 +699,23 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       // Route sprinkle licks to the offscreen orchestrator's cone
       if (event.type === 'sprinkle') {
         // Welcome lifecycle — same deterministic flow as standalone.
-        if (event.sprinkleName === 'welcome') {
+        // Inline-mounted welcome dip emits licks with `sprinkleName: 'inline'`;
+        // the legacy welcome panel emits `'welcome'`. Match either when the
+        // action is part of the welcome flow.
+        const welcomeAction =
+          event.sprinkleName === 'welcome' || event.sprinkleName === 'inline'
+            ? ((event.body as Record<string, unknown> | null)?.action as string | undefined)
+            : undefined;
+        const isWelcomeFlowAction =
+          welcomeAction === 'first-run' ||
+          welcomeAction === 'onboarding-complete' ||
+          welcomeAction === 'connect-ready' ||
+          welcomeAction === 'connect-attempt' ||
+          welcomeAction === 'shortcut-migrate' ||
+          welcomeAction === 'request-mount';
+        if (isWelcomeFlowAction) {
           const body = event.body as Record<string, unknown> | null;
-          const action = body?.action;
+          const action = welcomeAction;
 
           if (action === 'first-run') {
             getExtOnboardingOrchestrator().handleFirstRun();
@@ -1723,9 +1737,26 @@ async function main(): Promise<void> {
     // sliccy lines + the connect-llm dip, then routes a synthetic
     // `onboarding-complete-with-provider` lick back through here so
     // the cone (now LLM-backed) can comment on the choice.
-    if (isSprinkle && event.sprinkleName === 'welcome') {
+    //
+    // Inline dips (welcome.shtml / connect-llm.shtml mounted via
+    // image-ref hydration in the chat panel) emit licks with
+    // `sprinkleName === 'inline'`, while the standalone wizard panel
+    // emits `sprinkleName === 'welcome'`. We match on the action
+    // name to catch both.
+    const welcomeAction =
+      isSprinkle && (event.sprinkleName === 'welcome' || event.sprinkleName === 'inline')
+        ? ((event.body as Record<string, unknown> | null)?.action as string | undefined)
+        : undefined;
+    const isWelcomeFlowAction =
+      welcomeAction === 'first-run' ||
+      welcomeAction === 'onboarding-complete' ||
+      welcomeAction === 'connect-ready' ||
+      welcomeAction === 'connect-attempt' ||
+      welcomeAction === 'shortcut-migrate' ||
+      welcomeAction === 'request-mount';
+    if (isSprinkle && isWelcomeFlowAction) {
       const body = event.body as Record<string, unknown> | null;
-      const action = body?.action;
+      const action = welcomeAction;
 
       // ── First-run: render the welcome dip directly. The cone has
       // no API key yet, so any LLM-driven path here would fatal with
