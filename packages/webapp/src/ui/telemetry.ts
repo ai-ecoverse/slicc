@@ -45,19 +45,48 @@ export async function initTelemetry(): Promise<void> {
     return;
 
   try {
-    // High sampling rate (1-in-10) for beta. Remove for GA (defaults to 1-in-100).
+    const mode = getModeLabel();
+
     if (typeof window !== 'undefined') {
-      window.SAMPLE_PAGEVIEWS_AT_RATE = 'high';
+      window.RUM_GENERATION = `slicc-${mode}`;
     }
 
-    const mod = await import('@adobe/helix-rum-js');
-    sampleRUM = mod.sampleRUM;
+    if (mode === 'extension') {
+      const mod = await import('./rum.js');
+      sampleRUM = mod.default as SampleRUM;
+
+      // Helix-rum-js auto-registers its own error/unhandledrejection listeners
+      // for selected sessions. The inlined rum.js does not — register equivalents
+      // here so the extension panel still records JS errors. Do NOT add these to
+      // the CLI/Electron branch (would double-fire alongside helix's listeners).
+      if (typeof window !== 'undefined') {
+        window.addEventListener('error', (e) => {
+          trackError('js', sanitizeError((e as ErrorEvent).message ?? ''));
+        });
+        window.addEventListener('unhandledrejection', (e) => {
+          const reason = (e as PromiseRejectionEvent).reason;
+          const msg = reason instanceof Error ? reason.message : String(reason);
+          trackError('js', sanitizeError(msg));
+        });
+      }
+    } else {
+      // CLI / Electron — use @adobe/helix-rum-js with its auto-loaded enhancer
+      // (CWV, auto-click). The extension can't load the enhancer at runtime
+      // because the manifest CSP blocks external script loads, which is why
+      // the extension branch above uses the inlined rum.js instead.
+      if (typeof window !== 'undefined') {
+        window.SAMPLE_PAGEVIEWS_AT_RATE = 'high';
+      }
+      const mod = await import('@adobe/helix-rum-js');
+      sampleRUM = mod.sampleRUM;
+    }
+
     initialized = true;
 
     if (sampleRUM) {
       sampleRUM('navigate', {
         source: typeof document !== 'undefined' ? document.referrer : '',
-        target: getModeLabel(),
+        target: mode,
       });
     }
   } catch {
@@ -93,6 +122,18 @@ export function trackError(errorType: string, details?: string): void {
 /** Settings dialog opened. source=trigger (button/shortcut) */
 export function trackSettingsOpen(trigger: string): void {
   sampleRUM?.('signup', { source: trigger });
+}
+
+/**
+ * Reduce error messages to a privacy-safe form.
+ * - Truncate to 200 characters.
+ * - Collapse VFS-style paths (/<root>/...) past their first segment to /<root>/.../
+ *   so `/workspace/skills/foo/bar.ts` becomes `/workspace/.../`.
+ *   The regex uses the `i` flag, so `/Workspace/...` and `/SHARED/...` collapse too.
+ */
+function sanitizeError(msg: string): string {
+  const truncated = (msg ?? '').slice(0, 200);
+  return truncated.replace(/(\/[a-z]+)(?:\/[^\s/]+)+/gi, '$1/.../');
 }
 
 /**

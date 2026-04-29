@@ -72,6 +72,10 @@ If a shell command needs to affect the panel UI, use the dual-context pattern:
 - **Persistence**: offscreen code is the source of truth for chat/session state that must survive panel close/reopen.
 - **CDP access**: offscreen documents cannot call `chrome.debugger` directly; always proxy via the service worker.
 
+## Telemetry
+
+The side panel emits Helix RUM beacons via the inlined `packages/webapp/src/ui/rum.js` (extension-only). CLI/Electron use `@adobe/helix-rum-js` instead; the choice is made by `telemetry.ts:initTelemetry()` based on `getModeLabel()`. Offscreen and the service worker are not instrumented. Force 100% sampling for debugging by setting `localStorage.setItem('slicc-rum-debug', '1')` in the side panel's DevTools and reloading. See `docs/operational-telemetry.md`.
+
 ## Build Notes
 
 - `packages/chrome-extension/vite.config.ts` builds the side panel UI, service worker, offscreen document, and copied static assets into `dist/extension/`.

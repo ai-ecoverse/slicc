@@ -27,7 +27,6 @@ import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
 import { buildActiveLicksError, type LickManager } from './lick-manager.js';
 import { SessionStore } from '../core/session.js';
 import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
-import { trackChatSend } from '../ui/telemetry.js';
 import {
   registerSessionCostsProvider,
   type ScoopCostData,
@@ -1173,11 +1172,6 @@ export class Orchestrator {
       channel: message.channel,
       contentPreview: message.content.slice(0, 80),
     });
-
-    // Telemetry: track chat sends
-    const scoop = this.scoops.get(message.chatJid);
-    const scoopName = scoop?.isCone ? 'cone' : (scoop?.name ?? 'unknown');
-    trackChatSend(scoopName, localStorage.getItem('selected-model') ?? 'unknown');
 
     // Store the message
     await db.saveMessage(message);
