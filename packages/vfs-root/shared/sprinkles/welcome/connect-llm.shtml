@@ -64,14 +64,6 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      .provider__desc {
-        font-size: 11px;
-        color: var(--s2-content-secondary, #a1a1a1);
-        margin-top: 2px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
       .provider__chevron {
         color: var(--s2-content-secondary, #a1a1a1);
         font-size: 14px;
@@ -228,14 +220,12 @@
           name.className = 'provider__name';
           name.textContent = p.name;
           info.appendChild(name);
-          // Suppress auto-generated `<id> provider` descriptions — they
-          // repeat the id and add visual noise in the multi-column grid.
+          // Show meaningful descriptions only as a hover tooltip so the
+          // grid rows stay a uniform height. Skip auto-generated
+          // `<id> provider` strings — they repeat the id and add no info.
           var fallbackDesc = (p.id || '') + ' provider';
           if (p.description && p.description !== fallbackDesc) {
-            var desc = document.createElement('div');
-            desc.className = 'provider__desc';
-            desc.textContent = p.description;
-            info.appendChild(desc);
+            row.title = p.description;
           }
           row.appendChild(info);
           var chev = document.createElement('span');
