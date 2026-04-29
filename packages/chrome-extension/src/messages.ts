@@ -71,6 +71,13 @@ export interface RefreshModelMsg {
   type: 'refresh-model';
 }
 
+export interface SetThinkingLevelMsg {
+  type: 'set-thinking-level';
+  scoopJid: string;
+  /** Undefined clears the override; the level falls back to default. */
+  level?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+}
+
 export interface RefreshTrayRuntimeMsg {
   type: 'refresh-tray-runtime';
 }
@@ -122,6 +129,7 @@ export type PanelToOffscreenMessage =
   | ClearChatMsg
   | ClearFilesystemMsg
   | RefreshModelMsg
+  | SetThinkingLevelMsg
   | RefreshTrayRuntimeMsg
   | PanelCdpCommandMsg
   | OAuthRequestMsg

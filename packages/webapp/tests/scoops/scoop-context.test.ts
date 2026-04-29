@@ -13,6 +13,7 @@ import {
   isImageProcessingError,
   isNonRetryableError,
   isRetryableError,
+  resolveThinkingLevel,
   type ScoopContextCallbacks,
 } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
@@ -1792,5 +1793,44 @@ describe('ScoopContext dispose', () => {
     expect(callbacks.onToolStart).not.toHaveBeenCalled();
     expect(callbacks.onToolEnd).not.toHaveBeenCalled();
     expect(callbacks.onResponseDone).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveThinkingLevel', () => {
+  // Synthesize the smallest possible `Model<Api>` shape the helper inspects.
+  // pi-ai's `supportsXhigh` only reads `id` (string match against the Opus
+  // 4.6+ / GPT-5.2+ families), so we don't need a real model record here.
+  const makeModel = (reasoning: boolean, supportsXhighFamily = false) =>
+    ({
+      id: supportsXhighFamily ? 'claude-opus-4-7' : 'claude-haiku-4-5',
+      reasoning,
+    }) as unknown as Parameters<typeof resolveThinkingLevel>[1];
+
+  it("returns 'off' when the model does not support reasoning", () => {
+    const model = makeModel(false);
+    expect(resolveThinkingLevel('high', model)).toBe('off');
+    expect(resolveThinkingLevel('xhigh', model)).toBe('off');
+    expect(resolveThinkingLevel(undefined, model)).toBe('off');
+  });
+
+  it("returns 'off' when no level is requested", () => {
+    expect(resolveThinkingLevel(undefined, makeModel(true))).toBe('off');
+  });
+
+  it('clamps xhigh to high when the model does not advertise xhigh support', () => {
+    // Haiku (or any non-xhigh family) — pi-ai's supportsXhigh returns false.
+    expect(resolveThinkingLevel('xhigh', makeModel(true, false))).toBe('high');
+  });
+
+  it('passes xhigh through when the model supports it (Opus 4.7 family)', () => {
+    expect(resolveThinkingLevel('xhigh', makeModel(true, true))).toBe('xhigh');
+  });
+
+  it('passes through other valid levels unchanged', () => {
+    const model = makeModel(true);
+    expect(resolveThinkingLevel('low', model)).toBe('low');
+    expect(resolveThinkingLevel('medium', model)).toBe('medium');
+    expect(resolveThinkingLevel('high', model)).toBe('high');
+    expect(resolveThinkingLevel('minimal', model)).toBe('minimal');
   });
 });

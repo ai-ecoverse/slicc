@@ -494,6 +494,87 @@
   position: relative;
 }
 
+/* Brain icon — thinking-level cycle. Lives left of the model pill inside
+   the .chat__model-selector flex row; click cycles through
+   off → low → high → xhigh → off (xhigh skipped on unsupported models). */
+.chat__thinking-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  border-radius: var(--s2-radius-default);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--s2-content-default);
+  transition:
+    opacity 130ms ease,
+    transform 130ms ease,
+    background 130ms ease,
+    color 130ms ease;
+}
+.chat__thinking-btn svg {
+  width: 18px;
+  height: 18px;
+}
+.chat__thinking-btn:hover {
+  background: var(--s2-bg-elevated);
+}
+.chat__thinking-btn:active {
+  transform: scale(0.92);
+}
+.chat__thinking-btn[hidden] {
+  display: none;
+}
+
+.chat__thinking-btn[data-level='off'] {
+  opacity: 0.5;
+}
+.chat__thinking-btn[data-level='minimal'],
+.chat__thinking-btn[data-level='low'] {
+  opacity: 0.75;
+}
+.chat__thinking-btn[data-level='medium'],
+.chat__thinking-btn[data-level='high'] {
+  opacity: 1;
+  color: var(--s2-accent, var(--slicc-cone, #6b8afd));
+}
+
+/* xhigh: ice-cream gradient with subtle shimmer.
+   Falls back to flat brand pastels via CSS variables; design tokens can
+   override via --slicc-cone-* without touching this rule. */
+.chat__thinking-btn[data-level='xhigh'] {
+  opacity: 1;
+  color: #fff;
+  background: linear-gradient(
+    135deg,
+    var(--slicc-cone-mint, #b8e6c9),
+    var(--slicc-cone-strawberry, #ffb3c1),
+    var(--slicc-cone-vanilla, #fff4c2),
+    var(--slicc-cone-blueberry, #b8c9ff)
+  );
+  background-size: 300% 300%;
+  animation: chat-thinking-shimmer 6s ease-in-out infinite;
+}
+
+@keyframes chat-thinking-shimmer {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat__thinking-btn[data-level='xhigh'] {
+    animation: none;
+  }
+}
+
 /* Pill buttons — shown when chat is empty */
 .chat__model-pill {
   border: 1px solid var(--s2-border-subtle);

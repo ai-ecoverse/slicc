@@ -25,8 +25,9 @@ import type {
   ImageContent,
   Model,
 } from '../core/index.js';
-import { isContextOverflow, streamSimple } from '@mariozechner/pi-ai';
-import type { AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
+import { isContextOverflow, streamSimple, supportsXhigh } from '@mariozechner/pi-ai';
+import type { Api, AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
+import type { ThinkingLevel } from '@mariozechner/pi-agent-core';
 import type { SessionStore } from '../core/session.js';
 import { createFileTools, createBashTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
@@ -45,6 +46,28 @@ import { getAdobeSessionId } from './llm-session-id.js';
 import { fetchSecretEnvVars } from '../core/secret-env.js';
 
 const log = createLogger('scoop-context');
+
+/**
+ * Resolve a thinking level against an active model. Returns the value the
+ * `Agent` should be initialized with — never throws.
+ *
+ * Rules:
+ *   - Non-reasoning model → always `'off'`, regardless of `requested`.
+ *   - `requested === undefined` → `'off'` (default; UI/CLI can opt in).
+ *   - `requested === 'xhigh'` and `!supportsXhigh(model)` → clamped to `'high'`.
+ *   - Otherwise the requested value is passed through.
+ *
+ * Exposed for tests and re-used by `agent-bridge.ts`.
+ */
+export function resolveThinkingLevel(
+  requested: ThinkingLevel | undefined,
+  model: Model<Api>
+): ThinkingLevel {
+  if (!model.reasoning) return 'off';
+  if (requested === undefined) return 'off';
+  if (requested === 'xhigh' && !supportsXhigh(model)) return 'high';
+  return requested;
+}
 
 /** Detect API errors caused by invalid/oversized images. */
 export function isImageProcessingError(msg: string): boolean {
@@ -386,12 +409,15 @@ export class ScoopContext {
       // Guard: dispose() may have run while init() was awaiting above.
       if (this.disposed) return;
 
+      const thinkingLevel = resolveThinkingLevel(this.scoop.config?.thinkingLevel, model);
+
       this.agent = new Agent({
         initialState: {
           model,
           tools,
           systemPrompt,
           messages: restoredMessages,
+          thinkingLevel,
         },
         getApiKey: () => getApiKey() ?? undefined,
         transformContext: compactFn,
@@ -651,6 +677,30 @@ export class ScoopContext {
       folder: this.scoop.folder,
       skillCount: skills.length,
     });
+  }
+
+  /**
+   * Update the active reasoning/thinking level for this scoop.
+   *
+   * Mutates `agent.state.thinkingLevel` directly (it's writable on
+   * pi-agent-core's `AgentState`), so the next assistant turn picks up the
+   * change without restarting the agent. The caller is responsible for
+   * persisting `scoop.config.thinkingLevel` separately if the change should
+   * survive a reload — `Orchestrator.updateScoopConfig` handles that.
+   *
+   * Returns the level actually applied, after model-aware resolution
+   * (xhigh→high clamp on unsupported models, off on non-reasoning models).
+   */
+  setThinkingLevel(level: ThinkingLevel | undefined): ThinkingLevel {
+    if (!this.agent) return 'off';
+    const resolved = resolveThinkingLevel(level, this.agent.state.model);
+    this.agent.state.thinkingLevel = resolved;
+    return resolved;
+  }
+
+  /** Currently applied thinking level on the running agent. */
+  getThinkingLevel(): ThinkingLevel {
+    return this.agent?.state.thinkingLevel ?? 'off';
   }
 
   /** Cleanup */

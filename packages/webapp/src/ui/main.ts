@@ -21,7 +21,13 @@ import './styles/feedback.css';
  */
 
 import { Layout } from './layout.js';
-import { getApiKey, applyProviderDefaults } from './provider-settings.js';
+import {
+  getApiKey,
+  applyProviderDefaults,
+  resolveCurrentModel,
+  resolveModelById,
+} from './provider-settings.js';
+import { supportsXhigh } from '@mariozechner/pi-ai';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
@@ -628,6 +634,8 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     if (client.isProcessing(scoop.jid)) {
       layout.panels.chat.setProcessing(true);
     }
+
+    syncThinkingButtonForExtensionScoop(scoop);
   };
 
   client = new OffscreenClient({
@@ -763,10 +771,33 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   layout.onScoopSelect = selectScoop;
 
+  /**
+   * Sync the brain icon to the active scoop's resolved model + persisted
+   * thinking-level. Extension flavor: same lookup logic as the standalone
+   * version, but reads `scoop.config` from the proxied snapshot and uses
+   * provider-settings via the side-panel realm (which shares localStorage
+   * with offscreen for the model id).
+   */
+  const syncThinkingButtonForExtensionScoop = (scoop: RegisteredScoop): void => {
+    const modelId = scoop.config?.modelId;
+    const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
+    layout.panels.chat.setModelSupportsReasoning(!!model.reasoning, supportsXhigh(model));
+    layout.panels.chat.setThinkingLevel(scoop.config?.thinkingLevel);
+  };
+
   // Wire model picker
   layout.onModelChange = (modelId) => {
     localStorage.setItem('selected-model', modelId);
     client.updateModel();
+    if (selectedScoop) {
+      syncThinkingButtonForExtensionScoop(selectedScoop);
+    }
+  };
+
+  // Wire brain-icon thinking-level cycle through the offscreen client.
+  layout.onThinkingLevelChange = (level) => {
+    if (!selectedScoop) return;
+    client.setScoopThinkingLevel(selectedScoop.jid, level);
   };
 
   // Wire clear chat — delete all scoop sessions from the shared IndexedDB
@@ -2782,11 +2813,35 @@ async function main(): Promise<void> {
 
   connectLickWs();
 
+  /**
+   * Sync the brain icon to the active scoop's resolved model + persisted
+   * thinking-level. Called on scoop switch and after a model swap.
+   */
+  const syncThinkingButtonForScoop = (scoop: RegisteredScoop): void => {
+    const modelId = scoop.config?.modelId;
+    const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
+    layout.panels.chat.setModelSupportsReasoning(!!model.reasoning, supportsXhigh(model));
+    layout.panels.chat.setThinkingLevel(scoop.config?.thinkingLevel);
+  };
+
   // Wire model picker changes
   layout.onModelChange = (modelId) => {
     localStorage.setItem('selected-model', modelId);
     // Immediately update all active agent contexts to use the new model
     orchestrator.updateModel();
+    // The brain icon's visibility / xhigh availability depends on the
+    // selected model — refresh it now so the UI matches the new active
+    // model on the cone (scoop overrides keep their own model).
+    if (selectedScoop) {
+      syncThinkingButtonForScoop(selectedScoop);
+    }
+  };
+
+  // Wire brain-icon thinking-level cycle to the orchestrator. Updates the
+  // live agent for the next turn AND persists into scoop.config.thinkingLevel.
+  layout.onThinkingLevelChange = (level) => {
+    if (!selectedScoop) return;
+    void orchestrator.setScoopThinkingLevel(selectedScoop.jid, level);
   };
 
   // Track which scoops have been selected at least once this runtime.
@@ -2911,6 +2966,11 @@ async function main(): Promise<void> {
     }
 
     selectedOnceThisRuntime.add(scoop.jid);
+
+    // Sync brain icon to the freshly selected scoop's persisted level +
+    // model capabilities. Done last so the chat panel has already
+    // re-rendered the model selector for this context.
+    syncThinkingButtonForScoop(scoop);
   };
 
   layout.onScoopSelect = handleScoopSelect;

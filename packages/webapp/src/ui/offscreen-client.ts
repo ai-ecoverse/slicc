@@ -10,7 +10,7 @@
 
 import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
 import type { MessageAttachment } from '../core/attachments.js';
-import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
+import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
 import type { VirtualFS } from '../fs/index.js';
 import type {
   ExtensionMessage,
@@ -182,6 +182,16 @@ export class OffscreenClient {
   updateModel(): void {
     // Side panel already wrote to localStorage. Tell offscreen to re-read.
     this.send({ type: 'refresh-model' });
+  }
+
+  /**
+   * Update a scoop's reasoning / thinking level on the offscreen
+   * orchestrator. Mirrors the standalone-mode `Orchestrator.setScoopThinkingLevel`
+   * call. The offscreen side persists the value into IndexedDB so it
+   * survives panel close.
+   */
+  setScoopThinkingLevel(jid: string, level: ThinkingLevel | undefined): void {
+    this.send({ type: 'set-thinking-level', scoopJid: jid, level });
   }
 
   async clearAllMessages(): Promise<void> {

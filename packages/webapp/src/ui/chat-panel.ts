@@ -5,7 +5,8 @@
  * Connects to an AgentHandle for sending messages and receiving events.
  */
 
-import { File as FileIcon, FileText, Image as ImageIcon, Paperclip, X } from 'lucide';
+import { Brain, File as FileIcon, FileText, Image as ImageIcon, Paperclip, X } from 'lucide';
+import { THINKING_LEVEL_CYCLE, isThinkingLevel, type ThinkingLevel } from '../scoops/types.js';
 import type { AgentHandle, AgentEvent, ChatMessage, ToolCall } from './types.js';
 import { renderAssistantMessageContent, renderMessageContent } from './message-renderer.js';
 import { SessionStore } from './session-store.js';
@@ -155,6 +156,22 @@ export class ChatPanel {
   public onDipLick?: (action: string, data: unknown) => void;
   private modelSelectorEl!: HTMLElement;
   public onModelChange?: (modelId: string) => void;
+  private thinkingBtn!: HTMLButtonElement;
+  /**
+   * Currently displayed thinking level. Source of truth for the brain icon
+   * UI; mirrored to the active scoop's `agent.state.thinkingLevel` and
+   * `scoop.config.thinkingLevel` via {@link onThinkingLevelChange}.
+   */
+  private thinkingLevel: ThinkingLevel = 'off';
+  /**
+   * Whether the active model supports reasoning at all. The brain icon is
+   * hidden when false. Toggled by {@link setModelSupportsReasoning} when
+   * the layout learns the active scoop's model has changed.
+   */
+  private modelSupportsReasoning = false;
+  /** Whether the active model supports the `xhigh` cycle stop. */
+  private modelSupportsXhigh = false;
+  public onThinkingLevelChange?: (level: ThinkingLevel) => void;
   // Per-sessionId write queue for `persistLickToSession`. Chains concurrent
   // load→mutate→save cycles behind the previous in-flight call so bursty
   // licks (e.g. fswatch) for a non-selected scoop can't clobber each other.
@@ -715,9 +732,20 @@ export class ChatPanel {
     actionBarLeft.appendChild(this.micBtn);
     actionBar.appendChild(actionBarLeft);
 
-    // Model selector — between left actions and send button
+    // Model selector — between left actions and send button.
+    // The brain icon (thinking-level cycle) sits LEFT of the model pill
+    // inside the same flex container so it stays visually attached.
     this.modelSelectorEl = document.createElement('div');
     this.modelSelectorEl.className = 'chat__model-selector';
+
+    this.thinkingBtn = document.createElement('button');
+    this.thinkingBtn.type = 'button';
+    this.thinkingBtn.className = 'chat__thinking-btn';
+    this.thinkingBtn.appendChild(createLucideIcon(Brain as unknown as IconNode, 18));
+    this.thinkingBtn.addEventListener('click', () => this.cycleThinkingLevel());
+    this.modelSelectorEl.appendChild(this.thinkingBtn);
+    this.updateThinkingBtn();
+
     this.renderModelSelector();
     actionBar.appendChild(this.modelSelectorEl);
 
@@ -1193,6 +1221,13 @@ export class ChatPanel {
     const el = this.modelSelectorEl;
     if (!el) return;
     while (el.firstChild) el.removeChild(el.firstChild);
+    // The brain icon lives in the same flex container so it visually
+    // anchors to the model pill. Re-attach it after every clear so the
+    // model-list rerender doesn't accidentally drop it.
+    if (this.thinkingBtn) {
+      el.appendChild(this.thinkingBtn);
+      this.updateThinkingBtn();
+    }
 
     const groups = getAllAvailableModels();
     const currentModelId = getSelectedModelId();
@@ -1298,6 +1333,77 @@ export class ChatPanel {
   /** Refresh the model selector (call after provider changes). */
   refreshModelSelector(): void {
     this.renderModelSelector();
+  }
+
+  // ── Thinking level (brain icon) ───────────────────────────────────
+
+  /**
+   * Set whether the active model supports reasoning + xhigh. Drives the
+   * brain icon's visibility and cycle range. Layout calls this whenever
+   * the active scoop's model changes (initial select, model picker swap).
+   */
+  setModelSupportsReasoning(reasoning: boolean, xhigh: boolean): void {
+    this.modelSupportsReasoning = reasoning;
+    this.modelSupportsXhigh = xhigh;
+    if (!reasoning) {
+      this.thinkingLevel = 'off';
+    } else if (this.thinkingLevel === 'xhigh' && !xhigh) {
+      this.thinkingLevel = 'high';
+    }
+    this.updateThinkingBtn();
+  }
+
+  /**
+   * Set the displayed thinking level without notifying listeners. Layout
+   * calls this on scoop switch to mirror the persisted
+   * `scoop.config.thinkingLevel` into the UI.
+   */
+  setThinkingLevel(level: ThinkingLevel | undefined): void {
+    if (level !== undefined && isThinkingLevel(level)) {
+      this.thinkingLevel = level;
+    } else {
+      this.thinkingLevel = 'off';
+    }
+    this.updateThinkingBtn();
+  }
+
+  /** Currently displayed thinking level. */
+  getThinkingLevel(): ThinkingLevel {
+    return this.thinkingLevel;
+  }
+
+  /**
+   * Cycle through {@link THINKING_LEVEL_CYCLE}, skipping `xhigh` when the
+   * active model doesn't support it. Notifies {@link onThinkingLevelChange}
+   * so the layout can mirror the new value into the active scoop's config
+   * + live agent state.
+   */
+  private cycleThinkingLevel(): void {
+    if (!this.modelSupportsReasoning) return;
+    const cycle = this.modelSupportsXhigh
+      ? THINKING_LEVEL_CYCLE
+      : THINKING_LEVEL_CYCLE.filter((l) => l !== 'xhigh');
+    const idx = cycle.indexOf(this.thinkingLevel);
+    // Unknown current level (e.g. minimal/medium set via shell flag) →
+    // start the cycle from the beginning so the click does something
+    // predictable.
+    const next = cycle[idx === -1 ? 0 : (idx + 1) % cycle.length];
+    this.thinkingLevel = next;
+    this.updateThinkingBtn();
+    this.onThinkingLevelChange?.(next);
+  }
+
+  private updateThinkingBtn(): void {
+    if (!this.thinkingBtn) return;
+    if (!this.modelSupportsReasoning) {
+      this.thinkingBtn.hidden = true;
+      return;
+    }
+    this.thinkingBtn.hidden = false;
+    this.thinkingBtn.dataset.level = this.thinkingLevel;
+    const label = `Thinking: ${this.thinkingLevel} (click to cycle)`;
+    this.thinkingBtn.setAttribute('aria-label', label);
+    this.thinkingBtn.dataset.tooltip = label;
   }
 
   private findMessage(id: string): ChatMessage | undefined {

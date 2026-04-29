@@ -43,7 +43,7 @@ import { PanelRegistry } from './panel-registry.js';
 import { showSprinklePicker } from './sprinkle-picker.js';
 import type { ZoneId } from './panel-types.js';
 // ChatMessage import removed — copy chat moved to feedback row
-import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
+import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
 
 export interface LayoutPanels {
   chat: ChatPanel;
@@ -121,6 +121,8 @@ export class Layout {
   public panels!: LayoutPanels;
   public readonly registry = new PanelRegistry();
   public onModelChange?: (model: string) => void;
+  /** Fired when the user cycles the brain icon in the chat panel. */
+  public onThinkingLevelChange?: (level: ThinkingLevel) => void;
   /** Re-populate the model dropdown (call after provider login/logout). */
   public refreshModels?: () => void;
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
@@ -658,6 +660,7 @@ export class Layout {
   // `extensionZone`, dual-zone TabZone wiring) have been retired.
   // Both modes now mount the same split layout below — the only
   // mode-specific tweaks live in `buildSplitLayout` / `buildHeader`.
+  // ── Standalone: Split Layout ────────────────────────────────────────
 
   private buildSplitLayout(): void {
     while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
@@ -898,6 +901,7 @@ export class Layout {
 
     // Wire chat panel model selector to layout's onModelChange
     this.panels.chat.onModelChange = (modelId) => this.onModelChange?.(modelId);
+    this.panels.chat.onThinkingLevelChange = (level) => this.onThinkingLevelChange?.(level);
 
     this.setupVerticalDrag();
     window.addEventListener('resize', () => {});

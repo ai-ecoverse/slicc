@@ -15,6 +15,7 @@ import {
   type ChannelMessage,
   type ScoopTabState,
   type ScheduledTask,
+  type ThinkingLevel,
 } from './types.js';
 import * as db from './db.js';
 import { createLogger } from '../core/logger.js';
@@ -1764,6 +1765,49 @@ export class Orchestrator {
       context.updateModel();
     }
     log.info('Model updated on all active contexts', { contextCount: this.contexts.size });
+  }
+
+  /**
+   * Update a single scoop's reasoning / thinking level. Mutates the live
+   * agent (`agent.state.thinkingLevel`) for the next turn AND persists the
+   * value into `scoop.config.thinkingLevel` on disk so it survives reloads.
+   *
+   * Returns the level actually applied after model-aware resolution
+   * (xhigh→high clamp on unsupported models, off on non-reasoning models).
+   * Returns `null` when no scoop with the given jid is registered, or the
+   * scoop has no live context (initialization failed / not yet ready).
+   */
+  async setScoopThinkingLevel(
+    jid: string,
+    level: ThinkingLevel | undefined
+  ): Promise<ThinkingLevel | null> {
+    const scoop = this.scoops.get(jid);
+    if (!scoop) return null;
+
+    const context = this.contexts.get(jid);
+    const applied = context ? context.setThinkingLevel(level) : null;
+
+    // Persist the requested level (not the resolved/clamped one): on a
+    // model swap later, we want the user's stated preference re-resolved
+    // against the new model, not the stale clamped value.
+    if (level === undefined) {
+      if (scoop.config && scoop.config.thinkingLevel !== undefined) {
+        const { thinkingLevel: _omit, ...rest } = scoop.config;
+        scoop.config = rest;
+      }
+    } else {
+      scoop.config = { ...(scoop.config ?? {}), thinkingLevel: level };
+    }
+
+    try {
+      await db.saveScoop(scoop);
+    } catch (err) {
+      log.warn('Failed to persist thinkingLevel', {
+        jid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return applied;
   }
 
   /** Reload skills on all active scoop contexts (cone + scoops). */

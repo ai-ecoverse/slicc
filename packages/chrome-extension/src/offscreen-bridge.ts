@@ -527,6 +527,16 @@ export class OffscreenBridge {
         break;
       }
 
+      case 'set-thinking-level': {
+        const tlMsg = msg as { scoopJid: string; level?: string };
+        try {
+          await this.orchestrator.setScoopThinkingLevel(tlMsg.scoopJid, tlMsg.level as never);
+        } catch (err) {
+          console.error('[offscreen-bridge] set-thinking-level failed:', err);
+        }
+        break;
+      }
+
       case 'sprinkle-lick': {
         // Sprinkle lick event from the side panel — route to targetScoop or fall back to cone
         const scoops = this.orchestrator.getScoops();

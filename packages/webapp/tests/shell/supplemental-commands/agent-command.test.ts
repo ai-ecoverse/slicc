@@ -9,6 +9,7 @@ interface SpawnArgs {
   modelId?: string;
   visiblePaths?: string[];
   invokingCwd?: string;
+  thinkingLevel?: string;
 }
 
 interface SpawnResult {
@@ -912,6 +913,112 @@ describe('agent command', () => {
       installBridge(bridge);
       await createAgentCommand().execute(['--unknown'], createMockCtx());
       expect(bridge).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('--thinking flag', () => {
+    it('forwards a valid level to the bridge', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      const result = await createAgentCommand().execute(
+        ['--thinking', 'high', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(captured?.thinkingLevel).toBe('high');
+    });
+
+    it('accepts --effort as an alias for --thinking', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      const result = await createAgentCommand().execute(
+        ['--effort', 'xhigh', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(captured?.thinkingLevel).toBe('xhigh');
+    });
+
+    it('omits the field when the flag is absent', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(captured?.thinkingLevel).toBeUndefined();
+    });
+
+    it('rejects unknown level values without invoking the bridge', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--thinking', 'turbo', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/--thinking must be one of/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('rejects missing value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['--thinking'], createMockCtx());
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/--thinking requires a value/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('rejects flag-shaped value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['--thinking', '--help'], createMockCtx());
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/--thinking requires a value/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('treats --thinking as a prompt when it appears in the third positional slot', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['.', '*', '--thinking high'], createMockCtx());
+      expect(captured?.prompt).toBe('--thinking high');
+      expect(captured?.thinkingLevel).toBeUndefined();
+    });
+
+    it('accepts every valid level', async () => {
+      const levels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+      for (const level of levels) {
+        let captured: SpawnArgs | undefined;
+        installBridge((args) => {
+          captured = args;
+          return { finalText: 'ok', exitCode: 0 };
+        });
+        const result = await createAgentCommand().execute(
+          ['--thinking', level, '.', '*', 'p'],
+          createMockCtx()
+        );
+        expect(result.exitCode).toBe(0);
+        expect(captured?.thinkingLevel).toBe(level);
+      }
+    });
+
+    it('mentions --thinking in --help', async () => {
+      installBridge(() => ({ finalText: '', exitCode: 0 }));
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toMatch(/--thinking/);
+      expect(result.stdout).toMatch(/off, minimal, low, medium, high, xhigh/);
     });
   });
 });
