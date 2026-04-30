@@ -6,7 +6,7 @@ Complete reference for SLICC's shell capabilities, including supplemental comman
 
 ## Overview
 
-SLICC uses `just-bash` (WASM Bash interpreter v2.11.7) as its core shell runtime. This provides 78+ standard Unix commands plus 17+ custom supplemental commands and auto-discovered `.jsh` script commands.
+SLICC uses `just-bash` (WASM Bash interpreter v2.14.3) as its core shell runtime. This provides 78+ standard Unix commands plus 17+ custom supplemental commands and auto-discovered `.jsh` script commands.
 
 **Entry point**: Via the `bash` agent tool. All shell features available to agents.
 
