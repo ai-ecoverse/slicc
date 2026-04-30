@@ -304,15 +304,15 @@ export class MountCommands {
   }
 
   private async handleUnmount(args: string[], cwd: string): Promise<MountCommandResult> {
-    const target = args[0];
-    if (!target) {
+    // Parse the full arg list so flags can appear before or after the path.
+    // Spec syntax: `mount unmount [--clear-cache] <target-path>`.
+    const parsed = parseArgs(args);
+    if (parsed.positional.length === 0) {
       return { stdout: '', stderr: 'mount unmount: path required\n', exitCode: 1 };
     }
-    const targetPath = this.resolvePath(target, cwd);
+    const targetPath = this.resolvePath(parsed.positional[0], cwd);
 
     try {
-      const parsed = parseArgs(args.slice(1));
-
       // Look up the descriptor BEFORE unmount so we keep the mountId for
       // cache clearing. After unmount the entry is gone from the table.
       let mountIdForCache: string | undefined;
