@@ -312,18 +312,39 @@ export class MountCommands {
 
     try {
       const parsed = parseArgs(args.slice(1));
-      this.options.fs.unmount(targetPath);
 
-      // Clear cache if --clear-cache was set and the backend is remote.
+      // Look up the descriptor BEFORE unmount so we keep the mountId for
+      // cache clearing. After unmount the entry is gone from the table.
+      let mountIdForCache: string | undefined;
+      let kindForCache: 's3' | 'da' | undefined;
       if (parsed.clearCache) {
-        // Note: cache clearing happens at the RemoteMountCache level when
-        // we eventually have access to the mountId. For now, we've unmounted
-        // and the cache will be stale the next time we mount the same mountId.
-        // A future enhancement: store mountId with the mount entry so we can
-        // look it up and clear the cache explicitly.
+        const { getAllMountEntries } = await import('./mount-table-store.js');
+        const entries = await getAllMountEntries();
+        const entry = entries.find((e) => e.targetPath === targetPath);
+        if (entry && (entry.descriptor.kind === 's3' || entry.descriptor.kind === 'da')) {
+          mountIdForCache = entry.descriptor.mountId;
+          kindForCache = entry.descriptor.kind;
+        }
       }
 
-      return { stdout: `Unmounted ${targetPath}\n`, stderr: '', exitCode: 0 };
+      await this.options.fs.unmount(targetPath);
+
+      let cacheCleared = '';
+      if (parsed.clearCache && mountIdForCache && kindForCache) {
+        const { RemoteMountCache } = await import('./mount/remote-cache.js');
+        const cache = new RemoteMountCache({ mountId: mountIdForCache, ttlMs: 30_000 });
+        await cache.clearMount();
+        cacheCleared = ` (cache cleared)`;
+      } else if (parsed.clearCache) {
+        // Local mount or descriptor missing — clear-cache is a no-op.
+        cacheCleared = ` (no remote cache to clear)`;
+      }
+
+      return {
+        stdout: `Unmounted ${targetPath}${cacheCleared}\n`,
+        stderr: '',
+        exitCode: 0,
+      };
     } catch (err) {
       return {
         stdout: '',
