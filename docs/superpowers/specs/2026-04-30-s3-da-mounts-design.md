@@ -528,13 +528,17 @@ recoverMounts(entries, sharedFs, log) {
             needsRecovery.push(toRecoveryEntry(desc, err.message))
 }
 
-// Caller in main.ts — already exists:
+// Caller in main.ts ~1749-1763 — already exists, dispatches via routeLickToScoop:
+const entries = await getAllMountEntries();        // → MountTableEntry[]   (see prereq #2)
 const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
 if (needsRecovery.length > 0) {
-    lickManager.fire({
+    const event: LickEvent = {
         type: 'session-reload',
+        targetScoop: undefined,                    // routes to the cone
+        timestamp: new Date().toISOString(),
         body: { reason: 'mount-recovery', mounts: needsRecovery },
-    });
+    };
+    routeLickToScoop(event);                       // not lickManager.fire — the actual API
 }
 // Cone renders the lick by calling formatMountRecoveryPrompt(needsRecovery),
 // which switches on kind to produce backend-specific copy.
@@ -835,11 +839,11 @@ These are small upstream changes the design depends on. They land **inside the s
 2. **Change the `BroadcastChannel('vfs-mount-sync:<db>')` message shape.** Today (`virtual-fs.ts:62-90`) the channel posts `{ type: 'mount' | 'unmount', path, handle }` where `handle` is a `FileSystemDirectoryHandle` (structured-cloneable). Remote backends are not cloneable, so the message must carry the descriptor instead:
 
    ```ts
-   { type: 'mount', path, descriptor: BackendDescriptor, mountId: string }
+   { type: 'mount', path, descriptor: BackendDescriptor } // descriptor.mountId is the cache key
    { type: 'unmount', path }
    ```
 
-   Receiving peers reconstruct the backend per-context: local → `loadFromIDB(descriptor.idbHandleKey)` (same path as recovery), S3/DA → re-resolve profile and instantiate, with each peer's `RemoteMountCache` pointing at the same shared IDB store keyed by `mountId`. Cross-peer cache writes are inherently best-effort because IDB writes from one peer aren't atomically visible to another mid-op; the TTL window absorbs short divergences. Two peers writing the same file is a multi-writer scenario already governed by ETag conditionals.
+   Receiving peers reconstruct the backend per-context: local → `loadFromIDB(descriptor.idbHandleKey)` (same path as recovery), S3/DA → re-resolve profile and instantiate, with each peer's `RemoteMountCache` pointing at the same shared IDB store keyed by `descriptor.mountId`. Cross-peer cache writes are inherently best-effort because IDB writes from one peer aren't atomically visible to another mid-op; the TTL window absorbs short divergences. Two peers writing the same file is a multi-writer scenario already governed by ETag conditionals.
 
 3. **Extend `MountRecoveryEntry` in `packages/webapp/src/fs/mount-recovery.ts`.** Today: `{ path, dirName }`. Required shape:
 
@@ -852,17 +856,35 @@ These are small upstream changes the design depends on. They land **inside the s
 
    `formatMountRecoveryPrompt` switches on `kind`; existing local copy stays unchanged. The `session-reload` lick payload (`{ reason: 'mount-recovery', mounts }`) is unchanged at the lick level — only the entry shape grows.
 
-4. **Add a raw-body bypass to `/api/fetch-proxy` in `packages/node-server/src/index.ts`.** Today (line ~960) the proxy uses `express.json({ limit: '50mb' })` and re-serializes parsed bodies via `JSON.stringify(req.body)` before forwarding. This corrupts SigV4-signed S3 PUTs because:
+   **Audit list — call sites that bind to today's narrow `{ path, dirName }` shape:**
+   - `packages/webapp/src/ui/main.ts:1629-1637` — the `event.body as { reason?: string; mounts?: Array<{ path: string; dirName: string }> }` cast in the cone-side renderer must widen to the new union.
+   - `formatMountRecoveryPrompt` itself — body needs a `switch (kind)` instead of unconditional `dirName` access.
+   - Any tests that assert the prompt copy or build mock recovery entries (`mount-recovery.test.ts`).
+
+4. **Migrate `mount-table-store.ts` to descriptor-shaped rows.** Today (line 29-32) `MountEntry = { path, handle }` and `getAllMountEntries(): Promise<MountEntry[]>`. Required:
+   - New row shape `MountTableEntry = { targetPath, descriptor: BackendDescriptor, createdAt }`.
+   - `getAllMountEntries(): Promise<MountTableEntry[]>` — returns descriptors, not raw handles. Local descriptors carry an `idbHandleKey` which the consumer uses to fetch the live `FileSystemDirectoryHandle` from IDB.
+   - **Audit list — consumers of the previous return shape:**
+     - `packages/webapp/src/ui/main.ts:1749` — passes the result straight into `recoverMounts(entries, sharedFs, log)`. `recoverMounts` itself becomes the descriptor-aware brancher.
+     - `packages/webapp/src/fs/mount-recovery.ts` — current implementation iterates `{ path, handle }`; rewrites against `BackendDescriptor`.
+
+5. **Add mount recovery to the extension boot path.** Today, `recoverMounts` + `getAllMountEntries` only run inside `main()` (`main.ts:1749`); `mainExtension()` (line 337) and the offscreen bootstrap (`packages/chrome-extension/src/offscreen.ts`) **never restore persisted mounts**. The whole "session restore" flow is CLI/Electron-only today, which the existing local-mount design has been able to live with because mount handle reactivation in extensions hits the side-panel-crash bug anyway. With S3/DA, where reactivation is just a network call and a card, parity is mandatory:
+   - Mirror `main.ts:1748-1763` into the offscreen bootstrap, **after** `Orchestrator.init()` resolves and `sharedFs` is available.
+   - Route the resulting `session-reload` lick to the cone via the same `routeLickToScoop` the panel uses (cone runs in offscreen in extension mode, so the dispatch is local).
+   - For local backend in extension, `LocalMountBackend.fromHandle()` will hit the existing handle-reactivation lick flow → panel approval card.
+   - For S3/DA backend in extension, recovery succeeds without any UI gesture if profiles still resolve and IMS isn't expired.
+
+6. **Add a raw-body bypass to `/api/fetch-proxy` in `packages/node-server/src/index.ts`.** Today (line ~960) the proxy uses `express.json({ limit: '50mb' })` mounted globally at `app.use(...)` (line 757) and re-serializes parsed bodies via `JSON.stringify(req.body)` before forwarding. This corrupts SigV4-signed S3 PUTs because:
    - The body bytes that were SHA-256-hashed and signed pre-flight no longer match the bytes sent on the wire.
    - `JSON.stringify` produces canonical output that may differ byte-for-byte from the original.
 
-   Fix: detect S3-bound (or generally, raw-body-required) traffic and bypass body parsing entirely, piping the raw stream through. Two reasonable triggers:
-   - **Header gate.** A `X-Slicc-Raw-Body: 1` request header skips `express.json()` parsing for that specific request. The S3/DA backends always set it.
-   - **Content-type gate.** Any `Content-Type` other than `application/json` skips parsing. Simpler, but more action-at-a-distance.
+   Because `express.json()` is global middleware, a per-request bypass requires the JSON parser to **not consume the body before the proxy handler runs**. Two reasonable triggers:
+   - **Header gate.** A `X-Slicc-Raw-Body: 1` request header. Implementation: gate the global `express.json()` with a `type` predicate (`type: (req) => req.get('X-Slicc-Raw-Body') !== '1' && req.is('application/json')`) so the parser skips itself when the header is set, leaving the raw stream available. The S3/DA backends always set the header.
+   - **Content-type gate.** Restrict `express.json()` to `application/json` only (it already does this by default — but verify) and have S3/DA backends always send a non-JSON `Content-Type` (`application/octet-stream` etc.). Simpler, but more action-at-a-distance.
 
-   Pick one at implementation time; the design's only constraint is "the proxy must stop re-serializing bodies it parsed unintentionally."
+   Pick one at implementation time; the design's only constraint is "the JSON parser does not consume the body before the proxy handler runs."
 
-These four prerequisites together unblock the backend code. Each is small and self-contained.
+These six prerequisites together unblock the backend code. Each is small and self-contained.
 
 ## Open risks
 
@@ -875,7 +897,10 @@ These four prerequisites together unblock the backend code. Each is small and se
 
 - Feature gate not required; new behavior is purely additive (new flags, new schemes).
 - Existing local mounts continue to work unchanged because `mount` without `--source` still routes to the picker.
-- Mount-table descriptors are upgraded transparently: existing local-mount entries are recognized by the absence of a `kind` field and migrated to `{ kind: 'local', ... }` on first load (one-time migration in `mount-table-store.ts`).
+- Mount-table descriptors are upgraded transparently on first load (one-time migration in `mount-table-store.ts`):
+  - Legacy rows (`{ path, handle }` shape, no `kind`/`mountId` fields) are detected and rewritten to `{ targetPath, descriptor: { kind: 'local', mountId: crypto.randomUUID(), idbHandleKey }, createdAt: Date.now() }`. The handle stays in IDB at `idbHandleKey`; only the table row shape changes.
+  - The migration runs idempotently — re-running on already-upgraded rows is a no-op.
+  - `mountId` is generated once per legacy row and persisted, so subsequent boots see the same id and `RemoteMountCache` (if the user later switches to a remote backend at the same path) gets a predictable namespace.
 - Documentation updates ship in the same PR(s) — root `CLAUDE.md`, `packages/webapp/CLAUDE.md`, `docs/architecture.md`, README. Per the project's three-gate rule (tests, docs, verification), docs are part of the change.
 
 ## Out-of-scope follow-ups (v2+)
