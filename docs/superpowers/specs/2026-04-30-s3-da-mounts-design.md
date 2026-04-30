@@ -552,8 +552,10 @@ if (needsRecovery.length > 0) {
     };
     routeLickToScoop(event);                       // not lickManager.fire — the actual API
 }
-// Cone renders the lick by calling formatMountRecoveryPrompt(needsRecovery),
-// which switches on kind to produce backend-specific copy.
+// Cone renders the lick via formatLickEventForCone(event) (once prereq 5b lands),
+// which dispatches mount-recovery to formatMountRecoveryPrompt(mounts) — the latter
+// switches on kind to produce backend-specific copy. Until 5b lands, main.ts inlines
+// this in its handler at lines 1620-1650; offscreen.ts only knows isUpgrade.
 ```
 
 `MountRecoveryEntry` extends from today's `{ path, dirName }` to a discriminated shape:
@@ -893,7 +895,7 @@ These are small upstream changes the design depends on. They land **inside the s
 
 5. **Add mount recovery to the extension boot path AND make the offscreen lick handler render `session-reload` correctly.** Today the recovery boot is CLI/Electron-only (`main.ts:1749`), and even if recovery were added to offscreen, the existing offscreen lick handler at `packages/chrome-extension/src/offscreen.ts:161-252` only special-cases `isUpgrade`. There's no `isSessionReload` branch and no call to `formatMountRecoveryPrompt`, so a `session-reload` event would render with `event.cronName` (undefined) and a `[Cron Event: undefined]\n\`\`\`json\n…\`\`\`` body — silently broken UX. Two changes are required, not one:
 
-   **5a — Run recovery in the extension bootstrap.** Mirror `main.ts:1748-1763` into the offscreen bootstrap, **after** `Orchestrator.init()` resolves and `sharedFs` is available. Note: `routeLickToScoop` is a private helper inside `main()` (`main.ts:1503`) and is not visible to offscreen. Use the public emit API instead — `lickManager.emitEvent(event)` (defined at `packages/webapp/src/scoops/lick-manager.ts:105`). The offscreen handler installed via `setEventHandler` (after prereq 5b is in place) will then format the `session-reload` event correctly. For local backend, `LocalMountBackend.fromHandle()` failing on permission triggers the existing handle-reactivation lick → panel approval card. For S3/DA, recovery succeeds without any UI gesture as long as profiles resolve and IMS hasn't expired.
+   **5a — Run recovery in the extension bootstrap.** Mirror `main.ts:1748-1763` into the offscreen bootstrap, **after** `Orchestrator.init()` resolves, `sharedFs` is available, **and `lickManager.setEventHandler(...)` has been registered with the formatter from 5b**. Order matters: a `session-reload` event emitted before the handler is wired (or before 5b lands the formatter) renders as the malformed `[Cron Event: undefined]` JSON block at `offscreen.ts:233-234`, defeating the purpose of running recovery here at all. Concretely: 5b first (formatter exists), then `setEventHandler(formatter-equipped handler)`, then this recovery block. Note: `routeLickToScoop` is a private helper inside `main()` (`main.ts:1503`) and is not visible to offscreen. Use the public emit API instead — `lickManager.emitEvent(event)` (defined at `packages/webapp/src/scoops/lick-manager.ts:105`). For local backend, `LocalMountBackend.fromHandle()` failing on permission triggers the existing handle-reactivation lick → panel approval card. For S3/DA, recovery succeeds without any UI gesture as long as profiles resolve and IMS hasn't expired.
 
    **5b — Extract a shared `formatLickEventForCone(event): { label, content } | null` helper.** Both `main.ts:1620-1650` and `offscreen.ts:161-252` build `eventLabel` + `content` for the cone-side rendering, but they currently diverge: `main.ts` knows `session-reload` + `mount-recovery` + `formatMountRecoveryPrompt`; `offscreen.ts` only knows `upgrade`. Move the shared logic into `packages/webapp/src/scoops/lick-formatting.ts` (or similar) and have both call sites import it. Without this step, the CLI cone shows actionable mount-recovery prompts while the extension cone shows a malformed JSON dump — divergent UX defeats the point of running recovery in offscreen at all.
 
