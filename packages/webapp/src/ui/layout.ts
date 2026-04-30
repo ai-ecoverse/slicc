@@ -125,6 +125,14 @@ export class Layout {
   public onThinkingLevelChange?: (level: ThinkingLevel) => void;
   /** Re-populate the model dropdown (call after provider login/logout). */
   public refreshModels?: () => void;
+  /**
+   * Fired after `refreshModels` finishes — i.e. whenever provider accounts
+   * change and the chat panel's active model may have shifted. main.ts
+   * uses this hook to re-sync the thinking-level brain icon to the new
+   * model's reasoning support (a model swap from a non-reasoning to a
+   * reasoning model has to un-hide the icon).
+   */
+  public onModelsRefreshed?: () => void;
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
   public onClearChat?: () => Promise<void>;
   public onClearFilesystem?: () => Promise<void>;
@@ -287,6 +295,10 @@ export class Layout {
       ensureModelSelected();
       this.panels?.chat?.refreshModelSelector();
       this.refreshAvatar();
+      // Notify main.ts so it can re-resolve the active model for the brain
+      // icon. Done last so the chat panel has already re-rendered when the
+      // hook fires.
+      this.onModelsRefreshed?.();
     };
   }
 

@@ -800,6 +800,11 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     client.setScoopThinkingLevel(selectedScoop.jid, level);
   };
 
+  // Re-sync brain icon on provider account changes (see standalone path).
+  layout.onModelsRefreshed = () => {
+    if (selectedScoop) syncThinkingButtonForExtensionScoop(selectedScoop);
+  };
+
   // Wire clear chat — delete all scoop sessions from the shared IndexedDB
   // synchronously (from the panel's perspective) before the reload happens.
   // The bridge also clears its in-memory buffers via the clear-chat message.
@@ -2842,6 +2847,14 @@ async function main(): Promise<void> {
   layout.onThinkingLevelChange = (level) => {
     if (!selectedScoop) return;
     void orchestrator.setScoopThinkingLevel(selectedScoop.jid, level);
+  };
+
+  // Re-sync the brain icon when provider accounts change — the active
+  // model's reasoning support may have shifted (e.g. logging into Adobe
+  // exposes Claude models with reasoning=true), and `refreshModels` is
+  // the canonical signal for that transition.
+  layout.onModelsRefreshed = () => {
+    if (selectedScoop) syncThinkingButtonForScoop(selectedScoop);
   };
 
   // Track which scoops have been selected at least once this runtime.
