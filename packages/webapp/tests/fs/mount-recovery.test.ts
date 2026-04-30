@@ -211,7 +211,7 @@ describe('recoverMounts', () => {
     expect(received?.mountId).toBe(e.descriptor.kind === 'local' ? e.descriptor.mountId : '');
   });
 
-  it('routes s3 descriptors to needsRecovery (Phase 11 stub)', async () => {
+  it('routes s3 descriptors with missing profile to needsRecovery', async () => {
     const entry: MountTableEntry = {
       targetPath: '/mnt/r2',
       descriptor: {
@@ -230,7 +230,7 @@ describe('recoverMounts', () => {
         path: '/mnt/r2',
         source: 's3://bucket/prefix',
         profile: 'r2',
-        reason: expect.stringContaining('not yet implemented'),
+        reason: expect.stringContaining("missing required field 'access_key_id'"),
       },
     ]);
   });

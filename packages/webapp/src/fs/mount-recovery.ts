@@ -34,6 +34,12 @@
  */
 
 import { LocalMountBackend } from './mount/backend-local.js';
+import {
+  S3MountBackend,
+  RemoteMountCache,
+  resolveS3Profile,
+  getDefaultSecretStore,
+} from './mount/index.js';
 import type { MountBackend } from './mount/backend.js';
 import { loadMountHandle } from './mount-table-store.js';
 import type { MountTableEntry } from './mount-table-store.js';
@@ -129,15 +135,41 @@ export async function recoverMounts(
     }
 
     if (descriptor.kind === 's3') {
-      // Phase 11 wires this branch (resolveS3Profile + new S3MountBackend).
-      // Until then, surface as needsRecovery.
-      needsRecovery.push({
-        kind: 's3',
-        path: targetPath,
-        source: descriptor.source,
-        profile: descriptor.profile,
-        reason: 'S3 backend recovery not yet implemented',
-      });
+      try {
+        const store = await getDefaultSecretStore();
+        const profile = await resolveS3Profile(descriptor.profile, store);
+        const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
+        const backend = new S3MountBackend({
+          source: descriptor.source,
+          profile: descriptor.profile,
+          profileResolved: profile,
+          cache,
+          mountId: descriptor.mountId,
+          reresolveProfile: () => resolveS3Profile(descriptor.profile, store),
+        });
+        await fs.mount(targetPath, backend);
+        log?.info?.('Restored S3 mount from previous session', {
+          path: targetPath,
+          source: descriptor.source,
+        });
+        restored.push({
+          kind: 's3',
+          path: targetPath,
+          source: descriptor.source,
+          profile: descriptor.profile,
+          reason: '', // Successfully recovered; reason is empty
+        });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        log?.warn?.('Failed to restore S3 mount', { path: targetPath, error: reason });
+        needsRecovery.push({
+          kind: 's3',
+          path: targetPath,
+          source: descriptor.source,
+          profile: descriptor.profile,
+          reason,
+        });
+      }
       continue;
     }
 

@@ -500,7 +500,21 @@ export class VirtualFS {
         if (!handle) throw new Error(`no handle stored for ${descriptor.idbHandleKey}`);
         return LocalMountBackend.fromHandle(handle, { mountId: descriptor.mountId });
       }
-      case 's3':
+      case 's3': {
+        const { S3MountBackend, RemoteMountCache, resolveS3Profile, getDefaultSecretStore } =
+          await import('./mount/index.js');
+        const store = await getDefaultSecretStore();
+        const profile = await resolveS3Profile(descriptor.profile, store);
+        const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
+        return new S3MountBackend({
+          source: descriptor.source,
+          profile: descriptor.profile,
+          profileResolved: profile,
+          cache,
+          mountId: descriptor.mountId,
+          reresolveProfile: () => resolveS3Profile(descriptor.profile, store),
+        });
+      }
       case 'da':
         throw new Error(`${descriptor.kind} peer reconstruction not yet implemented`);
     }

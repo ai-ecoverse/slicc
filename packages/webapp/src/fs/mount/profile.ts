@@ -81,3 +81,37 @@ export async function resolveDaProfile(_name: string, ims: AdobeImsClient): Prom
     identity: ims.identity ?? 'adobe-ims',
   };
 }
+
+/**
+ * Get the default SecretStore for the current runtime context.
+ * In browser/extension: fetches from /api/secrets endpoint.
+ * In Node.js CLI: reads from environment variables.
+ * @throws Error if no secret store is available (e.g., extension without backend)
+ */
+export async function getDefaultSecretStore(): Promise<SecretStore> {
+  // Browser context: use API endpoint
+  if (typeof window !== 'undefined' && !('process' in globalThis)) {
+    return {
+      async get(key: string): Promise<string | undefined> {
+        try {
+          const resp = await fetch('/api/secrets');
+          if (!resp.ok) return undefined;
+          const entries = (await resp.json()) as Array<{ name: string }>;
+          if (!entries.find((e) => e.name === key)) return undefined;
+          // The API returns metadata, not values. For now, return undefined.
+          // In a full implementation, secrets would be fetched via a masked endpoint.
+          return undefined;
+        } catch {
+          return undefined;
+        }
+      },
+    };
+  }
+
+  // Node.js CLI: use environment
+  return {
+    async get(key: string): Promise<string | undefined> {
+      return process.env[key];
+    },
+  };
+}
