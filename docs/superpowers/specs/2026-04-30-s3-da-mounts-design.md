@@ -17,7 +17,7 @@ The driving workflow: the agent edits remote content as if it were local (publis
 - Reuse the existing `mount`, `mount list`, `mount unmount`, `mount refresh` UX
 - Single global cred set per backend per profile for v1; AWS-style profile selection lets a user switch credentials between mounts (e.g. one R2 profile + one AWS profile)
 - Read-write from day one
-- Dual-mode: works in CLI / Electron (via `/api/fetch-proxy`) and Chrome extension (direct fetch from offscreen)
+- Dual-mode: works in CLI / Electron (via `/api/fetch-proxy`) and Chrome extension (direct fetch from both panel and offscreen shells)
 
 ## Non-goals (v1)
 
@@ -96,6 +96,12 @@ Flags:
 - `--max-body-mb <n>` overrides the per-mount maximum body size.
 - `--clear-cache` (on `unmount`) drops cached bodies/listings for that mount.
 - `--bodies` (on `refresh`) forces conditional revalidation of all cached bodies.
+
+Output behavior (a behavior change vs current `mount`):
+
+- `mount` (success) — keeps today's existing summary line plus the source/profile when applicable: `Mounted '<name>' → <path> (source: <source>, profile: <profile>)`. Old single-line `Mounted '<name>' → <path>` remains for local mounts.
+- `mount unmount` — keeps today's `Unmounted <path>`. With `--clear-cache`, appends `Cache cleared (<n> entries)`.
+- `mount refresh` — replaces today's `Re-indexed <path>` with a structured summary derived from `RefreshReport`: `Refreshed <path>: +<added> -<removed> ~<changed> (<unchanged> unchanged, <errors> errors)`. Errors print on stderr, one per line, after the summary. Existing scripts/tests parsing the old `Re-indexed` string need updating; this is intentional (the old output had no information about what actually changed).
 
 ### Approval flow
 
@@ -186,6 +192,22 @@ Modifications to existing files:
 - `RemoteMountCache` is the only stateful module shared between S3 and DA backends. Local backend doesn't touch it.
 - Profile resolution captures the resolved profile at backend construction; re-resolves only on auth failure.
 - SigV4 signing is a pure function — easy to unit-test against the AWS test vectors with no network.
+- **`describe()` vs `describeForApproval()` usage rule.** `describe()` returns non-sensitive identifying information (source URI, profile name, optional descriptor) and is safe in any context — `mount list`, log lines, recovery prompts, telemetry. `describeForApproval()` returns the user-facing approval-card copy plus picker-required flags and is invoked **only** at mount time when a `ToolUI` approval card is being rendered. Implementations must not let approval-card strings leak into non-interactive output paths.
+
+### Stable mount identity
+
+Each mount carries a stable `mountId: string` (UUID generated at mount creation, persisted in the descriptor). `RemoteMountCache` keys all entries by this id, so re-mounting at the same target path with a different source produces a fresh cache namespace and never collides with the prior mount's entries. Local mounts also carry a `mountId` for symmetry, even though the cache is unused.
+
+### Backend close() lifecycle
+
+`MountBackend.close()` is called once per unmount. Contract:
+
+1. **Mark closed.** Subsequent calls into the backend (read/write/listing) throw `FsError('EBADF', 'mount closed')`.
+2. **Abort in-flight ops.** The backend's internal AbortController is aborted; pending fetches reject with AbortError, which the call site converts to `EIO` or `EBADF` as appropriate.
+3. **Drain.** `close()` awaits all pending op promises (resolved or rejected) before resolving, so `VirtualFS.unmount()` can safely tear down the mount-table entry afterwards.
+4. **Release resources.** Cache instance is detached but cache entries persist in IDB until a `--clear-cache` unmount or natural TTL eviction.
+
+Local backend's `close()` is a no-op aside from steps 1 and 3 (handle reactivation has no live network state).
 
 ### Key types
 
@@ -320,10 +342,11 @@ export async function signSigV4(
 
 ```ts
 // mount-table-store.ts
+type BaseDescriptor = { mountId: string }; // stable UUID per mount
 export type BackendDescriptor =
-  | { kind: 'local'; idbHandleKey: string }
-  | { kind: 's3'; source: string; profile: string }
-  | { kind: 'da'; source: string; profile: string };
+  | (BaseDescriptor & { kind: 'local'; idbHandleKey: string })
+  | (BaseDescriptor & { kind: 's3'; source: string; profile: string })
+  | (BaseDescriptor & { kind: 'da'; source: string; profile: string });
 
 export interface MountTableEntry {
   targetPath: string;
@@ -331,6 +354,8 @@ export interface MountTableEntry {
   createdAt: number;
 }
 ```
+
+`mountId` is generated at mount creation (`crypto.randomUUID()`), persisted in the descriptor, and used as the `RemoteMountCache` namespace. Re-mounting at the same target with a different source produces a fresh `mountId` and therefore a fresh cache namespace, eliminating cross-source aliasing.
 
 The descriptor is the recipe for rebuilding a backend on session restore — no live objects, no resolved secrets, no `Uint8Array`s.
 
@@ -472,39 +497,64 @@ default: keep cache (re-mount within TTL window is instant; entries expire by TT
 
 ### 6. Session recovery
 
+Recovery uses the existing API in `packages/webapp/src/fs/mount-recovery.ts` and `packages/webapp/src/ui/main.ts`:
+
 ```
-on session start:
-    descriptors = mountTableStore.getAll()
-    for each desc in descriptors:
+recoverMounts(entries, sharedFs, log) {
+    restored: MountRecoveryEntry[]      // mounts re-attached cleanly
+    needsRecovery: MountRecoveryEntry[] // mounts that need user action (extended for S3/DA)
+
+    for desc in entries:
         try:
             switch desc.kind:
                 'local' → handle  = loadFromIDB(desc.idbHandleKey)
+                          // permission may have lapsed — handle reactivation requires
+                          // user gesture, fall through to needsRecovery on PermissionError
                           backend = LocalMountBackend.fromHandle(handle)
-                          // user-gesture lick for handle re-activation (existing flow)
 
-                's3'    → profile = resolveS3Profile(desc.profile)   // missing → throw
-                          cache   = new RemoteMountCache({ mountId: s3:<path>, ttlMs: 30_000 })
+                's3'    → profile = resolveS3Profile(desc.profile)
+                          cache   = new RemoteMountCache({ mountId: desc.mountId, ttlMs: 30_000 })
                           backend = new S3MountBackend({ source: desc.source, profile, cache })
 
-                'da'    → profile = resolveDaProfile(desc.profile)   // expired → throw / re-auth
-                          cache   = new RemoteMountCache({ mountId: da:<path>, ttlMs: 30_000 })
+                'da'    → profile = resolveDaProfile(desc.profile)
+                          cache   = new RemoteMountCache({ mountId: desc.mountId, ttlMs: 30_000 })
                           backend = new DaMountBackend({ source: desc.source, profile, cache })
 
-            await VirtualFS.mount(desc.targetPath, backend)
+            await sharedFs.mount(desc.targetPath, backend)
+            restored.push(toRecoveryEntry(desc))
 
         catch (err):
             log.warn(err)
-            fireRecoveryLick({          // matches existing local-mount recovery lick pattern
-                mountPath: desc.targetPath,
-                kind: desc.kind,
-                reason: err.message,
-                retryHint: 'mount --source ' + desc.source +
-                           (desc.profile ? ' --profile ' + desc.profile : '') + ' ' +
-                           desc.targetPath,
-            })
+            needsRecovery.push(toRecoveryEntry(desc, err.message))
+}
+
+// Caller in main.ts — already exists:
+const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
+if (needsRecovery.length > 0) {
+    lickManager.fire({
+        type: 'session-reload',
+        body: { reason: 'mount-recovery', mounts: needsRecovery },
+    });
+}
+// Cone renders the lick by calling formatMountRecoveryPrompt(needsRecovery),
+// which switches on kind to produce backend-specific copy.
 ```
 
-Recovery never auto-prompts the user mid-session. It surfaces an actionable lick and stays out of the way; cone shows it as a card with the retry command pre-filled.
+`MountRecoveryEntry` extends from today's `{ path, dirName }` to a discriminated shape:
+
+```ts
+export type MountRecoveryEntry =
+  | { kind: 'local'; path: string; dirName: string }
+  | { kind: 's3'; path: string; source: string; profile: string; reason: string }
+  | { kind: 'da'; path: string; source: string; profile: string; reason: string };
+```
+
+`formatMountRecoveryPrompt` switches on `kind`:
+
+- `local` → existing copy unchanged
+- `s3` / `da` → "Couldn't restore mount `<path>` (`<source>`, profile `<profile>`) — `<reason>`. Run `mount --source <source> --profile <profile> <path>` to retry."
+
+Recovery never auto-prompts the user mid-session. It populates `needsRecovery`, the `session-reload` lick fires once, and the cone surfaces an actionable card with the retry command pre-filled.
 
 ## Error handling
 
@@ -567,14 +617,14 @@ Cache misses are not failures. The body was already read; we just couldn't memoi
 
 ### Mount-time errors (stderr, non-zero exit)
 
-| Cause                 | Message                                                                                             |
-| --------------------- | --------------------------------------------------------------------------------------------------- |
-| Bad URL               | `mount: invalid source 's3foo' — expected s3://bucket[/prefix]`                                     |
-| Profile missing       | `mount: profile 's3.r2' not configured. Set s3.r2.access_key_id and s3.r2.secret_access_key first.` |
-| Profile incomplete    | `mount: profile 's3.r2' missing required field 'secret_access_key'`                                 |
-| Probe failed          | `mount: probe failed for s3://bucket — 403 Forbidden. Check creds for profile 'r2'.`                |
-| Target not empty      | (existing message — unchanged)                                                                      |
-| Scoop + local backend | `mount: cannot mount local directories from a scoop (no UI). Ask the cone.`                         |
+| Cause                 | Message                                                                                          |
+| --------------------- | ------------------------------------------------------------------------------------------------ |
+| Bad URL               | `mount: invalid source 's3foo' — expected s3://bucket[/prefix]`                                  |
+| Profile missing       | `mount: profile 'r2' not configured. Set s3.r2.access_key_id and s3.r2.secret_access_key first.` |
+| Profile incomplete    | `mount: profile 'r2' missing required field 'secret_access_key'`                                 |
+| Probe failed          | `mount: probe failed for s3://bucket — 403 Forbidden. Check creds for profile 'r2'.`             |
+| Target not empty      | (existing message — unchanged)                                                                   |
+| Scoop + local backend | `mount: cannot mount local directories from a scoop (no UI). Ask the cone.`                      |
 
 ### Timeouts
 
@@ -646,12 +696,12 @@ Outer abort → op aborts → in-flight fetch aborts. The backend re-throws as `
 
 ## Dual-mode networking
 
-| Float          | Strategy                                                                                                                                                                                                                     |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CLI / Electron | Signed request → `/api/fetch-proxy?url=...` → forwarded to S3/DA. Proxy must preserve `Authorization`, `X-Amz-Date`, `X-Amz-Content-Sha256`, and the URL host (SigV4 signs all four). Mount-time probe is the early-warning. |
-| Extension      | Direct `fetch()` from offscreen document. Manifest `host_permissions: <all_urls>` covers any S3 endpoint + da.live. Side panel never touches the network.                                                                    |
+| Float          | Strategy                                                                                                                                                                                                                                                                                                                                 |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CLI / Electron | Signed request → `/api/fetch-proxy` (target via `X-Target-URL` header) → forwarded to S3/DA. Headers are preserved by the proxy already (only a small skip-set is dropped). The real risk is **body re-serialization** — the proxy currently `JSON.stringify`s anything `express.json()` parsed, which corrupts SigV4-signed PUT bodies. |
+| Extension      | Direct `fetch()` from whichever shell context originated the call. Both contexts apply: the side-panel shell handles user-typed `mount` commands in the Terminal tab; the offscreen shell handles agent-tool-driven I/O. Manifest `host_permissions: <all_urls>` covers any S3 endpoint + da.live in both contexts.                      |
 
-The fetch-proxy header preservation is a **known risk**; if probe fails on CLI with a `SignatureDoesNotMatch` body, mount fails fast with a message naming the proxy as the suspect. Section "Open risks" tracks this.
+The fetch-proxy body issue requires a small upstream change to `packages/node-server/src/index.ts` (raw-body bypass) — tracked under Implementation prerequisites. Mount-time probe is the early-warning until that change is in: a `SignatureDoesNotMatch` from S3 fails the mount with a message pointing at the proxy.
 
 ## Testing
 
@@ -672,7 +722,8 @@ packages/webapp/tests/fs/mount/
   mount-recovery.test.ts         # backend reconstruction (adapted)
   mount-commands.test.ts         # flag parsing, dispatch, approval card (adapted)
   mount-index.test.ts            # backend.readDir-driven walk (adapted)
-  virtual-fs-mount.test.ts       # VFS routing through MountBackend (adapted)
+  virtual-fs.mount.test.ts       # VFS routing through MountBackend (adapted)
+  virtual-fs-mount-sync.test.ts  # BroadcastChannel cross-instance sync (adapted)
   fixtures/
     sigv4-vectors/               # AWS test suite vectors (vendor copy)
     s3-listing-page-1.xml        # paginated LIST response fixtures
@@ -770,11 +821,55 @@ Each existing `tests/fs/mount-*.test.ts` file gets a paired migration in the sam
 
 Migration ships in the implementation PR(s), not as a follow-up.
 
+## Implementation prerequisites
+
+These are small upstream changes the design depends on. They land **inside the same PR(s)** as the backend code, but they are sequenced first so the rest of the work compiles and the test surfaces line up.
+
+1. **Extend `FsErrorCode` in `packages/webapp/src/fs/types.ts`.** Today the type is closed at `ENOENT, EEXIST, ENOTDIR, EISDIR, ENOTEMPTY, EINVAL, EACCES, ELOOP`. The design adds:
+   - `EBUSY` — 412 Precondition Failed (concurrent write conflict)
+   - `EFBIG` — body exceeds `maxBodyBytes` (pre-flight check)
+   - `EBADF` — operation issued against an unmounted/closed backend
+   - `EIO` — network failure, 5xx, AbortError-from-timeout
+     Implementer must audit any exhaustive switches over `FsErrorCode` (notably `restricted-fs.ts` errno mapping and tool-error formatting in `packages/webapp/src/tools/`) and extend accordingly.
+
+2. **Change the `BroadcastChannel('vfs-mount-sync:<db>')` message shape.** Today (`virtual-fs.ts:62-90`) the channel posts `{ type: 'mount' | 'unmount', path, handle }` where `handle` is a `FileSystemDirectoryHandle` (structured-cloneable). Remote backends are not cloneable, so the message must carry the descriptor instead:
+
+   ```ts
+   { type: 'mount', path, descriptor: BackendDescriptor, mountId: string }
+   { type: 'unmount', path }
+   ```
+
+   Receiving peers reconstruct the backend per-context: local → `loadFromIDB(descriptor.idbHandleKey)` (same path as recovery), S3/DA → re-resolve profile and instantiate, with each peer's `RemoteMountCache` pointing at the same shared IDB store keyed by `mountId`. Cross-peer cache writes are inherently best-effort because IDB writes from one peer aren't atomically visible to another mid-op; the TTL window absorbs short divergences. Two peers writing the same file is a multi-writer scenario already governed by ETag conditionals.
+
+3. **Extend `MountRecoveryEntry` in `packages/webapp/src/fs/mount-recovery.ts`.** Today: `{ path, dirName }`. Required shape:
+
+   ```ts
+   export type MountRecoveryEntry =
+     | { kind: 'local'; path: string; dirName: string }
+     | { kind: 's3'; path: string; source: string; profile: string; reason: string }
+     | { kind: 'da'; path: string; source: string; profile: string; reason: string };
+   ```
+
+   `formatMountRecoveryPrompt` switches on `kind`; existing local copy stays unchanged. The `session-reload` lick payload (`{ reason: 'mount-recovery', mounts }`) is unchanged at the lick level — only the entry shape grows.
+
+4. **Add a raw-body bypass to `/api/fetch-proxy` in `packages/node-server/src/index.ts`.** Today (line ~960) the proxy uses `express.json({ limit: '50mb' })` and re-serializes parsed bodies via `JSON.stringify(req.body)` before forwarding. This corrupts SigV4-signed S3 PUTs because:
+   - The body bytes that were SHA-256-hashed and signed pre-flight no longer match the bytes sent on the wire.
+   - `JSON.stringify` produces canonical output that may differ byte-for-byte from the original.
+
+   Fix: detect S3-bound (or generally, raw-body-required) traffic and bypass body parsing entirely, piping the raw stream through. Two reasonable triggers:
+   - **Header gate.** A `X-Slicc-Raw-Body: 1` request header skips `express.json()` parsing for that specific request. The S3/DA backends always set it.
+   - **Content-type gate.** Any `Content-Type` other than `application/json` skips parsing. Simpler, but more action-at-a-distance.
+
+   Pick one at implementation time; the design's only constraint is "the proxy must stop re-serializing bodies it parsed unintentionally."
+
+These four prerequisites together unblock the backend code. Each is small and self-contained.
+
 ## Open risks
 
-1. **`/api/fetch-proxy` header preservation for SigV4.** The proxy must pass through `Authorization`, `X-Amz-Date`, `X-Amz-Content-Sha256`, and not modify the URL host. Mount-time probe is the early-warning. May require a small proxy adjustment as part of this work.
-2. **R2 + AWS S3 coexistence.** v1 single-global-creds-per-profile means a user has to maintain separate profiles (e.g. `s3.aws.*` and `s3.r2.*`) and pass `--profile` per mount. Per-mount credential override via flag is v2 follow-up.
-3. **DA single-IMS-identity.** v1 reuses the existing Adobe provider's IMS token. If the user is not authed for the Adobe LLM provider, DA mounts cannot authenticate. Mitigation: clear error message at mount time pointing to `oauth-token adobe` or the provider settings UI.
+1. **R2 + AWS S3 coexistence requires multiple profiles.** v1 single-global-creds-per-profile means the user maintains separate named profiles (e.g. `s3.aws.*` and `s3.r2.*`) and passes `--profile` per mount. Per-mount credential override via flag is a v2 follow-up.
+2. **DA single-IMS-identity.** v1 reuses the existing Adobe provider's IMS token. If the user is not authed for the Adobe LLM provider, DA mounts cannot authenticate. Mitigation: clear error message at mount time pointing to `oauth-token adobe` or the provider settings UI.
+3. **DA API surface is external to this repo.** URLs like `https://admin.da.live/source/<org>/<repo>/<path>` and `GET /list/<org>/<repo>/<path>` are da.live's documented contract, not in-repo APIs. Implementer should link the spec to da.live's official API reference before coding the DA backend, and add the `da-list-response.json` test fixture from a real captured response. SigV4 by contrast is exercised against the official AWS SigV4 v4 test suite (vendored under `tests/.../fixtures/sigv4-vectors/`).
+4. **Cross-peer BroadcastChannel cache divergence.** Panel and offscreen each maintain their own `RemoteMountCache` instance, both backed by the same IDB store but with independent in-memory state. Short divergences are absorbed by the TTL window; concurrent writes are governed by ETag conditionals. Worth a targeted test in `virtual-fs-mount-sync.test.ts` for the new message shape.
 
 ## Rollout
 
