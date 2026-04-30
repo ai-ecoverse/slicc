@@ -72,6 +72,13 @@ interface CatalogSkillSource {
   repo: string;
   path?: string;
   skill?: string;
+  /**
+   * When true, install ALL skills found under `path` (not just the one named
+   * in `skill`). Used for bundle entries — e.g. `migrate-page` is the primary
+   * skill name (for display + dedup), but the migration bundle ships four
+   * companion skills that should land together.
+   */
+  installAll?: boolean;
 }
 
 interface CatalogSkill {
@@ -113,6 +120,8 @@ interface RemoteCatalogRow {
   role: string;
   purpose: string;
   boost: string;
+  /** Sheet column — truthy values ("true", "TRUE", "1", "yes") opt the entry into bundle install. */
+  installAll?: string;
 }
 
 interface ScoredSkill {
@@ -129,6 +138,12 @@ function splitField(value: string): string[] | undefined {
     .filter(Boolean);
 }
 
+function parseInstallAll(raw: string | undefined): boolean {
+  if (!raw) return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes';
+}
+
 function parseRemoteCatalog(data: RemoteCatalogRow[]): CatalogSkill[] {
   return data.map((row) => {
     const boost = row.boost ? parseFloat(row.boost) : NaN;
@@ -142,6 +157,7 @@ function parseRemoteCatalog(data: RemoteCatalogRow[]): CatalogSkill[] {
         repo: row.repo,
         path: row.path || undefined,
         skill: row.skill || undefined,
+        installAll: parseInstallAll(row.installAll),
       },
       affinity: {
         apps: splitField(row.apps),
@@ -195,7 +211,8 @@ export function scoreSkills(catalog: CatalogSkill[], profile: UserProfile): Scor
 function buildInstallCmd(source: CatalogSkillSource): string {
   let cmd = `upskill ${source.repo}`;
   if (source.path) cmd += ` --path ${source.path}`;
-  if (source.skill) cmd += ` --skill ${source.skill}`;
+  if (source.installAll) cmd += ` --all`;
+  else if (source.skill) cmd += ` --skill ${source.skill}`;
   return cmd;
 }
 
@@ -1494,6 +1511,59 @@ export async function installRecommendedSkills(
 
       for (const rec of recs) {
         const src = rec.entry.source;
+
+        // Bundle install: install ALL skills under src.path. The catalog
+        // entry's `name` / `skill` is the primary identifier (used for
+        // dedup against an already-installed bundle), but the actual
+        // install fans out across every SKILL.md found under the path.
+        if (src.installAll && src.path) {
+          const pathPrefix = src.path.replace(/^\/|\/$/g, '');
+          const targets: Array<{ name: string; path: string }> = [];
+          for (const [name, p] of skillIndex) {
+            if (p === pathPrefix || p.startsWith(pathPrefix + '/')) {
+              targets.push({ name, path: p });
+            }
+          }
+          completedSkills++;
+          const bundleEta =
+            completedSkills < totalSkills
+              ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
+              : '';
+
+          if (targets.length === 0) {
+            const error = `no skills found under "${src.path}" in ${repoKey}`;
+            results.push({ ok: false, name: rec.entry.name, error });
+            output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" bundle from ${repoKey}: ${error}${bundleEta}\n`;
+            continue;
+          }
+
+          const bundleStart = Date.now();
+          let bundleSuccess = 0;
+          let bundleFailed = 0;
+          for (const target of targets) {
+            // Per-sub-skill dedup so a partially-installed bundle still
+            // gets the missing companions filled in.
+            if (installed.has(target.name)) continue;
+            const subResult = await installSkillFromZip(target.path, target.name, files, fs, false);
+            if (subResult.ok) {
+              results.push({ ok: true, name: target.name });
+              bundleSuccess++;
+            } else {
+              results.push({ ok: false, name: target.name, error: subResult.error });
+              bundleFailed++;
+            }
+          }
+          const bundleDuration = ((Date.now() - bundleStart) / 1000).toFixed(1);
+          if (bundleSuccess === 0 && bundleFailed === 0) {
+            output += `[${completedSkills}/${totalSkills}] Skipped "${rec.entry.name}" bundle from ${repoKey}: all sub-skills already installed${bundleEta}\n`;
+          } else if (bundleFailed === 0) {
+            output += `[${completedSkills}/${totalSkills}] Installed "${rec.entry.name}" bundle (${bundleSuccess} skill(s)) from ${repoKey} (${bundleDuration}s)${bundleEta}\n`;
+          } else {
+            output += `[${completedSkills}/${totalSkills}] Installed "${rec.entry.name}" bundle (${bundleSuccess}/${bundleSuccess + bundleFailed} skill(s)) from ${repoKey} (${bundleDuration}s)${bundleEta}\n`;
+          }
+          continue;
+        }
+
         let skillPath: string;
         let skillName: string;
 

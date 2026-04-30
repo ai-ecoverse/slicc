@@ -1043,4 +1043,164 @@ describe('installRecommendedSkills helper (no-shell entry point)', () => {
     expect(result.skipped).toBe('all-installed');
     expect(result.installedNames).toEqual([]);
   });
+
+  it('installs a whole bundle when catalog row sets installAll', async () => {
+    // Profile picks up the migration bundle via tasks: ['build-websites'].
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
+
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'skills-main/skills/migration/migrate-page/SKILL.md': encoder.encode(
+        '---\nname: migrate-page\n---\n# Migrate Page\n'
+      ),
+      'skills-main/skills/migration/migrate-block/SKILL.md': encoder.encode(
+        '---\nname: migrate-block\n---\n# Migrate Block\n'
+      ),
+      'skills-main/skills/migration/migrate-header/SKILL.md': encoder.encode(
+        '---\nname: migrate-header\n---\n# Migrate Header\n'
+      ),
+      'skills-main/skills/migration/dismiss-overlays/SKILL.md': encoder.encode(
+        '---\nname: dismiss-overlays\n---\n# Dismiss Overlays\n'
+      ),
+    });
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return response(
+          200,
+          JSON.stringify({
+            data: [
+              {
+                name: 'migrate-page',
+                displayName: 'AEM Page Import',
+                description: 'Migration bundle',
+                repo: 'aemcoder/skills',
+                path: 'skills/migration/',
+                skill: 'migrate-page',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+                installAll: 'true',
+              },
+            ],
+          })
+        );
+      }
+      if (url.includes('codeload.github.com')) {
+        return response(200, zipBytes);
+      }
+      if (url.includes('api.github.com')) {
+        return response(403, JSON.stringify({ message: 'rate limited' }), {}, 'Forbidden');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBeNull();
+    expect(result.errors).toEqual([]);
+    expect(result.installedNames.sort()).toEqual([
+      'dismiss-overlays',
+      'migrate-block',
+      'migrate-header',
+      'migrate-page',
+    ]);
+    await expect(fs.readTextFile('/workspace/skills/migrate-page/SKILL.md')).resolves.toContain(
+      '# Migrate Page'
+    );
+    await expect(fs.readTextFile('/workspace/skills/migrate-block/SKILL.md')).resolves.toContain(
+      '# Migrate Block'
+    );
+    await expect(fs.readTextFile('/workspace/skills/migrate-header/SKILL.md')).resolves.toContain(
+      '# Migrate Header'
+    );
+    await expect(fs.readTextFile('/workspace/skills/dismiss-overlays/SKILL.md')).resolves.toContain(
+      '# Dismiss Overlays'
+    );
+  });
+
+  it('fills in missing companions when only some bundle skills are installed', async () => {
+    // Pre-install ONE bundle skill — but NOT the primary `migrate-page`,
+    // so the catalog filter doesn't drop the entry. The bundle install
+    // should skip the already-installed companion and install the rest.
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
+    await fs.mkdir('/workspace/skills/migrate-block', { recursive: true });
+    await fs.writeFile('/workspace/skills/migrate-block/SKILL.md', '# pre-existing\n');
+
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'skills-main/skills/migration/migrate-page/SKILL.md': encoder.encode(
+        '---\nname: migrate-page\n---\n# Migrate Page\n'
+      ),
+      'skills-main/skills/migration/migrate-block/SKILL.md': encoder.encode(
+        '---\nname: migrate-block\n---\n# Migrate Block (new)\n'
+      ),
+      'skills-main/skills/migration/migrate-header/SKILL.md': encoder.encode(
+        '---\nname: migrate-header\n---\n# Migrate Header\n'
+      ),
+    });
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return response(
+          200,
+          JSON.stringify({
+            data: [
+              {
+                name: 'migrate-page',
+                displayName: 'AEM Page Import',
+                description: 'Migration bundle',
+                repo: 'aemcoder/skills',
+                path: 'skills/migration/',
+                skill: 'migrate-page',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+                installAll: 'true',
+              },
+            ],
+          })
+        );
+      }
+      if (url.includes('codeload.github.com')) {
+        return response(200, zipBytes);
+      }
+      if (url.includes('api.github.com')) {
+        return response(403, JSON.stringify({ message: 'rate limited' }), {}, 'Forbidden');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBeNull();
+    expect(result.errors).toEqual([]);
+    expect(result.installedNames.sort()).toEqual(['migrate-header', 'migrate-page']);
+    // The pre-existing companion was left untouched.
+    await expect(fs.readTextFile('/workspace/skills/migrate-block/SKILL.md')).resolves.toContain(
+      'pre-existing'
+    );
+  });
 });
