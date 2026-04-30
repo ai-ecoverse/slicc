@@ -235,7 +235,7 @@ describe('recoverMounts', () => {
     ]);
   });
 
-  it('routes da descriptors to needsRecovery (Phase 12 stub)', async () => {
+  it('routes da descriptors with no IMS account to needsRecovery', async () => {
     const entry: MountTableEntry = {
       targetPath: '/mnt/da',
       descriptor: {
@@ -248,15 +248,19 @@ describe('recoverMounts', () => {
     };
     const { fs } = mockFs();
     const result = await recoverMounts([entry], fs);
-    expect(result.needsRecovery).toEqual([
-      {
-        kind: 'da',
-        path: '/mnt/da',
-        source: 'da://my-org/my-repo',
-        profile: 'default',
-        reason: expect.stringContaining('not yet implemented'),
-      },
-    ]);
+    // With Phase 12 wired in, DA recovery actually attempts reconstruction
+    // via getDefaultImsClient(). In this test environment there's no logged-
+    // in IMS account, so reconstruction fails — we just assert the entry
+    // surfaces in needsRecovery with the right shape and a non-empty reason.
+    expect(result.needsRecovery).toHaveLength(1);
+    expect(result.needsRecovery[0]).toMatchObject({
+      kind: 'da',
+      path: '/mnt/da',
+      source: 'da://my-org/my-repo',
+      profile: 'default',
+    });
+    expect(result.needsRecovery[0]).toHaveProperty('reason');
+    expect((result.needsRecovery[0] as { reason: string }).reason.length).toBeGreaterThan(0);
   });
 });
 

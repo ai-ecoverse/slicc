@@ -14,10 +14,19 @@ const TEST_DA_PROFILE: DaProfile = {
   getBearerToken: async () => 'test-bearer',
 };
 
+// Each test gets its own dbName so fake-indexeddb state is naturally
+// isolated; avoids deleteDatabase races and lets tests run in parallel.
+function uniqueDbName(): string {
+  return `slicc-mount-cache-test-${Math.random().toString(36).slice(2)}`;
+}
+
+function makeCache(): RemoteMountCache {
+  return new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000, dbName: uniqueDbName() });
+}
+
 describe('DaMountBackend readFile', () => {
   let mock: ReturnType<typeof installFetchMock>;
   beforeEach(() => {
-    indexedDB.deleteDatabase('slicc-mount-cache');
     mock = installFetchMock();
   });
   afterEach(() => mock.restore());
@@ -28,7 +37,7 @@ describe('DaMountBackend readFile', () => {
       source: 'da://my-org/my-repo',
       profile: 'default',
       profileResolved: TEST_DA_PROFILE,
-      cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000 }),
+      cache: makeCache(),
     });
     const body = await backend.readFile('index.html');
     expect(new TextDecoder().decode(body)).toBe('<html>hi</html>');
@@ -40,7 +49,6 @@ describe('DaMountBackend readFile', () => {
 describe('DaMountBackend writeFile', () => {
   let mock: ReturnType<typeof installFetchMock>;
   beforeEach(() => {
-    indexedDB.deleteDatabase('slicc-mount-cache');
     mock = installFetchMock();
   });
   afterEach(() => mock.restore());
@@ -53,7 +61,7 @@ describe('DaMountBackend writeFile', () => {
       source: 'da://my-org/my-repo',
       profile: 'default',
       profileResolved: TEST_DA_PROFILE,
-      cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000 }),
+      cache: makeCache(),
     });
     await backend.readFile('index.html');
     mock.enqueue(new Response('', { status: 200, headers: { etag: '"e2"' } }));
@@ -70,7 +78,7 @@ describe('DaMountBackend writeFile', () => {
       source: 'da://my-org/my-repo',
       profile: 'default',
       profileResolved: TEST_DA_PROFILE,
-      cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000 }),
+      cache: makeCache(),
     });
     await backend.readFile('index.html');
     mock.enqueue(new Response('', { status: 412 }));
@@ -91,13 +99,17 @@ describe('DaMountBackend writeFile', () => {
       source: 'da://my-org/my-repo',
       profile: 'default',
       profileResolved: TEST_DA_PROFILE,
-      cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000 }),
+      cache: makeCache(),
     });
     await backend.readFile('index.html');
-    mock.enqueue(new Error('Network timeout'));
+    // First write attempt: network failure (factory throws).
+    mock.enqueue(() => Promise.reject(new DOMException('Aborted', 'AbortError')));
+    // Retry-attempt: server returns 412 (our duplicate PUT actually landed).
     mock.enqueue(new Response('', { status: 412 }));
+    // Reconcile via HEAD to learn the new etag.
     mock.enqueue(new Response('', { status: 200, headers: { etag: '"new-e"' } }));
     const newBody = new TextEncoder().encode('updated');
+    // Should NOT throw — silent reconcile per spec.
     await backend.writeFile('index.html', newBody);
   });
 });
@@ -105,7 +117,6 @@ describe('DaMountBackend writeFile', () => {
 describe('DaMountBackend readDir', () => {
   let mock: ReturnType<typeof installFetchMock>;
   beforeEach(() => {
-    indexedDB.deleteDatabase('slicc-mount-cache');
     mock = installFetchMock();
   });
   afterEach(() => mock.restore());
@@ -117,7 +128,7 @@ describe('DaMountBackend readDir', () => {
       source: 'da://my-org/my-repo',
       profile: 'default',
       profileResolved: TEST_DA_PROFILE,
-      cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000 }),
+      cache: makeCache(),
     });
     const entries = await backend.readDir('/');
     expect(entries.find((e) => e.name === 'index.html')!.kind).toBe('file');
@@ -128,7 +139,6 @@ describe('DaMountBackend readDir', () => {
 describe('DaMountBackend auth retry', () => {
   let mock: ReturnType<typeof installFetchMock>;
   beforeEach(() => {
-    indexedDB.deleteDatabase('slicc-mount-cache');
     mock = installFetchMock();
   });
   afterEach(() => mock.restore());
@@ -148,7 +158,7 @@ describe('DaMountBackend auth retry', () => {
       source: 'da://my-org/my-repo',
       profile: 'default',
       profileResolved: profile,
-      cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000 }),
+      cache: makeCache(),
     });
     const body = await backend.readFile('index.html');
     expect(new TextDecoder().decode(body)).toBe('hi');
@@ -160,7 +170,6 @@ describe('DaMountBackend auth retry', () => {
 describe('DaMountBackend stat', () => {
   let mock: ReturnType<typeof installFetchMock>;
   beforeEach(() => {
-    indexedDB.deleteDatabase('slicc-mount-cache');
     mock = installFetchMock();
   });
   afterEach(() => mock.restore());
@@ -173,7 +182,7 @@ describe('DaMountBackend stat', () => {
       source: 'da://my-org/my-repo',
       profile: 'default',
       profileResolved: TEST_DA_PROFILE,
-      cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000 }),
+      cache: makeCache(),
     });
     const stat = await backend.stat('index.html');
     expect(stat.kind).toBe('file');
@@ -185,7 +194,6 @@ describe('DaMountBackend stat', () => {
 describe('DaMountBackend remove', () => {
   let mock: ReturnType<typeof installFetchMock>;
   beforeEach(() => {
-    indexedDB.deleteDatabase('slicc-mount-cache');
     mock = installFetchMock();
   });
   afterEach(() => mock.restore());
@@ -196,7 +204,7 @@ describe('DaMountBackend remove', () => {
       source: 'da://my-org/my-repo',
       profile: 'default',
       profileResolved: TEST_DA_PROFILE,
-      cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000 }),
+      cache: makeCache(),
     });
     await backend.remove('index.html');
     expect(mock.calls[0].method).toBe('DELETE');
@@ -206,7 +214,6 @@ describe('DaMountBackend remove', () => {
 describe('DaMountBackend refresh', () => {
   let mock: ReturnType<typeof installFetchMock>;
   beforeEach(() => {
-    indexedDB.deleteDatabase('slicc-mount-cache');
     mock = installFetchMock();
   });
   afterEach(() => mock.restore());
@@ -226,7 +233,7 @@ describe('DaMountBackend refresh', () => {
       source: 'da://my-org/my-repo',
       profile: 'default',
       profileResolved: TEST_DA_PROFILE,
-      cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000 }),
+      cache: makeCache(),
     });
     const report = await backend.refresh();
 
