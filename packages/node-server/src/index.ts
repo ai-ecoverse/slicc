@@ -27,6 +27,8 @@ import { CliLogDedup } from './cli-log-dedup.js';
 import { EnvSecretStore } from './secrets/env-secret-store.js';
 import { SecretProxyManager } from './secrets/proxy-manager.js';
 
+import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
+
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
 
@@ -754,7 +756,18 @@ async function main() {
     }
   });
 
-  app.use(express.json({ limit: '50mb' }));
+  // Global JSON body parser. Skipped when the request carries
+  // `X-Slicc-Raw-Body: 1`, so SigV4-signed bodies survive into the
+  // /api/fetch-proxy handler byte-for-byte (the parser would otherwise
+  // re-serialize them via JSON.stringify, breaking the signature).
+  app.use(
+    express.json({
+      limit: '50mb',
+      type: (req) =>
+        req.headers['x-slicc-raw-body'] !== '1' &&
+        (req.headers['content-type'] ?? '').includes('application/json'),
+    })
+  );
 
   app.get('/api/runtime-config', (_req, res) => {
     res.json({
@@ -979,20 +992,12 @@ async function main() {
         method: req.method,
         redirect: 'follow', // Follow redirects for git protocol compatibility
       };
-      // Forward relevant headers (excluding hop-by-hop and proxy headers)
-      const skipHeaders = new Set([
-        'host',
-        'connection',
-        'x-target-url',
-        'content-length',
-        'transfer-encoding',
-        'x-proxy-cookie',
-        'x-proxy-origin',
-        'x-proxy-referer',
-      ]);
+      // Forward relevant headers (excluding hop-by-hop and proxy headers).
+      // Set lives at module scope as FETCH_PROXY_SKIP_HEADERS so tests can
+      // verify the contract without copying it.
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(req.headers)) {
-        if (!skipHeaders.has(key) && typeof value === 'string') {
+        if (!FETCH_PROXY_SKIP_HEADERS.has(key) && typeof value === 'string') {
           headers[key] = value;
         }
       }
