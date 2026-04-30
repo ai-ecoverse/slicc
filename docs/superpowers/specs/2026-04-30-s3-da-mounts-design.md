@@ -507,7 +507,7 @@ Recovery uses the existing API in `packages/webapp/src/fs/mount-recovery.ts` and
 // Input: entries: MountTableEntry[]   each is { targetPath, descriptor, createdAt }
 // Output: { restored, needsRecovery } — both arrays of MountRecoveryEntry
 recoverMounts(entries, sharedFs, log) {
-    restored: MountRecoveryEntry[]      // for logs / observability; today's API only returns needsRecovery
+    restored: MountRecoveryEntry[]      // already returned by today's API; UI consumers (main.ts) only read needsRecovery, but `restored` is available for logging / observability
     needsRecovery: MountRecoveryEntry[] // mounts that need user action
 
     for entry in entries:
@@ -860,7 +860,7 @@ These are small upstream changes the design depends on. They land **inside the s
    - `packages/webapp/src/scoops/agent-bridge.ts` — `isFsErrorCode` helper plus call sites
      (No `FsError` references under `packages/webapp/src/tools/` — earlier mention of that directory was wrong.)
 
-2. **Change the `BroadcastChannel('vfs-mount-sync:<db>')` message shape.** Today (`virtual-fs.ts:62-90`) the channel posts `{ type: 'mount' | 'unmount', path, handle }` where `handle` is a `FileSystemDirectoryHandle` (structured-cloneable). Remote backends are not cloneable, so the message must carry the descriptor instead:
+2. **Change the `BroadcastChannel('vfs-mount-sync:<db>')` message shape.** Today (`virtual-fs.ts:62-78`, plus the matching `postMessage` at ~393/412) the channel posts `{ type: 'mount' | 'unmount', path, handle }` where `handle` is a `FileSystemDirectoryHandle` (structured-cloneable). Remote backends are not cloneable, so the message must carry the descriptor instead:
 
    ```ts
    { type: 'mount', path, descriptor: BackendDescriptor } // descriptor.mountId is the cache key
