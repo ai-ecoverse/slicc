@@ -43,6 +43,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **cost**                                    | `cost-command.ts`          | Show session cost breakdown per scoop/cone                                                                                                  | `--json`, `-h`                                                                                                                              |
 | **models**                                  | `models-command.ts`        | List available LLM models with pricing and benchmarks                                                                                       | `--all`, `--json`, `--provider <id>`, `--refresh`                                                                                           |
 | **secret**                                  | `secret-command.ts`        | Manage secrets (API keys, tokens) with domain-scoped injection                                                                              | `list`, `set <name>`, `delete <name>`, `test <name> <url>`                                                                                  |
+| **mount**                                   | (MountCommands class)      | Mount local directories or remote storage (S3 / S3-compatible / DA) into the VFS                                                            | `mount [--source <url>] [--profile <name>] <path>`, `mount unmount [--clear-cache] <path>`, `mount list`, `mount refresh [--bodies] <path>` |
 | **git**                                     | (isomorphic-git)           | Full git support                                                                                                                            | `git clone`, `git commit`, `git push`, etc.                                                                                                 |
 
 **Example usage**:
@@ -141,6 +142,86 @@ playwright-cli cookie-set theme dark
 - `/.playwright/screenshots/` — saved screenshots
 
 Use the skill doc at `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md` for the full command list and operating guidance.
+
+---
+
+## mount
+
+Bridges local directories and remote object storage into the VirtualFS so that file tools (`read_file`, `write_file`, `edit_file`, `bash`) operate on remote content the same way they do on browser-local files. Three peer backends share a `MountBackend` interface: a local FS Access backend (uses the `showDirectoryPicker()` flow), an S3 / S3-compatible backend (AWS, Cloudflare R2, MinIO via custom endpoints), and a DA backend (Adobe da.live, authenticated via the existing Adobe IMS provider).
+
+Implementation lives outside `supplemental-commands/`: `packages/webapp/src/fs/mount-commands.ts` is the dispatcher, registered via the `MountCommands` class consumed by `wasm-shell.ts`. Backends are under `packages/webapp/src/fs/mount/`.
+
+### Subcommands
+
+| Form                                               | Behavior                                                                                                                                                                                                                                                         |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mount <path>`                                     | Local FS Access mount. Opens a directory picker (cone-only — fails fast in scoops, which have no UI gesture).                                                                                                                                                    |
+| `mount --source s3://<bucket>[/<prefix>] <path>`   | S3 / S3-compatible mount. Reads creds from `s3.<profile>.*` secrets (`--profile` selects the namespace; defaults to `default`). Allowed in scoops.                                                                                                               |
+| `mount --source da://<org>/<repo>[/<path>] <path>` | Adobe da.live mount. Reuses the existing Adobe provider's IMS bearer token; `--profile` is accepted for symmetry but has a single global identity in v1. Allowed in scoops.                                                                                      |
+| `mount list`                                       | Show all active mounts with their kind, source, and profile (where applicable).                                                                                                                                                                                  |
+| `mount unmount [--clear-cache] <path>`             | Tear down a mount. `--clear-cache` also drops cached listings + bodies for that mount; without it, cache entries persist until TTL or the next session.                                                                                                          |
+| `mount refresh [--bodies] <path>`                  | Re-walk the source and diff against the cache. Prints `Refreshed <path>: +<added> -<removed> ~<changed> (<unchanged> unchanged, <errors> errors)`. Without `--bodies` only the listing is rechecked; with `--bodies` changed files are conditionally re-fetched. |
+
+### Mount-time flags
+
+| Flag                | Applies to    | Effect                                                                                                                                                                                 |
+| ------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--source <url>`    | mount         | Selects a remote backend by URL scheme (`s3://`, `da://`). Without `--source`, the local picker is used.                                                                               |
+| `--profile <name>`  | mount         | Profile name resolved against `s3.<profile>.*` secrets (S3) or used as a label (DA). Defaults to `default`.                                                                            |
+| `--no-probe`        | mount         | Skip the mount-time `HEAD` bucket / `GET /list` round-trip. Use when latency matters and you trust the source URL is well-formed and accessible.                                       |
+| `--max-body-mb <n>` | mount         | Override the per-mount maximum body size for read/write. Defaults: S3 25 MB, DA 5 MB. Files exceeding the threshold throw `EFBIG` before any body bytes flow.                          |
+| `--clear-cache`     | mount unmount | Drop the `RemoteMountCache` entries (listings + bodies) for this mount.                                                                                                                |
+| `--bodies`          | mount refresh | After the listing diff, conditionally re-fetch bodies for paths whose ETag changed. Without this flag a refresh is one paginated list (or one DA recursive walk) plus zero body bytes. |
+
+### Caching and conflict semantics
+
+Remote backends share a `RemoteMountCache` (TTL + ETag, IDB-backed under `slicc-mount-cache`). Default TTL is 30 s.
+
+- **Reads**: cache-fresh → zero RTT; cache-stale → conditional `GET` with `If-None-Match` (304 keeps cached body, 200 replaces it); cache-miss → unconditional `GET`.
+- **Writes**: existing files use `If-Match: <etag>`; new files use `If-None-Match: *` to refuse silent overwrite. A 412 from a fresh first-attempt PUT surfaces as `FsError('EBUSY', …)` so the agent's edit loop can re-read and retry. (412 inside a bounded retry window of an in-flight PUT is silently reconciled — that case means "we already won this PUT" rather than a conflict.)
+- **Auth**: 401/403 triggers a one-time profile re-resolution (covers credential rotation and IMS token refresh) before bubbling `EACCES`.
+- **Recovery**: mount descriptors persist across sessions. On reload, local mounts may need a user gesture to re-grant the FS Access handle; remote mounts auto-restore as long as profiles resolve and IMS hasn't expired. Failures surface via a `session-reload` lick that the cone renders as an actionable retry prompt.
+
+### Credentials
+
+S3 secrets follow the `s3.<profile>.*` namespace. DA reuses the Adobe IMS token from the existing provider — no DA-specific secret to set. See [docs/secrets.md](secrets.md#mount-backend-secrets) for the full key list and example setup.
+
+### Examples
+
+```bash
+# Local picker (cone only — runs in the panel/UI context with a user gesture)
+mount /mnt/local
+
+# S3 (AWS) — first store creds, then mount
+secret set s3.aws.access_key_id      # follow printed instructions
+secret set s3.aws.secret_access_key  # follow printed instructions
+mount --source s3://my-bucket/site --profile aws /mnt/aws
+
+# Cloudflare R2 (S3-compatible — uses --source s3:// with a custom endpoint in the profile)
+secret set s3.r2.access_key_id
+secret set s3.r2.secret_access_key
+secret set s3.r2.endpoint            # https://<account>.r2.cloudflarestorage.com
+mount --source s3://my-r2-bucket/path --profile r2 /mnt/r2
+
+# Adobe da.live — uses the Adobe provider's existing IMS identity
+mount --source da://my-org/my-repo /mnt/da
+
+# Inspect, refresh, unmount
+mount list
+mount refresh /mnt/r2                # listing-only diff
+mount refresh --bodies /mnt/r2       # also revalidates changed bodies
+mount unmount --clear-cache /mnt/r2  # drops cache as well
+```
+
+### Approval flow
+
+Cone-initiated mounts always render an approval card before the mount lands. Backend-specific copy comes from `MountBackend.describeForApproval()`:
+
+- **Local**: "Approve and select directory" with the picker integration.
+- **S3**: "Approve mount of `s3://<bucket>/<prefix>` (profile `<name>`)".
+- **DA**: "Approve mount of `da://<org>/<repo>` using your IMS identity".
+
+Local mounts are gated to cone context only because the directory picker requires a real user gesture. S3 and DA mounts are allowed from scoops since their credentials come from the secret store and no UI gesture is required.
 
 ---
 
