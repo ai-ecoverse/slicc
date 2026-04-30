@@ -186,9 +186,17 @@ export class OffscreenClient {
 
   /**
    * Update a scoop's reasoning / thinking level on the offscreen
-   * orchestrator. Mirrors the standalone-mode `Orchestrator.setScoopThinkingLevel`
-   * call. The offscreen side persists the value into IndexedDB so it
-   * survives panel close.
+   * orchestrator. Mirrors the standalone-mode
+   * `Orchestrator.setScoopThinkingLevel` call:
+   *
+   * - The offscreen side mutates the live `Agent.state.thinkingLevel`
+   *   so the next agent turn picks up the new value.
+   * - It also persists `scoop.config.thinkingLevel` into the
+   *   orchestrator's IndexedDB record.
+   * - The persisted value is surfaced back to the panel through the
+   *   `scoop-list` / `state-snapshot` / `scoop-created` messages
+   *   (see `ScoopSnapshotConfig`), so the brain icon rehydrates with
+   *   the correct level on reconnect / scoop switch.
    */
   setScoopThinkingLevel(jid: string, level: ThinkingLevel | undefined): void {
     this.send({ type: 'set-thinking-level', scoopJid: jid, level });
@@ -473,6 +481,13 @@ export class OffscreenClient {
       requiresTrigger: !s.isCone,
       assistantLabel: s.assistantLabel,
       addedAt: new Date().toISOString(),
+      // Carry the persisted-per-scoop config snapshot through to the
+      // panel-side `RegisteredScoop`. The offscreen bridge populates
+      // `s.config` with `modelId` + `thinkingLevel` (see
+      // `OffscreenBridge.toScoopSnapshot`); the panel reads these in
+      // `syncThinkingButtonForExtensionScoop` to drive the brain icon's
+      // visibility and persisted level on scoop switches and reconnect.
+      ...(s.config ? { config: { ...s.config } } : {}),
     };
   }
 

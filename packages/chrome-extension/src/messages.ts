@@ -71,11 +71,21 @@ export interface RefreshModelMsg {
   type: 'refresh-model';
 }
 
+/**
+ * Discriminated literal for `ThinkingLevel`. Mirrors the union exported
+ * by `packages/webapp/src/scoops/types.ts` — duplicated here so the
+ * extension messages module stays free of webapp imports (the extension
+ * source set is consumed by both the panel and the offscreen contexts,
+ * and we don't want to drag the scoop config layer into the message
+ * envelopes).
+ */
+export type ExtensionThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+
 export interface SetThinkingLevelMsg {
   type: 'set-thinking-level';
   scoopJid: string;
   /** Undefined clears the override; the level falls back to default. */
-  level?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  level?: ExtensionThinkingLevel;
 }
 
 export interface RefreshTrayRuntimeMsg {
@@ -167,6 +177,19 @@ export interface ScoopStatusMsg {
   status: ScoopTabState['status'];
 }
 
+/**
+ * Subset of `ScoopConfig` (see `packages/webapp/src/scoops/types.ts`)
+ * carried across the offscreen → panel boundary. The panel only needs
+ * the persisted-per-scoop bits that drive the UI affordances (model
+ * pill capability detection + brain-icon thinking level). Sandbox
+ * shape (visiblePaths/writablePaths/allowedCommands) is intentionally
+ * NOT mirrored here — the panel never reads those.
+ */
+export interface ScoopSnapshotConfig {
+  modelId?: string;
+  thinkingLevel?: ExtensionThinkingLevel;
+}
+
 export interface ScoopListMsg {
   type: 'scoop-list';
   scoops: Array<{
@@ -176,6 +199,15 @@ export interface ScoopListMsg {
     isCone: boolean;
     assistantLabel: string;
     status: ScoopTabState['status'];
+    /**
+     * Persisted per-scoop config snapshot. Optional because the cone
+     * (and freshly-created scoops with no overrides) may have no
+     * recorded config. The panel reads `config?.modelId` /
+     * `config?.thinkingLevel` to drive model-capability detection
+     * and the brain-icon's persisted level on reconnect / scoop
+     * switch.
+     */
+    config?: ScoopSnapshotConfig;
   }>;
 }
 

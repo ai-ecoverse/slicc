@@ -23,6 +23,8 @@ import type {
   PanelCdpResponseMsg,
   ScoopStatusMsg,
   ScoopListMsg,
+  ScoopSnapshotConfig,
+  SetThinkingLevelMsg,
   StateSnapshotMsg,
   ErrorMsg,
   ScoopCreatedMsg,
@@ -268,17 +270,37 @@ export class OffscreenBridge {
     };
   }
 
+  /**
+   * Project an orchestrator `RegisteredScoop` down to the snapshot shape
+   * the panel sees. Carries `config.modelId` / `config.thinkingLevel`
+   * (the only config bits the panel reads — see `ScoopSnapshotConfig`)
+   * so the brain icon and model pill rehydrate correctly across
+   * reconnects and scoop switches.
+   */
+  private toScoopSnapshot(s: RegisteredScoop): ScoopListMsg['scoops'][number] {
+    const config: ScoopSnapshotConfig | undefined =
+      s.config && (s.config.modelId !== undefined || s.config.thinkingLevel !== undefined)
+        ? {
+            ...(s.config.modelId !== undefined ? { modelId: s.config.modelId } : {}),
+            ...(s.config.thinkingLevel !== undefined
+              ? { thinkingLevel: s.config.thinkingLevel }
+              : {}),
+          }
+        : undefined;
+    return {
+      jid: s.jid,
+      name: s.name,
+      folder: s.folder,
+      isCone: s.isCone,
+      assistantLabel: s.assistantLabel,
+      status: (this.scoopStatuses.get(s.jid) ?? 'ready') as ScoopTabState['status'],
+      ...(config ? { config } : {}),
+    };
+  }
+
   /** Build a full state snapshot for panel reconnect. */
   buildStateSnapshot(): StateSnapshotMsg {
-    const scoops =
-      this.orchestrator?.getScoops().map((s) => ({
-        jid: s.jid,
-        name: s.name,
-        folder: s.folder,
-        isCone: s.isCone,
-        assistantLabel: s.assistantLabel,
-        status: (this.scoopStatuses.get(s.jid) ?? 'ready') as ScoopTabState['status'],
-      })) ?? [];
+    const scoops = this.orchestrator?.getScoops().map((s) => this.toScoopSnapshot(s)) ?? [];
 
     const cone = scoops.find((s) => s.isCone);
 
@@ -436,14 +458,7 @@ export class OffscreenBridge {
         await this.orchestrator.registerScoop(scoop);
         this.emit({
           type: 'scoop-created',
-          scoop: {
-            jid: scoop.jid,
-            name: scoop.name,
-            folder: scoop.folder,
-            isCone: scoop.isCone,
-            assistantLabel: scoop.assistantLabel,
-            status: 'ready',
-          },
+          scoop: this.toScoopSnapshot(scoop),
         } satisfies ScoopCreatedMsg);
         break;
       }
@@ -528,9 +543,14 @@ export class OffscreenBridge {
       }
 
       case 'set-thinking-level': {
-        const tlMsg = msg as { scoopJid: string; level?: string };
+        // `msg` is already narrowed to `SetThinkingLevelMsg` by the union
+        // tag — the explicit annotation makes that obvious to readers and
+        // ensures the orchestrator call site receives a typed
+        // `ThinkingLevel | undefined` (the message field's literal union
+        // is the same shape the orchestrator expects).
+        const tlMsg: SetThinkingLevelMsg = msg;
         try {
-          await this.orchestrator.setScoopThinkingLevel(tlMsg.scoopJid, tlMsg.level as never);
+          await this.orchestrator.setScoopThinkingLevel(tlMsg.scoopJid, tlMsg.level);
         } catch (err) {
           console.error('[offscreen-bridge] set-thinking-level failed:', err);
         }
@@ -629,15 +649,7 @@ export class OffscreenBridge {
   }
 
   /** @internal */ emitScoopList(): void {
-    const scoops =
-      this.orchestrator?.getScoops().map((s) => ({
-        jid: s.jid,
-        name: s.name,
-        folder: s.folder,
-        isCone: s.isCone,
-        assistantLabel: s.assistantLabel,
-        status: (this.scoopStatuses.get(s.jid) ?? 'ready') as ScoopTabState['status'],
-      })) ?? [];
+    const scoops = this.orchestrator?.getScoops().map((s) => this.toScoopSnapshot(s)) ?? [];
     this.emit({ type: 'scoop-list', scoops } satisfies ScoopListMsg);
   }
 

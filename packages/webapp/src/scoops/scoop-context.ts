@@ -641,12 +641,34 @@ export class ScoopContext {
     return this.shell;
   }
 
-  /** Update the model on the running agent (e.g., when the user changes the model dropdown). */
+  /**
+   * Update the model on the running agent (e.g. when the user changes
+   * the model dropdown).
+   *
+   * Also re-resolves the running thinking-level against the new model:
+   * `xhigh` clamps down to `high` on a model family that doesn't
+   * advertise xhigh, and any non-`off` level snaps to `off` on a
+   * non-reasoning model. The persisted `scoop.config.thinkingLevel`
+   * stays untouched so the user's intent is preserved across model
+   * swaps — the resolver re-evaluates it on every change.
+   */
   updateModel(): void {
     if (!this.agent) return;
     const model = resolveCurrentModel();
     this.agent.state.model = model;
-    log.info('Model updated on running agent', { folder: this.scoop.folder, model: model.id });
+    // Re-resolve the active thinking level against the new model. Read
+    // the user's *intent* off the persisted scoop config (not
+    // `agent.state.thinkingLevel`, which would already have been
+    // clamped by a previous resolution) so a model swap that re-enables
+    // a higher tier (e.g. switching to an xhigh-capable Opus) restores
+    // it instead of leaving the previously-clamped value in place.
+    const requested = this.scoop.config?.thinkingLevel;
+    this.agent.state.thinkingLevel = resolveThinkingLevel(requested, model);
+    log.info('Model updated on running agent', {
+      folder: this.scoop.folder,
+      model: model.id,
+      thinkingLevel: this.agent.state.thinkingLevel,
+    });
   }
 
   /** Hot-reload skills from VFS and update the agent's system prompt. */

@@ -96,9 +96,12 @@ export interface AgentSpawnOptions {
    *
    * `xhigh` is forwarded as-is; ScoopContext clamps to `'high'` at
    * Agent-construction time when the resolved model lacks xhigh support.
-   * Validation of the literal value happens in
-   * `agent-command.ts` (`--thinking` flag) — the bridge trusts callers
-   * to supply a valid {@link ThinkingLevel}.
+   *
+   * Validation: `spawn()` validates this field on every call and returns
+   * an error result for unknown literal values, regardless of caller —
+   * `agent-command.ts` (the `--thinking` CLI flag) and `scoop_scoop`
+   * already validate at their layer for tighter user feedback, but
+   * direct programmatic / extension callers also hit this path.
    */
   thinkingLevel?: ThinkingLevel;
 }
@@ -208,12 +211,16 @@ export function createAgentBridge(
 
   /**
    * Mirror of {@link resolveParentModelId} for `thinkingLevel`. Returns
-   * `null` when the parent is missing or has no `config.thinkingLevel`.
-   * The cone never stores its level here either — it lives on the cone's
-   * live `agent.state.thinkingLevel`, which the chat-panel UI mutates
-   * directly. Ephemeral `agent` invocations from the cone therefore
-   * default to `undefined` here and let `ScoopContext.init()` fall back
-   * to `'off'` unless the caller passed `--thinking <level>`.
+   * `null` when the parent is missing or has no persisted
+   * `config.thinkingLevel`.
+   *
+   * Reads from the registered scoop's config for any parent jid (cone or
+   * scoop) — `Orchestrator.setScoopThinkingLevel` persists into
+   * `scoop.config.thinkingLevel` for both, so a cone with a UI-set level
+   * will inherit it down to ephemeral `agent` sub-scoops. When the cone
+   * never had a level set (the common case), this returns `null` and
+   * the bridge falls back to `undefined`, which `ScoopContext.init()`
+   * then resolves to `'off'`.
    */
   function resolveParentThinkingLevel(parentJid: string | undefined): ThinkingLevel | null {
     if (parentJid === undefined) return null;
