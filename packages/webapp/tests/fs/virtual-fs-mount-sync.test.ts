@@ -1,6 +1,22 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
+// Stub mount-table-store's loadMountHandle so peer instances can reconstruct
+// the LocalMountBackend without needing the handle to round-trip through
+// fake-indexeddb (which strips function properties during structured clone).
+const handleByKey = new Map<string, FileSystemDirectoryHandle>();
+vi.mock('../../src/fs/mount-table-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/fs/mount-table-store.js')>();
+  return {
+    ...actual,
+    loadMountHandle: async (key: string) => handleByKey.get(key) ?? null,
+  };
+});
+
+function makeFakeHandle(): FileSystemDirectoryHandle {
+  return { kind: 'directory', name: 'fake' } as unknown as FileSystemDirectoryHandle;
+}
+
 // ---------------------------------------------------------------------------
 // BroadcastChannel mock — Node doesn't provide one.
 // We simulate the real behaviour: posting on one channel delivers to all
@@ -38,6 +54,7 @@ class MockBroadcastChannel {
 // Dynamic import so the module sees the global BroadcastChannel
 const { VirtualFS } = await import('../../src/fs/virtual-fs.js');
 const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
+const { LocalMountBackend } = await import('../../src/fs/mount/backend-local.js');
 
 describe('VirtualFS mount-point sync via BroadcastChannel', () => {
   let vfsA: InstanceType<typeof VirtualFS>;
@@ -57,16 +74,24 @@ describe('VirtualFS mount-point sync via BroadcastChannel', () => {
   });
 
   it('syncs mount from A to B', async () => {
-    const fakeHandle = { kind: 'directory', name: 'fake' } as unknown as FileSystemDirectoryHandle;
-    await vfsA.mount('/mnt/real', fakeHandle);
+    const fakeHandle = makeFakeHandle();
+    handleByKey.set('/mnt/real', fakeHandle);
+    await vfsA.mount(
+      '/mnt/real',
+      LocalMountBackend.fromHandle(fakeHandle, { mountId: 'sync-test-mount' })
+    );
 
     expect(vfsA.listMounts()).toContain('/mnt/real');
     expect(vfsB.listMounts()).toContain('/mnt/real');
   });
 
   it('syncs unmount from A to B', async () => {
-    const fakeHandle = { kind: 'directory', name: 'fake' } as unknown as FileSystemDirectoryHandle;
-    await vfsA.mount('/mnt/real', fakeHandle);
+    const fakeHandle = makeFakeHandle();
+    handleByKey.set('/mnt/real', fakeHandle);
+    await vfsA.mount(
+      '/mnt/real',
+      LocalMountBackend.fromHandle(fakeHandle, { mountId: 'sync-test-mount' })
+    );
     expect(vfsB.listMounts()).toContain('/mnt/real');
 
     vfsA.unmount('/mnt/real');
@@ -80,8 +105,12 @@ describe('VirtualFS mount-point sync via BroadcastChannel', () => {
     vfsB.setWatcher(watcher);
     watcher.watch('/mnt', () => true, callback);
 
-    const fakeHandle = { kind: 'directory', name: 'fake' } as unknown as FileSystemDirectoryHandle;
-    await vfsA.mount('/mnt/real', fakeHandle);
+    const fakeHandle = makeFakeHandle();
+    handleByKey.set('/mnt/real', fakeHandle);
+    await vfsA.mount(
+      '/mnt/real',
+      LocalMountBackend.fromHandle(fakeHandle, { mountId: 'sync-test-mount' })
+    );
     expect(callback).toHaveBeenCalledWith([
       { type: 'modify', path: '/mnt/real', entryType: 'directory' },
     ]);
@@ -95,18 +124,26 @@ describe('VirtualFS mount-point sync via BroadcastChannel', () => {
 
   it('does not sync between different dbNames', async () => {
     const vfsOther = await VirtualFS.create({ dbName: 'other-db', wipe: true });
-    const fakeHandle = { kind: 'directory', name: 'fake' } as unknown as FileSystemDirectoryHandle;
-    await vfsA.mount('/mnt/real', fakeHandle);
+    const fakeHandle = makeFakeHandle();
+    handleByKey.set('/mnt/real', fakeHandle);
+    await vfsA.mount(
+      '/mnt/real',
+      LocalMountBackend.fromHandle(fakeHandle, { mountId: 'sync-test-mount' })
+    );
 
     expect(vfsOther.listMounts()).not.toContain('/mnt/real');
     await vfsOther.dispose();
   });
 
   it('stops syncing after dispose', async () => {
-    const fakeHandle = { kind: 'directory', name: 'fake' } as unknown as FileSystemDirectoryHandle;
+    const fakeHandle = makeFakeHandle();
+    handleByKey.set('/mnt/real', fakeHandle);
     await vfsB.dispose();
 
-    await vfsA.mount('/mnt/real', fakeHandle);
+    await vfsA.mount(
+      '/mnt/real',
+      LocalMountBackend.fromHandle(fakeHandle, { mountId: 'sync-test-mount' })
+    );
     // vfsB was disposed, so it shouldn't receive the mount — but we can't
     // check vfsB.listMounts() after dispose. Instead verify the channel was closed:
     const channelSet = channelRegistry.get('vfs-mount-sync:sync-test');

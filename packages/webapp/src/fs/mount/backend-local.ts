@@ -103,6 +103,12 @@ export class LocalMountBackend implements MountBackend {
         return new FsError('ENOENT', 'no such file or directory', path);
       if (err.name === 'TypeMismatchError') return new FsError('ENOTDIR', 'not a directory', path);
       if (err.name === 'NotAllowedError') return new FsError('EACCES', 'permission denied', path);
+      // FSA throws InvalidModificationError from removeEntry() when the
+      // target is a non-empty directory and `recursive` was not requested.
+      // Surface that as ENOTEMPTY so callers (notably isomorphic-git's
+      // checkout/reset cleanup path) can tolerate untracked files.
+      if (err.name === 'InvalidModificationError')
+        return new FsError('ENOTEMPTY', 'directory not empty', path);
     }
     // Mock helpers may throw a plain Error with name='NotFound' (no -Error suffix).
     if (err instanceof Error) {
@@ -110,6 +116,8 @@ export class LocalMountBackend implements MountBackend {
         return new FsError('ENOENT', 'no such file or directory', path);
       if (err.name === 'TypeMismatch' || err.name === 'TypeMismatchError')
         return new FsError('ENOTDIR', 'not a directory', path);
+      if (err.name === 'InvalidModification' || err.name === 'InvalidModificationError')
+        return new FsError('ENOTEMPTY', 'directory not empty', path);
     }
     return new FsError('EINVAL', err instanceof Error ? err.message : String(err), path);
   }

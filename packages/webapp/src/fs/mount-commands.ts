@@ -16,6 +16,8 @@ import {
   loadAndClearPendingHandle,
   reactivateHandle,
 } from './mount-picker-popup.js';
+import { LocalMountBackend } from './mount/backend-local.js';
+import { newMountId } from './mount/mount-id.js';
 
 /** Escape HTML special characters to prevent XSS */
 function escapeHtml(text: string): string {
@@ -329,7 +331,8 @@ export class MountCommands {
     }
 
     try {
-      await this.options.fs.mount(targetPath, dirHandle);
+      const backend = LocalMountBackend.fromHandle(dirHandle, { mountId: newMountId() });
+      await this.options.fs.mount(targetPath, backend);
       return {
         stdout:
           `Mounted '${dirHandle.name}' → ${targetPath}\n` +

@@ -90,6 +90,9 @@ import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
 import { recoverMounts, formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
+import type { MountRecoveryEntry } from '../fs/mount-recovery.js';
+import { LocalMountBackend } from '../fs/mount/backend-local.js';
+import { newMountId } from '../fs/mount/mount-id.js';
 import {
   openMountPickerPopup,
   loadAndClearPendingHandle,
@@ -169,7 +172,8 @@ async function applyPendingMount(fs: VirtualFS): Promise<void> {
     tx.objectStore('handles').delete(PENDING_MOUNT_KEY);
     await new Promise<void>((r) => (tx.oncomplete = () => r()));
     const mountPath = `/mnt/${handle.name}`;
-    await fs.mount(mountPath, handle);
+    const backend = LocalMountBackend.fromHandle(handle, { mountId: newMountId() });
+    await fs.mount(mountPath, backend);
     log.info('Mounted folder from welcome onboarding', { name: handle.name, path: mountPath });
   }
   db.close();
@@ -1629,7 +1633,7 @@ async function main(): Promise<void> {
         const body = event.body as
           | {
               reason?: string;
-              mounts?: Array<{ path: string; dirName: string }>;
+              mounts?: MountRecoveryEntry[];
             }
           | null
           | undefined;
