@@ -31,6 +31,26 @@ export interface MountEntry {
   handle: FileSystemDirectoryHandle;
 }
 
+/**
+ * Stable per-mount identity + everything needed to reconstruct a backend on
+ * session restore. Persisted across sessions; never carries live objects,
+ * resolved secrets, or Uint8Arrays.
+ *
+ * Shipped alongside the legacy `MountEntry` export during the migration
+ * window; Phase 8 deletes the legacy type and rewrites `getAllMountEntries`
+ * to return `MountTableEntry[]`.
+ */
+export type BackendDescriptor =
+  | { kind: 'local'; mountId: string; idbHandleKey: string }
+  | { kind: 's3'; mountId: string; source: string; profile: string }
+  | { kind: 'da'; mountId: string; source: string; profile: string };
+
+export interface MountTableEntry {
+  targetPath: string;
+  descriptor: BackendDescriptor;
+  createdAt: number;
+}
+
 /** Save a mount entry (path → handle) to IndexedDB. */
 export async function saveMountEntry(
   path: string,
