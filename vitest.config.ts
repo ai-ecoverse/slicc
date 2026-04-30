@@ -1,8 +1,12 @@
 import { defineConfig } from 'vitest/config';
 import { resolve } from 'path';
+import { readFileSync } from 'fs';
 
 const webappDir = resolve(__dirname, 'packages/webapp');
 const workspaceRoot = __dirname;
+const rootPkg = JSON.parse(readFileSync(resolve(workspaceRoot, 'package.json'), 'utf-8')) as {
+  version: string;
+};
 
 export default defineConfig({
   test: {
@@ -13,6 +17,8 @@ export default defineConfig({
         extends: true,
         define: {
           __DEV__: 'true',
+          __SLICC_VERSION__: JSON.stringify(rootPkg.version),
+          __SLICC_RELEASED_AT__: 'null',
           global: 'globalThis',
         },
         resolve: {

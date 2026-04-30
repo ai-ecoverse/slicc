@@ -1,9 +1,14 @@
 import { defineConfig } from 'vite';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { readFileSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = resolve(__dirname, '../..');
+const rootPkg = JSON.parse(readFileSync(resolve(workspaceRoot, 'package.json'), 'utf-8')) as {
+  version: string;
+};
+const sliccReleasedAt = process.env['SLICC_RELEASED_AT'] ?? null;
 const uiOutDir = resolve(workspaceRoot, 'dist/ui');
 const previewSwEntry = resolve(__dirname, 'src/ui/preview-sw.ts');
 const electronOverlayEntry = resolve(__dirname, 'src/ui/electron-overlay-entry.ts');
@@ -292,6 +297,8 @@ export default defineConfig(({ mode }) => ({
   ],
   define: {
     __DEV__: JSON.stringify(mode !== 'production'),
+    __SLICC_VERSION__: JSON.stringify(rootPkg.version),
+    __SLICC_RELEASED_AT__: JSON.stringify(sliccReleasedAt),
     // Buffer polyfill for isomorphic-git
     global: 'globalThis',
   },
