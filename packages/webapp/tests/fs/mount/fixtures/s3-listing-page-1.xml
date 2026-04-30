@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>my-bucket</Name>
+  <Prefix>prefix/</Prefix>
+  <KeyCount>2</KeyCount>
+  <MaxKeys>1000</MaxKeys>
+  <IsTruncated>true</IsTruncated>
+  <NextContinuationToken>tok-page-2</NextContinuationToken>
+  <Contents>
+    <Key>prefix/foo.html</Key>
+    <ETag>"e-foo"</ETag>
+    <Size>123</Size>
+    <LastModified>2026-04-29T12:00:00.000Z</LastModified>
+  </Contents>
+  <Contents>
+    <Key>prefix/sub/bar.json</Key>
+    <ETag>"e-bar"</ETag>
+    <Size>45</Size>
+    <LastModified>2026-04-29T12:30:00.000Z</LastModified>
+  </Contents>
+</ListBucketResult>
