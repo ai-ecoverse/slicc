@@ -15,3 +15,5 @@ export { signSigV4 } from './signing-s3.js';
 export type { SigV4Request, SigV4Credentials } from './signing-s3.js';
 export { fetchWithBudget } from './fetch-with-budget.js';
 export type { FetchBudgetOptions } from './fetch-with-budget.js';
+export { resolveS3Profile, resolveDaProfile, ProfileNotConfiguredError } from './profile.js';
+export type { SecretStore, S3Profile, DaProfile, AdobeImsClient } from './profile.js';

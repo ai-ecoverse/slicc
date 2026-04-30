@@ -1,0 +1,83 @@
+/**
+ * Profile-namespaced credential resolution for remote mount backends.
+ *
+ * S3 secrets follow the pattern `s3.<profile>.*`:
+ *   - access_key_id (required)
+ *   - secret_access_key (required)
+ *   - region (optional; default 'us-east-1')
+ *   - endpoint (optional; default: derived from region for AWS)
+ *   - session_token (optional; for STS temp creds)
+ *
+ * DA v1 reuses the existing Adobe IMS token from `providers/adobe.ts`.
+ * Profile name is accepted for symmetry but only `default` has meaning.
+ */
+
+/**
+ * The minimal SecretStore surface this module needs. Any concrete store
+ * (production or test fake) implementing `get` is structurally compatible.
+ */
+export interface SecretStore {
+  get(key: string): Promise<string | undefined>;
+}
+
+export interface S3Profile {
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string;
+  region: string;
+  endpoint?: string;
+}
+
+export interface DaProfile {
+  /** Refreshes on demand via the IMS launcher; always returns a current token. */
+  getBearerToken(): Promise<string>;
+  /** For `mount list` and approval cards. */
+  identity: string;
+}
+
+export interface AdobeImsClient {
+  getBearerToken(): Promise<string>;
+  identity?: string;
+}
+
+export class ProfileNotConfiguredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProfileNotConfiguredError';
+  }
+}
+
+export async function resolveS3Profile(name: string, store: SecretStore): Promise<S3Profile> {
+  const prefix = `s3.${name}.`;
+  const accessKeyId = await store.get(`${prefix}access_key_id`);
+  const secretAccessKey = await store.get(`${prefix}secret_access_key`);
+
+  if (!accessKeyId) {
+    throw new ProfileNotConfiguredError(
+      `profile '${name}' missing required field 'access_key_id'. ` +
+        `Set it via: secret set ${prefix}access_key_id <value>`
+    );
+  }
+  if (!secretAccessKey) {
+    throw new ProfileNotConfiguredError(
+      `profile '${name}' missing required field 'secret_access_key'. ` +
+        `Set it via: secret set ${prefix}secret_access_key <value>`
+    );
+  }
+
+  return {
+    accessKeyId,
+    secretAccessKey,
+    sessionToken: await store.get(`${prefix}session_token`),
+    region: (await store.get(`${prefix}region`)) ?? 'us-east-1',
+    endpoint: await store.get(`${prefix}endpoint`),
+  };
+}
+
+export async function resolveDaProfile(_name: string, ims: AdobeImsClient): Promise<DaProfile> {
+  // v1 ignores the profile name — all DA mounts share the IMS identity.
+  return {
+    getBearerToken: () => ims.getBearerToken(),
+    identity: ims.identity ?? 'adobe-ims',
+  };
+}
