@@ -58,6 +58,7 @@ SLICC is for you if:
 - **Delegate parallel work to scoops.** Split tasks into isolated sub-agents with their own sandboxes and context, then let the main agent coordinate the results.
 - **Turn one-off wins into reusable workflows.** Package behavior as skills, build interactive sprinkles, and react to external events with webhooks and cron-driven licks.
 - **Mount your local file system.** By default, SLICC is confined to your browser. But you can ask it to mount folders from your local file system, so it can read and write from there. Mount into an empty path such as `/mnt/myproject` so you do not hide existing skills or scripts.
+- **Mount remote storage as if it were local.** Beyond local folders, `mount --source` bridges S3 buckets, S3-compatible services like Cloudflare R2, and Adobe da.live repositories into the same VFS surface. Reads use TTL+ETag caching with conditional revalidation; writes use ETag-conditional PUTs that surface concurrent-edit conflicts as `EBUSY`. Configure once via `secret set s3.<profile>.access_key_id …` etc., then `mount --source s3://my-bucket/prefix --profile r2 /mnt/r2`. DA mounts reuse your IMS identity from the existing Adobe provider.
 
 ## Getting started
 
