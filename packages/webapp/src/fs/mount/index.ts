@@ -17,3 +17,5 @@ export { fetchWithBudget } from './fetch-with-budget.js';
 export type { FetchBudgetOptions } from './fetch-with-budget.js';
 export { resolveS3Profile, resolveDaProfile, ProfileNotConfiguredError } from './profile.js';
 export type { SecretStore, S3Profile, DaProfile, AdobeImsClient } from './profile.js';
+export { LocalMountBackend } from './backend-local.js';
+export type { LocalMountBackendOptions } from './backend-local.js';
