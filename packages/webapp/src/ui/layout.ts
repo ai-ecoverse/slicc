@@ -43,7 +43,7 @@ import { PanelRegistry } from './panel-registry.js';
 import { showSprinklePicker } from './sprinkle-picker.js';
 import type { ZoneId } from './panel-types.js';
 // ChatMessage import removed — copy chat moved to feedback row
-import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
+import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
 
 export interface LayoutPanels {
   chat: ChatPanel;
@@ -121,8 +121,18 @@ export class Layout {
   public panels!: LayoutPanels;
   public readonly registry = new PanelRegistry();
   public onModelChange?: (model: string) => void;
+  /** Fired when the user cycles the brain icon in the chat panel. */
+  public onThinkingLevelChange?: (level: ThinkingLevel) => void;
   /** Re-populate the model dropdown (call after provider login/logout). */
   public refreshModels?: () => void;
+  /**
+   * Fired after `refreshModels` finishes — i.e. whenever provider accounts
+   * change and the chat panel's active model may have shifted. main.ts
+   * uses this hook to re-sync the thinking-level brain icon to the new
+   * model's reasoning support (a model swap from a non-reasoning to a
+   * reasoning model has to un-hide the icon).
+   */
+  public onModelsRefreshed?: () => void;
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
   public onClearChat?: () => Promise<void>;
   public onClearFilesystem?: () => Promise<void>;
@@ -285,6 +295,10 @@ export class Layout {
       ensureModelSelected();
       this.panels?.chat?.refreshModelSelector();
       this.refreshAvatar();
+      // Notify main.ts so it can re-resolve the active model for the brain
+      // icon. Done last so the chat panel has already re-rendered when the
+      // hook fires.
+      this.onModelsRefreshed?.();
     };
   }
 
@@ -658,6 +672,7 @@ export class Layout {
   // `extensionZone`, dual-zone TabZone wiring) have been retired.
   // Both modes now mount the same split layout below — the only
   // mode-specific tweaks live in `buildSplitLayout` / `buildHeader`.
+  // ── Standalone: Split Layout ────────────────────────────────────────
 
   private buildSplitLayout(): void {
     while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
@@ -898,6 +913,7 @@ export class Layout {
 
     // Wire chat panel model selector to layout's onModelChange
     this.panels.chat.onModelChange = (modelId) => this.onModelChange?.(modelId);
+    this.panels.chat.onThinkingLevelChange = (level) => this.onThinkingLevelChange?.(level);
 
     this.setupVerticalDrag();
     window.addEventListener('resize', () => {});

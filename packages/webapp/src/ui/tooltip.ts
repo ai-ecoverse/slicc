@@ -12,6 +12,16 @@ const GAP = 6; // px between trigger and tooltip
 
 let el: HTMLDivElement | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * Track the [data-tooltip] element currently being hovered. Used to
+ * ignore pointer transitions BETWEEN descendants of the same target —
+ * `pointerenter` / `pointerleave` (capture) fire for every internal
+ * element boundary the cursor crosses, which would otherwise reset the
+ * show-timer and hide the tooltip every time the cursor moves a pixel
+ * inside a button with multi-element content (e.g. a Lucide SVG with
+ * several `<path>` children).
+ */
+let activeTarget: HTMLElement | null = null;
 
 function getEl(): HTMLDivElement {
   if (!el) {
@@ -77,27 +87,43 @@ function hide(): void {
     clearTimeout(timer);
     timer = null;
   }
+  activeTarget = null;
   el?.classList.remove('s2-tooltip--visible');
 }
 
 /** Call once to install global tooltip listeners. */
 export function initTooltips(): void {
   document.addEventListener(
-    'pointerenter',
+    'pointerover',
     (e) => {
       const target = (e.target as HTMLElement).closest?.('[data-tooltip]') as HTMLElement | null;
-      if (!target) return;
+      // Cursor is still over the same tooltip-bearing element — ignore
+      // pointerover on internal descendants (e.g. moving from button
+      // padding to its SVG, or between adjacent <path> elements inside
+      // the same icon). Without this guard the timer would reset on
+      // every internal boundary crossing and the tooltip would never
+      // show on small buttons with multi-element content.
+      if (target && target === activeTarget) return;
+      // Different (or absent) target — clear any pending timer / visible
+      // tooltip from the previous target before starting a new run.
       hide();
+      if (!target) return;
+      activeTarget = target;
       timer = setTimeout(() => show(target), DELAY);
     },
     true
   );
 
   document.addEventListener(
-    'pointerleave',
+    'pointerout',
     (e) => {
-      const target = (e.target as HTMLElement).closest?.('[data-tooltip]') as HTMLElement | null;
-      if (target) hide();
+      // Only hide when the cursor truly leaves the tooltip-bearing
+      // element. `pointerout` fires when crossing into descendants too,
+      // so we use relatedTarget to detect a real exit.
+      if (!activeTarget) return;
+      const related = (e as PointerEvent).relatedTarget as Node | null;
+      if (related && activeTarget.contains(related)) return;
+      hide();
     },
     true
   );

@@ -7,6 +7,39 @@
  */
 
 import type { MessageAttachment } from '../core/attachments.js';
+import type { ThinkingLevel } from '@mariozechner/pi-agent-core';
+
+export type { ThinkingLevel };
+
+/**
+ * Click-cycle order for the chat panel's brain icon. The full
+ * {@link ThinkingLevel} enum (`off | minimal | low | medium | high | xhigh`)
+ * remains valid for programmatic / shell-flag callers; the UI only steps
+ * through this 4-bucket subset for clarity. `xhigh` is silently skipped to
+ * `off` when the active model doesn't support it (see `supportsXhigh()` in
+ * `@mariozechner/pi-ai`).
+ */
+export const THINKING_LEVEL_CYCLE: readonly ThinkingLevel[] = [
+  'off',
+  'low',
+  'high',
+  'xhigh',
+] as const;
+
+/** Full enumeration accepted by the `agent --thinking` flag and tools. */
+export const THINKING_LEVELS: readonly ThinkingLevel[] = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+] as const;
+
+/** Type guard: is `value` a valid {@link ThinkingLevel}? */
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === 'string' && (THINKING_LEVELS as readonly string[]).includes(value);
+}
 
 /**
  * Current `ScoopConfig` schema generation. Bumped whenever a new field is
@@ -77,6 +110,17 @@ export interface ScoopConfig {
   assistantName?: string;
   /** Model ID override (e.g., "claude-sonnet-4-20250514"). Uses globally selected model if not set. */
   modelId?: string;
+  /**
+   * Reasoning / thinking level forwarded to `pi-agent-core`'s
+   * {@link import('@mariozechner/pi-agent-core').AgentState.thinkingLevel}.
+   * One of `off | minimal | low | medium | high | xhigh`. When unset, the
+   * scoop inherits its parent's level (or `off` for non-reasoning models).
+   *
+   * `xhigh` is silently clamped to `high` when the active model doesn't
+   * advertise xhigh support — see `supportsXhigh()` from `@mariozechner/pi-ai`.
+   * For non-reasoning models the value is ignored entirely.
+   */
+  thinkingLevel?: ThinkingLevel;
   /**
    * VFS paths this scoop can READ (but not write). Pure replace — when
    * `undefined` the scoop gets no read-only paths at all. The `scoop_scoop`
