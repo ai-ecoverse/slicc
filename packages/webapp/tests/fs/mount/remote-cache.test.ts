@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { RemoteMountCache } from '../../../src/fs/mount/remote-cache.js';
 
@@ -9,6 +9,18 @@ function uniqueDbName(): string {
 }
 
 describe('RemoteMountCache', () => {
+  // Freeze the clock for isStale boundary checks. Without this the test
+  // captures `Date.now()` then calls isStale(...) which calls Date.now()
+  // again — under load the wall-clock can advance enough between calls
+  // to flip a 29 999ms-elapsed timestamp past the 30s TTL boundary.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-01T00:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('isStale: under TTL is fresh', () => {
     const cache = new RemoteMountCache({
       mountId: 'm1',
