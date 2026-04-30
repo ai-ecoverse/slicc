@@ -320,6 +320,30 @@ export interface GroupedModels {
   models: Model<Api>[];
 }
 
+/**
+ * Patterns of model IDs hidden from human-facing pickers (chat header
+ * dropdown, connect-llm wizard list, settings dialog). Programmatic
+ * surfaces — `scoop_scoop`, the `agent` shell command, the `models`
+ * shell command — keep the full list, so the cone can still spawn a
+ * Haiku scoop for cheap throwaway work.
+ *
+ * Why Haiku: it routinely produces sub-optimal cone-level reasoning
+ * for SLICC's task surface. Letting users pick it as the default
+ * makes the product feel broken even though the model is performing
+ * to spec.
+ */
+const PICKER_HIDDEN_MODEL_PATTERNS: RegExp[] = [/haiku/i];
+
+/** True if the model ID should be hidden from human-facing pickers. */
+export function isModelHiddenFromPicker(modelId: string): boolean {
+  return PICKER_HIDDEN_MODEL_PATTERNS.some((re) => re.test(modelId));
+}
+
+/** Filter helper used by every UI surface that lists models. */
+function pickerVisible<T extends { id: string }>(models: T[]): T[] {
+  return models.filter((m) => !isModelHiddenFromPicker(m.id));
+}
+
 /** Get models from all configured provider accounts, grouped by provider. */
 export function getAllAvailableModels(): GroupedModels[] {
   const accounts = getAccounts();
@@ -327,7 +351,7 @@ export function getAllAvailableModels(): GroupedModels[] {
   const seen = new Map<string, GroupedModels>();
   for (const account of accounts) {
     if (seen.has(account.providerId)) continue;
-    const models = getProviderModels(account.providerId);
+    const models = pickerVisible(getProviderModels(account.providerId));
     if (models.length === 0) continue;
     const config = getProviderConfig(account.providerId);
     const group: GroupedModels = {

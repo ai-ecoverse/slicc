@@ -10,6 +10,14 @@ import type { VirtualFS } from '../fs/index.js';
 /** Priority roots to scan first (in order). */
 const PRIORITY_ROOTS = ['/shared/sprinkles'];
 
+/**
+ * Sprinkle names that are part of the deterministic onboarding flow
+ * and only ever rendered as inline dips in chat. Excluded from
+ * `discoverSprinkles` so they never appear in the rail's [+] picker,
+ * the panel registry, or anywhere else that lists pickable sprinkles.
+ */
+const HIDDEN_SPRINKLES = new Set<string>(['welcome', 'connect-llm']);
+
 export interface Sprinkle {
   /** basename without .shtml */
   name: string;
@@ -51,6 +59,7 @@ async function scanDir(
   for await (const filePath of fs.walk(root)) {
     if (!filePath.endsWith('.shtml')) continue;
     const name = sprinkleName(filePath);
+    if (HIDDEN_SPRINKLES.has(name)) continue;
     if (!sprinkles.has(name)) {
       let content: string;
       try {

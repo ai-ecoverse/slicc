@@ -535,6 +535,102 @@ describe('createAgentBridge — model resolution', () => {
   });
 });
 
+describe('createAgentBridge — thinking level resolution', () => {
+  it('forwards an explicit thinkingLevel onto the scoop config', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+      resolveModel: (id) => id,
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, thinkingLevel: 'high' });
+
+    expect(registerCalls[0].config?.thinkingLevel).toBe('high');
+  });
+
+  it('inherits thinkingLevel from a parent scoop when no explicit value is provided', async () => {
+    const { orchestrator, registerCalls, scripts, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    knownScoops.push({
+      jid: 'scoop_parent',
+      name: 'parent',
+      folder: 'parent',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'parent',
+      addedAt: '2026-04-19T00:00:00Z',
+      config: { thinkingLevel: 'medium' },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, parentJid: 'scoop_parent' });
+
+    expect(registerCalls[0].config?.thinkingLevel).toBe('medium');
+  });
+
+  it('explicit thinkingLevel overrides the parent inheritance', async () => {
+    const { orchestrator, registerCalls, scripts, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    knownScoops.push({
+      jid: 'scoop_parent',
+      name: 'parent',
+      folder: 'parent',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'parent',
+      addedAt: '2026-04-19T00:00:00Z',
+      config: { thinkingLevel: 'medium' },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, parentJid: 'scoop_parent', thinkingLevel: 'xhigh' });
+
+    expect(registerCalls[0].config?.thinkingLevel).toBe('xhigh');
+  });
+
+  it('leaves thinkingLevel unset when no explicit value and no parent override', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn(BASE_OPTS);
+
+    expect(registerCalls[0].config?.thinkingLevel).toBeUndefined();
+  });
+
+  it('rejects an invalid thinkingLevel without creating a scoop', async () => {
+    const { orchestrator, registerCalls } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      thinkingLevel: 'turbo' as never,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('invalid thinking level');
+    expect(registerCalls).toHaveLength(0);
+  });
+});
+
 describe('createAgentBridge — output capture', () => {
   it('returns the last send_message as finalText', async () => {
     const { orchestrator, scripts } = makeMockOrchestrator();

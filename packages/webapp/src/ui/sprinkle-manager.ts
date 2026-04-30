@@ -14,14 +14,43 @@ import { trackSprinkleView } from './telemetry.js';
 
 const log = createLogger('sprinkle-manager');
 
+export interface AddSprinkleOptions {
+  /**
+   * Mark the rail entry as "needs attention" — the layout should
+   * register the icon (so it's clickable) but NOT activate the panel
+   * automatically. Used by the extension float for auto-opened
+   * sprinkles, where popping the panel mid-onboarding overlays the
+   * chat. The user clicks the pulsing icon when ready.
+   */
+  attention?: boolean;
+}
+
 export interface SprinkleManagerCallbacks {
   /** Called to add a sprinkle to the layout (standalone: right column, extension: tab). */
-  addSprinkle(name: string, title: string, element: HTMLElement, zone?: string): void;
+  addSprinkle(
+    name: string,
+    title: string,
+    element: HTMLElement,
+    zone?: string,
+    options?: AddSprinkleOptions
+  ): void;
   /** Called to remove a sprinkle from the layout. */
   removeSprinkle(name: string): void;
 }
 
 const OPEN_SPRINKLES_KEY = 'slicc-open-sprinkles';
+
+export interface SprinkleManagerOptions {
+  /**
+   * How to surface auto-open sprinkles (those carrying
+   * `data-sprinkle-autoopen`). `'activate'` (default) opens the panel
+   * immediately — the standalone behavior. `'attention'` keeps the
+   * panel collapsed and just pulses the rail icon for the user to
+   * click — the extension behavior, where covering chat mid-flow is
+   * disruptive.
+   */
+  autoOpenBehavior?: 'activate' | 'attention';
+}
 
 export class SprinkleManager {
   private fs: VirtualFS;
@@ -36,16 +65,19 @@ export class SprinkleManager {
       container: HTMLElement;
     }
   >();
+  private autoOpenBehavior: 'activate' | 'attention';
 
   constructor(
     fs: VirtualFS,
     lickHandler: (event: LickEvent) => void,
     callbacks: SprinkleManagerCallbacks,
-    stopConeHandler: () => void
+    stopConeHandler: () => void,
+    options: SprinkleManagerOptions = {}
   ) {
     this.fs = fs;
     this.bridge = new SprinkleBridge(fs, lickHandler, (name) => this.close(name), stopConeHandler);
     this.callbacks = callbacks;
+    this.autoOpenBehavior = options.autoOpenBehavior ?? 'activate';
   }
 
   /** Restore sprinkles that were open in the previous session.
@@ -54,11 +86,14 @@ export class SprinkleManager {
     try {
       const raw = localStorage.getItem(OPEN_SPRINKLES_KEY);
       if (!raw) {
-        // First run — open sprinkles with autoOpen flag
+        // First run — open sprinkles with autoOpen flag (or just
+        // surface them as attention-grabbing rail icons in
+        // `'attention'` mode).
+        const attention = this.autoOpenBehavior === 'attention';
         for (const sprinkle of this.availableSprinkles.values()) {
           if (sprinkle.autoOpen) {
             try {
-              await this.open(sprinkle.name);
+              await this.open(sprinkle.name, undefined, { attention });
             } catch {
               log.warn('Failed to auto-open sprinkle', { name: sprinkle.name });
             }
@@ -90,11 +125,15 @@ export class SprinkleManager {
   /** Refresh and auto-open any new sprinkles with autoOpen that aren't already open. */
   async openNewAutoOpenSprinkles(): Promise<void> {
     await this.refresh();
+    const attention = this.autoOpenBehavior === 'attention';
     for (const sprinkle of this.availableSprinkles.values()) {
       if (sprinkle.autoOpen && !this.openSprinkles.has(sprinkle.name)) {
         try {
-          await this.open(sprinkle.name);
-          log.info('Auto-opened new sprinkle after install', { name: sprinkle.name });
+          await this.open(sprinkle.name, undefined, { attention });
+          log.info('Auto-opened new sprinkle after install', {
+            name: sprinkle.name,
+            attention,
+          });
         } catch {
           log.warn('Failed to auto-open new sprinkle', { name: sprinkle.name });
         }
@@ -109,7 +148,7 @@ export class SprinkleManager {
   }
 
   /** Open a sprinkle by name, optionally in a specific zone. */
-  async open(name: string, zone?: string): Promise<void> {
+  async open(name: string, zone?: string, options: AddSprinkleOptions = {}): Promise<void> {
     if (this.openSprinkles.has(name)) {
       log.info('Sprinkle already open', { name });
       return;
@@ -143,7 +182,7 @@ export class SprinkleManager {
     // (extension mode) gets added to a live DOM subtree. Iframes in detached
     // subtrees won't fire their load event.
     this.openSprinkles.set(name, { renderer: null!, container });
-    this.callbacks.addSprinkle(name, sprinkle.title, container, zone);
+    this.callbacks.addSprinkle(name, sprinkle.title, container, zone, options);
 
     const api = this.bridge.createAPI(name);
     const renderer = new SprinkleRenderer(container, api);

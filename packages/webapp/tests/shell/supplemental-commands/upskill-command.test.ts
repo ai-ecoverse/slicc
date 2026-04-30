@@ -4,11 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem, SecureFetch } from 'just-bash';
 import { zipSync } from 'fflate';
 import { VirtualFS } from '../../../src/fs/index.js';
-import { initSkillsSystem } from '../../../src/skills/index.js';
 import {
   createSkillCommand,
   createUpskillCommand,
   _resetGlobalFsCache,
+  installRecommendedSkills,
   scoreSkills,
 } from '../../../src/shell/supplemental-commands/upskill-command.js';
 
@@ -49,28 +49,26 @@ describe('skill/upskill command compatibility discovery', () => {
       dbName: `test-upskill-command-${dbCounter++}`,
       wipe: true,
     });
-    await initSkillsSystem(fs);
   });
 
   afterEach(() => {
     _resetGlobalFsCache();
   });
 
-  it('skill help documents discoverable compatibility roots and native-only management', async () => {
+  it('skill help documents discoverable compatibility roots', async () => {
     const result = await createSkillCommand(fs).execute(['--help'], createMockCtx() as never);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('List discoverable skills and management status');
+    expect(result.stdout).toContain('List discoverable skills');
     expect(result.stdout).toContain('**/.agents/skills/*');
     expect(result.stdout).toContain('**/.claude/skills/*');
-    expect(result.stdout).toContain('Only native /workspace/skills entries are install-managed');
   });
 
-  it('skill list shows source and read-only compatibility status', async () => {
+  it('skill list shows source and description for both native and compatibility skills', async () => {
     await fs.mkdir('/workspace/skills/native-skill', { recursive: true });
     await fs.writeFile(
-      '/workspace/skills/native-skill/manifest.yaml',
-      'skill: native-skill\nversion: 1.2.3\ndescription: Native skill\n'
+      '/workspace/skills/native-skill/SKILL.md',
+      '---\nname: native-skill\ndescription: Native skill\n---\n# Native\n'
     );
 
     await fs.mkdir('/repo/.claude/skills/compat-skill', { recursive: true });
@@ -84,11 +82,9 @@ describe('skill/upskill command compatibility discovery', () => {
     expect(result.stdout).toContain('compat-skill');
     expect(result.stdout).toContain('native');
     expect(result.stdout).toContain('.claude');
-    expect(result.stdout).toContain('available');
-    expect(result.stdout).toContain('compatibility (read-only)');
   });
 
-  it('skill info reports source and management mode for compatibility skills', async () => {
+  it('skill info reports source for compatibility skills', async () => {
     await fs.mkdir('/repo/.agents/skills/agent-skill', { recursive: true });
     await fs.writeFile('/repo/.agents/skills/agent-skill/SKILL.md', '# Agent Skill');
 
@@ -101,36 +97,23 @@ describe('skill/upskill command compatibility discovery', () => {
     expect(result.stdout).toContain('Skill: agent-skill');
     expect(result.stdout).toContain('Source: .agents');
     expect(result.stdout).toContain('Source root: /repo/.agents/skills');
-    expect(result.stdout).toContain('Management: compatibility-only (read-only)');
     expect(result.stdout).toContain('Instructions: /repo/.agents/skills/agent-skill/SKILL.md');
   });
 
-  it('skill install refuses to mutate compatibility-discovered skills', async () => {
-    await fs.mkdir('/repo/.claude/skills/compat-skill', { recursive: true });
-    await fs.writeFile('/repo/.claude/skills/compat-skill/SKILL.md', '# Compat Skill');
-
-    const result = await createSkillCommand(fs).execute(
-      ['install', 'compat-skill'],
+  it('skill install/uninstall subcommands no longer exist', async () => {
+    const installResult = await createSkillCommand(fs).execute(
+      ['install', 'anything'],
       createMockCtx() as never
     );
+    expect(installResult.exitCode).toBe(1);
+    expect(installResult.stderr).toContain('unknown command');
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('compatibility-only/read-only');
-    expect(result.stderr).toContain('/repo/.claude/skills');
-  });
-
-  it('skill uninstall refuses compatibility-only skills with a clear message', async () => {
-    await fs.mkdir('/repo/.claude/skills/compat-skill', { recursive: true });
-    await fs.writeFile('/repo/.claude/skills/compat-skill/SKILL.md', '# Compat Skill');
-
-    const result = await createSkillCommand(fs).execute(
-      ['uninstall', 'compat-skill'],
+    const uninstallResult = await createSkillCommand(fs).execute(
+      ['uninstall', 'anything'],
       createMockCtx() as never
     );
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('compatibility skill');
-    expect(result.stderr).toContain('read-only');
+    expect(uninstallResult.exitCode).toBe(1);
+    expect(uninstallResult.stderr).toContain('unknown command');
   });
 
   it('upskill list uses unified local discovery wording', async () => {
@@ -146,7 +129,6 @@ describe('skill/upskill command compatibility discovery', () => {
     expect(result.stdout).toContain('Discoverable local skills:');
     expect(result.stdout).toContain('local-agent-skill');
     expect(result.stdout).toContain('.agents');
-    expect(result.stdout).toContain('Only native /workspace/skills entries are install-managed');
   });
 });
 
@@ -853,5 +835,372 @@ describe('upskill recommendations subcommand', () => {
     // AEM should be filtered out since it's already installed
     expect(result.stdout).toContain('all matching skills are already installed');
     expect(result.stdout).not.toContain('AEM');
+  });
+});
+
+describe('installRecommendedSkills helper (no-shell entry point)', () => {
+  let fs: VirtualFS;
+  let createdFileSystems: VirtualFS[];
+  let dbCounter = 400;
+
+  beforeEach(async () => {
+    createdFileSystems = [];
+    const originalCreate = VirtualFS.create.bind(VirtualFS);
+    vi.spyOn(VirtualFS, 'create').mockImplementation(async (options) => {
+      const instance = await originalCreate(options);
+      createdFileSystems.push(instance);
+      return instance;
+    });
+
+    fs = await VirtualFS.create({ dbName: `install-helper-${dbCounter++}`, wipe: true });
+    await VirtualFS.create({ dbName: 'slicc-fs-global', wipe: true });
+  });
+
+  afterEach(async () => {
+    _resetGlobalFsCache();
+    await Promise.allSettled(
+      createdFileSystems.map((instance) =>
+        (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()
+      )
+    );
+    vi.restoreAllMocks();
+  });
+
+  it('returns skipped="no-profile" when /home is empty', async () => {
+    const fetchMock = vi.fn();
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBe('no-profile');
+    expect(result.installedNames).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('uses an in-memory profileOverride without scanning /home', async () => {
+    // /home is empty — without the override this would skip with no-profile.
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'skills-main/aem/SKILL.md': encoder.encode('---\nname: aem\n---\n# AEM\n'),
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return response(
+          200,
+          JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          })
+        );
+      }
+      if (url.includes('codeload.github.com')) {
+        return response(200, zipBytes);
+      }
+      if (url.includes('api.github.com')) {
+        return response(403, JSON.stringify({ message: 'rate limited' }), {}, 'Forbidden');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch, {
+      purpose: 'work',
+      role: 'developer',
+      tasks: ['build-websites'],
+      apps: ['aem'],
+    });
+    expect(result.skipped).toBeNull();
+    expect(result.installedNames).toEqual(['aem']);
+  });
+
+  it('returns skipped="catalog-fetch" when the catalog request fails', async () => {
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({ purpose: 'work', role: 'developer', tasks: ['x'], apps: ['y'] })
+    );
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      status: 503,
+      body: '',
+      headers: {},
+    });
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBe('catalog-fetch');
+    expect(result.errors[0]).toContain('failed to fetch skill catalog');
+  });
+
+  it('installs a recommended skill end-to-end and reports it in installedNames', async () => {
+    // Profile that scores well against the catalog entry.
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
+
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'skills-main/aem/SKILL.md': encoder.encode('---\nname: aem\n---\n# AEM\n'),
+      'skills-main/aem/helper.js': encoder.encode('console.log("hi");\n'),
+    });
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return response(
+          200,
+          JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          })
+        );
+      }
+      if (url.includes('codeload.github.com')) {
+        return response(200, zipBytes);
+      }
+      if (url.includes('api.github.com')) {
+        return response(403, JSON.stringify({ message: 'rate limited' }), {}, 'Forbidden');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBeNull();
+    expect(result.installedNames).toEqual(['aem']);
+    expect(result.errors).toEqual([]);
+    await expect(fs.readTextFile('/workspace/skills/aem/SKILL.md')).resolves.toContain('# AEM');
+  });
+
+  it('returns skipped="all-installed" when every match is already on disk', async () => {
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
+    await fs.mkdir('/workspace/skills/aem', { recursive: true });
+    await fs.writeFile('/workspace/skills/aem/SKILL.md', '# AEM Skill\n');
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return response(
+          200,
+          JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          })
+        );
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBe('all-installed');
+    expect(result.installedNames).toEqual([]);
+  });
+
+  it('installs a whole bundle when catalog row sets installAll', async () => {
+    // Profile picks up the migration bundle via tasks: ['build-websites'].
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
+
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'skills-main/skills/migration/migrate-page/SKILL.md': encoder.encode(
+        '---\nname: migrate-page\n---\n# Migrate Page\n'
+      ),
+      'skills-main/skills/migration/migrate-block/SKILL.md': encoder.encode(
+        '---\nname: migrate-block\n---\n# Migrate Block\n'
+      ),
+      'skills-main/skills/migration/migrate-header/SKILL.md': encoder.encode(
+        '---\nname: migrate-header\n---\n# Migrate Header\n'
+      ),
+      'skills-main/skills/migration/dismiss-overlays/SKILL.md': encoder.encode(
+        '---\nname: dismiss-overlays\n---\n# Dismiss Overlays\n'
+      ),
+    });
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return response(
+          200,
+          JSON.stringify({
+            data: [
+              {
+                name: 'migrate-page',
+                displayName: 'AEM Page Import',
+                description: 'Migration bundle',
+                repo: 'aemcoder/skills',
+                path: 'skills/migration/',
+                skill: 'migrate-page',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+                installAll: 'true',
+              },
+            ],
+          })
+        );
+      }
+      if (url.includes('codeload.github.com')) {
+        return response(200, zipBytes);
+      }
+      if (url.includes('api.github.com')) {
+        return response(403, JSON.stringify({ message: 'rate limited' }), {}, 'Forbidden');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBeNull();
+    expect(result.errors).toEqual([]);
+    expect(result.installedNames.sort()).toEqual([
+      'dismiss-overlays',
+      'migrate-block',
+      'migrate-header',
+      'migrate-page',
+    ]);
+    await expect(fs.readTextFile('/workspace/skills/migrate-page/SKILL.md')).resolves.toContain(
+      '# Migrate Page'
+    );
+    await expect(fs.readTextFile('/workspace/skills/migrate-block/SKILL.md')).resolves.toContain(
+      '# Migrate Block'
+    );
+    await expect(fs.readTextFile('/workspace/skills/migrate-header/SKILL.md')).resolves.toContain(
+      '# Migrate Header'
+    );
+    await expect(fs.readTextFile('/workspace/skills/dismiss-overlays/SKILL.md')).resolves.toContain(
+      '# Dismiss Overlays'
+    );
+  });
+
+  it('fills in missing companions when only some bundle skills are installed', async () => {
+    // Pre-install ONE bundle skill — but NOT the primary `migrate-page`,
+    // so the catalog filter doesn't drop the entry. The bundle install
+    // should skip the already-installed companion and install the rest.
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
+    await fs.mkdir('/workspace/skills/migrate-block', { recursive: true });
+    await fs.writeFile('/workspace/skills/migrate-block/SKILL.md', '# pre-existing\n');
+
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'skills-main/skills/migration/migrate-page/SKILL.md': encoder.encode(
+        '---\nname: migrate-page\n---\n# Migrate Page\n'
+      ),
+      'skills-main/skills/migration/migrate-block/SKILL.md': encoder.encode(
+        '---\nname: migrate-block\n---\n# Migrate Block (new)\n'
+      ),
+      'skills-main/skills/migration/migrate-header/SKILL.md': encoder.encode(
+        '---\nname: migrate-header\n---\n# Migrate Header\n'
+      ),
+    });
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return response(
+          200,
+          JSON.stringify({
+            data: [
+              {
+                name: 'migrate-page',
+                displayName: 'AEM Page Import',
+                description: 'Migration bundle',
+                repo: 'aemcoder/skills',
+                path: 'skills/migration/',
+                skill: 'migrate-page',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+                installAll: 'true',
+              },
+            ],
+          })
+        );
+      }
+      if (url.includes('codeload.github.com')) {
+        return response(200, zipBytes);
+      }
+      if (url.includes('api.github.com')) {
+        return response(403, JSON.stringify({ message: 'rate limited' }), {}, 'Forbidden');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBeNull();
+    expect(result.errors).toEqual([]);
+    expect(result.installedNames.sort()).toEqual(['migrate-header', 'migrate-page']);
+    // The pre-existing companion was left untouched.
+    await expect(fs.readTextFile('/workspace/skills/migrate-block/SKILL.md')).resolves.toContain(
+      'pre-existing'
+    );
   });
 });

@@ -1,77 +1,48 @@
 ---
 name: welcome
-description: Handle onboarding lick from the welcome sprinkle
+description: Render the welcome wizard on first run and acknowledge the user once they have wired up an LLM provider.
 allowed-tools: bash
 ---
 
 # Welcome Onboarding
 
-When you receive a `[Sprinkle Event: welcome]` with `onboarding-complete`, follow these steps in order. Do NOT skip any step.
+The deterministic onboarding flow now lives entirely in the webapp. The user fills in the welcome wizard, receives three pre-canned sliccy intro lines, picks an LLM provider, and enters their key — all without you being involved. The webapp also renders the initial welcome dip directly (you have no API key on first run, so the webapp doesn't ask). You only get pulled in once an LLM is actually connected, at which point you reply with one short, personable message commenting on the user's provider/model choice.
 
-The lick payload contains the user's profile:
+There is exactly **one** event you handle.
+
+## Trigger: Onboarding complete WITH provider
+
+When you receive a `[Sprinkle Event: welcome]` with `action: 'onboarding-complete-with-provider'`, the user has already finished the wizard, picked a provider, entered an API key, and the webapp validated it. The lick payload looks like:
 
 ```json
 {
-  "action": "onboarding-complete",
+  "action": "onboarding-complete-with-provider",
   "data": {
-    "purpose": "work",
-    "role": "developer",
-    "tasks": ["build-websites", "automate"],
-    "apps": ["aem"],
-    "name": "Paolo"
+    "profile": {
+      "name": "Paolo",
+      "purpose": "work",
+      "role": "developer",
+      "tasks": ["build-websites"]
+    },
+    "provider": "openai",
+    "model": "gpt-4o",
+    "modelLabel": "GPT-4o",
+    "validation": "ok"
   }
 }
 ```
 
-## IMPORTANT RULES
+Your one and only job is to send a single short reply (≤ 6 sentences total) that:
 
-- **Do NOT close the welcome panel.** Never run `sprinkle close welcome`. The user will close it themselves.
-- **Do NOT use `update_global_memory`.** Use `edit_file` to update `/shared/CLAUDE.md`.
-- **You MUST include the shtml table below.** Do not skip it, do not replace it with cards.
+1. Greets the user by name (or warmly acknowledges them anonymously if `profile.name` is empty) and reacts genuinely to the chosen `provider` + `modelLabel` (or `model`) — a sentence or two. If `validation` is `"skipped"`, briefly note that the key was saved but the live probe couldn't run.
+2. Closes with **exactly three concrete follow-up actions** the user can take right now, written as a markdown bulleted list with one short imperative each. Before you write them, take a quick look at the skills currently installed under `/workspace/skills/` — the orchestrator just finished installing the user's recommended set, so those skills (and their sprinkles / commands) are the most relevant surface to suggest. Ground the suggestions in BOTH the user's `profile.tasks` / `profile.role` / `profile.purpose` AND the available skills. The three bullets must follow this mix exactly:
+   - **One obvious** — the natural next step a user with this profile would expect, ideally invoking a freshly installed skill that matches their stated tasks (e.g. for an AEM developer with `migration` installed: "Try `migrate-page` on a real AEM URL").
+   - **One obligatory** — the practical setup-or-housekeeping step they really should do before anything else (e.g. "Run `git config --global user.email …` so your commits are attributed", "Open the Files tab and mount your project directory", or "Drop your team's coding-style doc into chat so I can pick it up").
+   - **One outrageous** — a deliberately bold, slightly-cheeky use of the available skills that pushes the user beyond their stated profile and shows what's possible (e.g. "Ask me to rewrite your homepage in pirate English", "Have me generate a brand-compliance report for your competitor's site", or "Spin up a scoop that drafts your next pull request from a one-line brief"). Keep it tasteful but unmistakably playful.
 
-## Steps
+   Pick concrete suggestions that actually fit what's installed; do **not** copy the examples above verbatim if they don't fit. If you cannot ground a bullet in the profile or the skill set, fall back to a useful generic one (e.g. "Drop a URL into the chat for me to inspect", "Paste a screenshot you'd like me to analyse").
 
-**Step 1.** Save the user profile and install recommended skills.
-
-First, save the profile. Use the user's name (lowercased, spaces replaced with hyphens) as the home directory. If no name was provided, use `user`. For example, if the name is "Lars", write to `/home/lars/.welcome.json`. If the name is "Paolo Moz", write to `/home/paolo-moz/.welcome.json`.
-
-```bash
-write_file /home/<name>/.welcome.json
-```
-
-Write the full profile JSON from the lick payload (purpose, role, tasks, apps, name).
-
-Next, check which skills will be installed by running:
-
-```bash
-upskill recommendations
-```
-
-This reads the saved profile and the skill catalog, and lists matching skills. Briefly tell the user what's being set up — e.g., _"Setting up 4 recommended skills for your profile…"_ — so they know something is happening.
-
-Then install them:
-
-```bash
-upskill recommendations --install
-```
-
-This outputs progress lines like `[1/N] Installed "skill-name"…`. Let the output show — do NOT suppress it. Once done, briefly summarize what was installed (e.g., _"All set — installed web-dev, git-workflow, and 2 others."_). Ignore any individual failures — the user can install those later.
-
-**Step 2.** Use `edit_file` on `/shared/CLAUDE.md` to add a `## User Profile` section right after the `# sliccy` heading with the user's name, purpose, role, and interests from the profile data.
-
-**Step 3.** Write a one-sentence greeting using their name, matching tone to purpose (professional for work, playful for exploring, encouraging for school).
-
-**Step 4.** Immediately after the greeting, include a ` ```shtml ` code block with a capability table. Copy this template exactly, changing only the task names and descriptions to match the user's profile. Use 3-4 rows:
-
-```shtml
-<table style="width:100%;border-collapse:collapse;font-size:14px">
-<tr style="border-bottom:1px solid #e0e0e0"><td style="padding:10px 8px;font-weight:700">Scaffold a site</td><td style="padding:10px 8px;color:#707070">Generate a starter HTML/CSS/JS project</td><td style="padding:10px 8px;text-align:right"><a href="#" onclick="event.preventDefault();slicc.lick({action:'start-task',task:'scaffold-site'})" style="color:#3B63FB;font-weight:600;text-decoration:none">Try it →</a></td></tr>
-<tr style="border-bottom:1px solid #e0e0e0"><td style="padding:10px 8px;font-weight:700">Automate a workflow</td><td style="padding:10px 8px;color:#707070">Set up a cron task or browser macro</td><td style="padding:10px 8px;text-align:right"><a href="#" onclick="event.preventDefault();slicc.lick({action:'start-task',task:'automate'})" style="color:#3B63FB;font-weight:600;text-decoration:none">Try it →</a></td></tr>
-<tr><td style="padding:10px 8px;font-weight:700">Research a topic</td><td style="padding:10px 8px;color:#707070">Scrape sites and summarize findings</td><td style="padding:10px 8px;text-align:right"><a href="#" onclick="event.preventDefault();slicc.lick({action:'start-task',task:'research'})" style="color:#3B63FB;font-weight:600;text-decoration:none">Try it →</a></td></tr>
-</table>
-```
-
-**Step 5.** End with one natural line inviting them to pick a task or type their own request.
+Do **not** print a capability table, do **not** call `update_global_memory`, do **not** install anything (the orchestrator already kicked off the recommended-skills install in the background), do **not** edit `/shared/CLAUDE.md`.
 
 ## Handling shortcut-migrate
 
@@ -85,10 +56,3 @@ upskill aemcoder/skills --path migration --all
 
 2. If it succeeds, do nothing further. The `migrate-page.shtml` sprinkle has `data-sprinkle-autoopen` and opens automatically after installation.
 3. If it fails, tell the user the install failed and suggest they retry manually with `upskill aemcoder/skills --path migration --all`.
-
-Do NOT save a profile, update `/shared/CLAUDE.md`, or write a greeting.
-
-## Handling follow-up licks
-
-- **`start-task` lick** — treat as the user's first request, begin the task immediately.
-- **Sparse profiles** (user skipped most steps) — keep greeting brief, ask what they need.

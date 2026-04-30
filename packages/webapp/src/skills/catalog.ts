@@ -1,5 +1,5 @@
 import type { VirtualFS } from '../fs/index.js';
-import { MANIFEST_FILE, SKILL_FILE, WORKSPACE_SKILLS_PATH } from './constants.js';
+import { SKILL_FILE, WORKSPACE_SKILLS_PATH } from './constants.js';
 
 export type SkillDiscoverySource = 'native' | 'agents' | 'claude';
 
@@ -12,8 +12,6 @@ export interface DiscoveredSkillCandidate {
   path: string;
   /** Path to SKILL.md when present. */
   skillFilePath?: string;
-  /** Whether the directory also contains manifest.yaml. */
-  hasManifest: boolean;
 }
 
 export interface SkillNameCollision<T> {
@@ -112,19 +110,16 @@ async function discoverNativeSkillCandidates(
     if (entry.type !== 'directory') continue;
 
     const skillPath = `${nativeSkillsDir}/${entry.name}`;
-    const manifestPath = `${skillPath}/${MANIFEST_FILE}`;
     const skillFilePath = `${skillPath}/${SKILL_FILE}`;
-    const hasManifest = await pathExists(fs, manifestPath);
     const hasSkillFile = await pathExists(fs, skillFilePath);
 
-    if (!hasManifest && !hasSkillFile) continue;
+    if (!hasSkillFile) continue;
 
     discovered.push({
       source: 'native',
       sourceRoot: nativeSkillsDir,
       path: skillPath,
-      skillFilePath: hasSkillFile ? skillFilePath : undefined,
-      hasManifest,
+      skillFilePath,
     });
   }
 
@@ -165,7 +160,6 @@ async function discoverCompatibilitySkillCandidates(
             sourceRoot: skillRoot,
             path: skillPath,
             skillFilePath,
-            hasManifest: false,
           });
         }
       }

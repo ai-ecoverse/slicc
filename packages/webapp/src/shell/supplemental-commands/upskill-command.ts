@@ -4,7 +4,6 @@ import type { VirtualFS } from '../../fs/index.js';
 import { VirtualFS as SharedVirtualFS } from '../../fs/index.js';
 import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
 import type { DiscoveredSkill } from '../../skills/types.js';
-import { SLICC_DIR, STATE_FILE } from '../../skills/constants.js';
 import { unzipSync } from 'fflate';
 import { consumeCachedBinaryByUrl } from '../binary-cache.js';
 import { decodeFetchBody, getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
@@ -73,6 +72,13 @@ interface CatalogSkillSource {
   repo: string;
   path?: string;
   skill?: string;
+  /**
+   * When true, install ALL skills found under `path` (not just the one named
+   * in `skill`). Used for bundle entries — e.g. `migrate-page` is the primary
+   * skill name (for display + dedup), but the migration bundle ships four
+   * companion skills that should land together.
+   */
+  installAll?: boolean;
 }
 
 interface CatalogSkill {
@@ -114,6 +120,8 @@ interface RemoteCatalogRow {
   role: string;
   purpose: string;
   boost: string;
+  /** Sheet column — truthy values ("true", "TRUE", "1", "yes") opt the entry into bundle install. */
+  installAll?: string;
 }
 
 interface ScoredSkill {
@@ -130,6 +138,12 @@ function splitField(value: string): string[] | undefined {
     .filter(Boolean);
 }
 
+function parseInstallAll(raw: string | undefined): boolean {
+  if (!raw) return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes';
+}
+
 function parseRemoteCatalog(data: RemoteCatalogRow[]): CatalogSkill[] {
   return data.map((row) => {
     const boost = row.boost ? parseFloat(row.boost) : NaN;
@@ -143,6 +157,7 @@ function parseRemoteCatalog(data: RemoteCatalogRow[]): CatalogSkill[] {
         repo: row.repo,
         path: row.path || undefined,
         skill: row.skill || undefined,
+        installAll: parseInstallAll(row.installAll),
       },
       affinity: {
         apps: splitField(row.apps),
@@ -196,7 +211,8 @@ export function scoreSkills(catalog: CatalogSkill[], profile: UserProfile): Scor
 function buildInstallCmd(source: CatalogSkillSource): string {
   let cmd = `upskill ${source.repo}`;
   if (source.path) cmd += ` --path ${source.path}`;
-  if (source.skill) cmd += ` --skill ${source.skill}`;
+  if (source.installAll) cmd += ` --all`;
+  else if (source.skill) cmd += ` --skill ${source.skill}`;
   return cmd;
 }
 
@@ -216,15 +232,7 @@ async function getInstalledSkillNames(fs: VirtualFS): Promise<Set<string>> {
   } catch {
     /* dir may not exist */
   }
-  // 2. State file (tracks applied skills)
-  try {
-    const raw = await fs.readTextFile(`/${SLICC_DIR}/${STATE_FILE}`);
-    const state = JSON.parse(raw) as { applied_skills?: Array<{ name: string }> };
-    for (const s of state.applied_skills ?? []) names.add(s.name);
-  } catch {
-    /* file may not exist */
-  }
-  // 3. Compatibility skill roots (.agents/skills/, .claude/skills/) — scan
+  // 2. Compatibility skill roots (.agents/skills/, .claude/skills/) — scan
   //    top-level VFS directories (no deep BFS) for these well-known paths.
   const COMPAT_DIRS = ['.agents', '.claude'] as const;
   try {
@@ -391,10 +399,6 @@ function formatDiscoveryScope(): string {
   return 'Discovery roots: /workspace/skills plus accessible **/.agents/skills/* and **/.claude/skills/* anywhere in the VFS.\n';
 }
 
-function formatManagementScope(): string {
-  return 'Only native /workspace/skills entries are install-managed; compatibility-discovered .agents/.claude skills remain read-only.\n';
-}
-
 function formatSkillSource(source: DiscoveredSkill['source']): string {
   switch (source) {
     case 'native':
@@ -406,53 +410,25 @@ function formatSkillSource(source: DiscoveredSkill['source']): string {
   }
 }
 
-function isInstallManagedSkill(skill: DiscoveredSkill): boolean {
-  return skill.source === 'native';
-}
-
-function formatSkillStatus(skill: DiscoveredSkill): string {
-  if (!isInstallManagedSkill(skill)) {
-    if (skill.installed && skill.installedVersion) {
-      return `compatibility (state v${skill.installedVersion})`;
-    }
-    return 'compatibility (read-only)';
-  }
-
-  if (skill.installed && skill.installedVersion) {
-    return `installed (v${skill.installedVersion})`;
-  }
-
-  return 'available';
-}
-
-function formatManagementMode(skill: DiscoveredSkill): string {
-  return isInstallManagedSkill(skill)
-    ? 'install-managed (/workspace/skills)'
-    : 'compatibility-only (read-only)';
-}
-
 function formatDiscoveredSkills(discovered: DiscoveredSkill[], heading: string): string {
   let output = `${heading}:\n\n`;
-  output += '  NAME                 VERSION    SOURCE    STATUS\n';
+  output += '  NAME                 SOURCE    DESCRIPTION\n';
   output += '  ─────────────────────────────────────────────────────────────\n';
 
   for (const skill of discovered) {
-    output += `  ${skill.name.padEnd(20)} ${skill.manifest.version.padEnd(10)} ${formatSkillSource(skill.source).padEnd(9)} ${formatSkillStatus(skill)}\n`;
+    const description = skill.description || '';
+    output += `  ${skill.name.padEnd(20)} ${formatSkillSource(skill.source).padEnd(9)} ${description}\n`;
   }
 
   output += `\n${formatDiscoveryScope()}`;
-  output += formatManagementScope();
   return output;
 }
 
 function formatSkillInfo(skill: DiscoveredSkill): string {
-  let output = `Skill: ${skill.manifest.skill}\n`;
-  output += `Version: ${skill.manifest.version}\n`;
-  output += `Description: ${skill.manifest.description || '(none)'}\n`;
+  let output = `Skill: ${skill.name}\n`;
+  output += `Description: ${skill.description || '(none)'}\n`;
   output += `Source: ${formatSkillSource(skill.source)}\n`;
   output += `Source root: ${skill.sourceRoot}\n`;
-  output += `Management: ${formatManagementMode(skill)}\n`;
-  output += `Status: ${formatSkillStatus(skill)}\n`;
 
   if (skill.skillFilePath) {
     output += `Instructions: ${skill.skillFilePath}\n`;
@@ -466,13 +442,6 @@ function formatSkillInfo(skill: DiscoveredSkill): string {
   }
 
   return output;
-}
-
-function formatCompatibilityMutationError(
-  commandName: 'skill' | 'upskill',
-  skill: DiscoveredSkill
-): string {
-  return `${commandName}: "${skill.name}" is discoverable from ${skill.sourceRoot} but remains compatibility-only/read-only. Only native /workspace/skills entries are install-managed.\n`;
 }
 
 function upskillHelp(): { stdout: string; stderr: string; exitCode: number } {
@@ -490,8 +459,7 @@ Commands:
   <clawhub-url>            Install skill from ClawHub URL
   tessl:<name>             Install skill from Tessl registry
 
-${formatDiscoveryScope()}${formatManagementScope()}
-
+${formatDiscoveryScope()}
 GitHub Installation:
   upskill owner/repo                     List available skills in repo
   upskill owner/repo --skill name        Install specific skill
@@ -1356,6 +1324,342 @@ async function refreshSprinklesAfterInstall(): Promise<void> {
 }
 
 /**
+ * Coerce a (possibly partial / loosely-typed) profile into the shape
+ * `scoreSkills` expects. `scoreSkills` calls `.includes()` on `apps`
+ * and `tasks` and dereferences `role`/`purpose`/`name`, so missing
+ * fields default to safe empties rather than throwing.
+ */
+function normalizeProfile(profile: Partial<UserProfile>): UserProfile {
+  return {
+    purpose: profile.purpose ?? '',
+    role: profile.role ?? '',
+    tasks: Array.isArray(profile.tasks) ? profile.tasks : [],
+    apps: Array.isArray(profile.apps) ? profile.apps : [],
+    name: profile.name ?? '',
+  };
+}
+
+/**
+ * Result of {@link installRecommendedSkills}.
+ *
+ * - `installedNames`: skills that successfully landed under `/workspace/skills/`.
+ * - `errors`: human-readable failure lines (one per failed skill / repo).
+ * - `skipped`: present when the install was a non-error no-op:
+ *     - `'no-profile'`     — `/home/<name>/.welcome.json` is missing.
+ *     - `'all-installed'`  — every recommended skill was already on disk.
+ *     - `'catalog-fetch'`  — the catalog HTTP request failed; details in `errors`.
+ *
+ * The shell command (`upskill recommendations --install`) and the onboarding
+ * orchestrator both consume this — the shell renders it into stdout/stderr;
+ * the orchestrator just logs it and moves on.
+ */
+export interface InstallRecommendationsResult {
+  installedNames: string[];
+  errors: string[];
+  skipped: 'no-profile' | 'all-installed' | 'catalog-fetch' | null;
+  /** Per-skill install log, ready to print verbatim into stdout. */
+  log: string;
+  /** Total wall-clock seconds for the install pass. */
+  elapsedSeconds: number;
+}
+
+/**
+ * Install all recommended skills for the current user profile, bypassing
+ * the shell. Used both by `upskill recommendations --install` and by the
+ * onboarding orchestrator (which fires this in the background after the
+ * welcome wizard completes).
+ *
+ * When called from the orchestrator, the in-memory profile is passed
+ * directly via `profileOverride` to avoid racing with the parallel
+ * `persistProfile` write — the install otherwise lands before the
+ * `/home/<user>/.welcome.json` file exists on disk and skips with
+ * `skipped: 'no-profile'`.
+ *
+ * Errors are collected into the result; this function does not throw.
+ * Post-install hooks (`__slicc_reloadSkills`, sprinkle refresh) run iff
+ * at least one skill was installed successfully.
+ */
+export async function installRecommendedSkills(
+  fs: VirtualFS,
+  fetchFn: SecureFetch,
+  profileOverride?: Partial<UserProfile> | null
+): Promise<InstallRecommendationsResult> {
+  const startTime = Date.now();
+  const empty = (
+    skipped: InstallRecommendationsResult['skipped'],
+    errors: string[] = []
+  ): InstallRecommendationsResult => ({
+    installedNames: [],
+    errors,
+    skipped,
+    log: '',
+    elapsedSeconds: (Date.now() - startTime) / 1000,
+  });
+
+  let profile: UserProfile | null = null;
+
+  // Fast path — caller (orchestrator) supplied the freshly-collected
+  // profile so we don't have to wait for the parallel persistProfile()
+  // write to land on disk.
+  if (profileOverride) {
+    profile = normalizeProfile(profileOverride);
+  } else {
+    // Fallback path — read from disk (`upskill recommendations --install`
+    // shell command, or any caller that doesn't have the profile in hand).
+    try {
+      const homeDirs = await fs.readDir('/home');
+      for (const entry of homeDirs) {
+        try {
+          const raw = await fs.readTextFile(`/home/${entry.name}/.welcome.json`);
+          profile = normalizeProfile(JSON.parse(raw) as Partial<UserProfile>);
+          break;
+        } catch {
+          // no .welcome.json in this dir
+        }
+      }
+    } catch {
+      // /home doesn't exist
+    }
+  }
+
+  if (!profile) return empty('no-profile');
+
+  // Fetch catalog and installed names in parallel
+  let catalogSkills: CatalogSkill[];
+  let installed: Set<string>;
+  try {
+    const [catalogResult, installedResult] = await Promise.all([
+      (async () => {
+        const response = await fetchFn(SKILL_CATALOG_URL, {
+          headers: { Accept: 'application/json' },
+        });
+        if (response.status !== 200) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const data = parseFetchJson<{ data: RemoteCatalogRow[] }>(response.body);
+        return parseRemoteCatalog(data.data);
+      })(),
+      getInstalledSkillNames(fs),
+    ]);
+    catalogSkills = catalogResult;
+    installed = installedResult;
+  } catch (err) {
+    return empty('catalog-fetch', [
+      `upskill: failed to fetch skill catalog from ${SKILL_CATALOG_URL}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    ]);
+  }
+
+  const scored = scoreSkills(catalogSkills, profile).filter((s) => !installed.has(s.entry.name));
+  if (scored.length === 0) return empty('all-installed');
+
+  // Group scored entries by repo so each ZIP is downloaded only once
+  const repoGroups = new Map<string, ScoredSkill[]>();
+  for (const rec of scored) {
+    const repoKey = rec.entry.source.repo;
+    const group = repoGroups.get(repoKey);
+    if (group) group.push(rec);
+    else repoGroups.set(repoKey, [rec]);
+  }
+
+  const totalSkills = scored.length;
+  let completedSkills = 0;
+  let output = '';
+  const errors: string[] = [];
+  const installedNames: string[] = [];
+
+  // Process repos in parallel, skills within each repo sequentially (shared ZIP)
+  const repoResults = await Promise.allSettled(
+    Array.from(repoGroups.entries()).map(async ([repoKey, recs]) => {
+      const [owner, repo] = repoKey.split('/');
+      const zip = await fetchRepoZip(owner, repo, fetchFn);
+      if (zip.status === 'not_found' || zip.status === 'error') {
+        const errMsg =
+          zip.status === 'not_found'
+            ? `upskill: repository ${repoKey} not found`
+            : `upskill: failed to fetch ${repoKey}: ${zip.message}`;
+        const results: Array<{ ok: boolean; name: string; error?: string }> = [];
+        for (const rec of recs) {
+          completedSkills++;
+          const eta =
+            completedSkills < totalSkills
+              ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
+              : '';
+          output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: repo fetch failed${eta}\n`;
+          results.push({
+            ok: false,
+            name: rec.entry.name,
+            error: `repo fetch failed for ${repoKey}`,
+          });
+        }
+        return { errors: [errMsg], results };
+      }
+
+      const files = stripZipPrefix(zip.files);
+      const results: Array<{ ok: boolean; name: string; error?: string }> = [];
+
+      // Precompute skill index: map skillName → path for all SKILL.md entries
+      const skillIndex = new Map<string, string>();
+      for (const p of Object.keys(files)) {
+        if (p.endsWith('/SKILL.md')) {
+          const skillDir = p.replace(/\/SKILL\.md$/, '');
+          const name = skillDir.split('/').pop() || skillDir;
+          skillIndex.set(name, skillDir);
+        }
+      }
+
+      for (const rec of recs) {
+        const src = rec.entry.source;
+
+        // Bundle install: install ALL skills under src.path. The catalog
+        // entry's `name` / `skill` is the primary identifier (used for
+        // dedup against an already-installed bundle), but the actual
+        // install fans out across every SKILL.md found under the path.
+        if (src.installAll && src.path) {
+          const pathPrefix = src.path.replace(/^\/|\/$/g, '');
+          const targets: Array<{ name: string; path: string }> = [];
+          for (const [name, p] of skillIndex) {
+            if (p === pathPrefix || p.startsWith(pathPrefix + '/')) {
+              targets.push({ name, path: p });
+            }
+          }
+          completedSkills++;
+          const bundleEta =
+            completedSkills < totalSkills
+              ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
+              : '';
+
+          if (targets.length === 0) {
+            const error = `no skills found under "${src.path}" in ${repoKey}`;
+            results.push({ ok: false, name: rec.entry.name, error });
+            output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" bundle from ${repoKey}: ${error}${bundleEta}\n`;
+            continue;
+          }
+
+          const bundleStart = Date.now();
+          let bundleSuccess = 0;
+          let bundleFailed = 0;
+          for (const target of targets) {
+            // Per-sub-skill dedup so a partially-installed bundle still
+            // gets the missing companions filled in.
+            if (installed.has(target.name)) continue;
+            const subResult = await installSkillFromZip(target.path, target.name, files, fs, false);
+            if (subResult.ok) {
+              results.push({ ok: true, name: target.name });
+              bundleSuccess++;
+            } else {
+              results.push({ ok: false, name: target.name, error: subResult.error });
+              bundleFailed++;
+            }
+          }
+          const bundleDuration = ((Date.now() - bundleStart) / 1000).toFixed(1);
+          if (bundleSuccess === 0 && bundleFailed === 0) {
+            output += `[${completedSkills}/${totalSkills}] Skipped "${rec.entry.name}" bundle from ${repoKey}: all sub-skills already installed${bundleEta}\n`;
+          } else if (bundleFailed === 0) {
+            output += `[${completedSkills}/${totalSkills}] Installed "${rec.entry.name}" bundle (${bundleSuccess} skill(s)) from ${repoKey} (${bundleDuration}s)${bundleEta}\n`;
+          } else {
+            output += `[${completedSkills}/${totalSkills}] Installed "${rec.entry.name}" bundle (${bundleSuccess}/${bundleSuccess + bundleFailed} skill(s)) from ${repoKey} (${bundleDuration}s)${bundleEta}\n`;
+          }
+          continue;
+        }
+
+        let skillPath: string;
+        let skillName: string;
+
+        if (src.skill) {
+          const indexedPath = skillIndex.get(src.skill);
+          if (indexedPath) {
+            skillPath = indexedPath;
+            skillName = src.skill;
+          } else if (src.path) {
+            skillPath = src.path.replace(/^\/|\/$/g, '');
+            skillName = src.skill;
+          } else {
+            const error = `skill "${src.skill}" not found in ${repoKey}`;
+            results.push({ ok: false, name: rec.entry.name, error });
+            completedSkills++;
+            const eta =
+              completedSkills < totalSkills
+                ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
+                : '';
+            output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: ${error}${eta}\n`;
+            continue;
+          }
+        } else if (src.path) {
+          skillPath = src.path.replace(/^\/|\/$/g, '');
+          skillName = rec.entry.name;
+        } else {
+          const indexedPath = skillIndex.get(rec.entry.name);
+          if (indexedPath) {
+            skillPath = indexedPath;
+            skillName = rec.entry.name;
+          } else {
+            const error = `skill "${rec.entry.name}" not found in ${repoKey} and no explicit path provided`;
+            results.push({ ok: false, name: rec.entry.name, error });
+            completedSkills++;
+            const eta =
+              completedSkills < totalSkills
+                ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
+                : '';
+            output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: ${error}${eta}\n`;
+            continue;
+          }
+        }
+
+        const skillStart = Date.now();
+        const result = await installSkillFromZip(skillPath, skillName, files, fs, false);
+        completedSkills++;
+
+        const skillDuration = ((Date.now() - skillStart) / 1000).toFixed(1);
+        const avgTime = (Date.now() - startTime) / completedSkills;
+        const remaining = Math.round(((totalSkills - completedSkills) * avgTime) / 1000);
+        const eta = completedSkills < totalSkills ? ` (~${remaining}s remaining)` : '';
+
+        if (result.ok) {
+          results.push({ ok: true, name: skillName });
+          output += `[${completedSkills}/${totalSkills}] Installed "${skillName}" from ${repoKey} (${skillDuration}s)${eta}\n`;
+        } else {
+          results.push({ ok: false, name: skillName, error: result.error });
+          output += `[${completedSkills}/${totalSkills}] Failed "${skillName}" from ${repoKey}: ${result.error}${eta}\n`;
+        }
+      }
+
+      return { errors: [] as string[], results };
+    })
+  );
+
+  for (const settled of repoResults) {
+    if (settled.status === 'rejected') {
+      errors.push(`upskill: unexpected error: ${settled.reason}`);
+      continue;
+    }
+    for (const e of settled.value.errors) errors.push(e);
+    for (const r of settled.value.results) {
+      if (r.ok) installedNames.push(r.name);
+      else if (r.error) errors.push(`upskill: ${r.error}`);
+    }
+  }
+
+  if (installedNames.length > 0) {
+    await runPostInstallHooks();
+  }
+
+  const elapsedSeconds = (Date.now() - startTime) / 1000;
+  if (installedNames.length > 0) {
+    output += `\nInstalled ${installedNames.length} recommended skill(s) in ${elapsedSeconds.toFixed(1)}s\n`;
+  }
+
+  return {
+    installedNames,
+    errors,
+    skipped: null,
+    log: output,
+    elapsedSeconds,
+  };
+}
+
+/**
  * Handle the `upskill recommendations` subcommand.
  */
 async function handleRecommendations(
@@ -1363,7 +1667,39 @@ async function handleRecommendations(
   fetchFn: SecureFetch,
   install: boolean
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  // Read user profile — scan /home/*/.welcome.json
+  if (install) {
+    const result = await installRecommendedSkills(fs, fetchFn);
+
+    if (result.skipped === 'no-profile') {
+      return {
+        stdout: '',
+        stderr:
+          'upskill: no user profile found. Complete the welcome onboarding first, or create /home/<name>/.welcome.json manually.\n',
+        exitCode: 1,
+      };
+    }
+    if (result.skipped === 'catalog-fetch') {
+      return {
+        stdout: '',
+        stderr: result.errors.map((e) => `${e}\n`).join(''),
+        exitCode: 1,
+      };
+    }
+    if (result.skipped === 'all-installed') {
+      return {
+        stdout: 'No new skill recommendations — all matching skills are already installed.\n',
+        stderr: '',
+        exitCode: 0,
+      };
+    }
+    return {
+      stdout: result.log,
+      stderr: result.errors.map((e) => `${e}\n`).join(''),
+      exitCode: result.errors.length > 0 ? 1 : 0,
+    };
+  }
+
+  // Display-only path (no install) — keep the original recommendation listing.
   let profile: UserProfile | null = null;
   try {
     const homeDirs = await fs.readDir('/home');
@@ -1389,7 +1725,6 @@ async function handleRecommendations(
     };
   }
 
-  // Fetch catalog and installed names in parallel
   let catalogSkills: CatalogSkill[];
   let installed: Set<string>;
   try {
@@ -1416,7 +1751,6 @@ async function handleRecommendations(
     };
   }
 
-  // Score and filter
   const scored = scoreSkills(catalogSkills, profile).filter((s) => !installed.has(s.entry.name));
 
   if (scored.length === 0) {
@@ -1425,183 +1759,6 @@ async function handleRecommendations(
       stderr: '',
       exitCode: 0,
     };
-  }
-
-  if (install) {
-    // Group scored entries by repo so each ZIP is downloaded only once
-    const repoGroups = new Map<string, ScoredSkill[]>();
-    for (const rec of scored) {
-      const repoKey = rec.entry.source.repo;
-      const group = repoGroups.get(repoKey);
-      if (group) {
-        group.push(rec);
-      } else {
-        repoGroups.set(repoKey, [rec]);
-      }
-    }
-
-    // Count total skills for progress tracking
-    const totalSkills = scored.length;
-    let completedSkills = 0;
-    const startTime = Date.now();
-
-    let output = '';
-    let errors = '';
-    let successCount = 0;
-
-    // Process repos in parallel, skills within each repo sequentially (shared ZIP)
-    const repoResults = await Promise.allSettled(
-      Array.from(repoGroups.entries()).map(async ([repoKey, recs]) => {
-        const [owner, repo] = repoKey.split('/');
-        const zip = await fetchRepoZip(owner, repo, fetchFn);
-        if (zip.status === 'not_found' || zip.status === 'error') {
-          const errMsg =
-            zip.status === 'not_found'
-              ? `upskill: repository ${repoKey} not found\n`
-              : `upskill: failed to fetch ${repoKey}: ${zip.message}\n`;
-          const results: Array<{ ok: boolean; name: string; error?: string }> = [];
-          for (const rec of recs) {
-            completedSkills++;
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-            const eta =
-              completedSkills < totalSkills
-                ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
-                : '';
-            output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: repo fetch failed${eta}\n`;
-            results.push({
-              ok: false,
-              name: rec.entry.name,
-              error: `repo fetch failed for ${repoKey}`,
-            });
-          }
-          return { errors: errMsg, results };
-        }
-
-        const files = stripZipPrefix(zip.files);
-        const results: Array<{ ok: boolean; name: string; error?: string }> = [];
-
-        // Precompute skill index: map skillName → path for all SKILL.md entries
-        const skillIndex = new Map<string, string>();
-        for (const p of Object.keys(files)) {
-          if (p.endsWith('/SKILL.md')) {
-            const skillDir = p.replace(/\/SKILL\.md$/, '');
-            const name = skillDir.split('/').pop() || skillDir;
-            skillIndex.set(name, skillDir);
-          }
-        }
-
-        for (const rec of recs) {
-          const src = rec.entry.source;
-          // Resolve the skill path from the ZIP
-          let skillPath: string;
-          let skillName: string;
-
-          // Resolution strategy:
-          // 1. If src.skill is provided, use it to look up in index
-          // 2. If src.skill is missing but src.path is provided, use path directly (explicit path takes precedence)
-          // 3. If neither src.skill nor src.path, fall back to looking up rec.entry.name in index
-          // 4. If none of the above work, error
-
-          if (src.skill) {
-            // Explicit skill field - look up in index
-            const indexedPath = skillIndex.get(src.skill);
-            if (indexedPath) {
-              skillPath = indexedPath;
-              skillName = src.skill;
-            } else if (src.path) {
-              // Skill not found in index, but explicit path provided
-              const normalizedPath = src.path.replace(/^\/|\/$/g, '');
-              skillPath = normalizedPath;
-              skillName = src.skill;
-            } else {
-              // Explicit skill field but not found and no path
-              const error = `skill "${src.skill}" not found in ${repoKey}`;
-              results.push({
-                ok: false,
-                name: rec.entry.name,
-                error,
-              });
-              completedSkills++;
-              const eta =
-                completedSkills < totalSkills
-                  ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
-                  : '';
-              output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: ${error}${eta}\n`;
-              continue;
-            }
-          } else if (src.path) {
-            // No explicit skill field, but explicit path provided - use path directly
-            const normalizedPath = src.path.replace(/^\/|\/$/g, '');
-            skillPath = normalizedPath;
-            skillName = rec.entry.name;
-          } else {
-            // No skill field and no path - try looking up name in index as fallback
-            const indexedPath = skillIndex.get(rec.entry.name);
-            if (indexedPath) {
-              skillPath = indexedPath;
-              skillName = rec.entry.name;
-            } else {
-              // Fallback failed - no way to resolve
-              const error = `skill "${rec.entry.name}" not found in ${repoKey} and no explicit path provided`;
-              results.push({
-                ok: false,
-                name: rec.entry.name,
-                error,
-              });
-              completedSkills++;
-              const eta =
-                completedSkills < totalSkills
-                  ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
-                  : '';
-              output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: ${error}${eta}\n`;
-              continue;
-            }
-          }
-
-          const skillStart = Date.now();
-          const result = await installSkillFromZip(skillPath, skillName, files, fs, false);
-          completedSkills++;
-
-          const skillDuration = ((Date.now() - skillStart) / 1000).toFixed(1);
-          const avgTime = (Date.now() - startTime) / completedSkills;
-          const remaining = Math.round(((totalSkills - completedSkills) * avgTime) / 1000);
-          const eta = completedSkills < totalSkills ? ` (~${remaining}s remaining)` : '';
-
-          if (result.ok) {
-            results.push({ ok: true, name: skillName });
-            output += `[${completedSkills}/${totalSkills}] Installed "${skillName}" from ${repoKey} (${skillDuration}s)${eta}\n`;
-          } else {
-            results.push({ ok: false, name: skillName, error: result.error });
-            output += `[${completedSkills}/${totalSkills}] Failed "${skillName}" from ${repoKey}: ${result.error}${eta}\n`;
-          }
-        }
-
-        return { errors: '', results };
-      })
-    );
-
-    // Collect results from parallel repo processing
-    for (const settled of repoResults) {
-      if (settled.status === 'rejected') {
-        errors += `upskill: unexpected error: ${settled.reason}\n`;
-        continue;
-      }
-      if (settled.value.errors) {
-        errors += settled.value.errors;
-      }
-      for (const r of settled.value.results) {
-        if (r.ok) successCount++;
-        else if (r.error) errors += `upskill: ${r.error}\n`;
-      }
-    }
-
-    const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-
-    if (successCount > 0) {
-      output += `\nInstalled ${successCount} recommended skill(s) in ${totalElapsed}s\n`;
-      await runPostInstallHooks();
-    }
-    return { stdout: output, stderr: errors, exitCode: errors ? 1 : 0 };
   }
 
   // Display recommendations
@@ -1664,7 +1821,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
 
         if (discovered.length === 0) {
           return {
-            stdout: `No discoverable local skills found.\n\n${formatDiscoveryScope()}${formatManagementScope()}`,
+            stdout: `No discoverable local skills found.\n\n${formatDiscoveryScope()}`,
             stderr: '',
             exitCode: 0,
           };
@@ -1937,14 +2094,11 @@ export function createSkillCommand(fs: VirtualFS): Command {
         stdout: `usage: skill <command> [options]
 
 Commands:
-  list                   List discoverable skills and management status
+  list                   List discoverable skills
   info <name>            Show details about a skill
   read <name>            Read the SKILL.md instructions
-  install <name>         Install a native /workspace/skills skill (apply manifest)
-  uninstall <name>       Uninstall a native /workspace/skills skill
 
-${formatDiscoveryScope()}${formatManagementScope()}
-
+${formatDiscoveryScope()}
 For installing skills from registries or GitHub, use 'upskill':
   upskill search "query"           Search ClawHub + Tessl
   upskill owner/repo --list        List skills in GitHub repo
@@ -1971,7 +2125,7 @@ Examples:
 
           if (discovered.length === 0) {
             return {
-              stdout: `No discoverable skills found.\n\n${formatDiscoveryScope()}${formatManagementScope()}\nInstall install-managed skills with: upskill owner/repo --all\n`,
+              stdout: `No discoverable skills found.\n\n${formatDiscoveryScope()}Install skills with: upskill owner/repo --all\n`,
               stderr: '',
               exitCode: 0,
             };
@@ -2010,56 +2164,6 @@ Examples:
           }
 
           return { stdout: instructions + '\n', stderr: '', exitCode: 0 };
-        }
-
-        case 'install': {
-          const name = args[1];
-          if (!name) {
-            return { stdout: '', stderr: 'skill: install requires a skill name\n', exitCode: 1 };
-          }
-
-          const discovered = await skills.getSkillInfo(fs, name);
-          if (discovered && !isInstallManagedSkill(discovered)) {
-            return {
-              stdout: '',
-              stderr: formatCompatibilityMutationError('skill', discovered),
-              exitCode: 1,
-            };
-          }
-
-          const result = await skills.applySkill(fs, name);
-          if (result.success) {
-            await refreshSprinklesAfterInstall();
-            await reloadSkillsAfterInstall();
-            return {
-              stdout: `Installed skill "${result.skill}" v${result.version}\n`,
-              stderr: '',
-              exitCode: 0,
-            };
-          }
-          return { stdout: '', stderr: `skill: ${result.error}\n`, exitCode: 1 };
-        }
-
-        case 'uninstall': {
-          const name = args[1];
-          if (!name) {
-            return { stdout: '', stderr: 'skill: uninstall requires a skill name\n', exitCode: 1 };
-          }
-
-          const discovered = await skills.getSkillInfo(fs, name);
-          if (discovered && !isInstallManagedSkill(discovered)) {
-            return {
-              stdout: '',
-              stderr: `skill: "${name}" is a compatibility skill discovered from ${discovered.sourceRoot} (read-only). Only native /workspace/skills entries can be uninstalled.\n`,
-              exitCode: 1,
-            };
-          }
-
-          const result = await skills.uninstallSkill(fs, name);
-          if (result.success) {
-            return { stdout: `Uninstalled skill "${result.skill}"\n`, stderr: '', exitCode: 0 };
-          }
-          return { stdout: '', stderr: `skill: ${result.error}\n`, exitCode: 1 };
         }
 
         default:
