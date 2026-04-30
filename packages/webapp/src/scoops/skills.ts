@@ -193,7 +193,7 @@ async function loadDiscoveredSkills(
       skills.push({
         metadata: {
           name,
-          description: metadata.description || discoveredSkill.manifest.description || '',
+          description: metadata.description || discoveredSkill.description || '',
           allowedTools: metadata.allowedTools,
         },
         content: body,

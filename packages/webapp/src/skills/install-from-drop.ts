@@ -2,14 +2,13 @@ import { unzipSync } from 'fflate';
 import type { VirtualFS } from '../fs/index.js';
 import { joinPath, splitPath } from '../fs/index.js';
 import {
-  MANIFEST_FILE,
   MAX_SKILL_ARCHIVE_ENTRY_COUNT,
   MAX_SKILL_ARCHIVE_SIZE_BYTES,
   MAX_SKILL_ARCHIVE_UNCOMPRESSED_SIZE_BYTES,
   SKILL_ARCHIVE_EXTENSION,
+  SKILL_FILE,
   WORKSPACE_SKILLS_PATH,
 } from './constants.js';
-import { parseManifestContent } from './manifest.js';
 
 export interface DroppedSkillFile {
   name: string;
@@ -31,11 +30,25 @@ interface ArchiveEntry {
 
 const VALID_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-class ArchiveBudgetError extends Error {}
-
-function decodeUtf8(bytes: Uint8Array): string {
-  return new TextDecoder().decode(bytes);
+/**
+ * Common archive metadata noise we never want to land in a skill directory:
+ *  - macOS Finder side-cars (`__MACOSX/`, `.DS_Store`, AppleDouble `._*`)
+ *  - Windows Explorer side-cars (`Thumbs.db`, `desktop.ini`)
+ *
+ * Filtered uniformly whether the SKILL.md sits in a wrapper directory (where
+ * the prefix scope already drops `__MACOSX/`) or at the archive root (where
+ * everything would otherwise be copied verbatim).
+ */
+function isArchiveMetadataPath(path: string): boolean {
+  if (path === '__MACOSX' || path.startsWith('__MACOSX/')) return true;
+  const base = path.includes('/') ? path.slice(path.lastIndexOf('/') + 1) : path;
+  if (base === '.DS_Store' || base === 'Thumbs.db' || base === 'desktop.ini') return true;
+  // AppleDouble resource-fork files: any segment named `._<something>`.
+  if (base.startsWith('._')) return true;
+  return false;
 }
+
+class ArchiveBudgetError extends Error {}
 
 function sanitizeArchiveEntryPath(path: string): string | null {
   const normalized = path.replace(/\\/g, '/');
@@ -54,7 +67,7 @@ function sanitizeArchiveEntryPath(path: string): string | null {
 
 function assertValidSkillName(skillName: string): void {
   if (!VALID_SKILL_NAME.test(skillName)) {
-    throw new Error(`Invalid manifest: skill name "${skillName}" must be a simple directory name.`);
+    throw new Error(`Invalid skill: skill name "${skillName}" must be a simple directory name.`);
   }
 }
 
@@ -63,24 +76,33 @@ function collectArchiveEntries(files: Record<string, Uint8Array>): ArchiveEntry[
   for (const [originalPath, bytes] of Object.entries(files)) {
     const path = sanitizeArchiveEntryPath(originalPath);
     if (!path) continue;
+    if (isArchiveMetadataPath(path)) continue;
     entries.push({ originalPath, path, bytes });
   }
   return entries;
 }
 
-function findManifestEntry(entries: ArchiveEntry[]): ArchiveEntry {
-  const manifests = entries.filter(
-    (entry) => entry.path === MANIFEST_FILE || entry.path.endsWith(`/${MANIFEST_FILE}`)
+/**
+ * Find the SKILL.md entry that anchors the skill. The archive must contain
+ * exactly one SKILL.md so the resulting skill directory is unambiguous.
+ *
+ * The skill name is derived from the SKILL.md's parent directory (the wrapping
+ * folder inside the archive), or — when SKILL.md is at the archive root —
+ * from the archive filename minus the .skill extension.
+ */
+function findSkillEntry(entries: ArchiveEntry[]): ArchiveEntry {
+  const skillFiles = entries.filter(
+    (entry) => entry.path === SKILL_FILE || entry.path.endsWith(`/${SKILL_FILE}`)
   );
 
-  if (manifests.length === 0) {
-    throw new Error(`Skill archive is missing ${MANIFEST_FILE}.`);
+  if (skillFiles.length === 0) {
+    throw new Error(`Skill archive is missing ${SKILL_FILE}.`);
   }
-  if (manifests.length > 1) {
-    throw new Error(`Skill archive contains multiple ${MANIFEST_FILE} files.`);
+  if (skillFiles.length > 1) {
+    throw new Error(`Skill archive contains multiple ${SKILL_FILE} files.`);
   }
 
-  return manifests[0];
+  return skillFiles[0];
 }
 
 function unzipArchiveWithSafetyLimits(bytes: Uint8Array): Record<string, Uint8Array> {
@@ -113,6 +135,21 @@ function createTemporaryDestinationPath(skillName: string): string {
   return joinPath(WORKSPACE_SKILLS_PATH, `.${skillName}.tmp-${suffix}`);
 }
 
+function deriveSkillNameFromArchive(fileName: string, skillEntryPath: string): string {
+  if (skillEntryPath === SKILL_FILE) {
+    // SKILL.md sits at the archive root → fall back to the archive filename.
+    const base = fileName.replace(/\.skill$/i, '');
+    return base;
+  }
+  // SKILL.md lives inside a wrapper directory → use that directory name.
+  return (
+    skillEntryPath
+      .slice(0, -(SKILL_FILE.length + 1))
+      .split('/')
+      .pop() ?? ''
+  );
+}
+
 export async function installSkillFromDrop(
   fs: VirtualFS,
   file: DroppedSkillFile
@@ -139,34 +176,30 @@ export async function installSkillFromDrop(
   }
 
   const entries = collectArchiveEntries(archive);
-  const manifestEntry = findManifestEntry(entries);
-  const manifest = parseManifestContent(decodeUtf8(manifestEntry.bytes), manifestEntry.path);
-  assertValidSkillName(manifest.skill);
+  const skillEntry = findSkillEntry(entries);
+  const skillName = deriveSkillNameFromArchive(file.name, skillEntry.path);
+  assertValidSkillName(skillName);
 
-  const destinationPath = joinPath(WORKSPACE_SKILLS_PATH, manifest.skill);
+  const destinationPath = joinPath(WORKSPACE_SKILLS_PATH, skillName);
   if (await fs.exists(destinationPath)) {
-    throw new Error(`Skill "${manifest.skill}" already exists at ${destinationPath}.`);
+    throw new Error(`Skill "${skillName}" already exists at ${destinationPath}.`);
   }
-  const temporaryDestinationPath = createTemporaryDestinationPath(manifest.skill);
+  const temporaryDestinationPath = createTemporaryDestinationPath(skillName);
 
-  const manifestPrefix =
-    manifestEntry.path === MANIFEST_FILE
-      ? ''
-      : manifestEntry.path.slice(0, -(MANIFEST_FILE.length + 1));
+  const skillPrefix =
+    skillEntry.path === SKILL_FILE ? '' : skillEntry.path.slice(0, -(SKILL_FILE.length + 1));
 
   await fs.mkdir(temporaryDestinationPath, { recursive: true });
 
   try {
     let fileCount = 0;
     for (const entry of entries) {
-      if (manifestPrefix) {
-        if (entry.path === manifestPrefix) continue;
-        if (!entry.path.startsWith(`${manifestPrefix}/`)) continue;
+      if (skillPrefix) {
+        if (entry.path === skillPrefix) continue;
+        if (!entry.path.startsWith(`${skillPrefix}/`)) continue;
       }
 
-      const relativePath = manifestPrefix
-        ? entry.path.slice(manifestPrefix.length + 1)
-        : entry.path;
+      const relativePath = skillPrefix ? entry.path.slice(skillPrefix.length + 1) : entry.path;
       if (!relativePath) continue;
 
       const outputPath = joinPath(temporaryDestinationPath, relativePath);
@@ -181,7 +214,7 @@ export async function installSkillFromDrop(
     await fs.rename(temporaryDestinationPath, destinationPath);
 
     return {
-      skillName: manifest.skill,
+      skillName,
       destinationPath,
       fileCount,
     };

@@ -3,7 +3,6 @@ import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { VirtualFS } from '../../src/fs/index.js';
 import { discoverSkills, getSkillInfo, readSkillInstructions } from '../../src/skills/discover.js';
-import { initSkillsSystem, recordSkillApplication } from '../../src/skills/state.js';
 
 const SKILLS_DIR = '/workspace/skills';
 
@@ -13,28 +12,9 @@ describe('discoverSkills', () => {
   beforeEach(async () => {
     globalThis.indexedDB = new IDBFactory();
     fs = await VirtualFS.create();
-    await initSkillsSystem(fs);
   });
 
-  it('finds skill with manifest.yaml', async () => {
-    await fs.mkdir(SKILLS_DIR, { recursive: true });
-    await fs.mkdir(`${SKILLS_DIR}/manifest-skill`);
-    await fs.writeFile(
-      `${SKILLS_DIR}/manifest-skill/manifest.yaml`,
-      `skill: manifest-skill
-version: 1.0.0
-description: A skill with manifest`
-    );
-
-    const skills = await discoverSkills(fs);
-    expect(skills).toHaveLength(1);
-    expect(skills[0].name).toBe('manifest-skill');
-    expect(skills[0].manifest.skill).toBe('manifest-skill');
-    expect(skills[0].manifest.version).toBe('1.0.0');
-    expect(skills[0].installed).toBe(false);
-  });
-
-  it('finds skill with only SKILL.md (no manifest)', async () => {
+  it('finds a skill with a SKILL.md file and uses the directory name', async () => {
     await fs.mkdir(SKILLS_DIR, { recursive: true });
     await fs.mkdir(`${SKILLS_DIR}/md-only-skill`);
     await fs.writeFile(
@@ -45,11 +25,36 @@ description: A skill with manifest`
     const skills = await discoverSkills(fs);
     expect(skills).toHaveLength(1);
     expect(skills[0].name).toBe('md-only-skill');
-    expect(skills[0].manifest.skill).toBe('md-only-skill');
-    expect(skills[0].installed).toBe(false);
+    expect(skills[0].source).toBe('native');
   });
 
-  it('skips directories without manifest or SKILL.md', async () => {
+  it('parses the description from SKILL.md frontmatter when present', async () => {
+    await fs.mkdir(SKILLS_DIR, { recursive: true });
+    await fs.mkdir(`${SKILLS_DIR}/described`);
+    await fs.writeFile(
+      `${SKILLS_DIR}/described/SKILL.md`,
+      '---\nname: described\ndescription: A skill with a frontmatter description.\n---\n# Body\n'
+    );
+
+    const skills = await discoverSkills(fs);
+    expect(skills).toHaveLength(1);
+    expect(skills[0].description).toBe('A skill with a frontmatter description.');
+  });
+
+  it('parses frontmatter even with CRLF line endings, BOM, and leading blank lines', async () => {
+    await fs.mkdir(SKILLS_DIR, { recursive: true });
+    await fs.mkdir(`${SKILLS_DIR}/windows-skill`);
+    // UTF-8 BOM + leading blank line + CRLF newlines
+    const content =
+      '\uFEFF\r\n---\r\nname: windows-skill\r\ndescription: Authored on Windows.\r\n---\r\n# Body\r\n';
+    await fs.writeFile(`${SKILLS_DIR}/windows-skill/SKILL.md`, content);
+
+    const skills = await discoverSkills(fs);
+    expect(skills).toHaveLength(1);
+    expect(skills[0].description).toBe('Authored on Windows.');
+  });
+
+  it('skips directories without SKILL.md', async () => {
     await fs.mkdir(SKILLS_DIR, { recursive: true });
     await fs.mkdir(`${SKILLS_DIR}/empty-dir`);
     await fs.writeFile(`${SKILLS_DIR}/empty-dir/random.txt`, 'content');
@@ -61,32 +66,6 @@ description: A skill with manifest`
   it('returns empty array when skills dir missing', async () => {
     const skills = await discoverSkills(fs);
     expect(skills).toEqual([]);
-  });
-
-  it('marks installed skills correctly', async () => {
-    await fs.mkdir(SKILLS_DIR, { recursive: true });
-    await fs.mkdir(`${SKILLS_DIR}/installed-skill`);
-    await fs.writeFile(
-      `${SKILLS_DIR}/installed-skill/manifest.yaml`,
-      `skill: installed-skill
-version: 2.0.0
-description: An installed skill`
-    );
-
-    // Record the skill as installed
-    await recordSkillApplication(fs, {
-      name: 'installed-skill',
-      version: '2.0.0',
-      applied_at: new Date().toISOString(),
-      file_hashes: {},
-      added_files: [],
-    });
-
-    const skills = await discoverSkills(fs);
-    expect(skills).toHaveLength(1);
-    expect(skills[0].name).toBe('installed-skill');
-    expect(skills[0].installed).toBe(true);
-    expect(skills[0].installedVersion).toBe('2.0.0');
   });
 
   it('discovers recursively reachable compatibility skills and surfaces source metadata', async () => {
@@ -142,23 +121,17 @@ describe('getSkillInfo', () => {
   beforeEach(async () => {
     globalThis.indexedDB = new IDBFactory();
     fs = await VirtualFS.create();
-    await initSkillsSystem(fs);
   });
 
   it('returns skill by name', async () => {
     await fs.mkdir(SKILLS_DIR, { recursive: true });
     await fs.mkdir(`${SKILLS_DIR}/test-skill`);
-    await fs.writeFile(
-      `${SKILLS_DIR}/test-skill/manifest.yaml`,
-      `skill: test-skill
-version: 1.5.0
-description: Test skill`
-    );
+    await fs.writeFile(`${SKILLS_DIR}/test-skill/SKILL.md`, '# Test Skill\n');
 
     const skill = await getSkillInfo(fs, 'test-skill');
     expect(skill).not.toBeNull();
     expect(skill!.name).toBe('test-skill');
-    expect(skill!.manifest.version).toBe('1.5.0');
+    expect(skill!.skillFilePath).toBe(`${SKILLS_DIR}/test-skill/SKILL.md`);
   });
 
   it('returns null for nonexistent skill', async () => {
@@ -186,7 +159,6 @@ describe('readSkillInstructions', () => {
   beforeEach(async () => {
     globalThis.indexedDB = new IDBFactory();
     fs = await VirtualFS.create();
-    await initSkillsSystem(fs);
   });
 
   it('returns SKILL.md content', async () => {
@@ -199,15 +171,10 @@ describe('readSkillInstructions', () => {
     expect(content).toBe(instructions);
   });
 
-  it('returns null when no SKILL.md', async () => {
+  it('returns null when no SKILL.md is present', async () => {
     await fs.mkdir(SKILLS_DIR, { recursive: true });
     await fs.mkdir(`${SKILLS_DIR}/no-docs-skill`);
-    await fs.writeFile(
-      `${SKILLS_DIR}/no-docs-skill/manifest.yaml`,
-      `skill: no-docs-skill
-version: 1.0.0
-description: No docs`
-    );
+    await fs.writeFile(`${SKILLS_DIR}/no-docs-skill/notes.md`, '# Notes\n');
 
     const content = await readSkillInstructions(fs, 'no-docs-skill');
     expect(content).toBeNull();

@@ -31,7 +31,7 @@ Skills in `/workspace/skills/` extend capabilities. SLICC also discovers compati
 
 Type `commands` in the terminal for the full list. Key commands:
 
-- **skill list/info/read** — inspect skills; `skill install/uninstall` manages native packages
+- **skill list/info/read** — inspect skills (read-only)
 - **upskill** — install from GitHub (`upskill owner/repo`) or ClawHub (`upskill clawhub:name`)
 - **webhook/crontask/fswatch** — set up licks (external event triggers, file change watchers)
 - **sprinkle** — manage sprinkles: `list`, `open`, `close`, `send`, `chat`
