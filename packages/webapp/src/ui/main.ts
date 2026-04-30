@@ -89,8 +89,8 @@ import {
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
-import { recoverMounts, formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
-import type { MountRecoveryEntry } from '../fs/mount-recovery.js';
+import { recoverMounts } from '../fs/mount-recovery.js';
+import { formatLickEventForCone } from '../scoops/lick-formatting.js';
 import { LocalMountBackend } from '../fs/mount/backend-local.js';
 import { newMountId } from '../fs/mount/mount-id.js';
 import {
@@ -1615,56 +1615,15 @@ async function main(): Promise<void> {
 
     if (resolvedTarget) {
       const msgId = `${channel}-${eventId}-${Date.now()}`;
-      const eventLabel = isWebhook
-        ? 'Webhook Event'
-        : isSprinkle
-          ? 'Sprinkle Event'
-          : isFsWatch
-            ? 'File Watch Event'
-            : isSessionReload
-              ? 'Session Reload'
-              : isNavigate
-                ? 'Navigate Event'
-                : isUpgrade
-                  ? 'Upgrade Event'
-                  : 'Cron Event';
-      let content: string | null = null;
-      if (isSessionReload) {
-        const body = event.body as
-          | {
-              reason?: string;
-              mounts?: MountRecoveryEntry[];
-            }
-          | null
-          | undefined;
-        if (body?.reason === 'mount-recovery') {
-          content = formatMountRecoveryPrompt(body.mounts ?? []);
-          if (content === null) {
-            // Nothing actually needs recovery — drop the lick instead of
-            // pestering the cone with an empty notification.
-            log.debug('Dropping session-reload lick with empty mount-recovery list');
-            return;
-          }
-        }
+      // Cone-side rendering shared with offscreen.ts (extension parity).
+      // Returns null when the event should be dropped entirely (e.g. an empty
+      // mount-recovery list — nothing actionable to surface).
+      const formatted = formatLickEventForCone(event);
+      if (formatted === null) {
+        log.debug('Dropping lick event with no renderable content', { type: event.type });
+        return;
       }
-      if (isUpgrade) {
-        const from = event.upgradeFromVersion ?? 'unknown';
-        const to = event.upgradeToVersion ?? 'unknown';
-        const releasedAt =
-          (event.body as { releasedAt?: string | null } | null | undefined)?.releasedAt ?? null;
-        const releaseLine = releasedAt ? `\nReleased: ${releasedAt}` : '';
-        content =
-          `[${eventLabel}: ${from}\u2192${to}]\n\n` +
-          `SLICC was upgraded from \`${from}\` to \`${to}\`.${releaseLine}\n\n` +
-          `Use the **upgrade** skill (\`/workspace/skills/upgrade/SKILL.md\`) to:\n` +
-          `- Show the user the changelog between these tags from GitHub\n` +
-          `- Offer to merge new bundled vfs-root content into their workspace ` +
-          `(three-way merge: bundled snapshot vs user's VFS, reconciled with the GitHub tag-to-tag diff).`;
-      }
-      if (content === null) {
-        content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
-      }
-
+      const content: string = formatted.content;
       const msg: ChannelMessage = {
         id: msgId,
         chatJid: resolvedTarget.jid,
