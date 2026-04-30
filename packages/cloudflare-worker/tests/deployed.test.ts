@@ -232,6 +232,22 @@ describeIfConfigured('deployed tray worker', () => {
     const body = await response.text();
     expect(body).toContain('<!DOCTYPE html>');
   }, 15_000);
+
+  // GitHub validates (client_id, client_secret) before the code, so a fake-code
+  // probe distinguishes "credentials wrong" from "credentials fine, code fake".
+  it('exchanges fake GitHub OAuth codes through valid worker credentials', async () => {
+    const baseUrl = new URL(workerBaseUrl!);
+    const response = await fetch(new URL('/oauth/token', baseUrl), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'github',
+        code: 'FAKE_CODE_FOR_SMOKE_TEST',
+      }),
+    });
+    const body = (await response.json()) as { error?: string; error_description?: string };
+    expect(body.error).toBe('bad_verification_code');
+  }, 15_000);
 });
 
 function openWebSocket(
