@@ -115,3 +115,29 @@ export async function getDefaultSecretStore(): Promise<SecretStore> {
     },
   };
 }
+
+/**
+ * Get the default IMS client for the current runtime context.
+ * Reads the stored Adobe OAuth account from ui/provider-settings.js via getAccounts().
+ * This is a minimal v1 implementation; v2 should handle token refresh / IMS launcher delegation.
+ * @throws Error if no Adobe account is found
+ */
+export async function getDefaultImsClient(): Promise<AdobeImsClient> {
+  // Dynamic import to avoid circular dependencies and to keep IMS access confined to this module.
+  const { getAccounts } = await import('../../ui/provider-settings.js');
+  const accounts = getAccounts();
+  const adobeAccount = accounts.find(
+    (a: { providerId?: string; accessToken?: string }) => a.providerId === 'adobe'
+  );
+
+  if (!adobeAccount || !adobeAccount.accessToken) {
+    throw new ProfileNotConfiguredError(
+      'No Adobe IMS account found. Log in via Settings → Providers → Adobe first.'
+    );
+  }
+
+  return {
+    identity: 'adobe-ims',
+    getBearerToken: async () => adobeAccount.accessToken!,
+  };
+}

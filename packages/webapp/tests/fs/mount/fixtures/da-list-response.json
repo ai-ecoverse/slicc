@@ -1,0 +1,20 @@
+[
+  {
+    "name": "index",
+    "ext": "html",
+    "path": "/my-org/my-repo/index.html",
+    "lastModified": 1714000000000,
+    "etag": "\"da-e-1\""
+  },
+  {
+    "name": "about",
+    "ext": "html",
+    "path": "/my-org/my-repo/about.html",
+    "lastModified": 1714010000000,
+    "etag": "\"da-e-2\""
+  },
+  {
+    "name": "blog",
+    "path": "/my-org/my-repo/blog"
+  }
+]

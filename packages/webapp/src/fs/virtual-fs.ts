@@ -515,8 +515,20 @@ export class VirtualFS {
           reresolveProfile: () => resolveS3Profile(descriptor.profile, store),
         });
       }
-      case 'da':
-        throw new Error(`${descriptor.kind} peer reconstruction not yet implemented`);
+      case 'da': {
+        const { DaMountBackend, RemoteMountCache, resolveDaProfile, getDefaultImsClient } =
+          await import('./mount/index.js');
+        const ims = await getDefaultImsClient();
+        const profile = await resolveDaProfile(descriptor.profile, ims);
+        const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
+        return new DaMountBackend({
+          source: descriptor.source,
+          profile: descriptor.profile,
+          profileResolved: profile,
+          cache,
+          mountId: descriptor.mountId,
+        });
+      }
     }
   }
 

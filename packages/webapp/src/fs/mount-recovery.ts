@@ -36,9 +36,12 @@
 import { LocalMountBackend } from './mount/backend-local.js';
 import {
   S3MountBackend,
+  DaMountBackend,
   RemoteMountCache,
   resolveS3Profile,
+  resolveDaProfile,
   getDefaultSecretStore,
+  getDefaultImsClient,
 } from './mount/index.js';
 import type { MountBackend } from './mount/backend.js';
 import { loadMountHandle } from './mount-table-store.js';
@@ -174,14 +177,40 @@ export async function recoverMounts(
     }
 
     if (descriptor.kind === 'da') {
-      // Phase 12 wires this branch.
-      needsRecovery.push({
-        kind: 'da',
-        path: targetPath,
-        source: descriptor.source,
-        profile: descriptor.profile,
-        reason: 'DA backend recovery not yet implemented',
-      });
+      try {
+        const ims = await getDefaultImsClient();
+        const profile = await resolveDaProfile(descriptor.profile, ims);
+        const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
+        const backend = new DaMountBackend({
+          source: descriptor.source,
+          profile: descriptor.profile,
+          profileResolved: profile,
+          cache,
+          mountId: descriptor.mountId,
+        });
+        await fs.mount(targetPath, backend);
+        log?.info?.('Restored DA mount from previous session', {
+          path: targetPath,
+          source: descriptor.source,
+        });
+        restored.push({
+          kind: 'da',
+          path: targetPath,
+          source: descriptor.source,
+          profile: descriptor.profile,
+          reason: '', // Successfully recovered; reason is empty
+        });
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        log?.warn?.('Failed to restore DA mount', { path: targetPath, error: reason });
+        needsRecovery.push({
+          kind: 'da',
+          path: targetPath,
+          source: descriptor.source,
+          profile: descriptor.profile,
+          reason,
+        });
+      }
       continue;
     }
   }
