@@ -17,7 +17,15 @@ import { processImageContent, isSupportedImageFormat } from '../core/image-proce
 import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
 import { hydrateDips, disposeDips, type DipInstance } from './dip.js';
 import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
-import { getToolDescriptor, createToolIcon, createToolBody, toolStatus } from './tool-call-view.js';
+import {
+  getToolDescriptor,
+  createToolIcon,
+  createToolBody,
+  toolStatus,
+  groupToolCalls,
+  clusterPreview,
+  createClusterIcon,
+} from './tool-call-view.js';
 import { getLickDescriptor, createLickIcon, parseLickContent } from './lick-view.js';
 import { isLickChannel, type LickChannel } from './lick-channels.js';
 import {
@@ -1492,7 +1500,7 @@ export class ChatPanel {
     // rendered tool calls should become stale — retint them now.
     if (this.isRealUserTurn(msg)) {
       this.messagesInner
-        .querySelectorAll('.tool-call')
+        .querySelectorAll('.tool-call, .tool-call-cluster')
         .forEach((el) => el.classList.add('tool-call--stale'));
     }
     const el = this.createMessageEl(msg, showLabel, isLastAssistant);
@@ -1696,10 +1704,16 @@ export class ChatPanel {
       wrapper.appendChild(el);
     }
 
-    // Tool calls rendered outside the message bubble for compact display
-    if (msg.toolCalls) {
-      for (const tc of msg.toolCalls) {
-        wrapper.appendChild(this.createToolCallEl(tc, stale));
+    // Tool calls rendered outside the message bubble for compact display.
+    // Long runs (3+) collapse into a single "working" cluster so they
+    // don't push the assistant content out of view.
+    if (msg.toolCalls?.length) {
+      for (const group of groupToolCalls(msg.toolCalls)) {
+        if (group.kind === 'single') {
+          wrapper.appendChild(this.createToolCallEl(group.toolCall, stale));
+        } else {
+          wrapper.appendChild(this.createToolClusterEl(group.toolCalls, stale));
+        }
       }
     }
 
@@ -1866,6 +1880,66 @@ export class ChatPanel {
     }
 
     el.appendChild(details);
+
+    return el;
+  }
+
+  /** Collapsed "working" cluster used when a single assistant turn fires
+   *  three or more tool calls in a row. The header shows one small status
+   *  dot per inner call so users can see the progression of the run at a
+   *  glance; expanding the cluster reveals the individual tool-call rows
+   *  (each with their own full row + status bubble). */
+  private createToolClusterEl(toolCalls: ToolCall[], stale = false): HTMLElement {
+    const el = document.createElement('details');
+    el.className = `tool-call-cluster${stale ? ' tool-call--stale' : ''}`;
+
+    const summary = document.createElement('summary');
+    summary.className = 'tool-call__header tool-call-cluster__header';
+
+    const iconWrap = document.createElement('span');
+    iconWrap.className = 'tool-call__icon';
+    iconWrap.appendChild(createClusterIcon());
+    summary.appendChild(iconWrap);
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'tool-call__name';
+    nameEl.textContent = 'Working';
+    summary.appendChild(nameEl);
+
+    const previewText = clusterPreview(toolCalls);
+    if (previewText) {
+      const preview = document.createElement('span');
+      preview.className = 'tool-call__preview';
+      preview.textContent = previewText;
+      summary.appendChild(preview);
+    }
+
+    // One bubble per inner tool call, colored to the call's status.
+    // Each bubble carries the matching `tool-call--<status>` class so
+    // it picks up the same `--tool-status-color` cascade as standalone
+    // rows without needing extra CSS variables on the cluster itself.
+    const dotsEl = document.createElement('span');
+    dotsEl.className = 'tool-call-cluster__dots';
+    for (const tc of toolCalls) {
+      const status = toolStatus(tc);
+      const dot = document.createElement('span');
+      dot.className =
+        `tool-call tool-call--${status} ` +
+        `tool-call__status tool-call__status--${status} ` +
+        `tool-call-cluster__dot`;
+      dot.setAttribute('aria-label', `${tc.name}: ${status}`);
+      dotsEl.appendChild(dot);
+    }
+    summary.appendChild(dotsEl);
+
+    el.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'tool-call-cluster__body';
+    for (const tc of toolCalls) {
+      body.appendChild(this.createToolCallEl(tc, stale));
+    }
+    el.appendChild(body);
 
     return el;
   }
