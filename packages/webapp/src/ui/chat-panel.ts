@@ -1098,6 +1098,14 @@ export class ChatPanel {
       if (toolCallEl instanceof HTMLDetailsElement) {
         toolCallEl.open = true;
       }
+      // If the call lives inside a collapsed "Working" cluster, open the
+      // enclosing cluster too — otherwise interactive widgets (approval
+      // prompts etc.) stay hidden behind the cluster summary and block
+      // the run from making progress.
+      const enclosingCluster = toolCallEl.closest('.tool-call-cluster');
+      if (enclosingCluster instanceof HTMLDetailsElement) {
+        enclosingCluster.open = true;
+      }
 
       // Create a container for the tool UI
       let uiContainer = toolCallEl.querySelector('.tool-call__ui') as HTMLElement;
