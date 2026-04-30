@@ -104,7 +104,7 @@ Write clean code.
       expect(skills[0]).toMatchObject({
         metadata: {
           name: 'compat-skill',
-          description: 'Skill from compat-skill',
+          description: '',
         },
         path: '/repo/.claude/skills/compat-skill/SKILL.md',
       });

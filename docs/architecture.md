@@ -151,21 +151,18 @@
 | `debug-command.ts`       | `debug` — toggle Terminal/Memory tabs in extension mode (extension-only, uses dual-context hook+relay pattern)                                                              |
 | `magick-wasm.ts`         | Shared ImageMagick WASM initialization module for dual-mode (CLI/browser CDN vs extension bundled) image processing                                                         |
 
-### packages/webapp/src/skills/ — Skill Package Manager
+### packages/webapp/src/skills/ — Skill Discovery
 
 | File                   | Purpose                                                                                                                                                                                                                          |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apply.ts`             | applySkill: installs an install-managed native skill from `/workspace/skills/`, validates manifest, executes post-install steps                                                                                                  |
 | `discover.ts`          | discoverSkills: scans native `/workspace/skills/` plus accessible `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` roots in the reachable VFS; getSkillInfo/readSkillInstructions expose the winning discovered skill |
-| `install-from-drop.ts` | installSkillFromDrop: validates and unpacks dropped `.skill` ZIP archives into `/workspace/skills/{name}` as native install-managed skills                                                                                       |
-| `uninstall.ts`         | uninstallSkill: removes skill from state, rolls back installed files                                                                                                                                                             |
-| `state.ts`             | initSkillsSystem: init `.slicc/state.json`; readState/writeState: persistent skill state                                                                                                                                         |
-| `manifest.ts`          | parseManifest: YAML parser for `manifest.yaml` (name, version, dependencies, conflicts, files)                                                                                                                                   |
-| `constants.ts`         | SKILL_DIR, STATE_FILE, SKILL_MANIFEST constants                                                                                                                                                                                  |
-| `types.ts`             | Skill, SkillManifest, AppliedSkill, SkillState interfaces                                                                                                                                                                        |
+| `catalog.ts`           | discoverSkillCandidates: low-level walker shared by discovery, `which`, etc.; resolveSkillNameCollisions: precedence + shadowed-path bookkeeping                                                                                 |
+| `install-from-drop.ts` | installSkillFromDrop: validates and unpacks dropped `.skill` ZIP archives into `/workspace/skills/{name}` (must contain a SKILL.md)                                                                                              |
+| `constants.ts`         | SKILLS_DIR, SKILL_FILE, archive size limits, etc.                                                                                                                                                                                |
+| `types.ts`             | DiscoveredSkill, SkillDiscoverySource interfaces                                                                                                                                                                                 |
 | `index.ts`             | Re-exports                                                                                                                                                                                                                       |
 
-Native `/workspace/skills` entries are the only install-managed skills. Compatibility-discovered `.agents`/`.claude` skills are readable/discoverable inputs only and are not auto-installed into or mutated in place.
+All skills (native and compatibility) are read-only — the slicc-specific `manifest.yaml` install/uninstall machinery has been removed. `upskill` writes new skills into `/workspace/skills/` directly; users edit or delete those directories with regular VFS commands.
 
 ### packages/webapp/src/scoops/ — Multi-Agent Orchestration
 
@@ -555,13 +552,11 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 
 ### Skills & Package Management
 
-| I need to...                    | Modify                                                                                   |
-| ------------------------------- | ---------------------------------------------------------------------------------------- |
-| Change skill installation logic | `packages/webapp/src/skills/apply.ts`, `packages/webapp/src/skills/install-from-drop.ts` |
-| Change skill discovery          | `packages/webapp/src/skills/discover.ts`                                                 |
-| Change skill uninstall logic    | `packages/webapp/src/skills/uninstall.ts`                                                |
-| Change skill state persistence  | `packages/webapp/src/skills/state.ts`                                                    |
-| Change manifest parsing         | `packages/webapp/src/skills/manifest.ts`                                                 |
+| I need to...                          | Modify                                                               |
+| ------------------------------------- | -------------------------------------------------------------------- |
+| Change skill discovery                | `packages/webapp/src/skills/discover.ts`                             |
+| Change `.skill` drop archive handling | `packages/webapp/src/skills/install-from-drop.ts`                    |
+| Change install via GitHub/Tessl/etc.  | `packages/webapp/src/shell/supplemental-commands/upskill-command.ts` |
 
 ### Sprinkles System
 

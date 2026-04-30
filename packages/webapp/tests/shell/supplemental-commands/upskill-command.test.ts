@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem, SecureFetch } from 'just-bash';
 import { zipSync } from 'fflate';
 import { VirtualFS } from '../../../src/fs/index.js';
-import { initSkillsSystem } from '../../../src/skills/index.js';
 import {
   createSkillCommand,
   createUpskillCommand,
@@ -50,28 +49,26 @@ describe('skill/upskill command compatibility discovery', () => {
       dbName: `test-upskill-command-${dbCounter++}`,
       wipe: true,
     });
-    await initSkillsSystem(fs);
   });
 
   afterEach(() => {
     _resetGlobalFsCache();
   });
 
-  it('skill help documents discoverable compatibility roots and native-only management', async () => {
+  it('skill help documents discoverable compatibility roots', async () => {
     const result = await createSkillCommand(fs).execute(['--help'], createMockCtx() as never);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('List discoverable skills and management status');
+    expect(result.stdout).toContain('List discoverable skills');
     expect(result.stdout).toContain('**/.agents/skills/*');
     expect(result.stdout).toContain('**/.claude/skills/*');
-    expect(result.stdout).toContain('Only native /workspace/skills entries are install-managed');
   });
 
-  it('skill list shows source and read-only compatibility status', async () => {
+  it('skill list shows source and description for both native and compatibility skills', async () => {
     await fs.mkdir('/workspace/skills/native-skill', { recursive: true });
     await fs.writeFile(
-      '/workspace/skills/native-skill/manifest.yaml',
-      'skill: native-skill\nversion: 1.2.3\ndescription: Native skill\n'
+      '/workspace/skills/native-skill/SKILL.md',
+      '---\nname: native-skill\ndescription: Native skill\n---\n# Native\n'
     );
 
     await fs.mkdir('/repo/.claude/skills/compat-skill', { recursive: true });
@@ -85,11 +82,9 @@ describe('skill/upskill command compatibility discovery', () => {
     expect(result.stdout).toContain('compat-skill');
     expect(result.stdout).toContain('native');
     expect(result.stdout).toContain('.claude');
-    expect(result.stdout).toContain('available');
-    expect(result.stdout).toContain('compatibility (read-only)');
   });
 
-  it('skill info reports source and management mode for compatibility skills', async () => {
+  it('skill info reports source for compatibility skills', async () => {
     await fs.mkdir('/repo/.agents/skills/agent-skill', { recursive: true });
     await fs.writeFile('/repo/.agents/skills/agent-skill/SKILL.md', '# Agent Skill');
 
@@ -102,36 +97,23 @@ describe('skill/upskill command compatibility discovery', () => {
     expect(result.stdout).toContain('Skill: agent-skill');
     expect(result.stdout).toContain('Source: .agents');
     expect(result.stdout).toContain('Source root: /repo/.agents/skills');
-    expect(result.stdout).toContain('Management: compatibility-only (read-only)');
     expect(result.stdout).toContain('Instructions: /repo/.agents/skills/agent-skill/SKILL.md');
   });
 
-  it('skill install refuses to mutate compatibility-discovered skills', async () => {
-    await fs.mkdir('/repo/.claude/skills/compat-skill', { recursive: true });
-    await fs.writeFile('/repo/.claude/skills/compat-skill/SKILL.md', '# Compat Skill');
-
-    const result = await createSkillCommand(fs).execute(
-      ['install', 'compat-skill'],
+  it('skill install/uninstall subcommands no longer exist', async () => {
+    const installResult = await createSkillCommand(fs).execute(
+      ['install', 'anything'],
       createMockCtx() as never
     );
+    expect(installResult.exitCode).toBe(1);
+    expect(installResult.stderr).toContain('unknown command');
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('compatibility-only/read-only');
-    expect(result.stderr).toContain('/repo/.claude/skills');
-  });
-
-  it('skill uninstall refuses compatibility-only skills with a clear message', async () => {
-    await fs.mkdir('/repo/.claude/skills/compat-skill', { recursive: true });
-    await fs.writeFile('/repo/.claude/skills/compat-skill/SKILL.md', '# Compat Skill');
-
-    const result = await createSkillCommand(fs).execute(
-      ['uninstall', 'compat-skill'],
+    const uninstallResult = await createSkillCommand(fs).execute(
+      ['uninstall', 'anything'],
       createMockCtx() as never
     );
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('compatibility skill');
-    expect(result.stderr).toContain('read-only');
+    expect(uninstallResult.exitCode).toBe(1);
+    expect(uninstallResult.stderr).toContain('unknown command');
   });
 
   it('upskill list uses unified local discovery wording', async () => {
@@ -147,7 +129,6 @@ describe('skill/upskill command compatibility discovery', () => {
     expect(result.stdout).toContain('Discoverable local skills:');
     expect(result.stdout).toContain('local-agent-skill');
     expect(result.stdout).toContain('.agents');
-    expect(result.stdout).toContain('Only native /workspace/skills entries are install-managed');
   });
 });
 

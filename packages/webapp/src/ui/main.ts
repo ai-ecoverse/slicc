@@ -401,7 +401,7 @@ function registerSkillDropInstall(
         const result = await installSkillFromDrop(fs, skillFile);
         await onInstalled();
         onNotice(
-          `Installed "${result.skillName}" to ${result.destinationPath} (${result.fileCount} files). Run "skill install ${result.skillName}" to apply it.`,
+          `Installed "${result.skillName}" to ${result.destinationPath} (${result.fileCount} files).`,
           'success'
         );
       } catch (err) {

@@ -1,12 +1,14 @@
 /**
- * Skill discovery - finds available skills in the filesystem
+ * Skill discovery — finds available skills in the filesystem.
+ *
+ * Skills are SKILL.md packages. The native dir (/workspace/skills) and
+ * compatibility roots (.agents/skills, .claude/skills) are walked
+ * uniformly: every directory containing a SKILL.md is a skill.
  */
 
 import type { VirtualFS } from '../fs/index.js';
 import type { DiscoveredSkill } from './types.js';
 import { discoverSkillCandidates, resolveSkillNameCollisions } from './catalog.js';
-import { readManifest } from './manifest.js';
-import { readState } from './state.js';
 
 /**
  * Discover all available skills from the native skills directory plus
@@ -16,50 +18,30 @@ export async function discoverSkills(
   fs: VirtualFS,
   skillsDir: string = '/workspace/skills'
 ): Promise<DiscoveredSkill[]> {
-  // Get current state to check installation status
-  const state = await readState(fs);
-  const installedMap = new Map(state.applied_skills.map((s) => [s.name, s.version]));
-  const discovered: DiscoveredSkill[] = [];
   const candidates = await discoverSkillCandidates(fs, skillsDir);
+  const discovered: DiscoveredSkill[] = [];
 
   for (const candidate of candidates) {
-    try {
-      if (candidate.hasManifest) {
-        const manifest = await readManifest(fs, candidate.path);
-        const installed = installedMap.has(manifest.skill);
+    const name = candidate.path.split('/').pop() ?? candidate.path;
+    let description = '';
 
-        discovered.push({
-          name: manifest.skill,
-          source: candidate.source,
-          sourceRoot: candidate.sourceRoot,
-          path: candidate.path,
-          skillFilePath: candidate.skillFilePath,
-          manifest,
-          installed,
-          installedVersion: installed ? installedMap.get(manifest.skill) : undefined,
-        });
-        continue;
+    if (candidate.skillFilePath) {
+      try {
+        const content = await fs.readTextFile(candidate.skillFilePath);
+        description = extractDescription(content) ?? '';
+      } catch {
+        // SKILL.md unreadable — leave description empty
       }
-
-      const name = candidate.path.split('/').pop() ?? candidate.path;
-      discovered.push({
-        name,
-        source: candidate.source,
-        sourceRoot: candidate.sourceRoot,
-        path: candidate.path,
-        skillFilePath: candidate.skillFilePath,
-        manifest: {
-          skill: name,
-          version: '1.0.0',
-          description: `Skill from ${name}`,
-        },
-        installed: installedMap.has(name),
-        installedVersion: installedMap.get(name),
-      });
-    } catch (err) {
-      // Skip skills with invalid manifests
-      console.warn(`Skipping invalid skill at ${candidate.path}:`, err);
     }
+
+    discovered.push({
+      name,
+      source: candidate.source,
+      sourceRoot: candidate.sourceRoot,
+      path: candidate.path,
+      skillFilePath: candidate.skillFilePath,
+      description,
+    });
   }
 
   const { winners, collisions } = resolveSkillNameCollisions(discovered, (skill) => skill.name);
@@ -104,4 +86,18 @@ export async function readSkillInstructions(
   } catch {
     return null;
   }
+}
+
+/**
+ * Extract the `description:` value from a SKILL.md frontmatter block, if any.
+ * Returns null when no frontmatter or no description key is present.
+ */
+function extractDescription(content: string): string | null {
+  const fm = content.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!fm) return null;
+  for (const line of fm[1].split('\n')) {
+    const m = line.match(/^description:\s*(.*)$/);
+    if (m) return m[1].trim();
+  }
+  return null;
 }
