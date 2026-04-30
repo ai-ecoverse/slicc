@@ -1,7 +1,7 @@
 # S3 and DA Mount Backends — Design
 
 **Date:** 2026-04-30
-**Status:** Draft (pending implementation plan)
+**Status:** Approved — implementation plan at `docs/superpowers/plans/2026-04-30-s3-da-mounts.md`
 **Owner:** Karl Pauls
 
 ## Summary
