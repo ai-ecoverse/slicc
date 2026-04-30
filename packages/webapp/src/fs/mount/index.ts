@@ -13,3 +13,5 @@ export { RemoteMountCache } from './remote-cache.js';
 export type { CachedListing, CachedBody, RemoteMountCacheOptions } from './remote-cache.js';
 export { signSigV4 } from './signing-s3.js';
 export type { SigV4Request, SigV4Credentials } from './signing-s3.js';
+export { fetchWithBudget } from './fetch-with-budget.js';
+export type { FetchBudgetOptions } from './fetch-with-budget.js';
