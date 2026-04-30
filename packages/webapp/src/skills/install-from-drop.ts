@@ -30,6 +30,24 @@ interface ArchiveEntry {
 
 const VALID_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/**
+ * Common archive metadata noise we never want to land in a skill directory:
+ *  - macOS Finder side-cars (`__MACOSX/`, `.DS_Store`, AppleDouble `._*`)
+ *  - Windows Explorer side-cars (`Thumbs.db`, `desktop.ini`)
+ *
+ * Filtered uniformly whether the SKILL.md sits in a wrapper directory (where
+ * the prefix scope already drops `__MACOSX/`) or at the archive root (where
+ * everything would otherwise be copied verbatim).
+ */
+function isArchiveMetadataPath(path: string): boolean {
+  if (path === '__MACOSX' || path.startsWith('__MACOSX/')) return true;
+  const base = path.includes('/') ? path.slice(path.lastIndexOf('/') + 1) : path;
+  if (base === '.DS_Store' || base === 'Thumbs.db' || base === 'desktop.ini') return true;
+  // AppleDouble resource-fork files: any segment named `._<something>`.
+  if (base.startsWith('._')) return true;
+  return false;
+}
+
 class ArchiveBudgetError extends Error {}
 
 function sanitizeArchiveEntryPath(path: string): string | null {
@@ -58,6 +76,7 @@ function collectArchiveEntries(files: Record<string, Uint8Array>): ArchiveEntry[
   for (const [originalPath, bytes] of Object.entries(files)) {
     const path = sanitizeArchiveEntryPath(originalPath);
     if (!path) continue;
+    if (isArchiveMetadataPath(path)) continue;
     entries.push({ originalPath, path, bytes });
   }
   return entries;

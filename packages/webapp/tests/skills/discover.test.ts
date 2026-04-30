@@ -41,6 +41,19 @@ describe('discoverSkills', () => {
     expect(skills[0].description).toBe('A skill with a frontmatter description.');
   });
 
+  it('parses frontmatter even with CRLF line endings, BOM, and leading blank lines', async () => {
+    await fs.mkdir(SKILLS_DIR, { recursive: true });
+    await fs.mkdir(`${SKILLS_DIR}/windows-skill`);
+    // UTF-8 BOM + leading blank line + CRLF newlines
+    const content =
+      '\uFEFF\r\n---\r\nname: windows-skill\r\ndescription: Authored on Windows.\r\n---\r\n# Body\r\n';
+    await fs.writeFile(`${SKILLS_DIR}/windows-skill/SKILL.md`, content);
+
+    const skills = await discoverSkills(fs);
+    expect(skills).toHaveLength(1);
+    expect(skills[0].description).toBe('Authored on Windows.');
+  });
+
   it('skips directories without SKILL.md', async () => {
     await fs.mkdir(SKILLS_DIR, { recursive: true });
     await fs.mkdir(`${SKILLS_DIR}/empty-dir`);

@@ -91,9 +91,20 @@ export async function readSkillInstructions(
 /**
  * Extract the `description:` value from a SKILL.md frontmatter block, if any.
  * Returns null when no frontmatter or no description key is present.
+ *
+ * Tolerates:
+ *  - UTF-8 BOM at the start of the file
+ *  - Leading blank lines/whitespace before the opening `---`
+ *  - CRLF line endings (Windows-authored SKILL.md files)
  */
 function extractDescription(content: string): string | null {
-  const fm = content.match(/^---\s*\n([\s\S]*?)\n---/);
+  // Strip BOM and leading whitespace, then normalize line endings to LF
+  // before applying the frontmatter regex.
+  const normalized = content
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n?/g, '\n')
+    .trimStart();
+  const fm = normalized.match(/^---\s*\n([\s\S]*?)\n---/);
   if (!fm) return null;
   for (const line of fm[1].split('\n')) {
     const m = line.match(/^description:\s*(.*)$/);

@@ -69,6 +69,34 @@ describe('installSkillFromDrop', () => {
     await expect(fs.exists('/workspace/skills/wrapped/__MACOSX/ignored.txt')).resolves.toBe(false);
   });
 
+  it('filters archive metadata side-cars even when SKILL.md is at the archive root', async () => {
+    const archive = makeArchive({
+      'SKILL.md': '# Root\n',
+      'helper.txt': 'real content',
+      '__MACOSX/foo': 'macos noise',
+      '.DS_Store': 'finder noise',
+      '._SKILL.md': 'apple-double',
+      'nested/._helper.txt': 'apple-double nested',
+      'nested/Thumbs.db': 'windows noise',
+      'nested/desktop.ini': 'windows noise',
+      'nested/keep.txt': 'real nested',
+    });
+
+    const result = await installSkillFromDrop(fs, makeDroppedFile('rooted.skill', archive));
+
+    expect(result.skillName).toBe('rooted');
+    expect(result.fileCount).toBe(3); // SKILL.md, helper.txt, nested/keep.txt
+    await expect(fs.exists('/workspace/skills/rooted/SKILL.md')).resolves.toBe(true);
+    await expect(fs.exists('/workspace/skills/rooted/helper.txt')).resolves.toBe(true);
+    await expect(fs.exists('/workspace/skills/rooted/nested/keep.txt')).resolves.toBe(true);
+    await expect(fs.exists('/workspace/skills/rooted/__MACOSX')).resolves.toBe(false);
+    await expect(fs.exists('/workspace/skills/rooted/.DS_Store')).resolves.toBe(false);
+    await expect(fs.exists('/workspace/skills/rooted/._SKILL.md')).resolves.toBe(false);
+    await expect(fs.exists('/workspace/skills/rooted/nested/._helper.txt')).resolves.toBe(false);
+    await expect(fs.exists('/workspace/skills/rooted/nested/Thumbs.db')).resolves.toBe(false);
+    await expect(fs.exists('/workspace/skills/rooted/nested/desktop.ini')).resolves.toBe(false);
+  });
+
   it('rejects archives larger than 50 MB', async () => {
     const archive = makeArchive({
       'SKILL.md': '# huge\n',
