@@ -536,9 +536,9 @@ recoverMounts(entries, sharedFs, log) {
             needsRecovery.push(toRecoveryEntry(targetPath, descriptor, err.message))
 }
 
-// `restored` is new in this design (today's recoverMounts only surfaces needsRecovery). It's used for
-// logging — implementations that don't need it can keep the public return type as { needsRecovery }
-// only. The pseudocode shows both for clarity.
+// `restored` is already returned by today's recoverMounts. UI callers (main.ts) currently
+// destructure only `needsRecovery` and may keep doing so; `restored` stays available for
+// logging / observability and gains backend-specific entries under this design.
 
 // Caller in main.ts ~1749-1763 — already exists, dispatches via routeLickToScoop:
 const entries = await getAllMountEntries();        // → MountTableEntry[]   (see prereq #4)
