@@ -9,3 +9,5 @@ export type {
   MountApprovalCopy,
   MountBackend,
 } from './backend.js';
+export { RemoteMountCache } from './remote-cache.js';
+export type { CachedListing, CachedBody, RemoteMountCacheOptions } from './remote-cache.js';
