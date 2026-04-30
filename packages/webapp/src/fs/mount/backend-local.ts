@@ -7,12 +7,7 @@
  */
 
 import { FsError } from '../types.js';
-import {
-  getToolExecutionContext,
-  showToolUI,
-  toolUIRegistry,
-  type ToolExecutionContext,
-} from '../../tools/tool-ui.js';
+import { showToolUI, toolUIRegistry, type ToolExecutionContext } from '../../tools/tool-ui.js';
 import {
   openMountPickerPopup,
   loadAndClearPendingHandle,
@@ -46,16 +41,6 @@ const MOUNT_TOOL_UI_TIMEOUT_MS = 5 * 60 * 1000;
 const MOUNT_TIMEOUT_SENTINEL: unique symbol = Symbol('mount:timeout');
 
 type ShowDirectoryPickerFn = (opts?: object) => Promise<FileSystemDirectoryHandle>;
-
-/** Escape HTML special characters to prevent XSS */
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 export class LocalMountBackend implements MountBackend {
   readonly kind = 'local' as const;
