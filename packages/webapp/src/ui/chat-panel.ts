@@ -1902,7 +1902,7 @@ export class ChatPanel {
     el.className = `tool-call-cluster${stale ? ' tool-call--stale' : ''}`;
 
     const summary = document.createElement('summary');
-    summary.className = 'tool-call__header tool-call-cluster__header';
+    summary.className = 'tool-call__header';
 
     const iconWrap = document.createElement('span');
     iconWrap.className = 'tool-call__icon';
@@ -1923,16 +1923,17 @@ export class ChatPanel {
     }
 
     // One bubble per inner tool call, colored to the call's status.
-    // Each bubble carries the matching `tool-call--<status>` class so
-    // it picks up the same `--tool-status-color` cascade as standalone
-    // rows without needing extra CSS variables on the cluster itself.
+    // Each bubble carries only the `tool-call--<status>` modifier (no
+    // bare `.tool-call`) so it sets `--tool-status-color` for itself
+    // without colliding with `.tool-call` DOM queries used elsewhere
+    // (stale retinting, handleToolUI lookup, copy-chat etc.).
     const dotsEl = document.createElement('span');
     dotsEl.className = 'tool-call-cluster__dots';
     for (const tc of toolCalls) {
       const status = toolStatus(tc);
       const dot = document.createElement('span');
       dot.className =
-        `tool-call tool-call--${status} ` +
+        `tool-call--${status} ` +
         `tool-call__status tool-call__status--${status} ` +
         `tool-call-cluster__dot`;
       dot.setAttribute('aria-label', `${tc.name}: ${status}`);

@@ -139,11 +139,12 @@
 .tool-call-cluster > summary::-webkit-details-marker {
   display: none;
 }
-/* Per-call status dots in the cluster header. Each dot is a tiny
- * `.tool-call`-class span carrying its own `tool-call--<status>`
- * variant, so it picks up the same `--tool-status-color` cascade as
- * standalone tool rows. The container anchors the row to the right
- * side of the summary and packs the dots tightly. */
+/* Per-call status dots in the cluster header. Each dot only carries
+ * its own `tool-call--<status>` modifier (no bare `.tool-call`) so the
+ * status modifier sets `--tool-status-color` on the dot itself without
+ * making the dot look like a real tool-call row to DOM queries. The
+ * container anchors the row to the right side of the summary and packs
+ * the dots tightly. */
 .tool-call-cluster__dots {
   margin-left: auto;
   display: inline-flex;
