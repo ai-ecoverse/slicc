@@ -192,7 +192,7 @@ Modifications to existing files:
 - `RemoteMountCache` is the only stateful module shared between S3 and DA backends. Local backend doesn't touch it.
 - Profile resolution captures the resolved profile at backend construction; re-resolves only on auth failure.
 - SigV4 signing is a pure function — easy to unit-test against the AWS test vectors with no network.
-- **`describe()` vs `describeForApproval()` usage rule.** `describe()` returns non-sensitive identifying information (source URI, profile name, optional descriptor) and is safe in any context — `mount list`, log lines, recovery prompts, telemetry. `describeForApproval()` returns the user-facing approval-card copy plus picker-required flags and is invoked **only** at mount time when a `ToolUI` approval card is being rendered. Implementations must not let approval-card strings leak into non-interactive output paths.
+- **`describe()` vs `describeForApproval()` usage rule.** `describe()` returns non-sensitive identifying information — `displayName` (always; e.g. picked dir's `name` for local, `'<bucket>/<prefix>'` for S3, `'<org>/<repo>'` for DA), `source` URI, `profile` name, optional `extra` — and is safe in any context: `mount list`, log lines, recovery prompts, telemetry, the `Mounted '<displayName>' → <path>` success line. `describeForApproval()` returns the user-facing approval-card copy plus picker-required flags and is invoked **only** at mount time when a `ToolUI` approval card is being rendered. Implementations must not let approval-card strings leak into non-interactive output paths.
 
 ### Stable mount identity
 
@@ -255,7 +255,7 @@ export interface MountBackend {
   remove(path: string, opts?: { recursive?: boolean }): Promise<void>;
 
   refresh(opts?: { bodies?: boolean }): Promise<RefreshReport>;
-  describe(): { source?: string; profile?: string; extra?: string };
+  describe(): { displayName: string; source?: string; profile?: string; extra?: string };
   describeForApproval(): {
     summary: string;
     needsPicker: boolean;
@@ -709,7 +709,7 @@ Outer abort → op aborts → in-flight fetch aborts. The backend re-throws as `
 
 ### What we deliberately don't do
 
-- No silent 412 retry on writes — surface to agent
+- No silent 412 handling on a user-facing first-attempt PUT — those bubble as `EBUSY` so the agent's edit loop can re-read. The transport-layer reconcile inside the bounded retry window (see "Why writes are safely retryable here") is a different case: there, a 412 means "we already won this PUT" and is silently reconciled. The two cases are distinguished by **whether the conflict comes from us or another writer** — bounded retry is always our own duplicate; first-attempt 412 is always external.
 - No write batching / coalescing
 - No background polling for staleness (TTL is read-driven)
 - No offline mode with queued writes
@@ -893,7 +893,7 @@ These are small upstream changes the design depends on. They land **inside the s
 
 5. **Add mount recovery to the extension boot path AND make the offscreen lick handler render `session-reload` correctly.** Today the recovery boot is CLI/Electron-only (`main.ts:1749`), and even if recovery were added to offscreen, the existing offscreen lick handler at `packages/chrome-extension/src/offscreen.ts:161-252` only special-cases `isUpgrade`. There's no `isSessionReload` branch and no call to `formatMountRecoveryPrompt`, so a `session-reload` event would render with `event.cronName` (undefined) and a `[Cron Event: undefined]\n\`\`\`json\n…\`\`\`` body — silently broken UX. Two changes are required, not one:
 
-   **5a — Run recovery in the extension bootstrap.** Mirror `main.ts:1748-1763` into the offscreen bootstrap, **after** `Orchestrator.init()` resolves and `sharedFs` is available. Same `routeLickToScoop` dispatch (cone runs in offscreen in extension mode, so dispatch is local). For local backend, `LocalMountBackend.fromHandle()` failing on permission triggers the existing handle-reactivation lick → panel approval card. For S3/DA, recovery succeeds without any UI gesture as long as profiles resolve and IMS hasn't expired.
+   **5a — Run recovery in the extension bootstrap.** Mirror `main.ts:1748-1763` into the offscreen bootstrap, **after** `Orchestrator.init()` resolves and `sharedFs` is available. Note: `routeLickToScoop` is a private helper inside `main()` (`main.ts:1503`) and is not visible to offscreen. Use the public emit API instead — `lickManager.emitEvent(event)` (defined at `packages/webapp/src/scoops/lick-manager.ts:105`). The offscreen handler installed via `setEventHandler` (after prereq 5b is in place) will then format the `session-reload` event correctly. For local backend, `LocalMountBackend.fromHandle()` failing on permission triggers the existing handle-reactivation lick → panel approval card. For S3/DA, recovery succeeds without any UI gesture as long as profiles resolve and IMS hasn't expired.
 
    **5b — Extract a shared `formatLickEventForCone(event): { label, content } | null` helper.** Both `main.ts:1620-1650` and `offscreen.ts:161-252` build `eventLabel` + `content` for the cone-side rendering, but they currently diverge: `main.ts` knows `session-reload` + `mount-recovery` + `formatMountRecoveryPrompt`; `offscreen.ts` only knows `upgrade`. Move the shared logic into `packages/webapp/src/scoops/lick-formatting.ts` (or similar) and have both call sites import it. Without this step, the CLI cone shows actionable mount-recovery prompts while the extension cone shows a malformed JSON dump — divergent UX defeats the point of running recovery in offscreen at all.
 
