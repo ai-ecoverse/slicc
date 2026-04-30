@@ -29,7 +29,7 @@ import {
   loadMountHandle,
 } from './mount-table-store.js';
 import type { BackendDescriptor, MountTableEntry } from './mount-table-store.js';
-import type { MountBackend } from './mount/backend.js';
+import type { MountBackend, RefreshReport } from './mount/backend.js';
 import { LocalMountBackend } from './mount/backend-local.js';
 import { MountIndex } from './mount-index.js';
 
@@ -548,12 +548,19 @@ export class VirtualFS {
    * Re-index a mounted directory. Use after external changes.
    * @throws Error if the path is not a mount point
    */
-  async refreshMount(mountPath: string): Promise<void> {
+  async refreshMount(mountPath: string, opts?: { bodies?: boolean }): Promise<RefreshReport> {
     const normalized = normalizePath(mountPath);
-    if (!this.mountPoints.has(normalized)) {
+    const backend = this.mountPoints.get(normalized);
+    if (!backend) {
       throw new FsError('ENOENT', 'not a mount point', normalized);
     }
-    await this.mountIndex.refreshMount(normalized);
+    const report = await backend.refresh(opts);
+    // Local backend's refresh is a no-op; existing MountIndex re-walk still
+    // happens here for local mounts.
+    if (backend.kind === 'local') {
+      await this.mountIndex.refreshMount(normalized);
+    }
+    return report;
   }
 
   /**

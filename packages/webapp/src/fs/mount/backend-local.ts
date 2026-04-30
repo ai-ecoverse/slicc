@@ -7,6 +7,17 @@
  */
 
 import { FsError } from '../types.js';
+import {
+  getToolExecutionContext,
+  showToolUI,
+  toolUIRegistry,
+  type ToolExecutionContext,
+} from '../../tools/tool-ui.js';
+import {
+  openMountPickerPopup,
+  loadAndClearPendingHandle,
+  reactivateHandle,
+} from '../mount-picker-popup.js';
 import type {
   MountBackend,
   MountDirEntry,
@@ -18,6 +29,32 @@ import type {
 
 export interface LocalMountBackendOptions {
   mountId: string;
+}
+
+/**
+ * Maximum time the agent-driven (cone) mount flow waits for the user to
+ * resolve the approval / picker UI. Five minutes matches the slowest
+ * realistic human response while preventing indefinite hangs.
+ */
+const MOUNT_TOOL_UI_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Unique sentinel returned by the timeout race so it can never be confused
+ * with a legitimate tool UI result (which is `unknown`). Compared by
+ * reference identity, not structural shape.
+ */
+const MOUNT_TIMEOUT_SENTINEL: unique symbol = Symbol('mount:timeout');
+
+type ShowDirectoryPickerFn = (opts?: object) => Promise<FileSystemDirectoryHandle>;
+
+/** Escape HTML special characters to prevent XSS */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 export class LocalMountBackend implements MountBackend {
@@ -39,6 +76,186 @@ export class LocalMountBackend implements MountBackend {
     opts: LocalMountBackendOptions
   ): LocalMountBackend {
     return new LocalMountBackend(handle, opts);
+  }
+
+  /**
+   * Factory that handles the three picker contexts:
+   *   - cone (toolContext present) — render approval card via showToolUI,
+   *     then run the picker (extension uses popup, standalone uses direct)
+   *   - extension terminal (no toolContext, isExtension true) — popup picker
+   *   - standalone (no toolContext, no extension) — direct picker
+   *
+   * Scoops fail fast — there is no human at a scoop's chat to approve a
+   * picker. Cone (interactive) is fine.
+   */
+  static async create(opts: {
+    mountId: string;
+    isScoop: () => boolean;
+    toolContext: ToolExecutionContext | undefined;
+    isExtension: boolean;
+  }): Promise<LocalMountBackend> {
+    if (opts.isScoop()) {
+      throw new Error('mount: cannot mount local directories from a scoop (no UI). Ask the cone.');
+    }
+
+    if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
+      throw new Error('mount: File System Access API not available in this environment');
+    }
+
+    let dirHandle: FileSystemDirectoryHandle;
+
+    if (opts.toolContext) {
+      // Agent-driven: show approval UI before opening picker. We drive
+      // showToolUI directly (rather than the helper) so we own the request
+      // id and can cancel the registry entry when the timeout fires —
+      // otherwise a late click would still run the picker callback after
+      // the command has already exited.
+      const uiRequestId = toolUIRegistry.generateId();
+      let timedOut = false;
+
+      const rawUiPromise = showToolUI(
+        {
+          id: uiRequestId,
+          html: `
+          <div class="sprinkle-action-card">
+            <div class="sprinkle-action-card__header">Mount local directory <span class="sprinkle-badge sprinkle-badge--notice">approval</span></div>
+            <div class="sprinkle-action-card__actions">
+              <button class="sprinkle-btn sprinkle-btn--secondary" data-action="deny">Deny</button>
+              <button class="sprinkle-btn sprinkle-btn--primary" data-action="approve" data-picker="directory">Select directory</button>
+            </div>
+          </div>
+        `,
+          onAction: async (action, data) => {
+            if (action === 'approve') {
+              const d = data as Record<string, unknown> | undefined;
+
+              if (d?.handleInIdb && typeof d.idbKey === 'string') {
+                try {
+                  const handle = await loadAndClearPendingHandle(d.idbKey);
+                  if (!handle) return { error: 'No directory handle found in storage' };
+                  await reactivateHandle(handle);
+                  return { approved: true, handle };
+                } catch (err: unknown) {
+                  return { error: err instanceof Error ? err.message : String(err) };
+                }
+              }
+
+              if (d?.cancelled) return { cancelled: true };
+              if (d?.error) return { error: String(d.error) };
+
+              try {
+                const handle = await (
+                  window as Window &
+                    typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
+                ).showDirectoryPicker({ mode: 'readwrite' });
+                return { approved: true, handle };
+              } catch (err: unknown) {
+                if (err instanceof Error && err.name === 'AbortError') {
+                  return { cancelled: true };
+                }
+                return { error: err instanceof Error ? err.message : String(err) };
+              }
+            }
+            return { denied: true };
+          },
+        },
+        opts.toolContext.onUpdate
+      );
+
+      // Swallow the registry rejection produced by our own cancel() call so
+      // it doesn't surface as an unhandled promise rejection. Other
+      // rejections (e.g. agent abort) are still observable via the race.
+      const safeUiPromise = rawUiPromise.catch((err: unknown) => {
+        if (timedOut) return MOUNT_TIMEOUT_SENTINEL;
+        throw err;
+      });
+
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<typeof MOUNT_TIMEOUT_SENTINEL>((resolve) => {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true;
+          // Cancelling rejects the pending UI, removes the registry entry,
+          // and lets showToolUI emit tool_ui_done so the panel cleans up.
+          toolUIRegistry.cancel(uiRequestId, 'mount: timed out');
+          resolve(MOUNT_TIMEOUT_SENTINEL);
+        }, MOUNT_TOOL_UI_TIMEOUT_MS);
+      });
+
+      const result = await Promise.race([safeUiPromise, timeoutPromise]);
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+
+      if (result === MOUNT_TIMEOUT_SENTINEL) {
+        throw new Error(
+          `mount: timed out after ${Math.round(MOUNT_TOOL_UI_TIMEOUT_MS / 60000)} minute(s) ` +
+            'waiting for user approval'
+        );
+      }
+
+      if (!result) {
+        throw new Error('mount: tool UI not available');
+      }
+
+      const res = result as {
+        approved?: boolean;
+        handle?: FileSystemDirectoryHandle;
+        denied?: boolean;
+        cancelled?: boolean;
+        error?: string;
+      };
+
+      if (res.denied) {
+        throw new Error('mount: denied by user');
+      }
+      if (res.cancelled) {
+        throw new Error('mount: cancelled');
+      }
+      if (res.error) {
+        throw new Error(`mount: ${res.error}`);
+      }
+      if (!res.handle) {
+        throw new Error('mount: no directory selected');
+      }
+
+      dirHandle = res.handle;
+    } else if (opts.isExtension) {
+      // Extension terminal: picker must run in popup window so macOS TCC
+      // dialogs render properly (side panel can't host them → renderer crash)
+      try {
+        const result = await openMountPickerPopup();
+        if (result.cancelled) {
+          throw new Error('mount: cancelled');
+        }
+        if (result.error) {
+          throw new Error(`mount: ${result.error}`);
+        }
+        if (result.handleInIdb && typeof result.idbKey === 'string') {
+          const handle = await loadAndClearPendingHandle(result.idbKey);
+          if (!handle) {
+            throw new Error('mount: no directory handle found in storage');
+          }
+          await reactivateHandle(handle);
+          dirHandle = handle;
+        } else {
+          throw new Error('mount: unexpected popup result');
+        }
+      } catch (err: unknown) {
+        throw new Error(`mount: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else {
+      // CLI/standalone: direct picker (TCC dialogs work in regular page context)
+      try {
+        dirHandle = await (
+          window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
+        ).showDirectoryPicker({ mode: 'readwrite' });
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          throw new Error('mount: cancelled');
+        }
+        throw new Error(`mount: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    return new LocalMountBackend(dirHandle, { mountId: opts.mountId });
   }
 
   /** Test/internal access to the underlying handle. */

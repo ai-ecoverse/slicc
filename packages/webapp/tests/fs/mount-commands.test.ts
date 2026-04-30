@@ -42,7 +42,7 @@ describe('MountCommands', () => {
     it('includes usage hint in stderr', async () => {
       const cmd = new MountCommands({ fs: makeFs() });
       const result = await cmd.execute([], '/workspace');
-      expect(result.stderr).toContain('Usage: mount <target-path>');
+      expect(result.stderr).toContain('mount point required');
     });
 
     it('stderr ends with a newline', async () => {
@@ -105,7 +105,7 @@ describe('MountCommands', () => {
       const cmd = new MountCommands({ fs: makeFs(), isScoop: () => true });
       const result = await cmd.execute(['/workspace/myapp'], '/workspace');
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('cannot mount from a scoop');
+      expect(result.stderr).toContain('cannot mount local directories from a scoop');
     });
 
     it('does not invoke the directory picker or fs.mount in scoop context', async () => {
@@ -198,7 +198,7 @@ describe('MountCommands', () => {
     it('shows required <target-path> in usage', async () => {
       const cmd = new MountCommands({ fs: makeFs() });
       const result = await cmd.execute(['--help'], '/workspace');
-      expect(result.stdout).toContain('Usage: mount <target-path>');
+      expect(result.stdout).toContain('Usage: mount [OPTIONS] <target-path>');
     });
   });
 });
