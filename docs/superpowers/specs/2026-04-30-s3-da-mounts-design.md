@@ -99,7 +99,7 @@ Flags:
 
 Output behavior (a behavior change vs current `mount`):
 
-- `mount` (success) — keeps today's existing summary line plus the source/profile when applicable: `Mounted '<name>' → <path> (source: <source>, profile: <profile>)`. Old single-line `Mounted '<name>' → <path>` remains for local mounts.
+- `mount` (success) — display name comes from `backend.describe().displayName` rather than today's `dirHandle.name` (which doesn't exist on remote backends). Local backend continues to derive display name from the picked directory's `name`; S3 derives from the bucket and prefix (e.g. `'my-bucket/prefix'`); DA from the org/repo (`'my-org/my-repo'`). Output format: `Mounted '<displayName>' → <path>` for local (preserves today's wording), `Mounted '<displayName>' → <path> (profile: <profile>)` for remote.
 - `mount unmount` — keeps today's `Unmounted <path>`. With `--clear-cache`, appends `Cache cleared (<n> entries)`.
 - `mount refresh` — replaces today's `Re-indexed <path>` with a structured summary derived from `RefreshReport`: `Refreshed <path>: +<added> -<removed> ~<changed> (<unchanged> unchanged, <errors> errors)`. Errors print on stderr, one per line, after the summary. Existing scripts/tests parsing the old `Re-indexed` string need updating; this is intentional (the old output had no information about what actually changed).
 
@@ -166,7 +166,7 @@ New layout under `packages/webapp/src/fs/mount/`:
 
 | File                   | Purpose                                                                                                                        |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `backend.ts`           | `MountBackend` interface + shared types (`MountEntry`, `MountStat`, `RefreshReport`)                                           |
+| `backend.ts`           | `MountBackend` interface + shared types (`MountDirEntry`, `MountStat`, `RefreshReport`)                                        |
 | `backend-local.ts`     | Wraps the existing `FileSystemDirectoryHandle` logic — what `virtual-fs.ts` does today, lifted into a backend                  |
 | `backend-s3.ts`        | S3 / S3-compatible implementation; uses `signing-s3.ts` and `remote-cache.ts`                                                  |
 | `backend-da.ts`        | da.live implementation; uses IMS token from existing Adobe provider and `remote-cache.ts`                                      |
@@ -198,6 +198,10 @@ Modifications to existing files:
 
 Each mount carries a stable `mountId: string` (UUID generated at mount creation, persisted in the descriptor). `RemoteMountCache` keys all entries by this id, so re-mounting at the same target path with a different source produces a fresh cache namespace and never collides with the prior mount's entries. Local mounts also carry a `mountId` for symmetry, even though the cache is unused.
 
+### Cache key path convention
+
+`RemoteMountCache` keys files and directories by **mount-relative paths** — i.e. `foo/bar.html`, not `/mnt/r2/foo/bar.html`. The reason is that two peers (panel + offscreen) sharing the same logical mount may have different VFS-absolute paths in flight at any moment if a rename or re-mount is racing, but the mount-relative path is unambiguous given a `mountId`. The key shape is therefore `(mountId, mountRelativePath)`, which is the same on both sides of the BroadcastChannel and across recovery. Backends translate VFS-absolute paths to mount-relative paths at the boundary (subtract the target prefix) before touching the cache.
+
 ### Backend close() lifecycle
 
 `MountBackend.close()` is called once per unmount. Contract:
@@ -215,7 +219,7 @@ Local backend's `close()` is a no-op aside from steps 1 and 3 (handle reactivati
 // backend.ts
 export type MountKind = 'local' | 's3' | 'da';
 
-export interface MountEntry {
+export interface MountDirEntry {
   name: string;
   kind: 'file' | 'directory';
   size?: number;
@@ -243,7 +247,7 @@ export interface MountBackend {
   readonly source: string | undefined;
   readonly profile?: string;
 
-  readDir(path: string): Promise<MountEntry[]>;
+  readDir(path: string): Promise<MountDirEntry[]>;
   readFile(path: string): Promise<Uint8Array>;
   writeFile(path: string, body: Uint8Array): Promise<void>;
   stat(path: string): Promise<MountStat>;
@@ -266,7 +270,7 @@ export interface MountBackend {
 ```ts
 // remote-cache.ts
 export interface CachedListing {
-  entries: MountEntry[];
+  entries: MountDirEntry[];
   cachedAt: number;
 }
 
@@ -281,7 +285,7 @@ export class RemoteMountCache {
   constructor(opts: { mountId: string; ttlMs: number; dbName?: string });
 
   getListing(dirPath: string): Promise<CachedListing | null>;
-  putListing(dirPath: string, entries: MountEntry[]): Promise<void>;
+  putListing(dirPath: string, entries: MountDirEntry[]): Promise<void>;
   invalidateListing(dirPath: string): Promise<void>;
 
   getBody(filePath: string): Promise<CachedBody | null>;
@@ -500,36 +504,44 @@ default: keep cache (re-mount within TTL window is instant; entries expire by TT
 Recovery uses the existing API in `packages/webapp/src/fs/mount-recovery.ts` and `packages/webapp/src/ui/main.ts`:
 
 ```
+// Input: entries: MountTableEntry[]   each is { targetPath, descriptor, createdAt }
+// Output: { restored, needsRecovery } — both arrays of MountRecoveryEntry
 recoverMounts(entries, sharedFs, log) {
-    restored: MountRecoveryEntry[]      // mounts re-attached cleanly
-    needsRecovery: MountRecoveryEntry[] // mounts that need user action (extended for S3/DA)
+    restored: MountRecoveryEntry[]      // for logs / observability; today's API only returns needsRecovery
+    needsRecovery: MountRecoveryEntry[] // mounts that need user action
 
-    for desc in entries:
+    for entry in entries:
+        const { targetPath, descriptor } = entry
         try:
-            switch desc.kind:
-                'local' → handle  = loadFromIDB(desc.idbHandleKey)
+            let backend: MountBackend
+            switch descriptor.kind:
+                'local' → handle = loadFromIDB(descriptor.idbHandleKey)
                           // permission may have lapsed — handle reactivation requires
                           // user gesture, fall through to needsRecovery on PermissionError
                           backend = LocalMountBackend.fromHandle(handle)
 
-                's3'    → profile = resolveS3Profile(desc.profile)
-                          cache   = new RemoteMountCache({ mountId: desc.mountId, ttlMs: 30_000 })
-                          backend = new S3MountBackend({ source: desc.source, profile, cache })
+                's3'    → profile = resolveS3Profile(descriptor.profile)
+                          cache   = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 })
+                          backend = new S3MountBackend({ source: descriptor.source, profile, cache })
 
-                'da'    → profile = resolveDaProfile(desc.profile)
-                          cache   = new RemoteMountCache({ mountId: desc.mountId, ttlMs: 30_000 })
-                          backend = new DaMountBackend({ source: desc.source, profile, cache })
+                'da'    → profile = resolveDaProfile(descriptor.profile)
+                          cache   = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 })
+                          backend = new DaMountBackend({ source: descriptor.source, profile, cache })
 
-            await sharedFs.mount(desc.targetPath, backend)
-            restored.push(toRecoveryEntry(desc))
+            await sharedFs.mount(targetPath, backend)        // MountRecoveryFS.mount widens to take MountBackend
+            restored.push(toRecoveryEntry(targetPath, descriptor))
 
         catch (err):
             log.warn(err)
-            needsRecovery.push(toRecoveryEntry(desc, err.message))
+            needsRecovery.push(toRecoveryEntry(targetPath, descriptor, err.message))
 }
 
+// `restored` is new in this design (today's recoverMounts only surfaces needsRecovery). It's used for
+// logging — implementations that don't need it can keep the public return type as { needsRecovery }
+// only. The pseudocode shows both for clarity.
+
 // Caller in main.ts ~1749-1763 — already exists, dispatches via routeLickToScoop:
-const entries = await getAllMountEntries();        // → MountTableEntry[]   (see prereq #2)
+const entries = await getAllMountEntries();        // → MountTableEntry[]   (see prereq #4)
 const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
 if (needsRecovery.length > 0) {
     const event: LickEvent = {
@@ -667,7 +679,11 @@ ETag conditionals make retry safe:
   - If first succeeded, retry returns **412** — same reconcile path.
   - If first failed, retry creates the file.
 
-Documented as a comment in the backend implementations.
+**412 has two meanings — distinguish them.** The retry path above treats 412 as "we already won this PUT," and silently reconciles the cache (with a `HEAD` to learn the new etag). That's only safe inside the retry branch where we know the first PUT was issued by us and may have actually landed.
+
+The op-level 412 path (Section "Data flow → Write") is different — there, the first PUT failed cleanly with 412 because **another writer** changed the file between our last read and our PUT. We surface that to the agent as `EBUSY` so the edit loop can re-read.
+
+Implementation rule: a 412 inside the bounded retry window of an in-flight PUT is reconciled silently; a 412 from a fresh first-attempt PUT is bubbled as `EBUSY`. Documented as a comment in the backend implementations so the distinction doesn't get collapsed.
 
 ### Backoff schedule
 
@@ -834,7 +850,13 @@ These are small upstream changes the design depends on. They land **inside the s
    - `EFBIG` — body exceeds `maxBodyBytes` (pre-flight check)
    - `EBADF` — operation issued against an unmounted/closed backend
    - `EIO` — network failure, 5xx, AbortError-from-timeout
-     Implementer must audit any exhaustive switches over `FsErrorCode` (notably `restricted-fs.ts` errno mapping and tool-error formatting in `packages/webapp/src/tools/`) and extend accordingly.
+     Implementer must audit code that branches on `FsError` / `FsErrorCode`. Today's actual consumers (search results, not guesses):
+   - `packages/webapp/src/fs/restricted-fs.ts` — extensive errno branching
+   - `packages/webapp/src/fs/virtual-fs.ts` — many `throw new FsError(...)` sites including `convertFsaError`
+   - `packages/webapp/src/shell/vfs-adapter.ts` — `instanceof FsError && err.code === 'ENOENT'` check + `EISDIR` throws
+   - `packages/webapp/src/shell/supplemental-commands/playwright-command.ts` — `EEXIST` check
+   - `packages/webapp/src/scoops/agent-bridge.ts` — `isFsErrorCode` helper plus call sites
+     (No `FsError` references under `packages/webapp/src/tools/` — earlier mention of that directory was wrong.)
 
 2. **Change the `BroadcastChannel('vfs-mount-sync:<db>')` message shape.** Today (`virtual-fs.ts:62-90`) the channel posts `{ type: 'mount' | 'unmount', path, handle }` where `handle` is a `FileSystemDirectoryHandle` (structured-cloneable). Remote backends are not cloneable, so the message must carry the descriptor instead:
 
@@ -862,17 +884,18 @@ These are small upstream changes the design depends on. They land **inside the s
    - Any tests that assert the prompt copy or build mock recovery entries (`mount-recovery.test.ts`).
 
 4. **Migrate `mount-table-store.ts` to descriptor-shaped rows.** Today (line 29-32) `MountEntry = { path, handle }` and `getAllMountEntries(): Promise<MountEntry[]>`. Required:
+   - **Delete the old `MountEntry` export** to free the name (the new `backend.ts` directory-listing type is `MountDirEntry`, so there's no collision once the old one is removed — but the brief transition window during the PR will have both visible; importers must use the fully-qualified module path or be migrated in the same change).
    - New row shape `MountTableEntry = { targetPath, descriptor: BackendDescriptor, createdAt }`.
    - `getAllMountEntries(): Promise<MountTableEntry[]>` — returns descriptors, not raw handles. Local descriptors carry an `idbHandleKey` which the consumer uses to fetch the live `FileSystemDirectoryHandle` from IDB.
    - **Audit list — consumers of the previous return shape:**
      - `packages/webapp/src/ui/main.ts:1749` — passes the result straight into `recoverMounts(entries, sharedFs, log)`. `recoverMounts` itself becomes the descriptor-aware brancher.
-     - `packages/webapp/src/fs/mount-recovery.ts` — current implementation iterates `{ path, handle }`; rewrites against `BackendDescriptor`.
+     - `packages/webapp/src/fs/mount-recovery.ts` — current implementation iterates `{ path, handle }`; rewrites against `BackendDescriptor`. Specifically `MountRecoveryFS` (line 52, today: `mount(path, handle: FileSystemDirectoryHandle)`) widens its signature to `mount(path: string, backend: MountBackend)`.
 
-5. **Add mount recovery to the extension boot path.** Today, `recoverMounts` + `getAllMountEntries` only run inside `main()` (`main.ts:1749`); `mainExtension()` (line 337) and the offscreen bootstrap (`packages/chrome-extension/src/offscreen.ts`) **never restore persisted mounts**. The whole "session restore" flow is CLI/Electron-only today, which the existing local-mount design has been able to live with because mount handle reactivation in extensions hits the side-panel-crash bug anyway. With S3/DA, where reactivation is just a network call and a card, parity is mandatory:
-   - Mirror `main.ts:1748-1763` into the offscreen bootstrap, **after** `Orchestrator.init()` resolves and `sharedFs` is available.
-   - Route the resulting `session-reload` lick to the cone via the same `routeLickToScoop` the panel uses (cone runs in offscreen in extension mode, so the dispatch is local).
-   - For local backend in extension, `LocalMountBackend.fromHandle()` will hit the existing handle-reactivation lick flow → panel approval card.
-   - For S3/DA backend in extension, recovery succeeds without any UI gesture if profiles still resolve and IMS isn't expired.
+5. **Add mount recovery to the extension boot path AND make the offscreen lick handler render `session-reload` correctly.** Today the recovery boot is CLI/Electron-only (`main.ts:1749`), and even if recovery were added to offscreen, the existing offscreen lick handler at `packages/chrome-extension/src/offscreen.ts:161-252` only special-cases `isUpgrade`. There's no `isSessionReload` branch and no call to `formatMountRecoveryPrompt`, so a `session-reload` event would render with `event.cronName` (undefined) and a `[Cron Event: undefined]\n\`\`\`json\n…\`\`\`` body — silently broken UX. Two changes are required, not one:
+
+   **5a — Run recovery in the extension bootstrap.** Mirror `main.ts:1748-1763` into the offscreen bootstrap, **after** `Orchestrator.init()` resolves and `sharedFs` is available. Same `routeLickToScoop` dispatch (cone runs in offscreen in extension mode, so dispatch is local). For local backend, `LocalMountBackend.fromHandle()` failing on permission triggers the existing handle-reactivation lick → panel approval card. For S3/DA, recovery succeeds without any UI gesture as long as profiles resolve and IMS hasn't expired.
+
+   **5b — Extract a shared `formatLickEventForCone(event): { label, content } | null` helper.** Both `main.ts:1620-1650` and `offscreen.ts:161-252` build `eventLabel` + `content` for the cone-side rendering, but they currently diverge: `main.ts` knows `session-reload` + `mount-recovery` + `formatMountRecoveryPrompt`; `offscreen.ts` only knows `upgrade`. Move the shared logic into `packages/webapp/src/scoops/lick-formatting.ts` (or similar) and have both call sites import it. Without this step, the CLI cone shows actionable mount-recovery prompts while the extension cone shows a malformed JSON dump — divergent UX defeats the point of running recovery in offscreen at all.
 
 6. **Add a raw-body bypass to `/api/fetch-proxy` in `packages/node-server/src/index.ts`.** Today (line ~960) the proxy uses `express.json({ limit: '50mb' })` mounted globally at `app.use(...)` (line 757) and re-serializes parsed bodies via `JSON.stringify(req.body)` before forwarding. This corrupts SigV4-signed S3 PUTs because:
    - The body bytes that were SHA-256-hashed and signed pre-flight no longer match the bytes sent on the wire.
@@ -900,7 +923,7 @@ These six prerequisites together unblock the backend code. Each is small and sel
 - Mount-table descriptors are upgraded transparently on first load (one-time migration in `mount-table-store.ts`):
   - Legacy rows (`{ path, handle }` shape, no `kind`/`mountId` fields) are detected and rewritten to `{ targetPath, descriptor: { kind: 'local', mountId: crypto.randomUUID(), idbHandleKey }, createdAt: Date.now() }`. The handle stays in IDB at `idbHandleKey`; only the table row shape changes.
   - The migration runs idempotently — re-running on already-upgraded rows is a no-op.
-  - `mountId` is generated once per legacy row and persisted, so subsequent boots see the same id and `RemoteMountCache` (if the user later switches to a remote backend at the same path) gets a predictable namespace.
+  - `mountId` is generated once per legacy row at upgrade time and persisted thereafter, so subsequent boots see the same id for the same mount. (To be clear: a fresh `mount` at the same target path always produces a new `mountId` — the persistence guarantee here is purely about preserving stable identity for the existing local mounts that survive the upgrade. Remote-mount cache namespacing is incidental, since legacy local rows have no remote cache to worry about.)
 - Documentation updates ship in the same PR(s) — root `CLAUDE.md`, `packages/webapp/CLAUDE.md`, `docs/architecture.md`, README. Per the project's three-gate rule (tests, docs, verification), docs are part of the change.
 
 ## Out-of-scope follow-ups (v2+)
