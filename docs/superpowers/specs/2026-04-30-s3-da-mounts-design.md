@@ -743,7 +743,7 @@ packages/webapp/tests/fs/mount/
   mount-table-store.test.ts      # descriptor persistence (adapted)
   mount-recovery.test.ts         # backend reconstruction (adapted)
   mount-commands.test.ts         # flag parsing, dispatch, approval card (adapted)
-  mount-index.test.ts            # backend.readDir-driven walk (adapted)
+  mount-index.test.ts            # backend.readDir-driven walk (new — only if mount-index.ts logic warrants its own surface; today no such file exists)
   virtual-fs.mount.test.ts       # VFS routing through MountBackend (adapted)
   virtual-fs-mount-sync.test.ts  # BroadcastChannel cross-instance sync (adapted)
   fixtures/
