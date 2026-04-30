@@ -348,6 +348,7 @@
 
       var TASKS = [
         { id: 'build-websites',     label: 'Build websites',      icon: 'globe' },
+        { id: 'migrate-page-aem',   label: 'Migrate a page to AEM', icon: 'book-up' },
         { id: 'automate',           label: 'Automate tasks',      icon: 'zap' },
         { id: 'research',           label: 'Research & analyze',  icon: 'search' },
         { id: 'write-content',      label: 'Write content',       icon: 'file-text' },
@@ -361,7 +362,7 @@
 
       var APPS = [
         { id: 'aem',      label: 'Adobe Experience Manager', icon: 'box',
-          relevance: ['build-websites','write-content','seo','content-creator','marketer','designer'] },
+          relevance: ['build-websites','migrate-page-aem','write-content','seo','content-creator','marketer','designer'] },
         { id: 'imessage', label: 'iMessage',                 icon: 'message-circle',
           relevance: ['personal','side-project','exploring'] },
         { id: 'teams',    label: 'Microsoft Teams',          icon: 'users',
