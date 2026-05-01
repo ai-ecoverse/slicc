@@ -29,10 +29,22 @@ const baseCatalogue: ProviderCatalogue = {
       requiresApiKey: true,
       requiresBaseUrl: false,
     },
+    {
+      id: 'azure-openai',
+      name: 'Azure OpenAI',
+      description: 'GPT models via Azure AI Foundry',
+      requiresApiKey: true,
+      requiresBaseUrl: true,
+      requiresDeployment: true,
+      requiresApiVersion: true,
+      defaultBaseUrl: 'https://your-resource.cognitiveservices.azure.com/',
+      apiVersionDefault: '2024-08-01-preview',
+    },
   ],
   models: {
     openai: [{ id: 'gpt-4o', name: 'GPT-4o' }],
     anthropic: [{ id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }],
+    'azure-openai': [{ id: 'gpt-4o', name: 'GPT-4o' }],
   },
 };
 
@@ -55,7 +67,8 @@ function makeHarness(
     postSystemMessage: (line) => systemMessages.push(line),
     postDipReference: (md) => dipRefs.push(md),
     getProviderCatalogue: () => baseCatalogue,
-    saveAccount: (id, key, baseUrl) => accounts.push({ id, key, baseUrl }),
+    saveAccount: (id, key, baseUrl, deployment, apiVersion) =>
+      accounts.push({ id, key, baseUrl, deployment, apiVersion }),
     setSelectedModel: (id) => selectedModels.push(id),
     resolveModelLabel: (_p, m) => m.toUpperCase(),
     broadcastToDip: (msg) => dipInbox.push(msg),
@@ -208,7 +221,15 @@ describe('OnboardingOrchestrator', () => {
         baseUrl: null,
         model: 'gpt-4o',
       });
-      expect(h.accounts).toEqual([{ id: 'openai', key: 'sk-good', baseUrl: undefined }]);
+      expect(h.accounts).toEqual([
+        {
+          id: 'openai',
+          key: 'sk-good',
+          baseUrl: undefined,
+          deployment: undefined,
+          apiVersion: undefined,
+        },
+      ]);
       expect(h.selectedModels).toEqual(['gpt-4o']);
       expect(h.finalLicks).toHaveLength(1);
       expect(h.finalLicks[0].action).toBe('onboarding-complete-with-provider');
@@ -324,6 +345,63 @@ describe('OnboardingOrchestrator', () => {
       });
       expect(selectedModels).toEqual([]);
       expect(finalLicks[0].data.model).toBeNull();
+    });
+
+    it('forwards deployment + apiVersion to saveAccount for Azure-style providers', async () => {
+      const h = makeHarness();
+      await h.orchestrator.handleOnboardingComplete({});
+      await h.orchestrator.handleConnectAttempt({
+        provider: 'azure-openai',
+        apiKey: 'azure-key',
+        baseUrl: 'https://example.cognitiveservices.azure.com/',
+        deployment: 'gpt4o-eastus',
+        apiVersion: '2024-08-01-preview',
+        model: null,
+      });
+      expect(h.accounts).toEqual([
+        {
+          id: 'azure-openai',
+          key: 'azure-key',
+          baseUrl: 'https://example.cognitiveservices.azure.com/',
+          deployment: 'gpt4o-eastus',
+          apiVersion: '2024-08-01-preview',
+        },
+      ]);
+      expect(h.finalLicks).toHaveLength(1);
+      expect(h.finalLicks[0].data.provider).toBe('azure-openai');
+    });
+
+    it('rejects when a requiresDeployment provider is missing the deployment field', async () => {
+      const h = makeHarness();
+      await h.orchestrator.handleOnboardingComplete({});
+      await h.orchestrator.handleConnectAttempt({
+        provider: 'azure-openai',
+        apiKey: 'azure-key',
+        baseUrl: 'https://example.cognitiveservices.azure.com/',
+        deployment: null,
+        apiVersion: '2024-08-01-preview',
+      });
+      expect(h.accounts).toEqual([]);
+      expect(h.finalLicks).toEqual([]);
+      const reject = h.dipInbox.find((m) => m.type === 'slicc-connect-result');
+      expect(reject.ok).toBe(false);
+      expect(reject.message).toContain('deployment');
+      expect(h.orchestrator.getStage()).toBe('awaiting-connect');
+    });
+
+    it('rejects when a requiresBaseUrl provider is missing the base URL', async () => {
+      const h = makeHarness();
+      await h.orchestrator.handleOnboardingComplete({});
+      await h.orchestrator.handleConnectAttempt({
+        provider: 'azure-openai',
+        apiKey: 'azure-key',
+        baseUrl: null,
+        deployment: 'gpt4o-eastus',
+      });
+      expect(h.accounts).toEqual([]);
+      const reject = h.dipInbox.find((m) => m.type === 'slicc-connect-result');
+      expect(reject.ok).toBe(false);
+      expect(reject.message.toLowerCase()).toContain('base url');
     });
 
     it('rejects empty payloads gracefully', async () => {

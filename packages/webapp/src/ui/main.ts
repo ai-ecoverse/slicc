@@ -852,7 +852,16 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           description: cfg.description,
           requiresApiKey: cfg.requiresApiKey ?? true,
           requiresBaseUrl: cfg.requiresBaseUrl ?? false,
+          requiresDeployment: !!cfg.requiresDeployment,
+          requiresApiVersion: !!cfg.requiresApiVersion,
+          apiKeyPlaceholder: cfg.apiKeyPlaceholder ?? undefined,
+          apiKeyEnvVar: cfg.apiKeyEnvVar ?? undefined,
           defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+          baseUrlDescription: cfg.baseUrlDescription ?? undefined,
+          deploymentPlaceholder: cfg.deploymentPlaceholder ?? undefined,
+          deploymentDescription: cfg.deploymentDescription ?? undefined,
+          apiVersionDefault: cfg.apiVersionDefault ?? undefined,
+          apiVersionDescription: cfg.apiVersionDescription ?? undefined,
           isOAuth: !!cfg.isOAuth,
         };
       })
@@ -880,7 +889,8 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       postSystemMessage: (line) => layout.panels.chat.addSystemMessage(line),
       postDipReference: (md) => layout.panels.chat.addSystemMessage(md),
       getProviderCatalogue: buildExtProviderCatalogue,
-      saveAccount: (id, key, baseUrl) => addAccountExt(id, key, baseUrl),
+      saveAccount: (id, key, baseUrl, deployment, apiVersion) =>
+        addAccountExt(id, key, baseUrl, deployment, apiVersion),
       setSelectedModel: (id) => setSelectedModelIdExt(id),
       resolveModelLabel: (provider, modelId) => {
         try {
@@ -1053,6 +1063,14 @@ async function mainExtension(app: HTMLElement): Promise<void> {
             provider: String(data.provider ?? ''),
             apiKey: String(data.apiKey ?? ''),
             baseUrl: typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+            deployment:
+              typeof data.deployment === 'string' && data.deployment
+                ? String(data.deployment)
+                : null,
+            apiVersion:
+              typeof data.apiVersion === 'string' && data.apiVersion
+                ? String(data.apiVersion)
+                : null,
             model: data.model == null ? null : String(data.model),
           })
           .catch((err) => log.warn('handleConnectAttempt failed', err));
@@ -2031,7 +2049,16 @@ async function main(): Promise<void> {
           description: cfg.description,
           requiresApiKey: cfg.requiresApiKey ?? true,
           requiresBaseUrl: cfg.requiresBaseUrl ?? false,
+          requiresDeployment: !!cfg.requiresDeployment,
+          requiresApiVersion: !!cfg.requiresApiVersion,
+          apiKeyPlaceholder: cfg.apiKeyPlaceholder ?? undefined,
+          apiKeyEnvVar: cfg.apiKeyEnvVar ?? undefined,
           defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+          baseUrlDescription: cfg.baseUrlDescription ?? undefined,
+          deploymentPlaceholder: cfg.deploymentPlaceholder ?? undefined,
+          deploymentDescription: cfg.deploymentDescription ?? undefined,
+          apiVersionDefault: cfg.apiVersionDefault ?? undefined,
+          apiVersionDescription: cfg.apiVersionDescription ?? undefined,
           isOAuth: !!cfg.isOAuth,
         };
       })
@@ -2059,7 +2086,8 @@ async function main(): Promise<void> {
       postSystemMessage: (line) => layout.panels.chat.addSystemMessage(line),
       postDipReference: (md) => layout.panels.chat.addSystemMessage(md),
       getProviderCatalogue: buildProviderCatalogue,
-      saveAccount: (id, key, baseUrl) => addAccount(id, key, baseUrl),
+      saveAccount: (id, key, baseUrl, deployment, apiVersion) =>
+        addAccount(id, key, baseUrl, deployment, apiVersion),
       setSelectedModel: (id) => setSelectedModelId(id),
       resolveModelLabel: (provider, modelId) => {
         try {
@@ -2284,6 +2312,14 @@ async function main(): Promise<void> {
               apiKey: String(data.apiKey ?? ''),
               baseUrl:
                 typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+              deployment:
+                typeof data.deployment === 'string' && data.deployment
+                  ? String(data.deployment)
+                  : null,
+              apiVersion:
+                typeof data.apiVersion === 'string' && data.apiVersion
+                  ? String(data.apiVersion)
+                  : null,
               model: data.model == null ? null : String(data.model),
             })
             .catch((err) => log.warn('handleConnectAttempt failed', err));
