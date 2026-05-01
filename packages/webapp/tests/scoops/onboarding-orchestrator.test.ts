@@ -277,6 +277,55 @@ describe('OnboardingOrchestrator', () => {
       expect(orch.getStage()).toBe('complete');
     });
 
+    it('falls back to the first catalogue model when the dip omits one', async () => {
+      // Mirrors the new welcome-dip path: dip no longer picks a
+      // model, so the orchestrator must pick a sensible default
+      // matching the just-saved provider. Without this fallback a
+      // stale `selected-model` from a previously-removed provider
+      // would survive onboarding and break chat requests.
+      const h = makeHarness();
+      await h.orchestrator.handleOnboardingComplete({});
+      await h.orchestrator.handleConnectAttempt({
+        provider: 'anthropic',
+        apiKey: 'sk-good',
+        baseUrl: null,
+        model: null,
+      });
+      expect(h.selectedModels).toEqual(['claude-opus-4-6']);
+      expect(h.finalLicks).toHaveLength(1);
+      expect(h.finalLicks[0].data.model).toBe('claude-opus-4-6');
+      expect(h.finalLicks[0].data.modelLabel).toBe('CLAUDE-OPUS-4-6');
+    });
+
+    it('leaves the selected model untouched when the catalogue has no models for the provider', async () => {
+      const fs = new VirtualFS('no-models-' + Math.random());
+      const selectedModels: string[] = [];
+      const finalLicks: any[] = [];
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => ({
+          providers: baseCatalogue.providers,
+          models: { openai: [], anthropic: [] },
+        }),
+        saveAccount: () => {},
+        setSelectedModel: (id) => selectedModels.push(id),
+        broadcastToDip: () => {},
+        fireFinalLick: (data) => finalLicks.push(data),
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleConnectAttempt({
+        provider: 'openai',
+        apiKey: 'sk-good',
+        model: null,
+      });
+      expect(selectedModels).toEqual([]);
+      expect(finalLicks[0].data.model).toBeNull();
+    });
+
     it('rejects empty payloads gracefully', async () => {
       const h = makeHarness();
       await h.orchestrator.handleOnboardingComplete({});

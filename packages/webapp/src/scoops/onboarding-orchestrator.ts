@@ -259,9 +259,27 @@ export class OnboardingOrchestrator {
 
     // Both `ok` and `skipped` count as accept-and-save for the
     // orchestrator; the dip surfaces the difference inline.
+    //
+    // When the dip omits a model (the welcome dip no longer
+    // surfaces a model picker), fall back to the first model the
+    // provider catalogue advertises for the just-saved provider.
+    // Without this fallback, a stale `selected-model` from a
+    // previously-removed provider would survive onboarding and
+    // immediately fail chat requests until the user manually
+    // corrected the header dropdown.
+    let effectiveModel = model || null;
+    if (!effectiveModel) {
+      try {
+        const catalogue = this.deps.getProviderCatalogue();
+        const fallback = catalogue.models?.[provider]?.[0]?.id;
+        if (fallback) effectiveModel = fallback;
+      } catch (err) {
+        log.warn('Failed to resolve fallback model for provider', { provider, err });
+      }
+    }
     try {
       this.deps.saveAccount(provider, apiKey.trim(), baseUrl ?? undefined);
-      if (model) this.deps.setSelectedModel(model);
+      if (effectiveModel) this.deps.setSelectedModel(effectiveModel);
     } catch (err) {
       log.warn('saveAccount failed', err);
       this.deps.broadcastToDip({
@@ -288,16 +306,16 @@ export class OnboardingOrchestrator {
     // Hand off to the cone — now that an LLM is configured, the cone
     // can comment on the choice. SKILL.md spells out the exact reply.
     const modelLabel =
-      model && this.deps.resolveModelLabel?.(provider, model)
-        ? this.deps.resolveModelLabel?.(provider, model)
-        : model || null;
+      effectiveModel && this.deps.resolveModelLabel?.(provider, effectiveModel)
+        ? this.deps.resolveModelLabel?.(provider, effectiveModel)
+        : effectiveModel || null;
     this.stage = 'complete';
     this.deps.fireFinalLick({
       action: 'onboarding-complete-with-provider',
       data: {
         profile: this.profile,
         provider,
-        model: model ?? null,
+        model: effectiveModel ?? null,
         modelLabel,
         validation: result.kind,
       },
