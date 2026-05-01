@@ -204,10 +204,37 @@ describe('OnboardingOrchestrator', () => {
       ]);
     });
 
-    it('ignores stray ready events when the orchestrator is idle', () => {
+    it('also responds when the orchestrator is idle (reload after ledger suppressed onboarding-complete)', () => {
+      // The connect-llm dip re-mounts from chat history on reload
+      // and emits `connect-ready` again. The persistent welcome-
+      // flow ledger may have already swallowed `onboarding-complete`
+      // so the orchestrator stays at `idle`. The catalogue must
+      // still flow through, otherwise the dip is stuck on
+      // "Loading providers…" forever.
       const h = makeHarness();
       h.orchestrator.handleConnectReady();
-      expect(h.dipInbox).toHaveLength(0);
+      expect(h.dipInbox).toEqual([
+        {
+          type: 'slicc-providers',
+          providers: baseCatalogue.providers,
+          models: baseCatalogue.models,
+        },
+      ]);
+    });
+
+    it('ignores ready events after onboarding has fully completed', async () => {
+      const h = makeHarness();
+      await h.orchestrator.handleOnboardingComplete({});
+      await h.orchestrator.handleConnectAttempt({
+        provider: 'openai',
+        apiKey: 'sk-good',
+        baseUrl: null,
+        model: 'gpt-4o',
+      });
+      expect(h.orchestrator.getStage()).toBe('complete');
+      h.dipInbox.length = 0;
+      h.orchestrator.handleConnectReady();
+      expect(h.dipInbox).toEqual([]);
     });
   });
 

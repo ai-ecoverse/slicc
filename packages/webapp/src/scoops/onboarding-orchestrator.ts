@@ -234,9 +234,22 @@ export class OnboardingOrchestrator {
     return true;
   }
 
-  /** Dip is mounted and asking for the provider catalogue. */
+  /** Dip is mounted and asking for the provider catalogue.
+   *
+   * Responds in any non-complete stage. The dip emits `connect-ready`
+   * whenever it (re)mounts — including after a reload where the
+   * persistent welcome-flow ledger suppressed the prior
+   * `onboarding-complete` and left the orchestrator at `idle`. We
+   * still need to feed the catalogue so the dip leaves its
+   * "Loading providers…" state.
+   *
+   * If onboarding has already wired a provider, the host short-
+   * circuits with a `slicc-already-connected` message before this
+   * runs, so the only remaining `complete` case is a programmatic
+   * re-fire we can safely ignore.
+   */
   handleConnectReady(): void {
-    if (this.stage !== 'awaiting-connect' && this.stage !== 'connecting') return;
+    if (this.stage === 'complete') return;
     const catalogue = this.deps.getProviderCatalogue();
     this.deps.broadcastToDip({
       type: 'slicc-providers',
@@ -245,9 +258,15 @@ export class OnboardingOrchestrator {
     });
   }
 
-  /** User submitted a provider + key. */
+  /** User submitted a provider + key.
+   *
+   * Idle is also a valid entry stage — see `handleConnectReady` for
+   * the reload case where the dip is re-mounted from chat history
+   * after the welcome-flow ledger already suppressed
+   * `onboarding-complete`.
+   */
   async handleConnectAttempt(payload: ConnectAttemptPayload): Promise<void> {
-    if (this.stage !== 'awaiting-connect' && this.stage !== 'connecting') return;
+    if (this.stage === 'complete') return;
     this.stage = 'connecting';
 
     const { provider, apiKey, baseUrl, deployment, apiVersion, model } = payload;
@@ -399,9 +418,15 @@ export class OnboardingOrchestrator {
     });
   }
 
-  /** User picked an OAuth provider and clicked "Login". */
+  /** User picked an OAuth provider and clicked "Login".
+   *
+   * Idle is also a valid entry stage — see `handleConnectReady` for
+   * the reload case where the dip is re-mounted from chat history
+   * after the welcome-flow ledger already suppressed
+   * `onboarding-complete`.
+   */
   async handleOAuthAttempt(payload: OAuthAttemptPayload): Promise<void> {
-    if (this.stage !== 'awaiting-connect' && this.stage !== 'connecting') return;
+    if (this.stage === 'complete') return;
     if (!this.deps.launchOAuth) {
       this.deps.broadcastToDip({
         type: 'slicc-connect-result',
