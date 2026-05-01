@@ -163,7 +163,8 @@
       .field-help {
         font-size: 11px;
         color: var(--s2-content-secondary, #a1a1a1);
-        margin-top: -4px;
+        margin-top: 6px;
+        line-height: 1.4;
       }
     </style>
   </head>
