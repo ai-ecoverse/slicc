@@ -160,6 +160,12 @@
         color: var(--s2-content-secondary, #a1a1a1);
         margin-top: 6px;
       }
+      .field-help {
+        font-size: 11px;
+        color: var(--s2-content-secondary, #a1a1a1);
+        margin-top: 6px;
+        line-height: 1.4;
+      }
     </style>
   </head>
   <body>
@@ -178,16 +184,23 @@
       <div class="step-sub" id="providerDesc"></div>
       <div class="form">
         <div id="apiKeyRow">
-          <label for="apiKeyIn">API Key</label>
+          <label for="apiKeyIn" id="apiKeyLabel">API Key</label>
           <input id="apiKeyIn" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" />
         </div>
         <div id="baseUrlRow" hidden>
           <label for="baseUrlIn">Base URL</label>
           <input id="baseUrlIn" type="text" autocomplete="off" spellcheck="false" placeholder="https://…" />
+          <div id="baseUrlHelp" class="field-help" hidden></div>
         </div>
-        <div id="modelRow">
-          <label for="modelSel">Model</label>
-          <select id="modelSel"></select>
+        <div id="deploymentRow" hidden>
+          <label for="deploymentIn">Deployment</label>
+          <input id="deploymentIn" type="text" autocomplete="off" spellcheck="false" placeholder="deployment-name" />
+          <div id="deploymentHelp" class="field-help" hidden></div>
+        </div>
+        <div id="apiVersionRow" hidden>
+          <label for="apiVersionIn">API Version</label>
+          <input id="apiVersionIn" type="text" autocomplete="off" spellcheck="false" placeholder="api-version" />
+          <div id="apiVersionHelp" class="field-help" hidden></div>
         </div>
       </div>
       <div id="status" class="status"></div>
@@ -207,24 +220,41 @@
 
     <script>
       // Provider catalogue is injected by the parent via slicc-message.
-      // Until it arrives we render a tiny placeholder.
+      // Until it arrives we render a tiny placeholder. Model selection
+      // intentionally lives in the chat header (not the dip), so we
+      // ignore the `models` map and never surface it here.
       var providers = [];
-      var modelsByProvider = {};
       var current = { provider: null, providerConfig: null };
 
       var providerListEl = document.getElementById('providerList');
       var providerNameEl = document.getElementById('providerName');
       var providerDescEl = document.getElementById('providerDesc');
       var apiKeyRow = document.getElementById('apiKeyRow');
+      var apiKeyLabelEl = document.getElementById('apiKeyLabel');
       var apiKeyIn = document.getElementById('apiKeyIn');
       var baseUrlRow = document.getElementById('baseUrlRow');
       var baseUrlIn = document.getElementById('baseUrlIn');
-      var modelRow = document.getElementById('modelRow');
-      var modelSel = document.getElementById('modelSel');
+      var baseUrlHelpEl = document.getElementById('baseUrlHelp');
+      var deploymentRow = document.getElementById('deploymentRow');
+      var deploymentIn = document.getElementById('deploymentIn');
+      var deploymentHelpEl = document.getElementById('deploymentHelp');
+      var apiVersionRow = document.getElementById('apiVersionRow');
+      var apiVersionIn = document.getElementById('apiVersionIn');
+      var apiVersionHelpEl = document.getElementById('apiVersionHelp');
       var statusEl = document.getElementById('status');
       var connectBtn = document.getElementById('connectBtn');
       var backBtn = document.getElementById('backBtn');
       var metaEl = document.getElementById('meta');
+
+      function setHelpText(el, text) {
+        if (text) {
+          el.textContent = text;
+          el.hidden = false;
+        } else {
+          el.textContent = '';
+          el.hidden = true;
+        }
+      }
 
       function renderProviders() {
         providerListEl.innerHTML = '';
@@ -275,37 +305,55 @@
         var fallback = (p.id || '') + ' provider';
         providerDescEl.textContent =
           p.description && p.description !== fallback ? p.description : '';
-        baseUrlRow.hidden = !p.requiresBaseUrl;
-        baseUrlIn.value = p.defaultBaseUrl || '';
         statusEl.className = 'status';
         statusEl.textContent = '';
         metaEl.textContent = '';
-        apiKeyIn.value = '';
 
-        // OAuth providers don't take an API key OR a model — they
-        // delegate everything to a popup login flow handled by the
-        // host page. The dip just emits an `oauth-attempt` and waits
-        // for `slicc-connect-result`.
+        // ── API key field ─────────────────────────────────────────
+        apiKeyIn.value = '';
+        // Mirror the Settings → Add Account dialog's "API Key (ENVVAR):"
+        // label so users see which env-var SLICC will read on import.
+        apiKeyLabelEl.textContent =
+          'API Key' + (p.apiKeyEnvVar ? ' (' + p.apiKeyEnvVar + ')' : '');
+        apiKeyIn.placeholder = p.apiKeyPlaceholder || 'sk-…';
+
+        // ── Base URL field ────────────────────────────────────────
+        baseUrlRow.hidden = !p.requiresBaseUrl;
+        baseUrlIn.value = p.defaultBaseUrl || '';
+        baseUrlIn.placeholder = p.defaultBaseUrl || 'https://…';
+        setHelpText(baseUrlHelpEl, p.requiresBaseUrl ? p.baseUrlDescription || '' : '');
+
+        // ── Deployment field ──────────────────────────────────────
+        deploymentRow.hidden = !p.requiresDeployment;
+        deploymentIn.value = '';
+        deploymentIn.placeholder = p.deploymentPlaceholder || 'deployment-name';
+        setHelpText(
+          deploymentHelpEl,
+          p.requiresDeployment ? p.deploymentDescription || '' : ''
+        );
+
+        // ── API version field ─────────────────────────────────────
+        apiVersionRow.hidden = !p.requiresApiVersion;
+        apiVersionIn.value = p.apiVersionDefault || '';
+        apiVersionIn.placeholder = p.apiVersionDefault || 'api-version';
+        setHelpText(
+          apiVersionHelpEl,
+          p.requiresApiVersion ? p.apiVersionDescription || '' : ''
+        );
+
+        // OAuth providers delegate everything to a popup login flow
+        // handled by the host page. The dip just emits an
+        // `oauth-attempt` and waits for `slicc-connect-result`.
         var isOAuth = !!p.isOAuth;
         apiKeyRow.hidden = isOAuth;
-        modelRow.hidden = isOAuth;
-
-        // Populate model list (if known up-front).
-        modelSel.innerHTML = '';
-        var models = modelsByProvider[p.id] || [];
-        if (models.length === 0) {
-          var opt = document.createElement('option');
-          opt.value = '';
-          opt.textContent = '(default)';
-          modelSel.appendChild(opt);
-        } else {
-          models.forEach(function (m) {
-            var opt = document.createElement('option');
-            opt.value = m.id;
-            opt.textContent = m.name || m.id;
-            modelSel.appendChild(opt);
-          });
+        // OAuth + per-provider extras don't combine in the settings
+        // dialog either, so hide deployment/api-version on OAuth
+        // providers regardless of catalogue flags.
+        if (isOAuth) {
+          deploymentRow.hidden = true;
+          apiVersionRow.hidden = true;
         }
+
         connectBtn.disabled = false;
         connectBtn.textContent = isOAuth ? 'Login with ' + p.name : 'Connect';
         go('sCreds');
@@ -331,12 +379,27 @@
           return;
         }
         var key = (apiKeyIn.value || '').trim();
-        if (!key) {
+        if (p.requiresApiKey !== false && !key) {
           statusEl.className = 'status error';
           statusEl.textContent = 'Please enter an API key.';
           apiKeyIn.focus();
           return;
         }
+        var baseUrlVal = (baseUrlIn.value || '').trim();
+        if (p.requiresBaseUrl && !baseUrlVal) {
+          statusEl.className = 'status error';
+          statusEl.textContent = 'Please enter a base URL.';
+          baseUrlIn.focus();
+          return;
+        }
+        var deploymentVal = (deploymentIn.value || '').trim();
+        if (p.requiresDeployment && !deploymentVal) {
+          statusEl.className = 'status error';
+          statusEl.textContent = 'Please enter a deployment name.';
+          deploymentIn.focus();
+          return;
+        }
+        var apiVersionVal = (apiVersionIn.value || '').trim();
         connectBtn.disabled = true;
         connectBtn.textContent = 'Validating…';
         statusEl.className = 'status busy';
@@ -346,22 +409,34 @@
           data: {
             provider: current.provider,
             apiKey: key,
-            baseUrl: (baseUrlIn.value || '').trim() || null,
-            model: modelSel.value || null,
+            baseUrl: baseUrlVal || null,
+            deployment: deploymentVal || null,
+            apiVersion: apiVersionVal || null,
+            // Model picking is handled by the chat header dropdown,
+            // not by the welcome dip — leave it null so the
+            // orchestrator preserves whatever model the user (or
+            // provider defaults) has already chosen.
+            model: null,
           },
         });
       };
 
-      apiKeyIn.addEventListener('keydown', function (e) {
+      function submitOnEnter(e) {
         if (e.key === 'Enter') connectBtn.click();
-      });
+      }
+      apiKeyIn.addEventListener('keydown', submitOnEnter);
+      baseUrlIn.addEventListener('keydown', submitOnEnter);
+      deploymentIn.addEventListener('keydown', submitOnEnter);
+      apiVersionIn.addEventListener('keydown', submitOnEnter);
 
       // Listen for parent → dip messages.
       document.addEventListener('slicc-message', function (e) {
         var msg = e.detail || {};
         if (msg.type === 'slicc-providers') {
           providers = (msg.providers || []).slice();
-          modelsByProvider = msg.models || {};
+          // The dip used to read `msg.models` to populate a per-provider
+          // model dropdown; that responsibility now lives in the chat
+          // header so we deliberately ignore the models map.
           renderProviders();
         } else if (msg.type === 'slicc-already-connected') {
           // Reload of a chat that already finished onboarding —

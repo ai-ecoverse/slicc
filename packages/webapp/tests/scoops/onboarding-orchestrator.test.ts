@@ -29,10 +29,22 @@ const baseCatalogue: ProviderCatalogue = {
       requiresApiKey: true,
       requiresBaseUrl: false,
     },
+    {
+      id: 'azure-openai',
+      name: 'Azure OpenAI',
+      description: 'GPT models via Azure AI Foundry',
+      requiresApiKey: true,
+      requiresBaseUrl: true,
+      requiresDeployment: true,
+      requiresApiVersion: true,
+      defaultBaseUrl: 'https://your-resource.cognitiveservices.azure.com/',
+      apiVersionDefault: '2024-08-01-preview',
+    },
   ],
   models: {
     openai: [{ id: 'gpt-4o', name: 'GPT-4o' }],
     anthropic: [{ id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }],
+    'azure-openai': [{ id: 'gpt-4o', name: 'GPT-4o' }],
   },
 };
 
@@ -55,7 +67,8 @@ function makeHarness(
     postSystemMessage: (line) => systemMessages.push(line),
     postDipReference: (md) => dipRefs.push(md),
     getProviderCatalogue: () => baseCatalogue,
-    saveAccount: (id, key, baseUrl) => accounts.push({ id, key, baseUrl }),
+    saveAccount: (id, key, baseUrl, deployment, apiVersion) =>
+      accounts.push({ id, key, baseUrl, deployment, apiVersion }),
     setSelectedModel: (id) => selectedModels.push(id),
     resolveModelLabel: (_p, m) => m.toUpperCase(),
     broadcastToDip: (msg) => dipInbox.push(msg),
@@ -191,10 +204,37 @@ describe('OnboardingOrchestrator', () => {
       ]);
     });
 
-    it('ignores stray ready events when the orchestrator is idle', () => {
+    it('also responds when the orchestrator is idle (reload after ledger suppressed onboarding-complete)', () => {
+      // The connect-llm dip re-mounts from chat history on reload
+      // and emits `connect-ready` again. The persistent welcome-
+      // flow ledger may have already swallowed `onboarding-complete`
+      // so the orchestrator stays at `idle`. The catalogue must
+      // still flow through, otherwise the dip is stuck on
+      // "Loading providers…" forever.
       const h = makeHarness();
       h.orchestrator.handleConnectReady();
-      expect(h.dipInbox).toHaveLength(0);
+      expect(h.dipInbox).toEqual([
+        {
+          type: 'slicc-providers',
+          providers: baseCatalogue.providers,
+          models: baseCatalogue.models,
+        },
+      ]);
+    });
+
+    it('ignores ready events after onboarding has fully completed', async () => {
+      const h = makeHarness();
+      await h.orchestrator.handleOnboardingComplete({});
+      await h.orchestrator.handleConnectAttempt({
+        provider: 'openai',
+        apiKey: 'sk-good',
+        baseUrl: null,
+        model: 'gpt-4o',
+      });
+      expect(h.orchestrator.getStage()).toBe('complete');
+      h.dipInbox.length = 0;
+      h.orchestrator.handleConnectReady();
+      expect(h.dipInbox).toEqual([]);
     });
   });
 
@@ -208,7 +248,15 @@ describe('OnboardingOrchestrator', () => {
         baseUrl: null,
         model: 'gpt-4o',
       });
-      expect(h.accounts).toEqual([{ id: 'openai', key: 'sk-good', baseUrl: undefined }]);
+      expect(h.accounts).toEqual([
+        {
+          id: 'openai',
+          key: 'sk-good',
+          baseUrl: undefined,
+          deployment: undefined,
+          apiVersion: undefined,
+        },
+      ]);
       expect(h.selectedModels).toEqual(['gpt-4o']);
       expect(h.finalLicks).toHaveLength(1);
       expect(h.finalLicks[0].action).toBe('onboarding-complete-with-provider');
@@ -275,6 +323,112 @@ describe('OnboardingOrchestrator', () => {
       expect(ok.kind).toBe('skipped');
       expect(ok.note.toLowerCase()).toContain('saved');
       expect(orch.getStage()).toBe('complete');
+    });
+
+    it('falls back to the first catalogue model when the dip omits one', async () => {
+      // Mirrors the new welcome-dip path: dip no longer picks a
+      // model, so the orchestrator must pick a sensible default
+      // matching the just-saved provider. Without this fallback a
+      // stale `selected-model` from a previously-removed provider
+      // would survive onboarding and break chat requests.
+      const h = makeHarness();
+      await h.orchestrator.handleOnboardingComplete({});
+      await h.orchestrator.handleConnectAttempt({
+        provider: 'anthropic',
+        apiKey: 'sk-good',
+        baseUrl: null,
+        model: null,
+      });
+      expect(h.selectedModels).toEqual(['claude-opus-4-6']);
+      expect(h.finalLicks).toHaveLength(1);
+      expect(h.finalLicks[0].data.model).toBe('claude-opus-4-6');
+      expect(h.finalLicks[0].data.modelLabel).toBe('CLAUDE-OPUS-4-6');
+    });
+
+    it('leaves the selected model untouched when the catalogue has no models for the provider', async () => {
+      const fs = new VirtualFS('no-models-' + Math.random());
+      const selectedModels: string[] = [];
+      const finalLicks: any[] = [];
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => ({
+          providers: baseCatalogue.providers,
+          models: { openai: [], anthropic: [] },
+        }),
+        saveAccount: () => {},
+        setSelectedModel: (id) => selectedModels.push(id),
+        broadcastToDip: () => {},
+        fireFinalLick: (data) => finalLicks.push(data),
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleConnectAttempt({
+        provider: 'openai',
+        apiKey: 'sk-good',
+        model: null,
+      });
+      expect(selectedModels).toEqual([]);
+      expect(finalLicks[0].data.model).toBeNull();
+    });
+
+    it('forwards deployment + apiVersion to saveAccount for Azure-style providers', async () => {
+      const h = makeHarness();
+      await h.orchestrator.handleOnboardingComplete({});
+      await h.orchestrator.handleConnectAttempt({
+        provider: 'azure-openai',
+        apiKey: 'azure-key',
+        baseUrl: 'https://example.cognitiveservices.azure.com/',
+        deployment: 'gpt4o-eastus',
+        apiVersion: '2024-08-01-preview',
+        model: null,
+      });
+      expect(h.accounts).toEqual([
+        {
+          id: 'azure-openai',
+          key: 'azure-key',
+          baseUrl: 'https://example.cognitiveservices.azure.com/',
+          deployment: 'gpt4o-eastus',
+          apiVersion: '2024-08-01-preview',
+        },
+      ]);
+      expect(h.finalLicks).toHaveLength(1);
+      expect(h.finalLicks[0].data.provider).toBe('azure-openai');
+    });
+
+    it('rejects when a requiresDeployment provider is missing the deployment field', async () => {
+      const h = makeHarness();
+      await h.orchestrator.handleOnboardingComplete({});
+      await h.orchestrator.handleConnectAttempt({
+        provider: 'azure-openai',
+        apiKey: 'azure-key',
+        baseUrl: 'https://example.cognitiveservices.azure.com/',
+        deployment: null,
+        apiVersion: '2024-08-01-preview',
+      });
+      expect(h.accounts).toEqual([]);
+      expect(h.finalLicks).toEqual([]);
+      const reject = h.dipInbox.find((m) => m.type === 'slicc-connect-result');
+      expect(reject.ok).toBe(false);
+      expect(reject.message).toContain('deployment');
+      expect(h.orchestrator.getStage()).toBe('awaiting-connect');
+    });
+
+    it('rejects when a requiresBaseUrl provider is missing the base URL', async () => {
+      const h = makeHarness();
+      await h.orchestrator.handleOnboardingComplete({});
+      await h.orchestrator.handleConnectAttempt({
+        provider: 'azure-openai',
+        apiKey: 'azure-key',
+        baseUrl: null,
+        deployment: 'gpt4o-eastus',
+      });
+      expect(h.accounts).toEqual([]);
+      const reject = h.dipInbox.find((m) => m.type === 'slicc-connect-result');
+      expect(reject.ok).toBe(false);
+      expect(reject.message.toLowerCase()).toContain('base url');
     });
 
     it('rejects empty payloads gracefully', async () => {
