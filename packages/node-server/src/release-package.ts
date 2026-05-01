@@ -26,11 +26,6 @@ interface PackageMetadata {
   version: string;
 }
 
-interface ExtensionMetadata {
-  name: string;
-  version: string;
-}
-
 interface ZipEntry {
   path: string;
   data: Buffer;
@@ -60,14 +55,6 @@ export function sanitizeArtifactName(value: string): string {
     .replace(/[^a-z0-9._-]+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
-}
-
-export function assertMatchingVersions(packageVersion: string, extensionVersion: string): void {
-  if (packageVersion !== extensionVersion) {
-    throw new Error(
-      `package.json version (${packageVersion}) must match manifest.json version (${extensionVersion}) before packaging release artifacts.`
-    );
-  }
 }
 
 export function collectZipEntries(rootDir: string): ZipEntry[] {
@@ -236,7 +223,7 @@ export function parseNpmPackFilename(output: string): string {
   return filename;
 }
 
-function createExtensionArchive(metadata: ExtensionMetadata): string {
+function createExtensionArchive(metadata: PackageMetadata): string {
   const extensionDir = resolve(PROJECT_ROOT, 'dist', 'extension');
   requirePath(extensionDir, 'Extension build output');
 
@@ -279,15 +266,11 @@ function writeReleaseManifest(manifest: ReleaseManifest): string {
 
 export function packageReleaseArtifacts(): ReleaseManifest {
   const packageJson = readJsonFile<PackageMetadata>(resolve(PROJECT_ROOT, 'package.json'));
-  const extensionManifest = readJsonFile<ExtensionMetadata>(
-    resolve(PROJECT_ROOT, 'packages/chrome-extension/manifest.json')
-  );
-  assertMatchingVersions(packageJson.version, extensionManifest.version);
 
   rmSync(RELEASE_DIR, { recursive: true, force: true });
   mkdirSync(RELEASE_DIR, { recursive: true });
 
-  const extensionArchive = createExtensionArchive(extensionManifest);
+  const extensionArchive = createExtensionArchive(packageJson);
   const npmPackageTarball = createNpmPackageTarball();
   const manifest: ReleaseManifest = {
     version: packageJson.version,

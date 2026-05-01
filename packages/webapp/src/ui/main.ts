@@ -2534,16 +2534,17 @@ async function main(): Promise<void> {
   }
 
   // ── Upgrade detection ────────────────────────────────────────────────
-  // Compares the bundled SLICC version (baked into /shared/version.json
-  // at release time) against the value last seen on a previous boot and
-  // emits an `upgrade` lick when it bumped. Aligned with the session-
-  // reload (mount-recovery) lick above: both fire after the orchestrator
-  // is fully initialized so a cone is guaranteed to be present as a
-  // routable target. The "last seen" marker is only advanced AFTER the
-  // lick has actually been routed — otherwise a transient no-cone state
-  // would silently lose the upgrade notification for that version.
+  // Compares the bundled SLICC version (baked into the bundle at build
+  // time from root package.json) against the value last seen on a
+  // previous boot and emits an `upgrade` lick when it bumped. Aligned
+  // with the session-reload (mount-recovery) lick above: both fire after
+  // the orchestrator is fully initialized so a cone is guaranteed to be
+  // present as a routable target. The "last seen" marker is only
+  // advanced AFTER the lick has actually been routed — otherwise a
+  // transient no-cone state would silently lose the upgrade notification
+  // for that version.
   if (sharedFs) {
-    detectUpgrade(sharedFs)
+    detectUpgrade()
       .then(async (result) => {
         if (!result.isUpgrade || result.lastSeen === null) return;
         const event: LickEvent = {

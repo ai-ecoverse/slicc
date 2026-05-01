@@ -1,4 +1,6 @@
 declare const __DEV__: boolean;
+declare const __SLICC_VERSION__: string;
+declare const __SLICC_RELEASED_AT__: string | null;
 
 declare module 'sql.js/dist/sql-wasm.js' {
   interface SqlJsResultSet {
