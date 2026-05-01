@@ -11,18 +11,10 @@
 
 import type { VirtualFS } from './virtual-fs.js';
 import { LocalMountBackend } from './mount/backend-local.js';
-import { S3MountBackend } from './mount/backend-s3.js';
-import { DaMountBackend } from './mount/backend-da.js';
+import { S3MountBackend, type SignedFetchS3 } from './mount/backend-s3.js';
+import { DaMountBackend, type SignedFetchDa } from './mount/backend-da.js';
 import { RemoteMountCache } from './mount/remote-cache.js';
-import {
-  resolveS3Profile,
-  resolveDaProfile,
-  ProfileNotConfiguredError,
-  getDefaultSecretStore,
-  getDefaultImsClient,
-  type SecretStore,
-  type AdobeImsClient,
-} from './mount/profile.js';
+import { makeSignedFetchS3, makeSignedFetchDa } from './mount/signed-fetch.js';
 import { newMountId } from './mount/mount-id.js';
 import { getToolExecutionContext, showToolUI, toolUIRegistry } from '../tools/tool-ui.js';
 
@@ -40,8 +32,13 @@ export interface MountCommandsOptions {
    * LocalMountBackend.create). Scoops can mount S3 and DA freely.
    */
   isScoop?: () => boolean;
-  secretStore?: SecretStore;
-  imsClient?: AdobeImsClient;
+  /**
+   * Test override for the S3 transport. Production builds the default at
+   * mount time via `makeSignedFetchS3(profile)`.
+   */
+  signedFetchS3?: SignedFetchS3;
+  /** Test override for the DA transport. */
+  signedFetchDa?: SignedFetchDa;
 }
 
 interface ParsedArgs {
@@ -83,12 +80,12 @@ function parseArgs(args: string[]): ParsedArgs {
 }
 
 export class MountCommands {
-  private secretStore?: SecretStore;
-  private imsClient?: AdobeImsClient;
+  private signedFetchS3?: SignedFetchS3;
+  private signedFetchDa?: SignedFetchDa;
 
   constructor(private options: MountCommandsOptions) {
-    this.secretStore = options.secretStore;
-    this.imsClient = options.imsClient;
+    this.signedFetchS3 = options.signedFetchS3;
+    this.signedFetchDa = options.signedFetchDa;
   }
 
   async execute(args: string[], cwd: string): Promise<MountCommandResult> {
@@ -170,30 +167,21 @@ export class MountCommands {
     }
     const profileName = parsed.profile ?? 'default';
 
-    // Resolve the store if not already injected.
-    const store = this.secretStore ?? (await getDefaultSecretStore());
-
-    let profileResolved;
-    try {
-      profileResolved = await resolveS3Profile(profileName, store);
-    } catch (err) {
-      if (err instanceof ProfileNotConfiguredError) {
-        return { stdout: '', stderr: `mount: ${err.message}\n`, exitCode: 1 };
-      }
-      throw err;
-    }
+    // Profile resolution is server-side — node-server's
+    // /api/s3-sign-and-forward (or the SW handler in extension mode) reads
+    // s3.<profile>.* fresh on every call. Browser holds no credentials.
+    // The mount-time probe (below) surfaces ProfileNotConfiguredError as a
+    // 4xx through the transport, which signedFetch maps to FsError(EACCES).
 
     const mountId = newMountId();
     const cache = new RemoteMountCache({ mountId, ttlMs: 30_000 });
     const backend = new S3MountBackend({
       source: parsed.source,
       profile: profileName,
-      profileResolved,
       cache,
       maxBodyBytes: parsed.maxBodyMb ? parsed.maxBodyMb * 1024 * 1024 : undefined,
       mountId,
-      // Auth retry: re-read secrets on 401/403 to pick up rotated creds.
-      reresolveProfile: () => resolveS3Profile(profileName, store),
+      signedFetch: this.signedFetchS3 ?? makeSignedFetchS3(profileName),
     });
 
     if (!parsed.noProbe) {
@@ -241,28 +229,19 @@ export class MountCommands {
     }
     const profileName = parsed.profile ?? 'default';
 
-    // Resolve the IMS client if not already injected.
-    const ims = this.imsClient ?? (await getDefaultImsClient());
-
-    let profileResolved;
-    try {
-      profileResolved = await resolveDaProfile(profileName, ims);
-    } catch (err) {
-      if (err instanceof ProfileNotConfiguredError) {
-        return { stdout: '', stderr: `mount: ${err.message}\n`, exitCode: 1 };
-      }
-      throw err;
-    }
+    // The IMS bearer token comes from the browser-side Adobe LLM provider on
+    // each request; the transport (signedFetch) fetches it fresh per call so
+    // refreshes apply. Tests inject signedFetch directly and bypass this.
 
     const mountId = newMountId();
     const cache = new RemoteMountCache({ mountId, ttlMs: 30_000 });
     const backend = new DaMountBackend({
       source: parsed.source,
       profile: profileName,
-      profileResolved,
       cache,
       maxBodyBytes: parsed.maxBodyMb ? parsed.maxBodyMb * 1024 * 1024 : undefined,
       mountId,
+      signedFetch: this.signedFetchDa ?? makeSignedFetchDa(),
     });
 
     if (!parsed.noProbe) {

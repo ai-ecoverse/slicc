@@ -26,6 +26,17 @@ export type { SecretStore, S3Profile, DaProfile, AdobeImsClient } from './profil
 export { LocalMountBackend } from './backend-local.js';
 export type { LocalMountBackendOptions } from './backend-local.js';
 export { S3MountBackend } from './backend-s3.js';
-export type { S3MountBackendOptions } from './backend-s3.js';
+export type { S3MountBackendOptions, SignedFetchS3, SignedFetchS3Request } from './backend-s3.js';
 export { DaMountBackend } from './backend-da.js';
-export type { DaMountBackendOptions } from './backend-da.js';
+export type { DaMountBackendOptions, SignedFetchDa, SignedFetchDaRequest } from './backend-da.js';
+export { makeSignedFetchS3, makeSignedFetchDa } from './signed-fetch.js';
+export { executeS3SignAndForward, executeDaSignAndForward } from './sign-and-forward-shared.js';
+export type {
+  S3SignAndForwardEnvelope,
+  DaSignAndForwardEnvelope,
+  SignAndForwardReply,
+  SignAndForwardSuccess,
+  SignAndForwardFailure,
+  SignAndForwardErrorCode,
+  SecretGetter,
+} from './sign-and-forward-shared.js';

@@ -211,7 +211,12 @@ describe('recoverMounts', () => {
     expect(received?.mountId).toBe(e.descriptor.kind === 'local' ? e.descriptor.mountId : '');
   });
 
-  it('routes s3 descriptors with missing profile to needsRecovery', async () => {
+  // Recovery for remote backends is now lazy — credential resolution
+  // happens server-side (CLI) or in the SW (extension) at request time, not
+  // at recovery time. The browser-side recoverMounts just rebuilds the
+  // backend and registers it. Missing-profile / missing-IMS failures
+  // surface on the first read/write, not during recovery itself.
+  it('S3 recovery succeeds even when profile is not configured (lazy resolution)', async () => {
     const entry: MountTableEntry = {
       targetPath: '/mnt/r2',
       descriptor: {
@@ -224,18 +229,17 @@ describe('recoverMounts', () => {
     };
     const { fs } = mockFs();
     const result = await recoverMounts([entry], fs);
-    expect(result.needsRecovery).toEqual([
-      {
-        kind: 's3',
-        path: '/mnt/r2',
-        source: 's3://bucket/prefix',
-        profile: 'r2',
-        reason: expect.stringContaining("missing required field 'access_key_id'"),
-      },
-    ]);
+    expect(result.needsRecovery).toEqual([]);
+    expect(result.restored).toHaveLength(1);
+    expect(result.restored[0]).toMatchObject({
+      kind: 's3',
+      path: '/mnt/r2',
+      source: 's3://bucket/prefix',
+      profile: 'r2',
+    });
   });
 
-  it('routes da descriptors with no IMS account to needsRecovery', async () => {
+  it('DA recovery succeeds even with no IMS account yet (lazy resolution)', async () => {
     const entry: MountTableEntry = {
       targetPath: '/mnt/da',
       descriptor: {
@@ -248,19 +252,14 @@ describe('recoverMounts', () => {
     };
     const { fs } = mockFs();
     const result = await recoverMounts([entry], fs);
-    // With Phase 12 wired in, DA recovery actually attempts reconstruction
-    // via getDefaultImsClient(). In this test environment there's no logged-
-    // in IMS account, so reconstruction fails — we just assert the entry
-    // surfaces in needsRecovery with the right shape and a non-empty reason.
-    expect(result.needsRecovery).toHaveLength(1);
-    expect(result.needsRecovery[0]).toMatchObject({
+    expect(result.needsRecovery).toEqual([]);
+    expect(result.restored).toHaveLength(1);
+    expect(result.restored[0]).toMatchObject({
       kind: 'da',
       path: '/mnt/da',
       source: 'da://my-org/my-repo',
       profile: 'default',
     });
-    expect(result.needsRecovery[0]).toHaveProperty('reason');
-    expect((result.needsRecovery[0] as { reason: string }).reason.length).toBeGreaterThan(0);
   });
 });
 

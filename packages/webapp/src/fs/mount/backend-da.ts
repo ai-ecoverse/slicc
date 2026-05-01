@@ -1,15 +1,21 @@
 /**
- * DaMountBackend — HTTP + IMS bearer against da.live (Adobe Document Authoring).
+ * DaMountBackend — signing-naive HTTP mount for da.live (Adobe Document Authoring).
  *
- * URL scheme:
- *   - readFile / writeFile: GET/POST https://admin.da.live/source/<org>/<repo>/<path>
- *   - readDir / refresh:    GET     https://admin.da.live/list/<org>/<repo>/<path>
+ * Like S3MountBackend, the DA backend never holds the IMS bearer token. It
+ * builds *logical* requests (`{method, path, query, headers, body}`) where
+ * `path` is the full DA URL path (e.g. `/source/<org>/<repo>/<key>` for
+ * reads/writes, `/list/<org>/<repo>/<dir>` for directory walks) and hands
+ * them to an injected `SignedFetchDa` transport, which is wired at runtime to:
  *
- * Auth via IMS bearer token from DaProfile.getBearerToken(). On 401, the
- * backend re-fetches the token and retries once.
+ *   - CLI/Electron: HTTP POST to node-server's `/api/da-sign-and-forward`
+ *     (browser sends the IMS token transiently in the envelope; v2 will move
+ *     OAuth server-side and remove the browser-side exposure)
+ *   - Extension: `chrome.runtime.sendMessage` to the service worker
+ *     (which holds the IMS token in `chrome.storage.local`)
+ *   - Tests: a helper that attaches a fake bearer + mocked fetch
  *
- * See spec §"Behavior → Caching" and §"Data flow → Read/Write" for the
- * contract; this is the same TTL+ETag pattern as S3MountBackend.
+ * 412 dual-semantics retry (first-attempt = EBUSY, retry-attempt = silent
+ * reconcile via HEAD) mirrors S3MountBackend.writeFile.
  */
 
 import { FsError } from '../types.js';
@@ -21,19 +27,34 @@ import type {
   MountApprovalCopy,
   RefreshReport,
 } from './backend.js';
-import type { DaProfile } from './profile.js';
-import { fetchWithBudget } from './fetch-with-budget.js';
-import { RemoteMountCache } from './remote-cache.js';
+import { type RemoteMountCache } from './remote-cache.js';
+
+/**
+ * A logical DA request handed to the transport.
+ */
+export interface SignedFetchDaRequest {
+  method: 'GET' | 'PUT' | 'POST' | 'DELETE' | 'HEAD';
+  /** Full DA path starting with /, e.g. `/source/<org>/<repo>/<key>` or `/list/<org>/<repo>/<dir>`. */
+  path: string;
+  query?: Record<string, string>;
+  headers?: Record<string, string>;
+  body?: Uint8Array;
+}
+
+/**
+ * Transport function: attaches the IMS bearer token and forwards the request,
+ * returns the upstream Response. Throws `FsError` for envelope-level
+ * failures; upstream 4xx/5xx are returned as Responses.
+ */
+export type SignedFetchDa = (req: SignedFetchDaRequest) => Promise<Response>;
 
 export interface DaMountBackendOptions {
   source: string;
   profile: string;
-  profileResolved: DaProfile;
   cache: RemoteMountCache;
   maxBodyBytes?: number;
-  signal?: AbortSignal;
-  /** Test-only override. */
-  apiBase?: string;
+  /** Required: signs and forwards each request. */
+  signedFetch: SignedFetchDa;
   mountId?: string;
 }
 
@@ -44,7 +65,7 @@ interface ParsedDaSource {
 }
 
 function parseDaSource(source: string): ParsedDaSource {
-  const m = /^da:\/\/([^/]+)\/([^/]+)(?:\/(.*))?$/.exec(source);
+  const m = source.match(/^da:\/\/([^/]+)\/([^/]+)(?:\/(.*))?$/);
   if (!m) throw new Error(`invalid DA source '${source}' — expected da://org/repo[/path]`);
   return {
     org: m[1],
@@ -53,7 +74,6 @@ function parseDaSource(source: string): ParsedDaSource {
   };
 }
 
-const DEFAULT_API_BASE = 'https://admin.da.live';
 const DEFAULT_MAX_BODY_BYTES = 5 * 1024 * 1024; // DA docs are small
 
 export class DaMountBackend implements MountBackend {
@@ -63,11 +83,9 @@ export class DaMountBackend implements MountBackend {
   readonly mountId: string;
 
   private readonly parsed: ParsedDaSource;
-  private readonly profileResolved: DaProfile;
   private readonly cache: RemoteMountCache;
   private readonly maxBodyBytes: number;
-  private readonly apiBase: string;
-  private readonly internalCtl: AbortController;
+  private readonly transport: SignedFetchDa;
   private closed = false;
 
   constructor(opts: DaMountBackendOptions) {
@@ -75,14 +93,9 @@ export class DaMountBackend implements MountBackend {
     this.profile = opts.profile;
     this.mountId = opts.mountId ?? crypto.randomUUID();
     this.parsed = parseDaSource(opts.source);
-    this.profileResolved = opts.profileResolved;
     this.cache = opts.cache;
     this.maxBodyBytes = opts.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
-    this.apiBase = opts.apiBase ?? DEFAULT_API_BASE;
-    this.internalCtl = new AbortController();
-    if (opts.signal) {
-      opts.signal.addEventListener('abort', () => this.internalCtl.abort(), { once: true });
-    }
+    this.transport = opts.signedFetch;
   }
 
   private assertOpen(path: string): void {
@@ -93,52 +106,18 @@ export class DaMountBackend implements MountBackend {
     return path.replace(/^\/+/, '');
   }
 
-  private buildSourceUrl(rel: string): URL {
-    const cleanRel = rel.replace(/^\/+/, '').replace(/\/+$/, '');
+  /** Build the `/source/<org>/<repo>[/<path>]` DA path for a given mount-relative path. */
+  private toSourcePath(mountRelative: string): string {
+    const cleanRel = mountRelative.replace(/^\/+/, '').replace(/\/+$/, '');
     const segments = [this.parsed.path, cleanRel].filter((s) => s.length > 0).join('/');
-    return new URL(
-      `${this.apiBase}/source/${this.parsed.org}/${this.parsed.repo}${segments ? `/${segments}` : ''}`
-    );
+    return `/source/${this.parsed.org}/${this.parsed.repo}${segments ? `/${segments}` : ''}`;
   }
 
-  private buildListUrl(rel: string): URL {
-    const cleanRel = rel.replace(/^\/+/, '').replace(/\/+$/, '');
+  /** Build the `/list/<org>/<repo>[/<dir>]` DA path. */
+  private toListPath(mountRelative: string): string {
+    const cleanRel = mountRelative.replace(/^\/+/, '').replace(/\/+$/, '');
     const segments = [this.parsed.path, cleanRel].filter((s) => s.length > 0).join('/');
-    return new URL(
-      `${this.apiBase}/list/${this.parsed.org}/${this.parsed.repo}${segments ? `/${segments}` : ''}`
-    );
-  }
-
-  private async authedFetch(req: {
-    method: string;
-    url: URL;
-    headers?: Record<string, string>;
-    body?: Uint8Array;
-  }): Promise<Response> {
-    let token = await this.profileResolved.getBearerToken();
-    const buildRequest = () =>
-      new Request(req.url.toString(), {
-        method: req.method,
-        headers: { ...(req.headers ?? {}), authorization: `Bearer ${token}` },
-        body: req.body ? new Uint8Array(req.body) : undefined,
-      });
-    let res = await fetchWithBudget(buildRequest(), {
-      maxAttempts: 3,
-      perAttemptMs: 15_000,
-      totalBudgetMs: 30_000,
-      signal: this.internalCtl.signal,
-    });
-    if (res.status === 401) {
-      // Token may have expired between resolution and the call; refresh once.
-      token = await this.profileResolved.getBearerToken();
-      res = await fetchWithBudget(buildRequest(), {
-        maxAttempts: 1,
-        perAttemptMs: 15_000,
-        totalBudgetMs: 15_000,
-        signal: this.internalCtl.signal,
-      });
-    }
-    return res;
+    return `/list/${this.parsed.org}/${this.parsed.repo}${segments ? `/${segments}` : ''}`;
   }
 
   async readFile(path: string): Promise<Uint8Array> {
@@ -152,8 +131,12 @@ export class DaMountBackend implements MountBackend {
 
     const headers: Record<string, string> = {};
     if (cached) headers['if-none-match'] = cached.etag;
-    const url = this.buildSourceUrl(rel);
-    const res = await this.authedFetch({ method: 'GET', url, headers });
+
+    const res = await this.transport({
+      method: 'GET',
+      path: this.toSourcePath(rel),
+      headers,
+    });
 
     if (res.status === 304 && cached) {
       await this.cache.putBody(rel, cached.body, cached.etag);
@@ -191,7 +174,6 @@ export class DaMountBackend implements MountBackend {
     }
     const rel = this.toMountRelative(path);
     const cached = await this.cache.getBody(rel);
-    const url = this.buildSourceUrl(rel);
     const headers: Record<string, string> = {
       'content-type': 'application/octet-stream',
       'content-length': String(body.byteLength),
@@ -199,33 +181,33 @@ export class DaMountBackend implements MountBackend {
     if (cached) headers['if-match'] = cached.etag;
     else headers['if-none-match'] = '*';
 
-    // DA's write verb is POST per their docs. If live API confirms a different
-    // verb (PUT), adjust this line. The contract from our side is "send body,
-    // set conditional headers".
-    //
-    // 412 dual-semantics retry — same shape as S3MountBackend.writeFile.
-    // First-attempt 412 = external conflict → EBUSY. Retry-attempt 412
-    // (after a transient on attempt 1) = our duplicate POST actually
-    // landed → silent reconcile via HEAD.
+    // 412 dual-semantics retry — see backend-s3.ts for the full rationale.
     const tryOnce = (): Promise<Response> =>
-      this.authedFetch({ method: 'POST', url, headers, body });
+      this.transport({
+        method: 'POST',
+        path: this.toSourcePath(rel),
+        headers,
+        body,
+      });
 
     let res: Response;
     let attempt = 1;
     try {
       res = await tryOnce();
     } catch {
-      // Network error / timeout on attempt 1 — duplicate is safe under
-      // ETag conditionals. (Catch parameter unused; we only retry, we
-      // don't inspect the cause.)
       attempt = 2;
       res = await tryOnce();
     }
 
     if (res.status === 412) {
       if (attempt === 2) {
-        // Our first POST landed; learn the new etag.
-        const headRes = await this.authedFetch({ method: 'HEAD', url });
+        const headRes = await this.transport({
+          method: 'HEAD',
+          path: this.toSourcePath(rel),
+        });
+        if (headRes.status >= 400) {
+          throw new FsError('EIO', `da reconcile HEAD failed: ${headRes.status}`, path);
+        }
         const newEtag = headRes.headers.get('etag') ?? '';
         await this.cache.putBody(rel, body, newEtag);
         const parent = rel.split('/').slice(0, -1).join('/') || '/';
@@ -236,7 +218,7 @@ export class DaMountBackend implements MountBackend {
       try {
         await this.readFile(path);
       } catch {
-        /* best-effort */
+        // Cache refresh is best-effort; the EBUSY below is the actionable signal.
       }
       throw new FsError('EBUSY', 'remote modified since last read — re-read and retry', path);
     }
@@ -259,8 +241,7 @@ export class DaMountBackend implements MountBackend {
     if (listing && !this.cache.isStale(listing.cachedAt)) {
       return listing.entries;
     }
-    const url = this.buildListUrl(rel);
-    const res = await this.authedFetch({ method: 'GET', url });
+    const res = await this.transport({ method: 'GET', path: this.toListPath(rel) });
     if (res.status === 404) throw new FsError('ENOENT', 'no such directory', path);
     if (res.status >= 400) {
       throw new FsError('EIO', `da list failed: ${res.status}`, path);
@@ -294,9 +275,7 @@ export class DaMountBackend implements MountBackend {
     if (cached) {
       return { kind: 'file', size: cached.size, mtime: cached.cachedAt, etag: cached.etag };
     }
-    // Fall back to a HEAD on /source.
-    const url = this.buildSourceUrl(rel);
-    const res = await this.authedFetch({ method: 'HEAD', url });
+    const res = await this.transport({ method: 'HEAD', path: this.toSourcePath(rel) });
     if (res.status === 200) {
       const size = Number(res.headers.get('content-length') ?? '0');
       const etag = res.headers.get('etag') ?? '';
@@ -317,8 +296,7 @@ export class DaMountBackend implements MountBackend {
   async remove(path: string): Promise<void> {
     this.assertOpen(path);
     const rel = this.toMountRelative(path);
-    const url = this.buildSourceUrl(rel);
-    const res = await this.authedFetch({ method: 'DELETE', url });
+    const res = await this.transport({ method: 'DELETE', path: this.toSourcePath(rel) });
     if (res.status === 404) throw new FsError('ENOENT', 'no such file', path);
     if (res.status === 401 || res.status === 403) {
       throw new FsError('EACCES', 'da delete denied', path);
@@ -333,15 +311,18 @@ export class DaMountBackend implements MountBackend {
 
   async refresh(opts?: { bodies?: boolean }): Promise<RefreshReport> {
     this.assertOpen('/');
-    // Recursive walk: start at root, list each dir, recurse into directory entries.
-    const report: RefreshReport = { added: [], removed: [], changed: [], unchanged: 0, errors: [] };
+    const report: RefreshReport = {
+      added: [],
+      removed: [],
+      changed: [],
+      unchanged: 0,
+      errors: [],
+    };
     const stack: string[] = [''];
-    const seenPaths = new Set<string>();
     while (stack.length > 0) {
       const dir = stack.pop()!;
       try {
-        const url = this.buildListUrl(dir);
-        const res = await this.authedFetch({ method: 'GET', url });
+        const res = await this.transport({ method: 'GET', path: this.toListPath(dir) });
         if (res.status >= 400) {
           report.errors.push({ path: dir, message: `list failed: ${res.status}` });
           continue;
@@ -356,7 +337,6 @@ export class DaMountBackend implements MountBackend {
         for (const item of json) {
           if (item.ext) {
             const filePath = dir ? `${dir}/${item.name}.${item.ext}` : `${item.name}.${item.ext}`;
-            seenPaths.add(filePath);
             entries.push({
               name: `${item.name}.${item.ext}`,
               kind: 'file',
@@ -419,6 +399,5 @@ export class DaMountBackend implements MountBackend {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    this.internalCtl.abort();
   }
 }

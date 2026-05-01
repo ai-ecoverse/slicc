@@ -501,32 +501,27 @@ export class VirtualFS {
         return LocalMountBackend.fromHandle(handle, { mountId: descriptor.mountId });
       }
       case 's3': {
-        const { S3MountBackend, RemoteMountCache, resolveS3Profile, getDefaultSecretStore } =
+        const { S3MountBackend, RemoteMountCache, makeSignedFetchS3 } =
           await import('./mount/index.js');
-        const store = await getDefaultSecretStore();
-        const profile = await resolveS3Profile(descriptor.profile, store);
         const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
         return new S3MountBackend({
           source: descriptor.source,
           profile: descriptor.profile,
-          profileResolved: profile,
           cache,
           mountId: descriptor.mountId,
-          reresolveProfile: () => resolveS3Profile(descriptor.profile, store),
+          signedFetch: makeSignedFetchS3(descriptor.profile),
         });
       }
       case 'da': {
-        const { DaMountBackend, RemoteMountCache, resolveDaProfile, getDefaultImsClient } =
+        const { DaMountBackend, RemoteMountCache, makeSignedFetchDa } =
           await import('./mount/index.js');
-        const ims = await getDefaultImsClient();
-        const profile = await resolveDaProfile(descriptor.profile, ims);
         const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
         return new DaMountBackend({
           source: descriptor.source,
           profile: descriptor.profile,
-          profileResolved: profile,
           cache,
           mountId: descriptor.mountId,
+          signedFetch: makeSignedFetchDa(),
         });
       }
     }

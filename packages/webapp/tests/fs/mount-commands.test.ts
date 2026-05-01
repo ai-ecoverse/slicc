@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import 'fake-indexeddb/auto';
 import { MountCommands } from '../../src/fs/mount-commands.js';
 import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
@@ -220,15 +221,24 @@ describe('MountCommands', () => {
       expect(result.stderr).toMatch(/s3:\/\/.*da:\/\//);
     });
 
-    it('s3:// with missing profile surfaces ProfileNotConfiguredError with secret-set hint', async () => {
-      const { createFakeSecretStore } = await import('./mount/helpers/fake-secret-store.js');
+    it('s3:// surfaces probe failure with the actionable secret-set hint', async () => {
+      // Profile resolution moved server-side; the actionable hint surfaces
+      // when the probe (or first request) returns the server's
+      // ProfileNotConfiguredError. Inject a signedFetch that mimics that
+      // server-side response by throwing FsError(EACCES).
+      const { FsError } = await import('../../src/fs/types.js');
       const cmd = new MountCommands({
         fs: makeFs(),
-        // empty store — no s3.r2.* secrets configured
-        secretStore: createFakeSecretStore({}),
+        signedFetchS3: async () => {
+          throw new FsError(
+            'EACCES',
+            "profile 'r2' missing required field 'access_key_id'. " +
+              'Set it via: secret set s3.r2.access_key_id <value>'
+          );
+        },
       });
       const result = await cmd.execute(
-        ['--source', 's3://my-bucket/prefix', '--profile', 'r2', '--no-probe', '/mnt/r2'],
+        ['--source', 's3://my-bucket/prefix', '--profile', 'r2', '/mnt/r2'],
         '/workspace'
       );
       expect(result.exitCode).toBe(1);
@@ -237,16 +247,11 @@ describe('MountCommands', () => {
       expect(result.stderr).toMatch(/secret set s3\.r2\.access_key_id/);
     });
 
-    it('s3:// with valid profile + --no-probe constructs an S3 backend and calls fs.mount', async () => {
-      const { createFakeSecretStore } = await import('./mount/helpers/fake-secret-store.js');
+    it('s3:// with --no-probe constructs an S3 backend and calls fs.mount', async () => {
       const fs = makeFs();
       const cmd = new MountCommands({
         fs,
-        secretStore: createFakeSecretStore({
-          's3.default.access_key_id': 'AKIA1',
-          's3.default.secret_access_key': 'sak',
-          's3.default.region': 'us-east-1',
-        }),
+        signedFetchS3: async () => new Response('', { status: 200 }),
       });
       const result = await cmd.execute(
         ['--source', 's3://my-bucket/prefix', '--no-probe', '/mnt/s3'],
@@ -255,7 +260,6 @@ describe('MountCommands', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Mounted');
       expect(result.stdout).toContain('(profile: default)');
-      // Backend handed to fs.mount has kind 's3'.
       const mountFn = fs.mount as ReturnType<typeof vi.fn>;
       expect(mountFn).toHaveBeenCalledTimes(1);
       const [, backend] = mountFn.mock.calls[0] as [string, { kind: string; source: string }];
@@ -264,13 +268,10 @@ describe('MountCommands', () => {
     });
 
     it('da:// with --no-probe constructs a DA backend and calls fs.mount', async () => {
-      const { createFakeImsClient } = await import('./mount/helpers/fake-ims-client.js');
-      const { createFakeSecretStore } = await import('./mount/helpers/fake-secret-store.js');
       const fs = makeFs();
       const cmd = new MountCommands({
         fs,
-        secretStore: createFakeSecretStore({}),
-        imsClient: createFakeImsClient('test-token'),
+        signedFetchDa: async () => new Response('[]', { status: 200 }),
       });
       const result = await cmd.execute(
         ['--source', 'da://my-org/my-repo', '--no-probe', '/mnt/da'],

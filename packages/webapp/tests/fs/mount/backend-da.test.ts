@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto';
 import { DaMountBackend } from '../../../src/fs/mount/backend-da.js';
 import { RemoteMountCache } from '../../../src/fs/mount/remote-cache.js';
 import { installFetchMock } from './helpers/mock-fetch.js';
+import { createSignedFetchDaStub } from './helpers/signed-fetch-stub.js';
 import type { DaProfile } from '../../../src/fs/mount/profile.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -36,7 +37,7 @@ describe('DaMountBackend readFile', () => {
     const backend = new DaMountBackend({
       source: 'da://my-org/my-repo',
       profile: 'default',
-      profileResolved: TEST_DA_PROFILE,
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
       cache: makeCache(),
     });
     const body = await backend.readFile('index.html');
@@ -60,7 +61,7 @@ describe('DaMountBackend writeFile', () => {
     const backend = new DaMountBackend({
       source: 'da://my-org/my-repo',
       profile: 'default',
-      profileResolved: TEST_DA_PROFILE,
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
       cache: makeCache(),
     });
     await backend.readFile('index.html');
@@ -77,7 +78,7 @@ describe('DaMountBackend writeFile', () => {
     const backend = new DaMountBackend({
       source: 'da://my-org/my-repo',
       profile: 'default',
-      profileResolved: TEST_DA_PROFILE,
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
       cache: makeCache(),
     });
     await backend.readFile('index.html');
@@ -98,7 +99,7 @@ describe('DaMountBackend writeFile', () => {
     const backend = new DaMountBackend({
       source: 'da://my-org/my-repo',
       profile: 'default',
-      profileResolved: TEST_DA_PROFILE,
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
       cache: makeCache(),
     });
     await backend.readFile('index.html');
@@ -127,7 +128,7 @@ describe('DaMountBackend readDir', () => {
     const backend = new DaMountBackend({
       source: 'da://my-org/my-repo',
       profile: 'default',
-      profileResolved: TEST_DA_PROFILE,
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
       cache: makeCache(),
     });
     const entries = await backend.readDir('/');
@@ -136,34 +137,31 @@ describe('DaMountBackend readDir', () => {
   });
 });
 
-describe('DaMountBackend auth retry', () => {
+describe('DaMountBackend auth', () => {
   let mock: ReturnType<typeof installFetchMock>;
   beforeEach(() => {
     mock = installFetchMock();
   });
   afterEach(() => mock.restore());
 
-  it('401 triggers token refresh and retries', async () => {
+  // Auth retry was removed from the browser-side backend in the server-side
+  // signing refactor. The transport fetches the bearer token fresh on every
+  // call (browser → /api/da-sign-and-forward in CLI; chrome.storage.local
+  // for the SW handler in extension), so 401 surfaces directly as EACCES
+  // with no client-driven retry.
+  it('401 surfaces as EACCES (no client-side retry)', async () => {
     mock.enqueue(new Response('', { status: 401 }));
-    mock.enqueue(new Response('hi', { status: 200, headers: { etag: '"e1"' } }));
-    let ticks = 0;
     const profile: DaProfile = {
       identity: 'adobe-ims',
-      getBearerToken: async () => {
-        ticks++;
-        return ticks === 1 ? 'expired' : 'fresh';
-      },
+      getBearerToken: async () => 'tok',
     };
     const backend = new DaMountBackend({
       source: 'da://my-org/my-repo',
       profile: 'default',
-      profileResolved: profile,
+      signedFetch: createSignedFetchDaStub(profile),
       cache: makeCache(),
     });
-    const body = await backend.readFile('index.html');
-    expect(new TextDecoder().decode(body)).toBe('hi');
-    expect(mock.calls[0].headers['authorization']).toBe('Bearer expired');
-    expect(mock.calls[1].headers['authorization']).toBe('Bearer fresh');
+    await expect(backend.readFile('index.html')).rejects.toMatchObject({ code: 'EACCES' });
   });
 });
 
@@ -181,7 +179,7 @@ describe('DaMountBackend stat', () => {
     const backend = new DaMountBackend({
       source: 'da://my-org/my-repo',
       profile: 'default',
-      profileResolved: TEST_DA_PROFILE,
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
       cache: makeCache(),
     });
     const stat = await backend.stat('index.html');
@@ -203,7 +201,7 @@ describe('DaMountBackend remove', () => {
     const backend = new DaMountBackend({
       source: 'da://my-org/my-repo',
       profile: 'default',
-      profileResolved: TEST_DA_PROFILE,
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
       cache: makeCache(),
     });
     await backend.remove('index.html');
@@ -232,7 +230,7 @@ describe('DaMountBackend refresh', () => {
     const backend = new DaMountBackend({
       source: 'da://my-org/my-repo',
       profile: 'default',
-      profileResolved: TEST_DA_PROFILE,
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
       cache: makeCache(),
     });
     const report = await backend.refresh();

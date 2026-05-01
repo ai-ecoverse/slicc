@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto';
 import { S3MountBackend } from '../../../src/fs/mount/backend-s3.js';
 import { RemoteMountCache } from '../../../src/fs/mount/remote-cache.js';
 import { installFetchMock } from './helpers/mock-fetch.js';
+import { createSignedFetchS3Stub } from './helpers/signed-fetch-stub.js';
 import type { S3Profile } from '../../../src/fs/mount/profile.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -59,7 +60,7 @@ describe('S3MountBackend URL construction', () => {
     const backend = new S3MountBackend({
       source: 's3://my-bucket/prefix',
       profile: 'default',
-      profileResolved: TEST_PROFILE,
+      signedFetch: createSignedFetchS3Stub(TEST_PROFILE),
       cache,
     });
     await backend.readFile('foo.txt');
@@ -72,7 +73,7 @@ describe('S3MountBackend URL construction', () => {
     const backend = new S3MountBackend({
       source: 's3://my-bucket/prefix',
       profile: 'r2',
-      profileResolved: R2_PROFILE,
+      signedFetch: createSignedFetchS3Stub(R2_PROFILE),
       cache,
     });
     await backend.readFile('foo.txt');
@@ -88,7 +89,7 @@ describe('S3MountBackend URL construction', () => {
     const backend = new S3MountBackend({
       source: 's3://my-bucket',
       profile: 'default',
-      profileResolved: TEST_PROFILE,
+      signedFetch: createSignedFetchS3Stub(TEST_PROFILE),
       cache,
     });
     await backend.readFile('foo.txt');
@@ -110,7 +111,7 @@ describe('S3MountBackend readFile cache flow', () => {
     return new S3MountBackend({
       source: 's3://my-bucket/prefix',
       profile: 'default',
-      profileResolved: TEST_PROFILE,
+      signedFetch: createSignedFetchS3Stub(TEST_PROFILE),
       cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000, dbName }),
     });
   }
@@ -146,7 +147,7 @@ describe('S3MountBackend readFile cache flow', () => {
     const backend = new S3MountBackend({
       source: 's3://my-bucket/prefix',
       profile: 'default',
-      profileResolved: TEST_PROFILE,
+      signedFetch: createSignedFetchS3Stub(TEST_PROFILE),
       cache,
     });
     await backend.readFile('foo.txt');
@@ -168,7 +169,7 @@ describe('S3MountBackend readFile cache flow', () => {
     const backend = new S3MountBackend({
       source: 's3://my-bucket/prefix',
       profile: 'default',
-      profileResolved: TEST_PROFILE,
+      signedFetch: createSignedFetchS3Stub(TEST_PROFILE),
       cache: cacheOther,
     });
     await backend.readFile('foo.txt');
@@ -194,7 +195,7 @@ describe('S3MountBackend readFile cache flow', () => {
     const backend = new S3MountBackend({
       source: 's3://my-bucket/prefix',
       profile: 'default',
-      profileResolved: TEST_PROFILE,
+      signedFetch: createSignedFetchS3Stub(TEST_PROFILE),
       cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000, dbName }),
       maxBodyBytes: 25 * 1024 * 1024,
     });
@@ -216,7 +217,7 @@ describe('S3MountBackend writeFile', () => {
     return new S3MountBackend({
       source: 's3://my-bucket/prefix',
       profile: 'default',
-      profileResolved: TEST_PROFILE,
+      signedFetch: createSignedFetchS3Stub(TEST_PROFILE),
       cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000, dbName }),
     });
   }
@@ -316,7 +317,7 @@ describe('S3MountBackend readDir + refresh', () => {
     return new S3MountBackend({
       source: 's3://my-bucket/prefix',
       profile: 'default',
-      profileResolved: TEST_PROFILE,
+      signedFetch: createSignedFetchS3Stub(TEST_PROFILE),
       cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000, dbName }),
     });
   }
@@ -352,7 +353,7 @@ describe('S3MountBackend readDir + refresh', () => {
     const backend = new S3MountBackend({
       source: 's3://my-bucket/prefix',
       profile: 'default',
-      profileResolved: TEST_PROFILE,
+      signedFetch: createSignedFetchS3Stub(TEST_PROFILE),
       cache,
     });
     await backend.readDir('/'); // seeds cache via refresh internals
@@ -387,7 +388,7 @@ describe('S3MountBackend remove + auth retry', () => {
     return new S3MountBackend({
       source: 's3://my-bucket/prefix',
       profile: 'default',
-      profileResolved: TEST_PROFILE,
+      signedFetch: createSignedFetchS3Stub(TEST_PROFILE),
       cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000, dbName }),
     });
   }
@@ -399,44 +400,13 @@ describe('S3MountBackend remove + auth retry', () => {
     expect(mock.calls[0].method).toBe('DELETE');
   });
 
-  it('401 without reresolveProfile callback throws EACCES on first hit', async () => {
+  // Auth retry was removed from the browser-side backend in the server-side
+  // signing refactor. The transport reads creds fresh on every call (server-
+  // side EnvSecretStore or extension chrome.storage.local), so a 401/403
+  // surfaces directly as EACCES with no client-driven retry.
+  it('401 surfaces as EACCES (no client-side retry)', async () => {
     mock.enqueue(new Response('', { status: 401 }));
-    const backend = makeBackend(); // no callback wired
-    await expect(backend.readFile('foo.txt')).rejects.toMatchObject({ code: 'EACCES' });
-  });
-
-  it('401 with reresolveProfile callback re-resolves once and retries', async () => {
-    mock.enqueue(new Response('', { status: 401 }));
-    mock.enqueue(
-      new Response('hello', { status: 200, headers: { etag: '"e1"', 'content-length': '5' } })
-    );
-    let resolveCount = 0;
-    const backend = new S3MountBackend({
-      source: 's3://my-bucket/prefix',
-      profile: 'default',
-      profileResolved: { ...TEST_PROFILE, secretAccessKey: 'old' },
-      cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000, dbName }),
-      reresolveProfile: async () => {
-        resolveCount++;
-        return { ...TEST_PROFILE, secretAccessKey: 'new' };
-      },
-    });
-    const body = await backend.readFile('foo.txt');
-    expect(new TextDecoder().decode(body)).toBe('hello');
-    expect(resolveCount).toBe(1);
-    expect(mock.calls.length).toBe(2);
-  });
-
-  it('401 after reresolveProfile callback already retried throws EACCES', async () => {
-    mock.enqueue(new Response('', { status: 401 }));
-    mock.enqueue(new Response('', { status: 401 })); // still fails after refresh
-    const backend = new S3MountBackend({
-      source: 's3://my-bucket/prefix',
-      profile: 'default',
-      profileResolved: TEST_PROFILE,
-      cache: new RemoteMountCache({ mountId: 'm1', ttlMs: 30_000, dbName }),
-      reresolveProfile: async () => TEST_PROFILE,
-    });
+    const backend = makeBackend();
     await expect(backend.readFile('foo.txt')).rejects.toMatchObject({ code: 'EACCES' });
   });
 });

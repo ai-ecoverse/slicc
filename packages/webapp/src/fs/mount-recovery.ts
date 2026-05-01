@@ -23,14 +23,11 @@
  *   re-mounting.
  *
  * For REMOTE backends (S3, DA):
- * Recovery is pure cred resolution + backend instantiation. If the
- * profile still resolves (S3 secrets present; IMS token still valid),
- * the mount auto-restores silently. Otherwise the entry surfaces in
- * `needsRecovery` with an actionable retry hint.
- *
- * The S3 and DA branches in `recoverMounts` below are stubbed out —
- * they fall straight into `needsRecovery` until Phase 11 (S3 backend)
- * and Phase 12 (DA backend) wire their reconstruction paths.
+ * The browser-side backend is signing-naive — it never holds creds. Recovery
+ * just rebuilds the backend with a fresh `signedFetch` factory; profile
+ * resolution and signing happen server-side (or in the SW for extension)
+ * at request time. Recovery cannot fail in the credential sense — only
+ * the first real request after recovery surfaces auth issues.
  */
 
 import { LocalMountBackend } from './mount/backend-local.js';
@@ -38,10 +35,8 @@ import {
   S3MountBackend,
   DaMountBackend,
   RemoteMountCache,
-  resolveS3Profile,
-  resolveDaProfile,
-  getDefaultSecretStore,
-  getDefaultImsClient,
+  makeSignedFetchS3,
+  makeSignedFetchDa,
 } from './mount/index.js';
 import type { MountBackend } from './mount/backend.js';
 import { loadMountHandle } from './mount-table-store.js';
@@ -139,16 +134,13 @@ export async function recoverMounts(
 
     if (descriptor.kind === 's3') {
       try {
-        const store = await getDefaultSecretStore();
-        const profile = await resolveS3Profile(descriptor.profile, store);
         const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
         const backend = new S3MountBackend({
           source: descriptor.source,
           profile: descriptor.profile,
-          profileResolved: profile,
           cache,
           mountId: descriptor.mountId,
-          reresolveProfile: () => resolveS3Profile(descriptor.profile, store),
+          signedFetch: makeSignedFetchS3(descriptor.profile),
         });
         await fs.mount(targetPath, backend);
         log?.info?.('Restored S3 mount from previous session', {
@@ -178,15 +170,13 @@ export async function recoverMounts(
 
     if (descriptor.kind === 'da') {
       try {
-        const ims = await getDefaultImsClient();
-        const profile = await resolveDaProfile(descriptor.profile, ims);
         const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
         const backend = new DaMountBackend({
           source: descriptor.source,
           profile: descriptor.profile,
-          profileResolved: profile,
           cache,
           mountId: descriptor.mountId,
+          signedFetch: makeSignedFetchDa(),
         });
         await fs.mount(targetPath, backend);
         log?.info?.('Restored DA mount from previous session', {

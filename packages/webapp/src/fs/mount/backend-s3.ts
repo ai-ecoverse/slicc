@@ -1,14 +1,23 @@
 /**
- * S3MountBackend — HTTP + SigV4 mount implementation.
+ * S3MountBackend — signing-naive HTTP mount implementation.
  *
- * Implements the MountBackend interface for S3-compatible services (AWS S3,
- * Cloudflare R2, MinIO, etc.). Uses:
- *   - signSigV4 for request signing (no AWS SDK dependency)
- *   - RemoteMountCache for TTL+ETag content cache
- *   - fetchWithBudget for timeout / retry / abort signal threading
- *   - resolveS3Profile output (passed in at construction)
+ * Implements MountBackend for S3-compatible services (AWS S3, Cloudflare R2,
+ * MinIO, etc.). The backend never holds credentials and never computes
+ * signatures. It builds *logical* requests (`{bucket, key, method, query,
+ * headers, body}`) and hands them to an injected `SignedFetchS3` transport,
+ * which is wired at runtime to:
  *
- * See spec §"Data flow → Read" / "Data flow → Write" for the contract.
+ *   - CLI/Electron: HTTP POST to node-server's `/api/s3-sign-and-forward`
+ *   - Extension: `chrome.runtime.sendMessage` to the service worker
+ *   - Tests: a helper that signs locally with a fake profile + mocked fetch
+ *
+ * URL construction (virtual-hosted vs path-style, region/endpoint resolution)
+ * lives entirely in the transport. The backend supplies bucket + S3 key only.
+ *
+ * Auth retry was previously handled here by re-resolving the profile and
+ * retrying once on 401/403. With server-side signing, the server reads from
+ * its secret store fresh on every call — there is no stale cached profile to
+ * retry against. 401/403 from upstream surfaces as `EACCES` directly.
  */
 
 import { FsError } from '../types.js';
@@ -20,31 +29,42 @@ import type {
   MountApprovalCopy,
   RefreshReport,
 } from './backend.js';
-import type { S3Profile } from './profile.js';
-import { signSigV4, type SigV4Request } from './signing-s3.js';
-import { fetchWithBudget } from './fetch-with-budget.js';
-import { RemoteMountCache } from './remote-cache.js';
+import { type RemoteMountCache } from './remote-cache.js';
+
+/**
+ * A logical S3 request handed to the transport. The transport decides on
+ * virtual-hosted vs path-style URL construction, region/endpoint resolution,
+ * and SigV4 signing.
+ */
+export interface SignedFetchS3Request {
+  method: 'GET' | 'PUT' | 'POST' | 'DELETE' | 'HEAD';
+  bucket: string;
+  /** Full S3 key including any prefix. Empty string for bucket-root operations. */
+  key: string;
+  query?: Record<string, string>;
+  headers?: Record<string, string>;
+  body?: Uint8Array;
+}
+
+/**
+ * Transport function: signs and executes a logical S3 request, returns the
+ * upstream Response. Throws `FsError` for envelope-level failures (profile
+ * not configured, network failure to localhost / SW, etc.) — successful
+ * upstream responses (including 4xx/5xx from S3 itself) are returned as
+ * Responses so the backend can branch on status.
+ */
+export type SignedFetchS3 = (req: SignedFetchS3Request) => Promise<Response>;
 
 export interface S3MountBackendOptions {
-  /** Original 's3://bucket/prefix' source URI. */
+  /** Original 's3://bucket/prefix' source URI (for describe()). */
   source: string;
-  /** Profile name (for `mount list` / display). */
+  /** Profile name (display only — credentials live server-side). */
   profile: string;
-  /** Already-resolved S3Profile (creds + region + endpoint). */
-  profileResolved: S3Profile;
   cache: RemoteMountCache;
   /** Reasonable defaults: 25 MiB. */
   maxBodyBytes?: number;
-  /** Override for tests. */
-  signal?: AbortSignal;
-  /**
-   * Re-resolve the profile from the secret store. Called once on 401/403 to
-   * pick up rotated credentials before retrying the request. The backend
-   * stops the auth retry loop after one re-resolve to avoid masking real
-   * permission errors. Optional — when omitted, 401/403 throws EACCES on
-   * first hit (used by tests that pre-bake profiles).
-   */
-  reresolveProfile?: () => Promise<S3Profile>;
+  /** Required: signs and forwards each request. */
+  signedFetch: SignedFetchS3;
 }
 
 interface ParsedSource {
@@ -53,7 +73,7 @@ interface ParsedSource {
 }
 
 function parseS3Source(source: string): ParsedSource {
-  const m = /^s3:\/\/([^/]+)(?:\/(.*))?$/.exec(source);
+  const m = source.match(/^s3:\/\/([^/]+)(?:\/(.*))?$/);
   if (!m) throw new Error(`invalid S3 source '${source}' — expected s3://bucket[/prefix]`);
   const bucket = m[1];
   const prefix = (m[2] ?? '').replace(/^\/+/, '').replace(/\/+$/, '');
@@ -69,11 +89,9 @@ export class S3MountBackend implements MountBackend {
   readonly mountId: string;
 
   private readonly parsed: ParsedSource;
-  private profileResolved: S3Profile;
   private readonly cache: RemoteMountCache;
   private readonly maxBodyBytes: number;
-  private readonly internalCtl: AbortController;
-  private readonly reresolveProfile?: () => Promise<S3Profile>;
+  private readonly transport: SignedFetchS3;
   private closed = false;
 
   constructor(opts: S3MountBackendOptions & { mountId?: string }) {
@@ -81,27 +99,9 @@ export class S3MountBackend implements MountBackend {
     this.profile = opts.profile;
     this.mountId = opts.mountId ?? crypto.randomUUID();
     this.parsed = parseS3Source(opts.source);
-    this.profileResolved = opts.profileResolved;
     this.cache = opts.cache;
     this.maxBodyBytes = opts.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
-    this.internalCtl = new AbortController();
-    this.reresolveProfile = opts.reresolveProfile;
-    if (opts.signal) {
-      opts.signal.addEventListener('abort', () => this.internalCtl.abort(), { once: true });
-    }
-  }
-
-  private endpointHost(): string {
-    if (this.profileResolved.endpoint) {
-      return new URL(this.profileResolved.endpoint).host;
-    }
-    return `s3.${this.profileResolved.region}.amazonaws.com`;
-  }
-
-  private buildUrl(mountRelativePath: string): URL {
-    const cleanRel = mountRelativePath.replace(/^\/+/, '').replace(/\/+$/, '');
-    const segments = [this.parsed.prefix, cleanRel].filter((s) => s.length > 0).join('/');
-    return new URL(`https://${this.parsed.bucket}.${this.endpointHost()}/${segments}`);
+    this.transport = opts.signedFetch;
   }
 
   private assertOpen(path: string): void {
@@ -112,41 +112,15 @@ export class S3MountBackend implements MountBackend {
     return path.replace(/^\/+/, '');
   }
 
-  private async signedFetch(
-    req: SigV4Request,
-    opts?: { maxAttempts?: number; perAttemptMs?: number; totalBudgetMs?: number }
-  ): Promise<Response> {
-    const doFetch = async (): Promise<Response> => {
-      const signed = await signSigV4(
-        req,
-        {
-          accessKeyId: this.profileResolved.accessKeyId,
-          secretAccessKey: this.profileResolved.secretAccessKey,
-          sessionToken: this.profileResolved.sessionToken,
-        },
-        this.profileResolved.region
-      );
-      return fetchWithBudget(
-        new Request(signed.url.toString(), {
-          method: signed.method,
-          headers: signed.headers,
-          body: signed.body ? new Uint8Array(signed.body) : undefined,
-        }),
-        {
-          maxAttempts: opts?.maxAttempts ?? 3,
-          perAttemptMs: opts?.perAttemptMs ?? 15_000,
-          totalBudgetMs: opts?.totalBudgetMs ?? 30_000,
-          signal: this.internalCtl.signal,
-        }
-      );
-    };
+  /** Map a mount-relative path to the full S3 key (with the mount's prefix). */
+  private toS3Key(mountRelative: string): string {
+    const clean = mountRelative.replace(/^\/+/, '').replace(/\/+$/, '');
+    return [this.parsed.prefix, clean].filter((s) => s.length > 0).join('/');
+  }
 
-    let res = await doFetch();
-    if ((res.status === 401 || res.status === 403) && this.reresolveProfile) {
-      this.profileResolved = await this.reresolveProfile();
-      res = await doFetch();
-    }
-    return res;
+  /** Inverse of toS3Key — strip the mount prefix from a full S3 key. */
+  private toMountRelativeKey(s3Key: string): string {
+    return this.parsed.prefix ? s3Key.slice(this.parsed.prefix.length + 1) : s3Key;
   }
 
   async readFile(path: string): Promise<Uint8Array> {
@@ -158,11 +132,15 @@ export class S3MountBackend implements MountBackend {
       return cached.body;
     }
 
-    const url = this.buildUrl(rel);
-    const headers: Record<string, string> = { host: url.host };
+    const headers: Record<string, string> = {};
     if (cached) headers['if-none-match'] = cached.etag;
 
-    const res = await this.signedFetch({ method: 'GET', url, headers });
+    const res = await this.transport({
+      method: 'GET',
+      bucket: this.parsed.bucket,
+      key: this.toS3Key(rel),
+      headers,
+    });
 
     if (res.status === 304 && cached) {
       await this.cache.putBody(rel, cached.body, cached.etag);
@@ -206,51 +184,59 @@ export class S3MountBackend implements MountBackend {
     }
 
     const cached = await this.cache.getBody(rel);
-    const url = this.buildUrl(rel);
-    const baseHeaders: Record<string, string> = {
-      host: url.host,
+    const headers: Record<string, string> = {
       'content-type': 'application/octet-stream',
       'content-length': String(body.byteLength),
     };
     if (cached) {
-      baseHeaders['if-match'] = cached.etag;
+      headers['if-match'] = cached.etag;
     } else {
-      baseHeaders['if-none-match'] = '*';
+      headers['if-none-match'] = '*';
     }
 
     const tryOnce = (): Promise<Response> =>
-      this.signedFetch(
-        { method: 'PUT', url, headers: baseHeaders, body },
-        { maxAttempts: 1, perAttemptMs: 30_000, totalBudgetMs: 30_000 }
-      );
+      this.transport({
+        method: 'PUT',
+        bucket: this.parsed.bucket,
+        key: this.toS3Key(rel),
+        headers,
+        body,
+      });
 
     let res: Response;
     let attempt = 1;
     try {
       res = await tryOnce();
-    } catch (err) {
+    } catch {
       attempt = 2;
       res = await tryOnce();
     }
 
     if (res.status === 412) {
       if (attempt === 2) {
-        const headRes = await this.signedFetch({
+        // 412 inside the bounded retry window: our prior PUT may have already
+        // landed; reconcile the cache silently. HEAD to learn the new etag.
+        const headRes = await this.transport({
           method: 'HEAD',
-          url,
-          headers: { host: url.host },
+          bucket: this.parsed.bucket,
+          key: this.toS3Key(rel),
         });
+        if (headRes.status >= 400) {
+          throw new FsError('EIO', `s3 reconcile HEAD failed: ${headRes.status}`, path);
+        }
         const newEtag = headRes.headers.get('etag') ?? '';
         await this.cache.putBody(rel, body, newEtag);
         const parent = rel.split('/').slice(0, -1).join('/') || '/';
         await this.cache.invalidateListing(parent);
         return;
       }
+      // First-attempt 412: external writer changed the file. Refresh cache and
+      // surface EBUSY so the agent's edit loop can re-read.
       await this.cache.invalidateBody(rel);
       try {
         await this.readFile(path);
       } catch {
-        /* best-effort */
+        // Cache refresh is best-effort; the EBUSY below is the actionable signal.
       }
       throw new FsError('EBUSY', 'remote modified since last read — re-read and retry', path);
     }
@@ -273,18 +259,18 @@ export class S3MountBackend implements MountBackend {
     const all: { key: string; etag: string; size: number; lastModified: number }[] = [];
     let continuationToken: string | undefined;
     do {
-      const url = new URL(`https://${this.parsed.bucket}.${this.endpointHost()}/`);
-      url.searchParams.set('list-type', '2');
+      const query: Record<string, string> = { 'list-type': '2' };
       if (this.parsed.prefix) {
-        url.searchParams.set('prefix', `${this.parsed.prefix}/`);
+        query.prefix = `${this.parsed.prefix}/`;
       }
       if (continuationToken) {
-        url.searchParams.set('continuation-token', continuationToken);
+        query['continuation-token'] = continuationToken;
       }
-      const res = await this.signedFetch({
+      const res = await this.transport({
         method: 'GET',
-        url,
-        headers: { host: url.host },
+        bucket: this.parsed.bucket,
+        key: '',
+        query,
       });
       if (res.status >= 400) {
         throw new FsError('EIO', `s3 list failed: ${res.status}`, '/');
@@ -305,10 +291,10 @@ export class S3MountBackend implements MountBackend {
     const contentRegex = /<Contents>([\s\S]*?)<\/Contents>/g;
     for (const match of xml.matchAll(contentRegex)) {
       const block = match[1];
-      const key = /<Key>([^<]+)<\/Key>/.exec(block)?.[1] ?? '';
-      const etag = /<ETag>([^<]+)<\/ETag>/.exec(block)?.[1] ?? '';
-      const sizeStr = /<Size>([^<]+)<\/Size>/.exec(block)?.[1] ?? '0';
-      const lmStr = /<LastModified>([^<]+)<\/LastModified>/.exec(block)?.[1] ?? '';
+      const key = block.match(/<Key>([^<]+)<\/Key>/)?.[1] ?? '';
+      const etag = block.match(/<ETag>([^<]+)<\/ETag>/)?.[1] ?? '';
+      const sizeStr = block.match(/<Size>([^<]+)<\/Size>/)?.[1] ?? '0';
+      const lmStr = block.match(/<LastModified>([^<]+)<\/LastModified>/)?.[1] ?? '';
       contents.push({
         key,
         etag,
@@ -316,15 +302,11 @@ export class S3MountBackend implements MountBackend {
         lastModified: lmStr ? Date.parse(lmStr) : 0,
       });
     }
-    const truncated = /<IsTruncated>([^<]+)<\/IsTruncated>/.exec(xml)?.[1] === 'true';
+    const truncated = xml.match(/<IsTruncated>([^<]+)<\/IsTruncated>/)?.[1] === 'true';
     const nextContinuationToken = truncated
-      ? /<NextContinuationToken>([^<]+)<\/NextContinuationToken>/.exec(xml)?.[1]
+      ? xml.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/)?.[1]
       : undefined;
     return { contents, nextContinuationToken };
-  }
-
-  private toMountRelativeKey(s3Key: string): string {
-    return this.parsed.prefix ? s3Key.slice(this.parsed.prefix.length + 1) : s3Key;
   }
 
   async readDir(path: string): Promise<MountDirEntry[]> {
@@ -393,8 +375,11 @@ export class S3MountBackend implements MountBackend {
         etag: cached.etag,
       };
     }
-    const url = this.buildUrl(rel);
-    const res = await this.signedFetch({ method: 'HEAD', url, headers: { host: url.host } });
+    const res = await this.transport({
+      method: 'HEAD',
+      bucket: this.parsed.bucket,
+      key: this.toS3Key(rel),
+    });
     if (res.status === 200) {
       const size = Number(res.headers.get('content-length') ?? '0');
       const etag = res.headers.get('etag') ?? '';
@@ -415,7 +400,13 @@ export class S3MountBackend implements MountBackend {
     const remotePaths = new Set(all.map((o) => this.toMountRelativeKey(o.key)));
     const remoteEtags = new Map(all.map((o) => [this.toMountRelativeKey(o.key), o.etag]));
 
-    const report: RefreshReport = { added: [], removed: [], changed: [], unchanged: 0, errors: [] };
+    const report: RefreshReport = {
+      added: [],
+      removed: [],
+      changed: [],
+      unchanged: 0,
+      errors: [],
+    };
 
     for (const path of remotePaths) {
       const cached = await this.cache.getBody(path);
@@ -456,11 +447,10 @@ export class S3MountBackend implements MountBackend {
     if (opts?.recursive) {
       throw new FsError('EINVAL', 'recursive remove not yet supported on S3', path);
     }
-    const url = this.buildUrl(rel);
-    const res = await this.signedFetch({
+    const res = await this.transport({
       method: 'DELETE',
-      url,
-      headers: { host: url.host },
+      bucket: this.parsed.bucket,
+      key: this.toS3Key(rel),
     });
     if (res.status === 404) {
       throw new FsError('ENOENT', 'no such file', path);
@@ -496,6 +486,5 @@ export class S3MountBackend implements MountBackend {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    this.internalCtl.abort();
   }
 }
