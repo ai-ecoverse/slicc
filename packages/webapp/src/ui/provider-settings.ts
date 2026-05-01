@@ -407,6 +407,18 @@ export function addAccount(
 
 export function removeAccount(providerId: string): void {
   saveAccounts(getAccounts().filter((a) => a.providerId !== providerId));
+  // Clear the stored `selected-model` if it pointed at the deleted
+  // account. Without this, header dropdowns and the next message
+  // continue to resolve `getSelectedProvider()` to the removed
+  // provider — which then surfaces as
+  // "No API key configured for provider …" the next time the user
+  // sends a chat. The follow-up `ensureModelSelected` call in
+  // layout.ts re-picks a default from the surviving accounts.
+  const raw = localStorage.getItem(MODEL_KEY) ?? '';
+  const sep = raw.indexOf(':');
+  if (sep > 0 && raw.slice(0, sep) === providerId) {
+    localStorage.removeItem(MODEL_KEY);
+  }
 }
 
 /** Save an OAuth account (used by external providers after token exchange). */
