@@ -13,6 +13,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { GitCommands } from '../../src/git/git-commands.js';
 import { createDirectoryHandle } from '../fs/fsa-test-helpers.js';
+import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
+import { newMountId } from '../../src/fs/mount/mount-id.js';
 
 let dbCounter = 0;
 
@@ -33,7 +35,10 @@ describe('GitCommands on mounted directories (issue #421)', () => {
 
   async function mountEmpty(path: string): Promise<void> {
     await vfs.mkdir(path, { recursive: true });
-    await vfs.mount(path, createDirectoryHandle({}));
+    await vfs.mount(
+      path,
+      LocalMountBackend.fromHandle(createDirectoryHandle({}), { mountId: newMountId() })
+    );
   }
 
   it('git init creates .git/HEAD inside a mounted directory', async () => {

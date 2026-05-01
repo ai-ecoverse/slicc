@@ -3,6 +3,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { FsWatcher, RestrictedFS, VirtualFS } from '../../src/fs/index.js';
 import { ScriptCatalog } from '../../src/shell/script-catalog.js';
 import { createMutableDirectoryHandle } from '../fs/fsa-test-helpers.js';
+import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
+import { newMountId } from '../../src/fs/mount/mount-id.js';
+
+function backendOf(handle: FileSystemDirectoryHandle): LocalMountBackend {
+  return LocalMountBackend.fromHandle(handle, { mountId: newMountId() });
+}
 
 class MockScriptFs {
   readonly files = new Map<string, string>();
@@ -229,7 +235,7 @@ describe('ScriptCatalog', () => {
     const mounted = createMutableDirectoryHandle({
       'one.jsh': 'console.log("one");',
     });
-    await vfs.mount('/mnt/repo', mounted.handle);
+    await vfs.mount('/mnt/repo', backendOf(mounted.handle));
 
     const catalog = new ScriptCatalog({ jshFs: vfs, watcher });
     expect((await catalog.getJshCommands()).get('one')).toBe('/mnt/repo/one.jsh');
@@ -250,7 +256,7 @@ describe('ScriptCatalog', () => {
     const mounted = createMutableDirectoryHandle({
       'one.jsh': 'console.log("one");',
     });
-    await vfs.mount('/workspace/repo', mounted.handle);
+    await vfs.mount('/workspace/repo', backendOf(mounted.handle));
 
     const restricted = new RestrictedFS(vfs, ['/workspace']);
     const catalog = new ScriptCatalog({ jshFs: restricted, watcher });
@@ -272,7 +278,7 @@ describe('ScriptCatalog', () => {
     const mounted = createMutableDirectoryHandle({
       '-.okta.com.bsh': 'console.log("okta");',
     });
-    await vfs.mount('/workspace/repo', mounted.handle);
+    await vfs.mount('/workspace/repo', backendOf(mounted.handle));
 
     const catalog = new ScriptCatalog({ jshFs: vfs, bshFs: vfs, watcher });
     expect((await catalog.getBshEntries()).map((entry) => entry.path)).toEqual([

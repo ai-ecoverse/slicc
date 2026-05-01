@@ -22,7 +22,15 @@ import type {
 import { FsError } from './types.js';
 import { normalizePath, splitPath, joinPath } from './path-utils.js';
 import type { FsWatcher } from './fs-watcher.js';
-import { saveMountEntry, removeMountEntry, clearMountEntries } from './mount-table-store.js';
+import {
+  saveMountEntry,
+  removeMountEntry,
+  clearMountEntries,
+  loadMountHandle,
+} from './mount-table-store.js';
+import type { BackendDescriptor, MountTableEntry } from './mount-table-store.js';
+import type { MountBackend, RefreshReport } from './mount/backend.js';
+import { LocalMountBackend } from './mount/backend-local.js';
 import { MountIndex } from './mount-index.js';
 
 /** Maximum number of symlink hops before throwing ELOOP. */
@@ -39,8 +47,14 @@ export class VirtualFS {
   private lfs: FS.PromisifiedFS;
   private rawFs: FS;
   private _ready: Promise<void>;
-  /** Map from absolute mount path → FileSystemDirectoryHandle (File System Access API). */
-  private mountPoints = new Map<string, FileSystemDirectoryHandle>();
+  /**
+   * Map from absolute mount path → MountBackend instance. The backend
+   * abstracts over local FS Access handles (`LocalMountBackend`), S3
+   * (`S3MountBackend`), and DA (`DaMountBackend`); read/write paths in this
+   * file route operations through `backend.method()` rather than reaching
+   * into a handle directly.
+   */
+  private mountPoints = new Map<string, MountBackend>();
   private watcher: FsWatcher | null = null;
   private readonly dbName: string;
   /** BroadcastChannel for syncing mount registrations across VFS instances with the same dbName. */
@@ -59,20 +73,35 @@ export class VirtualFS {
       .then(() => {})
       .catch(() => {});
 
-    // Set up BroadcastChannel for mount point synchronization
+    // Set up BroadcastChannel for mount point synchronization. Messages
+    // carry a `BackendDescriptor` (not the live backend, which isn't
+    // structured-cloneable for remote backends); peer instances reconstruct
+    // the backend per descriptor kind via `reconstructBackendFromDescriptor`.
     if (typeof BroadcastChannel !== 'undefined') {
       try {
         this.mountSyncChannel = new BroadcastChannel(`vfs-mount-sync:${dbName}`);
         this.mountSyncChannel.onmessage = (event: MessageEvent) => {
-          const { type, path, handle } = event.data ?? {};
-          if (type === 'mount' && typeof path === 'string' && handle) {
-            this.mountPoints.set(path, handle);
-            // Register with MountIndex so peer instances also get fast walks
-            this.mountIndex.registerMount(path, handle);
-            this.watcher?.notify([{ type: 'modify', path, entryType: 'directory' }]);
+          const { type, path, descriptor } = event.data ?? {};
+          if (type === 'mount' && typeof path === 'string' && descriptor) {
+            void this.reconstructBackendFromDescriptor(descriptor as BackendDescriptor)
+              .then((backend) => {
+                this.mountPoints.set(path, backend);
+                if (backend.kind === 'local') {
+                  this.mountIndex.registerMount(path, (backend as LocalMountBackend).getHandle());
+                }
+                this.watcher?.notify([{ type: 'modify', path, entryType: 'directory' }]);
+              })
+              .catch(() => {
+                // Peer reconstruction is best-effort; if we can't rebuild
+                // the backend (e.g. handle GCed, profile missing), the
+                // mount is unavailable on this instance until a fresh
+                // mount() call.
+              });
           } else if (type === 'unmount' && typeof path === 'string') {
+            const backend = this.mountPoints.get(path);
             this.mountPoints.delete(path);
             this.mountIndex.unregisterMount(path);
+            void backend?.close();
             this.watcher?.notify([{ type: 'modify', path, entryType: 'directory' }]);
           }
         };
@@ -353,7 +382,7 @@ export class VirtualFS {
    * A placeholder directory is created in LightningFS so that ancestor paths
    * (e.g. `cd /workspace`) resolve correctly.
    */
-  async mount(absolutePath: string, handle: FileSystemDirectoryHandle): Promise<void> {
+  async mount(absolutePath: string, backend: MountBackend): Promise<void> {
     const normalized = normalizePath(absolutePath);
     if (this.mountPoints.has(normalized)) {
       throw new FsError('EEXIST', 'mount point is already mounted', normalized);
@@ -386,18 +415,46 @@ export class VirtualFS {
     } catch {
       /* EEXIST is fine */
     }
-    this.mountPoints.set(normalized, handle);
-    // Start async indexing for fast file discovery
-    this.mountIndex.registerMount(normalized, handle);
+    this.mountPoints.set(normalized, backend);
+    // For local backends, register the underlying handle with MountIndex
+    // so fast directory walks work. Remote backends have their own
+    // listing cache (RemoteMountCache); MountIndex stays local-only.
+    if (backend.kind === 'local') {
+      this.mountIndex.registerMount(normalized, (backend as LocalMountBackend).getHandle());
+    }
+    // Build the persistence descriptor.
+    const descriptor: BackendDescriptor =
+      backend.kind === 'local'
+        ? { kind: 'local', mountId: backend.mountId, idbHandleKey: normalized }
+        : backend.kind === 's3'
+          ? {
+              kind: 's3',
+              mountId: backend.mountId,
+              source: backend.source!,
+              profile: backend.profile ?? 'default',
+            }
+          : {
+              kind: 'da',
+              mountId: backend.mountId,
+              source: backend.source!,
+              profile: backend.profile ?? 'default',
+            };
     try {
-      this.mountSyncChannel?.postMessage({ type: 'mount', path: normalized, handle });
+      this.mountSyncChannel?.postMessage({ type: 'mount', path: normalized, descriptor });
     } catch {
       /* Best-effort sync: local mount is already registered */
     }
     this.watcher?.notify([{ type: 'modify', path: normalized, entryType: 'directory' }]);
     // Persist to IndexedDB (best-effort)
     try {
-      await saveMountEntry(normalized, handle);
+      const entry: MountTableEntry = {
+        targetPath: normalized,
+        descriptor,
+        createdAt: Date.now(),
+      };
+      const handle =
+        backend.kind === 'local' ? (backend as LocalMountBackend).getHandle() : undefined;
+      await saveMountEntry(entry, handle);
     } catch {
       /* best-effort persistence */
     }
@@ -406,19 +463,67 @@ export class VirtualFS {
   /** Remove a mount point (the LFS placeholder directory is left in place). */
   async unmount(absolutePath: string): Promise<void> {
     const normalized = normalizePath(absolutePath);
+    const backend = this.mountPoints.get(normalized);
     this.mountPoints.delete(normalized);
     this.mountIndex.unregisterMount(normalized);
+    // Sync to peers and notify watchers BEFORE awaiting close, so callers
+    // who don't await unmount() still propagate the removal synchronously.
     try {
       this.mountSyncChannel?.postMessage({ type: 'unmount', path: normalized });
     } catch {
       /* best-effort sync */
     }
     this.watcher?.notify([{ type: 'modify', path: normalized, entryType: 'directory' }]);
+    // close() aborts in-flight requests and marks the backend closed; any
+    // pending op against it now throws EBADF.
+    await backend?.close();
     // Remove from IndexedDB (best-effort)
     try {
       await removeMountEntry(normalized);
     } catch {
       /* best-effort persistence */
+    }
+  }
+
+  /**
+   * Reconstruct a `MountBackend` from a persisted descriptor. Used by
+   * BroadcastChannel peer sync. S3 / DA branches throw until Phase 11/12
+   * wire their reconstruction paths — peer instances of remote mounts skip
+   * gracefully.
+   */
+  private async reconstructBackendFromDescriptor(
+    descriptor: BackendDescriptor
+  ): Promise<MountBackend> {
+    switch (descriptor.kind) {
+      case 'local': {
+        const handle = await loadMountHandle(descriptor.idbHandleKey);
+        if (!handle) throw new Error(`no handle stored for ${descriptor.idbHandleKey}`);
+        return LocalMountBackend.fromHandle(handle, { mountId: descriptor.mountId });
+      }
+      case 's3': {
+        const { S3MountBackend, RemoteMountCache, makeSignedFetchS3 } =
+          await import('./mount/index.js');
+        const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
+        return new S3MountBackend({
+          source: descriptor.source,
+          profile: descriptor.profile,
+          cache,
+          mountId: descriptor.mountId,
+          signedFetch: makeSignedFetchS3(descriptor.profile),
+        });
+      }
+      case 'da': {
+        const { DaMountBackend, RemoteMountCache, makeSignedFetchDa } =
+          await import('./mount/index.js');
+        const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
+        return new DaMountBackend({
+          source: descriptor.source,
+          profile: descriptor.profile,
+          cache,
+          mountId: descriptor.mountId,
+          signedFetch: makeSignedFetchDa(),
+        });
+      }
     }
   }
 
@@ -438,12 +543,19 @@ export class VirtualFS {
    * Re-index a mounted directory. Use after external changes.
    * @throws Error if the path is not a mount point
    */
-  async refreshMount(mountPath: string): Promise<void> {
+  async refreshMount(mountPath: string, opts?: { bodies?: boolean }): Promise<RefreshReport> {
     const normalized = normalizePath(mountPath);
-    if (!this.mountPoints.has(normalized)) {
+    const backend = this.mountPoints.get(normalized);
+    if (!backend) {
       throw new FsError('ENOENT', 'not a mount point', normalized);
     }
-    await this.mountIndex.refreshMount(normalized);
+    const report = await backend.refresh(opts);
+    // Local backend's refresh is a no-op; existing MountIndex re-walk still
+    // happens here for local mounts.
+    if (backend.kind === 'local') {
+      await this.mountIndex.refreshMount(normalized);
+    }
+    return report;
   }
 
   /**
@@ -463,75 +575,55 @@ export class VirtualFS {
    * Returns the mount path, handle, and the path segments relative to the mount root,
    * or null if the path is not under any mount.
    */
+  /**
+   * Re-throw an `FsError` from a backend with the VFS-absolute path. Backend
+   * implementations are agnostic to where they're mounted, so they throw with
+   * mount-relative paths (e.g. `'pack'`); callers expect the path they passed
+   * in (e.g. `'/mnt/repo/pack'`).
+   */
+  private static rebrandFsError(err: unknown, normalizedPath: string): never {
+    if (err instanceof FsError) {
+      // FsError's `message` field is the constructor parameter; the displayed
+      // Error.message is `${code}: ${message}${path ? ` '${path}'` : ''}`.
+      // Extract the inner message so the rebranded error keeps the same text.
+      const codePrefix = `${err.code}: `;
+      let inner = err.message;
+      if (inner.startsWith(codePrefix)) inner = inner.slice(codePrefix.length);
+      if (err.path && inner.endsWith(` '${err.path}'`)) {
+        inner = inner.slice(0, inner.length - ` '${err.path}'`.length);
+      }
+      throw new FsError(err.code, inner, normalizedPath);
+    }
+    throw err;
+  }
+
   private findMount(
     path: string
-  ): { path: string; handle: FileSystemDirectoryHandle; relParts: string[] } | null {
-    let bestMatch: { mountPath: string; handle: FileSystemDirectoryHandle } | null = null;
+  ): { path: string; backend: MountBackend; relParts: string[] } | null {
+    let bestMatch: { mountPath: string; backend: MountBackend } | null = null;
 
-    for (const [mountPath, handle] of this.mountPoints) {
+    for (const [mountPath, backend] of this.mountPoints) {
       const isMatch = path === mountPath || path.startsWith(mountPath + '/');
       if (!isMatch) continue;
       if (!bestMatch || mountPath.length > bestMatch.mountPath.length) {
-        bestMatch = { mountPath, handle };
+        bestMatch = { mountPath, backend };
       }
     }
 
     if (!bestMatch) return null;
 
     if (path === bestMatch.mountPath) {
-      return { path: bestMatch.mountPath, handle: bestMatch.handle, relParts: [] };
+      return { path: bestMatch.mountPath, backend: bestMatch.backend, relParts: [] };
     }
 
     return {
       path: bestMatch.mountPath,
-      handle: bestMatch.handle,
+      backend: bestMatch.backend,
       relParts: path
         .slice(bestMatch.mountPath.length + 1)
         .split('/')
         .filter(Boolean),
     };
-  }
-
-  /** Navigate to a nested sub-directory within a FileSystemDirectoryHandle. */
-  private static async fsaNavDir(
-    root: FileSystemDirectoryHandle,
-    parts: string[],
-    create = false
-  ): Promise<FileSystemDirectoryHandle> {
-    let dir = root;
-    for (const part of parts) {
-      dir = await dir.getDirectoryHandle(part, { create });
-    }
-    return dir;
-  }
-
-  /** Get a FileSystemFileHandle at `parts` relative to `root`. */
-  private static async fsaGetFile(
-    root: FileSystemDirectoryHandle,
-    parts: string[],
-    create = false
-  ): Promise<FileSystemFileHandle> {
-    const dir = await VirtualFS.fsaNavDir(root, parts.slice(0, -1), create);
-    return dir.getFileHandle(parts[parts.length - 1], { create });
-  }
-
-  /** Convert a File System Access API error to FsError. */
-  private convertFsaError(err: unknown, path: string): FsError {
-    if (err instanceof FsError) return err;
-    if (err instanceof Error) {
-      if (err.name === 'NotFoundError')
-        return new FsError('ENOENT', 'no such file or directory', path);
-      if (err.name === 'TypeMismatchError') return new FsError('ENOTDIR', 'not a directory', path);
-      if (err.name === 'NotAllowedError') return new FsError('EINVAL', 'permission denied', path);
-      // FSA throws InvalidModificationError from removeEntry() when the target
-      // is a non-empty directory and `recursive` was not requested. Surface
-      // that as ENOTEMPTY so callers (notably isomorphic-git's checkout/reset
-      // cleanup path) can tolerate untracked files the same way they do on
-      // the LightningFS-backed path.
-      if (err.name === 'InvalidModificationError')
-        return new FsError('ENOTEMPTY', 'directory not empty', path);
-    }
-    return new FsError('EINVAL', err instanceof Error ? err.message : String(err), path);
   }
 
   /**
@@ -543,14 +635,14 @@ export class VirtualFS {
     const mount = this.findMount(normalized);
     if (mount) {
       if (mount.relParts.length === 0) throw new FsError('EISDIR', 'is a directory', normalized);
+      const relPath = mount.relParts.join('/');
       try {
-        const fh = await VirtualFS.fsaGetFile(mount.handle, mount.relParts);
-        const file = await fh.getFile();
+        const body = await mount.backend.readFile(relPath);
         const encoding = options?.encoding ?? 'utf-8';
-        if (encoding === 'utf-8') return await file.text();
-        return new Uint8Array(await file.arrayBuffer());
+        if (encoding === 'utf-8') return new TextDecoder('utf-8').decode(body);
+        return body;
       } catch (err) {
-        throw this.convertFsaError(err, normalized);
+        VirtualFS.rebrandFsError(err, normalized);
       }
     }
     // Resolve symlinks before reading
@@ -581,6 +673,7 @@ export class VirtualFS {
     const mount = this.findMount(normalized);
     if (mount) {
       if (mount.relParts.length === 0) throw new FsError('EISDIR', 'is a directory', normalized);
+      const relPath = mount.relParts.join('/');
       let wasExisting = false;
       try {
         await this.stat(normalized);
@@ -588,22 +681,19 @@ export class VirtualFS {
       } catch {
         /* file doesn't exist yet */
       }
+      // Preserve byteOffset/byteLength: pooled Buffer instances share a
+      // backing ArrayBuffer with other allocations, so `content.buffer`
+      // alone would write the whole pool.
+      const data =
+        typeof content === 'string'
+          ? new TextEncoder().encode(content)
+          : content instanceof Uint8Array
+            ? new Uint8Array(content.buffer, content.byteOffset, content.byteLength)
+            : new Uint8Array(content as ArrayBuffer);
       try {
-        const fh = await VirtualFS.fsaGetFile(mount.handle, mount.relParts, true);
-        const writable = await fh.createWritable();
-        // Preserve byteOffset/byteLength: pooled Buffer instances share a
-        // backing ArrayBuffer with other allocations, so `content.buffer`
-        // alone would write the whole pool.
-        const data =
-          typeof content === 'string'
-            ? new TextEncoder().encode(content)
-            : content instanceof Uint8Array
-              ? new Uint8Array(content.buffer, content.byteOffset, content.byteLength)
-              : new Uint8Array(content as ArrayBuffer);
-        await writable.write(data as unknown as FileSystemWriteChunkType);
-        await writable.close();
+        await mount.backend.writeFile(relPath, data);
       } catch (err) {
-        throw this.convertFsaError(err, normalized);
+        VirtualFS.rebrandFsError(err, normalized);
       }
       this.watcher?.notify([
         {
@@ -681,32 +771,32 @@ export class VirtualFS {
         return [...entries.values()];
       }
 
-      // Slow path: iterate over FSA handle
+      // Slow path: backend.readDir
+      const relPath = mount.relParts.join('/') || '/';
+      let dirEntries;
       try {
-        const dirHandle =
-          mount.relParts.length === 0
-            ? mount.handle
-            : await VirtualFS.fsaNavDir(mount.handle, mount.relParts);
-        const entries = new Map<string, DirEntry>();
-        for await (const [name, handle] of dirHandle as unknown as AsyncIterable<
-          [string, FileSystemHandle]
-        >) {
-          entries.set(name, { name, type: handle.kind === 'directory' ? 'directory' : 'file' });
-        }
-
-        const childPrefix = normalized === '/' ? '/' : `${normalized}/`;
-        for (const mountPath of this.mountPoints.keys()) {
-          if (mountPath === normalized || !mountPath.startsWith(childPrefix)) continue;
-          const relPath = mountPath.slice(childPrefix.length);
-          if (!relPath || relPath.includes('/')) continue;
-          if (!entries.has(relPath)) {
-            entries.set(relPath, { name: relPath, type: 'directory' });
-          }
-        }
-        return [...entries.values()];
+        dirEntries = await mount.backend.readDir(relPath);
       } catch (err) {
-        throw this.convertFsaError(err, normalized);
+        VirtualFS.rebrandFsError(err, normalized);
       }
+      const entries = new Map<string, DirEntry>();
+      for (const entry of dirEntries) {
+        entries.set(entry.name, {
+          name: entry.name,
+          type: entry.kind === 'directory' ? 'directory' : 'file',
+        });
+      }
+
+      const childPrefix = normalized === '/' ? '/' : `${normalized}/`;
+      for (const mountPath of this.mountPoints.keys()) {
+        if (mountPath === normalized || !mountPath.startsWith(childPrefix)) continue;
+        const relPath2 = mountPath.slice(childPrefix.length);
+        if (!relPath2 || relPath2.includes('/')) continue;
+        if (!entries.has(relPath2)) {
+          entries.set(relPath2, { name: relPath2, type: 'directory' });
+        }
+      }
+      return [...entries.values()];
     }
     // Resolve symlinks in the directory path itself
     const resolved = await this.resolveSymlinks(normalized);
@@ -747,14 +837,15 @@ export class VirtualFS {
     const mount = this.findMount(normalized);
     if (mount) {
       if (mount.relParts.length === 0) return; // mount root placeholder already exists
+      const relPath = mount.relParts.join('/');
+      const existed = await this.exists(normalized);
       try {
-        const existed = await this.exists(normalized);
-        await VirtualFS.fsaNavDir(mount.handle, mount.relParts, true);
-        if (!existed) {
-          this.watcher?.notify([{ type: 'create', path: normalized, entryType: 'directory' }]);
-        }
+        await mount.backend.mkdir(relPath);
       } catch (err) {
-        throw this.convertFsaError(err, normalized);
+        VirtualFS.rebrandFsError(err, normalized);
+      }
+      if (!existed) {
+        this.watcher?.notify([{ type: 'create', path: normalized, entryType: 'directory' }]);
       }
       return;
     }
@@ -802,16 +893,11 @@ export class VirtualFS {
       } catch {
         /* best effort */
       }
+      const relPath = mount.relParts.join('/');
       try {
-        const parentParts = mount.relParts.slice(0, -1);
-        const name = mount.relParts[mount.relParts.length - 1];
-        const parentDir =
-          parentParts.length === 0
-            ? mount.handle
-            : await VirtualFS.fsaNavDir(mount.handle, parentParts);
-        await parentDir.removeEntry(name, { recursive: options?.recursive });
+        await mount.backend.remove(relPath, { recursive: options?.recursive });
       } catch (err) {
-        throw this.convertFsaError(err, normalized);
+        VirtualFS.rebrandFsError(err, normalized);
       }
       this.watcher?.notify([{ type: 'delete', path: normalized, entryType }]);
       // Update mount index
@@ -870,24 +956,17 @@ export class VirtualFS {
           return { type: 'directory', size: 0, mtime: Date.now(), ctime: Date.now() };
         }
       }
+      const relPath = mount.relParts.join('/');
       try {
-        // Try as file first
-        try {
-          const fh = await VirtualFS.fsaGetFile(mount.handle, mount.relParts);
-          const file = await fh.getFile();
-          return {
-            type: 'file',
-            size: file.size,
-            mtime: file.lastModified,
-            ctime: file.lastModified,
-          };
-        } catch {
-          // Try as directory
-          await VirtualFS.fsaNavDir(mount.handle, mount.relParts);
-          return { type: 'directory', size: 0, mtime: Date.now(), ctime: Date.now() };
-        }
+        const ms = await mount.backend.stat(relPath);
+        return {
+          type: ms.kind === 'directory' ? 'directory' : 'file',
+          size: ms.size,
+          mtime: ms.mtime,
+          ctime: ms.mtime,
+        };
       } catch (err) {
-        throw this.convertFsaError(err, normalized);
+        VirtualFS.rebrandFsError(err, normalized);
       }
     }
     // Resolve symlinks before stat — stat follows symlinks

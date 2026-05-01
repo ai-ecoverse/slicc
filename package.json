@@ -39,6 +39,7 @@
     "start:electron": "node dist/node-server/index.js --electron",
     "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json",
     "test": "vitest run",
+    "test:live": "SLICC_TEST_LIVE=1 vitest run packages/webapp/tests/fs/mount/live",
     "test:server-integration": "vitest run --config packages/node-server/tests/integration/server/vitest.config.ts",
     "test:e2e": "npx playwright test --config packages/webapp/tests/e2e/playwright.config.ts",
     "start:extension": "npm run build -w @slicc/chrome-extension && npm run dev -- --profile=extension",

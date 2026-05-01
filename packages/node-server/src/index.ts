@@ -26,6 +26,9 @@ import { FileLogger } from './file-logger.js';
 import { CliLogDedup } from './cli-log-dedup.js';
 import { EnvSecretStore } from './secrets/env-secret-store.js';
 import { SecretProxyManager } from './secrets/proxy-manager.js';
+import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
+
+import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
@@ -754,7 +757,18 @@ async function main() {
     }
   });
 
-  app.use(express.json({ limit: '50mb' }));
+  // Global JSON body parser. Skipped when the request carries
+  // `X-Slicc-Raw-Body: 1`, so SigV4-signed bodies survive into the
+  // /api/fetch-proxy handler byte-for-byte (the parser would otherwise
+  // re-serialize them via JSON.stringify, breaking the signature).
+  app.use(
+    express.json({
+      limit: '50mb',
+      type: (req) =>
+        req.headers['x-slicc-raw-body'] !== '1' &&
+        (req.headers['content-type'] ?? '').includes('application/json'),
+    })
+  );
 
   app.get('/api/runtime-config', (_req, res) => {
     res.json({
@@ -937,6 +951,51 @@ async function main() {
     }
   });
 
+  // S3 sign-and-forward — browser-side mount backend posts envelopes here;
+  // server resolves the s3.<profile>.* secrets, signs SigV4 v4, forwards to
+  // the upstream, returns the response as a JSON envelope. The browser
+  // never sees access_key_id / secret_access_key. See sign-and-forward.ts
+  // for the envelope contract.
+  app.post('/api/s3-sign-and-forward', async (req, res) => {
+    try {
+      await handleS3SignAndForward(req, res, secretStore);
+    } catch (err) {
+      // Avoid logging envelope contents — bodies / headers may include
+      // credential material.
+      console.error(
+        `S3 sign-and-forward error: ${err instanceof Error ? err.message : String(err)}`
+      );
+      if (!res.headersSent) {
+        res.status(500).json({
+          ok: false,
+          error: 'internal sign-and-forward error',
+          errorCode: 'internal',
+        });
+      }
+    }
+  });
+
+  // DA sign-and-forward — same pattern as S3, but for Adobe da.live. The
+  // IMS bearer token is passed transiently in the envelope (browser holds
+  // it via the existing Adobe LLM provider). v2 will move OAuth server-side
+  // to remove the browser exposure entirely.
+  app.post('/api/da-sign-and-forward', async (req, res) => {
+    try {
+      await handleDaSignAndForward(req, res);
+    } catch (err) {
+      console.error(
+        `DA sign-and-forward error: ${err instanceof Error ? err.message : String(err)}`
+      );
+      if (!res.headersSent) {
+        res.status(500).json({
+          ok: false,
+          error: 'internal sign-and-forward error',
+          errorCode: 'internal',
+        });
+      }
+    }
+  });
+
   // Masked secrets endpoint — returns name + maskedValue pairs for shell env population.
   // The browser fetches this at shell init to populate env vars with masked values.
   // Real values are never exposed; only deterministic session-scoped masks.
@@ -979,20 +1038,12 @@ async function main() {
         method: req.method,
         redirect: 'follow', // Follow redirects for git protocol compatibility
       };
-      // Forward relevant headers (excluding hop-by-hop and proxy headers)
-      const skipHeaders = new Set([
-        'host',
-        'connection',
-        'x-target-url',
-        'content-length',
-        'transfer-encoding',
-        'x-proxy-cookie',
-        'x-proxy-origin',
-        'x-proxy-referer',
-      ]);
+      // Forward relevant headers (excluding hop-by-hop and proxy headers).
+      // Set lives at module scope as FETCH_PROXY_SKIP_HEADERS so tests can
+      // verify the contract without copying it.
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(req.headers)) {
-        if (!skipHeaders.has(key) && typeof value === 'string') {
+        if (!FETCH_PROXY_SKIP_HEADERS.has(key) && typeof value === 'string') {
           headers[key] = value;
         }
       }

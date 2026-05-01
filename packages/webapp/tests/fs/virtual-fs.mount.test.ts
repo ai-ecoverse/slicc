@@ -4,6 +4,12 @@ import { type FsError, VirtualFS } from '../../src/fs/index.js';
 import { discoverBshScripts } from '../../src/shell/bsh-discovery.js';
 import { discoverJshCommands } from '../../src/shell/jsh-discovery.js';
 import { createDirectoryHandle } from './fsa-test-helpers.js';
+import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
+
+let testMountIdCounter = 0;
+function backendOf(handle: FileSystemDirectoryHandle): LocalMountBackend {
+  return LocalMountBackend.fromHandle(handle, { mountId: `test-${testMountIdCounter++}` });
+}
 
 let dbCounter = 0;
 
@@ -23,9 +29,11 @@ describe('VirtualFS mount interactions with script discovery', () => {
     await expect(
       vfs.mount(
         '/workspace/skills',
-        createDirectoryHandle({
-          'shadow.jsh': 'console.log("shadow");',
-        })
+        backendOf(
+          createDirectoryHandle({
+            'shadow.jsh': 'console.log("shadow");',
+          })
+        )
       )
     ).rejects.toEqual(
       expect.objectContaining<FsError>({
@@ -42,11 +50,13 @@ describe('VirtualFS mount interactions with script discovery', () => {
     await vfs.mkdir('/mnt/repo', { recursive: true });
     await vfs.mount(
       '/mnt/repo',
-      createDirectoryHandle({
-        pack: {
-          'entry.txt': 'contents',
-        },
-      })
+      backendOf(
+        createDirectoryHandle({
+          pack: {
+            'entry.txt': 'contents',
+          },
+        })
+      )
     );
 
     // Non-recursive rm on a non-empty mounted directory must surface ENOTEMPTY
@@ -62,17 +72,21 @@ describe('VirtualFS mount interactions with script discovery', () => {
   it('discovers nested mounted .jsh and .bsh scripts through the parent mount', async () => {
     await vfs.mount(
       '/workspace/repo',
-      createDirectoryHandle({
-        'outer.jsh': 'console.log("outer");',
-      })
+      backendOf(
+        createDirectoryHandle({
+          'outer.jsh': 'console.log("outer");',
+        })
+      )
     );
 
     await vfs.mount(
       '/workspace/repo/nested',
-      createDirectoryHandle({
-        'inner.jsh': 'console.log("inner");',
-        '-.okta.com.bsh': 'console.log("okta");',
-      })
+      backendOf(
+        createDirectoryHandle({
+          'inner.jsh': 'console.log("inner");',
+          '-.okta.com.bsh': 'console.log("okta");',
+        })
+      )
     );
 
     const commands = await discoverJshCommands(vfs);

@@ -40,7 +40,8 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 - Path: `packages/webapp/src/fs/`
 - `virtual-fs.ts` provides the POSIX-like filesystem backed by LightningFS/IndexedDB.
 - `restricted-fs.ts` adds path ACLs for scoop sandboxes.
-- `mount-commands.ts` and `path-utils.ts` define path normalization and mount behavior.
+- `mount-commands.ts` is the dispatcher (parses `--source` / `--profile` / `--no-probe` etc.); `path-utils.ts` defines path normalization.
+- `mount/` holds the backend abstraction: `MountBackend` interface (`backend.ts`), three implementations (`backend-local.ts` wrapping FS Access, `backend-s3.ts` for S3 + S3-compatible like R2, `backend-da.ts` for da.live), the shared `RemoteMountCache` (TTL + ETag, IDB-backed), `signing-s3.ts` (pure SigV4 v4 via Web Crypto, no AWS SDK), `fetch-with-budget.ts` (timeout + retry + abort threading), and `profile.ts` (cred resolution from `s3.<profile>.*` secrets, IMS for DA). Persistence + recovery: `mount-table-store.ts` keys by `targetPath` with a `BackendDescriptor` discriminated union; `mount-recovery.ts` reconstructs backends per-kind on session restore.
 
 ### Shell
 

@@ -1,12 +1,43 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+/**
+ * Tests stub the IDB-backed mount-table-store so handles with function
+ * properties (queryPermission) survive intact — the real fake-indexeddb
+ * strips functions during its structured clone, which would defeat the
+ * permission-check tests below.
+ *
+ * The stub also seeds a default empty `loadMountHandle` per test; tests
+ * that need a specific handle override `handleByKey` before calling
+ * recoverMounts.
+ */
+const handleByKey = new Map<string, FileSystemDirectoryHandle>();
+vi.mock('../../src/fs/mount-table-store.js', async () => {
+  return {
+    loadMountHandle: async (key: string) => handleByKey.get(key) ?? null,
+    // Type-only re-exports for the test's TypeScript imports.
+  };
+});
+
 import {
   recoverMounts,
   formatMountRecoveryPrompt,
   mdInlineCode,
   shellQuote,
   type MountRecoveryFS,
+  type MountRecoveryEntry,
 } from '../../src/fs/mount-recovery.js';
-import type { MountEntry } from '../../src/fs/mount-table-store.js';
+import { newMountId } from '../../src/fs/mount/mount-id.js';
+import type { MountBackend } from '../../src/fs/mount/backend.js';
+import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
+
+interface MountTableEntry {
+  targetPath: string;
+  descriptor:
+    | { kind: 'local'; mountId: string; idbHandleKey: string }
+    | { kind: 's3'; mountId: string; source: string; profile: string }
+    | { kind: 'da'; mountId: string; source: string; profile: string };
+  createdAt: number;
+}
 
 type PermissionState = 'granted' | 'prompt' | 'denied';
 
@@ -31,31 +62,52 @@ function mockHandle(opts: MockHandleOptions): FileSystemDirectoryHandle {
   return handle as unknown as FileSystemDirectoryHandle;
 }
 
-function mockFs(mountImpl?: (path: string, handle: FileSystemDirectoryHandle) => Promise<void>): {
+/**
+ * Build a local-backend MountTableEntry and stash the handle in the
+ * `handleByKey` map so the mocked `loadMountHandle` returns it.
+ */
+function seedLocalEntry(targetPath: string, handle: FileSystemDirectoryHandle): MountTableEntry {
+  const entry: MountTableEntry = {
+    targetPath,
+    descriptor: {
+      kind: 'local',
+      mountId: newMountId(),
+      idbHandleKey: targetPath,
+    },
+    createdAt: Date.now(),
+  };
+  handleByKey.set(targetPath, handle);
+  return entry;
+}
+
+function mockFs(mountImpl?: (path: string, backend: MountBackend) => Promise<void>): {
   fs: MountRecoveryFS;
   mounts: Array<{ path: string; name: string }>;
 } {
   const mounts: Array<{ path: string; name: string }> = [];
   const fs: MountRecoveryFS = {
-    mount: async (path: string, handle: FileSystemDirectoryHandle) => {
-      if (mountImpl) await mountImpl(path, handle);
-      mounts.push({ path, name: handle.name });
+    mount: async (path: string, backend: MountBackend) => {
+      if (mountImpl) await mountImpl(path, backend);
+      const desc = backend.describe();
+      mounts.push({ path, name: desc.displayName });
     },
   };
   return { fs, mounts };
 }
 
 describe('recoverMounts', () => {
+  beforeEach(() => {
+    handleByKey.clear();
+  });
+
   it('silently remounts handles whose permission is still granted', async () => {
-    const entries: MountEntry[] = [
-      { path: '/workspace/a', handle: mockHandle({ name: 'a', permission: 'granted' }) },
-      { path: '/workspace/b', handle: mockHandle({ name: 'b', permission: 'granted' }) },
-    ];
+    const a = seedLocalEntry('/workspace/a', mockHandle({ name: 'a', permission: 'granted' }));
+    const b = seedLocalEntry('/workspace/b', mockHandle({ name: 'b', permission: 'granted' }));
     const { fs, mounts } = mockFs();
-    const result = await recoverMounts(entries, fs);
+    const result = await recoverMounts([a, b], fs);
     expect(result.restored).toEqual([
-      { path: '/workspace/a', dirName: 'a' },
-      { path: '/workspace/b', dirName: 'b' },
+      { kind: 'local', path: '/workspace/a', dirName: 'a' },
+      { kind: 'local', path: '/workspace/b', dirName: 'b' },
     ]);
     expect(result.needsRecovery).toEqual([]);
     expect(mounts).toEqual([
@@ -65,45 +117,43 @@ describe('recoverMounts', () => {
   });
 
   it('flags handles whose permission dropped to `prompt` as needing recovery', async () => {
-    const entries: MountEntry[] = [
-      { path: '/workspace/a', handle: mockHandle({ name: 'a', permission: 'prompt' }) },
-      { path: '/workspace/b', handle: mockHandle({ name: 'b', permission: 'denied' }) },
-    ];
+    const a = seedLocalEntry('/workspace/a', mockHandle({ name: 'a', permission: 'prompt' }));
+    const b = seedLocalEntry('/workspace/b', mockHandle({ name: 'b', permission: 'denied' }));
     const { fs, mounts } = mockFs();
-    const result = await recoverMounts(entries, fs);
+    const result = await recoverMounts([a, b], fs);
     expect(result.restored).toEqual([]);
     expect(result.needsRecovery).toEqual([
-      { path: '/workspace/a', dirName: 'a' },
-      { path: '/workspace/b', dirName: 'b' },
+      { kind: 'local', path: '/workspace/a', dirName: 'a' },
+      { kind: 'local', path: '/workspace/b', dirName: 'b' },
     ]);
     expect(mounts).toEqual([]);
   });
 
   it('flags handles that lost `queryPermission` as needing recovery', async () => {
-    const entries: MountEntry[] = [
-      {
-        path: '/workspace/legacy',
-        handle: mockHandle({ name: 'legacy', withoutQueryPermission: true }),
-      },
-    ];
+    const e = seedLocalEntry(
+      '/workspace/legacy',
+      mockHandle({ name: 'legacy', withoutQueryPermission: true })
+    );
     const { fs } = mockFs();
-    const result = await recoverMounts(entries, fs);
+    const result = await recoverMounts([e], fs);
     expect(result.restored).toEqual([]);
-    expect(result.needsRecovery).toEqual([{ path: '/workspace/legacy', dirName: 'legacy' }]);
+    expect(result.needsRecovery).toEqual([
+      { kind: 'local', path: '/workspace/legacy', dirName: 'legacy' },
+    ]);
   });
 
   it('flags handles whose queryPermission throws as needing recovery', async () => {
     const warn = vi.fn();
-    const entries: MountEntry[] = [
-      {
-        path: '/workspace/broken',
-        handle: mockHandle({ name: 'broken', throwOnQuery: true }),
-      },
-    ];
+    const e = seedLocalEntry(
+      '/workspace/broken',
+      mockHandle({ name: 'broken', throwOnQuery: true })
+    );
     const { fs } = mockFs();
-    const result = await recoverMounts(entries, fs, { warn });
+    const result = await recoverMounts([e], fs, { warn });
     expect(result.restored).toEqual([]);
-    expect(result.needsRecovery).toEqual([{ path: '/workspace/broken', dirName: 'broken' }]);
+    expect(result.needsRecovery).toEqual([
+      { kind: 'local', path: '/workspace/broken', dirName: 'broken' },
+    ]);
     expect(warn).toHaveBeenCalledWith(
       'queryPermission threw on persisted handle',
       expect.objectContaining({ path: '/workspace/broken' })
@@ -112,17 +162,15 @@ describe('recoverMounts', () => {
 
   it('falls back to needsRecovery when the fs mount call itself throws', async () => {
     const warn = vi.fn();
-    const entries: MountEntry[] = [
-      { path: '/workspace/x', handle: mockHandle({ name: 'x', permission: 'granted' }) },
-    ];
+    const e = seedLocalEntry('/workspace/x', mockHandle({ name: 'x', permission: 'granted' }));
     const fs: MountRecoveryFS = {
       mount: async () => {
         throw new Error('mount failed');
       },
     };
-    const result = await recoverMounts(entries, fs, { warn });
+    const result = await recoverMounts([e], fs, { warn });
     expect(result.restored).toEqual([]);
-    expect(result.needsRecovery).toEqual([{ path: '/workspace/x', dirName: 'x' }]);
+    expect(result.needsRecovery).toEqual([{ kind: 'local', path: '/workspace/x', dirName: 'x' }]);
     expect(warn).toHaveBeenCalledWith(
       'Failed to re-mount persisted handle',
       expect.objectContaining({ path: '/workspace/x' })
@@ -136,18 +184,90 @@ describe('recoverMounts', () => {
   });
 
   it('mixes restored and needs-recovery correctly in a single pass', async () => {
-    const entries: MountEntry[] = [
-      { path: '/workspace/ok', handle: mockHandle({ name: 'ok', permission: 'granted' }) },
-      { path: '/workspace/stale', handle: mockHandle({ name: 'stale', permission: 'prompt' }) },
-    ];
+    const ok = seedLocalEntry('/workspace/ok', mockHandle({ name: 'ok', permission: 'granted' }));
+    const stale = seedLocalEntry(
+      '/workspace/stale',
+      mockHandle({ name: 'stale', permission: 'prompt' })
+    );
     const { fs } = mockFs();
-    const result = await recoverMounts(entries, fs);
-    expect(result.restored).toEqual([{ path: '/workspace/ok', dirName: 'ok' }]);
-    expect(result.needsRecovery).toEqual([{ path: '/workspace/stale', dirName: 'stale' }]);
+    const result = await recoverMounts([ok, stale], fs);
+    expect(result.restored).toEqual([{ kind: 'local', path: '/workspace/ok', dirName: 'ok' }]);
+    expect(result.needsRecovery).toEqual([
+      { kind: 'local', path: '/workspace/stale', dirName: 'stale' },
+    ]);
+  });
+
+  it('restored backends are LocalMountBackend instances passed to fs.mount', async () => {
+    const e = seedLocalEntry('/workspace/x', mockHandle({ name: 'x', permission: 'granted' }));
+    let received: MountBackend | undefined;
+    const fs: MountRecoveryFS = {
+      mount: async (_path, backend) => {
+        received = backend;
+      },
+    };
+    await recoverMounts([e], fs);
+    expect(received).toBeInstanceOf(LocalMountBackend);
+    expect(received?.kind).toBe('local');
+    expect(received?.mountId).toBe(e.descriptor.kind === 'local' ? e.descriptor.mountId : '');
+  });
+
+  // Recovery for remote backends is now lazy — credential resolution
+  // happens server-side (CLI) or in the SW (extension) at request time, not
+  // at recovery time. The browser-side recoverMounts just rebuilds the
+  // backend and registers it. Missing-profile / missing-IMS failures
+  // surface on the first read/write, not during recovery itself.
+  it('S3 recovery succeeds even when profile is not configured (lazy resolution)', async () => {
+    const entry: MountTableEntry = {
+      targetPath: '/mnt/r2',
+      descriptor: {
+        kind: 's3',
+        mountId: newMountId(),
+        source: 's3://bucket/prefix',
+        profile: 'r2',
+      },
+      createdAt: Date.now(),
+    };
+    const { fs } = mockFs();
+    const result = await recoverMounts([entry], fs);
+    expect(result.needsRecovery).toEqual([]);
+    expect(result.restored).toHaveLength(1);
+    expect(result.restored[0]).toMatchObject({
+      kind: 's3',
+      path: '/mnt/r2',
+      source: 's3://bucket/prefix',
+      profile: 'r2',
+    });
+  });
+
+  it('DA recovery succeeds even with no IMS account yet (lazy resolution)', async () => {
+    const entry: MountTableEntry = {
+      targetPath: '/mnt/da',
+      descriptor: {
+        kind: 'da',
+        mountId: newMountId(),
+        source: 'da://my-org/my-repo',
+        profile: 'default',
+      },
+      createdAt: Date.now(),
+    };
+    const { fs } = mockFs();
+    const result = await recoverMounts([entry], fs);
+    expect(result.needsRecovery).toEqual([]);
+    expect(result.restored).toHaveLength(1);
+    expect(result.restored[0]).toMatchObject({
+      kind: 'da',
+      path: '/mnt/da',
+      source: 'da://my-org/my-repo',
+      profile: 'default',
+    });
   });
 });
 
 describe('formatMountRecoveryPrompt', () => {
+  function localEntry(path: string, dirName: string): MountRecoveryEntry {
+    return { kind: 'local', path, dirName };
+  }
+
   it('returns null when there are no mounts to recover', () => {
     expect(formatMountRecoveryPrompt([])).toBeNull();
   });
@@ -157,9 +277,7 @@ describe('formatMountRecoveryPrompt', () => {
   });
 
   it('produces a single-mount prompt that includes the mount command', () => {
-    const prompt = formatMountRecoveryPrompt([
-      { path: '/workspace/my-project', dirName: 'my-project' },
-    ]);
+    const prompt = formatMountRecoveryPrompt([localEntry('/workspace/my-project', 'my-project')]);
     expect(prompt).not.toBeNull();
     expect(prompt).toContain('Mount recovery required');
     expect(prompt).toContain('1 mount point');
@@ -171,8 +289,8 @@ describe('formatMountRecoveryPrompt', () => {
 
   it('pluralizes when multiple mounts need recovery', () => {
     const prompt = formatMountRecoveryPrompt([
-      { path: '/workspace/a', dirName: 'a' },
-      { path: '/workspace/b', dirName: 'b' },
+      localEntry('/workspace/a', 'a'),
+      localEntry('/workspace/b', 'b'),
     ]);
     expect(prompt).not.toBeNull();
     expect(prompt).toContain('2 mount points');
@@ -181,47 +299,70 @@ describe('formatMountRecoveryPrompt', () => {
   });
 
   it('omits the original directory name when it is unknown', () => {
-    const prompt = formatMountRecoveryPrompt([{ path: '/mnt/data', dirName: '' }]);
+    const prompt = formatMountRecoveryPrompt([localEntry('/mnt/data', '')]);
     expect(prompt).not.toBeNull();
     expect(prompt).not.toContain('previously mounted');
     expect(prompt).toContain('/mnt/data');
   });
 
   it('shell-quotes mount paths containing spaces so they parse as one argv token', () => {
-    const prompt = formatMountRecoveryPrompt([{ path: '/mnt/My Project', dirName: 'My Project' }]);
+    const prompt = formatMountRecoveryPrompt([localEntry('/mnt/My Project', 'My Project')]);
     expect(prompt).not.toBeNull();
-    // The command must keep the path as a single argv token.
     expect(prompt).toContain("mount '/mnt/My Project'");
-    // And must NOT emit the unsafe, whitespace-splitting form.
     expect(prompt).not.toMatch(/^ {4}mount \/mnt\/My Project$/m);
   });
 
   it('escapes single quotes inside shell-quoted mount paths', () => {
-    const prompt = formatMountRecoveryPrompt([{ path: "/mnt/It's Work", dirName: "It's Work" }]);
+    const prompt = formatMountRecoveryPrompt([localEntry("/mnt/It's Work", "It's Work")]);
     expect(prompt).not.toBeNull();
-    // POSIX single-quote escape: close, escape, reopen.
     expect(prompt).toContain("mount '/mnt/It'\\''s Work'");
   });
 
   it('uses a wider backtick delimiter when a value contains backticks', () => {
-    const prompt = formatMountRecoveryPrompt([{ path: '/mnt/weird`path', dirName: 'weird`dir' }]);
+    const prompt = formatMountRecoveryPrompt([localEntry('/mnt/weird`path', 'weird`dir')]);
     expect(prompt).not.toBeNull();
-    // Embedded `s force a `` … `` inline code fence so markdown stays valid.
     expect(prompt).toContain('``/mnt/weird`path``');
     expect(prompt).toContain('``weird`dir``');
   });
 
   it('collapses newlines inside Markdown inline code so the bullet renders on one line', () => {
-    const prompt = formatMountRecoveryPrompt([
-      { path: '/mnt/line1\nline2', dirName: 'weird\r\nname' },
-    ]);
+    const prompt = formatMountRecoveryPrompt([localEntry('/mnt/line1\nline2', 'weird\r\nname')]);
     expect(prompt).not.toBeNull();
-    // Inline code must not straddle a newline (CommonMark forbids it).
     expect(prompt).toContain('`/mnt/line1 line2`');
     expect(prompt).toContain('`weird name`');
-    // The indented shell command is a code block, not inline code, so the
-    // POSIX-correct single-quote form still preserves the real newline
-    // there — callers treat the path as opaque, we don't rewrite it.
+  });
+
+  it('formats s3 entries with retry hint including --source and --profile', () => {
+    const prompt = formatMountRecoveryPrompt([
+      {
+        kind: 's3',
+        path: '/mnt/r2',
+        source: 's3://my-bucket/prefix',
+        profile: 'r2',
+        reason: 'profile r2 missing access_key_id',
+      },
+    ]);
+    expect(prompt).not.toBeNull();
+    expect(prompt).toContain('s3://my-bucket/prefix');
+    expect(prompt).toContain("mount --source 's3://my-bucket/prefix' --profile 'r2' '/mnt/r2'");
+    expect(prompt).toContain('profile r2 missing access_key_id');
+  });
+
+  it('formats da entries with retry hint and IMS identity context', () => {
+    const prompt = formatMountRecoveryPrompt([
+      {
+        kind: 'da',
+        path: '/mnt/da',
+        source: 'da://my-org/my-repo',
+        profile: 'default',
+        reason: 'IMS token expired',
+      },
+    ]);
+    expect(prompt).not.toBeNull();
+    expect(prompt).toContain('da://my-org/my-repo');
+    // Default profile omits the --profile flag from the retry hint.
+    expect(prompt).toContain("mount --source 'da://my-org/my-repo' '/mnt/da'");
+    expect(prompt).toContain('IMS token expired');
   });
 });
 
