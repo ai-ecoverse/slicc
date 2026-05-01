@@ -185,10 +185,6 @@
           <label for="baseUrlIn">Base URL</label>
           <input id="baseUrlIn" type="text" autocomplete="off" spellcheck="false" placeholder="https://…" />
         </div>
-        <div id="modelRow">
-          <label for="modelSel">Model</label>
-          <select id="modelSel"></select>
-        </div>
       </div>
       <div id="status" class="status"></div>
       <div class="actions">
@@ -207,9 +203,10 @@
 
     <script>
       // Provider catalogue is injected by the parent via slicc-message.
-      // Until it arrives we render a tiny placeholder.
+      // Until it arrives we render a tiny placeholder. Model selection
+      // intentionally lives in the chat header (not the dip), so we
+      // ignore the `models` map and never surface it here.
       var providers = [];
-      var modelsByProvider = {};
       var current = { provider: null, providerConfig: null };
 
       var providerListEl = document.getElementById('providerList');
@@ -219,8 +216,6 @@
       var apiKeyIn = document.getElementById('apiKeyIn');
       var baseUrlRow = document.getElementById('baseUrlRow');
       var baseUrlIn = document.getElementById('baseUrlIn');
-      var modelRow = document.getElementById('modelRow');
-      var modelSel = document.getElementById('modelSel');
       var statusEl = document.getElementById('status');
       var connectBtn = document.getElementById('connectBtn');
       var backBtn = document.getElementById('backBtn');
@@ -282,30 +277,12 @@
         metaEl.textContent = '';
         apiKeyIn.value = '';
 
-        // OAuth providers don't take an API key OR a model — they
-        // delegate everything to a popup login flow handled by the
-        // host page. The dip just emits an `oauth-attempt` and waits
-        // for `slicc-connect-result`.
+        // OAuth providers delegate everything to a popup login flow
+        // handled by the host page. The dip just emits an
+        // `oauth-attempt` and waits for `slicc-connect-result`.
         var isOAuth = !!p.isOAuth;
         apiKeyRow.hidden = isOAuth;
-        modelRow.hidden = isOAuth;
 
-        // Populate model list (if known up-front).
-        modelSel.innerHTML = '';
-        var models = modelsByProvider[p.id] || [];
-        if (models.length === 0) {
-          var opt = document.createElement('option');
-          opt.value = '';
-          opt.textContent = '(default)';
-          modelSel.appendChild(opt);
-        } else {
-          models.forEach(function (m) {
-            var opt = document.createElement('option');
-            opt.value = m.id;
-            opt.textContent = m.name || m.id;
-            modelSel.appendChild(opt);
-          });
-        }
         connectBtn.disabled = false;
         connectBtn.textContent = isOAuth ? 'Login with ' + p.name : 'Connect';
         go('sCreds');
@@ -347,7 +324,11 @@
             provider: current.provider,
             apiKey: key,
             baseUrl: (baseUrlIn.value || '').trim() || null,
-            model: modelSel.value || null,
+            // Model picking is handled by the chat header dropdown,
+            // not by the welcome dip — leave it null so the
+            // orchestrator preserves whatever model the user (or
+            // provider defaults) has already chosen.
+            model: null,
           },
         });
       };
@@ -361,7 +342,9 @@
         var msg = e.detail || {};
         if (msg.type === 'slicc-providers') {
           providers = (msg.providers || []).slice();
-          modelsByProvider = msg.models || {};
+          // The dip used to read `msg.models` to populate a per-provider
+          // model dropdown; that responsibility now lives in the chat
+          // header so we deliberately ignore the models map.
           renderProviders();
         } else if (msg.type === 'slicc-already-connected') {
           // Reload of a chat that already finished onboarding —
