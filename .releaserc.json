@@ -1,5 +1,6 @@
 {
   "branches": ["main"],
+  "repositoryUrl": "git@github.com:ai-ecoverse/slicc.git",
   "plugins": [
     "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",
