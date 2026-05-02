@@ -1090,10 +1090,20 @@ async function main() {
 
       // Propagate client disconnect to the upstream request so that
       // long-lived streams (LLM SSE completions) are torn down promptly
-      // when the SW or the page aborts.
+      // when the SW or the page aborts. Listen on `res.on('close')` —
+      // not `req.on('close')` — because Node fires `req` close as soon
+      // as the readable side of the request is consumed (right after
+      // express.json() parses the body), which would abort the upstream
+      // fetch before it could even start. `res` close only fires when
+      // the response is sent OR the connection is killed mid-stream;
+      // in the first case the abort is harmless (the fetch already
+      // settled), in the second it's exactly what we want. Guard with
+      // `res.writableEnded` to be safe.
       const abortController = new AbortController();
-      const onClientClose = () => abortController.abort();
-      req.on('close', onClientClose);
+      const onClientClose = () => {
+        if (!res.writableEnded) abortController.abort();
+      };
+      res.on('close', onClientClose);
       fetchInit.signal = abortController.signal;
 
       const upstream = await fetch(targetUrl, fetchInit);
@@ -1137,7 +1147,7 @@ async function main() {
       // is best-effort on streamed bodies).
       if (!upstream.body) {
         res.end();
-        req.off('close', onClientClose);
+        res.off('close', onClientClose);
         return;
       }
       const ct = (upstream.headers.get('content-type') ?? '').toLowerCase();
@@ -1163,7 +1173,7 @@ async function main() {
           }
         },
       });
-      const cleanup = () => req.off('close', onClientClose);
+      const cleanup = () => res.off('close', onClientClose);
       upstreamStream.on('error', (err) => {
         cleanup();
         if (!res.headersSent) {
@@ -1175,7 +1185,7 @@ async function main() {
           res.destroy(err);
         }
       });
-      res.on('close', cleanup);
+      res.on('finish', cleanup);
       upstreamStream.pipe(scrubChunk).pipe(res);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

@@ -42,6 +42,22 @@ declare const self: ServiceWorkerGlobalScope;
 const FETCH_PROXY_PATH = '/api/fetch-proxy';
 const BYPASS_HEADER = 'x-bypass-llm-proxy';
 
+// Pull in preview-sw so its fetch handler runs in this SW's context.
+//
+// Why: this SW is registered at scope `/` so that it controls the main
+// SLICC page and can intercept cross-origin fetches issued by pi-ai
+// providers. But the SW spec says a controlled client's fetches go to
+// THE controlling SW only — sub-scope SWs (preview-sw at `/preview/`)
+// never see them. Without this importScripts, every `/preview/*`
+// request from the page would slip past preview-sw, fall through to
+// the dev server, get SPA-fallback'd to `/index.html`, and render the
+// full SLICC UI inside the requesting context (e.g. dip iframes,
+// causing visible "infinite recursion"). Loading preview-sw.js here
+// registers its fetch handler in the same global; the first handler
+// that calls `event.respondWith` wins, so /preview/* keeps working
+// exactly as before and we just add the cross-origin rewrite on top.
+self.importScripts('/preview-sw.js');
+
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting());
 });
@@ -62,9 +78,9 @@ self.addEventListener('fetch', (event: FetchEvent) => {
   }
 
   // Same-origin: pass straight through. This deliberately includes the
-  // proxy endpoint itself (no infinite loop) and the existing preview-sw
-  // scope (`/preview/*`) which the more-specific SW handles via Browser
-  // scope precedence.
+  // proxy endpoint itself (no infinite loop) and the `/preview/*`
+  // requests preview-sw (importScripts'd above) handles in this same
+  // SW context.
   if (url.origin === self.location.origin) return;
 
   // Non-network protocols: nothing for us to do.

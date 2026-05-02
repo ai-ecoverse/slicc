@@ -529,24 +529,55 @@ private func makeStreamingProxyResponse(
 
     // Per-chunk transform — secrets crossing a chunk boundary slip through
     // unscrubbed. Acceptable for LLM SSE responses (matches Node-server).
-    let body = ResponseBody { writer in
-        for try await chunk in upstreamBody {
-            if shouldScrub,
-               let str = chunk.getString(at: chunk.readerIndex, length: chunk.readableBytes) {
-                let scrubbed = scrubber.scrub(text: str)
-                try await writer.write(ByteBuffer(string: scrubbed))
-            } else {
-                try await writer.write(chunk)
-            }
-        }
-        try await writer.finish(nil)
-    }
+    // Use the writer-based ResponseBody so each chunk is written and flushed
+    // immediately. The previous shape of this code awaited each
+    // `writer.write` inside a for-try-await over upstreamBody, which is
+    // identical to Hummingbird's own AsyncSequence-backed body but lets us
+    // fold in scrub without an intermediate map operator.
+    let body = ResponseBody(asyncSequence: ScrubbingAsyncStream(
+        upstream: upstreamBody,
+        shouldScrub: shouldScrub,
+        scrubber: scrubber
+    ))
 
     return Response(
         status: HTTPResponse.Status(code: Int(response.status.code), reasonPhrase: response.status.reasonPhrase),
         headers: headers,
         body: body
     )
+}
+
+/// AsyncSequence wrapper that scrubs each ByteBuffer chunk from the
+/// upstream HTTPClientResponse.Body before forwarding it to the Hummingbird
+/// response writer. Exists so `ResponseBody(asyncSequence:)` can be used —
+/// that path is the documented fast-path for streamed responses and avoids
+/// any buffering inside the writer-based `ResponseBody { writer in ... }`
+/// initializer.
+private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
+    typealias Element = ByteBuffer
+    let upstream: HTTPClientResponse.Body
+    let shouldScrub: Bool
+    let scrubber: SecretInjector
+
+    struct AsyncIterator: AsyncIteratorProtocol {
+        var inner: HTTPClientResponse.Body.AsyncIterator
+        let shouldScrub: Bool
+        let scrubber: SecretInjector
+
+        mutating func next() async throws -> ByteBuffer? {
+            guard let chunk = try await inner.next() else { return nil }
+            if shouldScrub,
+               let str = chunk.getString(at: chunk.readerIndex, length: chunk.readableBytes) {
+                let scrubbed = scrubber.scrub(text: str)
+                return ByteBuffer(string: scrubbed)
+            }
+            return chunk
+        }
+    }
+
+    func makeAsyncIterator() -> AsyncIterator {
+        AsyncIterator(inner: upstream.makeAsyncIterator(), shouldScrub: shouldScrub, scrubber: scrubber)
+    }
 }
 
 private extension HTTPMethod {
