@@ -1278,6 +1278,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   await sprinkleManager.refresh();
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);
+  layout.onSprinkleActivate = (name) => sprinkleManager.markActivated(name);
   layout.getAvailableSprinkles = () => {
     const opened = new Set(sprinkleManager.opened());
     return sprinkleManager
@@ -2687,6 +2688,7 @@ async function main(): Promise<void> {
 
     await sprinkleManager.refresh();
     layout.onSprinkleClose = (name) => sprinkleManager!.close(name);
+    layout.onSprinkleActivate = (name) => sprinkleManager!.markActivated(name);
 
     // Wire [+] picker: available sprinkles + open callback
     layout.getAvailableSprinkles = () => {
