@@ -228,7 +228,16 @@ export function groupToolCalls(toolCalls: readonly ToolCall[]): ToolGroup[] {
  *  label, e.g. `read, bash, edit, list, scoop, message`. Truncates with
  *  an ellipsis if it would overflow the row. */
 export function clusterPreview(toolCalls: readonly ToolCall[]): string {
-  const titles = toolCalls.map((tc) => getToolDescriptor(tc.name).title);
+  return clusterPreviewFromTitles(toolCalls.map((tc) => getToolDescriptor(tc.name).title));
+}
+
+/** Same shape as {@link clusterPreview} but driven by pre-resolved titles.
+ *  Used by the chain-level reflow pass which builds clusters from existing
+ *  `.tool-call` DOM elements where the descriptor lookup has already been
+ *  done at element-creation time. Keeping the truncation rule in one place
+ *  prevents the cross-message cluster from disagreeing with the per-message
+ *  cluster about how the preview should look. */
+export function clusterPreviewFromTitles(titles: readonly string[]): string {
   return truncate(titles.join(', '), 120);
 }
 

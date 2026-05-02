@@ -25,7 +25,9 @@ import {
   toolStatus,
   groupToolCalls,
   clusterPreview,
+  clusterPreviewFromTitles,
   createClusterIcon,
+  TOOL_CLUSTER_MIN,
 } from './tool-call-view.js';
 import { getLickDescriptor, createLickIcon, parseLickContent } from './lick-view.js';
 import { isLickChannel, type LickChannel } from './lick-channels.js';
@@ -63,6 +65,16 @@ const MAX_INLINE_TEXT_BYTES = 512 * 1024;
 /** Generate a simple unique ID. */
 function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+/** Read a tool-call element's current status from its `tool-call--<status>`
+ *  modifier. `createToolCallEl` always sets exactly one of these and
+ *  refreshes them on every `updateMessageEl`, so they're the live status
+ *  source the chain-level cluster mirrors in its summary dots. */
+function readToolCallStatus(el: Element): 'running' | 'success' | 'error' {
+  if (el.classList.contains('tool-call--success')) return 'success';
+  if (el.classList.contains('tool-call--error')) return 'error';
+  return 'running';
 }
 
 function createLucideIcon(node: IconNode, size = 18): SVGElement {
@@ -1114,9 +1126,13 @@ export class ChatPanel {
       return;
     }
 
-    // Find the tool call element (last one with matching name)
-    const toolCallEls = wrapper.querySelectorAll('.tool-call');
-    const toolCallEl = [...toolCallEls].reverse().find((el) => {
+    // Find the tool call element (last one with matching name) by
+    // `data-msg-id` since chain-level reflow may have relocated the
+    // element from `wrapper` into a sibling msg-group's cluster body.
+    const ownedToolCallEls = this.messagesEl.querySelectorAll<HTMLElement>(
+      `.tool-call[data-msg-id="${messageId}"]`
+    );
+    const toolCallEl = [...ownedToolCallEls].reverse().find((el) => {
       const nameEl = el.querySelector('.tool-call__name');
       return nameEl?.textContent === toolName;
     });
@@ -1596,6 +1612,7 @@ export class ChatPanel {
       prevRole = msg.role;
       prevTimestamp = msg.timestamp;
     }
+    this.reflowToolClusters();
     this.autoScrollAttached = true;
     this.hideJumpPill();
     this.scrollToBottom(true);
@@ -1619,6 +1636,7 @@ export class ChatPanel {
     }
     const el = this.createMessageEl(msg, showLabel, isLastAssistant);
     this.messagesInner.appendChild(el);
+    this.reflowToolClusters();
     this.scrollToBottom();
   }
 
@@ -1643,6 +1661,13 @@ export class ChatPanel {
     const existing = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
     if (existing) {
       this.disposeDipsForMessage(messageId);
+      // Tool calls for sibling messages in this chain may be inside a
+      // chain-level cluster appended to a different msg-group. Unwrap
+      // first so each msg-group owns its tool calls again before we
+      // swap this wrapper out — otherwise the new inline tool calls and
+      // the stale clustered ones would coexist briefly until the next
+      // reflow re-collected them.
+      this.unwrapToolClusters();
       // Determine showLabel based on previous message in the list
       const idx = this.messages.indexOf(msg);
       const prev = idx > 0 ? this.messages[idx - 1] : null;
@@ -1662,6 +1687,7 @@ export class ChatPanel {
       const stale = this.findLastRealUserIdx() > idx;
       const newEl = this.createMessageEl(msg, showLabel, isLastAssistant, stale);
       existing.replaceWith(newEl);
+      this.reflowToolClusters();
     }
     this.scrollToBottom();
   }
@@ -1824,9 +1850,9 @@ export class ChatPanel {
     if (msg.toolCalls?.length) {
       for (const group of groupToolCalls(msg.toolCalls)) {
         if (group.kind === 'single') {
-          wrapper.appendChild(this.createToolCallEl(group.toolCall, stale));
+          wrapper.appendChild(this.createToolCallEl(group.toolCall, msg.id, stale));
         } else {
-          wrapper.appendChild(this.createToolClusterEl(group.toolCalls, stale));
+          wrapper.appendChild(this.createToolClusterEl(group.toolCalls, msg.id, stale));
         }
       }
     }
@@ -1928,13 +1954,16 @@ export class ChatPanel {
     return el;
   }
 
-  private createToolCallEl(tc: ToolCall, stale = false): HTMLElement {
+  private createToolCallEl(tc: ToolCall, msgId: string, stale = false): HTMLElement {
     const desc = getToolDescriptor(tc.name);
     const status = toolStatus(tc);
 
     // Use <details> for collapsible behavior - collapsed by default, expand on hover/click
     const el = document.createElement('details');
     el.className = `tool-call tool-call--${status}${stale ? ' tool-call--stale' : ''}`;
+    // Tag with the owning message id so reflow can return the element to
+    // its home msg-group when unwrapping a cross-message cluster.
+    el.dataset.msgId = msgId;
 
     const summary = document.createElement('summary');
     summary.className = 'tool-call__header';
@@ -2003,7 +2032,7 @@ export class ChatPanel {
    *  dot per inner call so users can see the progression of the run at a
    *  glance; expanding the cluster reveals the individual tool-call rows
    *  (each with their own full row + status bubble). */
-  private createToolClusterEl(toolCalls: ToolCall[], stale = false): HTMLElement {
+  private createToolClusterEl(toolCalls: ToolCall[], msgId: string, stale = false): HTMLElement {
     const el = document.createElement('details');
     el.className = `tool-call-cluster${stale ? ' tool-call--stale' : ''}`;
 
@@ -2052,8 +2081,152 @@ export class ChatPanel {
     const body = document.createElement('div');
     body.className = 'tool-call-cluster__body';
     for (const tc of toolCalls) {
-      body.appendChild(this.createToolCallEl(tc, stale));
+      body.appendChild(this.createToolCallEl(tc, msgId, stale));
     }
+    el.appendChild(body);
+
+    return el;
+  }
+
+  /** Return every clustered `.tool-call` to its home msg-group so the
+   *  next reflow pass starts from a clean per-message inline layout.
+   *  A tool call's home group is identified by `data-msg-id`; if the
+   *  home wrapper has been removed (e.g. a message was deleted) the
+   *  orphan is dropped along with its now-empty cluster. Calls that
+   *  already have an inline twin in the home group (which can happen
+   *  immediately after `updateMessageEl` rebuilds a wrapper with fresh
+   *  inline tool calls) are dropped to avoid duplicates. */
+  private unwrapToolClusters(): void {
+    // Snapshot which msg-groups already own inline `.tool-call` children
+    // before we start unwrapping. Those are the ones whose wrappers were
+    // freshly re-rendered (e.g. by `updateMessageEl`); returning the
+    // stale cluster copies on top of the new inline ones would double up
+    // the same call. Decide once, up front — the check has to be immune
+    // to siblings being moved over the course of this pass.
+    const freshGroups = new Set<string>();
+    this.messagesInner.querySelectorAll<HTMLElement>(':scope > .msg-group').forEach((g) => {
+      const id = g.dataset.msgId;
+      if (id && g.querySelector(':scope > .tool-call')) freshGroups.add(id);
+    });
+
+    const clusters = this.messagesInner.querySelectorAll('.tool-call-cluster');
+    for (const cluster of clusters) {
+      const calls = cluster.querySelectorAll<HTMLElement>(
+        ':scope > .tool-call-cluster__body > .tool-call'
+      );
+      for (const call of calls) {
+        const msgId = call.dataset.msgId;
+        const home = msgId
+          ? this.messagesInner.querySelector<HTMLElement>(`[data-msg-id="${msgId}"]`)
+          : null;
+        if (!home) continue;
+        if (msgId && freshGroups.has(msgId)) continue;
+        // Insert before any feedback row so it stays at the bottom.
+        const feedback = home.querySelector(':scope > .msg__feedback');
+        if (feedback) {
+          home.insertBefore(call, feedback);
+        } else {
+          home.appendChild(call);
+        }
+      }
+      cluster.remove();
+    }
+  }
+
+  /** Walk continuation chains (one non-continuation `.msg-group` followed
+   *  by zero or more `--continuation` siblings) and collapse runs of
+   *  three or more direct-child `.tool-call` elements into a single
+   *  "Working" cluster appended to the chain's last msg-group. This
+   *  generalises the per-message clustering to spans where each individual
+   *  message contributes one or two calls but the whole assistant turn
+   *  fires many — exactly the case the per-message rule misses. */
+  private reflowToolClusters(): void {
+    this.unwrapToolClusters();
+    const groups = Array.from(
+      this.messagesInner.querySelectorAll<HTMLElement>(':scope > .msg-group')
+    );
+    let i = 0;
+    while (i < groups.length) {
+      let j = i + 1;
+      while (j < groups.length && groups[j].classList.contains('msg-group--continuation')) {
+        j++;
+      }
+      const chain = groups.slice(i, j);
+      const toolCallEls: HTMLElement[] = [];
+      for (const grp of chain) {
+        grp
+          .querySelectorAll<HTMLElement>(':scope > .tool-call')
+          .forEach((el) => toolCallEls.push(el));
+      }
+      if (toolCallEls.length >= TOOL_CLUSTER_MIN) {
+        const cluster = this.buildClusterFromElements(toolCallEls);
+        const lastGroup = chain[chain.length - 1];
+        const feedback = lastGroup.querySelector(':scope > .msg__feedback');
+        if (feedback) {
+          lastGroup.insertBefore(cluster, feedback);
+        } else {
+          lastGroup.appendChild(cluster);
+        }
+      }
+      i = j;
+    }
+  }
+
+  /** Build a "Working" cluster around an existing list of `.tool-call`
+   *  elements (which are moved into the cluster body). The summary is
+   *  derived from each element's name text and status class so the
+   *  cluster reflects the live per-call state captured by the most
+   *  recent `createToolCallEl` render. */
+  private buildClusterFromElements(toolCallEls: readonly HTMLElement[]): HTMLElement {
+    const stale = toolCallEls.every((el) => el.classList.contains('tool-call--stale'));
+
+    const el = document.createElement('details');
+    el.className = `tool-call-cluster${stale ? ' tool-call--stale' : ''}`;
+
+    const summary = document.createElement('summary');
+    summary.className = 'tool-call__header';
+
+    const iconWrap = document.createElement('span');
+    iconWrap.className = 'tool-call__icon';
+    iconWrap.appendChild(createClusterIcon());
+    summary.appendChild(iconWrap);
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'tool-call__name';
+    nameEl.textContent = 'Working';
+    summary.appendChild(nameEl);
+
+    const titles = toolCallEls.map(
+      (tcEl) => tcEl.querySelector('.tool-call__name')?.textContent ?? ''
+    );
+    const previewText = clusterPreviewFromTitles(titles);
+    if (previewText) {
+      const preview = document.createElement('span');
+      preview.className = 'tool-call__preview';
+      preview.textContent = previewText;
+      summary.appendChild(preview);
+    }
+
+    const dotsEl = document.createElement('span');
+    dotsEl.className = 'tool-call-cluster__dots';
+    for (let i = 0; i < toolCallEls.length; i++) {
+      const tcEl = toolCallEls[i];
+      const status = readToolCallStatus(tcEl);
+      const dot = document.createElement('span');
+      dot.className =
+        `tool-call--${status} ` +
+        `tool-call__status tool-call__status--${status} ` +
+        `tool-call-cluster__dot`;
+      dot.setAttribute('aria-label', `${titles[i]}: ${status}`);
+      dotsEl.appendChild(dot);
+    }
+    summary.appendChild(dotsEl);
+
+    el.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'tool-call-cluster__body';
+    for (const tcEl of toolCallEls) body.appendChild(tcEl);
     el.appendChild(body);
 
     return el;
