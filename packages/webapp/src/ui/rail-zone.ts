@@ -157,6 +157,25 @@ export class RailZone {
   }
 
   /**
+   * Replace the icon SVG/HTML for an existing rail item. Preserves
+   * the press-ripple layer so the click-and-hold animation still
+   * works after the swap. Used when a sprinkle's icon spec is
+   * resolved asynchronously (Lucide lookup, VFS read).
+   */
+  setItemIcon(id: string, iconHtml: string): void {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    const press = entry.btn.querySelector('.rail__item-press-layer');
+    entry.btn.innerHTML = iconHtml;
+    if (press) entry.btn.insertBefore(press, entry.btn.firstChild);
+    else {
+      const layer = document.createElement('span');
+      layer.className = 'rail__item-press-layer';
+      entry.btn.insertBefore(layer, entry.btn.firstChild);
+    }
+  }
+
+  /**
    * Mark a rail item as needing attention — the icon pulses until
    * the user clicks it (or `activateItem` runs for any reason). Used
    * for auto-installed sprinkles in the extension where popping the

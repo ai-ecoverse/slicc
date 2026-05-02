@@ -27,6 +27,17 @@ export interface Sprinkle {
   title: string;
   /** Whether this sprinkle should auto-open on first run */
   autoOpen: boolean;
+  /**
+   * Raw icon spec from the .shtml. Resolved by `sprinkle-icon.ts`.
+   * Can be:
+   * - a Lucide icon name (kebab-case, e.g. `"music"`, `"calendar-clock"`)
+   * - a VFS path to an SVG/PNG (e.g. `/workspace/skills/foo/icon.svg`)
+   * - an inline `<svg>...</svg>` markup
+   * - a `data:image/svg+xml;...` URL
+   * Sourced from `<link rel="icon" href="...">` (preferred) or
+   * `data-sprinkle-icon="..."` on any element.
+   */
+  icon?: string;
 }
 
 /**
@@ -72,6 +83,7 @@ async function scanDir(
         path: filePath,
         title: extractTitle(content, name),
         autoOpen: extractAutoOpen(content),
+        icon: extractIcon(content),
       });
     }
   }
@@ -99,4 +111,29 @@ export function extractTitle(content: string, fallback: string): string {
 /** Check if content has data-sprinkle-autoopen attribute. */
 export function extractAutoOpen(content: string): boolean {
   return /data-sprinkle-autoopen\b/.test(content);
+}
+
+/**
+ * Extract the sprinkle icon spec.
+ *
+ * Priority:
+ *   1. `<link rel="icon" href="...">` (the conventional favicon hook).
+ *   2. `data-sprinkle-icon="..."` attribute on any element.
+ *
+ * Returns the raw spec as authored — the resolver in
+ * `sprinkle-icon.ts` decides whether it's a Lucide name, a VFS
+ * path, an inline SVG, or a data URL.
+ */
+export function extractIcon(content: string): string | undefined {
+  const link = content.match(
+    /<link\b[^>]*\brel\s*=\s*["'](?:icon|shortcut icon)["'][^>]*\bhref\s*=\s*["']([^"']+)["']/i
+  );
+  if (link?.[1]) return link[1].trim();
+  const reverseLink = content.match(
+    /<link\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*\brel\s*=\s*["'](?:icon|shortcut icon)["']/i
+  );
+  if (reverseLink?.[1]) return reverseLink[1].trim();
+  const attr = content.match(/data-sprinkle-icon\s*=\s*["']([^"']+)["']/);
+  if (attr?.[1]) return attr[1].trim();
+  return undefined;
 }

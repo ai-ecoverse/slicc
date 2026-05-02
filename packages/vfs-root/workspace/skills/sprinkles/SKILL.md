@@ -18,9 +18,45 @@ allowed-tools: bash
 **Creating a sprinkle**:
 
 1. `read_file /workspace/skills/sprinkles/style-guide.md` — **always read first** before writing any sprinkle
-2. `write_file` to `/shared/sprinkles/<name>/<name>.shtml` (follow the style guide templates)
-3. `bash` → `sprinkle open <name>`
-4. **CRITICAL: Do NOT finish or send a completion message.** You own this sprinkle for its entire lifetime. The cone will send you follow-up instructions (modifications, lick events) via `feed_scoop`. If you finish, you lose your context and cannot handle future work on this sprinkle.
+2. **Pick a rail icon** that matches the sprinkle's purpose (see "Sprinkle icon" below). Every new sprinkle MUST declare an icon — the generic Sparkles default is reserved for sprinkles that genuinely have no thematic anchor.
+3. `write_file` to `/shared/sprinkles/<name>/<name>.shtml` (follow the style guide templates)
+4. `bash` → `sprinkle open <name>`
+5. **CRITICAL: Do NOT finish or send a completion message.** You own this sprinkle for its entire lifetime. The cone will send you follow-up instructions (modifications, lick events) via `feed_scoop`. If you finish, you lose your context and cannot handle future work on this sprinkle.
+
+## Sprinkle icon
+
+Each sprinkle gets its own glyph in the rail so users can tell them apart at a glance. Declare it in the `.shtml`. Three formats, in order of preference:
+
+**1. Lucide icon name** (preferred — covers ~1500 icons from [lucide.dev/icons](https://lucide.dev/icons)):
+
+```html
+<link rel="icon" href="music" />
+```
+
+Use the kebab-case name from lucide.dev. Common picks: `music`, `code`, `terminal`, `chart-bar`, `chart-line`, `calendar`, `calendar-clock`, `clock`, `image`, `file-text`, `globe`, `book-open`, `compass`, `gauge`, `wrench`, `palette`, `bug`, `flask-conical`, `database`, `cloud`, `package`, `shopping-cart`, `dollar-sign`, `mail`, `message-square`, `bell`, `users`, `user`, `settings`, `sparkles`.
+
+**2. SVG file in the sprinkle's directory** (when no Lucide icon fits):
+
+```html
+<link rel="icon" href="/shared/sprinkles/<name>/icon.svg" />
+```
+
+Author the SVG with `viewBox="0 0 24 24"` and `stroke="currentColor"` so it inherits the rail's color. Keep paths simple — the rail renders at 16×16.
+
+**3. Inline SVG or data URL** (one-off icons, no extra file):
+
+```html
+<link
+  rel="icon"
+  href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="..."/></svg>'
+/>
+```
+
+Or, for inline SVG, use `data-sprinkle-icon` on the root element with the SVG markup escaped. Prefer formats 1 and 2.
+
+**Where to put it**: Inside `<head>` for full-document mode, or as the very first element in fragment mode. The `<link rel="icon">` form is the standard favicon convention and matches what browsers expect, so it's the recommended form.
+
+**Fallback**: If the icon spec is missing or unresolvable, the rail uses a generic Sparkles glyph.
 
 **Updating a sprinkle** (when you receive follow-up instructions):
 
@@ -77,9 +113,10 @@ scoop_scoop("giro-winners")
 feed_scoop("giro-winners", "You own the sprinkle 'giro-winners'. Your job:
 1. Run: read_file /workspace/skills/sprinkles/style-guide.md
 2. Research the last 3 Giro d'Italia winners
-3. Write the sprinkle to /shared/sprinkles/giro-winners/giro-winners.shtml
-4. Run: sprinkle open giro-winners
-5. IMPORTANT: After opening the sprinkle, do NOT finish. Stay ready — you will receive follow-up instructions and lick events for this sprinkle via feed_scoop. Do not send a completion message.")
+3. Pick a rail icon — for cycling, use <link rel=\"icon\" href=\"bike\" /> in <head>. See the sprinkles SKILL.md \"Sprinkle icon\" section for the full list.
+4. Write the sprinkle to /shared/sprinkles/giro-winners/giro-winners.shtml
+5. Run: sprinkle open giro-winners
+6. IMPORTANT: After opening the sprinkle, do NOT finish. Stay ready — you will receive follow-up instructions and lick events for this sprinkle via feed_scoop. Do not send a completion message.")
 ```
 
 **Rule 4: Modifying sprinkles** — Feed the EXISTING scoop that owns it. Do NOT create a new scoop:
