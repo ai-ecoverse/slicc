@@ -11,6 +11,7 @@ const rootPkg = JSON.parse(readFileSync(resolve(workspaceRoot, 'package.json'), 
 const sliccReleasedAt = process.env['SLICC_RELEASED_AT'] ?? null;
 const uiOutDir = resolve(workspaceRoot, 'dist/ui');
 const previewSwEntry = resolve(__dirname, 'src/ui/preview-sw.ts');
+const llmProxySwEntry = resolve(__dirname, 'src/ui/llm-proxy-sw.ts');
 const electronOverlayEntry = resolve(__dirname, 'src/ui/electron-overlay-entry.ts');
 const sliccEditorEntry = resolve(__dirname, 'src/ui/slicc-editor-entry.ts');
 const sliccDiffEntry = resolve(__dirname, 'src/ui/slicc-diff-entry.ts');
@@ -57,6 +58,7 @@ export default defineConfig(({ mode }) => ({
       configureServer(server) {
         let cachedSwCode: string | null = null;
         let cachedSwMtime = 0;
+        let cachedLlmSwCode: string | null = null;
         let cachedOverlayCode: string | null = null;
         let cachedOverlayMtime = 0;
         // Editor/diff/lucide IIFE bundles are always rebuilt in dev (no mtime cache)
@@ -89,6 +91,42 @@ export default defineConfig(({ mode }) => ({
             res.statusCode = 500;
             res.setHeader('Content-Type', 'application/javascript');
             res.end(`console.error('[preview-sw] Build failed: ${msg.replace(/'/g, "\\'")}');`);
+          }
+        });
+
+        server.middlewares.use('/llm-proxy-sw.js', async (_req, res) => {
+          try {
+            // Rebuild on every request and key the cache off the
+            // esbuild metafile's input list, not just the entry's
+            // mtime. The SW imports `../shell/proxy-headers.ts` (and
+            // could grow more deps), so an mtime-on-entry-only cache
+            // would silently serve stale code whenever a transitive
+            // dep changed. esbuild's incremental rebuilds are cheap
+            // (~5ms) so we just always rebuild and let esbuild's own
+            // file-content cache handle the heavy lifting.
+            const esbuild = await import('esbuild');
+            const result = await esbuild.build({
+              entryPoints: [llmProxySwEntry],
+              bundle: true,
+              write: false,
+              format: 'iife',
+              target: 'esnext',
+              define: { __DEV__: 'true', global: 'globalThis' },
+            });
+            cachedLlmSwCode = result.outputFiles![0].text;
+
+            res.setHeader('Content-Type', 'application/javascript');
+            // SW must be served at the root scope; instruct the browser
+            // not to cache it so dev-mode rebuilds always reach the page.
+            res.setHeader('Service-Worker-Allowed', '/');
+            res.setHeader('Cache-Control', 'no-store');
+            res.end(cachedLlmSwCode);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[llm-proxy-sw-builder] Failed to build:', msg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[llm-proxy-sw] Build failed: ${msg.replace(/'/g, "\\'")}');`);
           }
         });
 
@@ -215,6 +253,18 @@ export default defineConfig(({ mode }) => ({
           entryPoints: [previewSwEntry],
           bundle: true,
           outfile: resolve(uiOutDir, 'preview-sw.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+
+        // LLM-proxy SW — root-scope, intercepts cross-origin LLM fetches
+        // and reroutes them through /api/fetch-proxy in CLI mode.
+        await esbuild.build({
+          entryPoints: [llmProxySwEntry],
+          bundle: true,
+          outfile: resolve(uiOutDir, 'llm-proxy-sw.js'),
           format: 'iife',
           target: 'esnext',
           minify: true,

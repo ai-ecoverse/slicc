@@ -36,7 +36,9 @@ struct StaticFileMiddleware<Context: RequestContext>: RouterMiddleware {
         }
 
         do {
-            return try await self.fileMiddleware.handle(request, context: context, next: next)
+            var response = try await self.fileMiddleware.handle(request, context: context, next: next)
+            Self.applyServiceWorkerHeaders(path: request.uri.path, response: &response)
+            return response
         } catch {
             guard Self.shouldServeSPAFallback(method: request.method, path: request.uri.path, error: error) else {
                 throw error
@@ -63,6 +65,16 @@ extension StaticFileMiddleware {
         guard !isReservedPath(path) else { return false }
         guard let responseError = error as? any HTTPResponseError else { return false }
         return responseError.status == .notFound
+    }
+
+    /// The root-scope LLM-proxy SW must declare its maximum scope via the
+    /// `Service-Worker-Allowed: /` response header; without it the browser
+    /// refuses to register a SW with a wider scope than its serve path.
+    /// Also disable caching so dev rebuilds always reach the page.
+    static func applyServiceWorkerHeaders(path: String, response: inout Response) {
+        guard path == "/llm-proxy-sw.js" else { return }
+        response.headers[HTTPField.Name("Service-Worker-Allowed")!] = "/"
+        response.headers[HTTPField.Name.cacheControl] = "no-store"
     }
 
     static func isReservedPath(_ path: String) -> Bool {
