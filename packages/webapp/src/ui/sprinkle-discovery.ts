@@ -27,6 +27,17 @@ export interface Sprinkle {
   title: string;
   /** Whether this sprinkle should auto-open on first run */
   autoOpen: boolean;
+  /**
+   * Raw icon spec from the .shtml. Resolved by `sprinkle-icon.ts`.
+   * Can be:
+   * - a Lucide icon name (kebab-case, e.g. `"music"`, `"calendar-clock"`)
+   * - a VFS path to an SVG/PNG (e.g. `/workspace/skills/foo/icon.svg`)
+   * - an inline `<svg>...</svg>` markup
+   * - a `data:image/svg+xml;...` URL
+   * Sourced from `<link rel="icon" href="...">` (preferred) or
+   * `data-sprinkle-icon="..."` on any element.
+   */
+  icon?: string;
 }
 
 /**
@@ -72,6 +83,7 @@ async function scanDir(
         path: filePath,
         title: extractTitle(content, name),
         autoOpen: extractAutoOpen(content),
+        icon: extractIcon(content),
       });
     }
   }
@@ -99,4 +111,72 @@ export function extractTitle(content: string, fallback: string): string {
 /** Check if content has data-sprinkle-autoopen attribute. */
 export function extractAutoOpen(content: string): boolean {
   return /data-sprinkle-autoopen\b/.test(content);
+}
+
+/**
+ * Extract the sprinkle icon spec.
+ *
+ * Priority:
+ *   1. `<link rel="icon" href="...">` (the conventional favicon hook).
+ *   2. `data-sprinkle-icon="..."` attribute on any element.
+ *
+ * Returns the raw spec as authored — the resolver in
+ * `sprinkle-icon.ts` decides whether it's a Lucide name, a VFS
+ * path, an inline SVG, or a data URL.
+ *
+ * The parser is intentionally quote-aware: a `data:image/svg+xml;...`
+ * href can legitimately contain both `"` and `>` characters from
+ * inline SVG markup, so we walk the tag manually rather than rely
+ * on a `[^>]*` regex that bails at the first `>` inside an
+ * attribute value.
+ */
+export function extractIcon(content: string): string | undefined {
+  const tagRe = /<link\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(content)) !== null) {
+    const attrsStart = m.index + m[0].length;
+    const tagEnd = findUnquotedTagEnd(content, attrsStart);
+    if (tagEnd < 0) continue;
+    const attrs = content.slice(attrsStart, tagEnd);
+    if (!/\brel\s*=\s*("|')\s*(?:shortcut\s+)?icon\s*\1/i.test(attrs)) continue;
+    const href = matchAttrValue(attrs, 'href');
+    if (href !== undefined) return href.trim();
+  }
+  const dataAttr = matchAttrValue(content, 'data-sprinkle-icon');
+  if (dataAttr !== undefined) return dataAttr.trim();
+  return undefined;
+}
+
+/**
+ * Find the index of the closing `>` for a tag whose attributes
+ * start at `from`, skipping `>` characters that occur inside
+ * quoted attribute values.
+ */
+function findUnquotedTagEnd(s: string, from: number): number {
+  let inDouble = false;
+  let inSingle = false;
+  for (let i = from; i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    if (inDouble) {
+      if (ch === 34 /* " */) inDouble = false;
+    } else if (inSingle) {
+      if (ch === 39 /* ' */) inSingle = false;
+    } else if (ch === 34) inDouble = true;
+    else if (ch === 39) inSingle = true;
+    else if (ch === 62 /* > */) return i;
+  }
+  return -1;
+}
+
+/**
+ * Match `name="value"` or `name='value'` and return the captured
+ * value. Inner quotes of the opposite kind are preserved verbatim,
+ * so e.g. a single-quoted href can carry an inline-SVG payload that
+ * uses double quotes for its own attributes.
+ */
+function matchAttrValue(haystack: string, name: string): string | undefined {
+  const re = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i');
+  const m = haystack.match(re);
+  if (!m) return undefined;
+  return m[1] ?? m[2] ?? undefined;
 }

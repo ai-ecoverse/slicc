@@ -14,6 +14,7 @@ interface Sprinkle {
   title: string;
   path: string;
   autoOpen: boolean;
+  icon?: string;
 }
 
 const TIMEOUT = 8000;

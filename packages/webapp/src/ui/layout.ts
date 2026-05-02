@@ -148,6 +148,13 @@ export class Layout {
   public getAvailableSprinkles?: () => Array<{ name: string; title: string }>;
   /** Callback to open a sprinkle by name. */
   public onOpenSprinkle?: (name: string, zone?: ZoneId) => Promise<void>;
+  /**
+   * Resolver for sprinkle icon specs → SVG/HTML markup.
+   * `addSprinkle()` calls this when a sprinkle declares an icon
+   * (Lucide name, VFS path, inline SVG, or data URL). Returns null
+   * to fall back to the default Sparkles glyph.
+   */
+  public resolveSprinkleIcon?: (spec: string | undefined) => Promise<string | null>;
 
   // Layout uses CSS flex — no manual width fractions needed
 
@@ -1072,7 +1079,7 @@ export class Layout {
     title: string,
     element: HTMLElement,
     targetZone?: ZoneId,
-    options?: { attention?: boolean }
+    options?: { attention?: boolean; icon?: string }
   ): void {
     const zone = targetZone ?? 'primary';
     const tabId = `sprinkle-${name}`;
@@ -1100,6 +1107,20 @@ export class Layout {
       closable: true,
     });
     this.dynamicSprinkles.set(name, container);
+
+    // Resolve the per-sprinkle icon asynchronously and swap it in
+    // when ready. We add the rail item with the default icon
+    // first so the entry is clickable immediately, then upgrade
+    // the SVG once the resolver responds.
+    if (options?.icon && this.resolveSprinkleIcon) {
+      this.resolveSprinkleIcon(options.icon)
+        .then((html) => {
+          if (html) this.primaryRail.setItemIcon(tabId, html);
+        })
+        .catch(() => {
+          /* fall back to default — already rendered */
+        });
+    }
 
     if (options?.attention) {
       // Auto-installed sprinkle in extension mode: leave the panel

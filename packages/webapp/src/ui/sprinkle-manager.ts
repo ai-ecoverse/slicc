@@ -25,6 +25,15 @@ export interface AddSprinkleOptions {
   attention?: boolean;
 }
 
+export interface SprinkleAddOptions extends AddSprinkleOptions {
+  /**
+   * Raw icon spec from the .shtml. Forwarded so the layout can
+   * render a per-sprinkle rail glyph instead of the generic
+   * Sparkles default. See `sprinkle-icon.ts` for accepted formats.
+   */
+  icon?: string;
+}
+
 export interface SprinkleManagerCallbacks {
   /** Called to add a sprinkle to the layout (standalone: right column, extension: tab). */
   addSprinkle(
@@ -32,7 +41,7 @@ export interface SprinkleManagerCallbacks {
     title: string,
     element: HTMLElement,
     zone?: string,
-    options?: AddSprinkleOptions
+    options?: SprinkleAddOptions
   ): void;
   /** Called to remove a sprinkle from the layout. */
   removeSprinkle(name: string): void;
@@ -327,7 +336,10 @@ export class SprinkleManager {
     this.openSprinkles.set(name, { renderer: null!, container });
     if (options.attention) this.attentionOnly.add(name);
     else this.attentionOnly.delete(name);
-    this.callbacks.addSprinkle(name, sprinkle.title, container, zone, options);
+    this.callbacks.addSprinkle(name, sprinkle.title, container, zone, {
+      ...options,
+      icon: sprinkle.icon,
+    });
 
     const api = this.bridge.createAPI(name);
     const renderer = new SprinkleRenderer(container, api);

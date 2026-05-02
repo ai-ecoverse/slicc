@@ -93,6 +93,7 @@ import {
   setPlaywrightTeleportConnectedFollowers,
 } from '../shell/supplemental-commands/playwright-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
+import { resolveSprinkleIconHtml } from './sprinkle-icon.js';
 import { initTelemetry } from './telemetry.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
 import { recoverMounts, formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
@@ -1287,6 +1288,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       .map((p) => ({ name: p.name, title: p.title }));
   };
   layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
+  layout.resolveSprinkleIcon = (spec) => resolveSprinkleIconHtml(spec, localFs);
   layout.updateAddButtons();
   await sprinkleManager.restoreOpenSprinkles();
 
@@ -2699,6 +2701,7 @@ async function main(): Promise<void> {
         .map((p) => ({ name: p.name, title: p.title }));
     };
     layout.onOpenSprinkle = (name, zone) => sprinkleManager!.open(name, zone);
+    layout.resolveSprinkleIcon = (spec) => resolveSprinkleIconHtml(spec, sharedFs);
     layout.updateAddButtons();
 
     // Auto-surface newly-added .shtml files in the rail (skill installs,
