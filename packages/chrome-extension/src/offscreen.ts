@@ -453,8 +453,33 @@ async function init(): Promise<void> {
   // The real SprinkleManager runs in the side panel (needs DOM). This proxy relays
   // operations via BroadcastChannel.
   const { createSprinkleManagerProxy } = await import('./sprinkle-proxy.js');
-  (globalThis as unknown as Record<string, unknown>).__slicc_sprinkleManager =
-    createSprinkleManagerProxy();
+  const sprinkleManagerProxy = createSprinkleManagerProxy();
+  (globalThis as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManagerProxy;
+
+  // Relay .shtml file changes from the offscreen FS to the panel
+  // SprinkleManager. The panel's localFs is a separate VirtualFS
+  // instance over the same IndexedDB, so its in-memory watcher
+  // can't see writes made by the agent's bash tool here. Bridge
+  // them via the sprinkle proxy: when offscreen sees a new/changed
+  // .shtml, ask the panel to refresh + auto-open. Debounced to
+  // coalesce bursty installs.
+  {
+    const offscreenWatcher = orchestrator.getSharedFS()?.getWatcher();
+    if (offscreenWatcher) {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      offscreenWatcher.watch(
+        '/',
+        (path) => path.endsWith('.shtml'),
+        () => {
+          if (timer) return;
+          timer = setTimeout(() => {
+            timer = null;
+            void sprinkleManagerProxy.openNewAutoOpenSprinkles().catch(() => {});
+          }, 150);
+        }
+      );
+    }
+  }
 
   // Start BSH navigation watchdog — auto-executes .bsh scripts on matching navigations
   // Mirrors the setup in packages/webapp/src/ui/main.ts

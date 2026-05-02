@@ -137,6 +137,12 @@ export class Layout {
   public onClearChat?: () => Promise<void>;
   public onClearFilesystem?: () => Promise<void>;
   public onSprinkleClose?: (name: string) => void;
+  /**
+   * Fired when the user clicks a sprinkle's rail icon. Lets the
+   * SprinkleManager promote attention-mode entries (which the user
+   * has now actually engaged with) into persistently-open ones.
+   */
+  public onSprinkleActivate?: (name: string) => void;
 
   /** Callback to get available sprinkles for the [+] picker. */
   public getAvailableSprinkles?: () => Array<{ name: string; title: string }>;
@@ -810,6 +816,9 @@ export class Layout {
         onItemActivate: (id) => {
           if (id === 'terminal') this.panels?.terminal?.refit();
           if (id === 'memory') this.panels?.memory?.refresh();
+          if (id.startsWith('sprinkle-')) {
+            this.onSprinkleActivate?.(id.slice(9));
+          }
         },
         onItemClose: (id) => {
           const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
