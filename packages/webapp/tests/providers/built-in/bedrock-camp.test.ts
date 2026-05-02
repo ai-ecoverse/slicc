@@ -87,15 +87,17 @@ describe('bedrock-camp built-in provider', () => {
 
     expect(result.stopReason).toBe('stop');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Provider now issues a plain cross-origin fetch — CLI mode's
+    // CORS routing is handled by `llm-proxy-sw.ts` which rewrites the
+    // request at the SW layer before it leaves the page. Extension mode
+    // bypasses CORS via host_permissions.
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/fetch-proxy',
+      'https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-sonnet-4-6/converse',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
           Authorization: 'Bearer ABSK-test',
           'Content-Type': 'application/json',
-          'X-Target-URL':
-            'https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-sonnet-4-6/converse',
         }),
       })
     );

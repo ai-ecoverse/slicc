@@ -1435,6 +1435,19 @@ async function main(): Promise<void> {
     try {
       await navigator.serviceWorker.register('/preview-sw.js', { scope: '/preview/' });
       log.info('Preview SW registered');
+      // CLI standalone only — extension mode bypasses CORS via
+      // host_permissions and never needs the LLM proxy SW. Registering it
+      // there would intercept side-panel fetches the extension expects to
+      // reach the network directly.
+      const isExtensionForSw = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+      if (!isExtensionForSw) {
+        try {
+          await navigator.serviceWorker.register('/llm-proxy-sw.js', { scope: '/' });
+          log.info('LLM-proxy SW registered');
+        } catch (err) {
+          log.error('LLM-proxy SW registration failed — cross-origin LLM calls will hit CORS', err);
+        }
+      }
       if (!navigator.serviceWorker.controller) {
         // Wait briefly for clients.claim() to attach the page.
         await Promise.race([
@@ -1447,9 +1460,12 @@ async function main(): Promise<void> {
         ]);
       }
       if (!navigator.serviceWorker.controller && !sessionStorage.getItem('slicc-sw-reloaded')) {
-        // Still uncontrolled — force one reload so the SW can claim us.
+        // Still uncontrolled — force one reload so both SWs can claim us.
+        // This also guarantees the LLM proxy SW is active before the
+        // first cross-origin provider request, otherwise the very first
+        // fetch slips past it and hits CORS directly.
         sessionStorage.setItem('slicc-sw-reloaded', '1');
-        log.info('Reloading once to gain preview SW control');
+        log.info('Reloading once to gain SW control');
         location.reload();
         return;
       }

@@ -272,10 +272,13 @@ func registerAPIRoutes(
                 )
 
                 let upstreamRequest = try makeProxyRequest(from: injectedRequest, targetURL: targetURL, rawBody: rawBody)
-                let upstreamResponse = try await httpClient.execute(request: upstreamRequest).get()
-
-                // --- Response scrubbing: replace real values with masked ---
-                return makeProxyResponse(from: upstreamResponse, secretInjector: secretInjector)
+                // Stream the upstream response straight through to the client so
+                // that LLM SSE completions reach the browser token-by-token instead
+                // of arriving in one giant burst at the end. Per-chunk secret-scrub
+                // runs on text responses; secrets that span a chunk boundary slip
+                // through unscrubbed (best-effort, matches Node-server behavior).
+                let upstreamResponse = try await httpClient.execute(upstreamRequest, timeout: .hours(1))
+                return try makeStreamingProxyResponse(from: upstreamResponse, secretInjector: secretInjector)
             } catch {
                 return try proxyErrorResponse(status: .badGateway, message: "Proxy fetch failed: \(errorMessage(error))")
             }
@@ -412,7 +415,7 @@ private func jsonHeaders(from headers: HTTPFields) -> LickSystem.JSONObject {
     return result
 }
 
-private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: ByteBuffer) throws -> HTTPClient.Request {
+private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: ByteBuffer) throws -> HTTPClientRequest {
     var headers = HTTPHeaders(request.headers)
     headers.remove(name: "accept-encoding")
 
@@ -465,21 +468,19 @@ private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: By
     }
     headers.add(name: "accept-encoding", value: "identity")
 
-    let body: HTTPClient.Body? = if rawBody.readableBytes > 0 && request.method != .get && request.method != .head {
-        .byteBuffer(rawBody)
-    } else {
-        nil
+    var clientRequest = HTTPClientRequest(url: targetURL.absoluteString)
+    clientRequest.method = HTTPMethod(request.method)
+    clientRequest.headers = headers
+    if rawBody.readableBytes > 0 && request.method != .get && request.method != .head {
+        clientRequest.body = .bytes(rawBody)
     }
-
-    return try HTTPClient.Request(
-        url: targetURL,
-        method: HTTPMethod(request.method),
-        headers: headers,
-        body: body
-    )
+    return clientRequest
 }
 
-private func makeProxyResponse(from response: HTTPClient.Response, secretInjector: SecretInjector) -> Response {
+private func makeStreamingProxyResponse(
+    from response: HTTPClientResponse,
+    secretInjector: SecretInjector
+) throws -> Response {
     // Forbidden-header transport: collect Set-Cookie headers and encode as X-Proxy-Set-Cookie
     let setCookies = response.headers[canonicalForm: "set-cookie"].map { String($0) }
 
@@ -488,11 +489,15 @@ private func makeProxyResponse(from response: HTTPClient.Response, secretInjecto
         headers[HTTPField.Name(header)!] = nil
     }
     // Strip any upstream X-Proxy-* headers to prevent spoofing
-    for field in headers {
-        if field.name.canonicalName.lowercased().hasPrefix("x-proxy-") {
-            headers[field.name] = nil
-        }
+    let xProxyNames = headers.compactMap { field -> HTTPField.Name? in
+        field.name.canonicalName.lowercased().hasPrefix("x-proxy-") ? field.name : nil
     }
+    for name in xProxyNames {
+        headers[name] = nil
+    }
+    // Drop Content-Length so the response is chunk-encoded transparently —
+    // we no longer know the final length up front since the body streams.
+    headers[HTTPField.Name.contentLength] = nil
 
     if !setCookies.isEmpty,
        let jsonData = try? JSONSerialization.data(withJSONObject: setCookies),
@@ -500,7 +505,8 @@ private func makeProxyResponse(from response: HTTPClient.Response, secretInjecto
         headers[HTTPField.Name("X-Proxy-Set-Cookie")!] = secretInjector.scrub(text: jsonString)
     }
 
-    // Scrub real secret values from response headers
+    // Scrub real secret values from response headers (one-shot — header
+    // values are always small so per-chunk semantics don't apply).
     if !secretInjector.isEmpty {
         var scrubbedHeaders = HTTPFields()
         for field in headers {
@@ -511,22 +517,35 @@ private func makeProxyResponse(from response: HTTPClient.Response, secretInjecto
     }
 
     headers[cacheControlHeader] = "no-store, no-cache"
-    headers[HTTPField.Name.contentLength] = nil
 
-    // Scrub real secret values from response body
-    var responseBody = response.body ?? ByteBuffer()
-    if !secretInjector.isEmpty, responseBody.readableBytes > 0,
-       let bodyString = responseBody.getString(at: responseBody.readerIndex, length: responseBody.readableBytes) {
-        let scrubbed = secretInjector.scrub(text: bodyString)
-        if scrubbed != bodyString {
-            responseBody = ByteBuffer(string: scrubbed)
+    let contentType = (headers[HTTPField.Name.contentType] ?? "").lowercased()
+    let isText = contentType.hasPrefix("text/")
+        || contentType.hasPrefix("application/json")
+        || contentType.contains("charset=")
+        || contentType.contains("event-stream")
+    let shouldScrub = isText && !secretInjector.isEmpty
+    let upstreamBody = response.body
+    let scrubber = secretInjector
+
+    // Per-chunk transform — secrets crossing a chunk boundary slip through
+    // unscrubbed. Acceptable for LLM SSE responses (matches Node-server).
+    let body = ResponseBody { writer in
+        for try await chunk in upstreamBody {
+            if shouldScrub,
+               let str = chunk.getString(at: chunk.readerIndex, length: chunk.readableBytes) {
+                let scrubbed = scrubber.scrub(text: str)
+                try await writer.write(ByteBuffer(string: scrubbed))
+            } else {
+                try await writer.write(chunk)
+            }
         }
+        try await writer.finish(nil)
     }
 
     return Response(
         status: HTTPResponse.Status(code: Int(response.status.code), reasonPhrase: response.status.reasonPhrase),
         headers: headers,
-        body: .init(byteBuffer: responseBody)
+        body: body
     )
 }
 

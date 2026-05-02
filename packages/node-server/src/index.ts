@@ -4,6 +4,7 @@ import { createServer as createNetServer } from 'net';
 import { spawn, type ChildProcess } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
+import { Readable, Transform } from 'stream';
 import { fileURLToPath } from 'url';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -1087,6 +1088,14 @@ async function main() {
         fetchInit.body = rawBody as unknown as RequestInit['body'];
       }
 
+      // Propagate client disconnect to the upstream request so that
+      // long-lived streams (LLM SSE completions) are torn down promptly
+      // when the SW or the page aborts.
+      const abortController = new AbortController();
+      const onClientClose = () => abortController.abort();
+      req.on('close', onClientClose);
+      fetchInit.signal = abortController.signal;
+
       const upstream = await fetch(targetUrl, fetchInit);
 
       // Forward status, prevent browser caching of proxy responses
@@ -1095,21 +1104,21 @@ async function main() {
 
       // Forward response headers (strip www-authenticate to prevent
       // the browser from showing a native Basic Auth dialog — isomorphic-git
-      // handles 401s through its own onAuth callback)
-      // Forbidden-header transport: browser fetch() strips Set-Cookie from
-      // responses. Collect all Set-Cookie values and encode as JSON in a
-      // transport header the browser can read.
+      // handles 401s through its own onAuth callback). Drop Content-Length
+      // so the response can be chunk-encoded transparently.
       const setCookieValues = upstream.headers.getSetCookie();
       upstream.headers.forEach((v, k) => {
         const lower = k.toLowerCase();
         if (
           lower !== 'transfer-encoding' &&
           lower !== 'content-encoding' &&
+          lower !== 'content-length' &&
           lower !== 'www-authenticate' &&
           lower !== 'set-cookie' &&
           !lower.startsWith('x-proxy-')
         ) {
-          // Scrub real secret values from response headers
+          // Scrub real secret values from response headers (one-shot,
+          // headers are always small so per-chunk semantics don't apply).
           res.setHeader(k, secretProxy.scrubResponse(v));
         }
       });
@@ -1120,20 +1129,54 @@ async function main() {
         );
       }
 
-      // Send body — scrub real secret values from response body (text-only)
-      const body = await upstream.arrayBuffer();
-      let buffer = Buffer.from(body);
-      if (secretProxy.hasSecrets()) {
-        const ct = (upstream.headers.get('content-type') ?? '').toLowerCase();
-        const isText =
-          ct.startsWith('text/') || ct.startsWith('application/json') || ct.includes('charset=');
-        if (isText) {
-          const scrubbed = secretProxy.scrubResponse(buffer.toString('utf-8'));
-          buffer = Buffer.from(scrubbed, 'utf-8');
-        }
+      // Stream the upstream body straight through to the client so that
+      // LLM SSE completions reach the browser token-by-token instead of
+      // arriving in one giant burst at the end. Per-chunk secret-scrub
+      // runs on text responses; secrets that span a chunk boundary slip
+      // through unscrubbed (documented limitation — the scrub primitive
+      // is best-effort on streamed bodies).
+      if (!upstream.body) {
+        res.end();
+        req.off('close', onClientClose);
+        return;
       }
-      res.setHeader('Content-Length', buffer.length);
-      res.end(buffer);
+      const ct = (upstream.headers.get('content-type') ?? '').toLowerCase();
+      const isText =
+        ct.startsWith('text/') ||
+        ct.startsWith('application/json') ||
+        ct.includes('charset=') ||
+        ct.includes('event-stream');
+      const upstreamStream = Readable.fromWeb(
+        upstream.body as unknown as import('stream/web').ReadableStream<Uint8Array>
+      );
+      const scrubChunk = new Transform({
+        transform(chunk, _enc, cb) {
+          if (!isText || !secretProxy.hasSecrets()) {
+            cb(null, chunk);
+            return;
+          }
+          try {
+            const scrubbed = secretProxy.scrubResponse(Buffer.from(chunk).toString('utf-8'));
+            cb(null, Buffer.from(scrubbed, 'utf-8'));
+          } catch (err) {
+            cb(err as Error);
+          }
+        },
+      });
+      const cleanup = () => req.off('close', onClientClose);
+      upstreamStream.on('error', (err) => {
+        cleanup();
+        if (!res.headersSent) {
+          res.setHeader('X-Proxy-Error', '1');
+          res
+            .status(502)
+            .json({ error: `Proxy stream failed: ${err instanceof Error ? err.message : err}` });
+        } else {
+          res.destroy(err);
+        }
+      });
+      res.on('close', cleanup);
+      upstreamStream.pipe(scrubChunk).pipe(res);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       res.setHeader('X-Proxy-Error', '1');
@@ -1187,7 +1230,19 @@ async function main() {
   } else {
     // Production mode: serve built static files
     const uiDir = resolve(__dirname, '..', 'ui');
-    app.use(express.static(uiDir));
+    app.use(
+      express.static(uiDir, {
+        setHeaders: (res, path) => {
+          // Service workers must declare a maximum scope; without
+          // `Service-Worker-Allowed: /`, the browser refuses to register
+          // a root-scoped SW served from `/llm-proxy-sw.js`.
+          if (path.endsWith('llm-proxy-sw.js')) {
+            res.setHeader('Service-Worker-Allowed', '/');
+            res.setHeader('Cache-Control', 'no-store');
+          }
+        },
+      })
+    );
 
     // SPA fallback — serve index.html for all non-file routes
     app.get('/{*path}', (_req, res) => {

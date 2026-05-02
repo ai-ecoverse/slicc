@@ -22,6 +22,11 @@ import type { SecureFetch } from 'just-bash';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { getFetchBodyBytes } from './fetch-body.js';
 import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
+import {
+  encodeForbiddenRequestHeaders as _encodeForbiddenRequestHeaders,
+  decodeForbiddenResponseHeaders as _decodeForbiddenResponseHeaders,
+  headersToRecord as _headersToRecord,
+} from './proxy-headers.js';
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
 export function isTextContentType(contentType: string): boolean {
@@ -64,19 +69,7 @@ export async function readResponseBody(resp: Response, url?: string): Promise<Ui
 }
 
 /** Convert Headers or Record<string, string> to a plain Record<string, string>. */
-export function headersToRecord(
-  headers: Record<string, string> | Headers | undefined
-): Record<string, string> | undefined {
-  if (!headers) return undefined;
-  if (headers instanceof Headers) {
-    const rec: Record<string, string> = {};
-    headers.forEach((v, k) => {
-      rec[k] = v;
-    });
-    return rec;
-  }
-  return headers;
-}
+export const headersToRecord = _headersToRecord;
 
 /**
  * Multipart form bodies contain latin1-encoded binary file content from curl —
@@ -99,48 +92,13 @@ export function prepareRequestBody(
  * Encode request headers that browsers silently strip (forbidden headers).
  * Cookie → X-Proxy-Cookie, Origin → X-Proxy-Origin, Referer → X-Proxy-Referer, Proxy-* → X-Proxy-Proxy-*
  */
-export function encodeForbiddenRequestHeaders(
-  headers: Record<string, string> | undefined
-): Record<string, string> {
-  if (!headers) return {};
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    const lower = key.toLowerCase();
-    if (lower === 'cookie') {
-      result['X-Proxy-Cookie'] = value;
-    } else if (lower === 'origin') {
-      result['X-Proxy-Origin'] = value;
-    } else if (lower === 'referer') {
-      result['X-Proxy-Referer'] = value;
-    } else if (lower.startsWith('proxy-')) {
-      result[`X-Proxy-${key}`] = value;
-    } else {
-      result[key] = value;
-    }
-  }
-  return result;
-}
+export const encodeForbiddenRequestHeaders = _encodeForbiddenRequestHeaders;
 
 /**
  * Decode response headers that the proxy transported under non-forbidden names.
  * X-Proxy-Set-Cookie (JSON array) → set-cookie (JSON array string)
  */
-export function decodeForbiddenResponseHeaders(
-  headers: Record<string, string>
-): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    const lower = key.toLowerCase();
-    if (lower === 'x-proxy-set-cookie') {
-      // Value is a JSON array of Set-Cookie strings from the proxy.
-      // Keep as JSON array string since Record<string,string> can only hold one value.
-      result['set-cookie'] = value;
-    } else {
-      result[key] = value;
-    }
-  }
-  return result;
-}
+export const decodeForbiddenResponseHeaders = _decodeForbiddenResponseHeaders;
 
 /**
  * Create a SecureFetch that routes requests through the CLI server's
