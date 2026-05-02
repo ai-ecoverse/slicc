@@ -2657,8 +2657,14 @@ async function main(): Promise<void> {
       sharedFs,
       routeLickToScoop,
       {
-        addSprinkle: (name, title, element, zone) =>
-          layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
+        addSprinkle: (name, title, element, zone, options) =>
+          layout.addSprinkle(
+            name,
+            title,
+            element,
+            zone as 'primary' | 'drawer' | undefined,
+            options
+          ),
         removeSprinkle: (name) => layout.removeSprinkle(name),
       },
       () => {

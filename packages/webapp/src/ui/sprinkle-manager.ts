@@ -39,6 +39,14 @@ export interface SprinkleManagerCallbacks {
 }
 
 const OPEN_SPRINKLES_KEY = 'slicc-open-sprinkles';
+/**
+ * Persistent ledger of every sprinkle name we've ever discovered in
+ * this profile. When `restoreOpenSprinkles()` runs and finds an
+ * entry in `availableSprinkles` that isn't in the ledger, it's a
+ * just-installed sprinkle that hasn't been surfaced yet — open it
+ * in attention mode so the rail icon shows up.
+ */
+const KNOWN_SPRINKLES_KEY = 'slicc-known-sprinkles';
 
 export interface SprinkleManagerOptions {
   /**
@@ -81,14 +89,27 @@ export class SprinkleManager {
   }
 
   /** Restore sprinkles that were open in the previous session.
-   *  On first run (no localStorage entry), auto-open sprinkles marked with data-sprinkle-autoopen. */
+   *  On first run (no localStorage entry), auto-open sprinkles marked with data-sprinkle-autoopen.
+   *  Always surfaces sprinkles that have landed in the VFS since
+   *  the last time the panel saw them (skill installs in a prior
+   *  session, or the very first time we boot a profile that
+   *  predates the known-sprinkles ledger). */
   async restoreOpenSprinkles(): Promise<void> {
     try {
       const raw = localStorage.getItem(OPEN_SPRINKLES_KEY);
-      if (!raw) {
-        // First run — open sprinkles with autoOpen flag (or just
-        // surface them as attention-grabbing rail icons in
-        // `'attention'` mode).
+      if (raw) {
+        const names: string[] = JSON.parse(raw);
+        for (const name of names) {
+          try {
+            await this.open(name);
+          } catch {
+            log.warn('Failed to restore sprinkle', { name });
+          }
+        }
+      } else {
+        // No previously-opened sprinkles — open autoopen ones
+        // (legacy behavior). The non-autoopen ones get a rail
+        // icon via `surfaceUnseenSprinkles()` below.
         const attention = this.autoOpenBehavior === 'attention';
         for (const sprinkle of this.availableSprinkles.values()) {
           if (sprinkle.autoOpen) {
@@ -99,18 +120,56 @@ export class SprinkleManager {
             }
           }
         }
-        return;
-      }
-      const names: string[] = JSON.parse(raw);
-      for (const name of names) {
-        try {
-          await this.open(name);
-        } catch {
-          log.warn('Failed to restore sprinkle', { name });
-        }
       }
     } catch {
       /* corrupt localStorage, ignore */
+    }
+    await this.surfaceUnseenSprinkles();
+  }
+
+  /**
+   * Diff the current available list against the persisted
+   * known-sprinkles ledger. Anything new gets opened in attention
+   * mode (or activated for `data-sprinkle-autoopen` ones, honoring
+   * `autoOpenBehavior`). Updates the ledger so the next reload
+   * doesn't re-pop the same sprinkles.
+   */
+  private async surfaceUnseenSprinkles(): Promise<void> {
+    const known = this.loadKnownSprinkles();
+    const attentionForAutoOpen = this.autoOpenBehavior === 'attention';
+    for (const sprinkle of this.availableSprinkles.values()) {
+      if (known.has(sprinkle.name)) continue;
+      if (this.openSprinkles.has(sprinkle.name)) continue;
+      try {
+        await this.open(sprinkle.name, undefined, {
+          attention: sprinkle.autoOpen ? attentionForAutoOpen : true,
+        });
+        log.info('Surfaced previously-unseen sprinkle', { name: sprinkle.name });
+      } catch {
+        log.warn('Failed to surface unseen sprinkle', { name: sprinkle.name });
+      }
+    }
+    // Seed/refresh the ledger so future boots only surface what's
+    // actually new.
+    this.persistKnownSprinkles(new Set(this.availableSprinkles.keys()));
+  }
+
+  private loadKnownSprinkles(): Set<string> {
+    try {
+      const raw = localStorage.getItem(KNOWN_SPRINKLES_KEY);
+      if (!raw) return new Set();
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? new Set(arr.filter((x) => typeof x === 'string')) : new Set();
+    } catch {
+      return new Set();
+    }
+  }
+
+  private persistKnownSprinkles(names: Set<string>): void {
+    try {
+      localStorage.setItem(KNOWN_SPRINKLES_KEY, JSON.stringify([...names]));
+    } catch {
+      /* localStorage full, ignore */
     }
   }
 
@@ -122,22 +181,51 @@ export class SprinkleManager {
     }
   }
 
-  /** Refresh and auto-open any new sprinkles with autoOpen that aren't already open. */
+  /**
+   * Refresh and surface newly-discovered sprinkles in the rail.
+   *
+   * Sprinkles that were already in the available list before the
+   * refresh are treated as pre-existing and left alone (otherwise
+   * every refresh would re-pop everything on every reload). New
+   * sprinkles — i.e. those that just appeared in the VFS — are
+   * opened so their icon shows up in the rail:
+   *
+   * - `data-sprinkle-autoopen` ones honor `autoOpenBehavior`
+   *   (panel activates in standalone, attention-pulse in extension).
+   * - Plain new sprinkles open in `attention` mode unconditionally
+   *   so the icon shows but the panel stays collapsed and we don't
+   *   cover whatever the user is doing.
+   */
   async openNewAutoOpenSprinkles(): Promise<void> {
+    const previouslyKnown = new Set(this.availableSprinkles.keys());
     await this.refresh();
-    const attention = this.autoOpenBehavior === 'attention';
+    const attentionForAutoOpen = this.autoOpenBehavior === 'attention';
+    let changed = false;
     for (const sprinkle of this.availableSprinkles.values()) {
-      if (sprinkle.autoOpen && !this.openSprinkles.has(sprinkle.name)) {
+      if (this.openSprinkles.has(sprinkle.name)) continue;
+      const isNew = !previouslyKnown.has(sprinkle.name);
+      if (isNew) changed = true;
+      if (sprinkle.autoOpen) {
         try {
-          await this.open(sprinkle.name, undefined, { attention });
+          await this.open(sprinkle.name, undefined, { attention: attentionForAutoOpen });
           log.info('Auto-opened new sprinkle after install', {
             name: sprinkle.name,
-            attention,
+            attention: attentionForAutoOpen,
           });
         } catch {
           log.warn('Failed to auto-open new sprinkle', { name: sprinkle.name });
         }
+      } else if (isNew) {
+        try {
+          await this.open(sprinkle.name, undefined, { attention: true });
+          log.info('Surfaced newly-installed sprinkle in rail', { name: sprinkle.name });
+        } catch {
+          log.warn('Failed to surface newly-installed sprinkle', { name: sprinkle.name });
+        }
       }
+    }
+    if (changed) {
+      this.persistKnownSprinkles(new Set(this.availableSprinkles.keys()));
     }
   }
 
