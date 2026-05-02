@@ -553,6 +553,14 @@ private func makeStreamingProxyResponse(
 /// that path is the documented fast-path for streamed responses and avoids
 /// any buffering inside the writer-based `ResponseBody { writer in ... }`
 /// initializer.
+///
+/// UTF-8 boundary handling: when `shouldScrub` is true, the iterator keeps
+/// trailing bytes that belong to an incomplete codepoint and prepends them
+/// to the next chunk. Without this, decoding a chunk that ended mid-multi-
+/// byte sequence would either fail (returning nil) or — worse, in a naive
+/// re-encode — corrupt the codepoint with U+FFFD. Real LLM SSE traffic
+/// often emits CJK / emoji / accented Latin so this matters for any non-
+/// ASCII model output.
 private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
     typealias Element = ByteBuffer
     let upstream: HTTPClientResponse.Body
@@ -563,21 +571,96 @@ private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
         var inner: HTTPClientResponse.Body.AsyncIterator
         let shouldScrub: Bool
         let scrubber: SecretInjector
+        var pendingTail: [UInt8] = []
+        var didEmitTail = false
 
         mutating func next() async throws -> ByteBuffer? {
-            guard let chunk = try await inner.next() else { return nil }
-            if shouldScrub,
-               let str = chunk.getString(at: chunk.readerIndex, length: chunk.readableBytes) {
+            guard shouldScrub else {
+                // Fast path: no scrub work, just forward chunks.
+                return try await inner.next()
+            }
+
+            while let chunk = try await inner.next() {
+                // Combine any unfinished bytes from the previous chunk.
+                var bytes = pendingTail
+                bytes.append(contentsOf: chunk.readableBytesView)
+                pendingTail.removeAll(keepingCapacity: true)
+
+                // Find the byte index of the last complete UTF-8 codepoint
+                // boundary. Anything past that boundary becomes pendingTail
+                // and rolls forward to the next chunk.
+                let cut = lastCompleteUTF8Boundary(bytes)
+                if cut == 0 {
+                    // The chunk doesn't even close out the previous tail.
+                    // Buffer it and ask upstream for more.
+                    pendingTail = bytes
+                    continue
+                }
+                if cut < bytes.count {
+                    pendingTail = Array(bytes[cut...])
+                    bytes.removeLast(bytes.count - cut)
+                }
+
+                guard let str = String(bytes: bytes, encoding: .utf8) else {
+                    // Should not happen — we only pass complete codepoints —
+                    // but if it does, drop the scrub for this chunk rather
+                    // than corrupt the bytes.
+                    return ByteBuffer(bytes: bytes)
+                }
                 let scrubbed = scrubber.scrub(text: str)
                 return ByteBuffer(string: scrubbed)
             }
-            return chunk
+
+            // Upstream EOF. Emit any remaining tail bytes verbatim — they
+            // form an incomplete codepoint that we couldn't scrub
+            // safely, but truncating them would corrupt the response too.
+            if !didEmitTail, !pendingTail.isEmpty {
+                didEmitTail = true
+                let tail = pendingTail
+                pendingTail.removeAll()
+                return ByteBuffer(bytes: tail)
+            }
+            return nil
         }
     }
 
     func makeAsyncIterator() -> AsyncIterator {
         AsyncIterator(inner: upstream.makeAsyncIterator(), shouldScrub: shouldScrub, scrubber: scrubber)
     }
+}
+
+/// Return the largest prefix length `n` of `bytes` such that bytes[0..<n] is
+/// a complete sequence of UTF-8 codepoints. Continuation bytes (10xxxxxx)
+/// at the tail mean the prefix is incomplete; we walk back from the end
+/// until we find a leading byte and verify the codepoint it starts has
+/// all its continuation bytes present.
+private func lastCompleteUTF8Boundary(_ bytes: [UInt8]) -> Int {
+    if bytes.isEmpty { return 0 }
+    var i = bytes.count
+    // Walk back over up to 3 continuation bytes (UTF-8 codepoints are at most
+    // 4 bytes long, so any incomplete trailing codepoint has 1-3 trailing
+    // continuation bytes plus a leading byte).
+    var continuations = 0
+    while i > 0, (bytes[i - 1] & 0xC0) == 0x80, continuations < 3 {
+        i -= 1
+        continuations += 1
+    }
+    if i == 0 {
+        // Entire buffer is continuation bytes (malformed) — emit all
+        // bytes; the String() decoder will reject and we'll forward
+        // verbatim.
+        return bytes.count
+    }
+    let lead = bytes[i - 1]
+    let needed: Int
+    if lead & 0x80 == 0 { needed = 1 }            // 0xxxxxxx
+    else if lead & 0xE0 == 0xC0 { needed = 2 }    // 110xxxxx
+    else if lead & 0xF0 == 0xE0 { needed = 3 }    // 1110xxxx
+    else if lead & 0xF8 == 0xF0 { needed = 4 }    // 11110xxx
+    else { return bytes.count }                   // malformed — pass through
+    let have = bytes.count - (i - 1)
+    if have >= needed { return bytes.count }
+    return i - 1
 }
 
 private extension HTTPMethod {

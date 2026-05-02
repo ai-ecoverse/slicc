@@ -93,6 +93,12 @@ async function forwardThroughProxy(req: Request): Promise<Response> {
   const targetUrl = req.url;
   const inboundHeaders: Record<string, string> = {};
   req.headers.forEach((value, key) => {
+    // Strip SW-internal headers so they never leak upstream. The
+    // bypass header is checked at the top of the fetch handler; if we
+    // got here it was either absent or set to a non-"1" value, so
+    // forwarding it to api.openai.com etc. is meaningless and a tiny
+    // information leak.
+    if (key.toLowerCase() === BYPASS_HEADER) return;
     inboundHeaders[key] = value;
   });
   const encoded = encodeForbiddenRequestHeaders(inboundHeaders);

@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { Readable, Transform } from 'stream';
+import { StringDecoder } from 'string_decoder';
 import { fileURLToPath } from 'url';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -975,6 +976,10 @@ async function main() {
       res.status(400).json({ error: 'Missing X-Target-URL header' });
       return;
     }
+    // Hoisted so the catch handler below can detach it on early
+    // failures (e.g. fetch threw before the success-path detach
+    // could run).
+    let onClientClose: (() => void) | null = null;
     try {
       const fetchInit: RequestInit = {
         method: req.method,
@@ -1100,7 +1105,7 @@ async function main() {
       // settled), in the second it's exactly what we want. Guard with
       // `res.writableEnded` to be safe.
       const abortController = new AbortController();
-      const onClientClose = () => {
+      onClientClose = () => {
         if (!res.writableEnded) abortController.abort();
       };
       res.on('close', onClientClose);
@@ -1147,7 +1152,7 @@ async function main() {
       // is best-effort on streamed bodies).
       if (!upstream.body) {
         res.end();
-        res.off('close', onClientClose);
+        if (onClientClose) res.off('close', onClientClose);
         return;
       }
       const ct = (upstream.headers.get('content-type') ?? '').toLowerCase();
@@ -1159,6 +1164,16 @@ async function main() {
       const upstreamStream = Readable.fromWeb(
         upstream.body as unknown as import('stream/web').ReadableStream<Uint8Array>
       );
+      // Buffer-aware UTF-8 scrubber. Naive `Buffer.from(chunk).toString('utf-8')`
+      // corrupts multi-byte codepoints whenever a sequence straddles a chunk
+      // boundary — Node replaces the partial bytes with U+FFFD, which is fatal
+      // for any non-ASCII model output (CJK, emoji, even some accented Latin).
+      // `StringDecoder` keeps the trailing partial bytes in a private buffer
+      // and prepends them to the next chunk, guaranteeing valid UTF-8 every
+      // call. The flush() in `flush(cb)` releases any tail bytes (replacing
+      // truly invalid trailing bytes with U+FFFD, same as before but only at
+      // EOF where it can't span a real codepoint).
+      const utf8Decoder = new StringDecoder('utf8');
       const scrubChunk = new Transform({
         transform(chunk, _enc, cb) {
           if (!isText || !secretProxy.hasSecrets()) {
@@ -1166,14 +1181,42 @@ async function main() {
             return;
           }
           try {
-            const scrubbed = secretProxy.scrubResponse(Buffer.from(chunk).toString('utf-8'));
+            const decoded = utf8Decoder.write(chunk);
+            if (decoded.length === 0) {
+              // All bytes were buffered as a partial codepoint — no output yet.
+              cb(null, Buffer.alloc(0));
+              return;
+            }
+            const scrubbed = secretProxy.scrubResponse(decoded);
+            cb(null, Buffer.from(scrubbed, 'utf-8'));
+          } catch (err) {
+            cb(err as Error);
+          }
+        },
+        flush(cb) {
+          if (!isText || !secretProxy.hasSecrets()) {
+            cb();
+            return;
+          }
+          try {
+            const tail = utf8Decoder.end();
+            if (tail.length === 0) {
+              cb();
+              return;
+            }
+            const scrubbed = secretProxy.scrubResponse(tail);
             cb(null, Buffer.from(scrubbed, 'utf-8'));
           } catch (err) {
             cb(err as Error);
           }
         },
       });
-      const cleanup = () => res.off('close', onClientClose);
+      const cleanup = () => {
+        if (onClientClose) {
+          res.off('close', onClientClose);
+          onClientClose = null;
+        }
+      };
       upstreamStream.on('error', (err) => {
         cleanup();
         if (!res.headersSent) {
@@ -1185,9 +1228,19 @@ async function main() {
           res.destroy(err);
         }
       });
+      // Belt-and-braces cleanup: 'finish' fires once the response is fully
+      // flushed; 'close' fires regardless of how the response ended (success,
+      // abort, or pipe error). Either way we want the abort listener gone.
       res.on('finish', cleanup);
+      res.on('close', cleanup);
       upstreamStream.pipe(scrubChunk).pipe(res);
     } catch (err: unknown) {
+      // Best-effort cleanup so an early failure (e.g. fetch threw) doesn't
+      // leave the close listener attached to the response object.
+      if (onClientClose) {
+        res.off('close', onClientClose);
+        onClientClose = null;
+      }
       const message = err instanceof Error ? err.message : String(err);
       res.setHeader('X-Proxy-Error', '1');
       res.status(502).json({ error: `Proxy fetch failed: ${message}` });

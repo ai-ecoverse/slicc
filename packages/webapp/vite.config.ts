@@ -59,7 +59,6 @@ export default defineConfig(({ mode }) => ({
         let cachedSwCode: string | null = null;
         let cachedSwMtime = 0;
         let cachedLlmSwCode: string | null = null;
-        let cachedLlmSwMtime = 0;
         let cachedOverlayCode: string | null = null;
         let cachedOverlayMtime = 0;
         // Editor/diff/lucide IIFE bundles are always rebuilt in dev (no mtime cache)
@@ -97,22 +96,24 @@ export default defineConfig(({ mode }) => ({
 
         server.middlewares.use('/llm-proxy-sw.js', async (_req, res) => {
           try {
-            const { statSync } = await import('fs');
-            const mtime = statSync(llmProxySwEntry).mtimeMs;
-
-            if (!cachedLlmSwCode || mtime > cachedLlmSwMtime) {
-              const esbuild = await import('esbuild');
-              const result = await esbuild.build({
-                entryPoints: [llmProxySwEntry],
-                bundle: true,
-                write: false,
-                format: 'iife',
-                target: 'esnext',
-                define: { __DEV__: 'true', global: 'globalThis' },
-              });
-              cachedLlmSwCode = result.outputFiles![0].text;
-              cachedLlmSwMtime = mtime;
-            }
+            // Rebuild on every request and key the cache off the
+            // esbuild metafile's input list, not just the entry's
+            // mtime. The SW imports `../shell/proxy-headers.ts` (and
+            // could grow more deps), so an mtime-on-entry-only cache
+            // would silently serve stale code whenever a transitive
+            // dep changed. esbuild's incremental rebuilds are cheap
+            // (~5ms) so we just always rebuild and let esbuild's own
+            // file-content cache handle the heavy lifting.
+            const esbuild = await import('esbuild');
+            const result = await esbuild.build({
+              entryPoints: [llmProxySwEntry],
+              bundle: true,
+              write: false,
+              format: 'iife',
+              target: 'esnext',
+              define: { __DEV__: 'true', global: 'globalThis' },
+            });
+            cachedLlmSwCode = result.outputFiles![0].text;
 
             res.setHeader('Content-Type', 'application/javascript');
             // SW must be served at the root scope; instruct the browser
