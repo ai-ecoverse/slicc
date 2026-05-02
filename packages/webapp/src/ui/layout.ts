@@ -275,9 +275,24 @@ export class Layout {
    */
   private initModelSelection(): void {
     const ensureModelSelected = () => {
-      const currentModelId = getSelectedModelId();
-      if (currentModelId) return;
       const groups = getAllAvailableModels();
+      // Validate that the stored selection still resolves against
+      // a configured account. Without this, deleting the active
+      // provider through Settings leaves a dangling `selected-model`
+      // (e.g. `bedrock-camp:…`) that the header dropdown silently
+      // ignores while message-send continues routing to the removed
+      // provider — surfacing as "No API key configured for provider".
+      const raw = localStorage.getItem('selected-model') ?? '';
+      const sep = raw.indexOf(':');
+      const storedProvider = sep > 0 ? raw.slice(0, sep) : '';
+      const storedModelId = sep > 0 ? raw.slice(sep + 1) : raw;
+      const stillResolves =
+        !!storedProvider &&
+        groups.some(
+          (g) => g.providerId === storedProvider && g.models.some((m) => m.id === storedModelId)
+        );
+      if (raw && stillResolves) return;
+      // Re-pick a default from the surviving accounts.
       for (const group of groups) {
         if (group.models.length > 0) {
           const { defaultModelId } = getProviderConfig(group.providerId);
@@ -288,6 +303,12 @@ export class Layout {
           setSelectedModelId(`${group.providerId}:${model.id}`);
           return;
         }
+      }
+      // No accounts at all → leave the selection empty so the chat
+      // header surfaces the "no provider configured" state instead
+      // of silently routing to a stale one.
+      if (raw && groups.length === 0) {
+        localStorage.removeItem('selected-model');
       }
     };
     ensureModelSelected();
