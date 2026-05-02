@@ -13,9 +13,14 @@
  * `resolveSprinkleIconHtml(spec, fs)` returns SVG/HTML markup ready
  * to drop into `RailItem.icon`, or `null` if the spec is missing or
  * unresolvable. Callers fall back to their own default glyph.
+ *
+ * Security: only Lucide-registry SVGs (which we ship and trust) are
+ * inlined as raw markup. Author-supplied SVG (inline spec or VFS
+ * file) is rendered through an `<img src="data:image/svg+xml;base64,...">`
+ * tag so it lands in the browser's script-disabled SVG context and
+ * cannot escape the rail back into the parent UI.
  */
 
-import { icons as lucideIcons } from 'lucide';
 import type { VirtualFS } from '../fs/index.js';
 import { createLogger } from '../core/logger.js';
 
@@ -29,6 +34,20 @@ const SVG_OPEN =
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">';
 const SVG_CLOSE = '</svg>';
 
+/**
+ * Lazy-load the Lucide icon registry. Lucide ships ~1500 SVG glyphs
+ * and pulling the whole `icons` map at module-eval time would bloat
+ * the main UI bundle even for sprinkles that use a VFS file or no
+ * icon at all. We import on first lookup and cache the promise.
+ */
+let lucideRegistryPromise: Promise<IconRegistry> | null = null;
+function loadLucideRegistry(): Promise<IconRegistry> {
+  if (!lucideRegistryPromise) {
+    lucideRegistryPromise = import('lucide').then((mod) => mod.icons as unknown as IconRegistry);
+  }
+  return lucideRegistryPromise;
+}
+
 /** kebab-case → PascalCase: "calendar-clock" → "CalendarClock". */
 function kebabToPascal(name: string): string {
   return name
@@ -38,8 +57,19 @@ function kebabToPascal(name: string): string {
     .join('');
 }
 
+/**
+ * Escape a value for safe insertion inside an HTML attribute.
+ * Escapes the full set of attribute-breaking characters — escaping
+ * only `"` lets entity-encoded payloads (e.g. `&quot;`) close the
+ * attribute and inject new ones such as `onerror=`.
+ */
 function escapeAttr(value: string | number): string {
-  return String(value).replace(/"/g, '&quot;');
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 /** Render a lucide IconNode array to inline SVG markup. */
@@ -55,10 +85,15 @@ function renderLucideToSvg(nodes: LucideNode[]): string {
   return `${SVG_OPEN}${inner}${SVG_CLOSE}`;
 }
 
-/** Look up a Lucide icon by kebab-case name. Returns the SVG HTML or null. */
-export function lucideIconHtml(name: string): string | null {
+/**
+ * Look up a Lucide icon by kebab-case name. Returns the SVG HTML or
+ * null. Async because it lazy-loads the Lucide registry on first
+ * use to keep the main bundle slim.
+ */
+export async function lucideIconHtml(name: string): Promise<string | null> {
   const key = kebabToPascal(name);
-  const node = (lucideIcons as IconRegistry)[key];
+  const icons = await loadLucideRegistry();
+  const node = icons[key];
   if (!node) return null;
   return renderLucideToSvg(node);
 }
@@ -92,6 +127,12 @@ function imgTag(src: string): string {
  * Resolve a sprinkle icon spec to inline HTML the rail can render.
  * Returns `null` when the spec is missing or unresolvable so the
  * caller can fall back to its default glyph.
+ *
+ * Author-supplied SVG (inline spec, VFS file) is wrapped as
+ * `<img src="data:image/svg+xml;base64,...">` so it renders in the
+ * browser's script-disabled SVG context. Lucide-registry SVGs are
+ * inlined verbatim because we own the registry and inline rendering
+ * lets `stroke="currentColor"` inherit the rail's foreground color.
  */
 export async function resolveSprinkleIconHtml(
   spec: string | undefined,
@@ -99,22 +140,23 @@ export async function resolveSprinkleIconHtml(
 ): Promise<string | null> {
   if (!spec) return null;
 
-  // 1. Inline SVG — return verbatim. Authors are responsible for
-  //    producing a 16×16-friendly viewBox; we don't rewrite their
-  //    markup here so they keep full control.
-  if (isInlineSvg(spec)) return spec;
+  // 1. Inline SVG — wrap as a data URL <img>. Direct innerHTML of
+  //    author-supplied SVG would let `<svg onload=…>`, embedded
+  //    `<script>`, or `<foreignObject>` execute in the parent UI
+  //    context.
+  if (isInlineSvg(spec)) return imgTag(svgToDataUrl(spec));
 
-  // 2. data: URL — wrap as <img>.
+  // 2. data: URL — wrap as <img>. Same script-disabled rendering.
   if (isDataUrl(spec)) return imgTag(spec);
 
-  // 3. VFS path — read and inline (SVG) or wrap as data URL (raster).
+  // 3. VFS path — read and wrap as a data URL <img>.
   if (looksLikeVfsPath(spec) && fs) {
     try {
       if (isImagePath(spec) && spec.toLowerCase().endsWith('.svg')) {
         const raw = await fs.readFile(spec, { encoding: 'utf-8' });
         const text = typeof raw === 'string' ? raw : new TextDecoder('utf-8').decode(raw);
         const svg = extractFirstSvg(text);
-        return svg ?? null;
+        return svg ? imgTag(svgToDataUrl(svg)) : null;
       }
       if (isImagePath(spec)) {
         const raw = await fs.readFile(spec, { encoding: 'binary' });
@@ -126,7 +168,7 @@ export async function resolveSprinkleIconHtml(
       const raw = await fs.readFile(spec, { encoding: 'utf-8' });
       const text = typeof raw === 'string' ? raw : new TextDecoder('utf-8').decode(raw);
       const svg = extractFirstSvg(text);
-      if (svg) return svg;
+      if (svg) return imgTag(svgToDataUrl(svg));
     } catch (err) {
       log.warn('Failed to read sprinkle icon from VFS', {
         path: spec,
@@ -138,12 +180,17 @@ export async function resolveSprinkleIconHtml(
 
   // 4. Lucide icon name.
   if (isLucideName(spec)) {
-    const html = lucideIconHtml(spec);
+    const html = await lucideIconHtml(spec);
     if (html) return html;
     log.warn('Unknown Lucide icon name', { spec });
   }
 
   return null;
+}
+
+function svgToDataUrl(svg: string): string {
+  const bytes = new TextEncoder().encode(svg);
+  return `data:image/svg+xml;base64,${bytesToBase64(bytes)}`;
 }
 
 /** Pull the first `<svg>...</svg>` block out of a text blob. */

@@ -185,6 +185,27 @@ describe('extractIcon', () => {
   it('handles single-quoted attributes', () => {
     expect(extractIcon("<link rel='icon' href='star' />")).toBe('star');
   });
+
+  it('preserves embedded double quotes inside a single-quoted href', () => {
+    const svg =
+      'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0"/></svg>';
+    const tag = `<link rel="icon" href='${svg}' />`;
+    expect(extractIcon(tag)).toBe(svg);
+  });
+
+  it('preserves embedded > characters inside a quoted href value', () => {
+    // `>` inside a quoted attribute is legal HTML; a parser that
+    // bails at the first `>` would truncate the data URL.
+    const svg = "data:image/svg+xml;utf8,<svg viewBox='0 0 1 1'><path d='M0 0'/></svg>";
+    const tag = `<link rel="icon" href="${svg}" />`;
+    expect(extractIcon(tag)).toBe(svg);
+  });
+
+  it('preserves embedded single quotes inside a double-quoted href', () => {
+    const svg = "data:image/svg+xml;utf8,<svg viewBox='0 0 24 24'/>";
+    const tag = `<link rel="icon" href="${svg}" />`;
+    expect(extractIcon(tag)).toBe(svg);
+  });
 });
 
 describe('discoverSprinkles icon', () => {

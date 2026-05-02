@@ -41,7 +41,7 @@ Use the kebab-case name from lucide.dev. Common picks: `music`, `code`, `termina
 <link rel="icon" href="/shared/sprinkles/<name>/icon.svg" />
 ```
 
-Author the SVG with `viewBox="0 0 24 24"` and `stroke="currentColor"` so it inherits the rail's color. Keep paths simple — the rail renders at 16×16.
+Author the SVG with `viewBox="0 0 24 24"`. Keep paths simple — the rail renders at 16×16. **Note**: only Lucide icons inherit `currentColor` from the rail; author-supplied SVGs render through `<img>` (script-disabled), so set explicit colors in the SVG itself.
 
 **3. Inline SVG or data URL** (one-off icons, no extra file):
 
@@ -55,6 +55,8 @@ Author the SVG with `viewBox="0 0 24 24"` and `stroke="currentColor"` so it inhe
 Or, for inline SVG, use `data-sprinkle-icon` on the root element with the SVG markup escaped. Prefer formats 1 and 2.
 
 **Where to put it**: Inside `<head>` for full-document mode, or as the very first element in fragment mode. The `<link rel="icon">` form is the standard favicon convention and matches what browsers expect, so it's the recommended form.
+
+**Quoting tip**: When the `href` value itself contains quotes (inline-SVG data URLs do), wrap the attribute in single quotes so the inner double quotes don't terminate it: `href='data:image/svg+xml;utf8,<svg xmlns="...">...'`. The parser is quote-aware.
 
 **Fallback**: If the icon spec is missing or unresolvable, the rail uses a generic Sparkles glyph.
 
