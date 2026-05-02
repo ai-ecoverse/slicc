@@ -1798,12 +1798,13 @@ describe('ScoopContext dispose', () => {
 
 describe('resolveThinkingLevel', () => {
   // Synthesize the smallest possible `Model<Api>` shape the helper inspects.
-  // pi-ai's `supportsXhigh` only reads `id` (string match against the Opus
-  // 4.6+ / GPT-5.2+ families), so we don't need a real model record here.
+  // pi-ai's `getSupportedThinkingLevels` reads `reasoning` and
+  // `thinkingLevelMap` — xhigh requires an explicit (non-null) entry.
   const makeModel = (reasoning: boolean, supportsXhighFamily = false) =>
     ({
       id: supportsXhighFamily ? 'claude-opus-4-7' : 'claude-haiku-4-5',
       reasoning,
+      thinkingLevelMap: supportsXhighFamily ? { xhigh: 'max' } : undefined,
     }) as unknown as Parameters<typeof resolveThinkingLevel>[1];
 
   it("returns 'off' when the model does not support reasoning", () => {
@@ -1818,7 +1819,7 @@ describe('resolveThinkingLevel', () => {
   });
 
   it('clamps xhigh to high when the model does not advertise xhigh support', () => {
-    // Haiku (or any non-xhigh family) — pi-ai's supportsXhigh returns false.
+    // No thinkingLevelMap entry for xhigh → getSupportedThinkingLevels excludes it.
     expect(resolveThinkingLevel('xhigh', makeModel(true, false))).toBe('high');
   });
 

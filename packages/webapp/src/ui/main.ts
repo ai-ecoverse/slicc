@@ -27,7 +27,7 @@ import {
   resolveCurrentModel,
   resolveModelById,
 } from './provider-settings.js';
-import { supportsXhigh } from '@mariozechner/pi-ai';
+import { getSupportedThinkingLevels } from '@mariozechner/pi-ai';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
@@ -781,7 +781,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   const syncThinkingButtonForExtensionScoop = (scoop: RegisteredScoop): void => {
     const modelId = scoop.config?.modelId;
     const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
-    layout.panels.chat.setModelSupportsReasoning(!!model.reasoning, supportsXhigh(model));
+    layout.panels.chat.setModelSupportsReasoning(
+      !!model.reasoning,
+      getSupportedThinkingLevels(model).includes('xhigh')
+    );
     layout.panels.chat.setThinkingLevel(scoop.config?.thinkingLevel);
   };
 
@@ -2878,7 +2881,10 @@ async function main(): Promise<void> {
   const syncThinkingButtonForScoop = (scoop: RegisteredScoop): void => {
     const modelId = scoop.config?.modelId;
     const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
-    layout.panels.chat.setModelSupportsReasoning(!!model.reasoning, supportsXhigh(model));
+    layout.panels.chat.setModelSupportsReasoning(
+      !!model.reasoning,
+      getSupportedThinkingLevels(model).includes('xhigh')
+    );
     layout.panels.chat.setThinkingLevel(scoop.config?.thinkingLevel);
   };
 

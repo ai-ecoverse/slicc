@@ -25,7 +25,7 @@ import type {
   ImageContent,
   Model,
 } from '../core/index.js';
-import { isContextOverflow, streamSimple, supportsXhigh } from '@mariozechner/pi-ai';
+import { isContextOverflow, streamSimple, getSupportedThinkingLevels } from '@mariozechner/pi-ai';
 import type { Api, AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
 import type { ThinkingLevel } from '@mariozechner/pi-agent-core';
 import type { SessionStore } from '../core/session.js';
@@ -54,7 +54,8 @@ const log = createLogger('scoop-context');
  * Rules:
  *   - Non-reasoning model → always `'off'`, regardless of `requested`.
  *   - `requested === undefined` → `'off'` (default; UI/CLI can opt in).
- *   - `requested === 'xhigh'` and `!supportsXhigh(model)` → clamped to `'high'`.
+ *   - `requested === 'xhigh'` and the model does not advertise xhigh support
+ *     (via `thinkingLevelMap`) → clamped to `'high'`.
  *   - Otherwise the requested value is passed through.
  *
  * Exposed for tests and re-used by `agent-bridge.ts`.
@@ -65,7 +66,7 @@ export function resolveThinkingLevel(
 ): ThinkingLevel {
   if (!model.reasoning) return 'off';
   if (requested === undefined) return 'off';
-  if (requested === 'xhigh' && !supportsXhigh(model)) return 'high';
+  if (requested === 'xhigh' && !getSupportedThinkingLevels(model).includes('xhigh')) return 'high';
   return requested;
 }
 
