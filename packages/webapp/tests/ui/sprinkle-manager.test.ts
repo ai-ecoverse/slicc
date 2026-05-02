@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { FsWatcher } from '../../src/fs/fs-watcher.js';
 import { SprinkleManager } from '../../src/ui/sprinkle-manager.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
 
@@ -62,6 +63,25 @@ describe('SprinkleManager', () => {
 
   it('sendToSprinkle does not throw for closed sprinkle', () => {
     expect(() => mgr.sendToSprinkle('unknown', {})).not.toThrow();
+  });
+
+  it('setupWatcher refreshes available list when new .shtml files appear', async () => {
+    const watcher = new FsWatcher();
+    vfs.setWatcher(watcher);
+    mgr.setupWatcher(watcher);
+    await mgr.refresh();
+    expect(mgr.available()).toEqual([]);
+
+    await vfs.writeFile(
+      '/workspace/skills/migrate/migrate-page.shtml',
+      '<title>Migrate Page</title><div/>'
+    );
+
+    // Wait past the debounce window plus the async refresh chain.
+    await new Promise<void>((resolve) => setTimeout(resolve, 250));
+
+    const names = mgr.available().map((s) => s.name);
+    expect(names).toContain('migrate-page');
   });
 
   it('open throws descriptive error when file content is undefined', async () => {

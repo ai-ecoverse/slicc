@@ -1289,6 +1289,20 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   layout.updateAddButtons();
   await sprinkleManager.restoreOpenSprinkles();
 
+  // Auto-surface newly-added .shtml files in the rail. The panel's
+  // `localFs` doesn't have the orchestrator's watcher (that lives in
+  // offscreen), so attach a fresh one to catch panel-side writes
+  // (e.g. skill drag-and-drop installs). Offscreen-side writes are
+  // relayed separately from `offscreen.ts` via the sprinkle proxy.
+  if (!localFs.getWatcher()) {
+    const { FsWatcher } = await import('../fs/index.js');
+    localFs.setWatcher(new FsWatcher());
+  }
+  const panelWatcher = localFs.getWatcher();
+  if (panelWatcher) {
+    sprinkleManager.setupWatcher(panelWatcher);
+  }
+
   // Migrate legacy localStorage flag to VFS marker
   if (!(await localFs.exists('/shared/.welcomed')) && localStorage.getItem('slicc-welcomed')) {
     await localFs.writeFile('/shared/.welcomed', '1').catch(() => {});
@@ -2678,6 +2692,15 @@ async function main(): Promise<void> {
     };
     layout.onOpenSprinkle = (name, zone) => sprinkleManager!.open(name, zone);
     layout.updateAddButtons();
+
+    // Auto-surface newly-added .shtml files in the rail (skill installs,
+    // direct file writes, mounted folders). Reuses the orchestrator's
+    // shared FsWatcher — same instance the bsh watchdog and other
+    // subsystems hang off of.
+    const sharedWatcher = sharedFs.getWatcher();
+    if (sharedWatcher) {
+      sprinkleManager.setupWatcher(sharedWatcher);
+    }
 
     // Migrate legacy localStorage flag to VFS marker
     if (!(await sharedFs.exists('/shared/.welcomed')) && localStorage.getItem('slicc-welcomed')) {

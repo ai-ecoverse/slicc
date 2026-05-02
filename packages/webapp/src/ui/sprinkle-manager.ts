@@ -218,12 +218,33 @@ export class SprinkleManager {
     return Array.from(this.openSprinkles.keys());
   }
 
-  /** Set up a watcher for auto-refreshing when .shtml files change. */
+  /**
+   * Set up a watcher that auto-surfaces newly-added `.shtml` files
+   * in the rail. Calls `openNewAutoOpenSprinkles()` (which refreshes
+   * the available list AND opens any new auto-open sprinkles), so
+   * non-auto-open sprinkles still appear in the [+] picker without
+   * a reload. Watches the whole VFS — `.shtml` files can land in
+   * `/workspace/skills/`, `/shared/sprinkles/`, or anywhere else
+   * `discoverSprinkles()` walks. Bursts are coalesced with a small
+   * debounce so a single skill install doesn't trigger one refresh
+   * per file.
+   */
   setupWatcher(watcher: FsWatcher): void {
+    let timer: ReturnType<typeof setTimeout> | null = null;
     this.watcherUnsub = watcher.watch(
-      '/workspace',
+      '/',
       (path) => path.endsWith('.shtml'),
-      () => void this.refresh()
+      () => {
+        if (timer) return;
+        timer = setTimeout(() => {
+          timer = null;
+          void this.openNewAutoOpenSprinkles().catch((err) => {
+            log.warn('Sprinkle refresh on watcher event failed', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }, 150);
+      }
     );
   }
 
