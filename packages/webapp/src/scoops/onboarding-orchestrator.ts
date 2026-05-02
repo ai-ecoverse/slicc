@@ -34,14 +34,42 @@ import { validateApiKey, type ValidationResult } from './api-key-validator.js';
 
 const log = createLogger('onboarding-orchestrator');
 
-/** Snapshot describing a single provider, dip-safe (no functions). */
+/**
+ * Snapshot describing a single provider, dip-safe (no functions).
+ *
+ * Mirrors the field set the Settings → Add Account dialog renders so
+ * the welcome dip can stay in lock-step with it. When the settings
+ * dialog gains a new per-provider input, this interface and the
+ * `buildProviderCatalogue` callsites in `main.ts` should grow with it
+ * — otherwise the dip silently saves an account missing required
+ * fields (the original symptom that motivated this contract).
+ */
 export interface ProviderEntry {
   id: string;
   name: string;
   description?: string;
   requiresApiKey: boolean;
   requiresBaseUrl: boolean;
+  /** True when the provider needs a deployment name (Azure OpenAI). */
+  requiresDeployment?: boolean;
+  /** True when the provider needs a custom api-version (Azure OpenAI). */
+  requiresApiVersion?: boolean;
+  /** Optional API-key placeholder shown in the dip's input. */
+  apiKeyPlaceholder?: string;
+  /** Optional env-var hint appended to the API-key label. */
+  apiKeyEnvVar?: string;
+  /** Default value pre-filled into the base-url input. */
   defaultBaseUrl?: string;
+  /** Helper text shown below the base-url input. */
+  baseUrlDescription?: string;
+  /** Placeholder for the deployment input. */
+  deploymentPlaceholder?: string;
+  /** Helper text shown below the deployment input. */
+  deploymentDescription?: string;
+  /** Default value (and placeholder) for the api-version input. */
+  apiVersionDefault?: string;
+  /** Helper text shown below the api-version input. */
+  apiVersionDescription?: string;
   /** True when this provider authenticates via an OAuth popup. */
   isOAuth?: boolean;
 }
@@ -62,6 +90,10 @@ export interface ConnectAttemptPayload {
   provider: string;
   apiKey: string;
   baseUrl?: string | null;
+  /** Deployment name for providers with `requiresDeployment` (Azure OpenAI). */
+  deployment?: string | null;
+  /** API version for providers with `requiresApiVersion` (Azure OpenAI). */
+  apiVersion?: string | null;
   model?: string | null;
 }
 
@@ -91,7 +123,13 @@ export interface OrchestratorDeps {
   /** Get the live provider catalogue snapshot. */
   getProviderCatalogue: () => ProviderCatalogue;
   /** Persist credentials. Mirrors `provider-settings.addAccount`. */
-  saveAccount: (providerId: string, apiKey: string, baseUrl?: string) => void;
+  saveAccount: (
+    providerId: string,
+    apiKey: string,
+    baseUrl?: string,
+    deployment?: string,
+    apiVersion?: string
+  ) => void;
   /** Set the active model id (mirrors `setSelectedModelId`). */
   setSelectedModel: (modelId: string) => void;
   /** Optional human label for the model that gets selected. */
@@ -196,9 +234,22 @@ export class OnboardingOrchestrator {
     return true;
   }
 
-  /** Dip is mounted and asking for the provider catalogue. */
+  /** Dip is mounted and asking for the provider catalogue.
+   *
+   * Responds in any non-complete stage. The dip emits `connect-ready`
+   * whenever it (re)mounts — including after a reload where the
+   * persistent welcome-flow ledger suppressed the prior
+   * `onboarding-complete` and left the orchestrator at `idle`. We
+   * still need to feed the catalogue so the dip leaves its
+   * "Loading providers…" state.
+   *
+   * If onboarding has already wired a provider, the host short-
+   * circuits with a `slicc-already-connected` message before this
+   * runs, so the only remaining `complete` case is a programmatic
+   * re-fire we can safely ignore.
+   */
   handleConnectReady(): void {
-    if (this.stage !== 'awaiting-connect' && this.stage !== 'connecting') return;
+    if (this.stage === 'complete') return;
     const catalogue = this.deps.getProviderCatalogue();
     this.deps.broadcastToDip({
       type: 'slicc-providers',
@@ -207,18 +258,57 @@ export class OnboardingOrchestrator {
     });
   }
 
-  /** User submitted a provider + key. */
+  /** User submitted a provider + key.
+   *
+   * Idle is also a valid entry stage — see `handleConnectReady` for
+   * the reload case where the dip is re-mounted from chat history
+   * after the welcome-flow ledger already suppressed
+   * `onboarding-complete`.
+   */
   async handleConnectAttempt(payload: ConnectAttemptPayload): Promise<void> {
-    if (this.stage !== 'awaiting-connect' && this.stage !== 'connecting') return;
+    if (this.stage === 'complete') return;
     this.stage = 'connecting';
 
-    const { provider, apiKey, baseUrl, model } = payload;
+    const { provider, apiKey, baseUrl, deployment, apiVersion, model } = payload;
     if (!provider || typeof apiKey !== 'string' || !apiKey.trim()) {
       this.deps.broadcastToDip({
         type: 'slicc-connect-result',
         ok: false,
         kind: 'failed',
         message: 'Provider and API key are required.',
+      });
+      this.stage = 'awaiting-connect';
+      return;
+    }
+
+    // Match the Settings → Add Account dialog's required-field gate
+    // so the dip can't silently save half-configured Azure-style
+    // accounts. Without this, picking azure-openai from the welcome
+    // dip used to write an account missing deployment + api-version
+    // and break at the first chat request.
+    const providerEntry = (() => {
+      try {
+        return this.deps.getProviderCatalogue().providers.find((p) => p.id === provider);
+      } catch {
+        return undefined;
+      }
+    })();
+    if (providerEntry?.requiresDeployment && !deployment?.trim()) {
+      this.deps.broadcastToDip({
+        type: 'slicc-connect-result',
+        ok: false,
+        kind: 'failed',
+        message: `${providerEntry.name} requires a deployment name.`,
+      });
+      this.stage = 'awaiting-connect';
+      return;
+    }
+    if (providerEntry?.requiresBaseUrl && !baseUrl?.trim()) {
+      this.deps.broadcastToDip({
+        type: 'slicc-connect-result',
+        ok: false,
+        kind: 'failed',
+        message: `${providerEntry.name} requires a base URL.`,
       });
       this.stage = 'awaiting-connect';
       return;
@@ -259,9 +349,33 @@ export class OnboardingOrchestrator {
 
     // Both `ok` and `skipped` count as accept-and-save for the
     // orchestrator; the dip surfaces the difference inline.
+    //
+    // When the dip omits a model (the welcome dip no longer
+    // surfaces a model picker), fall back to the first model the
+    // provider catalogue advertises for the just-saved provider.
+    // Without this fallback, a stale `selected-model` from a
+    // previously-removed provider would survive onboarding and
+    // immediately fail chat requests until the user manually
+    // corrected the header dropdown.
+    let effectiveModel = model || null;
+    if (!effectiveModel) {
+      try {
+        const catalogue = this.deps.getProviderCatalogue();
+        const fallback = catalogue.models?.[provider]?.[0]?.id;
+        if (fallback) effectiveModel = fallback;
+      } catch (err) {
+        log.warn('Failed to resolve fallback model for provider', { provider, err });
+      }
+    }
     try {
-      this.deps.saveAccount(provider, apiKey.trim(), baseUrl ?? undefined);
-      if (model) this.deps.setSelectedModel(model);
+      this.deps.saveAccount(
+        provider,
+        apiKey.trim(),
+        baseUrl?.trim() || undefined,
+        deployment?.trim() || undefined,
+        apiVersion?.trim() || undefined
+      );
+      if (effectiveModel) this.deps.setSelectedModel(effectiveModel);
     } catch (err) {
       log.warn('saveAccount failed', err);
       this.deps.broadcastToDip({
@@ -288,25 +402,31 @@ export class OnboardingOrchestrator {
     // Hand off to the cone — now that an LLM is configured, the cone
     // can comment on the choice. SKILL.md spells out the exact reply.
     const modelLabel =
-      model && this.deps.resolveModelLabel?.(provider, model)
-        ? this.deps.resolveModelLabel?.(provider, model)
-        : model || null;
+      effectiveModel && this.deps.resolveModelLabel?.(provider, effectiveModel)
+        ? this.deps.resolveModelLabel?.(provider, effectiveModel)
+        : effectiveModel || null;
     this.stage = 'complete';
     this.deps.fireFinalLick({
       action: 'onboarding-complete-with-provider',
       data: {
         profile: this.profile,
         provider,
-        model: model ?? null,
+        model: effectiveModel ?? null,
         modelLabel,
         validation: result.kind,
       },
     });
   }
 
-  /** User picked an OAuth provider and clicked "Login". */
+  /** User picked an OAuth provider and clicked "Login".
+   *
+   * Idle is also a valid entry stage — see `handleConnectReady` for
+   * the reload case where the dip is re-mounted from chat history
+   * after the welcome-flow ledger already suppressed
+   * `onboarding-complete`.
+   */
   async handleOAuthAttempt(payload: OAuthAttemptPayload): Promise<void> {
-    if (this.stage !== 'awaiting-connect' && this.stage !== 'connecting') return;
+    if (this.stage === 'complete') return;
     if (!this.deps.launchOAuth) {
       this.deps.broadcastToDip({
         type: 'slicc-connect-result',

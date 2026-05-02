@@ -33,7 +33,13 @@ import type { Orchestrator } from './orchestrator.js';
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath } from '../fs/path-utils.js';
 import type { SessionStore } from '../core/session.js';
-import { CURRENT_SCOOP_CONFIG_VERSION, type RegisteredScoop } from './types.js';
+import {
+  CURRENT_SCOOP_CONFIG_VERSION,
+  isThinkingLevel,
+  THINKING_LEVELS,
+  type RegisteredScoop,
+  type ThinkingLevel,
+} from './types.js';
 import { createLogger } from '../core/logger.js';
 import { getAllAvailableModels } from '../ui/provider-settings.js';
 
@@ -81,6 +87,23 @@ export interface AgentSpawnOptions {
    * Must be an absolute path. Normalized to a trailing-slash prefix.
    */
   invokingCwd?: string;
+  /**
+   * Optional reasoning / thinking level override (`off | minimal | low |
+   * medium | high | xhigh`). When omitted, falls back to the parent
+   * scoop's `config.thinkingLevel` (when found in the orchestrator
+   * registry), then to `undefined` — which `ScoopContext.init()` resolves
+   * to `'off'` via `resolveThinkingLevel`.
+   *
+   * `xhigh` is forwarded as-is; ScoopContext clamps to `'high'` at
+   * Agent-construction time when the resolved model lacks xhigh support.
+   *
+   * Validation: `spawn()` validates this field on every call and returns
+   * an error result for unknown literal values, regardless of caller —
+   * `agent-command.ts` (the `--thinking` CLI flag) and `scoop_scoop`
+   * already validate at their layer for tighter user feedback, but
+   * direct programmatic / extension callers also hit this path.
+   */
+  thinkingLevel?: ThinkingLevel;
 }
 
 /** Result returned by {@link AgentBridge.spawn}. */
@@ -186,6 +209,27 @@ export function createAgentBridge(
     return modelId && modelId.length > 0 ? modelId : null;
   }
 
+  /**
+   * Mirror of {@link resolveParentModelId} for `thinkingLevel`. Returns
+   * `null` when the parent is missing or has no persisted
+   * `config.thinkingLevel`.
+   *
+   * Reads from the registered scoop's config for any parent jid (cone or
+   * scoop) — `Orchestrator.setScoopThinkingLevel` persists into
+   * `scoop.config.thinkingLevel` for both, so a cone with a UI-set level
+   * will inherit it down to ephemeral `agent` sub-scoops. When the cone
+   * never had a level set (the common case), this returns `null` and
+   * the bridge falls back to `undefined`, which `ScoopContext.init()`
+   * then resolves to `'off'`.
+   */
+  function resolveParentThinkingLevel(parentJid: string | undefined): ThinkingLevel | null {
+    if (parentJid === undefined) return null;
+    const parent = orchestrator.getScoops().find((s) => s.jid === parentJid);
+    if (!parent) return null;
+    const level = parent.config?.thinkingLevel;
+    return level && isThinkingLevel(level) ? level : null;
+  }
+
   async function spawn(options: AgentSpawnOptions): Promise<AgentSpawnResult> {
     // Model validation first. An explicit `--model foo` with no matching
     // provider is a clean no-op — we never create the scratch folder or
@@ -203,6 +247,23 @@ export function createAgentBridge(
     // Model precedence: explicit > parent scoop > undefined (ScoopContext
     // then falls back to the UI selection via `resolveCurrentModel`).
     const effectiveModelId = requestedModelId ?? resolveParentModelId(options.parentJid) ?? '';
+
+    // Validate explicit thinkingLevel up-front. agent-command.ts already
+    // rejects unknown values, but defense-in-depth: programmatic callers
+    // (and the extension proxy) reach this path too.
+    const requestedLevel = options.thinkingLevel;
+    if (requestedLevel !== undefined && !isThinkingLevel(requestedLevel)) {
+      return {
+        finalText: `agent: invalid thinking level: ${String(requestedLevel)} (one of: ${THINKING_LEVELS.join(', ')})`,
+        exitCode: 1,
+      };
+    }
+
+    // Thinking-level precedence mirrors model precedence:
+    //   explicit > parent scoop > undefined (ScoopContext resolves
+    //   undefined to 'off' via `resolveThinkingLevel`).
+    const effectiveThinkingLevel =
+      requestedLevel ?? resolveParentThinkingLevel(options.parentJid) ?? undefined;
 
     // Friendly `<adjective>-<flavor>` naming (on-brand with the ice-cream
     // vocabulary). Folder uses dashes; jid uses underscores. Falls back
@@ -242,6 +303,9 @@ export function createAgentBridge(
     };
     if (effectiveModelId) {
       scoopConfig.modelId = effectiveModelId;
+    }
+    if (effectiveThinkingLevel !== undefined) {
+      scoopConfig.thinkingLevel = effectiveThinkingLevel;
     }
 
     const scoop: RegisteredScoop = {

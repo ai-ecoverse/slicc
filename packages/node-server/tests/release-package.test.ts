@@ -5,7 +5,6 @@ import { join } from 'path';
 import { describe, expect, it } from 'vitest';
 
 import {
-  assertMatchingVersions,
   collectZipEntries,
   createDeterministicZip,
   parseNpmPackFilename,
@@ -15,12 +14,6 @@ import {
 describe('release-package', () => {
   it('sanitizes artifact names for stable filenames', () => {
     expect(sanitizeArtifactName('@AI-Ecoverse/SLICC Release')).toBe('ai-ecoverse-slicc-release');
-  });
-
-  it('fails when package and extension versions diverge', () => {
-    expect(() => assertMatchingVersions('0.1.0', '0.2.0')).toThrow(
-      'package.json version (0.1.0) must match manifest.json version (0.2.0)'
-    );
   });
 
   it('reads the packed tarball filename from npm pack json output', () => {

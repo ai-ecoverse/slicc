@@ -169,22 +169,22 @@ async function init(): Promise<void> {
       : isSprinkle
         ? event.sprinkleName
         : isFsWatch
-          ? (event as any).fswatchName
+          ? event.fswatchName
           : isNavigate
-            ? (event as any).navigateUrl
+            ? event.navigateUrl
             : isUpgrade
-              ? `${(event as any).upgradeFromVersion ?? 'unknown'}\u2192${(event as any).upgradeToVersion ?? 'unknown'}`
+              ? `${event.upgradeFromVersion ?? 'unknown'}\u2192${event.upgradeToVersion ?? 'unknown'}`
               : event.cronName;
     const eventId = isWebhook
       ? event.webhookId
       : isSprinkle
         ? event.sprinkleName
         : isFsWatch
-          ? (event as any).fswatchId
+          ? event.fswatchId
           : isNavigate
-            ? (event as any).navigateUrl
+            ? event.navigateUrl
             : isUpgrade
-              ? `upgrade-${(event as any).upgradeToVersion ?? 'unknown'}`
+              ? `upgrade-${event.upgradeToVersion ?? 'unknown'}`
               : event.cronId;
     const channel = event.type;
 
@@ -218,8 +218,8 @@ async function init(): Promise<void> {
                 : 'Cron Event';
       let content: string;
       if (isUpgrade) {
-        const from = (event as any).upgradeFromVersion ?? 'unknown';
-        const to = (event as any).upgradeToVersion ?? 'unknown';
+        const from = event.upgradeFromVersion ?? 'unknown';
+        const to = event.upgradeToVersion ?? 'unknown';
         const releasedAt =
           (event.body as { releasedAt?: string | null } | null | undefined)?.releasedAt ?? null;
         const releaseLine = releasedAt ? `\nReleased: ${releasedAt}` : '';
@@ -313,7 +313,7 @@ async function init(): Promise<void> {
     if (sharedFsForUpgrade) {
       const { detectUpgrade, recordVersionSeen } =
         await import('../../../packages/webapp/src/scoops/upgrade-detection.js');
-      detectUpgrade(sharedFsForUpgrade)
+      detectUpgrade()
         .then(async (result) => {
           if (!result.isUpgrade || result.lastSeen === null) return;
           lickManager.emitEvent({

@@ -43,7 +43,7 @@ import { PanelRegistry } from './panel-registry.js';
 import { showSprinklePicker } from './sprinkle-picker.js';
 import type { ZoneId } from './panel-types.js';
 // ChatMessage import removed — copy chat moved to feedback row
-import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
+import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
 
 export interface LayoutPanels {
   chat: ChatPanel;
@@ -121,8 +121,18 @@ export class Layout {
   public panels!: LayoutPanels;
   public readonly registry = new PanelRegistry();
   public onModelChange?: (model: string) => void;
+  /** Fired when the user cycles the brain icon in the chat panel. */
+  public onThinkingLevelChange?: (level: ThinkingLevel) => void;
   /** Re-populate the model dropdown (call after provider login/logout). */
   public refreshModels?: () => void;
+  /**
+   * Fired after `refreshModels` finishes — i.e. whenever provider accounts
+   * change and the chat panel's active model may have shifted. main.ts
+   * uses this hook to re-sync the thinking-level brain icon to the new
+   * model's reasoning support (a model swap from a non-reasoning to a
+   * reasoning model has to un-hide the icon).
+   */
+  public onModelsRefreshed?: () => void;
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
   public onClearChat?: () => Promise<void>;
   public onClearFilesystem?: () => Promise<void>;
@@ -265,9 +275,24 @@ export class Layout {
    */
   private initModelSelection(): void {
     const ensureModelSelected = () => {
-      const currentModelId = getSelectedModelId();
-      if (currentModelId) return;
       const groups = getAllAvailableModels();
+      // Validate that the stored selection still resolves against
+      // a configured account. Without this, deleting the active
+      // provider through Settings leaves a dangling `selected-model`
+      // (e.g. `bedrock-camp:…`) that the header dropdown silently
+      // ignores while message-send continues routing to the removed
+      // provider — surfacing as "No API key configured for provider".
+      const raw = localStorage.getItem('selected-model') ?? '';
+      const sep = raw.indexOf(':');
+      const storedProvider = sep > 0 ? raw.slice(0, sep) : '';
+      const storedModelId = sep > 0 ? raw.slice(sep + 1) : raw;
+      const stillResolves =
+        !!storedProvider &&
+        groups.some(
+          (g) => g.providerId === storedProvider && g.models.some((m) => m.id === storedModelId)
+        );
+      if (raw && stillResolves) return;
+      // Re-pick a default from the surviving accounts.
       for (const group of groups) {
         if (group.models.length > 0) {
           const { defaultModelId } = getProviderConfig(group.providerId);
@@ -279,12 +304,22 @@ export class Layout {
           return;
         }
       }
+      // No accounts at all → leave the selection empty so the chat
+      // header surfaces the "no provider configured" state instead
+      // of silently routing to a stale one.
+      if (raw && groups.length === 0) {
+        localStorage.removeItem('selected-model');
+      }
     };
     ensureModelSelected();
     this.refreshModels = () => {
       ensureModelSelected();
       this.panels?.chat?.refreshModelSelector();
       this.refreshAvatar();
+      // Notify main.ts so it can re-resolve the active model for the brain
+      // icon. Done last so the chat panel has already re-rendered when the
+      // hook fires.
+      this.onModelsRefreshed?.();
     };
   }
 
@@ -658,6 +693,7 @@ export class Layout {
   // `extensionZone`, dual-zone TabZone wiring) have been retired.
   // Both modes now mount the same split layout below — the only
   // mode-specific tweaks live in `buildSplitLayout` / `buildHeader`.
+  // ── Standalone: Split Layout ────────────────────────────────────────
 
   private buildSplitLayout(): void {
     while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
@@ -898,6 +934,7 @@ export class Layout {
 
     // Wire chat panel model selector to layout's onModelChange
     this.panels.chat.onModelChange = (modelId) => this.onModelChange?.(modelId);
+    this.panels.chat.onThinkingLevelChange = (level) => this.onThinkingLevelChange?.(level);
 
     this.setupVerticalDrag();
     window.addEventListener('resize', () => {});

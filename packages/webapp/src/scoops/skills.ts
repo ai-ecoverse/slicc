@@ -193,7 +193,7 @@ async function loadDiscoveredSkills(
       skills.push({
         metadata: {
           name,
-          description: metadata.description || discoveredSkill.manifest.description || '',
+          description: metadata.description || discoveredSkill.description || '',
           allowedTools: metadata.allowedTools,
         },
         content: body,
@@ -333,18 +333,14 @@ export async function createDefaultSkills(
 }
 
 /**
- * Files under /shared/ that should always reflect the bundled (build-time)
- * version, even if they already exist in the user's VFS. Used by the
- * upgrade-detection flow (see ui/main.ts) so the bundled SLICC version
- * is the source of truth for "which version is currently installed".
+ * Files under /shared/ that should always reflect the bundled defaults,
+ * even if they already exist in the user's VFS. Welcome / onboarding
+ * sprinkles are system-managed: the dip markup evolves with the
+ * orchestrator so a stale on-disk copy (seeded once on first install)
+ * would freeze the flow on the version that originally landed in the
+ * user's LightningFS. Re-seed them on every boot.
  */
 const ALWAYS_OVERWRITE_SHARED = new Set<string>([
-  '/shared/version.json',
-  // Welcome / onboarding sprinkles are system-managed: the dip
-  // markup evolves with the orchestrator so a stale on-disk copy
-  // (seeded once on first install) would freeze the flow on the
-  // version that originally landed in the user's LightningFS.
-  // Re-seed them on every boot.
   '/shared/sprinkles/welcome/welcome.shtml',
   '/shared/sprinkles/welcome/connect-llm.shtml',
 ]);

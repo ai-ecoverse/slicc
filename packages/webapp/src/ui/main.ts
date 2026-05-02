@@ -21,7 +21,13 @@ import './styles/feedback.css';
  */
 
 import { Layout } from './layout.js';
-import { getApiKey, applyProviderDefaults } from './provider-settings.js';
+import {
+  getApiKey,
+  applyProviderDefaults,
+  resolveCurrentModel,
+  resolveModelById,
+} from './provider-settings.js';
+import { getSupportedThinkingLevels } from '@mariozechner/pi-ai';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
@@ -401,7 +407,7 @@ function registerSkillDropInstall(
         const result = await installSkillFromDrop(fs, skillFile);
         await onInstalled();
         onNotice(
-          `Installed "${result.skillName}" to ${result.destinationPath} (${result.fileCount} files). Run "skill install ${result.skillName}" to apply it.`,
+          `Installed "${result.skillName}" to ${result.destinationPath} (${result.fileCount} files).`,
           'success'
         );
       } catch (err) {
@@ -628,6 +634,8 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     if (client.isProcessing(scoop.jid)) {
       layout.panels.chat.setProcessing(true);
     }
+
+    syncThinkingButtonForExtensionScoop(scoop);
   };
 
   client = new OffscreenClient({
@@ -763,10 +771,41 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   layout.onScoopSelect = selectScoop;
 
+  /**
+   * Sync the brain icon to the active scoop's resolved model + persisted
+   * thinking-level. Extension flavor: same lookup logic as the standalone
+   * version, but reads `scoop.config` from the proxied snapshot and uses
+   * provider-settings via the side-panel realm (which shares localStorage
+   * with offscreen for the model id).
+   */
+  const syncThinkingButtonForExtensionScoop = (scoop: RegisteredScoop): void => {
+    const modelId = scoop.config?.modelId;
+    const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
+    layout.panels.chat.setModelSupportsReasoning(
+      !!model.reasoning,
+      getSupportedThinkingLevels(model).includes('xhigh')
+    );
+    layout.panels.chat.setThinkingLevel(scoop.config?.thinkingLevel);
+  };
+
   // Wire model picker
   layout.onModelChange = (modelId) => {
     localStorage.setItem('selected-model', modelId);
     client.updateModel();
+    if (selectedScoop) {
+      syncThinkingButtonForExtensionScoop(selectedScoop);
+    }
+  };
+
+  // Wire brain-icon thinking-level cycle through the offscreen client.
+  layout.onThinkingLevelChange = (level) => {
+    if (!selectedScoop) return;
+    client.setScoopThinkingLevel(selectedScoop.jid, level);
+  };
+
+  // Re-sync brain icon on provider account changes (see standalone path).
+  layout.onModelsRefreshed = () => {
+    if (selectedScoop) syncThinkingButtonForExtensionScoop(selectedScoop);
   };
 
   // Wire clear chat — delete all scoop sessions from the shared IndexedDB
@@ -816,7 +855,16 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           description: cfg.description,
           requiresApiKey: cfg.requiresApiKey ?? true,
           requiresBaseUrl: cfg.requiresBaseUrl ?? false,
+          requiresDeployment: !!cfg.requiresDeployment,
+          requiresApiVersion: !!cfg.requiresApiVersion,
+          apiKeyPlaceholder: cfg.apiKeyPlaceholder ?? undefined,
+          apiKeyEnvVar: cfg.apiKeyEnvVar ?? undefined,
           defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+          baseUrlDescription: cfg.baseUrlDescription ?? undefined,
+          deploymentPlaceholder: cfg.deploymentPlaceholder ?? undefined,
+          deploymentDescription: cfg.deploymentDescription ?? undefined,
+          apiVersionDefault: cfg.apiVersionDefault ?? undefined,
+          apiVersionDescription: cfg.apiVersionDescription ?? undefined,
           isOAuth: !!cfg.isOAuth,
         };
       })
@@ -844,7 +892,8 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       postSystemMessage: (line) => layout.panels.chat.addSystemMessage(line),
       postDipReference: (md) => layout.panels.chat.addSystemMessage(md),
       getProviderCatalogue: buildExtProviderCatalogue,
-      saveAccount: (id, key, baseUrl) => addAccountExt(id, key, baseUrl),
+      saveAccount: (id, key, baseUrl, deployment, apiVersion) =>
+        addAccountExt(id, key, baseUrl, deployment, apiVersion),
       setSelectedModel: (id) => setSelectedModelIdExt(id),
       resolveModelLabel: (provider, modelId) => {
         try {
@@ -1017,6 +1066,14 @@ async function mainExtension(app: HTMLElement): Promise<void> {
             provider: String(data.provider ?? ''),
             apiKey: String(data.apiKey ?? ''),
             baseUrl: typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+            deployment:
+              typeof data.deployment === 'string' && data.deployment
+                ? String(data.deployment)
+                : null,
+            apiVersion:
+              typeof data.apiVersion === 'string' && data.apiVersion
+                ? String(data.apiVersion)
+                : null,
             model: data.model == null ? null : String(data.model),
           })
           .catch((err) => log.warn('handleConnectAttempt failed', err));
@@ -1381,6 +1438,19 @@ async function main(): Promise<void> {
     try {
       await navigator.serviceWorker.register('/preview-sw.js', { scope: '/preview/' });
       log.info('Preview SW registered');
+      // CLI standalone only — extension mode bypasses CORS via
+      // host_permissions and never needs the LLM proxy SW. Registering it
+      // there would intercept side-panel fetches the extension expects to
+      // reach the network directly.
+      const isExtensionForSw = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+      if (!isExtensionForSw) {
+        try {
+          await navigator.serviceWorker.register('/llm-proxy-sw.js', { scope: '/' });
+          log.info('LLM-proxy SW registered');
+        } catch (err) {
+          log.error('LLM-proxy SW registration failed — cross-origin LLM calls will hit CORS', err);
+        }
+      }
       if (!navigator.serviceWorker.controller) {
         // Wait briefly for clients.claim() to attach the page.
         await Promise.race([
@@ -1393,9 +1463,12 @@ async function main(): Promise<void> {
         ]);
       }
       if (!navigator.serviceWorker.controller && !sessionStorage.getItem('slicc-sw-reloaded')) {
-        // Still uncontrolled — force one reload so the SW can claim us.
+        // Still uncontrolled — force one reload so both SWs can claim us.
+        // This also guarantees the LLM proxy SW is active before the
+        // first cross-origin provider request, otherwise the very first
+        // fetch slips past it and hits CORS directly.
         sessionStorage.setItem('slicc-sw-reloaded', '1');
-        log.info('Reloading once to gain preview SW control');
+        log.info('Reloading once to gain SW control');
         location.reload();
         return;
       }
@@ -1995,7 +2068,16 @@ async function main(): Promise<void> {
           description: cfg.description,
           requiresApiKey: cfg.requiresApiKey ?? true,
           requiresBaseUrl: cfg.requiresBaseUrl ?? false,
+          requiresDeployment: !!cfg.requiresDeployment,
+          requiresApiVersion: !!cfg.requiresApiVersion,
+          apiKeyPlaceholder: cfg.apiKeyPlaceholder ?? undefined,
+          apiKeyEnvVar: cfg.apiKeyEnvVar ?? undefined,
           defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+          baseUrlDescription: cfg.baseUrlDescription ?? undefined,
+          deploymentPlaceholder: cfg.deploymentPlaceholder ?? undefined,
+          deploymentDescription: cfg.deploymentDescription ?? undefined,
+          apiVersionDefault: cfg.apiVersionDefault ?? undefined,
+          apiVersionDescription: cfg.apiVersionDescription ?? undefined,
           isOAuth: !!cfg.isOAuth,
         };
       })
@@ -2023,7 +2105,8 @@ async function main(): Promise<void> {
       postSystemMessage: (line) => layout.panels.chat.addSystemMessage(line),
       postDipReference: (md) => layout.panels.chat.addSystemMessage(md),
       getProviderCatalogue: buildProviderCatalogue,
-      saveAccount: (id, key, baseUrl) => addAccount(id, key, baseUrl),
+      saveAccount: (id, key, baseUrl, deployment, apiVersion) =>
+        addAccount(id, key, baseUrl, deployment, apiVersion),
       setSelectedModel: (id) => setSelectedModelId(id),
       resolveModelLabel: (provider, modelId) => {
         try {
@@ -2248,6 +2331,14 @@ async function main(): Promise<void> {
               apiKey: String(data.apiKey ?? ''),
               baseUrl:
                 typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+              deployment:
+                typeof data.deployment === 'string' && data.deployment
+                  ? String(data.deployment)
+                  : null,
+              apiVersion:
+                typeof data.apiVersion === 'string' && data.apiVersion
+                  ? String(data.apiVersion)
+                  : null,
               model: data.model == null ? null : String(data.model),
             })
             .catch((err) => log.warn('handleConnectAttempt failed', err));
@@ -2498,16 +2589,17 @@ async function main(): Promise<void> {
   }
 
   // ── Upgrade detection ────────────────────────────────────────────────
-  // Compares the bundled SLICC version (baked into /shared/version.json
-  // at release time) against the value last seen on a previous boot and
-  // emits an `upgrade` lick when it bumped. Aligned with the session-
-  // reload (mount-recovery) lick above: both fire after the orchestrator
-  // is fully initialized so a cone is guaranteed to be present as a
-  // routable target. The "last seen" marker is only advanced AFTER the
-  // lick has actually been routed — otherwise a transient no-cone state
-  // would silently lose the upgrade notification for that version.
+  // Compares the bundled SLICC version (baked into the bundle at build
+  // time from root package.json) against the value last seen on a
+  // previous boot and emits an `upgrade` lick when it bumped. Aligned
+  // with the session-reload (mount-recovery) lick above: both fire after
+  // the orchestrator is fully initialized so a cone is guaranteed to be
+  // present as a routable target. The "last seen" marker is only
+  // advanced AFTER the lick has actually been routed — otherwise a
+  // transient no-cone state would silently lose the upgrade notification
+  // for that version.
   if (sharedFs) {
-    detectUpgrade(sharedFs)
+    detectUpgrade()
       .then(async (result) => {
         if (!result.isUpgrade || result.lastSeen === null) return;
         const event: LickEvent = {
@@ -2782,11 +2874,46 @@ async function main(): Promise<void> {
 
   connectLickWs();
 
+  /**
+   * Sync the brain icon to the active scoop's resolved model + persisted
+   * thinking-level. Called on scoop switch and after a model swap.
+   */
+  const syncThinkingButtonForScoop = (scoop: RegisteredScoop): void => {
+    const modelId = scoop.config?.modelId;
+    const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
+    layout.panels.chat.setModelSupportsReasoning(
+      !!model.reasoning,
+      getSupportedThinkingLevels(model).includes('xhigh')
+    );
+    layout.panels.chat.setThinkingLevel(scoop.config?.thinkingLevel);
+  };
+
   // Wire model picker changes
   layout.onModelChange = (modelId) => {
     localStorage.setItem('selected-model', modelId);
     // Immediately update all active agent contexts to use the new model
     orchestrator.updateModel();
+    // The brain icon's visibility / xhigh availability depends on the
+    // selected model — refresh it now so the UI matches the new active
+    // model on the cone (scoop overrides keep their own model).
+    if (selectedScoop) {
+      syncThinkingButtonForScoop(selectedScoop);
+    }
+  };
+
+  // Wire brain-icon thinking-level cycle to the orchestrator. Updates the
+  // live agent for the next turn AND persists into scoop.config.thinkingLevel.
+  layout.onThinkingLevelChange = (level) => {
+    if (!selectedScoop) return;
+    void orchestrator.setScoopThinkingLevel(selectedScoop.jid, level);
+  };
+
+  // Re-sync the brain icon when provider accounts change — the active
+  // model's reasoning support may have shifted (e.g. logging into Adobe
+  // exposes Claude models with reasoning=true), and `refreshModels` is
+  // the canonical signal for that transition.
+  layout.onModelsRefreshed = () => {
+    if (selectedScoop) syncThinkingButtonForScoop(selectedScoop);
   };
 
   // Track which scoops have been selected at least once this runtime.
@@ -2911,6 +3038,11 @@ async function main(): Promise<void> {
     }
 
     selectedOnceThisRuntime.add(scoop.jid);
+
+    // Sync brain icon to the freshly selected scoop's persisted level +
+    // model capabilities. Done last so the chat panel has already
+    // re-rendered the model selector for this context.
+    syncThinkingButtonForScoop(scoop);
   };
 
   layout.onScoopSelect = handleScoopSelect;

@@ -6,7 +6,13 @@
  */
 
 import type { ToolDefinition } from '../core/types.js';
-import { CURRENT_SCOOP_CONFIG_VERSION, type RegisteredScoop } from './types.js';
+import {
+  CURRENT_SCOOP_CONFIG_VERSION,
+  THINKING_LEVELS,
+  isThinkingLevel,
+  type RegisteredScoop,
+  type ThinkingLevel,
+} from './types.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('scoop-management-tools');
@@ -242,6 +248,12 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
               description:
                 'Shell command allow-list. Omit for unrestricted access to every built-in, custom, and .jsh command (the default). Pass a list of command names to restrict the scoop\'s shell — e.g. ["echo","cat","grep"] for a read-only text-processing scoop. Pass ["*"] for explicit unrestricted. Applies to pipelines, substitutions, and network commands too.',
             },
+            thinking: {
+              type: 'string',
+              enum: [...THINKING_LEVELS],
+              description:
+                'Reasoning / thinking-level for this scoop (pi-ai effort). One of: off, minimal, low, medium, high, xhigh. Omit to inherit the global default ("off"). Non-reasoning models always clamp to "off"; "xhigh" clamps to "high" on models that do not support the max tier.',
+            },
           },
           required: ['name'],
         },
@@ -253,6 +265,7 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
             visiblePaths,
             writablePaths,
             allowedCommands,
+            thinking,
           } = input as {
             name: string;
             model?: string;
@@ -260,7 +273,22 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
             visiblePaths?: string[];
             writablePaths?: string[];
             allowedCommands?: string[];
+            thinking?: string;
           };
+
+          // Validate thinking level eagerly so the cone gets a tight error
+          // message instead of a silently-dropped value. Mirrors the
+          // validation done by `agent-bridge.ts` and `agent-command.ts`.
+          let thinkingLevel: ThinkingLevel | undefined;
+          if (thinking !== undefined) {
+            if (!isThinkingLevel(thinking)) {
+              return {
+                content: `Invalid thinking level "${thinking}". Must be one of: ${THINKING_LEVELS.join(', ')}.`,
+                isError: true,
+              };
+            }
+            thinkingLevel = thinking;
+          }
           const folder =
             name
               .toLowerCase()
@@ -289,6 +317,7 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
                 visiblePaths: visiblePaths ?? ['/workspace/'],
                 writablePaths: writablePaths ?? [`/scoops/${folder}/`, '/shared/'],
                 ...(allowedCommands ? { allowedCommands } : {}),
+                ...(thinkingLevel ? { thinkingLevel } : {}),
               },
               configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
             });

@@ -13,7 +13,7 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "node dist/node-server/sync-release-version.js ${nextRelease.version} && npm run build -w @slicc/chrome-extension && npm run package:release && chmod +x packages/swift-launcher/sign-and-package.sh && packages/swift-launcher/sign-and-package.sh ${nextRelease.version}",
+        "prepareCmd": "SLICC_RELEASED_AT=\"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\" npm run build && npm run package:release && chmod +x packages/swift-launcher/sign-and-package.sh && packages/swift-launcher/sign-and-package.sh",
         "publishCmd": "npm run publish:worker && npm run publish:chrome"
       }
     ],
@@ -29,6 +29,13 @@
           "artifacts/release/release-artifacts.json",
           "artifacts/release/sliccstart-v*.dmg"
         ]
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": ["package.json", "package-lock.json"],
+        "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }
     ]
   ]

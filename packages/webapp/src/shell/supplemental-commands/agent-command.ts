@@ -2,6 +2,7 @@ import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 import { createLogger } from '../../core/logger.js';
 import { normalizePath } from '../../fs/path-utils.js';
+import { THINKING_LEVELS, isThinkingLevel, type ThinkingLevel } from '../../scoops/types.js';
 
 const log = createLogger('agent-command');
 
@@ -23,6 +24,8 @@ interface AgentSpawnOptions {
    * on the bridge for the read-only tradeoff.
    */
   invokingCwd?: string;
+  /** Forwarded to the bridge as the spawned scoop's thinking-level override. */
+  thinkingLevel?: ThinkingLevel;
 }
 
 /** Options accepted by {@link createAgentCommand}. */
@@ -72,6 +75,13 @@ Default sandbox:
 Options:
   --model <id>            Override the model id used by the spawned scoop.
                           Defaults to inheriting the parent's model.
+  --thinking <level>      Reasoning / thinking level for the spawned scoop.
+                          One of: off, minimal, low, medium, high, xhigh.
+                          Defaults to inheriting the parent's level (or 'off'
+                          when there is no parent). 'xhigh' is silently
+                          clamped to 'high' when the resolved model doesn't
+                          support it. Ignored entirely for non-reasoning
+                          models. Aliased as --effort.
   --read-only <paths>     Comma-separated VFS paths exposed read-only to the
                           spawned scoop (visiblePaths). Pure replace — when
                           set, the default ["/workspace/"] AND the implicit
@@ -85,6 +95,7 @@ Examples:
   agent . "*" "say hello in one word"
   agent /home ls,wc,find "how many files do I have in my home directory"
   agent --model claude-haiku-4-5 . "*" "summarize files in this directory"
+  agent --thinking high . "*" "design a careful plan first"
   agent --read-only /workspace/,/shared/assets/ . "*" "review the docs"
 `;
 
@@ -95,6 +106,7 @@ interface ParsedArgs {
   prompt?: string;
   modelId?: string;
   visiblePaths?: string[];
+  thinkingLevel?: ThinkingLevel;
   error?: string;
 }
 
@@ -114,6 +126,7 @@ function parseArgs(args: string[]): ParsedArgs {
   let help = false;
   let modelId: string | undefined;
   let visiblePaths: string[] | undefined;
+  let thinkingLevel: ThinkingLevel | undefined;
 
   let i = 0;
   while (i < args.length) {
@@ -147,6 +160,29 @@ function parseArgs(args: string[]): ParsedArgs {
         return { help: false, error: 'agent: --model requires a non-empty value' };
       }
       modelId = next;
+      i += 2;
+      continue;
+    }
+
+    if (arg === '--thinking' || arg === '--effort') {
+      const next = args[i + 1];
+      if (next === undefined) {
+        return { help: false, error: `agent: ${arg} requires a value` };
+      }
+      // A flag-looking value is rejected (e.g., `--thinking --help`).
+      if (next.length > 0 && next.startsWith('-')) {
+        return { help: false, error: `agent: ${arg} requires a value` };
+      }
+      if (next === '') {
+        return { help: false, error: `agent: ${arg} requires a non-empty value` };
+      }
+      if (!isThinkingLevel(next)) {
+        return {
+          help: false,
+          error: `agent: ${arg} must be one of: ${THINKING_LEVELS.join(', ')}`,
+        };
+      }
+      thinkingLevel = next;
       i += 2;
       continue;
     }
@@ -195,7 +231,7 @@ function parseArgs(args: string[]): ParsedArgs {
   }
 
   const [cwd, allowedCommandsRaw, prompt] = positionals;
-  return { help: false, cwd, allowedCommandsRaw, prompt, modelId, visiblePaths };
+  return { help: false, cwd, allowedCommandsRaw, prompt, modelId, visiblePaths, thinkingLevel };
 }
 
 /**
@@ -355,6 +391,9 @@ export function createAgentCommand(options: AgentCommandOptions = {}): Command {
     }
     if (parsed.visiblePaths !== undefined) {
       spawnOptions.visiblePaths = parsed.visiblePaths;
+    }
+    if (parsed.thinkingLevel !== undefined) {
+      spawnOptions.thinkingLevel = parsed.thinkingLevel;
     }
     // Forward the invoking shell's cwd. The bridge uses it as an
     // implicit read-only root (visiblePaths) ONLY when `--read-only`

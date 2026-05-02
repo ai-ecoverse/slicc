@@ -6,7 +6,7 @@ allowed-tools: bash, read_file, write_file, edit_file
 
 # Upgrade
 
-When SLICC boots and discovers that the bundled version (in `/shared/version.json`, baked at release time) differs from the version it was last seen running, it emits an `upgrade` lick to the cone. This skill describes how to react.
+When SLICC boots and discovers that the bundled version (baked into the build at release time from the root `package.json`) differs from the version it was last seen running, it emits an `upgrade` lick to the cone. This skill describes how to react.
 
 ## Event shape
 
