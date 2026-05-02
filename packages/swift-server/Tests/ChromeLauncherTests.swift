@@ -49,6 +49,12 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertTrue(args.contains("--user-data-dir=/tmp/profile"))
         XCTAssertTrue(args.contains("--disable-extensions-except=/tmp/ext"))
         XCTAssertTrue(args.contains("--load-extension=/tmp/ext"))
+        XCTAssertTrue(
+            args.contains(
+                "--enable-features=OptimizationGuideOnDeviceModel:on_device_model_image_input/true"
+            )
+        )
+        XCTAssertTrue(args.contains("--enable-blink-features=AIPromptAPIMultimodalInput"))
         XCTAssertEqual(args.last, "http://127.0.0.1:5710")
     }
 

@@ -101,6 +101,8 @@ describe('chrome-launch', () => {
       '--disable-crash-reporter',
       '--disable-background-tracing',
       '--user-data-dir=/repo/.qa/chrome/extension',
+      '--enable-features=OptimizationGuideOnDeviceModel:on_device_model_image_input/true',
+      '--enable-blink-features=AIPromptAPIMultimodalInput',
       '--disable-extensions-except=/repo/dist/extension',
       '--load-extension=/repo/dist/extension',
       'http://localhost:3000',

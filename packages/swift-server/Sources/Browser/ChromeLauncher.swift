@@ -149,6 +149,11 @@ struct ChromeLauncher: Sendable {
             "--disable-crash-reporter",
             "--disable-background-tracing",
             "--user-data-dir=\(userDataDir)",
+            // Chrome on-device Prompt API (Gemini Nano) — multimodal origin trial.
+            // Inert until window.LanguageModel.create() is invoked; the on-device
+            // model is downloaded lazily on first use.
+            "--enable-features=OptimizationGuideOnDeviceModel:on_device_model_image_input/true",
+            "--enable-blink-features=AIPromptAPIMultimodalInput",
         ]
 
         if let extensionPath, !extensionPath.isEmpty {
