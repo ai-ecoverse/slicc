@@ -1,122 +1,126 @@
 <!--
-Thanks for contributing to SLICC! Please fill out the sections below so reviewers
-(human and agent) have the context they need. Delete sections that don't apply,
-but keep the headings so the structure stays consistent.
+SLICC PR template. House style: `## Summary` + `## Why` + `## Test plan` /
+`## Verification`. Delete sections that don't apply; keep the headings you do
+fill in. The prompts in HTML comments are written to surface the things
+reviewers most often have to ask for after a draft lands.
 -->
+
+<!-- Stacked on / follow-up to: e.g. "Stacked on top of #545. Merge that first." -->
+<!-- Linked issue: "Fixes #NNN" / "Closes #NNN" — auto-closes on merge. -->
 
 ## Summary
 
 <!--
-1-3 sentences describing *what* changed and *why*. Focus on intent, not
-implementation detail (the diff covers that). If this fixes an issue, link it
-with `Fixes #123` so it auto-closes on merge.
+1-3 sentences. *What* changed, in plain English. The "why" goes in the next
+section. If this is a bug fix, say what the user saw before and what they see
+now (one sentence each).
 -->
 
-## Affected Packages / Floats
+## Why
 
 <!--
-Tick everything this PR touches. This helps reviewers know which CI matrix
-slices and runtime modes (CLI, extension, Electron, Sliccstart, cloud) need
-extra attention. See CLAUDE.md > "Module Map" for the full list.
+Motivation. Link issues, prior PRs, design docs, or transcripts.
+For bug fixes, include a minimal **Repro** the reviewer can run:
+  1. <step>
+  2. <step>
+  Expected: <…>
+  Actual:   <…>
+For new behavior, link the spec / plan / discussion.
 -->
 
-- [ ] `packages/webapp/` (UI, VFS, shell, CDP, tools, providers, skills, scoops)
-- [ ] `packages/chrome-extension/` (MV3 entry points, side panel, offscreen, service worker)
-- [ ] `packages/cloudflare-worker/` (tray hub, signaling, TURN credentials)
-- [ ] `packages/node-server/` (CLI / Electron server, Chrome launch, CDP proxy)
-- [ ] `packages/vfs-root/` (default VFS content, skills bundled to `/workspace`/`/shared`)
-- [ ] `packages/swift-launcher/` (`Sliccstart` native macOS launcher)
-- [ ] `packages/swift-server/` (`slicc-server` Hummingbird server)
-- [ ] `packages/dev-tools/` / `packages/assets/`
-- [ ] `docs/` only
-- [ ] CI / workflows / repo tooling
-
-**Floats exercised:** <!-- e.g. CLI, Chrome extension, Electron, Sliccstart, cloud -->
-
-## Type of Change
-
-- [ ] Bug fix (non-breaking change which fixes an issue)
-- [ ] New feature (non-breaking change which adds functionality)
-- [ ] Breaking change (fix or feature that changes existing behavior)
-- [ ] Refactor / internal cleanup (no user-visible behavior change)
-- [ ] Documentation only
-- [ ] CI / build / tooling
-- [ ] Skill, scoop, or lick change (`workspace/skills/`, scoops, webhooks, cron tasks)
-
-## Context
+## Approach / Implementation notes
 
 <!--
-Why is this change needed? Link to:
-- The issue, ticket, or discussion this came out of
-- Relevant prior PRs or design docs
-- Screenshots / screen recordings for UI changes (drag and drop into the
-  textarea — GitHub will host them)
-- Any deviation from the architecture in CLAUDE.md and the reasoning behind it
--->
+Only the things a reviewer can't infer from the diff. Pick the bullets that
+apply; delete the rest.
 
-## Implementation Notes
-
-<!--
-Call out anything a reviewer might miss from the diff alone:
-- Non-obvious design choices or trade-offs
-- New dependencies (note: confirm the lib is actually installed before using it,
-  per CLAUDE.md > "Coding conventions")
-- Cross-cutting concerns (CSP, Manifest V3 sandbox, two-shell extension model,
-  RestrictedFS path ACLs, dual-mode CLI/extension compatibility)
+- Layering: which subsystems / files own the new behavior
+- Non-obvious design choices and the alternatives you rejected (and why)
+- New runtime invariants, mutex/lock semantics, or ordering requirements
+- New dependencies (confirm the lib is already in package.json before adding)
 - Migration / data-shape changes for IndexedDB stores (`browser-coding-agent`,
-  VFS), session schemas, or persisted state
+  `slicc-fs`, session schemas, ledgers, localStorage keys)
 -->
 
-## Testing Done
+## Cross-cutting impact
 
 <!--
-Describe what you actually ran. Be specific: command + result, not "tested
-locally". The repo's CI gates are listed in CLAUDE.md > "Verification".
+This is the section reviewers ask for most often. Be explicit about what
+changes for code paths NOT directly named by this PR.
+
+- **Floats exercised**: CLI / Chrome extension / Electron / Sliccstart / worker
+- **Shell contexts** (extension only): side panel `WasmShell`, offscreen
+  `WasmShell`, sandbox iframe — name each one this PR touches or leaves alone.
+- **Other callers of the changed function/contract**: if you broadened a
+  try/catch, changed an error shape, or rewrote a helper, list the *unrelated*
+  callers you checked. ("This `catch` also catches `validateApiKey`'s 404; that
+  caller already tolerates rejection.")
+- **Persisted state side-effects**: does opening / surfacing / muting also write
+  to a ledger that survives reload? (e.g. `slicc-known-sprinkles`,
+  `slicc-open-sprinkles`, `selected-model`).
+- **Async lifecycle**: disposal guards on `.then(...)` after fetch, listener
+  removal on `close`/`error`, debounce vs real `setTimeout` in tests, UTF-8 /
+  multi-byte boundaries when scrubbing or chunking streams.
+- **Security**: secrets in shell echo / logs / process args, XSS via
+  `innerHTML` of attacker-controlled SVG, CSP/MV3 sandbox boundary, deploy-key
+  scope across CI steps.
+- **Bundle size**: importing a full registry (e.g. `lucide` icons) into the UI
+  bundle — quantify if non-trivial.
 -->
 
-- [ ] `npx prettier --write <changed-files>` (CI runs `prettier --check .` — do **not** skip)
+## Test plan
+
+<!--
+Be specific: command + result, not "tested locally". Pre-existing failures are
+fine — name them so reviewers don't conflate them with your changes.
+-->
+
+- [ ] `npx prettier --write <changed-files>` — CI runs `prettier --check .` as a lint gate
 - [ ] `npm run typecheck`
-- [ ] `npm run test`
+- [ ] `npm run test` — `<N>` passing, no new failures
 - [ ] `npm run build`
 - [ ] `npm run build -w @slicc/chrome-extension`
-- [ ] Added or updated tests in `packages/*/tests/` mirroring the changed `src/` paths
-- [ ] Manually verified in CLI mode (`npm run dev`)
-- [ ] Manually verified in Chrome extension mode (loaded `dist/extension/`)
-- [ ] Manually verified in Electron / Sliccstart (if relevant)
+- [ ] **New / changed behavior is covered by a unit test** in
+      `packages/*/tests/` mirroring the changed `src/` path
+      (e.g. `npx vitest run packages/webapp/tests/<area>/<file>.test.ts`)
+- [ ] Manual smoke (CLI): `npm run dev` + …
+- [ ] Manual smoke (extension): load unpacked `dist/extension/` + …
+- [ ] Manual smoke (Electron / Sliccstart / worker) — if relevant
 - [ ] N/A — explain below
 
-**Manual verification steps:**
+**Pre-existing failures** (verified against `main`, unrelated to this PR):
 
 <!--
-Step-by-step repro for reviewers. For UI changes, include before/after
-screenshots. For agent / scoop changes, include the prompt you tested with and
-a snippet of the resulting transcript.
+e.g. "17 failures in chat-panel-attachments / telemetry / chat-panel-telemetry
+reproduce on `main` at <sha> — unrelated localStorage issues in the test env."
 -->
 
 ## Documentation
 
-<!-- See CLAUDE.md > "Documentation" for the three-tier doc model. -->
+<!-- Pick the tier(s) that apply. See CLAUDE.md > "Documentation". -->
 
-- [ ] `README.md` updated (user-facing behavior changed)
-- [ ] Relevant `CLAUDE.md` updated (developer conventions / package architecture changed)
-- [ ] `docs/` updated (agent reference: tools, commands, skills, patterns)
-- [ ] `packages/vfs-root/shared/CLAUDE.md` updated (agent-facing instructions changed)
+- [ ] `README.md` (user-facing behavior)
+- [ ] Relevant `CLAUDE.md` (developer / package architecture)
+- [ ] `docs/` (agent reference: tools, commands, skills, patterns)
+- [ ] `packages/vfs-root/shared/CLAUDE.md` or `packages/vfs-root/workspace/skills/<skill>/SKILL.md` (agent-facing)
 - [ ] No documentation changes needed
 
-## Risk & Rollout
+## Risk & rollback
 
 <!--
-- What's the blast radius if this regresses? (single float vs. all floats,
-  reversible vs. data migration, etc.)
-- Any feature flags, kill switches, or config knobs introduced?
-- Anything reviewers should manually verify before merge that CI cannot catch
-  (e.g. CDP behavior in a real Chrome, extension permissions, OAuth flow)?
+- Blast radius if this regresses (single float / all floats / data migration).
+- Feature flags, kill switches, or env knobs introduced.
+- How to roll back: revert this PR cleanly? Need a follow-up to undo a
+  persisted state migration?
+- Anything CI cannot catch (real Chrome CDP behavior, OAuth round-trip,
+  Keychain prompt z-order, mounted-folder TCC) that the reviewer should verify
+  by hand before approving.
 -->
 
 ## Checklist
 
 - [ ] Commits are focused and package-local where possible
 - [ ] No hand-edited files under `dist/`
-- [ ] No secrets, credentials, API keys, or tokens in the diff (incl. logs and fixtures)
-- [ ] Public API / tool / shell command changes are intentional and documented
-- [ ] Co-authored-by trailers preserved if pairing with another agent or human
+- [ ] No secrets, credentials, OAuth client secrets, or tokens in the diff (incl. logs, fixtures, `.env*`, snapshots)
+- [ ] Public API / tool / shell-command / lick-channel changes are intentional and reflected in docs
+- [ ] If this changes a contract used by other floats (CLI ↔ extension ↔ tray), I checked the followers/leader/offscreen paths
