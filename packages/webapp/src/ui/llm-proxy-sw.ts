@@ -36,6 +36,7 @@
 /// <reference lib="webworker" />
 
 import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-headers.js';
+import { createLlmProxyFetchErrorResponse } from './llm-proxy-errors.js';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -113,29 +114,40 @@ async function forwardThroughProxy(req: Request): Promise<Response> {
   }
   proxyHeaders.set('X-Target-URL', targetUrl);
 
-  // Build the proxied request. Pass the body through as-is so that
-  // streaming request bodies (rare but legal — e.g. file uploads,
-  // chunked transfer-encoded fetches) flow without being collected
-  // into memory. `duplex: 'half'` is required by the spec when the
-  // body is a ReadableStream.
-  const init: RequestInit & { duplex?: 'half' } = {
-    method: req.method,
-    headers: proxyHeaders,
-    cache: 'no-store',
-    credentials: 'omit',
-    redirect: 'manual',
-    signal: req.signal,
-    body: req.method === 'GET' || req.method === 'HEAD' ? undefined : req.body,
-    duplex: req.method === 'GET' || req.method === 'HEAD' ? undefined : 'half',
-  };
+  try {
+    const body = await readForwardBody(req);
+    const init: RequestInit = {
+      method: req.method,
+      headers: proxyHeaders,
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'manual',
+      signal: req.signal,
+      body,
+    };
 
-  const response = await fetch(FETCH_PROXY_PATH, init);
-  // Return the proxy response unchanged. Its body is a streamed
-  // ReadableStream that pipes upstream chunks back to the page caller
-  // with no extra buffering — preserving SSE token-by-token UX for LLM
-  // completions. Status, headers (including X-Proxy-Set-Cookie and
-  // X-Proxy-Error), and body all pass through verbatim.
-  return response;
+    const response = await fetch(FETCH_PROXY_PATH, init);
+    // Return the proxy response unchanged. Its body is a streamed
+    // ReadableStream that pipes upstream chunks back to the page caller
+    // with no extra buffering — preserving SSE token-by-token UX for LLM
+    // completions. Status, headers (including X-Proxy-Set-Cookie and
+    // X-Proxy-Error), and body all pass through verbatim.
+    return response;
+  } catch (error) {
+    return createLlmProxyFetchErrorResponse(error);
+  }
+}
+
+async function readForwardBody(req: Request): Promise<BodyInit | undefined> {
+  if (req.method === 'GET' || req.method === 'HEAD') return undefined;
+
+  // Do not forward req.body directly here. Chrome can intermittently
+  // reject the SW's same-origin proxy fetch when we hand it the intercepted
+  // request stream, yielding an opaque "Failed to fetch" before
+  // /api/fetch-proxy sees the request. LLM provider requests are JSON
+  // payloads, so buffering the body is the more reliable transport.
+  const body = await req.arrayBuffer();
+  return body.byteLength > 0 ? body : undefined;
 }
 
 // Reference unused import so it survives tree-shaking (the helper is
