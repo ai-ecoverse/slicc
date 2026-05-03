@@ -212,6 +212,17 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 - Add or update tests for behavior changes.
 - TypeScript tests live in `packages/*/tests/`, mirrored by subsystem.
 - See `docs/testing.md` for patterns and command selection.
+- **Coverage thresholds are enforced in CI** via `vitest --coverage`. Each
+  package has a per-project minimum (configured in `package.json` as
+  `test:coverage:<package>`). New code must keep coverage at or above the
+  current floor — CI fails if any of statements/branches/functions/lines
+  drops below the threshold for that package. Run
+  `npm run test:coverage:<package>` locally before pushing changes that
+  remove or restructure code paths. Per-package floors:
+  - `cloudflare-worker`: 75% lines/statements, 65% branches, 85% functions
+  - `node-server`: 65% lines/statements/functions, 55% branches
+  - `chrome-extension`: 55% lines/statements, 45% branches, 60% functions
+  - `webapp`: global default 50% lines/statements/functions, 40% branches
 
 ### Documentation
 
@@ -229,6 +240,7 @@ These are the repo's CI gates and the default full verification pass before comm
 npx prettier --write <changed-files>   # Format FIRST — CI fails on unformatted code
 npm run typecheck
 npm run test
+npm run test:coverage                  # Enforces minimum coverage thresholds
 npm run build
 npm run build -w @slicc/chrome-extension
 ```

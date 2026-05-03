@@ -123,6 +123,17 @@ jobs:
         run: npx vitest run --project webapp
         env:
           NODE_OPTIONS: '--max-old-space-size=6144'
+      - name: Coverage threshold gate
+        run: npm run test:coverage:webapp
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-webapp
+          path: coverage/
+          if-no-files-found: ignore
       - name: Build
         run: npm run build -w @slicc/webapp
       - name: Check bundle for Node-only APIs
@@ -181,6 +192,15 @@ jobs:
         run: tsc --noEmit -p tsconfig.cli.json
       - name: Test
         run: npx vitest run --project node-server
+      - name: Coverage threshold gate
+        run: npm run test:coverage:node-server
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-node-server
+          path: coverage/
+          if-no-files-found: ignore
       - name: Build
         run: npm run build -w @slicc/node-server
 
@@ -202,6 +222,15 @@ jobs:
       - run: npm ci
       - name: Test
         run: npx vitest run --project chrome-extension
+      - name: Coverage threshold gate
+        run: npm run test:coverage:chrome-extension
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-chrome-extension
+          path: coverage/
+          if-no-files-found: ignore
       - name: Build webapp (dependency)
         run: npm run build -w @slicc/webapp
       - name: Build extension
@@ -262,6 +291,15 @@ jobs:
         run: tsc --noEmit -p tsconfig.worker.json
       - name: Test
         run: npx vitest run --project cloudflare-worker
+      - name: Coverage threshold gate
+        run: npm run test:coverage:cloudflare-worker
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-cloudflare-worker
+          path: coverage/
+          if-no-files-found: ignore
 
       # Deploy to staging on PRs (not forks) and pushes to main
       - name: Deploy staging worker (attempt 1)
