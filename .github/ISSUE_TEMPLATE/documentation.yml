@@ -1,0 +1,68 @@
+name: Documentation issue
+description: Report incorrect, missing, or confusing documentation in README, CLAUDE.md, AGENTS.md, or `docs/`.
+title: '[docs]: '
+labels: ['documentation', 'needs-triage']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping us keep the docs accurate. Both human and agent readers depend on them.
+
+  - type: dropdown
+    id: doc_tier
+    attributes:
+      label: Which tier of docs?
+      description: SLICC documents itself in three tiers — please pick the one this issue is about.
+      options:
+        - 'Public — README.md / website'
+        - 'Development — root `CLAUDE.md` / `AGENTS.md` / package `CLAUDE.md`'
+        - 'Agent reference — `docs/`'
+        - 'Skills — `/workspace/skills/*/SKILL.md`'
+        - 'Inline / JSDoc / TSDoc'
+        - 'Other'
+    validations:
+      required: true
+
+  - type: input
+    id: location
+    attributes:
+      label: File path or URL
+      description: Where exactly is the issue? Provide a path within the repo or a public URL.
+      placeholder: 'packages/webapp/CLAUDE.md or docs/architecture.md#extension'
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's wrong, missing, or unclear?
+      description: Quote the current text if applicable, and explain what is incorrect, ambiguous, or missing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested change
+      description: Optional. If you already have a draft, paste it here or link to a PR.
+
+  - type: dropdown
+    id: audience
+    attributes:
+      label: Who is most affected by this?
+      multiple: true
+      options:
+        - End users running SLICC
+        - Contributors / developers
+        - AI agents reading the repo (Claude Code, Droid, etc.)
+        - Skill authors
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I have verified the issue is on the latest `main` branch (or have noted the version below).
+          required: true

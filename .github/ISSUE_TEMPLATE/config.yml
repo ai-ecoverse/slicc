@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discussions & Q&A
+    url: https://github.com/ai-ecoverse/slicc/discussions
+    about: Ask questions, share what you're building, or chat with the community before opening an issue.
+  - name: Releases
+    url: https://github.com/ai-ecoverse/slicc/releases
+    about: Grab the latest macOS `.dmg`, npm release, or extension build.
+  - name: Security disclosures
+    url: https://github.com/ai-ecoverse/slicc/security/advisories/new
+    about: Report vulnerabilities privately via GitHub Security Advisories. Please do NOT open public issues for security problems.

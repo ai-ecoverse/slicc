@@ -1,0 +1,75 @@
+name: Skill proposal
+description: Propose a new skill (`SKILL.md`) for SLICC's `/workspace/skills/` or compatible `.agents` / `.claude` skills.
+title: '[skill]: '
+labels: ['skill', 'enhancement', 'needs-triage']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Skills teach SLICC how to perform challenging tasks without changing core code. Native skills live in `packages/vfs-root/workspace/skills/`. Compatible skills are auto-discovered from any reachable `.agents/skills/*/SKILL.md` or `.claude/skills/*/SKILL.md`.
+
+        Before opening this issue, consider whether you can simply send a PR adding the skill directly.
+
+  - type: input
+    id: name
+    attributes:
+      label: Skill name
+      description: Short, kebab-cased identifier (e.g., `pdf-extract`, `slack-triage`).
+      placeholder: my-skill
+    validations:
+      required: true
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: What does this skill do?
+      description: One-paragraph summary of the capability. What problem does it solve, and when should the cone reach for it?
+    validations:
+      required: true
+
+  - type: textarea
+    id: triggers
+    attributes:
+      label: When should the agent use it?
+      description: Describe the trigger conditions / user prompts that should lead the agent to invoke this skill.
+      placeholder: 'When the user asks to extract structured data from a PDF...'
+    validations:
+      required: true
+
+  - type: textarea
+    id: tools
+    attributes:
+      label: Required tools / shell commands
+      description: List the SLICC shell commands, browser APIs, or external dependencies the skill relies on. Flag anything that doesn't already exist.
+      placeholder: |
+        - `pdftk`, `convert` (already available)
+        - new shell helper: `pdf-extract <input> <out>`
+
+  - type: dropdown
+    id: skill_type
+    attributes:
+      label: Skill type
+      options:
+        - 'Native (`/workspace/skills/`) — install-managed'
+        - 'Compatibility (`.agents/skills/` or `.claude/skills/`) — read-only'
+        - 'Not sure / need guidance'
+    validations:
+      required: true
+
+  - type: textarea
+    id: draft
+    attributes:
+      label: Draft `SKILL.md` (optional)
+      description: Paste a draft, or link to a fork/PR if you already have one.
+      render: markdown
+
+  - type: dropdown
+    id: contribution
+    attributes:
+      label: Are you willing to contribute the skill?
+      options:
+        - "Yes, I'd like to send a PR"
+        - 'Yes, with guidance'
+        - 'No, just suggesting'
+    validations:
+      required: true
