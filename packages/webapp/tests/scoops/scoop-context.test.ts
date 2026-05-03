@@ -1312,6 +1312,33 @@ describe('ScoopContext stream error retries', () => {
       vi.useRealTimers();
     }
   });
+
+  it('surfaces stream errors without retrying once partial deltas have streamed', async () => {
+    let attempts = 0;
+    injectMockAgent(ctx, async () => {
+      attempts += 1;
+      (ctx as any).handleAgentEvent({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'partial answer ' },
+      });
+      (ctx as any).handleAgentEvent({
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'partial answer ' }],
+            errorMessage: 'Failed to fetch',
+          },
+        ],
+      });
+    });
+
+    await ctx.prompt('hello');
+
+    expect(attempts).toBe(1);
+    expect(callbacks.onError).toHaveBeenCalledWith('Failed to fetch');
+    expect(callbacks.onFatalError).not.toHaveBeenCalled();
+  });
 });
 
 describe('ScoopContext image error recovery', () => {

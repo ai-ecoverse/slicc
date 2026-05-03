@@ -841,11 +841,17 @@ export class ScoopContext {
               this.recoverFromOverflow(messages);
               break;
             }
-            if (!this.isRecovering && this.isProcessing) {
+            if (!this.isRecovering && this.isProcessing && !this.didStreamDeltas) {
+              // Transparent retry is only safe when no partial assistant
+              // text has been streamed yet. Once deltas have hit the UI/
+              // orchestrator buffers, retrying would render the new
+              // response on top of the broken one (or as a duplicate
+              // bubble), so surface the error instead.
               this.promptStreamErrorMessage = errorMsg;
               break;
             }
-            // Already recovering, or no prompt() retry loop is active — surface error.
+            // Already recovering, no prompt() retry loop is active, or a
+            // partial response has already been streamed — surface error.
             this.isRecovering = false;
             this.callbacks.onError(errorMsg);
           } else {

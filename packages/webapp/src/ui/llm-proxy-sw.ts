@@ -36,7 +36,6 @@
 /// <reference lib="webworker" />
 
 import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-headers.js';
-import { createLlmProxyFetchErrorResponse } from './llm-proxy-errors.js';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -114,28 +113,30 @@ async function forwardThroughProxy(req: Request): Promise<Response> {
   }
   proxyHeaders.set('X-Target-URL', targetUrl);
 
-  try {
-    const body = await readForwardBody(req);
-    const init: RequestInit = {
-      method: req.method,
-      headers: proxyHeaders,
-      cache: 'no-store',
-      credentials: 'omit',
-      redirect: 'manual',
-      signal: req.signal,
-      body,
-    };
+  const body = await readForwardBody(req);
+  const init: RequestInit = {
+    method: req.method,
+    headers: proxyHeaders,
+    cache: 'no-store',
+    credentials: 'omit',
+    redirect: 'manual',
+    signal: req.signal,
+    body,
+  };
 
-    const response = await fetch(FETCH_PROXY_PATH, init);
-    // Return the proxy response unchanged. Its body is a streamed
-    // ReadableStream that pipes upstream chunks back to the page caller
-    // with no extra buffering — preserving SSE token-by-token UX for LLM
-    // completions. Status, headers (including X-Proxy-Set-Cookie and
-    // X-Proxy-Error), and body all pass through verbatim.
-    return response;
-  } catch (error) {
-    return createLlmProxyFetchErrorResponse(error);
-  }
+  // Let any fetch rejection (including AbortError from req.signal and the
+  // intermittent Chrome SW "Failed to fetch") propagate to the page caller
+  // unchanged. Wrapping these into a synthetic 502 here would (a) convert
+  // user-/timeout-cancellations into infrastructure errors and (b) break
+  // unrelated callers like validateApiKey() which depend on rejected
+  // fetches to classify transient outages as `kind: 'skipped'`.
+  const response = await fetch(FETCH_PROXY_PATH, init);
+  // Return the proxy response unchanged. Its body is a streamed
+  // ReadableStream that pipes upstream chunks back to the page caller
+  // with no extra buffering — preserving SSE token-by-token UX for LLM
+  // completions. Status, headers (including X-Proxy-Set-Cookie and
+  // X-Proxy-Error), and body all pass through verbatim.
+  return response;
 }
 
 async function readForwardBody(req: Request): Promise<BodyInit | undefined> {
