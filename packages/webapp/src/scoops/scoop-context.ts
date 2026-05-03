@@ -112,7 +112,9 @@ export function isRetryableError(msg: string): boolean {
       msg
     ) ||
     // Network issues
-    /network.*error|connection.*refused|timeout|econnreset|socket.*hang.*up/i.test(msg) ||
+    /network.*error|failed to fetch|connection.*refused|timeout|econnreset|socket.*hang.*up/i.test(
+      msg
+    ) ||
     // Temporary overload
     /overloaded|temporarily.*unavailable|try.*again/i.test(msg)
   );
@@ -203,6 +205,7 @@ export class ScoopContext {
   private isProcessing = false;
   private disposed = false;
   private didStreamDeltas = false;
+  private promptStreamErrorMessage: string | null = null;
   private unsubscribe: (() => void) | null = null;
   /** Aborts the in-flight prompt() retry loop and any pending backoff sleep. */
   private promptAbortController: AbortController | null = null;
@@ -505,7 +508,13 @@ export class ScoopContext {
         this.didStreamDeltas = false;
 
         try {
+          this.promptStreamErrorMessage = null;
           await agent.prompt(text, images);
+          if (this.promptStreamErrorMessage) {
+            const streamError = this.promptStreamErrorMessage;
+            this.promptStreamErrorMessage = null;
+            throw new Error(streamError);
+          }
           // Success - exit retry loop
           lastError = null;
           break;
@@ -832,7 +841,17 @@ export class ScoopContext {
               this.recoverFromOverflow(messages);
               break;
             }
-            // Already recovering (either type) — surface error, reset flag
+            if (!this.isRecovering && this.isProcessing && !this.didStreamDeltas) {
+              // Transparent retry is only safe when no partial assistant
+              // text has been streamed yet. Once deltas have hit the UI/
+              // orchestrator buffers, retrying would render the new
+              // response on top of the broken one (or as a duplicate
+              // bubble), so surface the error instead.
+              this.promptStreamErrorMessage = errorMsg;
+              break;
+            }
+            // Already recovering, no prompt() retry loop is active, or a
+            // partial response has already been streamed — surface error.
             this.isRecovering = false;
             this.callbacks.onError(errorMsg);
           } else {

@@ -113,22 +113,23 @@ async function forwardThroughProxy(req: Request): Promise<Response> {
   }
   proxyHeaders.set('X-Target-URL', targetUrl);
 
-  // Build the proxied request. Pass the body through as-is so that
-  // streaming request bodies (rare but legal — e.g. file uploads,
-  // chunked transfer-encoded fetches) flow without being collected
-  // into memory. `duplex: 'half'` is required by the spec when the
-  // body is a ReadableStream.
-  const init: RequestInit & { duplex?: 'half' } = {
+  const body = await readForwardBody(req);
+  const init: RequestInit = {
     method: req.method,
     headers: proxyHeaders,
     cache: 'no-store',
     credentials: 'omit',
     redirect: 'manual',
     signal: req.signal,
-    body: req.method === 'GET' || req.method === 'HEAD' ? undefined : req.body,
-    duplex: req.method === 'GET' || req.method === 'HEAD' ? undefined : 'half',
+    body,
   };
 
+  // Let any fetch rejection (including AbortError from req.signal and the
+  // intermittent Chrome SW "Failed to fetch") propagate to the page caller
+  // unchanged. Wrapping these into a synthetic 502 here would (a) convert
+  // user-/timeout-cancellations into infrastructure errors and (b) break
+  // unrelated callers like validateApiKey() which depend on rejected
+  // fetches to classify transient outages as `kind: 'skipped'`.
   const response = await fetch(FETCH_PROXY_PATH, init);
   // Return the proxy response unchanged. Its body is a streamed
   // ReadableStream that pipes upstream chunks back to the page caller
@@ -136,6 +137,18 @@ async function forwardThroughProxy(req: Request): Promise<Response> {
   // completions. Status, headers (including X-Proxy-Set-Cookie and
   // X-Proxy-Error), and body all pass through verbatim.
   return response;
+}
+
+async function readForwardBody(req: Request): Promise<BodyInit | undefined> {
+  if (req.method === 'GET' || req.method === 'HEAD') return undefined;
+
+  // Do not forward req.body directly here. Chrome can intermittently
+  // reject the SW's same-origin proxy fetch when we hand it the intercepted
+  // request stream, yielding an opaque "Failed to fetch" before
+  // /api/fetch-proxy sees the request. LLM provider requests are JSON
+  // payloads, so buffering the body is the more reliable transport.
+  const body = await req.arrayBuffer();
+  return body.byteLength > 0 ? body : undefined;
 }
 
 // Reference unused import so it survives tree-shaking (the helper is
