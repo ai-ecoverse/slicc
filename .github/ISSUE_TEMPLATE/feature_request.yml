@@ -1,0 +1,58 @@
+name: Feature request
+description: Propose a new capability — shell command, tool, sprinkle, UI affordance, etc.
+title: 'feat: '
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening, a quick gut-check against SLICC's principles:
+        1. **Virtual CLIs over dedicated tools** — could this be a shell command instead of a new tool?
+        2. **Browser-first** — can it run client-side? Server only does what browsers physically cannot.
+        3. **Skills over hardcoded features** — could it ship as a `SKILL.md` (use the *Skill proposal* template instead)?
+
+        If the answer to any of those is "yes, probably," consider that path first.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is painful or impossible today? Who is it painful for?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would the feature look like? CLI surface, UI affordance, API shape, prompt — whatever applies.
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: Example usage (optional)
+      description: A shell command, chat prompt, code snippet, or screenshot showing what calling it would feel like.
+      render: markdown
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface (optional)
+      multiple: true
+      options:
+        - Cone (orchestrator)
+        - Scoops
+        - Shell / supplemental commands
+        - Tools (`read_file`, `bash`, `feed_scoop`, etc.)
+        - VFS / mount
+        - CDP / playwright-cli
+        - Sprinkles / dips
+        - Skills system
+        - UI (chat, terminal, files)
+        - Chrome extension
+        - CLI / Electron / Sliccstart
+        - Cloudflare worker / tray hub
+        - Provider / model integration
+        - Other

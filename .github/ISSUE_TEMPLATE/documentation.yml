@@ -1,0 +1,42 @@
+name: Documentation issue
+description: Incorrect, missing, or confusing docs in README, `CLAUDE.md`, `AGENTS.md`, `docs/`, or skill `SKILL.md` files.
+title: 'docs: '
+labels: ['documentation']
+body:
+  - type: input
+    id: location
+    attributes:
+      label: File or URL
+      description: Path within the repo, or a public URL.
+      placeholder: 'packages/webapp/CLAUDE.md or docs/architecture.md#extension'
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's wrong, missing, or unclear?
+      description: Quote the current text if helpful, then explain what's incorrect or ambiguous.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested change (optional)
+      description: A draft, a sketch, or a link to a PR.
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Doc tier
+      description: SLICC keeps three tiers — public, developer, agent reference. Pick the closest.
+      options:
+        - 'Public — README.md / website'
+        - 'Developer — root `CLAUDE.md` / `AGENTS.md` / package `CLAUDE.md`'
+        - 'Agent reference — `docs/`'
+        - 'Skills — `/workspace/skills/*/SKILL.md`'
+        - 'Inline / JSDoc'
+        - 'Other'
+    validations:
+      required: true
