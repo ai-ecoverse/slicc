@@ -1,114 +1,110 @@
 name: Bug report
-description: Something in SLICC broke, misbehaved, or otherwise melted. File a structured bug report.
-title: '[bug]: '
-labels: ['bug', 'needs-triage']
+description: Something in SLICC broke, misbehaved, or otherwise melted.
+title: 'bug: '
+labels: ['bug']
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to file a bug report. Clear repro steps and environment details help us (and the cone) debug far faster.
+        Filing a bug. Two notes:
+        - Most existing bug reports here open with a short **Summary**, then **Reproduction** (often a single shell command or chat prompt), then a **Suspected location** with a `file.ts:line` pointer or a code snippet. Writing yours that way is great — feel free to ignore the sub-fields below if your free-form body covers them.
+        - For security vulnerabilities use [private GitHub Security Advisories](https://github.com/ai-ecoverse/slicc/security/advisories/new), not a public issue.
 
-        Before submitting, please:
-        - Search [existing issues](https://github.com/ai-ecoverse/slicc/issues?q=is%3Aissue) to avoid duplicates.
-        - If this is a security issue, do NOT open a public issue — see `SECURITY.md` if present, or contact the maintainers directly.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One paragraph. What broke, where, and what you observed instead of what you expected.
+    validations:
+      required: true
 
   - type: dropdown
     id: float
     attributes:
       label: Float (runtime)
-      description: Which SLICC runtime were you using when the bug occurred?
+      description: Where did it happen?
+      multiple: true
       options:
-        - Standalone CLI (`npm run dev` / npx sliccy)
+        - Standalone CLI / `npm run dev`
         - Chrome extension (side panel)
         - Electron / Sliccstart (macOS app)
         - Cloudflare worker (tray hub)
-        - Multiple / not sure
+        - Not sure
     validations:
       required: true
 
-  - type: input
-    id: version
+  - type: dropdown
+    id: surface
     attributes:
-      label: SLICC version
-      description: Output of `sliccy --version`, the npm version, or commit SHA you built from.
-      placeholder: '2.26.1 / commit abc1234'
-    validations:
-      required: true
-
-  - type: input
-    id: os
-    attributes:
-      label: Operating system
-      placeholder: 'macOS 15.4 / Windows 11 / Ubuntu 24.04'
-    validations:
-      required: true
-
-  - type: input
-    id: browser
-    attributes:
-      label: Browser & version
-      description: Which Chrome/Chromium build and version. For the extension, also note Manifest V3 build channel.
-      placeholder: 'Chrome 138.0.7204.92 (Stable)'
-    validations:
-      required: true
-
-  - type: input
-    id: node
-    attributes:
-      label: Node.js version
-      description: Output of `node --version`. SLICC requires Node >= 22 LTS.
-      placeholder: 'v22.11.0'
-
-  - type: textarea
-    id: summary
-    attributes:
-      label: What happened?
-      description: A clear, concise description of the bug. What did you observe?
-      placeholder: 'When I clicked X, the cone replied with Y instead of Z.'
-    validations:
-      required: true
-
-  - type: textarea
-    id: expected
-    attributes:
-      label: What did you expect to happen?
-    validations:
-      required: true
+      label: Surface (best guess is fine)
+      description: Which subsystem(s) seem involved? Select all that apply. Leave blank if unsure.
+      multiple: true
+      options:
+        - Cone (main agent / orchestrator)
+        - Scoop (sub-agent / sandbox)
+        - Shell / WasmShell / supplemental commands
+        - CDP / playwright-cli / browser automation
+        - VFS / mount / File System Access
+        - Git (isomorphic-git)
+        - Sprinkles / dips (`.shtml` rendering)
+        - Skills (`/workspace/skills/`, `.agents`, `.claude`)
+        - Provider / model / API key handling
+        - UI (chat panel, terminal, files, tabs)
+        - Build / dev server / Vite HMR
+        - Other / not sure
 
   - type: textarea
     id: repro
     attributes:
-      label: Steps to reproduce
-      description: Minimal, deterministic steps. Include shell commands, prompts, or VFS paths where relevant.
+      label: Reproduction
+      description: |
+        Whatever lets a maintainer hit it. A shell command, a chat prompt, a code snippet, or numbered steps — all fine. If it only repros from a specific worktree layout or VFS state, say so.
       placeholder: |
-        1. Run `npm run dev`
-        2. In the chat panel, prompt: "..."
-        3. Observe the terminal output
+        e.g.
+
+        ```
+        playwright-cli snapshot
+        ```
+        from inside a scoop with a single tab open → "Error: --tab <targetId> is required"
       render: markdown
     validations:
       required: true
 
   - type: textarea
-    id: logs
+    id: location
     attributes:
-      label: Logs / console output
+      label: Suspected root cause / location (optional)
       description: |
-        Paste relevant logs from the browser DevTools console, the Node server, or the offscreen document.
-        Redact any secrets (PATs, API keys, OAuth tokens) before pasting.
-      render: shell
+        If you've already narrowed it down, paste the file/line, the offending code, or your hypothesis. Most existing reports do this — it makes triage dramatically faster.
+      placeholder: |
+        `packages/webapp/src/scoops/scoop-context.ts:246` casts `RestrictedFS as VirtualFS`, but `RestrictedFS` is missing `isPathUnderMount()`.
+      render: markdown
 
   - type: textarea
-    id: additional
+    id: logs
     attributes:
-      label: Additional context
-      description: Screenshots, recordings, related issues, or anything else useful.
+      label: Logs / error output (optional)
+      description: Paste relevant lines from the DevTools console, the Node server, or the offscreen document. Strip secrets first.
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: SLICC version / commit (optional)
+      description: '`sliccy --version`, an npm version, or a commit SHA.'
+      placeholder: '2.26.1 / commit cbcdb280'
+
+  - type: input
+    id: env
+    attributes:
+      label: OS / browser / Node (optional)
+      description: Only needed if you suspect platform sensitivity.
+      placeholder: 'macOS 15.4, Chrome 138.0.7204.92, Node v22.11.0'
 
   - type: checkboxes
     id: confirm
     attributes:
-      label: Pre-flight checks
+      label: Pre-flight
       options:
-        - label: I have searched existing issues for duplicates.
-          required: true
-        - label: I have removed any secrets, tokens, or sensitive data from logs and screenshots.
+        - label: I have stripped secrets, tokens, and PATs from logs and screenshots.
           required: true

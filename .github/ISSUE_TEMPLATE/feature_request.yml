@@ -1,24 +1,23 @@
 name: Feature request
-description: Suggest a new capability, command, scoop tool, or skill for SLICC.
-title: '[feature]: '
-labels: ['enhancement', 'needs-triage']
+description: Propose a new capability — shell command, tool, sprinkle, UI affordance, etc.
+title: 'feat: '
+labels: ['enhancement']
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for proposing an idea! Please remember SLICC's principles before suggesting an implementation:
+        Before opening, a quick gut-check against SLICC's principles:
+        1. **Virtual CLIs over dedicated tools** — could this be a shell command instead of a new tool?
+        2. **Browser-first** — can it run client-side? Server only does what browsers physically cannot.
+        3. **Skills over hardcoded features** — could it ship as a `SKILL.md` (use the *Skill proposal* template instead)?
 
-        1. **Virtual CLIs over dedicated tools** — prefer shell commands; only add bespoke tools if bash cannot do it.
-        2. **Browser-first** — keep state client-side (IndexedDB). Server only does what browsers physically cannot.
-        3. **Skills over hardcoded features** — new agent capabilities should usually be `SKILL.md` files, not core code changes.
-
-        If your idea fits one of those existing surfaces, consider opening a skill PR or shell-command proposal instead.
+        If the answer to any of those is "yes, probably," consider that path first.
 
   - type: textarea
     id: problem
     attributes:
-      label: Problem / motivation
-      description: What user-facing problem are you trying to solve? Who is affected, and what is currently painful?
+      label: Problem
+      description: What is painful or impossible today? Who is it painful for?
     validations:
       required: true
 
@@ -26,64 +25,34 @@ body:
     id: proposal
     attributes:
       label: Proposed solution
-      description: Describe the feature you'd like. Include UX, CLI surface, or API shape if you have one in mind.
+      description: What would the feature look like? CLI surface, UI affordance, API shape, prompt — whatever applies.
     validations:
       required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: Example usage (optional)
+      description: A shell command, chat prompt, code snippet, or screenshot showing what calling it would feel like.
+      render: markdown
 
   - type: dropdown
     id: surface
     attributes:
-      label: Which surface does this affect?
+      label: Surface (optional)
       multiple: true
       options:
-        - Cone / Orchestrator (`packages/webapp/src/scoops/`)
-        - Scoops / sub-agents
-        - Shell command (`packages/webapp/src/shell/`)
+        - Cone (orchestrator)
+        - Scoops
+        - Shell / supplemental commands
         - Tools (`read_file`, `bash`, `feed_scoop`, etc.)
-        - VFS / FS (`packages/webapp/src/fs/`)
-        - CDP / browser automation (`packages/webapp/src/cdp/`)
-        - UI (chat, terminal, files, sprinkles, dips)
-        - Chrome extension (`packages/chrome-extension/`)
-        - CLI / Electron server (`packages/node-server/`)
-        - Cloudflare worker / tray hub (`packages/cloudflare-worker/`)
-        - Sliccstart launcher (`packages/swift-launcher/`)
-        - Skills (`/workspace/skills/`)
+        - VFS / mount
+        - CDP / playwright-cli
+        - Sprinkles / dips
+        - Skills system
+        - UI (chat, terminal, files)
+        - Chrome extension
+        - CLI / Electron / Sliccstart
+        - Cloudflare worker / tray hub
         - Provider / model integration
-        - Documentation
         - Other
-    validations:
-      required: true
-
-  - type: textarea
-    id: alternatives
-    attributes:
-      label: Alternatives considered
-      description: What other approaches did you consider, and why did you discard them? Could this be a skill or shell command instead?
-
-  - type: textarea
-    id: examples
-    attributes:
-      label: Example usage
-      description: Show what calling this feature would look like (chat prompt, shell command, code snippet, screenshot, etc.).
-      render: markdown
-
-  - type: dropdown
-    id: contribution
-    attributes:
-      label: Are you willing to contribute?
-      options:
-        - "Yes, I'd like to send a PR"
-        - 'Yes, with guidance'
-        - 'No, just suggesting'
-    validations:
-      required: true
-
-  - type: checkboxes
-    id: confirm
-    attributes:
-      label: Pre-flight checks
-      options:
-        - label: I have searched existing issues and discussions for similar proposals.
-          required: true
-        - label: I have considered whether this could be implemented as a skill (`SKILL.md`) or shell command before requesting a code change.
-          required: true

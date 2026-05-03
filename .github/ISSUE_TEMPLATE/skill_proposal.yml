@@ -1,49 +1,49 @@
 name: Skill proposal
-description: Propose a new skill (`SKILL.md`) for SLICC's `/workspace/skills/` or compatible `.agents` / `.claude` skills.
-title: '[skill]: '
-labels: ['skill', 'enhancement', 'needs-triage']
+description: Propose a new `SKILL.md` for `/workspace/skills/` (native) or a `.agents` / `.claude` compatibility skill.
+title: 'skill: '
+labels: ['enhancement']
 body:
   - type: markdown
     attributes:
       value: |
-        Skills teach SLICC how to perform challenging tasks without changing core code. Native skills live in `packages/vfs-root/workspace/skills/`. Compatible skills are auto-discovered from any reachable `.agents/skills/*/SKILL.md` or `.claude/skills/*/SKILL.md`.
+        Skills teach SLICC how to perform challenging tasks without core code changes. Native skills live in `packages/vfs-root/workspace/skills/`. Compatibility skills are auto-discovered from any reachable `.agents/skills/*/SKILL.md` or `.claude/skills/*/SKILL.md`.
 
-        Before opening this issue, consider whether you can simply send a PR adding the skill directly.
+        If you already have a draft, sending a PR directly is usually faster than opening this issue.
 
   - type: input
     id: name
     attributes:
       label: Skill name
-      description: Short, kebab-cased identifier (e.g., `pdf-extract`, `slack-triage`).
-      placeholder: my-skill
+      description: Short, kebab-cased identifier.
+      placeholder: 'as-a-bot, mcp-secrets, pdf-extract'
     validations:
       required: true
 
   - type: textarea
     id: purpose
     attributes:
-      label: What does this skill do?
-      description: One-paragraph summary of the capability. What problem does it solve, and when should the cone reach for it?
+      label: What does it do?
+      description: One paragraph. What capability does the cone gain, and why does it belong as a skill rather than a hardcoded feature?
     validations:
       required: true
 
   - type: textarea
     id: triggers
     attributes:
-      label: When should the agent use it?
-      description: Describe the trigger conditions / user prompts that should lead the agent to invoke this skill.
-      placeholder: 'When the user asks to extract structured data from a PDF...'
+      label: When should the agent reach for it?
+      description: Trigger conditions or example user prompts.
     validations:
       required: true
 
   - type: textarea
-    id: tools
+    id: deps
     attributes:
-      label: Required tools / shell commands
-      description: List the SLICC shell commands, browser APIs, or external dependencies the skill relies on. Flag anything that doesn't already exist.
+      label: Dependencies / secrets / integration target (optional)
+      description: |
+        External services it talks to, secrets it needs, shell commands or browser APIs it relies on. Flag anything that doesn't already exist in SLICC.
       placeholder: |
-        - `pdftk`, `convert` (already available)
-        - new shell helper: `pdf-extract <input> <out>`
+        - GitHub PAT via `git config github.token`
+        - new shell helper: `as-a-bot <repo>`
 
   - type: dropdown
     id: skill_type
@@ -52,24 +52,6 @@ body:
       options:
         - 'Native (`/workspace/skills/`) — install-managed'
         - 'Compatibility (`.agents/skills/` or `.claude/skills/`) — read-only'
-        - 'Not sure / need guidance'
-    validations:
-      required: true
-
-  - type: textarea
-    id: draft
-    attributes:
-      label: Draft `SKILL.md` (optional)
-      description: Paste a draft, or link to a fork/PR if you already have one.
-      render: markdown
-
-  - type: dropdown
-    id: contribution
-    attributes:
-      label: Are you willing to contribute the skill?
-      options:
-        - "Yes, I'd like to send a PR"
-        - 'Yes, with guidance'
-        - 'No, just suggesting'
+        - 'Not sure'
     validations:
       required: true
