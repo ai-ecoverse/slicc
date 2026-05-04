@@ -366,6 +366,13 @@ jobs:
         run: cd packages/swift-server && swift build -c release
       - name: Test
         run: cd packages/swift-server && swift test
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+          # Informational scan; surfaces unused Swift declarations without
+          # blocking PRs while existing findings get cleaned up incrementally.
+          cd packages/swift-server && periphery scan --disable-update-check || true
 
   swift-launcher:
     needs: [changes, lint]
@@ -392,6 +399,13 @@ jobs:
         run: cd packages/swift-server && swift build -c release
       - name: Build
         run: npm run build -w @slicc/swift-launcher
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+          # Informational scan; surfaces unused Swift declarations without
+          # blocking PRs while existing findings get cleaned up incrementally.
+          cd packages/swift-launcher && periphery scan --disable-update-check || true
 
   # Wait for any in-progress release before allowing merge queue to land.
   # Only runs on merge_group events; skipped (= passing) for PRs.
