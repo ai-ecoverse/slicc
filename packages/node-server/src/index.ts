@@ -962,15 +962,24 @@ async function main() {
     try {
       await handleS3SignAndForward(req, res, secretStore);
     } catch (err) {
-      // Avoid logging envelope contents — bodies / headers may include
-      // credential material.
-      console.error(
-        `S3 sign-and-forward error: ${err instanceof Error ? err.message : String(err)}`
-      );
+      // Generic log line + trace id only. Avoid logging the err.message
+      // because TypeError stack frames or signing errors can include
+      // profile names, bucket names, or partial URLs — operational secrets
+      // we don't want in shared log aggregators (Sentry, Datadog, etc.).
+      // The trace id lets users correlate a server-side log with the
+      // 500 the client got; the detailed message goes only to the local
+      // file logger above DEBUG, where it's bounded to the operator.
+      const traceId = (
+        globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 10)
+      ).slice(0, 8);
+      console.error(`S3 sign-and-forward error [trace=${traceId}]`);
+      if (DEV_MODE) {
+        console.error(err);
+      }
       if (!res.headersSent) {
         res.status(500).json({
           ok: false,
-          error: 'internal sign-and-forward error',
+          error: `internal sign-and-forward error [trace=${traceId}]`,
           errorCode: 'internal',
         });
       }
@@ -985,13 +994,17 @@ async function main() {
     try {
       await handleDaSignAndForward(req, res);
     } catch (err) {
-      console.error(
-        `DA sign-and-forward error: ${err instanceof Error ? err.message : String(err)}`
-      );
+      const traceId = (
+        globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 10)
+      ).slice(0, 8);
+      console.error(`DA sign-and-forward error [trace=${traceId}]`);
+      if (DEV_MODE) {
+        console.error(err);
+      }
       if (!res.headersSent) {
         res.status(500).json({
           ok: false,
-          error: 'internal sign-and-forward error',
+          error: `internal sign-and-forward error [trace=${traceId}]`,
           errorCode: 'internal',
         });
       }

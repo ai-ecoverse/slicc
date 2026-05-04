@@ -154,7 +154,20 @@ export function createSecretCommand(): Command {
                 exitCode: 1,
               };
             }
-            await setInStorage(name, value, domains);
+            try {
+              await setInStorage(name, value, domains);
+            } catch (err) {
+              // chrome.storage.local can throw QuotaExceededError (10 MB limit)
+              // or fail if the storage permission was revoked. Surface as
+              // actionable stderr instead of crashing the command, since the
+              // user otherwise sees "secret stored" + downstream "profile
+              // not configured" — a misleading combination.
+              return {
+                stdout: '',
+                stderr: `secret: failed to write to chrome.storage.local: ${err instanceof Error ? err.message : String(err)}\n`,
+                exitCode: 1,
+              };
+            }
             return {
               stdout: `Stored "${name}" in chrome.storage.local (domains: ${domains.join(', ')})\n`,
               stderr: '',
@@ -198,7 +211,15 @@ export function createSecretCommand(): Command {
           }
 
           if (inExtension) {
-            await deleteFromStorage(name);
+            try {
+              await deleteFromStorage(name);
+            } catch (err) {
+              return {
+                stdout: '',
+                stderr: `secret: failed to remove from chrome.storage.local: ${err instanceof Error ? err.message : String(err)}\n`,
+                exitCode: 1,
+              };
+            }
             return {
               stdout: `Removed "${name}" from chrome.storage.local\n`,
               stderr: '',

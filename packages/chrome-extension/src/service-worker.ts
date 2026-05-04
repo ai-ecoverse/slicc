@@ -354,15 +354,26 @@ async function handleMountSignAndForward(
 chrome.runtime.onMessage.addListener(
   (message: unknown, _sender: ChromeMessageSender, sendResponse: (response?: unknown) => void) => {
     if (!isMountSignAndForwardRequest(message)) return false;
-    handleMountSignAndForward(message)
-      .then((reply) => sendResponse(reply))
-      .catch((err) =>
-        sendResponse({
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-          errorCode: 'internal' as const,
-        })
-      );
+    // Wrap the handler call in a sync try/catch in addition to the promise
+    // .catch. If the handler throws synchronously *before* returning a
+    // promise (e.g. a cast on a malformed envelope that passed the type
+    // guard but fails at first access), the .then().catch() chain never
+    // runs and sendResponse is never called → caller hangs forever on
+    // chrome.runtime.sendMessage. Belt-and-suspenders.
+    const respondError = (err: unknown): void => {
+      sendResponse({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        errorCode: 'internal' as const,
+      });
+    };
+    try {
+      handleMountSignAndForward(message)
+        .then((reply) => sendResponse(reply))
+        .catch(respondError);
+    } catch (err) {
+      respondError(err);
+    }
     // Keep the channel open so sendResponse can be called asynchronously.
     return true;
   }

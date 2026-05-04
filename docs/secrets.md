@@ -99,7 +99,7 @@ Each S3 mount selects a profile via `--profile <name>` (defaults to `default`). 
 | `s3.<profile>.endpoint`          | No       | Custom endpoint host for S3-compatible services. Omit for AWS S3 (host is derived from region). |
 | `s3.<profile>.session_token`     | No       | For STS temporary credentials.                                                                  |
 
-Multiple profiles coexist — e.g. `s3.aws.*` for AWS plus `s3.r2.*` for Cloudflare R2 — and `--profile` selects between them per mount. Profiles are resolved at backend construction; on a 401/403 the backend re-resolves once (covers key rotation) before bubbling `EACCES`.
+Multiple profiles coexist — e.g. `s3.aws.*` for AWS plus `s3.r2.*` for Cloudflare R2 — and `--profile` selects between them per mount. Profiles are resolved server-side (CLI: by node-server's `EnvSecretStore`; extension: by the SW reading `chrome.storage.local`) on every signed request, so rotated credentials apply immediately on the next mount operation — no client-side cache to invalidate. A 401/403 from upstream surfaces directly as `EACCES`; the user can re-mount or update the profile and retry.
 
 **Example: setting up an R2 profile via `~/.slicc/secrets.env`**
 

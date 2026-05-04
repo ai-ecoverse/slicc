@@ -49,6 +49,21 @@ function encodeBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/**
+ * The set of `errorCode` values the orchestrator can return. Kept in sync
+ * with `SignAndForwardErrorCode` in `sign-and-forward-shared.ts`. If the
+ * server adds a new code that isn't listed here, `envelopeToResponse`
+ * surfaces `EINVAL` with the raw text rather than silently mapping to
+ * `EIO` — that way the new code is debuggable.
+ */
+const KNOWN_ERROR_CODES = new Set([
+  'invalid_profile',
+  'invalid_request',
+  'profile_not_configured',
+  'fetch_failed',
+  'internal',
+]);
+
 /** Convert envelope-level errors into `FsError` so the backend can surface them uniformly. */
 function envelopeToResponse(reply: SignAndForwardReply): Response {
   if (!reply.ok) {
@@ -61,9 +76,33 @@ function envelopeToResponse(reply: SignAndForwardReply): Response {
     if (reply.errorCode === 'fetch_failed') {
       throw new FsError('EIO', reply.error);
     }
+    if (reply.errorCode === 'internal') {
+      throw new FsError('EIO', reply.error);
+    }
+    // Unknown / undefined errorCode — surface as EINVAL so the unfamiliar
+    // shape is visible to the agent rather than masquerading as a network
+    // failure. Includes the raw code in the message for debugging.
+    if (!KNOWN_ERROR_CODES.has(String(reply.errorCode))) {
+      throw new FsError(
+        'EINVAL',
+        `mount transport returned unrecognized errorCode '${reply.errorCode}': ${reply.error}`
+      );
+    }
     throw new FsError('EIO', reply.error);
   }
-  const body = decodeBase64(reply.bodyBase64);
+  let body: Uint8Array;
+  try {
+    body = decodeBase64(reply.bodyBase64);
+  } catch (err) {
+    // Malformed base64 in a successful envelope = transport corruption
+    // (oversized payload truncated at chrome.runtime boundary, partial
+    // HTTP response, etc.). Surface as EIO with a message that points at
+    // the boundary rather than an opaque DOMException.
+    throw new FsError(
+      'EIO',
+      `mount transport: response body decode failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
   return new Response(body as BlobPart, {
     status: reply.status,
     headers: new Headers(reply.headers),
@@ -86,9 +125,20 @@ async function postEnvelopeToCli(endpoint: string, body: unknown): Promise<SignA
         `(SLICC backend at localhost may not be running)`
     );
   }
-  // Parse the body either way — server returns the same envelope shape on
-  // both success (200) and structured error (400/502).
-  return (await res.json()) as SignAndForwardReply;
+  // Parse the body — server returns the same envelope shape on both success
+  // (200) and structured error (400/502). If the server crashes outside the
+  // route handler (e.g. middleware error producing Express's default HTML
+  // error page), .json() throws a SyntaxError. Map to FsError so the agent
+  // sees an actionable transport message rather than an opaque parse error.
+  try {
+    return (await res.json()) as SignAndForwardReply;
+  } catch (err) {
+    throw new FsError(
+      'EIO',
+      `mount transport: response is not a JSON envelope (status ${res.status}): ` +
+        `${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 }
 
 /** Post a chrome.runtime message to the SW and await the response. */
