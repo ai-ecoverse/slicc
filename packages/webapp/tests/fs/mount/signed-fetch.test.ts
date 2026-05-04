@@ -71,12 +71,7 @@ describe('signed-fetch CLI transport — success path', () => {
     expect(await res.text()).toBe('hello');
   });
 
-  it('handles empty bodyBase64 as zero-byte response', async () => {
-    // Using 200 instead of 204 because the WHATWG Response constructor
-    // rejects status codes that forbid a body (204/205/304) when given
-    // any body argument — even an empty Uint8Array. The transport always
-    // constructs Response with a Uint8Array, so empty-body upstream
-    // responses round-trip as 200 + empty body in this layer.
+  it('handles empty bodyBase64 as zero-byte response (200)', async () => {
     mockFetch(async () =>
       jsonResponse({
         ok: true,
@@ -90,6 +85,41 @@ describe('signed-fetch CLI transport — success path', () => {
     expect(res.status).toBe(200);
     const buf = await res.arrayBuffer();
     expect(buf.byteLength).toBe(0);
+  });
+
+  it('passes null body to Response for null-body statuses (204 DELETE)', async () => {
+    // Regression: WHATWG Response constructor refuses any body argument
+    // (even a 0-byte Uint8Array) for null-body statuses. Manual smoke
+    // testing on DA caught this — a successful DELETE returns 204 and
+    // the previous code threw "Response with null body status cannot
+    // have body" while the actual delete had succeeded server-side.
+    mockFetch(async () =>
+      jsonResponse({
+        ok: true,
+        status: 204,
+        headers: {},
+        bodyBase64: '',
+      })
+    );
+    const transport = makeSignedFetchS3('aws');
+    const res = await transport({ method: 'DELETE', bucket: 'b', key: 'k' });
+    expect(res.status).toBe(204);
+    expect(res.body).toBeNull();
+  });
+
+  it('passes null body for 205 (Reset Content) and 304 (Not Modified)', async () => {
+    // Both are null-body statuses per the WHATWG fetch spec.
+    mockFetch(async () => jsonResponse({ ok: true, status: 205, headers: {}, bodyBase64: '' }));
+    let transport = makeSignedFetchS3('aws');
+    let res = await transport({ method: 'POST', bucket: 'b', key: 'k' });
+    expect(res.status).toBe(205);
+    expect(res.body).toBeNull();
+
+    mockFetch(async () => jsonResponse({ ok: true, status: 304, headers: {}, bodyBase64: '' }));
+    transport = makeSignedFetchS3('aws');
+    res = await transport({ method: 'GET', bucket: 'b', key: 'k' });
+    expect(res.status).toBe(304);
+    expect(res.body).toBeNull();
   });
 });
 

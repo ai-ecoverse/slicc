@@ -64,6 +64,16 @@ const KNOWN_ERROR_CODES = new Set([
   'internal',
 ]);
 
+/**
+ * HTTP statuses for which the WHATWG `Response` constructor refuses any
+ * body argument (including a 0-byte Uint8Array) — the spec calls these
+ * "null body statuses". DA returns 204 for DELETE, 205 is rare but
+ * legal, 304 is the conditional-GET reuse path. Passing a body for any
+ * of these throws `TypeError: Response with null body status cannot
+ * have body`.
+ */
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
 /** Convert envelope-level errors into `FsError` so the backend can surface them uniformly. */
 function envelopeToResponse(reply: SignAndForwardReply): Response {
   if (!reply.ok) {
@@ -103,7 +113,15 @@ function envelopeToResponse(reply: SignAndForwardReply): Response {
       `mount transport: response body decode failed: ${err instanceof Error ? err.message : String(err)}`
     );
   }
-  return new Response(body as BlobPart, {
+  // For null-body statuses (204, 205, 304, 101, 103) the Response
+  // constructor refuses any body argument, even a 0-byte Uint8Array.
+  // Pass null instead. This is the path for successful DELETE (204)
+  // and Reset Content (205); 304 also flows here when an upstream cache
+  // hit happens to bubble all the way through the transport.
+  const responseBody: BlobPart | null = NULL_BODY_STATUSES.has(reply.status)
+    ? null
+    : (body as BlobPart);
+  return new Response(responseBody, {
     status: reply.status,
     headers: new Headers(reply.headers),
   });
