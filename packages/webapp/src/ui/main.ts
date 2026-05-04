@@ -544,6 +544,28 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   layout.panels.fileBrowser.setFs(localFs);
   log.info('File browser wired to shared VFS (local IndexedDB)');
 
+  // Restore persisted mounts. The side panel and the offscreen document
+  // each have their own VirtualFS instance (sharing only the underlying
+  // IDB store), so each must rebuild its own in-memory mount table on
+  // boot. Without this, terminal-typed `mount` commands survive the
+  // current session but vanish from the side panel's view as soon as
+  // the panel is closed/reopened — even though the descriptors are
+  // still in IDB and the offscreen agent can still see the mount.
+  void getAllMountEntries()
+    .then(async (entries) => {
+      if (entries.length === 0) return;
+      const { needsRecovery } = await recoverMounts(entries, localFs, log);
+      if (needsRecovery.length === 0) return;
+      // The offscreen already routes a session-reload lick when its own
+      // recovery surfaces unrecoverable mounts; routing a second one
+      // here from the panel would double-message the cone. Just log.
+      log.warn('Some mounts could not be recovered in the panel VFS', {
+        count: needsRecovery.length,
+        paths: needsRecovery.map((r) => r.path),
+      });
+    })
+    .catch((err) => log.warn('Failed to restore persisted mounts in panel VFS', err));
+
   // Listen for preview SW file-read requests (falls back here for mounted dirs).
   // Uses BroadcastChannel because the SW's `/preview/` scope excludes this page.
   const previewVfsCh = new BroadcastChannel('preview-vfs');
