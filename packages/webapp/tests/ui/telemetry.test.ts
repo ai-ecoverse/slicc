@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockSampleRUM = vi.fn();
 
@@ -7,7 +7,11 @@ vi.mock('@adobe/helix-rum-js', () => ({
   sampleRUM: mockSampleRUM,
 }));
 
-// Mock localStorage for Node environment
+// localStorage stub must be re-applied in every describe's beforeEach,
+// because describes that need to swap other globals (chrome, etc.) call
+// vi.unstubAllGlobals() in afterEach — which would otherwise wipe a
+// module-level stub and leave subsequent tests with a non-callable
+// localStorage on jsdom + Node >= 25.
 const localStorageMock: Record<string, string> = {};
 const mockLocalStorage = {
   getItem: (key: string) => localStorageMock[key] ?? null,
@@ -22,20 +26,20 @@ const mockLocalStorage = {
   },
 };
 
-vi.stubGlobal('localStorage', mockLocalStorage);
-
-afterAll(() => {
-  vi.unstubAllGlobals();
-});
+function stubLocalStorage() {
+  vi.stubGlobal('localStorage', mockLocalStorage);
+}
 
 describe('telemetry', () => {
   beforeEach(() => {
     mockLocalStorage.clear();
     mockSampleRUM.mockClear();
     vi.resetModules();
+    stubLocalStorage();
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.resetModules();
   });
 
@@ -169,6 +173,11 @@ describe('isTelemetryEnabled / setTelemetryEnabled', () => {
   beforeEach(() => {
     mockLocalStorage.clear();
     vi.resetModules();
+    stubLocalStorage();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('returns true by default', async () => {
@@ -202,6 +211,7 @@ describe('telemetry — extension branch', () => {
     mockSampleRUM.mockClear();
     mockSampleRumJs.mockClear();
     vi.resetModules();
+    stubLocalStorage();
     vi.stubGlobal('chrome', { runtime: { id: 'test-extension' } });
     vi.doMock('../../src/ui/rum.js', () => ({ default: mockSampleRumJs }));
   });
@@ -376,6 +386,7 @@ describe('telemetry — electron branch', () => {
     mockSampleRUM.mockClear();
     mockSampleRumJs.mockClear();
     vi.resetModules();
+    stubLocalStorage();
     document.documentElement.dataset.electronOverlay = 'true';
     // Mock rum.js so we can prove it was NOT used in the electron branch
     // — a refactor that accidentally routed electron through rum.js would
@@ -387,6 +398,7 @@ describe('telemetry — electron branch', () => {
   afterEach(() => {
     delete document.documentElement.dataset.electronOverlay;
     vi.doUnmock('../../src/ui/rum.js');
+    vi.unstubAllGlobals();
     vi.resetModules();
   });
 

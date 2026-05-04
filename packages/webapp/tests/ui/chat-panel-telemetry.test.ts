@@ -103,6 +103,23 @@ describe('ChatPanel — trackChatSend wiring', () => {
 describe('ChatPanel — trackImageView wiring', () => {
   beforeEach(() => {
     vi.mocked(trackImageView).mockClear();
+    // ChatPanel.sendMessage reads `selected-model` from localStorage, and on
+    // jsdom + Node >= 25 the previous describe's vi.unstubAllGlobals() can
+    // leave the global with a non-callable getItem. Re-stub explicitly.
+    const store: Record<string, string> = { 'selected-model': 'claude-sonnet' };
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store[k] ?? null,
+      setItem: (k: string, v: string) => {
+        store[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete store[k];
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('fires trackImageView("chat") for each <img> appended to messagesEl', async () => {
