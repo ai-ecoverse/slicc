@@ -119,10 +119,17 @@ jobs:
       - run: npm ci
       - name: Typecheck
         run: tsc --noEmit -p tsconfig.json
-      - name: Test
-        run: npx vitest run --project webapp
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:webapp
         env:
           NODE_OPTIONS: '--max-old-space-size=6144'
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-webapp
+          path: coverage/
+          if-no-files-found: ignore
       - name: Build
         run: npm run build -w @slicc/webapp
       - name: Check bundle for Node-only APIs
@@ -179,8 +186,15 @@ jobs:
       - run: npm ci
       - name: Typecheck
         run: tsc --noEmit -p tsconfig.cli.json
-      - name: Test
-        run: npx vitest run --project node-server
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:node-server
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-node-server
+          path: coverage/
+          if-no-files-found: ignore
       - name: Build
         run: npm run build -w @slicc/node-server
 
@@ -200,8 +214,15 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Test
-        run: npx vitest run --project chrome-extension
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:chrome-extension
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-chrome-extension
+          path: coverage/
+          if-no-files-found: ignore
       - name: Build webapp (dependency)
         run: npm run build -w @slicc/webapp
       - name: Build extension
@@ -260,8 +281,15 @@ jobs:
         run: npm run build -w @slicc/webapp
       - name: Typecheck
         run: tsc --noEmit -p tsconfig.worker.json
-      - name: Test
-        run: npx vitest run --project cloudflare-worker
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:cloudflare-worker
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-cloudflare-worker
+          path: coverage/
+          if-no-files-found: ignore
 
       # Deploy to staging on PRs (not forks) and pushes to main
       - name: Deploy staging worker (attempt 1)
@@ -358,8 +386,17 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build
         run: cd packages/swift-server && swift build -c release
-      - name: Test
-        run: cd packages/swift-server && swift test
+      - name: Test (with coverage threshold gate)
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-server SliccServerPackageTests 40 40 35
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-swift-server
+          path: packages/swift-server/.build/coverage/
+          if-no-files-found: ignore
 
   swift-launcher:
     needs: [changes, lint]
@@ -384,6 +421,17 @@ jobs:
         run: npm run build -w @slicc/webapp
       - name: Build swift-server (dependency)
         run: cd packages/swift-server && swift build -c release
+      - name: Test (with coverage threshold gate)
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-launcher SliccstartPackageTests 5 5 8
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-swift-launcher
+          path: packages/swift-launcher/.build/coverage/
+          if-no-files-found: ignore
       - name: Build
         run: npm run build -w @slicc/swift-launcher
 
