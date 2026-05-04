@@ -604,7 +604,7 @@ export class ChatPanel {
     const idx = this.messages.findIndex((m) => m.id === messageId);
     if (idx === -1) return;
     this.messages.splice(idx, 1);
-    const el = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+    const el = this.messagesEl.querySelector(`.msg-group[data-msg-id="${messageId}"]`);
     if (el) el.remove();
     this.persistSession();
     this.onDeleteQueuedMessage?.(messageId);
@@ -1112,7 +1112,7 @@ export class ChatPanel {
     (tc as any)._toolUIRequestId = requestId;
 
     // Find the tool call element and add a UI container
-    const wrapper = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+    const wrapper = this.messagesEl.querySelector(`.msg-group[data-msg-id="${messageId}"]`);
     if (!wrapper) {
       // DOM element might not be rendered yet - retry
       if (retryCount < 10) {
@@ -1466,7 +1466,7 @@ export class ChatPanel {
   private updateStreamingContent(messageId: string): void {
     const msg = this.findMessage(messageId);
     if (!msg) return;
-    const wrapper = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+    const wrapper = this.messagesEl.querySelector(`.msg-group[data-msg-id="${messageId}"]`);
     if (!wrapper) return;
     const contentEl = wrapper.querySelector('.msg__content');
     if (contentEl) {
@@ -1658,7 +1658,7 @@ export class ChatPanel {
   private updateMessageEl(messageId: string): void {
     const msg = this.findMessage(messageId);
     if (!msg) return;
-    const existing = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+    const existing = this.messagesEl.querySelector(`.msg-group[data-msg-id="${messageId}"]`);
     if (existing) {
       this.disposeDipsForMessage(messageId);
       // Tool calls for sibling messages in this chain may be inside a
@@ -2116,12 +2116,19 @@ export class ChatPanel {
       );
       for (const call of calls) {
         const msgId = call.dataset.msgId;
+        // Restrict the home lookup to top-level msg-group wrappers —
+        // tool-call elements also carry `data-msg-id`, so a bare
+        // `[data-msg-id=...]` selector picks up clustered calls (which
+        // are descendants of an earlier msg-group) before reaching the
+        // wrapper, and we'd end up trying to reparent a node into
+        // itself.
         const home = msgId
-          ? this.messagesInner.querySelector<HTMLElement>(`[data-msg-id="${msgId}"]`)
+          ? this.messagesInner.querySelector<HTMLElement>(
+              `:scope > .msg-group[data-msg-id="${msgId}"]`
+            )
           : null;
         if (!home) continue;
         if (msgId && freshGroups.has(msgId)) continue;
-        // Insert before any feedback row so it stays at the bottom.
         const feedback = home.querySelector(':scope > .msg__feedback');
         if (feedback) {
           home.insertBefore(call, feedback);
@@ -2159,13 +2166,31 @@ export class ChatPanel {
           .forEach((el) => toolCallEls.push(el));
       }
       if (toolCallEls.length >= TOOL_CLUSTER_MIN) {
+        // Anchor the cluster at the chronological position of the first
+        // tool call so any text the assistant produces *after* the tool
+        // run (typically a summary in a continuation msg-group) renders
+        // below the cluster instead of above it. Appending to the
+        // chain's last msg-group reorders post-tool text to appear
+        // before the tools, which contradicts how the agent generated
+        // them.
+        const firstCall = toolCallEls[0];
+        const anchorParent = firstCall.parentElement;
+        const moved = new Set<Node>(toolCallEls);
+        let anchorNext: Node | null = firstCall.nextSibling;
+        while (anchorNext && moved.has(anchorNext)) {
+          anchorNext = anchorNext.nextSibling;
+        }
         const cluster = this.buildClusterFromElements(toolCallEls);
-        const lastGroup = chain[chain.length - 1];
-        const feedback = lastGroup.querySelector(':scope > .msg__feedback');
-        if (feedback) {
-          lastGroup.insertBefore(cluster, feedback);
+        if (anchorParent && anchorParent.isConnected) {
+          anchorParent.insertBefore(cluster, anchorNext);
         } else {
-          lastGroup.appendChild(cluster);
+          const lastGroup = chain[chain.length - 1];
+          const feedback = lastGroup.querySelector(':scope > .msg__feedback');
+          if (feedback) {
+            lastGroup.insertBefore(cluster, feedback);
+          } else {
+            lastGroup.appendChild(cluster);
+          }
         }
       }
       i = j;
