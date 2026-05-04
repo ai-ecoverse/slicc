@@ -42,7 +42,6 @@
     "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json",
     "pretest": "npm run preflight",
     "test": "vitest run",
-    "test:live": "SLICC_TEST_LIVE=1 vitest run packages/webapp/tests/fs/mount/live",
     "test:coverage": "vitest run --coverage",
     "test:coverage:cloudflare-worker": "vitest run --project cloudflare-worker --coverage --coverage.thresholds.lines=75 --coverage.thresholds.statements=75 --coverage.thresholds.functions=85 --coverage.thresholds.branches=65",
     "test:coverage:node-server": "vitest run --project node-server --coverage --coverage.thresholds.lines=65 --coverage.thresholds.statements=65 --coverage.thresholds.functions=65 --coverage.thresholds.branches=55",
