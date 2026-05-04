@@ -15,9 +15,6 @@ export const ELECTRON_OVERLAY_LAUNCHER_POSITIONS = [
   'left',
 ] as const;
 
-/** @deprecated Use ELECTRON_OVERLAY_LAUNCHER_POSITIONS instead. */
-export const ELECTRON_OVERLAY_LAUNCHER_CORNERS = ELECTRON_OVERLAY_LAUNCHER_POSITIONS;
-
 export type ElectronOverlayLauncherCorner = (typeof ELECTRON_OVERLAY_LAUNCHER_POSITIONS)[number];
 
 export const DEFAULT_ELECTRON_OVERLAY_LAUNCHER_CORNER: ElectronOverlayLauncherCorner = 'top-right';

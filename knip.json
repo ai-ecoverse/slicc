@@ -1,7 +1,15 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreBinaries": ["swift", "wrangler", "playwright"],
-  "ignoreDependencies": ["pyodide", "@cloudflare/workers-types"],
+  "ignoreBinaries": ["swift", "wrangler", "playwright", "tsx", "sleep"],
+  "ignoreDependencies": [
+    "pyodide",
+    "@cloudflare/workers-types",
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    "@semantic-release/npm",
+    "@semantic-release/github",
+    "buffer"
+  ],
   "ignore": [
     "dist/**",
     "**/dist/**",
@@ -16,7 +24,7 @@
   ],
   "workspaces": {
     ".": {
-      "entry": ["vitest.config.ts", "eslint.config.js"],
+      "entry": ["vitest.config.ts", "eslint.config.js", ".releaserc.json"],
       "project": ["*.{js,ts,mjs}"]
     },
     "packages/webapp": {
@@ -34,7 +42,14 @@
         "tests/**/*.test.ts"
       ],
       "project": ["src/**/*.{ts,tsx,js}", "providers/**/*.ts", "tests/**/*.ts"],
-      "ignore": ["src/types/**", "src/globals.d.ts", "tests/e2e/**", "tests/integration/**"]
+      "ignore": [
+        "src/types/**",
+        "src/globals.d.ts",
+        "tests/e2e/**",
+        "tests/integration/**",
+        "tests/test-dips.mjs"
+      ],
+      "ignoreDependencies": ["puppeteer-core"]
     },
     "packages/chrome-extension": {
       "entry": [
@@ -46,7 +61,12 @@
         "tests/**/*.test.ts"
       ],
       "project": ["src/**/*.{ts,js}", "tests/**/*.ts"],
-      "ignore": ["src/chrome.d.ts"]
+      "ignore": ["src/chrome.d.ts"],
+      "ignoreDependencies": [
+        "@imagemagick/magick-wasm",
+        "@mariozechner/pi-ai",
+        "@mariozechner/pi-coding-agent"
+      ]
     },
     "packages/node-server": {
       "entry": [

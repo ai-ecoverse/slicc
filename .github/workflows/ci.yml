@@ -103,10 +103,13 @@ jobs:
           fi
       - name: Dead code detection (knip)
         run: |
-          # Run knip to surface unused files, exports, and dependencies.
-          # Currently informational (--no-exit-code) so existing dead code
-          # does not block PRs while it gets cleaned up incrementally.
-          npx knip --no-progress --no-exit-code --reporter compact
+          # Hard-fail on unused files, missing/unlisted dependencies,
+          # unresolved imports, duplicate exports, and unused binaries.
+          # Unused individual exports/types are NOT enforced here — they
+          # often represent intentional public API surface and are
+          # tracked separately via 'npm run deadcode'.
+          npx knip --no-progress --reporter compact \
+            --include files,dependencies,devDependencies,unlisted,binaries,unresolved,duplicates
 
   webapp:
     needs: changes
