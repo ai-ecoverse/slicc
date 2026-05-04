@@ -125,7 +125,7 @@ jobs:
           NODE_OPTIONS: '--max-old-space-size=6144'
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-webapp
           path: coverage/
@@ -190,7 +190,7 @@ jobs:
         run: npm run test:coverage:node-server
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-node-server
           path: coverage/
@@ -218,7 +218,7 @@ jobs:
         run: npm run test:coverage:chrome-extension
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-chrome-extension
           path: coverage/
@@ -285,7 +285,7 @@ jobs:
         run: npm run test:coverage:cloudflare-worker
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-cloudflare-worker
           path: coverage/
@@ -392,7 +392,7 @@ jobs:
             packages/swift-server SliccServerPackageTests 40 40 35
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-swift-server
           path: packages/swift-server/.build/coverage/
@@ -427,7 +427,7 @@ jobs:
             packages/swift-launcher SliccstartPackageTests 5 5 8
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-swift-launcher
           path: packages/swift-launcher/.build/coverage/
