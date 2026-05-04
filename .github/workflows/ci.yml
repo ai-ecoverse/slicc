@@ -101,6 +101,12 @@ jobs:
             echo "::error::packages/vfs-root/shared/CLAUDE.md exceeds 3KB limit ($size bytes). Keep agent instructions concise."
             exit 1
           fi
+      - name: Dead code detection (knip)
+        run: |
+          # Run knip to surface unused files, exports, and dependencies.
+          # Currently informational (--no-exit-code) so existing dead code
+          # does not block PRs while it gets cleaned up incrementally.
+          npx knip --no-progress --no-exit-code --reporter compact
 
   webapp:
     needs: changes
