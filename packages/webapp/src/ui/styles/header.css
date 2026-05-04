@@ -285,6 +285,11 @@
   color: var(--s2-content-tertiary);
   margin-top: 2px;
 }
+.avatar-popover__caption {
+  padding: 4px 16px 8px;
+  font-size: 11px;
+  color: var(--s2-content-tertiary);
+}
 .avatar-popover__item {
   display: flex;
   align-items: center;

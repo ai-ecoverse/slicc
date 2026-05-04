@@ -35,6 +35,7 @@ import { toolUIRegistry } from '../../../packages/webapp/src/tools/tool-ui.js';
 import type { ChatMessage } from '../../../packages/webapp/src/ui/types.js';
 import type { MessageAttachment } from '../../../packages/webapp/src/core/attachments.js';
 import type { BrowserAPI } from '../../../packages/webapp/src/cdp/index.js';
+import type { FollowerSyncManager } from '../../../packages/webapp/src/scoops/tray-follower-sync.js';
 
 /** Buffered message for state sync */
 interface BufferedChatMessage {
@@ -66,6 +67,14 @@ export class OffscreenBridge {
   private scoopStatuses = new Map<string, ScoopTabState['status']>();
   /** Shared UI session store — writes to browser-coding-agent IndexedDB */
   private sessionStore: SessionStore | null = null;
+  /**
+   * When set, the offscreen is acting as a tray follower: user messages
+   * from the panel are forwarded to the leader over WebRTC instead of
+   * being handed to the local orchestrator, and snapshots/agent events
+   * coming back from the leader are bridged into the panel via the same
+   * messages the local orchestrator would emit.
+   */
+  private followerSync: FollowerSyncManager | null = null;
 
   /**
    * Bind the orchestrator and start listening for panel messages.
@@ -312,6 +321,134 @@ export class OffscreenBridge {
   }
 
   /**
+   * Switch to / out of follower mode. When `sync` is set, panel-issued
+   * user messages are forwarded to the leader instead of the local
+   * orchestrator. Pass `null` to detach.
+   */
+  setFollowerSync(sync: FollowerSyncManager | null): void {
+    this.followerSync = sync;
+  }
+
+  /**
+   * Replace the local cone scoop's chat history with `messages` (typically
+   * from a leader snapshot), persist them to IndexedDB so panel reloads
+   * see them, and notify the panel to update its open chat.
+   */
+  applyFollowerSnapshot(messages: ChatMessage[]): void {
+    if (!this.orchestrator) return;
+    const cone = this.orchestrator.getScoops().find((s) => s.isCone);
+    if (!cone) return;
+    const buf = messages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      attachments: m.attachments,
+      timestamp: m.timestamp,
+      source: m.source,
+      channel: m.channel,
+      toolCalls: m.toolCalls?.map((tc) => ({
+        id: tc.id,
+        name: tc.name,
+        input: tc.input,
+        result: tc.result,
+        isError: tc.isError,
+      })),
+      isStreaming: m.isStreaming,
+    }));
+    this.messageBuffers.set(cone.jid, buf);
+    this.currentMessageId.delete(cone.jid);
+    if (this.sessionStore) {
+      const sessionId = cone.isCone ? 'session-cone' : `session-${cone.folder}`;
+      this.sessionStore.saveMessages(sessionId, messages).catch((err) => {
+        console.warn('[offscreen-bridge] applyFollowerSnapshot persist failed:', err);
+      });
+    }
+    this.emit({
+      type: 'scoop-messages-replaced',
+      scoopJid: cone.jid,
+      messages: buf,
+    });
+  }
+
+  /** Resolve the local cone scoop's jid (panel-known), if any. */
+  getConeJid(): string | null {
+    return this.orchestrator?.getScoops().find((s) => s.isCone)?.jid ?? null;
+  }
+
+  /** Bridge follower-side AgentEvents into panel-bound agent-event messages. */
+  emitFollowerAgentEvent(
+    event: import('../../../packages/webapp/src/ui/types.js').AgentEvent
+  ): void {
+    const scoopJid = this.getConeJid();
+    if (!scoopJid) return;
+    switch (event.type) {
+      case 'content_delta':
+        this.emit({
+          type: 'agent-event',
+          scoopJid,
+          eventType: 'text_delta',
+          text: event.text,
+        });
+        break;
+      case 'content_done':
+        this.emit({ type: 'agent-event', scoopJid, eventType: 'response_done' });
+        break;
+      case 'tool_use_start':
+        this.emit({
+          type: 'agent-event',
+          scoopJid,
+          eventType: 'tool_start',
+          toolName: event.toolName,
+          toolInput: event.toolInput,
+        });
+        break;
+      case 'tool_result':
+        this.emit({
+          type: 'agent-event',
+          scoopJid,
+          eventType: 'tool_end',
+          toolName: event.toolName,
+          toolResult: event.result,
+          isError: event.isError,
+        });
+        break;
+      case 'turn_end':
+        this.emit({ type: 'agent-event', scoopJid, eventType: 'turn_end' });
+        break;
+      case 'error':
+        this.emit({ type: 'error', scoopJid, error: event.error });
+        break;
+    }
+  }
+
+  /** Emit an incoming-message for the cone (used by follower mode for echoes). */
+  emitFollowerIncomingMessage(messageId: string, text: string): void {
+    const scoopJid = this.getConeJid();
+    if (!scoopJid) return;
+    this.emit({
+      type: 'incoming-message',
+      scoopJid,
+      message: {
+        id: messageId,
+        content: text,
+        channel: 'web',
+        senderName: 'User',
+        fromAssistant: false,
+        timestamp: new Date().toISOString(),
+      },
+    });
+  }
+
+  /** Bridge a follower status string to a scoop-status emission for the cone. */
+  emitFollowerStatus(scoopStatus: string): void {
+    const scoopJid = this.getConeJid();
+    if (!scoopJid) return;
+    const status: ScoopTabState['status'] = scoopStatus === 'processing' ? 'processing' : 'ready';
+    this.scoopStatuses.set(scoopJid, status);
+    this.emit({ type: 'scoop-status', scoopJid, status });
+  }
+
+  /**
    * Persist a scoop's message buffer to the shared UI session store.
    * Fire-and-forget — errors are swallowed to avoid blocking agent processing.
    */
@@ -415,6 +552,21 @@ export class OffscreenBridge {
 
     switch (msg.type) {
       case 'user-message': {
+        // In follower mode, route the message to the leader over WebRTC
+        // and let the leader's echo populate our buffer; the local
+        // orchestrator must stay out of the way.
+        if (this.followerSync) {
+          this.getBuffer(msg.scoopJid).push({
+            id: msg.messageId,
+            role: 'user',
+            content: msg.text,
+            attachments: msg.attachments,
+            timestamp: Date.now(),
+          });
+          this.persistScoop(msg.scoopJid);
+          this.followerSync.sendMessage(msg.text, msg.messageId, msg.attachments);
+          break;
+        }
         const channelMsg: ChannelMessage = {
           id: msg.messageId,
           chatJid: msg.scoopJid,

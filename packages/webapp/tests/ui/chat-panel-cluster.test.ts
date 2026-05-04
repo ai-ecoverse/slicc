@@ -133,7 +133,7 @@ describe('ChatPanel cross-message tool-call clustering', () => {
     expect(container.querySelectorAll('.tool-call').length).toBe(4);
   });
 
-  it('places the cluster inside the chain’s last msg-group so feedback rows stay attached', () => {
+  it('anchors the cluster at the chain’s first tool call so post-tool text renders below it', () => {
     panel.loadMessages([
       { id: 'u1', role: 'user', content: 'go', timestamp: 1000 },
       assistantMsg('a1', [tc({ id: 'tc-1', name: 'read_file', result: 'a' })], 2000),
@@ -141,9 +141,51 @@ describe('ChatPanel cross-message tool-call clustering', () => {
       assistantMsg('a3', [tc({ id: 'tc-3', name: 'read_file', result: 'c' })], 2200, 'done'),
     ]);
 
-    const lastGroup = container.querySelector('[data-msg-id="a3"]');
-    expect(lastGroup).not.toBeNull();
-    expect(lastGroup!.querySelector(':scope > .tool-call-cluster')).not.toBeNull();
+    const firstGroup = container.querySelector('.msg-group[data-msg-id="a1"]');
+    expect(firstGroup).not.toBeNull();
+    const cluster = firstGroup!.querySelector(':scope > .tool-call-cluster');
+    expect(cluster).not.toBeNull();
+
+    const lastGroup = container.querySelector('.msg-group[data-msg-id="a3"]') as HTMLElement;
+    expect(lastGroup.querySelector(':scope > .tool-call-cluster')).toBeNull();
+
+    // The cluster must precede the assistant's post-tool text bubble in
+    // document order — otherwise the reply visually jumps above the
+    // tools that produced it.
+    const summary = lastGroup.querySelector('.msg__content');
+    expect(summary?.textContent ?? '').toContain('done');
+    expect(cluster!.compareDocumentPosition(summary!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  it('keeps a continuation summary message after the cluster when text follows the tools', () => {
+    panel.loadMessages([
+      { id: 'u1', role: 'user', content: 'go', timestamp: 1000 },
+      assistantMsg('a1', [tc({ id: 'tc-1', name: 'bash', result: 'a' })], 2000, 'starting'),
+      assistantMsg('a2', [tc({ id: 'tc-2', name: 'bash', result: 'b' })], 2100),
+      assistantMsg('a3', [tc({ id: 'tc-3', name: 'bash', result: 'c' })], 2200),
+      // A pure-text continuation that summarises what the tools did.
+      assistantMsg('a4', [], 2300, 'all good'),
+    ]);
+
+    const cluster = container.querySelector('.tool-call-cluster');
+    expect(cluster).not.toBeNull();
+
+    const summary = container.querySelector('.msg-group[data-msg-id="a4"] .msg__content');
+    expect(summary?.textContent ?? '').toContain('all good');
+
+    expect(cluster!.compareDocumentPosition(summary!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+
+    // And the leading "starting" preamble in the same chain still
+    // precedes the cluster — chronology preserved on both sides.
+    const preamble = container.querySelector('.msg-group[data-msg-id="a1"] .msg__content');
+    expect(preamble?.textContent ?? '').toContain('starting');
+    expect(preamble!.compareDocumentPosition(cluster!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
   });
 
   it('rebuilds the cluster as new continuation messages stream in', () => {
@@ -199,9 +241,9 @@ describe('ChatPanel cross-message tool-call clustering', () => {
     );
     expect(afterDots).toEqual(['tool-call--running', 'tool-call--success', 'tool-call--running']);
 
-    // Cluster still sits in the chain's last msg-group.
-    const lastGroup = container.querySelector('[data-msg-id="a3"]');
-    expect(lastGroup!.querySelector(':scope > .tool-call-cluster')).not.toBeNull();
+    // Cluster still anchors at the chain's first tool call.
+    const firstGroup = container.querySelector('.msg-group[data-msg-id="a1"]');
+    expect(firstGroup!.querySelector(':scope > .tool-call-cluster')).not.toBeNull();
   });
 
   it('does not double-cluster when a single message already has 3+ tool calls in the chain', () => {

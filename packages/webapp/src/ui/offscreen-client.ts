@@ -23,6 +23,7 @@ import type {
   ErrorMsg,
   IncomingMessageMsg,
   ScoopListMsg,
+  ScoopMessagesReplacedMsg,
 } from '../../../chrome-extension/src/messages.js';
 import { createLogger } from '../core/logger.js';
 
@@ -33,6 +34,16 @@ export interface OffscreenClientCallbacks {
   onScoopCreated: (scoop: RegisteredScoop) => void;
   onScoopListUpdate: (scoops: ScoopListMsg['scoops']) => void;
   onIncomingMessage: (scoopJid: string, message: IncomingMessageMsg['message']) => void;
+  /**
+   * Whole-history replacement (used when the offscreen acts as a tray
+   * follower and receives a snapshot from the leader). The payload has
+   * already been persisted to IndexedDB by the offscreen, so callers
+   * just need to repaint the chat for the matching scoop.
+   */
+  onScoopMessagesReplaced?: (
+    scoopJid: string,
+    messages: ScoopMessagesReplacedMsg['messages']
+  ) => void;
   /** Called when the offscreen engine is ready and state has been received. */
   onReady?: () => void;
 }
@@ -318,6 +329,12 @@ export class OffscreenClient {
       case 'incoming-message':
         this.handleIncomingMessage(msg as IncomingMessageMsg);
         break;
+
+      case 'scoop-messages-replaced': {
+        const m = msg as ScoopMessagesReplacedMsg;
+        this.callbacks.onScoopMessagesReplaced?.(m.scoopJid, m.messages);
+        break;
+      }
     }
   }
 

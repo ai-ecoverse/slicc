@@ -64,6 +64,7 @@ import {
   hasStoredTrayJoinUrl,
   resolveTrayRuntimeConfig,
   TRAY_JOIN_STORAGE_KEY,
+  TRAY_WORKER_STORAGE_KEY,
 } from '../scoops/tray-runtime-config.js';
 import {
   FollowerTrayManager,
@@ -747,15 +748,26 @@ async function mainExtension(app: HTMLElement): Promise<void> {
         layout.panels.chat.addUserMessage(content, message.attachments);
       }
     },
+    onScoopMessagesReplaced: (scoopJid, messages) => {
+      if (selectedScoop?.jid !== scoopJid) return;
+      // The offscreen has already persisted the messages to IndexedDB,
+      // so a panel reload would pick them up. Repaint the open chat.
+      layout.panels.chat.loadMessages(messages as unknown as ChatMessage[]);
+    },
     onReady: async () => {
       try {
         log.info('Offscreen engine ready, scoop count:', client.getScoops().length);
 
-        if (window.localStorage.getItem(TRAY_JOIN_STORAGE_KEY)) {
+        const storedJoinUrl = window.localStorage.getItem(TRAY_JOIN_STORAGE_KEY);
+        if (storedJoinUrl) {
           void chrome.runtime
             .sendMessage({
               source: 'panel' as const,
-              payload: { type: 'refresh-tray-runtime' as const },
+              payload: {
+                type: 'refresh-tray-runtime' as const,
+                joinUrl: storedJoinUrl,
+                workerBaseUrl: window.localStorage.getItem(TRAY_WORKER_STORAGE_KEY),
+              },
             })
             .catch(() => {
               // Offscreen may already be syncing runtime state.

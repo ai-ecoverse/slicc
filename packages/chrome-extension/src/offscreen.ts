@@ -19,12 +19,15 @@ import { LeaderTrayManager } from '../../../packages/webapp/src/scoops/tray-lead
 import {
   hasStoredTrayJoinUrl,
   resolveTrayRuntimeConfig,
+  TRAY_JOIN_STORAGE_KEY,
+  TRAY_WORKER_STORAGE_KEY,
 } from '../../../packages/webapp/src/scoops/tray-runtime-config.js';
 import {
   FollowerTrayManager,
   LeaderTrayPeerManager,
   startFollowerWithAutoReconnect,
 } from '../../../packages/webapp/src/scoops/tray-webrtc.js';
+import { FollowerSyncManager } from '../../../packages/webapp/src/scoops/tray-follower-sync.js';
 import { OffscreenBridge } from './offscreen-bridge.js';
 import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
 import { createLogger } from '../../../packages/webapp/src/core/index.js';
@@ -371,6 +374,14 @@ async function init(): Promise<void> {
     activeTrayRuntimeKey = nextTrayRuntimeKey;
 
     if (trayRuntimeConfig?.joinUrl) {
+      let activeSync: FollowerSyncManager | null = null;
+      const detachSync = () => {
+        if (!activeSync) return;
+        bridge.setFollowerSync(null);
+        activeSync.close();
+        activeSync = null;
+      };
+
       const reconnectHandle = startFollowerWithAutoReconnect(
         {
           joinUrl: trayRuntimeConfig.joinUrl,
@@ -379,13 +390,32 @@ async function init(): Promise<void> {
         {
           onConnected: (connection) => {
             log.info('Extension follower connected', { trayId: connection.trayId });
+            detachSync();
+            const sync = new FollowerSyncManager(connection.channel, {
+              onSnapshot: (messages) => bridge.applyFollowerSnapshot(messages),
+              onUserMessage: (text, messageId) =>
+                bridge.emitFollowerIncomingMessage(messageId, text),
+              onStatus: (scoopStatus) => bridge.emitFollowerStatus(scoopStatus),
+              onDisconnect: (reason) => {
+                log.warn('Follower sync disconnected', { reason });
+                detachSync();
+              },
+            });
+            sync.onEvent((event) => bridge.emitFollowerAgentEvent(event));
+            activeSync = sync;
+            bridge.setFollowerSync(sync);
+            sync.requestSnapshot();
           },
           onGaveUp: (lastError) => {
             log.warn('Extension follower reconnect gave up', { lastError });
+            detachSync();
           },
         }
       );
-      stopTrayRuntime = () => reconnectHandle.cancel();
+      stopTrayRuntime = () => {
+        detachSync();
+        reconnectHandle.cancel();
+      };
       return;
     }
 
@@ -442,6 +472,22 @@ async function init(): Promise<void> {
     }
     if (message.payload.type !== 'refresh-tray-runtime') {
       return false;
+    }
+    // Mirror the panel's localStorage values into ours: in MV3 the side
+    // panel and the offscreen document are independent contexts with
+    // separate localStorage instances, so a join URL the user pasted in
+    // the panel is invisible to `resolveTrayRuntimeConfig` here unless
+    // we persist it locally first.
+    const { joinUrl, workerBaseUrl } = message.payload;
+    if (typeof joinUrl === 'string' && joinUrl) {
+      window.localStorage.setItem(TRAY_JOIN_STORAGE_KEY, joinUrl);
+    } else if (joinUrl === null) {
+      window.localStorage.removeItem(TRAY_JOIN_STORAGE_KEY);
+    }
+    if (typeof workerBaseUrl === 'string' && workerBaseUrl) {
+      window.localStorage.setItem(TRAY_WORKER_STORAGE_KEY, workerBaseUrl);
+    } else if (workerBaseUrl === null && joinUrl === null) {
+      window.localStorage.removeItem(TRAY_WORKER_STORAGE_KEY);
     }
     void syncTrayRuntime();
     return false;

@@ -86,6 +86,87 @@ The side panel emits Helix RUM beacons via the inlined `packages/webapp/src/ui/r
 
 - `packages/chrome-extension/vite.config.ts` builds the side panel UI, service worker, offscreen document, and copied static assets into `dist/extension/`.
 - The extension consumes shared browser code from `packages/webapp/` rather than duplicating core runtime logic.
+- `manifest.json` ships a stable `key` (so the production ID is fixed). For local debugging that key triggers `Content verify job failed for extension … at path: index.html` and the extension refuses to load. Build with `SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension` to strip `key` so Chrome assigns a path-derived ID instead.
+
+## Local QA: dedicated profile preinstalled with the extension
+
+Use this when you want a clean Chrome instance running only the unpacked
+extension — for example to drive the extension UI alongside a separate
+standalone leader. The shared `chrome-launch.ts` helper exposes the
+`extension` profile (`npm run dev -- --profile extension`), but that
+also boots a node-server. The recipe below runs Chrome standalone.
+
+1. **Build with `SLICC_EXT_DEV=1`** so the manifest key is stripped:
+
+   ```bash
+   SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension
+   ```
+
+2. **Use Chrome for Testing**, not your day-driver Chrome. Chrome
+   release builds (>=137) silently drop `--load-extension` unless
+   developer mode is already toggled on in the profile, which is awkward
+   to seed from CLI. Chrome for Testing accepts the flag without that
+   ceremony. The repo's `findChromeExecutable` helper already prefers
+   `~/.cache/puppeteer/chrome/mac_arm-*/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`.
+
+3. **Copy `dist/extension/` to a stable scratch path** so multiple runs
+   reuse the same path-derived extension ID:
+
+   ```bash
+   rm -rf /tmp/slicc-ext-build && cp -r dist/extension /tmp/slicc-ext-build
+   ```
+
+4. **Launch Chrome for Testing** with an isolated profile and the
+   extension preloaded. `--remote-debugging-port=0` lets Chrome pick a
+   free CDP port and write it to `<userDataDir>/DevToolsActivePort`:
+
+   ```bash
+   CFT="$HOME/.cache/puppeteer/chrome/mac_arm-146.0.7680.153/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+   EXT="/tmp/slicc-ext-build"
+   PROFILE="/tmp/slicc-ext-profile"
+   rm -rf "$PROFILE" && mkdir -p "$PROFILE"
+   GOOGLE_CRASHPAD_DISABLE=1 "$CFT" \
+     --user-data-dir="$PROFILE" \
+     --remote-debugging-port=0 \
+     --no-first-run \
+     --no-default-browser-check \
+     --disable-crash-reporter \
+     --disable-extensions-except="$EXT" \
+     --load-extension="$EXT" \
+     "chrome://extensions" &
+   ```
+
+5. **Find the extension ID** from CDP — it's path-derived from the
+   `--load-extension` argument, so a fixed `EXT` path produces a fixed
+   ID across runs:
+
+   ```bash
+   CDP=$(cat "$PROFILE/DevToolsActivePort" | head -1)
+   curl -sS "http://localhost:$CDP/json/list" \
+     | python3 -c 'import json,sys; [print(t["url"]) for t in json.load(sys.stdin) if "service-worker.js" in (t.get("url") or "")]'
+   # → chrome-extension://<id>/service-worker.js
+   ```
+
+6. **Open the side panel UI** by navigating directly to
+   `chrome-extension://<id>/index.html` in a tab — the side panel runs
+   the same `index.html`, so you can drive it via CDP exactly like a
+   normal page:
+
+   ```bash
+   curl -sS -X PUT "http://localhost:$CDP/json/new?chrome-extension://<id>/index.html"
+   ```
+
+   The real Chrome side panel only opens via a user gesture on the
+   extension icon, which CDP cannot synthesize headlessly.
+
+### Tear down
+
+```bash
+pkill -f "Google Chrome.*slicc-ext-profile"
+```
+
+The same `EXT` and `PROFILE` paths can be reused on the next run, but
+re-running step 1 + step 3 is the safest way to pick up code changes.
 
 ## Related Guides
 
