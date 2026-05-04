@@ -126,6 +126,7 @@ export default tseslint.config(
     files: [
       'packages/chrome-extension/voice-popup.js',
       'packages/chrome-extension/mount-popup.js',
+      'packages/chrome-extension/secrets.js',
       'packages/chrome-extension/src/**/*.ts',
     ],
     languageOptions: {

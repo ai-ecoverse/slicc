@@ -16,6 +16,8 @@ Extension mode (Chrome MV3, no server):
   secret list                                List from chrome.storage.local
   secret delete <name>                       Remove from chrome.storage.local
   secret test <name> <url>                   Check URL matches secret's domains
+  secret edit                                Open the Mount Secrets options page
+                                             (form UI, no value typed in shell)
 
 The --domain flag accepts a comma-separated list of domain patterns.
 Patterns support exact matches and wildcards (e.g. *.github.com).
@@ -23,6 +25,7 @@ Patterns support exact matches and wildcards (e.g. *.github.com).
 Examples:
   secret set GITHUB_TOKEN --domain "api.github.com,*.github.com"   # CLI: prints instructions
   secret set s3.r2.access_key_id <value> --domain "*.r2.cloudflarestorage.com"   # extension: stores
+  secret edit                                                     # extension: open form UI
   secret list
   secret delete GITHUB_TOKEN
   secret test GITHUB_TOKEN https://api.github.com/repos
@@ -274,6 +277,39 @@ export function createSecretCommand(): Command {
               stdout: `✗ ${name} is NOT allowed for ${hostname}\n  Allowed domains: ${entry.domains.join(', ')}\n`,
               stderr: '',
               exitCode: 1,
+            };
+          }
+        }
+
+        case 'edit': {
+          if (!inExtension) {
+            return {
+              stdout:
+                'secret: in CLI mode, edit ~/.slicc/secrets.env directly with your text editor.\n' +
+                '          (changes are picked up on the next request — no restart needed)\n',
+              stderr: '',
+              exitCode: 0,
+            };
+          }
+          // Open the extension's options page (`secrets.html`) in a new tab.
+          // chrome.runtime.openOptionsPage() is the canonical way; falls back
+          // to a tab if the user disabled the options page.
+          try {
+            await chrome.runtime.openOptionsPage();
+            return {
+              stdout: 'Opened Mount Secrets options page in a new tab.\n',
+              stderr: '',
+              exitCode: 0,
+            };
+          } catch (err) {
+            // Fallback: open the URL directly via window.open (no permission needed
+            // for extension pages; works from the side panel context).
+            const url = chrome.runtime.getURL('secrets.html');
+            window.open(url, '_blank');
+            return {
+              stdout: `Opened ${url}\n`,
+              stderr: '',
+              exitCode: 0,
             };
           }
         }

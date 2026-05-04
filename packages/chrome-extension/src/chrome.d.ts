@@ -80,6 +80,8 @@ interface ChromeAPI {
     getURL(path: string): string;
     lastError: { message?: string } | undefined;
     sendMessage(message: unknown, callback?: (response: unknown) => void): Promise<void>;
+    /** Open the manifest's options_ui page in a new tab (or popup). */
+    openOptionsPage(): Promise<void>;
     onInstalled?: {
       addListener?(callback: () => void): void;
     };
