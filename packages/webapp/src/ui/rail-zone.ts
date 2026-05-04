@@ -218,7 +218,11 @@ export class RailZone {
       // localStorage may be unavailable in some contexts.
     }
 
-    if (options.fullpage !== undefined) this.setFullpage(options.fullpage);
+    // Match the click handler: when the caller doesn't specify
+    // `fullpage`, fall back to `defaultFullpage` so a panel that's too
+    // narrow to host rail content beside chat (i.e. defaultFullpage)
+    // doesn't render a side-by-side layout.
+    this.setFullpage(options.fullpage ?? this.defaultFullpage);
 
     target.item.onActivate?.();
     this.callbacks.onItemActivate?.(id);

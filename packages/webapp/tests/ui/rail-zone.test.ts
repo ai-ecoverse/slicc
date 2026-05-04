@@ -248,6 +248,43 @@ describe('RailZone', () => {
     expect(onItemClose).not.toHaveBeenCalled();
   });
 
+  it('programmatic activateItem honors defaultFullpage when caller omits the flag', () => {
+    const { railEl, contentEl } = makeRail();
+    const onFullpageToggle = vi.fn();
+    const rail = new RailZone(
+      railEl,
+      contentEl,
+      'primary',
+      { onFullpageToggle },
+      { defaultFullpage: true }
+    );
+    rail.addItem(makeItem('sprinkle-foo', 'top'));
+
+    rail.activateItem('sprinkle-foo');
+
+    expect(rail.isFullpage()).toBe(true);
+    expect(onFullpageToggle).toHaveBeenCalledWith(true);
+  });
+
+  it('explicit fullpage option still wins over defaultFullpage', () => {
+    const { railEl, contentEl } = makeRail();
+    const rail = new RailZone(railEl, contentEl, 'primary', {}, { defaultFullpage: true });
+    rail.addItem(makeItem('terminal', 'bottom'));
+
+    rail.activateItem('terminal', { fullpage: false });
+    expect(rail.isFullpage()).toBe(false);
+  });
+
+  it('programmatic activateItem leaves fullpage off when defaultFullpage is unset (standalone)', () => {
+    const { railEl, contentEl } = makeRail();
+    const rail = new RailZone(railEl, contentEl, 'primary');
+    rail.addItem(makeItem('sprinkle-foo', 'top'));
+
+    rail.activateItem('sprinkle-foo');
+
+    expect(rail.isFullpage()).toBe(false);
+  });
+
   it('persists and restores the last active item across constructor calls', () => {
     const { railEl, contentEl } = makeRail();
     let rail = new RailZone(railEl, contentEl, 'primary');
