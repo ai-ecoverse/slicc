@@ -10,6 +10,8 @@ import WebKit
 struct TabsCarouselView: View {
     @EnvironmentObject var appState: AppState
     @State private var selectedTabId: String?
+    @State private var showingNewTabPrompt = false
+    @State private var newTabUrlInput: String = "https://"
 
     private let background = Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255)
     private let headerBg = Color(red: 0x18 / 255, green: 0x18 / 255, blue: 0x28 / 255)
@@ -32,7 +34,7 @@ struct TabsCarouselView: View {
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 Button {
-                    appState.cdpOpenTab(url: "about:blank")
+                    presentNewTabPrompt()
                 } label: {
                     Image(systemName: "plus.square.on.square")
                 }
@@ -48,6 +50,47 @@ struct TabsCarouselView: View {
                 }
             }
         }
+        .alert("New tab", isPresented: $showingNewTabPrompt) {
+            TextField("URL", text: $newTabUrlInput)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+                .keyboardType(.URL)
+            Button("Open") {
+                openNewTab(from: newTabUrlInput)
+            }
+            Button("Blank") {
+                appState.cdpOpenTab(url: "about:blank")
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Enter the URL to load. Leave as-is or pick Blank for an empty page.")
+        }
+    }
+
+    private func presentNewTabPrompt() {
+        let trimmed = newTabUrlInput.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty || trimmed == "https://" || trimmed == "about:blank" {
+            newTabUrlInput = "https://"
+        }
+        showingNewTabPrompt = true
+    }
+
+    private func openNewTab(from raw: String) {
+        let normalized = Self.normalizeUrl(raw)
+        appState.cdpOpenTab(url: normalized)
+    }
+
+    /// Coerce user input into a loadable URL: empty → about:blank,
+    /// missing scheme → prepend https://.
+    static func normalizeUrl(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "https://" || trimmed == "http://" {
+            return "about:blank"
+        }
+        if trimmed.contains("://") || trimmed.hasPrefix("about:") || trimmed.hasPrefix("data:") {
+            return trimmed
+        }
+        return "https://\(trimmed)"
     }
 
     // MARK: - Empty state
@@ -68,9 +111,9 @@ struct TabsCarouselView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
             Button {
-                appState.cdpOpenTab(url: "about:blank")
+                presentNewTabPrompt()
             } label: {
-                Label("Open blank tab", systemImage: "plus.square.on.square")
+                Label("Open new tab…", systemImage: "plus.square.on.square")
             }
             .buttonStyle(.borderedProminent)
             .disabled(!canControlTabs)
