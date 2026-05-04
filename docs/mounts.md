@@ -37,7 +37,7 @@ Credentials never reach the agent. Where they live depends on which deployment y
 | Deployment                   | Storage                                    | Setup UX                                             |
 | ---------------------------- | ------------------------------------------ | ---------------------------------------------------- |
 | `npx sliccy` / `slicc` (CLI) | `~/.slicc/secrets.env`                     | Edit the file in your text editor (no shell history) |
-| Sliccstart (macOS native)    | macOS Keychain (service `ai.sliccy.slicc`) | `security add-generic-password ...` (OS dialog)      |
+| Sliccstart (macOS native)    | macOS Keychain (service `ai.sliccy.slicc`) | Sliccstart Settings → Secrets (form UI)              |
 | Chrome extension             | `chrome.storage.local`                     | Right-click extension icon → **Options** (form UI)   |
 
 In all three, the credential channel is server-side / SW-side: the browser bundle never holds an `access_key_id`. The agent's `bash`, `node -e`, and `javascript` tools run in CSP-locked contexts (WASM / sandbox iframes) with no access to the storage backend.
@@ -145,28 +145,32 @@ The `RemoteMountCache` (TTL + ETag, IDB-backed under `slicc-mount-cache`) sits i
 The browser bundle never computes signatures or holds credentials. Backends construct _logical_ requests (`{method, bucket, key, body, ...}` for S3; `{method, path, body, ...}` for DA) and hand them to an injected transport. The transport routes per deployment:
 
 ```
-                ┌─── browser bundle ────┐
-                │ S3MountBackend         │
-                │ DaMountBackend         │
-                │ (signing-naive)        │
-                └────────┬───────────────┘
-                         │ logical request
-            ┌────────────┴────────────┐
-            ▼                         ▼
-     CLI / Electron               Chrome extension
-     POST /api/s3-...             chrome.runtime.sendMessage
-            │                         │
-            ▼                         ▼
-     node-server                  service worker
-     EnvSecretStore               chrome.storage.local
-            │                         │
-            └────────────┬────────────┘
-                         ▼
-            executeS3SignAndForward (shared)
-                         │
-                         ▼
-            signSigV4 → fetch → upstream
+                ┌────────── browser bundle ──────────┐
+                │ S3MountBackend                      │
+                │ DaMountBackend                      │
+                │ (signing-naive)                     │
+                └────────────────┬────────────────────┘
+                                 │ logical request
+        ┌────────────────────────┼────────────────────────┐
+        ▼                        ▼                        ▼
+ CLI / Electron           Sliccstart (macOS)       Chrome extension
+ POST /api/s3-...         POST /api/s3-...         chrome.runtime.sendMessage
+        │                        │                        │
+        ▼                        ▼                        ▼
+ node-server              swift-server              service worker
+ EnvSecretStore           Keychain SecretStore     chrome.storage.local
+        │                        │                        │
+        └────────────────────────┼────────────────────────┘
+                                 ▼
+                     executeS3SignAndForward (shared)
+                                 │
+                                 ▼
+                     signSigV4 → fetch → upstream
 ```
+
+The Swift-server endpoint (`Sources/Server/SignAndForward.swift`) ports the
+node-server handler line-for-line and reuses the same canonical SigV4 test
+vectors, so byte-identical signatures are enforced across all three runtimes.
 
 For DA, the IMS bearer token transits the same envelope (browser-side state today; v2 will move OAuth server-side / SW-side).
 
@@ -174,7 +178,6 @@ See `docs/architecture.md` for the file map and `docs/superpowers/specs/2026-04-
 
 ## Out of scope (v2)
 
-- swift-server `/api/s3-sign-and-forward` endpoint — Sliccstart (macOS native server) currently needs node-server for S3/DA mounts
 - Server-side Adobe OAuth — DA's IMS token currently lives browser-side; v2 will move it
 - Recursive `remove` on S3 (throws `EINVAL`; act on individual files for now)
 - Per-mount credential override flags (only profile-based selection in v1)

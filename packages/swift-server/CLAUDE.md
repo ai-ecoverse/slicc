@@ -20,6 +20,7 @@ swift run slicc-server --help
 - `Sources/Browser/` — Chrome and Electron launchers plus console forwarding
 - `Sources/CLI/` — `ServerCommand` argument parsing and runtime bootstrap
 - `Sources/Server/` — HTTP routes, static file middleware, request logging, shutdown
+- `Sources/Signing/` — `SigV4Signer` (mirrors the JS signers in webapp + node-server byte-for-byte against AWS canonical test vectors)
 - `Sources/WebSocket/` — CDP proxy and lick WebSocket system
 - `Tests/` — package tests
 
@@ -41,6 +42,8 @@ swift run slicc-server --help
 - `GET|POST|DELETE /api/crontasks...`
 - `GET /auth/callback`
 - `GET|POST /api/oauth-result`
+- `GET /api/secrets`, `GET /api/secrets/masked`
+- `POST /api/s3-sign-and-forward`, `POST /api/da-sign-and-forward` — server-side request signing for S3 and Adobe da.live mounts. Mirrors `packages/node-server/src/secrets/sign-and-forward.ts`; resolves S3 credentials from the Keychain (`SecretStore`) and accepts a transient IMS bearer for DA. See `Sources/Server/SignAndForward.swift`.
 - `ALL /api/fetch-proxy`
 
 WebSocket routes are installed separately for CDP proxying and the lick system.
