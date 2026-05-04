@@ -14,6 +14,10 @@ struct TabsCarouselView: View {
     private let background = Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255)
     private let headerBg = Color(red: 0x18 / 255, green: 0x18 / 255, blue: 0x28 / 255)
 
+    private var canControlTabs: Bool {
+        appState.connectionState == .connected
+    }
+
     var body: some View {
         Group {
             if appState.cdpTargets.isEmpty {
@@ -32,6 +36,7 @@ struct TabsCarouselView: View {
                 } label: {
                     Image(systemName: "plus.square.on.square")
                 }
+                .disabled(!canControlTabs)
                 if let tabId = effectiveSelectedTabId() {
                     Button(role: .destructive) {
                         appState.cdpCloseTab(tabId)
@@ -39,6 +44,7 @@ struct TabsCarouselView: View {
                     } label: {
                         Image(systemName: "xmark.square")
                     }
+                    .disabled(!canControlTabs)
                 }
             }
         }
@@ -54,7 +60,9 @@ struct TabsCarouselView: View {
                 .foregroundStyle(.secondary)
             Text("No browser tabs")
                 .font(.headline)
-            Text("The leader can drive WKWebView tabs over the CDP bridge — they appear here as a paged carousel. You can also open a blank tab manually.")
+            Text(canControlTabs
+                 ? "The leader can drive WKWebView tabs over the CDP bridge — they appear here as a paged carousel. You can also open a blank tab manually."
+                 : "Connect to a leader (Settings → Join URL) to host browser tabs here.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -65,6 +73,7 @@ struct TabsCarouselView: View {
                 Label("Open blank tab", systemImage: "plus.square.on.square")
             }
             .buttonStyle(.borderedProminent)
+            .disabled(!canControlTabs)
             .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

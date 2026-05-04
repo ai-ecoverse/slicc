@@ -15,16 +15,13 @@ enum DetailRoute: Hashable {
 /// of `NavigationSplitView` in `ChatView`.
 struct SprinkleSidebarView: View {
     @EnvironmentObject var appState: AppState
-    @Binding var route: DetailRoute
+    @Binding var route: DetailRoute?
 
     var body: some View {
-        // List uses an optional binding; we adapt to/from the non-optional
-        // route binding so an empty selection (clear) lands on .conversation.
-        let selectionBinding = Binding<DetailRoute?>(
-            get: { route },
-            set: { route = $0 ?? .conversation }
-        )
-        List(selection: selectionBinding) {
+        // Optional selection binds directly so popping the detail (back nav
+        // on compact) clears it and shows the sidebar instead of immediately
+        // re-pushing a default route.
+        List(selection: $route) {
             Section("Chat") {
                 conversationRow
                     .tag(DetailRoute.conversation)

@@ -6,7 +6,7 @@ import SwiftUI
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
-    @State private var route: DetailRoute = .conversation
+    @State private var route: DetailRoute? = .conversation
     @State private var showSettings = false
     @State private var hasAppeared = false
 
@@ -15,7 +15,7 @@ struct ChatView: View {
             SprinkleSidebarView(route: $route)
         } detail: {
             switch route {
-            case .conversation:
+            case .conversation, .none:
                 ConversationView(showSettings: $showSettings)
             case .tabs:
                 TabsCarouselView()
