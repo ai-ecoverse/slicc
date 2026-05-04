@@ -839,3 +839,225 @@ describe('OffscreenBridge handlePanelMessage', () => {
     });
   });
 });
+
+describe('OffscreenBridge follower mode', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+  let mockOrchestrator: any;
+  let mockSync: any;
+  let mockStore: any;
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+
+    bridge = new OffscreenBridge();
+    mockOrchestrator = {
+      getScoops: vi.fn(() => [
+        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'scoop_test',
+          name: 'Test',
+          folder: 'test-scoop',
+          isCone: false,
+          assistantLabel: 'test-scoop',
+        },
+      ]),
+      handleMessage: vi.fn().mockResolvedValue(undefined),
+      createScoopTab: vi.fn(),
+      registerScoop: vi.fn().mockResolvedValue(undefined),
+      unregisterScoop: vi.fn().mockResolvedValue(undefined),
+      stopScoop: vi.fn(),
+      clearQueuedMessages: vi.fn().mockResolvedValue(undefined),
+      clearAllMessages: vi.fn().mockResolvedValue(undefined),
+      delegateToScoop: vi.fn().mockResolvedValue(undefined),
+      updateModel: vi.fn(),
+    };
+    await bridge.bind(mockOrchestrator);
+
+    mockSync = {
+      sendMessage: vi.fn(),
+      close: vi.fn(),
+    };
+    mockStore = (bridge as any).sessionStore;
+  });
+
+  function simulatePanelMessage(payload: unknown): void {
+    for (const listener of messageListeners) {
+      listener({ source: 'panel', payload }, {}, () => {});
+    }
+  }
+
+  it('setFollowerSync stores the manager and clears with null', () => {
+    bridge.setFollowerSync(mockSync);
+    expect((bridge as any).followerSync).toBe(mockSync);
+    bridge.setFollowerSync(null);
+    expect((bridge as any).followerSync).toBeNull();
+  });
+
+  it('user-message in follower mode forwards to followerSync, skips orchestrator', async () => {
+    bridge.setFollowerSync(mockSync);
+
+    simulatePanelMessage({
+      type: 'user-message',
+      scoopJid: 'cone_1',
+      text: 'leader, do x',
+      messageId: 'msg-f1',
+      attachments: [{ kind: 'text', name: 'a.md', text: 'hi' }],
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockSync.sendMessage).toHaveBeenCalledWith('leader, do x', 'msg-f1', [
+      { kind: 'text', name: 'a.md', text: 'hi' },
+    ]);
+    expect(mockOrchestrator.handleMessage).not.toHaveBeenCalled();
+    expect(mockOrchestrator.createScoopTab).not.toHaveBeenCalled();
+
+    // Should still buffer the local user message for echo dedup
+    const buf = (bridge as any).getBuffer('cone_1');
+    expect(buf).toHaveLength(1);
+    expect(buf[0].id).toBe('msg-f1');
+  });
+
+  it('user-message falls through to orchestrator when follower mode inactive', async () => {
+    simulatePanelMessage({
+      type: 'user-message',
+      scoopJid: 'cone_1',
+      text: 'local',
+      messageId: 'msg-l1',
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalled();
+    expect(mockSync.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('applyFollowerSnapshot replaces cone buffer, persists, emits scoop-messages-replaced', () => {
+    // Pre-populate with stale local content to verify replacement.
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push({ id: 'old', role: 'user', content: 'stale', timestamp: 1 });
+
+    bridge.applyFollowerSnapshot([
+      { id: 'a', role: 'user', content: 'hi', timestamp: 100 },
+      {
+        id: 'b',
+        role: 'assistant',
+        content: 'reply',
+        timestamp: 200,
+        toolCalls: [{ id: 't1', name: 'bash', input: { cmd: 'ls' }, result: 'a\nb' }],
+      },
+    ] as any);
+
+    const after = (bridge as any).getBuffer('cone_1');
+    expect(after).toHaveLength(2);
+    expect(after[0].id).toBe('a');
+    expect(after[1].toolCalls?.[0]?.name).toBe('bash');
+
+    expect(mockStore.saveMessages).toHaveBeenCalledWith('session-cone', expect.any(Array));
+
+    const replaced = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    ) as any;
+    expect(replaced).toBeDefined();
+    expect(replaced.payload.scoopJid).toBe('cone_1');
+    expect(replaced.payload.messages).toHaveLength(2);
+  });
+
+  it('applyFollowerSnapshot is a noop when no orchestrator or no cone', () => {
+    (bridge as any).orchestrator = null;
+    bridge.applyFollowerSnapshot([{ id: 'a', role: 'user', content: 'hi', timestamp: 100 }] as any);
+    expect(sentMessages).toHaveLength(0);
+
+    (bridge as any).orchestrator = { getScoops: () => [] };
+    bridge.applyFollowerSnapshot([{ id: 'a', role: 'user', content: 'hi', timestamp: 100 }] as any);
+    expect(sentMessages).toHaveLength(0);
+  });
+
+  it('getConeJid returns the cone jid or null', () => {
+    expect(bridge.getConeJid()).toBe('cone_1');
+    (bridge as any).orchestrator = { getScoops: () => [] };
+    expect(bridge.getConeJid()).toBeNull();
+    (bridge as any).orchestrator = null;
+    expect(bridge.getConeJid()).toBeNull();
+  });
+
+  it('emitFollowerAgentEvent maps each AgentEvent type to the matching agent-event payload', () => {
+    bridge.emitFollowerAgentEvent({
+      type: 'content_delta',
+      messageId: 'm1',
+      text: 'partial',
+    } as any);
+    bridge.emitFollowerAgentEvent({ type: 'content_done', messageId: 'm1' } as any);
+    bridge.emitFollowerAgentEvent({
+      type: 'tool_use_start',
+      messageId: 'm1',
+      toolName: 'bash',
+      toolInput: { cmd: 'ls' },
+    } as any);
+    bridge.emitFollowerAgentEvent({
+      type: 'tool_result',
+      messageId: 'm1',
+      toolName: 'bash',
+      result: 'ok',
+      isError: false,
+    } as any);
+    bridge.emitFollowerAgentEvent({ type: 'turn_end', messageId: 'm1' } as any);
+    bridge.emitFollowerAgentEvent({ type: 'error', error: 'boom' } as any);
+
+    const types = sentMessages.map((m: any) => ({
+      type: m.payload?.type,
+      eventType: m.payload?.eventType,
+      error: m.payload?.error,
+    }));
+    expect(types).toEqual([
+      { type: 'agent-event', eventType: 'text_delta', error: undefined },
+      { type: 'agent-event', eventType: 'response_done', error: undefined },
+      { type: 'agent-event', eventType: 'tool_start', error: undefined },
+      { type: 'agent-event', eventType: 'tool_end', error: undefined },
+      { type: 'agent-event', eventType: 'turn_end', error: undefined },
+      { type: 'error', eventType: undefined, error: 'boom' },
+    ]);
+  });
+
+  it('emitFollowerAgentEvent is a noop without a cone', () => {
+    (bridge as any).orchestrator = { getScoops: () => [] };
+    bridge.emitFollowerAgentEvent({
+      type: 'content_delta',
+      messageId: 'm1',
+      text: 'x',
+    } as any);
+    expect(sentMessages).toHaveLength(0);
+  });
+
+  it('emitFollowerStatus emits scoop-status processing/ready for cone', () => {
+    bridge.emitFollowerStatus('processing');
+    bridge.emitFollowerStatus('idle');
+
+    const statusMsgs = sentMessages
+      .filter((m: any) => m.payload?.type === 'scoop-status')
+      .map((m: any) => m.payload);
+    expect(statusMsgs).toEqual([
+      { type: 'scoop-status', scoopJid: 'cone_1', status: 'processing' },
+      { type: 'scoop-status', scoopJid: 'cone_1', status: 'ready' },
+    ]);
+  });
+
+  it('emitFollowerIncomingMessage emits incoming-message for cone', () => {
+    bridge.emitFollowerIncomingMessage('echo-1', 'leader-side text');
+    const m = sentMessages.find((x: any) => x.payload?.type === 'incoming-message') as any;
+    expect(m.payload).toMatchObject({
+      type: 'incoming-message',
+      scoopJid: 'cone_1',
+      message: {
+        id: 'echo-1',
+        content: 'leader-side text',
+        channel: 'web',
+        senderName: 'User',
+        fromAssistant: false,
+      },
+    });
+    expect(typeof m.payload.message.timestamp).toBe('string');
+  });
+});
