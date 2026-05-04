@@ -97,6 +97,32 @@ If a Chrome Web Store revision is already pending review, `npm run publish:chrom
 
 When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browser runtime now exposes it at `/api/runtime-config` and the cone runtime will automatically create/attach a tray leader session on startup. Passing `--lead` to the CLI launches Chrome with the canonical `?tray=<worker-base-url>` query, and successful leader attach rewrites the visible URL to `?tray=<worker-base-url>/tray/<trayId>`. Passing `--join <join-url>` launches Chrome with the canonical `?tray=<join-url>` follower capability instead; the CLI validates that the value parses as a tray `.../join/<trayId>.<secret>` URL and strips any hash/query suffixes before launch. In standalone/Electron startup, if there is no query override, stored join/base URL, server runtime config, or `VITE_WORKER_BASE_URL`, the browser falls back to the staging worker in dev builds and the production worker in normal builds. Extension/offscreen builds can still use `VITE_WORKER_BASE_URL`, persisted runtime storage, or URL overrides via `tray` (canonical) plus legacy `lead` / `trayWorkerUrl` for the same leader-join path. `GET /join/:token` now reports readiness plus the supported bootstrap transport (`409 FOLLOWER_JOIN_NOT_READY` before a live leader, `200` with `signaling.transport = 'http-poll'` once the leader WebSocket is live), while **`POST /join/:token` remains the follower HTTP contract**: initial attach returns `result.action = wait|signal|fail`, and subsequent `poll` / `answer` / `ice-candidate` / `retry` actions drive the offer/answer/ICE bootstrap without requiring follower-owned tray WebSockets.
 
+## Dependency Update Policy
+
+This repo uses Renovate (`renovate.json`) to keep dependencies current, but enforces a deliberate cooldown before any new release is adopted. The intent is to mitigate supply-chain attacks: compromised packages (typosquats, hijacked maintainer accounts, malicious post-install scripts) are usually discovered, yanked, or flagged by the npm registry and the wider ecosystem within a few days of publication. Waiting before merging means we rarely consume those tainted versions.
+
+### Enforced delays
+
+| Update type                                         | Minimum age before Renovate opens / merges a PR |
+| --------------------------------------------------- | ----------------------------------------------- |
+| Default (all managers, all non-major updates)       | **7 days** since the upstream release           |
+| Major version bumps (`matchUpdateTypes: ["major"]`) | **14 days** since the upstream release          |
+| Renovate vulnerability alerts (security advisories) | **0 days** — fast-tracked, cooldown bypassed    |
+
+These delays are configured in `renovate.json` via `minimumReleaseAge` (top-level default) and per-rule overrides under `packageRules`. `internalChecksFilter: "strict"` ensures Renovate also applies the cooldown when deciding whether a PR is _eligible to merge_, not just when it is created — automerge will not fire until the release-age threshold has been satisfied for every package in the PR.
+
+### Reviewer expectations
+
+- Do not manually merge a Renovate PR that Renovate is still holding for the cooldown window. Wait for Renovate to mark the PR mergeable.
+- When bumping a dependency by hand (outside Renovate, e.g. via `npm install <pkg>@latest`), apply the same rule of thumb: prefer versions that are at least 7 days old (14 days for majors). For urgent security fixes, document the rationale in the commit/PR description.
+- Vulnerability-driven updates (Renovate "vulnerability alerts" or upstream CVE advisories) are exempt and may be merged immediately once they pass CI.
+
+### Why this policy exists
+
+- **Supply-chain risk mitigation**: the most common npm supply-chain incidents (e.g. `event-stream`, `ua-parser-js`, `coa`/`rc`, `node-ipc`) were detected and the malicious versions deprecated within hours-to-days of publish. A 7-day cooldown lets the ecosystem expose these before we ingest them.
+- **Stability**: brand-new releases occasionally regress in ways that the publisher patches within a day or two; the same cooldown coincidentally lets us skip those broken versions.
+- **Compatibility with autonomous agents**: agents working on this codebase (including Renovate's automerge bot) need an explicit, machine-readable signal for "this dependency is safe to adopt now." The `minimumReleaseAge` field is that signal.
+
 ## Ports (CLI Mode Only)
 
 | Port | Service            | Mode                                    |

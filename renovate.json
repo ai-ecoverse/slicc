@@ -5,6 +5,12 @@
   "automerge": true,
   "automergeType": "pr",
   "platformAutomerge": true,
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
+  "vulnerabilityAlerts": {
+    "minimumReleaseAge": "0 days",
+    "enabled": true
+  },
   "packageRules": [
     {
       "matchPackageNames": ["pyodide"],
@@ -30,6 +36,11 @@
     {
       "matchPackageNames": ["s1ntoneli/AppUpdater"],
       "allowedVersions": "<1.0.0"
+    },
+    {
+      "description": "Apply a longer 14-day cooldown for major version bumps, which carry higher risk of breaking changes and are more attractive targets for malicious actors.",
+      "matchUpdateTypes": ["major"],
+      "minimumReleaseAge": "14 days"
     }
   ]
 }

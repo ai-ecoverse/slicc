@@ -1,0 +1,57 @@
+name: Skill proposal
+description: Propose a new `SKILL.md` for `/workspace/skills/` (native) or a `.agents` / `.claude` compatibility skill.
+title: 'skill: '
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Skills teach SLICC how to perform challenging tasks without core code changes. Native skills live in `packages/vfs-root/workspace/skills/`. Compatibility skills are auto-discovered from any reachable `.agents/skills/*/SKILL.md` or `.claude/skills/*/SKILL.md`.
+
+        If you already have a draft, sending a PR directly is usually faster than opening this issue.
+
+  - type: input
+    id: name
+    attributes:
+      label: Skill name
+      description: Short, kebab-cased identifier.
+      placeholder: 'as-a-bot, mcp-secrets, pdf-extract'
+    validations:
+      required: true
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: What does it do?
+      description: One paragraph. What capability does the cone gain, and why does it belong as a skill rather than a hardcoded feature?
+    validations:
+      required: true
+
+  - type: textarea
+    id: triggers
+    attributes:
+      label: When should the agent reach for it?
+      description: Trigger conditions or example user prompts.
+    validations:
+      required: true
+
+  - type: textarea
+    id: deps
+    attributes:
+      label: Dependencies / secrets / integration target (optional)
+      description: |
+        External services it talks to, secrets it needs, shell commands or browser APIs it relies on. Flag anything that doesn't already exist in SLICC.
+      placeholder: |
+        - GitHub PAT via `git config github.token`
+        - new shell helper: `as-a-bot <repo>`
+
+  - type: dropdown
+    id: skill_type
+    attributes:
+      label: Skill type
+      options:
+        - 'Native (`/workspace/skills/`) — install-managed'
+        - 'Compatibility (`.agents/skills/` or `.claude/skills/`) — read-only'
+        - 'Not sure'
+    validations:
+      required: true

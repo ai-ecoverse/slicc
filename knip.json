@@ -1,15 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreBinaries": ["swift", "wrangler", "playwright", "tsx", "sleep"],
-  "ignoreDependencies": [
-    "pyodide",
-    "@cloudflare/workers-types",
-    "@semantic-release/commit-analyzer",
-    "@semantic-release/release-notes-generator",
-    "@semantic-release/npm",
-    "@semantic-release/github",
-    "buffer"
-  ],
+  "ignoreBinaries": ["swift", "wrangler", "playwright", "sleep"],
+  "ignoreDependencies": ["pyodide", "@cloudflare/workers-types"],
   "ignore": [
     "dist/**",
     "**/dist/**",
@@ -19,7 +11,6 @@
     "packages/dev-tools/**",
     "packages/assets/**",
     "**/*.d.ts",
-    "packages/webapp/src/shims/**",
     "packages/webapp/src/stubs/**"
   ],
   "workspaces": {
@@ -38,6 +29,11 @@
         "src/ui/slicc-diff-entry.ts",
         "src/ui/lucide-icons.ts",
         "src/ui/rum.js",
+        "src/shims/empty.ts",
+        "src/shims/stream.ts",
+        "src/shims/http.ts",
+        "src/shims/https.ts",
+        "src/shims/http2.ts",
         "providers/*.ts",
         "tests/**/*.test.ts"
       ],
@@ -49,7 +45,7 @@
         "tests/integration/**",
         "tests/test-dips.mjs"
       ],
-      "ignoreDependencies": ["puppeteer-core"]
+      "ignoreDependencies": ["buffer", "puppeteer-core"]
     },
     "packages/chrome-extension": {
       "entry": [
