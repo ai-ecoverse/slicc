@@ -101,6 +101,15 @@ jobs:
             echo "::error::packages/vfs-root/shared/CLAUDE.md exceeds 3KB limit ($size bytes). Keep agent instructions concise."
             exit 1
           fi
+      - name: Dead code detection (knip)
+        # Hard-fail on unused files, missing/unlisted dependencies,
+        # unresolved imports, duplicate exports, and unused binaries.
+        # Unused individual exports/types are NOT enforced here — they
+        # often represent intentional public API surface and are
+        # tracked separately via 'npm run deadcode:full'.
+        # Selector flags live in package.json so the CI gate cannot
+        # silently diverge from the documented local command.
+        run: npm run deadcode -- --no-progress --reporter compact
 
   webapp:
     needs: changes
@@ -397,6 +406,13 @@ jobs:
           name: coverage-swift-server
           path: packages/swift-server/.build/coverage/
           if-no-files-found: ignore
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+          # Informational scan; surfaces unused Swift declarations without
+          # blocking PRs while existing findings get cleaned up incrementally.
+          cd packages/swift-server && periphery scan --disable-update-check || true
 
   swift-launcher:
     needs: [changes, lint]
@@ -434,6 +450,13 @@ jobs:
           if-no-files-found: ignore
       - name: Build
         run: npm run build -w @slicc/swift-launcher
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+          # Informational scan; surfaces unused Swift declarations without
+          # blocking PRs while existing findings get cleaned up incrementally.
+          cd packages/swift-launcher && periphery scan --disable-update-check || true
 
   # Wait for any in-progress release before allowing merge queue to land.
   # Only runs on merge_group events; skipped (= passing) for PRs.

@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "build": "swift build -c release",
-    "test": "swift test"
+    "test": "swift test",
+    "deadcode": "periphery scan"
   }
 }
