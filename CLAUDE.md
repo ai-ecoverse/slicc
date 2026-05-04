@@ -212,17 +212,25 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 - Add or update tests for behavior changes.
 - TypeScript tests live in `packages/*/tests/`, mirrored by subsystem.
 - See `docs/testing.md` for patterns and command selection.
-- **Coverage thresholds are enforced in CI** via `vitest --coverage`. Each
-  package has a per-project minimum (configured in `package.json` as
-  `test:coverage:<package>`). New code must keep coverage at or above the
-  current floor — CI fails if any of statements/branches/functions/lines
-  drops below the threshold for that package. Run
-  `npm run test:coverage:<package>` locally before pushing changes that
-  remove or restructure code paths. Per-package floors:
-  - `cloudflare-worker`: 75% lines/statements, 65% branches, 85% functions
-  - `node-server`: 65% lines/statements/functions, 55% branches
-  - `chrome-extension`: 55% lines/statements, 45% branches, 60% functions
-  - `webapp`: global default 50% lines/statements/functions, 40% branches
+- **Coverage thresholds are enforced in CI** for every package. New code
+  must keep coverage at or above the current floor — CI fails if any of
+  the tracked metrics drops below the threshold for that package.
+  - **TypeScript packages**: `vitest --coverage` (v8 provider). Run
+    `npm run test:coverage:<package>` locally; CI runs the same script
+    as the package's only test step. Per-package floors:
+    - `cloudflare-worker`: 75% lines/statements, 65% branches, 85% functions
+    - `node-server`: 65% lines/statements/functions, 55% branches
+    - `chrome-extension`: 55% lines/statements, 45% branches, 60% functions
+    - `webapp`: global default 50% lines/statements/functions, 40% branches
+  - **Swift packages**: `swift test --enable-code-coverage` plus
+    `xcrun llvm-cov report` via
+    `packages/dev-tools/tools/swift-coverage-check.sh`. Tests/.build
+    paths are excluded; the TOTAL row is checked against per-package
+    floors:
+    - `swift-server`: 40% lines, 40% functions, 35% regions
+    - `swift-launcher`: 5% lines, 5% functions, 8% regions
+      (most of the bundle is SwiftUI views that resist unit tests; the
+      floor exists to prevent regression below the current baseline)
 
 ### Documentation
 
