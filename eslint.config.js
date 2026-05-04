@@ -92,6 +92,7 @@ export default tseslint.config(
     files: [
       'packages/node-server/src/**/*.ts',
       'packages/cloudflare-worker/src/**/*.ts',
+      'packages/dev-tools/tools/**/*.{mjs,js,ts}',
       'vite.config*.ts',
     ],
     languageOptions: {

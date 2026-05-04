@@ -111,6 +111,39 @@ jobs:
         # silently diverge from the documented local command.
         run: npm run deadcode -- --no-progress --reporter compact
 
+  # Lightweight test matrix that re-runs the TypeScript test suites across
+  # supported Node majors. The package engines field is `>=22.13.0`, so
+  # any one-version pin in the heavier per-package jobs misses regressions
+  # that only surface on newer runtimes (e.g. jsdom + Node >= 25 quirks
+  # around vi.unstubAllGlobals + localStorage). Build/E2E stay on a single
+  # Node version in the per-package jobs to keep CI time bounded.
+  node-matrix-tests:
+    needs: changes
+    if: >-
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.extension == 'true' ||
+      needs.changes.outputs.cloudflare-worker == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['24', '25']
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - name: Vitest (all projects, no coverage thresholds)
+        run: npm run test
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
+
   webapp:
     needs: changes
     if: >-
@@ -489,6 +522,7 @@ jobs:
       [
         changes,
         lint,
+        node-matrix-tests,
         webapp,
         node-server,
         chrome-extension,
