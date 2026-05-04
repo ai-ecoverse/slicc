@@ -52,6 +52,7 @@
         "vite.config.ts",
         "src/service-worker.ts",
         "src/offscreen.ts",
+        "src/secrets-entry.ts",
         "voice-popup.js",
         "mount-popup.js",
         "tests/**/*.test.ts"
