@@ -1368,7 +1368,11 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         }
 
         if (isExtensionRuntime()) {
-          const payload: RefreshTrayRuntimeMsg = { type: 'refresh-tray-runtime' };
+          const payload: RefreshTrayRuntimeMsg = {
+            type: 'refresh-tray-runtime',
+            joinUrl: stored.joinUrl,
+            workerBaseUrl: stored.workerBaseUrl,
+          };
           void chrome.runtime.sendMessage({ source: 'panel' as const, payload }).catch(() => {});
         } else {
           window.dispatchEvent(
@@ -1482,7 +1486,11 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         }
 
         if (isExtensionRuntime()) {
-          const payload: RefreshTrayRuntimeMsg = { type: 'refresh-tray-runtime' };
+          const payload: RefreshTrayRuntimeMsg = {
+            type: 'refresh-tray-runtime',
+            joinUrl: stored.joinUrl,
+            workerBaseUrl: stored.workerBaseUrl,
+          };
           void chrome.runtime.sendMessage({ source: 'panel' as const, payload }).catch(() => {
             // Offscreen may not be ready yet; mainExtension will reconnect shortly.
           });
