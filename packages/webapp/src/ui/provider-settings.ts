@@ -8,6 +8,9 @@ import { getProviders, getModels, getModel, createLogger } from '../core/index.j
 import type { Model } from '../core/index.js';
 import type { Api } from '@mariozechner/pi-ai';
 import { storeTrayJoinUrl, hasStoredTrayJoinUrl } from '../scoops/tray-runtime-config.js';
+import { describeInvalidJoinUrl } from './tray-join-url.js';
+
+export { describeInvalidJoinUrl };
 import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import type { RefreshTrayRuntimeMsg } from '../../../chrome-extension/src/messages.js';
 import {
@@ -935,7 +938,10 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       const joinTrayBtn = document.createElement('button');
       joinTrayBtn.className = 'dialog__btn dialog__btn--secondary';
-      joinTrayBtn.textContent = isFollowerActive || hasJoinUrl ? 'Rejoin tray' : 'Join a tray';
+      joinTrayBtn.textContent =
+        isFollowerActive || hasJoinUrl
+          ? 'Reconnect to other browser'
+          : 'Connect to another browser';
       joinTrayBtn.addEventListener('click', () => renderJoinTrayForm());
       dialog.appendChild(joinTrayBtn);
 
@@ -1291,7 +1297,7 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         const joinBtn = document.createElement('button');
         joinBtn.className = 'dialog__btn dialog__btn--secondary';
         joinBtn.style.marginTop = '8px';
-        joinBtn.textContent = 'Join a tray';
+        joinBtn.textContent = 'Connect to another browser';
         joinBtn.addEventListener('click', () => {
           renderJoinTrayForm();
         });
@@ -1324,14 +1330,14 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       const title = document.createElement('div');
       title.className = 'dialog__title';
-      title.textContent = 'Join this tray';
+      title.textContent = 'Connect this browser?';
       dialog.appendChild(title);
 
       const desc = document.createElement('div');
       desc.className = 'dialog__desc';
       desc.style.marginBottom = '12px';
       desc.textContent =
-        'You\u2019ve been invited to join a SLICC tray session. Click below to connect.';
+        'You\u2019ve been invited to mirror another SLICC browser. Click below to start syncing.';
       dialog.appendChild(desc);
 
       // Show truncated URL for context
@@ -1351,11 +1357,11 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       const joinBtn = document.createElement('button');
       joinBtn.className = 'dialog__btn';
-      joinBtn.textContent = 'Join tray';
+      joinBtn.textContent = 'Connect';
       joinBtn.addEventListener('click', () => {
         const stored = storeTrayJoinUrl(window.localStorage, joinUrl);
         if (!stored) {
-          statusEl.textContent = 'Invalid tray join URL.';
+          statusEl.textContent = 'Invalid sync URL.';
           statusEl.style.display = '';
           statusEl.style.color = 'var(--slicc-cone)';
           return;
@@ -1372,7 +1378,7 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           );
         }
 
-        statusEl.textContent = 'Connecting to tray...';
+        statusEl.textContent = 'Connecting\u2026';
         statusEl.style.display = '';
         statusEl.style.color = 'var(--s2-content-secondary)';
 
@@ -1398,19 +1404,45 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       const title = document.createElement('div');
       title.className = 'dialog__title';
-      title.textContent = 'Join a tray';
+      title.textContent = 'Connect to another browser';
       dialog.appendChild(title);
 
       const desc = document.createElement('div');
       desc.className = 'dialog__desc';
       desc.style.marginBottom = '12px';
-      desc.textContent =
-        'Paste the tray join URL shared by the tray leader. It must include a /join/... capability.';
+      desc.textContent = 'Paste a multi-browser sync URL to mirror another SLICC browser.';
       dialog.appendChild(desc);
+
+      const hint = document.createElement('details');
+      hint.style.cssText =
+        'margin-bottom: 12px; font-size: 12px; color: var(--s2-content-secondary);';
+      const hintSummary = document.createElement('summary');
+      hintSummary.style.cssText =
+        'cursor: pointer; user-select: none; color: var(--s2-content-secondary);';
+      hintSummary.textContent = 'How do I get the sync URL?';
+      hint.appendChild(hintSummary);
+      const hintBody = document.createElement('div');
+      hintBody.style.cssText =
+        'margin-top: 8px; padding: 10px 12px; background: var(--s2-bg-layer-2); border-radius: var(--s2-radius-default); border: 1px solid var(--s2-border-subtle); line-height: 1.5;';
+      const hintList = document.createElement('ol');
+      hintList.style.cssText = 'margin: 0; padding-left: 20px;';
+      const steps = [
+        'On the other SLICC, click the avatar (top right).',
+        'Choose \u201cEnable multi-browser sync\u201d \u2014 the URL is copied automatically.',
+        'Paste it below. Both browsers must be on the same SLICC version.',
+      ];
+      for (const step of steps) {
+        const li = document.createElement('li');
+        li.textContent = step;
+        hintList.appendChild(li);
+      }
+      hintBody.appendChild(hintList);
+      hint.appendChild(hintBody);
+      dialog.appendChild(hint);
 
       const trayUrlLabel = document.createElement('div');
       trayUrlLabel.className = 'dialog__desc';
-      trayUrlLabel.textContent = 'Tray URL:';
+      trayUrlLabel.textContent = 'Sync URL:';
       dialog.appendChild(trayUrlLabel);
 
       const trayUrlInput = document.createElement('input');
@@ -1418,8 +1450,7 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
       trayUrlInput.type = 'text';
       trayUrlInput.autocomplete = 'off';
       trayUrlInput.spellcheck = false;
-      trayUrlInput.placeholder = 'https://tray.example.com/base/join/tray-123.capability-token';
-      trayUrlInput.style.marginBottom = '12px';
+      trayUrlInput.placeholder = 'https://www.sliccy.ai/join/<token>';
       dialog.appendChild(trayUrlInput);
 
       const errorEl = document.createElement('div');
@@ -1433,11 +1464,18 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       const joinBtn = document.createElement('button');
       joinBtn.className = 'dialog__btn';
-      joinBtn.textContent = 'Join tray';
+      joinBtn.textContent = 'Connect';
       joinBtn.addEventListener('click', () => {
-        const stored = storeTrayJoinUrl(window.localStorage, trayUrlInput.value);
+        const raw = trayUrlInput.value.trim();
+        if (!raw) {
+          errorEl.textContent = 'Paste a sync URL to continue.';
+          errorEl.style.display = '';
+          trayUrlInput.focus();
+          return;
+        }
+        const stored = storeTrayJoinUrl(window.localStorage, raw);
         if (!stored) {
-          errorEl.textContent = 'Enter a valid tray join URL with a /join/... capability.';
+          errorEl.textContent = describeInvalidJoinUrl(raw);
           errorEl.style.display = '';
           trayUrlInput.focus();
           return;
@@ -1449,7 +1487,6 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
             // Offscreen may not be ready yet; mainExtension will reconnect shortly.
           });
         } else {
-          // Trigger follower join in standalone mode without page reload
           window.dispatchEvent(
             new CustomEvent('slicc:tray-join', {
               detail: { joinUrl: stored.joinUrl },
@@ -1457,11 +1494,10 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           );
         }
 
-        statusEl.textContent = 'Connecting to tray...';
+        statusEl.textContent = 'Connecting\u2026';
         statusEl.style.display = '';
         statusEl.style.color = 'var(--s2-content-secondary)';
 
-        // Close dialog after brief feedback
         setTimeout(() => {
           overlay.remove();
           resolve(false);

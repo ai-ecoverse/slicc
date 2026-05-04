@@ -37,6 +37,12 @@ import {
   getProviderConfig,
   removeAccount,
 } from './provider-settings.js';
+import { getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
+import { copyTextToClipboard } from './clipboard.js';
+import { computeTrayMenuModel } from './tray-join-url.js';
+import { showSyncEnabledDialog } from './sync-dialog.js';
+import { getTrayResetter } from '../shell/supplemental-commands/host-command.js';
 import { getHiddenTabs, setHiddenTabs, type ExtensionTabId } from './tabbed-ui.js';
 import { RailZone } from './rail-zone.js';
 import { PanelRegistry } from './panel-registry.js';
@@ -527,6 +533,74 @@ export class Layout {
     return name.slice(0, 2).toUpperCase();
   }
 
+  /**
+   * Render the Tray block of the avatar popover.
+   *
+   * Three shapes:
+   *   - Leader with `state === 'leader'` and a session: a primary "Copy
+   *     tray join URL" item plus a small status caption.
+   *   - Leader connecting / reconnecting / error: a disabled item showing
+   *     why no URL is available yet.
+   *   - Follower with state !== 'inactive': a status caption showing the
+   *     follower connection state.
+   *
+   * Returns nothing when this runtime is neither a leader nor a follower —
+   * keeps the popover compact for users that don't use trays.
+   */
+  private appendTrayMenu(popover: HTMLElement): void {
+    const model = computeTrayMenuModel(
+      getLeaderTrayRuntimeStatus(),
+      getFollowerTrayRuntimeStatus()
+    );
+    if (model.kind === 'hidden') return;
+
+    const sep = document.createElement('div');
+    sep.className = 'avatar-popover__separator';
+    popover.appendChild(sep);
+
+    if (model.kind === 'leader-copy') {
+      const enableBtn = document.createElement('button');
+      enableBtn.className = 'avatar-popover__item';
+      enableBtn.textContent = model.label;
+      enableBtn.addEventListener('click', async () => {
+        popover.remove();
+        const copied = await copyTextToClipboard(model.joinUrl);
+        showSyncEnabledDialog({
+          joinUrl: model.joinUrl,
+          copied,
+          onReset: getTrayResetter(),
+        });
+      });
+      popover.appendChild(enableBtn);
+      const caption = document.createElement('div');
+      caption.className = 'avatar-popover__caption';
+      caption.textContent = model.caption;
+      popover.appendChild(caption);
+    } else if (model.kind === 'leader-pending') {
+      const item = document.createElement('button');
+      item.className = 'avatar-popover__item';
+      item.textContent = model.label;
+      item.disabled = true;
+      item.style.opacity = '0.6';
+      item.style.cursor = 'not-allowed';
+      popover.appendChild(item);
+      const caption = document.createElement('div');
+      caption.className = 'avatar-popover__caption';
+      caption.textContent = model.caption;
+      popover.appendChild(caption);
+    } else {
+      const item = document.createElement('div');
+      item.className = 'avatar-popover__item';
+      item.textContent = model.label;
+      item.style.cursor = 'default';
+      popover.appendChild(item);
+      const caption = document.createElement('div');
+      caption.className = 'avatar-popover__caption';
+      caption.textContent = model.caption;
+      popover.appendChild(caption);
+    }
+  }
+
   /** Build the user avatar element — 28px circle, three states. */
   private buildUserAvatar(): HTMLElement {
     const el = document.createElement('div');
@@ -621,6 +695,12 @@ export class Layout {
       });
       popover.appendChild(signOutBtn);
     }
+
+    // Tray section — surface the leader's join URL (only visible
+    // when this runtime owns a tray) or the follower's connection
+    // state, so first-time users can find the URL without dropping
+    // into the shell.
+    this.appendTrayMenu(popover);
 
     // Clear all accounts (danger)
     if (accounts.length > 0) {
