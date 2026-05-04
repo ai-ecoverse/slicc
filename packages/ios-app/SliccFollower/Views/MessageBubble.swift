@@ -2,23 +2,42 @@ import SwiftUI
 
 // MARK: - MessageBubble
 
-/// Renders a single chat message as a styled bubble.
+/// Renders a single chat message — user bubbles on the right, lick rows
+/// as compact pills (no avatar/bubble), assistant text flowing on the
+/// dark background like the web UI.
 struct MessageBubble: View {
     let message: ChatMessage
     /// Optional callback for inline sprinkle licks (forwarded to AppState).
     var onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)?
 
     private let userBubbleColor = Color(red: 0x71 / 255, green: 0x55 / 255, blue: 0xFA / 255)
-    private let assistantBubbleColor = Color(red: 0x25 / 255, green: 0x25 / 255, blue: 0x40 / 255)
+
+    /// True when this message should render as a compact lick pill.
+    /// Mirrors the web UI rule: source == "lick" or known lick channel.
+    private var isLick: Bool {
+        if message.source == "lick" { return true }
+        if let channel = message.channel, LickRow.isLickChannel(channel) { return true }
+        return false
+    }
 
     var body: some View {
-        HStack {
-            if message.role == .user { Spacer(minLength: UIScreen.main.bounds.width * 0.2) }
-
-            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
-                // Source label for non-cone assistant messages — adds an SF icon
-                // matching the channel/source for visual parity with the web UI.
-                if message.role == .assistant, let source = message.source, source != "cone" {
+        if isLick {
+            LickRow(message: message)
+                .padding(.horizontal, 4)
+        } else if message.role == .user {
+            HStack {
+                Spacer(minLength: UIScreen.main.bounds.width * 0.2)
+                Text(message.content)
+                    .font(.system(size: 15))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(userBubbleColor)
+                    .cornerRadius(18)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                if let source = message.source, source != "cone" {
                     HStack(spacing: 4) {
                         Image(systemName: SliccIcons.messageSource(message))
                             .font(.system(size: 10))
@@ -28,22 +47,8 @@ struct MessageBubble: View {
                     .foregroundStyle(.white.opacity(0.45))
                     .padding(.horizontal, 4)
                 }
-
-                // Message content
-                if message.role == .user {
-                    Text(message.content)
-                        .font(.system(size: 15))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(userBubbleColor)
-                        .cornerRadius(18)
-                } else {
-                    assistantBody
-                }
+                assistantBody
             }
-
-            if message.role == .assistant { Spacer(minLength: UIScreen.main.bounds.width * 0.2) }
         }
     }
 
@@ -65,10 +70,8 @@ struct MessageBubble: View {
                 toolCallsSection(toolCalls)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(assistantBubbleColor)
-        .cornerRadius(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
     }
 
     /// Renders the cleaned markdown interleaved with extracted shtml fragments.
@@ -250,6 +253,170 @@ private struct InlineSprinkleHost: View {
         )
         .frame(height: height)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+// MARK: - LickRow
+
+/// Compact pill row for lick messages (webhook/cron/sprinkle/...). Mirrors
+/// the web UI's `.lick` rendering — channel label + event preview, with
+/// the body (typically JSON) hidden behind a tap-to-expand disclosure.
+struct LickRow: View {
+    let message: ChatMessage
+
+    @State private var isExpanded = false
+
+    private static let known: Set<String> = [
+        "webhook", "cron", "sprinkle", "fswatch",
+        "session-reload", "navigate", "upgrade",
+        "scoop-notify", "scoop-idle", "scoop-wait",
+    ]
+
+    static func isLickChannel(_ channel: String) -> Bool {
+        known.contains(channel)
+    }
+
+    private let pillBackground = Color(red: 0x1B / 255, green: 0x1B / 255, blue: 0x2A / 255)
+    private let bodyBackground = Color(red: 0x14 / 255, green: 0x14 / 255, blue: 0x22 / 255)
+    private let borderColor = Color.white.opacity(0.06)
+
+    private var channel: String { message.channel ?? "" }
+    private var label: String { SliccIcons.lickLabel(channel) }
+    private var iconName: String {
+        SliccIcons.lick(channel, sprinkleName: parseSprinkleName())
+    }
+
+    /// Sprinkle event name parsed from `[Sprinkle Event: <name>]` header.
+    private func parseSprinkleName() -> String? {
+        guard channel == "sprinkle" else { return nil }
+        guard let m = LickRow.headerRegex.firstMatch(
+            in: message.content,
+            range: NSRange(message.content.startIndex..., in: message.content)
+        ) else { return nil }
+        if let r = Range(m.range(at: 2), in: message.content) {
+            return String(message.content[r]).trimmingCharacters(in: .whitespaces)
+        }
+        return nil
+    }
+
+    private var parsed: (preview: String, body: String) {
+        LickRow.parseLickContent(message.content)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(label)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.85))
+                    if !parsed.preview.isEmpty {
+                        Text(parsed.preview)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Spacer(minLength: 6)
+                    Image(systemName: iconName)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(pillBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(borderColor, lineWidth: 0.5)
+                )
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded, !parsed.body.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(parsed.body)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .textSelection(.enabled)
+                        .padding(12)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(bodyBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(borderColor, lineWidth: 0.5)
+                )
+                .padding(.top, 4)
+            }
+        }
+    }
+
+    // MARK: Header parsing — mirrors lick-view.ts parseLickContent
+
+    private static let headerRegex: NSRegularExpression = {
+        // [Xyz Event: name]\n  OR  [Xyz: name]\n
+        try! NSRegularExpression(pattern: #"^\[([^\]:]+?)(?:\s+Event)?:\s*([^\]]+?)\]\s*\n?"#)
+    }()
+
+    private static let scoopHeaderRegex: NSRegularExpression = {
+        try! NSRegularExpression(pattern: #"^\[@([^\]]+?)\s+(completed|idle)\]\s*:?\s*\n?"#)
+    }()
+
+    private static let scoopWaitHeaderRegex: NSRegularExpression = {
+        try! NSRegularExpression(pattern: #"^\[scoop_wait completed\]\s*\n([^\n]+)\n?"#)
+    }()
+
+    static func parseLickContent(_ content: String) -> (preview: String, body: String) {
+        let full = NSRange(content.startIndex..., in: content)
+        if let m = scoopWaitHeaderRegex.firstMatch(in: content, range: full),
+           let summary = Range(m.range(at: 1), in: content),
+           let header = Range(m.range, in: content) {
+            let preview = String(content[summary]).trimmingCharacters(in: .whitespaces)
+            let body = stripFences(String(content[header.upperBound...])
+                .trimmingCharacters(in: .whitespaces))
+            return (preview, body)
+        }
+        if let m = scoopHeaderRegex.firstMatch(in: content, range: full),
+           let nameR = Range(m.range(at: 1), in: content),
+           let kwR = Range(m.range(at: 2), in: content),
+           let header = Range(m.range, in: content) {
+            let name = String(content[nameR]).trimmingCharacters(in: .whitespaces)
+            let kw = String(content[kwR])
+            let body = stripFences(String(content[header.upperBound...])
+                .trimmingCharacters(in: .whitespaces))
+            return ("\(name) \(kw)", body)
+        }
+        if let m = headerRegex.firstMatch(in: content, range: full),
+           let nameR = Range(m.range(at: 2), in: content),
+           let header = Range(m.range, in: content) {
+            let preview = String(content[nameR]).trimmingCharacters(in: .whitespaces)
+            let body = stripFences(String(content[header.upperBound...])
+                .trimmingCharacters(in: .whitespaces))
+            return (preview, body)
+        }
+        let firstLine = content.split(whereSeparator: \.isNewline)
+            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map(String.init) ?? ""
+        let preview = String(firstLine.prefix(80))
+        return (preview.trimmingCharacters(in: .whitespaces), stripFences(content))
+    }
+
+    /// Strip a leading ```lang fence and trailing ``` fence so the expanded
+    /// body shows the raw payload (matches the web UI's rendered markdown).
+    private static func stripFences(_ text: String) -> String {
+        var s = text
+        if let fence = s.range(of: #"^```[a-zA-Z0-9]*\n"#, options: .regularExpression) {
+            s.removeSubrange(fence)
+        }
+        if s.hasSuffix("```") {
+            s.removeLast(3)
+        }
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

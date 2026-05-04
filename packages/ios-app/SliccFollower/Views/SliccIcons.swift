@@ -63,18 +63,51 @@ enum SliccIcons {
         }
     }
 
-    // MARK: - Lick Channel Icons
+    // MARK: - Lick Channel Icons & Labels
 
-    /// Icon for a lick channel (webhook, cron, sprinkle, fswatch, navigate, session-reload).
-    static func lick(_ channel: String) -> String {
+    /// Icon for a lick channel (mirrors `packages/webapp/src/ui/lick-view.ts`).
+    /// `sprinkleName` allows per-sprinkle overrides (e.g. "welcome" → door icon).
+    static func lick(_ channel: String, sprinkleName: String? = nil) -> String {
+        if channel == "sprinkle", let name = sprinkleName,
+           let override = sprinkleIconOverrides[name] {
+            return override
+        }
         switch channel {
-        case "webhook":         return "antenna.radiowaves.left.and.right"
-        case "cron":            return "clock.arrow.2.circlepath"
-        case "sprinkle":        return "sparkles"
-        case "fswatch":         return "eye"
-        case "navigate":        return "arrow.up.right.square"
-        case "session-reload":  return "arrow.clockwise.circle"
-        default:                return "bolt"
+        case "webhook":         return "bolt.horizontal.fill"      // Webhook
+        case "cron":            return "calendar.badge.clock"      // CalendarClock
+        case "sprinkle":        return "sparkles"                  // Sparkles
+        case "fswatch":         return "folder.badge.gearshape"    // FolderSync
+        case "navigate":        return "safari"                    // Compass
+        case "session-reload":  return "arrow.counterclockwise"    // RotateCcw
+        case "upgrade":         return "arrow.up.circle.fill"      // ArrowUpCircle
+        case "scoop-notify":    return "cup.and.saucer.fill"       // IceCream
+        case "scoop-idle":      return "hourglass"                 // Hourglass
+        case "scoop-wait":      return "checklist"                 // ListChecks
+        default:                return "bell"                      // Bell
+        }
+    }
+
+    /// Per-sprinkle icon overrides keyed by sprinkle name (matches
+    /// `SPRINKLE_ICON_BY_NAME` in lick-view.ts).
+    private static let sprinkleIconOverrides: [String: String] = [
+        "welcome": "door.right.hand.open",
+    ]
+
+    /// Lowercase noun label for a lick channel — keeps the chat row reading
+    /// like a tool-call row ("webhook github-push", "cron daily-digest", …).
+    static func lickLabel(_ channel: String) -> String {
+        switch channel {
+        case "webhook":         return "webhook"
+        case "cron":            return "cron"
+        case "sprinkle":        return "sprinkle"
+        case "fswatch":         return "files"
+        case "navigate":        return "navigate"
+        case "session-reload":  return "reload"
+        case "upgrade":         return "upgrade"
+        case "scoop-notify":    return "scoop"
+        case "scoop-idle":      return "idle"
+        case "scoop-wait":      return "wait"
+        default:                return "event"
         }
     }
 
