@@ -267,7 +267,7 @@ export class DaMountBackend implements MountBackend {
         }
         const newEtag = headRes.headers.get('etag') ?? '';
         await this.cache.putBody(rel, body, newEtag);
-        const parent = rel.split('/').slice(0, -1).join('/') || '/';
+        const parent = rel.split('/').slice(0, -1).join('/');
         await this.cache.invalidateListing(parent);
         return;
       }
@@ -287,7 +287,7 @@ export class DaMountBackend implements MountBackend {
     }
     const newEtag = res.headers.get('etag') ?? '';
     await this.cache.putBody(rel, body, newEtag);
-    const parent = rel.split('/').slice(0, -1).join('/') || '/';
+    const parent = rel.split('/').slice(0, -1).join('/');
     await this.cache.invalidateListing(parent);
   }
 
@@ -418,7 +418,7 @@ export class DaMountBackend implements MountBackend {
       throw new FsError('EIO', `da delete failed: ${res.status}`, path);
     }
     await this.cache.invalidateBody(rel);
-    const parent = rel.split('/').slice(0, -1).join('/') || '/';
+    const parent = rel.split('/').slice(0, -1).join('/');
     await this.cache.invalidateListing(parent);
   }
 

@@ -340,6 +340,57 @@ describe('DaMountBackend stat', () => {
   });
 });
 
+describe('DaMountBackend remove cache invalidation', () => {
+  let mock: ReturnType<typeof installFetchMock>;
+  beforeEach(() => {
+    mock = installFetchMock();
+  });
+  afterEach(() => mock.restore());
+
+  it('invalidates the parent listing for a root-level file (regression for ls-still-shows-deleted)', async () => {
+    // Manual smoke test caught this: `rm /mnt/da/test.html` returned 204
+    // and DA confirmed the file was gone, but the next `ls /mnt/da/`
+    // still showed test.html. Root cause: the cache stores the root
+    // listing under key '' (mount-relative), but the invalidation code
+    // converted '' to '/' via `|| '/'`, so the wrong key was invalidated
+    // and the stale listing survived.
+    const cache = makeCache();
+    // 1. Populate root listing (file appears in it).
+    mock.enqueue(
+      new Response(
+        JSON.stringify([
+          { name: 'test', ext: 'html', lastModified: 1714000000000 },
+          { name: 'index', ext: 'html', lastModified: 1714000000000 },
+        ]),
+        { status: 200 }
+      )
+    );
+    const backend = new DaMountBackend({
+      source: 'da://my-org/my-repo',
+      profile: 'default',
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
+      cache,
+    });
+    let entries = await backend.readDir('');
+    expect(entries.map((e) => e.name)).toContain('test.html');
+
+    // 2. Delete the file (DA returns 204).
+    mock.enqueue(new Response(null, { status: 204 }));
+    await backend.remove('test.html');
+
+    // 3. Next readDir must hit network (cache invalidated). Set up a
+    //    fresh response without the deleted file.
+    mock.enqueue(
+      new Response(JSON.stringify([{ name: 'index', ext: 'html', lastModified: 1714000000000 }]), {
+        status: 200,
+      })
+    );
+    entries = await backend.readDir('');
+    expect(entries.map((e) => e.name)).not.toContain('test.html');
+    expect(entries.map((e) => e.name)).toContain('index.html');
+  });
+});
+
 describe('DaMountBackend remove', () => {
   let mock: ReturnType<typeof installFetchMock>;
   beforeEach(() => {
