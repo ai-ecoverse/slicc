@@ -32,10 +32,6 @@ When the user asks for a dashboard, editor, or visualization — read `/workspac
 
 On `[Navigate Event: ...]`, read `/workspace/skills/handoff/SKILL.md` first. Show approval card, wait for user, dispatch by verb.
 
-## Mounts
-
-When the user asks to mount anything — local folders, S3 / R2 / MinIO buckets, or Adobe da.live repos — read `/workspace/skills/mount/SKILL.md` first. Don't default to local when the user mentions a remote service (S3, R2, da.live, AEM Document Authoring). The skill covers credential setup, the right backend for each intent, and common errors.
-
 ## Environment
 
 This is a sandboxed browser-based VFS, not a regular Linux box. Run `commands` to see what's available. Use `serve <dir>` for apps, `open <path>` for files. No package managers, no long-running servers. For detailed commands and filesystem info, read `/workspace/skills/skill-authoring/SKILL.md`. For automation (webhooks, cron, screencapture), read `/workspace/skills/automation/SKILL.md`.
