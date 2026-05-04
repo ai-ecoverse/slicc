@@ -113,6 +113,74 @@ describe('DaMountBackend writeFile', () => {
     // Should NOT throw — silent reconcile per spec.
     await backend.writeFile('index.html', newBody);
   });
+
+  it('wraps body in multipart/form-data with the right MIME from the file extension', async () => {
+    // DA accepts only multipart/form-data or text/html — application/octet-stream
+    // returns 201 but silently drops the body. Verified manually against
+    // adobe/da-admin source.js (FORM_TYPES = ['multipart/form-data',
+    // 'application/x-www-form-urlencoded']).
+    mock.enqueue(new Response('', { status: 201, headers: { etag: '"new-e"' } }));
+    const backend = new DaMountBackend({
+      source: 'da://my-org/my-repo',
+      profile: 'default',
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
+      cache: makeCache(),
+    });
+    await backend.writeFile('test.html', new TextEncoder().encode('foo\n'));
+
+    const call = mock.calls[0];
+    expect(call.method).toBe('POST');
+    expect(call.headers['content-type']).toMatch(/^multipart\/form-data; boundary=----DaMount/);
+    // For a fresh file (nothing in cache) → If-None-Match: * (not if-match).
+    expect(call.headers['if-none-match']).toBe('*');
+    expect(call.headers['if-match']).toBeUndefined();
+
+    // Body should be a multipart envelope with a `data` field, an inner
+    // Content-Type of text/html (derived from .html extension), and the
+    // user's body bytes. We don't bother fully parsing — just spot-check
+    // the structure.
+    const bodyStr = new TextDecoder().decode(call.body as Uint8Array);
+    expect(bodyStr).toContain('Content-Disposition: form-data; name="data"; filename="test.html"');
+    expect(bodyStr).toContain('Content-Type: text/html');
+    expect(bodyStr).toContain('foo\n');
+  });
+
+  it('uses application/json mime for .json files', async () => {
+    mock.enqueue(new Response('', { status: 201 }));
+    const backend = new DaMountBackend({
+      source: 'da://my-org/my-repo',
+      profile: 'default',
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
+      cache: makeCache(),
+    });
+    await backend.writeFile('config.json', new TextEncoder().encode('{}'));
+    const bodyStr = new TextDecoder().decode(mock.calls[0].body as Uint8Array);
+    expect(bodyStr).toContain('Content-Type: application/json');
+    expect(bodyStr).toContain('filename="config.json"');
+  });
+
+  it('omits if-match (instead of sending empty value) when cached etag is empty', async () => {
+    // Repro for a real production bug: if a prior write or a 200 GET landed
+    // a body in cache with etag='' (DA omits ETag for some responses),
+    // the next writeFile was sending `if-match: ''` which DA rejects /
+    // ignores. Now we omit the conditional header entirely in that case.
+    mock.enqueue(
+      // Read with no etag header → cached with etag=''
+      new Response('hi', { status: 200, headers: { 'content-length': '2' } })
+    );
+    const backend = new DaMountBackend({
+      source: 'da://my-org/my-repo',
+      profile: 'default',
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
+      cache: makeCache(),
+    });
+    await backend.readFile('test.html');
+    mock.enqueue(new Response('', { status: 201 }));
+    await backend.writeFile('test.html', new TextEncoder().encode('updated'));
+    // Neither conditional header should be set.
+    expect(mock.calls[1].headers['if-match']).toBeUndefined();
+    expect(mock.calls[1].headers['if-none-match']).toBeUndefined();
+  });
 });
 
 describe('DaMountBackend readDir', () => {
@@ -186,6 +254,89 @@ describe('DaMountBackend stat', () => {
     expect(stat.kind).toBe('file');
     expect(stat.size).toBe(100);
     expect(stat.etag).toBe('"e1"');
+  });
+
+  it('backfills the parent listing after a HEAD so subsequent stats avoid the round-trip', async () => {
+    // DA's /list does not include size or etag, so the first stat() of a
+    // listed-but-never-read file must hit HEAD. After that, the size +
+    // etag are written back into the listing entry, and a second stat()
+    // should hit the cache (zero new HEADs).
+    const cache = makeCache();
+    // 1. Initial listing — file exists, no size.
+    mock.enqueue(
+      new Response(JSON.stringify([{ name: 'index', ext: 'html', lastModified: 1714000000000 }]), {
+        status: 200,
+      })
+    );
+    const backend = new DaMountBackend({
+      source: 'da://my-org/my-repo',
+      profile: 'default',
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
+      cache,
+    });
+    await backend.readDir('');
+
+    // 2. First stat — falls through to HEAD because listing entry has no size.
+    mock.enqueue(
+      new Response('', {
+        status: 200,
+        headers: {
+          'content-length': '14349',
+          etag: '"abc"',
+          'last-modified': 'Sun, 04 May 2026 16:14:00 GMT',
+        },
+      })
+    );
+    const stat1 = await backend.stat('index.html');
+    expect(stat1.kind).toBe('file');
+    expect(stat1.size).toBe(14349);
+    expect(stat1.etag).toBe('"abc"');
+
+    // 3. Second stat — should hit the backfilled listing, no new fetch.
+    const callsBefore = mock.calls.length;
+    const stat2 = await backend.stat('index.html');
+    expect(mock.calls.length).toBe(callsBefore);
+    expect(stat2.size).toBe(14349);
+    expect(stat2.etag).toBe('"abc"');
+  });
+
+  it('returns immediately for directories from listing without HEAD', async () => {
+    const cache = makeCache();
+    mock.enqueue(
+      new Response(JSON.stringify([{ name: 'blog', lastModified: 1714000000000 }]), {
+        status: 200,
+      })
+    );
+    const backend = new DaMountBackend({
+      source: 'da://my-org/my-repo',
+      profile: 'default',
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
+      cache,
+    });
+    await backend.readDir('');
+
+    const callsBefore = mock.calls.length;
+    const stat = await backend.stat('blog');
+    expect(stat.kind).toBe('directory');
+    // No HEAD round-trip for a directory we already saw in the listing.
+    expect(mock.calls.length).toBe(callsBefore);
+  });
+
+  it('returns ENOENT immediately when listing is fresh and entry is absent', async () => {
+    const cache = makeCache();
+    mock.enqueue(new Response(JSON.stringify([{ name: 'index', ext: 'html' }]), { status: 200 }));
+    const backend = new DaMountBackend({
+      source: 'da://my-org/my-repo',
+      profile: 'default',
+      signedFetch: createSignedFetchDaStub(TEST_DA_PROFILE),
+      cache,
+    });
+    await backend.readDir('');
+
+    const callsBefore = mock.calls.length;
+    await expect(backend.stat('does-not-exist.html')).rejects.toMatchObject({ code: 'ENOENT' });
+    // Authoritative-listing miss → no HEAD round-trip.
+    expect(mock.calls.length).toBe(callsBefore);
   });
 });
 

@@ -366,6 +366,8 @@ export class S3MountBackend implements MountBackend {
   async stat(path: string): Promise<MountStat> {
     this.assertOpen(path);
     const rel = this.toMountRelative(path);
+
+    // 1. Body cache — instant return when the file was read recently.
     const cached = await this.cache.getBody(rel);
     if (cached) {
       return {
@@ -375,6 +377,43 @@ export class S3MountBackend implements MountBackend {
         etag: cached.etag,
       };
     }
+
+    // 2. Parent listing cache — `ListObjectsV2` includes size/etag/
+    //    lastModified per key, so if the parent directory was walked
+    //    recently we can answer stat() without a network HEAD. Avoids
+    //    per-file HEAD spam after a `readDir` (e.g. `ls -l` stat()s
+    //    every entry it just listed).
+    const parts = rel.split('/');
+    const fileName = parts.pop() ?? '';
+    const parentDir = parts.join('/');
+    const parentListing = await this.cache.getListing(parentDir);
+    if (parentListing && !this.cache.isStale(parentListing.cachedAt)) {
+      const entry = parentListing.entries.find((e) => e.name === fileName);
+      if (entry?.kind === 'file' && entry.size !== undefined) {
+        return {
+          kind: 'file',
+          size: entry.size,
+          mtime: entry.lastModified ?? parentListing.cachedAt,
+          etag: entry.etag ?? '',
+        };
+      }
+      if (entry?.kind === 'directory') {
+        return {
+          kind: 'directory',
+          size: 0,
+          mtime: entry.lastModified ?? parentListing.cachedAt,
+        };
+      }
+      if (!entry) {
+        // Fresh authoritative listing without this entry → ENOENT.
+        throw new FsError('ENOENT', 'no such file or directory', path);
+      }
+      // Else: listing has the file but lacks size (defensive — shouldn't
+      // happen with ListObjectsV2 but covers future server changes).
+      // Fall through to HEAD.
+    }
+
+    // 3. Last resort — network HEAD.
     const res = await this.transport({
       method: 'HEAD',
       bucket: this.parsed.bucket,

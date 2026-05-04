@@ -28,6 +28,47 @@ import type {
   RefreshReport,
 } from './backend.js';
 import { type RemoteMountCache } from './remote-cache.js';
+import { getMimeType } from '../../core/mime-types.js';
+
+/**
+ * Build a multipart/form-data body with a single `data` field carrying
+ * `body` as a File-like part. DA's `/source/*` write endpoint requires
+ * this shape (or `text/html` raw body) — `application/octet-stream` raw
+ * is silently dropped server-side after a misleading 201. See
+ * adobe/da-admin source.js: `FORM_TYPES = ['multipart/form-data',
+ * 'application/x-www-form-urlencoded']`.
+ *
+ * Returns the assembled bytes plus the Content-Type header (with the
+ * boundary baked in) for the caller to attach to the request.
+ */
+function buildMultipartFormData(
+  filename: string,
+  contentType: string,
+  body: Uint8Array
+): { contentType: string; body: Uint8Array } {
+  // Random boundary; the value is opaque, only the match between the
+  // header and the body delimiters matters.
+  const boundary = `----DaMount${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  const enc = new TextEncoder();
+  const head = enc.encode(
+    `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="data"; filename="${filename}"\r\n` +
+      `Content-Type: ${contentType}\r\n\r\n`
+  );
+  const tail = enc.encode(`\r\n--${boundary}--\r\n`);
+  const merged = new Uint8Array(head.byteLength + body.byteLength + tail.byteLength);
+  merged.set(head, 0);
+  merged.set(body, head.byteLength);
+  merged.set(tail, head.byteLength + body.byteLength);
+  return {
+    contentType: `multipart/form-data; boundary=${boundary}`,
+    body: merged,
+  };
+}
+
+function basenameOf(path: string): string {
+  return path.split('/').pop() || 'data';
+}
 
 /**
  * A logical DA request handed to the transport.
@@ -174,12 +215,28 @@ export class DaMountBackend implements MountBackend {
     }
     const rel = this.toMountRelative(path);
     const cached = await this.cache.getBody(rel);
+
+    // DA accepts only multipart/form-data (with a `data` field) or text/html
+    // raw. Anything else returns 201 but silently drops the body. Wrap our
+    // bytes in a multipart envelope with a Content-Type derived from the
+    // path extension so the file lands with the right MIME on the server.
+    const filename = basenameOf(path);
+    const innerContentType = getMimeType(path);
+    const wrapped = buildMultipartFormData(filename, innerContentType, body);
+
     const headers: Record<string, string> = {
-      'content-type': 'application/octet-stream',
-      'content-length': String(body.byteLength),
+      'content-type': wrapped.contentType,
+      'content-length': String(wrapped.body.byteLength),
     };
-    if (cached) headers['if-match'] = cached.etag;
-    else headers['if-none-match'] = '*';
+    // Only attach `if-match` when we have a real etag — the previous code
+    // sent `if-match: ''` (empty header value) when the cache held a body
+    // with empty etag, which is malformed. Treat empty etag as "we don't
+    // know the version" and omit the conditional.
+    if (cached && cached.etag) {
+      headers['if-match'] = cached.etag;
+    } else if (!cached) {
+      headers['if-none-match'] = '*';
+    }
 
     // 412 dual-semantics retry — see backend-s3.ts for the full rationale.
     const tryOnce = (): Promise<Response> =>
@@ -187,7 +244,7 @@ export class DaMountBackend implements MountBackend {
         method: 'POST',
         path: this.toSourcePath(rel),
         headers,
-        body,
+        body: wrapped.body,
       });
 
     let res: Response;
@@ -271,15 +328,71 @@ export class DaMountBackend implements MountBackend {
   async stat(path: string): Promise<MountStat> {
     this.assertOpen(path);
     const rel = this.toMountRelative(path);
+
+    // 1. Body cache — fastest path, returns immediately if we've read the
+    //    file recently.
     const cached = await this.cache.getBody(rel);
     if (cached) {
       return { kind: 'file', size: cached.size, mtime: cached.cachedAt, etag: cached.etag };
     }
+
+    // 2. Parent listing cache. DA's /list does NOT include size or etag
+    //    per item — only name, ext, lastModified. So we can short-circuit
+    //    to "directory" entries and return ENOENT quickly when fresh, but
+    //    for files we still need a HEAD to get size/etag. After the HEAD,
+    //    we backfill the listing entry so subsequent stat()s on the same
+    //    file (typical `ls -l` workflow that stat()s each entry just
+    //    enumerated) hit the cache instead of N HEAD round-trips.
+    const parts = rel.split('/');
+    const fileName = parts.pop() ?? '';
+    const parentDir = parts.join('/');
+    const parentListing = await this.cache.getListing(parentDir);
+    if (parentListing && !this.cache.isStale(parentListing.cachedAt)) {
+      const entry = parentListing.entries.find((e) => e.name === fileName);
+      if (entry?.kind === 'file' && entry.size !== undefined) {
+        return {
+          kind: 'file',
+          size: entry.size,
+          mtime: entry.lastModified ?? parentListing.cachedAt,
+          etag: entry.etag ?? '',
+        };
+      }
+      if (entry?.kind === 'directory') {
+        return {
+          kind: 'directory',
+          size: 0,
+          mtime: entry.lastModified ?? parentListing.cachedAt,
+        };
+      }
+      if (!entry) {
+        // Listing fresh + authoritative + file absent → ENOENT, no HEAD.
+        throw new FsError('ENOENT', 'no such file or directory', path);
+      }
+      // Else: listing has the file but no size yet — fall through to HEAD
+      // and backfill below.
+    }
+
+    // 3. Network HEAD on /source.
     const res = await this.transport({ method: 'HEAD', path: this.toSourcePath(rel) });
     if (res.status === 200) {
       const size = Number(res.headers.get('content-length') ?? '0');
       const etag = res.headers.get('etag') ?? '';
-      return { kind: 'file', size, mtime: 0, etag };
+      const lm = res.headers.get('last-modified');
+      const mtime = lm ? Date.parse(lm) : 0;
+
+      // Backfill the parent listing entry so the next stat() / ls -l
+      // doesn't re-fire this HEAD. We re-putListing the whole listing
+      // (resetting cachedAt) because RemoteMountCache doesn't expose a
+      // partial-update primitive — acceptable, since the new HEAD result
+      // is genuinely fresh information.
+      if (parentListing) {
+        const updatedEntries = parentListing.entries.map((e) =>
+          e.name === fileName && e.kind === 'file' ? { ...e, size, etag, lastModified: mtime } : e
+        );
+        await this.cache.putListing(parentDir, updatedEntries);
+      }
+
+      return { kind: 'file', size, mtime, etag };
     }
     if (res.status === 404) {
       const listing = await this.cache.getListing(rel);
