@@ -171,9 +171,11 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Disconnect from the current tray session.
+    /// Disconnect from the current tray session. Unlike a transient WebRTC
+    /// drop this is user-initiated, so we also drop any open CDP tabs.
     func disconnect() {
         tearDown()
+        resetCDPState()
         connectionState = .disconnected
         trayId = nil
         leaderConnected = false
@@ -198,6 +200,16 @@ class AppState: ObservableObject {
                 waiter.resume(throwing: SprinkleFetchError.fetchFailed("Disconnected"))
             }
         }
+    }
+
+    /// Drop all hosted CDP tabs (called on user-initiated disconnect).
+    /// Reconnects after a transient WebRTC drop preserve the bridge so the
+    /// user's open tabs survive.
+    private func resetCDPState() {
+        stopTargetsAdvertiseTimer()
+        cdpBridge?.reset()
+        cdpBridge = nil
+        cdpTargets.removeAll()
     }
 
     /// Clear all stored data (history, credentials, etc.)
@@ -500,15 +512,24 @@ class AppState: ObservableObject {
         connectionState = .connected
         connectedSince = Date()
 
-        // Spin up the CDP bridge and advertise (initially empty) targets so
-        // the leader knows we can host federated WKWebView targets.
-        let bridge = CDPBridge(runtimeId: controllerId) { [weak self] msg in
-            self?.sendToLeader(msg)
+        // Reuse the existing CDP bridge across reconnects so the user's
+        // hosted tabs survive transient WebRTC drops. Only spin up a new
+        // bridge if there isn't one (first connect, or after a user-
+        // initiated `disconnect()` cleared it).
+        let bridge: CDPBridge
+        if let existing = cdpBridge {
+            bridge = existing
+        } else {
+            bridge = CDPBridge(runtimeId: controllerId) { [weak self] msg in
+                self?.sendToLeader(msg)
+            }
+            bridge.onTargetsChanged = { [weak self] in
+                Task { @MainActor in self?.refreshCDPTargets() }
+            }
+            cdpBridge = bridge
         }
-        bridge.onTargetsChanged = { [weak self] in
-            Task { @MainActor in self?.refreshCDPTargets() }
-        }
-        cdpBridge = bridge
+        // Re-advertise existing targets so the (possibly new) leader knows
+        // about every WKWebView we still own.
         bridge.advertiseTargets()
         refreshCDPTargets()
         startTargetsAdvertiseTimer()
@@ -915,6 +936,10 @@ class AppState: ObservableObject {
 
     // MARK: - Private: Teardown
 
+    /// Tear down transport state (signaling, WebRTC, keepalive) ahead of a
+    /// reconnect. Deliberately does NOT touch the CDP bridge — open tabs
+    /// must survive transient WebRTC drops. Use `resetCDPState()` from
+    /// `disconnect()` to fully drop tabs on a user-initiated disconnect.
     private func tearDown() {
         connectTask?.cancel()
         connectTask = nil
@@ -926,11 +951,9 @@ class AppState: ObservableObject {
         signalingClient = nil
         snapshotChunks.removeAll()
         cancelPendingMessagesFlush()
-        // Drop CDP bridge state.
+        // Pause the targets re-advertise timer; we'll restart it once the
+        // next data channel comes up. The CDP bridge itself stays alive.
         stopTargetsAdvertiseTimer()
-        cdpBridge?.reset()
-        cdpBridge = nil
-        cdpTargets.removeAll()
     }
 
     // MARK: - Private: History
