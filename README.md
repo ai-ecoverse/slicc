@@ -106,9 +106,12 @@ Load `dist/extension/` as an unpacked extension in `chrome://extensions`, then o
 
 ### 5. Run a second browser
 
-If you want to control a second browser (even on another machine), ask your main browser agent for a Tray Join URL. You can also type `host` in the built-in terminal, to get it. Copy that URL and launch a second browser throught the CLI.
+SLICC can mirror itself across multiple browsers, even on other machines:
 
-In the dialog, click "Join Tray" and paste the URL. Once you connect, the sessions are fully synchronized.
+1. **First browser:** click your avatar in the top-right header and choose **Enable multi-browser sync**. A dialog opens with the sync URL (already copied to your clipboard) and step-by-step instructions. The same dialog has a **Reset URL** button if you want to invalidate the link and disconnect connected browsers. (You can also type `host` in the built-in terminal to print the URL.)
+2. **Second browser:** open the account dialog, click **Connect to another browser**, and paste the URL. The "How do I get the sync URL?" hint inside the dialog walks through the same steps.
+
+Both browsers must run the same SLICC version. Once connected, the sessions stay in sync in real time.
 
 ### 6. Electron
 

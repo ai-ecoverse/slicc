@@ -90,6 +90,15 @@ export interface SetThinkingLevelMsg {
 
 export interface RefreshTrayRuntimeMsg {
   type: 'refresh-tray-runtime';
+  /**
+   * Snapshot of the panel's tray-join localStorage values, copied into
+   * the message because the side panel and offscreen document each have
+   * their own localStorage in MV3. Without this, the offscreen never
+   * sees a URL the user pasted into the panel and silently fails to
+   * start the follower.
+   */
+  joinUrl?: string | null;
+  workerBaseUrl?: string | null;
 }
 
 export interface PanelCdpCommandMsg {
@@ -242,6 +251,35 @@ export interface IncomingMessageMsg {
   };
 }
 
+/**
+ * Wholesale replace the chat history for a given scoop. Used when the
+ * offscreen acts as a tray follower and the leader sends a snapshot —
+ * the panel needs to drop whatever it had cached and render the
+ * leader's view. The bridge persists to IndexedDB before emitting so
+ * a panel reload picks up the same messages.
+ */
+export interface ScoopMessagesReplacedMsg {
+  type: 'scoop-messages-replaced';
+  scoopJid: string;
+  messages: Array<{
+    id: string;
+    role: 'user' | 'assistant';
+    content: string;
+    attachments?: MessageAttachment[];
+    timestamp: number;
+    source?: string;
+    channel?: string;
+    toolCalls?: Array<{
+      id: string;
+      name: string;
+      input: unknown;
+      result?: string;
+      isError?: boolean;
+    }>;
+    isStreaming?: boolean;
+  }>;
+}
+
 export interface OffscreenReadyMsg {
   type: 'offscreen-ready';
 }
@@ -285,6 +323,7 @@ export type OffscreenToPanelMessage =
   | ErrorMsg
   | ScoopCreatedMsg
   | IncomingMessageMsg
+  | ScoopMessagesReplacedMsg
   | PanelCdpResponseMsg
   | OAuthResultMsg;
 
