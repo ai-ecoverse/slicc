@@ -125,6 +125,12 @@ class AppState: ObservableObject {
     /// ID of the message currently being streamed.
     private var streamingMessageId: String?
 
+    /// Coalesces high-frequency `messages` republishes during streaming so a
+    /// burst of contentDeltas doesn't peg the SwiftUI render loop and starve
+    /// touch handling (notably the Settings sheet's Done button while the
+    /// underlying chat view is observing the same AppState).
+    private var pendingMessagesFlush: Task<Void, Never>?
+
     // MARK: - CDP / federated targets
 
     /// CDP bridge — owns WKWebViews, dispatches CDP commands.
@@ -756,6 +762,7 @@ class AppState: ObservableObject {
             buffer.append(newMsg)
             messagesByScoop[scoopJid] = buffer
             if isVisible {
+                cancelPendingMessagesFlush()
                 messages = buffer
                 isStreaming = true
                 streamingMessageId = messageId
@@ -767,7 +774,7 @@ class AppState: ObservableObject {
                 buffer[idx].content += text
                 messagesByScoop[scoopJid] = buffer
                 if isVisible {
-                    messages = buffer
+                    scheduleMessagesFlush(for: scoopJid)
                     onStreamingEvent?(.contentDelta(messageId: messageId, text: text))
                 }
             }
@@ -778,6 +785,7 @@ class AppState: ObservableObject {
                 buffer[idx].isStreaming = false
                 messagesByScoop[scoopJid] = buffer
                 if isVisible {
+                    cancelPendingMessagesFlush()
                     messages = buffer
                     onStreamingEvent?(.contentDone(messageId: messageId))
                 }
@@ -801,6 +809,7 @@ class AppState: ObservableObject {
                 }
                 messagesByScoop[scoopJid] = buffer
                 if isVisible {
+                    cancelPendingMessagesFlush()
                     messages = buffer
                     onStreamingEvent?(.toolUseStart(
                         messageId: messageId, toolName: toolName, toolInput: inputStr))
@@ -813,7 +822,10 @@ class AppState: ObservableObject {
                     buffer[idx].toolCalls?[tcIdx].result = result
                     buffer[idx].toolCalls?[tcIdx].isError = isError
                     messagesByScoop[scoopJid] = buffer
-                    if isVisible { messages = buffer }
+                    if isVisible {
+                        cancelPendingMessagesFlush()
+                        messages = buffer
+                    }
                 }
             }
 
@@ -823,6 +835,7 @@ class AppState: ObservableObject {
                 buffer[idx].isStreaming = false
                 messagesByScoop[scoopJid] = buffer
                 if isVisible {
+                    cancelPendingMessagesFlush()
                     messages = buffer
                     isStreaming = false
                     streamingMessageId = nil
@@ -844,6 +857,38 @@ class AppState: ObservableObject {
     private func sendToLeader(_ msg: FollowerToLeaderMessage) {
         guard let data = try? JSONEncoder().encode(msg) else { return }
         webRTCManager?.sendData(data)
+    }
+
+    // MARK: - Messages flush throttling
+
+    /// Throttle interval for streaming `messages` republishes. ~33ms keeps the
+    /// chat feeling live (≈30fps) without flooding SwiftUI's update graph on
+    /// every byte of agent text.
+    private static let messagesFlushIntervalNs: UInt64 = 33_000_000
+
+    /// Schedule a coalesced flush of `messages` from the per-scoop buffer.
+    /// Called from contentDelta to avoid setting `messages` on every byte.
+    private func scheduleMessagesFlush(for scoopJid: String) {
+        guard pendingMessagesFlush == nil else { return }
+        pendingMessagesFlush = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: AppState.messagesFlushIntervalNs)
+            guard let self else { return }
+            self.pendingMessagesFlush = nil
+            // Only publish if the user is still viewing the same scoop and the
+            // buffer still exists — drop stale flushes after a scoop switch.
+            if self.selectedScoopJid == scoopJid,
+               let buffer = self.messagesByScoop[scoopJid] {
+                self.messages = buffer
+            }
+        }
+    }
+
+    /// Cancel any in-flight throttled flush — used when a decisive event
+    /// (messageStart/contentDone/toolResult/turnEnd) writes a fresh `messages`
+    /// snapshot synchronously and we don't want a stale flush to overwrite it.
+    private func cancelPendingMessagesFlush() {
+        pendingMessagesFlush?.cancel()
+        pendingMessagesFlush = nil
     }
 
     // MARK: - Private: Disconnect Handling
@@ -880,6 +925,7 @@ class AppState: ObservableObject {
         webRTCDelegate = nil
         signalingClient = nil
         snapshotChunks.removeAll()
+        cancelPendingMessagesFlush()
         // Drop CDP bridge state.
         stopTargetsAdvertiseTimer()
         cdpBridge?.reset()
