@@ -113,18 +113,20 @@ final class CDPTarget: NSObject {
         returnByValue: Bool,
         completion: @escaping ([String: Any]) -> Void
     ) {
-        let wrapped: String
         if awaitPromise {
-            // Wrap the expression so that Promise resolution is awaited.
-            wrapped = """
-            (async () => {
-              try {
-                const __r = await (function() { return (\(expression)); })();
-                return { ok: true, value: __r };
-              } catch (e) {
-                return { ok: false, error: String(e && e.stack || e) };
-              }
-            })()
+            // `callAsyncJavaScript` treats the body as the body of an async
+            // function, so we must use top-level `return` (not an IIFE) for
+            // the result to flow back. The previous IIFE-only wrapping always
+            // returned undefined, breaking Runtime.evaluate for everything
+            // that defaulted to awaitPromise=true (which is most callers,
+            // including playwright eval / snapshot).
+            let wrapped = """
+            try {
+              const __r = await (\(expression));
+              return { ok: true, value: __r };
+            } catch (e) {
+              return { ok: false, error: String((e && e.stack) || e) };
+            }
             """
             webView.callAsyncJavaScript(wrapped, in: nil, in: .page) { result in
                 switch result {
@@ -135,8 +137,8 @@ final class CDPTarget: NSObject {
                 }
             }
         } else {
-            // Synchronous evaluate.
-            wrapped = "(function() { try { return { ok: true, value: (\(expression)) }; } catch(e) { return { ok: false, error: String(e && e.stack || e) }; } })()"
+            // Synchronous evaluate via an IIFE expression.
+            let wrapped = "(function() { try { return { ok: true, value: (\(expression)) }; } catch(e) { return { ok: false, error: String((e && e.stack) || e) }; } })()"
             webView.evaluateJavaScript(wrapped) { value, error in
                 if let error {
                     completion(self.encodeException(error.localizedDescription))

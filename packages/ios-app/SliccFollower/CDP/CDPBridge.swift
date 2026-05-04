@@ -107,6 +107,7 @@ final class CDPBridge {
         sessionId: String?
     ) {
         let paramsDict = (params?.value as? [String: Any]) ?? [:]
+        logger.info("CDP request: \(method) target=\(localTargetId) reqId=\(requestId, privacy: .public)")
         // Lookup target if applicable.
         let target = targets[localTargetId]
         // Domain dispatch.
