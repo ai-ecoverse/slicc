@@ -154,7 +154,15 @@ In Chrome extension mode, there is no server-side fetch proxy and no shell `secr
 
 For **mount backends specifically** (`mount --source s3://...` and `mount --source da://...`), the extension is self-contained. Secrets live in `chrome.storage.local`, the service worker holds them, signs requests with SigV4 (S3) or attaches the IMS Bearer (DA), and forwards via `fetch()` (extension `host_permissions: <all_urls>` covers any S3/da.live host). The agent's tools (`bash` WASM, `node -e` and `javascript` in CSP-locked sandbox iframes) have no `chrome.*` API access, so they cannot read `chrome.storage` directly — the same isolation property that keeps `~/.slicc/secrets.env` out of the agent in CLI mode.
 
-Set up extension-mode mount secrets via the `secret` shell command in the side-panel terminal:
+### Extension Options page (recommended)
+
+Right-click the SLICC toolbar icon → **Options** (or `chrome://extensions` → SLICC → **Extension options**, or `secret edit` in the side-panel terminal). The page has a real form with a password input — paste from your password manager, no shell history involved.
+
+The **S3 / R2 / MinIO profile** tab is a wizard: one form fills the five paired keys (`s3.<profile>.access_key_id`, `secret_access_key`, `region`, `endpoint`, `path_style`) with auto-derived domain wildcards from the endpoint host. The **Custom secret** tab handles arbitrary domain-scoped tokens.
+
+### Shell command alternative
+
+If you prefer the terminal:
 
 ```bash
 secret set s3.r2.access_key_id   R2_ACCESS_KEY_ID   --domain "*.r2.cloudflarestorage.com"
@@ -162,9 +170,13 @@ secret set s3.r2.secret_access_key R2_SECRET_KEY    --domain "*.r2.cloudflaresto
 secret set s3.r2.endpoint        https://<account>.r2.cloudflarestorage.com --domain "*.r2.cloudflarestorage.com"
 ```
 
-Then `mount --source s3://my-bucket --profile r2 /mnt/r2` works the same as in CLI mode.
+Either way, `mount --source s3://my-bucket --profile r2 /mnt/r2` works the same as in CLI mode.
 
 For **arbitrary HTTP secret injection** (e.g. `$GITHUB_TOKEN` in a `curl` call from `bash`), the extension still has no equivalent — that's the fetch-proxy injection, which requires a server backend.
+
+### Where to look next
+
+For the full mount setup guide (intent → backend mapping, lifecycle, error patterns, architecture), see [docs/mounts.md](mounts.md).
 
 ## Platform support
 
