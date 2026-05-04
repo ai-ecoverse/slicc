@@ -115,25 +115,79 @@ describe('GitHub account storage', () => {
 });
 
 describe('GitHub Models configuration', () => {
-  it('known models are OpenAI-compatible', () => {
-    // These match the GITHUB_MODELS array in github.ts
-    const models = [
-      { id: 'gpt-4o', api: 'openai' },
-      { id: 'gpt-4o-mini', api: 'openai' },
-      { id: 'o4-mini', api: 'openai' },
-      { id: 'o3-mini', api: 'openai' },
-    ];
+  // Free-tier models available to all GitHub accounts (no paid Copilot plan required).
+  // gpt-4o / gpt-4o-mini / o3-mini are deprecated by GitHub; o4-mini requires a paid plan.
+  // Model IDs use the vendor-prefixed format required by models.github.ai.
+  const GITHUB_MODELS = [
+    {
+      id: 'openai/gpt-4.1',
+      name: 'GPT-4.1',
+      api: 'openai',
+      context_window: 1047576,
+      max_tokens: 32768,
+      reasoning: false,
+    },
+    {
+      id: 'openai/gpt-4.1-mini',
+      name: 'GPT-4.1 mini',
+      api: 'openai',
+      context_window: 1047576,
+      max_tokens: 32768,
+      reasoning: false,
+    },
+  ];
 
-    for (const m of models) {
-      expect(m.api).toBe('openai');
+  it('only contains free-tier models (no paid-plan-only models)', () => {
+    const paidOnlyIds = ['o4-mini', 'o3-mini', 'o1', 'o1-mini', 'o3'].flatMap((m) => [
+      m,
+      `openai/${m}`,
+    ]);
+    for (const model of GITHUB_MODELS) {
+      expect(paidOnlyIds).not.toContain(model.id);
     }
-    expect(models.length).toBeGreaterThan(0);
   });
 
-  it('models endpoint is OpenAI-compatible', () => {
-    const baseUrl = 'https://models.inference.ai.azure.com';
-    // The provider appends /v1 so the OpenAI SDK adds /chat/completions
-    expect(`${baseUrl}/v1`).toBe('https://models.inference.ai.azure.com/v1');
+  it('does not contain deprecated models', () => {
+    const deprecatedIds = ['gpt-4o', 'gpt-4o-mini', 'o3-mini', 'gpt-4.5', 'o1'].flatMap((m) => [
+      m,
+      `openai/${m}`,
+    ]);
+    for (const model of GITHUB_MODELS) {
+      expect(deprecatedIds).not.toContain(model.id);
+    }
+  });
+
+  it('all models are OpenAI-compatible', () => {
+    for (const m of GITHUB_MODELS) {
+      expect(m.api).toBe('openai');
+    }
+  });
+
+  it('uses vendor-prefixed model IDs required by models.github.ai', () => {
+    for (const m of GITHUB_MODELS) {
+      expect(m.id).toMatch(/^openai\//);
+    }
+  });
+
+  it('includes current flagship and mini models', () => {
+    const ids = GITHUB_MODELS.map((m) => m.id);
+    expect(ids).toContain('openai/gpt-4.1');
+    expect(ids).toContain('openai/gpt-4.1-mini');
+  });
+
+  it('models have correct context windows for gpt-4.1 series (1M tokens)', () => {
+    for (const m of GITHUB_MODELS) {
+      expect(m.context_window).toBe(1047576);
+      expect(m.max_tokens).toBe(32768);
+    }
+  });
+
+  it('models endpoint uses new GitHub inference base URL', () => {
+    const baseUrl = 'https://models.github.ai/inference';
+    // pi-ai appends /chat/completions directly — no /v1 in the new endpoint
+    expect(`${baseUrl}/chat/completions`).toBe(
+      'https://models.github.ai/inference/chat/completions'
+    );
   });
 });
 

@@ -218,45 +218,33 @@ async function getValidAccessToken(): Promise<string> {
 
 // ── GitHub Models ──────────────────────────────────────────────────
 
-const GITHUB_MODELS_BASE = 'https://models.inference.ai.azure.com';
+// New unified GitHub Models endpoint (replaces the old Azure inference endpoint).
+// Model IDs use vendor-prefixed format: "openai/gpt-4.1"
+const GITHUB_MODELS_BASE = 'https://models.github.ai/inference';
 
-/** Known models available via GitHub Models. */
+/**
+ * Models available via GitHub Models free tier (no Copilot subscription required).
+ * gpt-4o / gpt-4o-mini / o3-mini are deprecated; o4-mini requires a paid Copilot plan.
+ * Model IDs use the vendor-prefixed format required by the models.github.ai endpoint.
+ */
 const GITHUB_MODELS: Array<{ id: string; name: string } & ModelMetadata> = [
   {
-    id: 'gpt-4o',
-    name: 'GPT-4o',
+    id: 'openai/gpt-4.1',
+    name: 'GPT-4.1',
     api: 'openai',
-    context_window: 128000,
-    max_tokens: 16384,
+    context_window: 1047576,
+    max_tokens: 32768,
     reasoning: false,
     input: ['text', 'image'],
   },
   {
-    id: 'gpt-4o-mini',
-    name: 'GPT-4o Mini',
+    id: 'openai/gpt-4.1-mini',
+    name: 'GPT-4.1 mini',
     api: 'openai',
-    context_window: 128000,
-    max_tokens: 16384,
+    context_window: 1047576,
+    max_tokens: 32768,
     reasoning: false,
     input: ['text', 'image'],
-  },
-  {
-    id: 'o4-mini',
-    name: 'o4-mini',
-    api: 'openai',
-    context_window: 200000,
-    max_tokens: 100000,
-    reasoning: true,
-    input: ['text', 'image'],
-  },
-  {
-    id: 'o3-mini',
-    name: 'o3-mini',
-    api: 'openai',
-    context_window: 200000,
-    max_tokens: 100000,
-    reasoning: true,
-    input: ['text'],
   },
 ];
 
@@ -298,9 +286,17 @@ const streamGitHub = (
       const accessToken = await getValidAccessToken();
       const proxyModel = {
         ...model,
-        baseUrl: `${GITHUB_MODELS_BASE}/v1`,
+        baseUrl: GITHUB_MODELS_BASE,
         api: 'openai-completions' as Api,
-        compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
+        compat: {
+          ...(model as any).compat,
+          supportsStore: false,
+          supportsDeveloperRole: false,
+          // models.github.ai/inference does not support stream_options.include_usage
+          // (causes 500 after ~30s timeout) or max_completion_tokens (use max_tokens).
+          supportsUsageInStreaming: false,
+          maxTokensField: 'max_tokens',
+        },
       };
       const inner = streamOpenAICompletions(proxyModel as any, context, {
         ...options,
@@ -327,9 +323,17 @@ const streamSimpleGitHub = (model: Model<Api>, context: Context, options?: Simpl
       const accessToken = await getValidAccessToken();
       const proxyModel = {
         ...model,
-        baseUrl: `${GITHUB_MODELS_BASE}/v1`,
+        baseUrl: GITHUB_MODELS_BASE,
         api: 'openai-completions' as Api,
-        compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
+        compat: {
+          ...(model as any).compat,
+          supportsStore: false,
+          supportsDeveloperRole: false,
+          // models.github.ai/inference does not support stream_options.include_usage
+          // (causes 500 after ~30s timeout) or max_completion_tokens (use max_tokens).
+          supportsUsageInStreaming: false,
+          maxTokensField: 'max_tokens',
+        },
       };
       const inner = streamSimpleOpenAICompletions(proxyModel as any, context, {
         ...options,
@@ -358,7 +362,7 @@ export const config: ProviderConfig = {
   requiresApiKey: false,
   requiresBaseUrl: false,
   isOAuth: true,
-  defaultModelId: 'gpt-4o',
+  defaultModelId: 'gpt-4.1', // substring-matched against openai/gpt-4.1
 
   getModelIds: () => GITHUB_MODELS,
 
