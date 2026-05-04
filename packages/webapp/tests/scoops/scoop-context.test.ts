@@ -1165,6 +1165,7 @@ describe('isRetryableError', () => {
 
   it('matches network errors', () => {
     expect(isRetryableError('network error')).toBe(true);
+    expect(isRetryableError('Failed to fetch')).toBe(true);
     expect(isRetryableError('connection refused')).toBe(true);
     expect(isRetryableError('request timeout')).toBe(true);
     expect(isRetryableError('ECONNRESET')).toBe(true);
@@ -1261,6 +1262,81 @@ describe('ScoopContext retry cancellation', () => {
     await promptPromise;
 
     expect(attempts).toBe(1);
+    expect(callbacks.onFatalError).not.toHaveBeenCalled();
+  });
+});
+
+describe('ScoopContext stream error retries', () => {
+  let ctx: ScoopContext;
+  let callbacks: ScoopContextCallbacks;
+
+  beforeEach(() => {
+    callbacks = createMockCallbacks();
+    ctx = new ScoopContext(testScoop, callbacks, {} as any);
+  });
+
+  it('retries retryable agent_end stream errors before surfacing them', async () => {
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      injectMockAgent(ctx, async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          (ctx as any).handleAgentEvent({
+            type: 'agent_end',
+            messages: [
+              {
+                role: 'assistant',
+                content: [],
+                errorMessage: 'Failed to fetch',
+              },
+            ],
+          });
+        }
+      });
+
+      const promptPromise = ctx.prompt('hello');
+      await Promise.resolve();
+
+      expect(attempts).toBe(1);
+      expect(callbacks.onError).not.toHaveBeenCalled();
+      expect(callbacks.onFatalError).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await promptPromise;
+
+      expect(attempts).toBe(2);
+      expect(callbacks.onError).not.toHaveBeenCalled();
+      expect(callbacks.onFatalError).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('surfaces stream errors without retrying once partial deltas have streamed', async () => {
+    let attempts = 0;
+    injectMockAgent(ctx, async () => {
+      attempts += 1;
+      (ctx as any).handleAgentEvent({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: 'partial answer ' },
+      });
+      (ctx as any).handleAgentEvent({
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'partial answer ' }],
+            errorMessage: 'Failed to fetch',
+          },
+        ],
+      });
+    });
+
+    await ctx.prompt('hello');
+
+    expect(attempts).toBe(1);
+    expect(callbacks.onError).toHaveBeenCalledWith('Failed to fetch');
     expect(callbacks.onFatalError).not.toHaveBeenCalled();
   });
 });
@@ -1798,12 +1874,13 @@ describe('ScoopContext dispose', () => {
 
 describe('resolveThinkingLevel', () => {
   // Synthesize the smallest possible `Model<Api>` shape the helper inspects.
-  // pi-ai's `supportsXhigh` only reads `id` (string match against the Opus
-  // 4.6+ / GPT-5.2+ families), so we don't need a real model record here.
+  // pi-ai's `getSupportedThinkingLevels` reads `reasoning` and
+  // `thinkingLevelMap` — xhigh requires an explicit (non-null) entry.
   const makeModel = (reasoning: boolean, supportsXhighFamily = false) =>
     ({
       id: supportsXhighFamily ? 'claude-opus-4-7' : 'claude-haiku-4-5',
       reasoning,
+      thinkingLevelMap: supportsXhighFamily ? { xhigh: 'max' } : undefined,
     }) as unknown as Parameters<typeof resolveThinkingLevel>[1];
 
   it("returns 'off' when the model does not support reasoning", () => {
@@ -1818,7 +1895,7 @@ describe('resolveThinkingLevel', () => {
   });
 
   it('clamps xhigh to high when the model does not advertise xhigh support', () => {
-    // Haiku (or any non-xhigh family) — pi-ai's supportsXhigh returns false.
+    // No thinkingLevelMap entry for xhigh → getSupportedThinkingLevels excludes it.
     expect(resolveThinkingLevel('xhigh', makeModel(true, false))).toBe('high');
   });
 

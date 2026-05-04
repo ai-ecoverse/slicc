@@ -272,10 +272,13 @@ func registerAPIRoutes(
                 )
 
                 let upstreamRequest = try makeProxyRequest(from: injectedRequest, targetURL: targetURL, rawBody: rawBody)
-                let upstreamResponse = try await httpClient.execute(request: upstreamRequest).get()
-
-                // --- Response scrubbing: replace real values with masked ---
-                return makeProxyResponse(from: upstreamResponse, secretInjector: secretInjector)
+                // Stream the upstream response straight through to the client so
+                // that LLM SSE completions reach the browser token-by-token instead
+                // of arriving in one giant burst at the end. Per-chunk secret-scrub
+                // runs on text responses; secrets that span a chunk boundary slip
+                // through unscrubbed (best-effort, matches Node-server behavior).
+                let upstreamResponse = try await httpClient.execute(upstreamRequest, timeout: .hours(1))
+                return try makeStreamingProxyResponse(from: upstreamResponse, secretInjector: secretInjector)
             } catch {
                 return try proxyErrorResponse(status: .badGateway, message: "Proxy fetch failed: \(errorMessage(error))")
             }
@@ -412,7 +415,7 @@ private func jsonHeaders(from headers: HTTPFields) -> LickSystem.JSONObject {
     return result
 }
 
-private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: ByteBuffer) throws -> HTTPClient.Request {
+private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: ByteBuffer) throws -> HTTPClientRequest {
     var headers = HTTPHeaders(request.headers)
     headers.remove(name: "accept-encoding")
 
@@ -465,21 +468,19 @@ private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: By
     }
     headers.add(name: "accept-encoding", value: "identity")
 
-    let body: HTTPClient.Body? = if rawBody.readableBytes > 0 && request.method != .get && request.method != .head {
-        .byteBuffer(rawBody)
-    } else {
-        nil
+    var clientRequest = HTTPClientRequest(url: targetURL.absoluteString)
+    clientRequest.method = HTTPMethod(request.method)
+    clientRequest.headers = headers
+    if rawBody.readableBytes > 0 && request.method != .get && request.method != .head {
+        clientRequest.body = .bytes(rawBody)
     }
-
-    return try HTTPClient.Request(
-        url: targetURL,
-        method: HTTPMethod(request.method),
-        headers: headers,
-        body: body
-    )
+    return clientRequest
 }
 
-private func makeProxyResponse(from response: HTTPClient.Response, secretInjector: SecretInjector) -> Response {
+private func makeStreamingProxyResponse(
+    from response: HTTPClientResponse,
+    secretInjector: SecretInjector
+) throws -> Response {
     // Forbidden-header transport: collect Set-Cookie headers and encode as X-Proxy-Set-Cookie
     let setCookies = response.headers[canonicalForm: "set-cookie"].map { String($0) }
 
@@ -488,11 +489,15 @@ private func makeProxyResponse(from response: HTTPClient.Response, secretInjecto
         headers[HTTPField.Name(header)!] = nil
     }
     // Strip any upstream X-Proxy-* headers to prevent spoofing
-    for field in headers {
-        if field.name.canonicalName.lowercased().hasPrefix("x-proxy-") {
-            headers[field.name] = nil
-        }
+    let xProxyNames = headers.compactMap { field -> HTTPField.Name? in
+        field.name.canonicalName.lowercased().hasPrefix("x-proxy-") ? field.name : nil
     }
+    for name in xProxyNames {
+        headers[name] = nil
+    }
+    // Drop Content-Length so the response is chunk-encoded transparently —
+    // we no longer know the final length up front since the body streams.
+    headers[HTTPField.Name.contentLength] = nil
 
     if !setCookies.isEmpty,
        let jsonData = try? JSONSerialization.data(withJSONObject: setCookies),
@@ -500,7 +505,8 @@ private func makeProxyResponse(from response: HTTPClient.Response, secretInjecto
         headers[HTTPField.Name("X-Proxy-Set-Cookie")!] = secretInjector.scrub(text: jsonString)
     }
 
-    // Scrub real secret values from response headers
+    // Scrub real secret values from response headers (one-shot — header
+    // values are always small so per-chunk semantics don't apply).
     if !secretInjector.isEmpty {
         var scrubbedHeaders = HTTPFields()
         for field in headers {
@@ -511,23 +517,150 @@ private func makeProxyResponse(from response: HTTPClient.Response, secretInjecto
     }
 
     headers[cacheControlHeader] = "no-store, no-cache"
-    headers[HTTPField.Name.contentLength] = nil
 
-    // Scrub real secret values from response body
-    var responseBody = response.body ?? ByteBuffer()
-    if !secretInjector.isEmpty, responseBody.readableBytes > 0,
-       let bodyString = responseBody.getString(at: responseBody.readerIndex, length: responseBody.readableBytes) {
-        let scrubbed = secretInjector.scrub(text: bodyString)
-        if scrubbed != bodyString {
-            responseBody = ByteBuffer(string: scrubbed)
-        }
-    }
+    let contentType = (headers[HTTPField.Name.contentType] ?? "").lowercased()
+    let isText = contentType.hasPrefix("text/")
+        || contentType.hasPrefix("application/json")
+        || contentType.contains("charset=")
+        || contentType.contains("event-stream")
+    let shouldScrub = isText && !secretInjector.isEmpty
+    let upstreamBody = response.body
+    let scrubber = secretInjector
+
+    // Per-chunk transform — secrets crossing a chunk boundary slip through
+    // unscrubbed. Acceptable for LLM SSE responses (matches Node-server).
+    // Use the writer-based ResponseBody so each chunk is written and flushed
+    // immediately. The previous shape of this code awaited each
+    // `writer.write` inside a for-try-await over upstreamBody, which is
+    // identical to Hummingbird's own AsyncSequence-backed body but lets us
+    // fold in scrub without an intermediate map operator.
+    let body = ResponseBody(asyncSequence: ScrubbingAsyncStream(
+        upstream: upstreamBody,
+        shouldScrub: shouldScrub,
+        scrubber: scrubber
+    ))
 
     return Response(
         status: HTTPResponse.Status(code: Int(response.status.code), reasonPhrase: response.status.reasonPhrase),
         headers: headers,
-        body: .init(byteBuffer: responseBody)
+        body: body
     )
+}
+
+/// AsyncSequence wrapper that scrubs each ByteBuffer chunk from the
+/// upstream HTTPClientResponse.Body before forwarding it to the Hummingbird
+/// response writer. Exists so `ResponseBody(asyncSequence:)` can be used —
+/// that path is the documented fast-path for streamed responses and avoids
+/// any buffering inside the writer-based `ResponseBody { writer in ... }`
+/// initializer.
+///
+/// UTF-8 boundary handling: when `shouldScrub` is true, the iterator keeps
+/// trailing bytes that belong to an incomplete codepoint and prepends them
+/// to the next chunk. Without this, decoding a chunk that ended mid-multi-
+/// byte sequence would either fail (returning nil) or — worse, in a naive
+/// re-encode — corrupt the codepoint with U+FFFD. Real LLM SSE traffic
+/// often emits CJK / emoji / accented Latin so this matters for any non-
+/// ASCII model output.
+private struct ScrubbingAsyncStream: AsyncSequence, Sendable {
+    typealias Element = ByteBuffer
+    let upstream: HTTPClientResponse.Body
+    let shouldScrub: Bool
+    let scrubber: SecretInjector
+
+    struct AsyncIterator: AsyncIteratorProtocol {
+        var inner: HTTPClientResponse.Body.AsyncIterator
+        let shouldScrub: Bool
+        let scrubber: SecretInjector
+        var pendingTail: [UInt8] = []
+        var didEmitTail = false
+
+        mutating func next() async throws -> ByteBuffer? {
+            guard shouldScrub else {
+                // Fast path: no scrub work, just forward chunks.
+                return try await inner.next()
+            }
+
+            while let chunk = try await inner.next() {
+                // Combine any unfinished bytes from the previous chunk.
+                var bytes = pendingTail
+                bytes.append(contentsOf: chunk.readableBytesView)
+                pendingTail.removeAll(keepingCapacity: true)
+
+                // Find the byte index of the last complete UTF-8 codepoint
+                // boundary. Anything past that boundary becomes pendingTail
+                // and rolls forward to the next chunk.
+                let cut = lastCompleteUTF8Boundary(bytes)
+                if cut == 0 {
+                    // The chunk doesn't even close out the previous tail.
+                    // Buffer it and ask upstream for more.
+                    pendingTail = bytes
+                    continue
+                }
+                if cut < bytes.count {
+                    pendingTail = Array(bytes[cut...])
+                    bytes.removeLast(bytes.count - cut)
+                }
+
+                guard let str = String(bytes: bytes, encoding: .utf8) else {
+                    // Should not happen — we only pass complete codepoints —
+                    // but if it does, drop the scrub for this chunk rather
+                    // than corrupt the bytes.
+                    return ByteBuffer(bytes: bytes)
+                }
+                let scrubbed = scrubber.scrub(text: str)
+                return ByteBuffer(string: scrubbed)
+            }
+
+            // Upstream EOF. Emit any remaining tail bytes verbatim — they
+            // form an incomplete codepoint that we couldn't scrub
+            // safely, but truncating them would corrupt the response too.
+            if !didEmitTail, !pendingTail.isEmpty {
+                didEmitTail = true
+                let tail = pendingTail
+                pendingTail.removeAll()
+                return ByteBuffer(bytes: tail)
+            }
+            return nil
+        }
+    }
+
+    func makeAsyncIterator() -> AsyncIterator {
+        AsyncIterator(inner: upstream.makeAsyncIterator(), shouldScrub: shouldScrub, scrubber: scrubber)
+    }
+}
+
+/// Return the largest prefix length `n` of `bytes` such that bytes[0..<n] is
+/// a complete sequence of UTF-8 codepoints. Continuation bytes (10xxxxxx)
+/// at the tail mean the prefix is incomplete; we walk back from the end
+/// until we find a leading byte and verify the codepoint it starts has
+/// all its continuation bytes present.
+private func lastCompleteUTF8Boundary(_ bytes: [UInt8]) -> Int {
+    if bytes.isEmpty { return 0 }
+    var i = bytes.count
+    // Walk back over up to 3 continuation bytes (UTF-8 codepoints are at most
+    // 4 bytes long, so any incomplete trailing codepoint has 1-3 trailing
+    // continuation bytes plus a leading byte).
+    var continuations = 0
+    while i > 0, (bytes[i - 1] & 0xC0) == 0x80, continuations < 3 {
+        i -= 1
+        continuations += 1
+    }
+    if i == 0 {
+        // Entire buffer is continuation bytes (malformed) — emit all
+        // bytes; the String() decoder will reject and we'll forward
+        // verbatim.
+        return bytes.count
+    }
+    let lead = bytes[i - 1]
+    let needed: Int
+    if lead & 0x80 == 0 { needed = 1 }            // 0xxxxxxx
+    else if lead & 0xE0 == 0xC0 { needed = 2 }    // 110xxxxx
+    else if lead & 0xF0 == 0xE0 { needed = 3 }    // 1110xxxx
+    else if lead & 0xF8 == 0xF0 { needed = 4 }    // 11110xxx
+    else { return bytes.count }                   // malformed — pass through
+    let have = bytes.count - (i - 1)
+    if have >= needed { return bytes.count }
+    return i - 1
 }
 
 private extension HTTPMethod {

@@ -2,6 +2,16 @@
 
 Use these CSS classes in `.shtml` sprinkles. Do NOT write custom CSS — these components cover all common UI patterns.
 
+## Rail icon (favicon)
+
+Every sprinkle declares its own glyph for the side rail. Add this to the sprinkle's `<head>` (full-document mode) or as the first element (fragment mode):
+
+```html
+<link rel="icon" href="music" />
+```
+
+The `href` accepts a Lucide icon name (preferred), a VFS path to an SVG (`/shared/sprinkles/<name>/icon.svg`), or a `data:image/svg+xml;...` URL. See the SKILL.md "Sprinkle icon" section for the full list. **Never skip this** — generic Sparkles tiles are reserved for sprinkles that genuinely have no thematic anchor.
+
 ## Icons (Lucide)
 
 Lucide icons are available globally via the `LucideIcons` object. Use declarative `data-lucide` attributes for automatic rendering, or create icons programmatically.
@@ -527,6 +537,7 @@ Panels should look like professional tools, not chatbot output. Follow these rul
 
 ```html
 <title>Report Title</title>
+<link rel="icon" href="clipboard-list" />
 <div class="sprinkle-stack">
   <div>
     <h2 class="sprinkle-heading">Report Title</h2>
@@ -639,13 +650,14 @@ Every built-in sprinkle has three view states: **empty** (URL input form), **loa
 scoop_scoop("<sprinkle-name>")
 feed_scoop("<sprinkle-name>", "You own the sprinkle '<sprinkle-name>'.
 1. Run: read_file /workspace/skills/sprinkles/style-guide.md
-2. Write the sprinkle to /shared/sprinkles/<sprinkle-name>/<sprinkle-name>.shtml — define the DATA CONTRACT at the top of the <script>.
-3. Run: sprinkle open <sprinkle-name>
-4. IMMEDIATELY push status: sprinkle send <sprinkle-name> '{\"status\":\"loading\",\"context\":\"<what>\"}'
-5. Gather the data the user needs.
-6. Push results to the sprinkle in the format specified by the DATA CONTRACT.
-7. Stay ready — you will receive lick events when the user clicks buttons in the sprinkle.
-8. When the user confirms an edit, attempt to apply it to the underlying source (see 'Applying Changes' below).
+2. Pick a Lucide icon name that matches the sprinkle's purpose. Add <link rel=\"icon\" href=\"<icon-name>\" /> to the .shtml. See sprinkles SKILL.md \"Sprinkle icon\" for examples.
+3. Write the sprinkle to /shared/sprinkles/<sprinkle-name>/<sprinkle-name>.shtml — define the DATA CONTRACT at the top of the <script>.
+4. Run: sprinkle open <sprinkle-name>
+5. IMMEDIATELY push status: sprinkle send <sprinkle-name> '{\"status\":\"loading\",\"context\":\"<what>\"}'
+6. Gather the data the user needs.
+7. Push results to the sprinkle in the format specified by the DATA CONTRACT.
+8. Stay ready — you will receive lick events when the user clicks buttons in the sprinkle.
+9. When the user confirms an edit, attempt to apply it to the underlying source (see 'Applying Changes' below).
 Do not send a completion message.")
 ```
 

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreBinaries": ["swift", "wrangler", "playwright", "sleep"],
+  "ignoreDependencies": ["pyodide", "@cloudflare/workers-types"],
+  "ignore": [
+    "dist/**",
+    "**/dist/**",
+    "packages/swift-launcher/**",
+    "packages/swift-server/**",
+    "packages/vfs-root/**",
+    "packages/dev-tools/**",
+    "packages/assets/**",
+    "**/*.d.ts",
+    "packages/webapp/src/stubs/**"
+  ],
+  "workspaces": {
+    ".": {
+      "entry": ["vitest.config.ts", "eslint.config.js", ".releaserc.json"],
+      "project": ["*.{js,ts,mjs}"]
+    },
+    "packages/webapp": {
+      "entry": [
+        "vite.config.ts",
+        "src/ui/main.ts",
+        "src/ui/preview-sw.ts",
+        "src/ui/llm-proxy-sw.ts",
+        "src/ui/electron-overlay-entry.ts",
+        "src/ui/slicc-editor-entry.ts",
+        "src/ui/slicc-diff-entry.ts",
+        "src/ui/lucide-icons.ts",
+        "src/ui/rum.js",
+        "src/shims/empty.ts",
+        "src/shims/stream.ts",
+        "src/shims/http.ts",
+        "src/shims/https.ts",
+        "src/shims/http2.ts",
+        "providers/*.ts",
+        "tests/**/*.test.ts"
+      ],
+      "project": ["src/**/*.{ts,tsx,js}", "providers/**/*.ts", "tests/**/*.ts"],
+      "ignore": [
+        "src/types/**",
+        "src/globals.d.ts",
+        "tests/e2e/**",
+        "tests/integration/**",
+        "tests/test-dips.mjs"
+      ],
+      "ignoreDependencies": ["buffer", "puppeteer-core"]
+    },
+    "packages/chrome-extension": {
+      "entry": [
+        "vite.config.ts",
+        "src/service-worker.ts",
+        "src/offscreen.ts",
+        "voice-popup.js",
+        "mount-popup.js",
+        "tests/**/*.test.ts"
+      ],
+      "project": ["src/**/*.{ts,js}", "tests/**/*.ts"],
+      "ignore": ["src/chrome.d.ts"],
+      "ignoreDependencies": [
+        "@imagemagick/magick-wasm",
+        "@mariozechner/pi-ai",
+        "@mariozechner/pi-coding-agent"
+      ]
+    },
+    "packages/node-server": {
+      "entry": [
+        "src/index.ts",
+        "src/electron-main.ts",
+        "src/release-package.ts",
+        "src/publish-chrome-web-store.ts",
+        "src/qa-setup.ts",
+        "src/secrets/index.ts",
+        "tests/**/*.test.ts"
+      ],
+      "project": ["src/**/*.ts", "tests/**/*.ts"],
+      "ignore": ["tests/integration/**"]
+    },
+    "packages/cloudflare-worker": {
+      "entry": ["src/index.ts", "tests/**/*.test.ts"],
+      "project": ["src/**/*.ts", "tests/**/*.ts"]
+    }
+  }
+}

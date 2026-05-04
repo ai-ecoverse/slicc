@@ -1,0 +1,110 @@
+name: Bug report
+description: Something in SLICC broke, misbehaved, or otherwise melted.
+title: 'bug: '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Filing a bug. Two notes:
+        - Most existing bug reports here open with a short **Summary**, then **Reproduction** (often a single shell command or chat prompt), then a **Suspected location** with a `file.ts:line` pointer or a code snippet. Writing yours that way is great — feel free to ignore the sub-fields below if your free-form body covers them.
+        - For security vulnerabilities use [private GitHub Security Advisories](https://github.com/ai-ecoverse/slicc/security/advisories/new), not a public issue.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One paragraph. What broke, where, and what you observed instead of what you expected.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: float
+    attributes:
+      label: Float (runtime)
+      description: Where did it happen?
+      multiple: true
+      options:
+        - Standalone CLI / `npm run dev`
+        - Chrome extension (side panel)
+        - Electron / Sliccstart (macOS app)
+        - Cloudflare worker (tray hub)
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface (best guess is fine)
+      description: Which subsystem(s) seem involved? Select all that apply. Leave blank if unsure.
+      multiple: true
+      options:
+        - Cone (main agent / orchestrator)
+        - Scoop (sub-agent / sandbox)
+        - Shell / WasmShell / supplemental commands
+        - CDP / playwright-cli / browser automation
+        - VFS / mount / File System Access
+        - Git (isomorphic-git)
+        - Sprinkles / dips (`.shtml` rendering)
+        - Skills (`/workspace/skills/`, `.agents`, `.claude`)
+        - Provider / model / API key handling
+        - UI (chat panel, terminal, files, tabs)
+        - Build / dev server / Vite HMR
+        - Other / not sure
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: |
+        Whatever lets a maintainer hit it. A shell command, a chat prompt, a code snippet, or numbered steps — all fine. If it only repros from a specific worktree layout or VFS state, say so.
+      placeholder: |
+        e.g.
+
+        ```
+        playwright-cli snapshot
+        ```
+        from inside a scoop with a single tab open → "Error: --tab <targetId> is required"
+      render: markdown
+    validations:
+      required: true
+
+  - type: textarea
+    id: location
+    attributes:
+      label: Suspected root cause / location (optional)
+      description: |
+        If you've already narrowed it down, paste the file/line, the offending code, or your hypothesis. Most existing reports do this — it makes triage dramatically faster.
+      placeholder: |
+        `packages/webapp/src/scoops/scoop-context.ts:246` casts `RestrictedFS as VirtualFS`, but `RestrictedFS` is missing `isPathUnderMount()`.
+      render: markdown
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output (optional)
+      description: Paste relevant lines from the DevTools console, the Node server, or the offscreen document. Strip secrets first.
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: SLICC version / commit (optional)
+      description: '`sliccy --version`, an npm version, or a commit SHA.'
+      placeholder: '2.26.1 / commit cbcdb280'
+
+  - type: input
+    id: env
+    attributes:
+      label: OS / browser / Node (optional)
+      description: Only needed if you suspect platform sensitivity.
+      placeholder: 'macOS 15.4, Chrome 138.0.7204.92, Node v22.11.0'
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I have stripped secrets, tokens, and PATs from logs and screenshots.
+          required: true

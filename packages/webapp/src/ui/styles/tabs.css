@@ -414,6 +414,17 @@
   background: var(--s2-gray-800);
   color: var(--s2-gray-25);
 }
+/* Author-supplied icons render via <img> (see imgTag in
+   sprinkle-icon.ts) so they can't inherit the active state's `color`
+   the way inline Lucide SVGs can — they'd disappear into the dark
+   active background. Recolor img-rendered icons to match the active
+   foreground via filter (theme-aware). */
+.rail__item--active img {
+  filter: brightness(0);
+}
+:root.theme-light .rail__item--active img {
+  filter: brightness(0) invert(1);
+}
 .rail__item:focus-visible {
   outline: 2px solid var(--s2-accent);
   outline-offset: 2px;

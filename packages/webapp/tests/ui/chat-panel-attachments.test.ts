@@ -39,6 +39,20 @@ describe('ChatPanel attachments', () => {
 
   beforeEach(async () => {
     testCounter += 1;
+    // ChatPanel.sendMessage reads `selected-model` from localStorage. On
+    // jsdom + Node >= 25, leaning on the default jsdom Storage is fragile
+    // when sibling test files run vi.unstubAllGlobals(). Stub a known-good
+    // Storage shape per test.
+    const store: Record<string, string> = { 'selected-model': 'claude-sonnet' };
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store[k] ?? null,
+      setItem: (k: string, v: string) => {
+        store[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete store[k];
+      },
+    });
     container = document.createElement('div');
     document.body.appendChild(container);
     panel = new ChatPanel(container);
@@ -56,6 +70,7 @@ describe('ChatPanel attachments', () => {
 
   afterEach(() => {
     container.remove();
+    vi.unstubAllGlobals();
   });
 
   it('adds a text file attachment and sends it with the chat message', async () => {

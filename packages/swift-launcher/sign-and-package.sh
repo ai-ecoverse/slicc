@@ -1,10 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="$1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$SCRIPT_DIR/build/Sliccstart.app"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+# Single source of truth: root package.json (kept in sync by @semantic-release/git).
+VERSION="$(node -p "require('$PROJECT_ROOT/package.json').version")"
 
 echo "=== Sliccstart sign-and-package v${VERSION} ==="
 

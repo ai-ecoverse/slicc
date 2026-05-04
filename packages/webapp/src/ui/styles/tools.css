@@ -109,6 +109,76 @@
   animation: none;
 }
 
+/* ── Working cluster ──────────────────────────────────────────────── */
+/* Three or more consecutive tool calls collapse behind a single
+ * "Working" header so they don't push assistant content out of view.
+ * The header shows one small status dot per inner call so users see
+ * the run's progression at a glance without expanding. */
+.tool-call-cluster {
+  padding: 0;
+  font-size: var(--s2-font-size-75);
+}
+.tool-call-cluster > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+  background: var(--s2-bg-layer-1);
+  color: var(--s2-content-secondary);
+  font-weight: 500;
+  font-size: var(--s2-font-size-75);
+  line-height: 1.4;
+  transition: background var(--s2-transition-default);
+}
+.tool-call-cluster > summary:hover {
+  background: var(--s2-bg-layer-2);
+}
+.tool-call-cluster > summary::-webkit-details-marker {
+  display: none;
+}
+/* Per-call status dots in the cluster header. Each dot only carries
+ * its own `tool-call--<status>` modifier (no bare `.tool-call`) so the
+ * status modifier sets `--tool-status-color` on the dot itself without
+ * making the dot look like a real tool-call row to DOM queries. The
+ * container anchors the row to the right side of the summary and packs
+ * the dots tightly. */
+.tool-call-cluster__dots {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 50%;
+}
+.tool-call-cluster__dot {
+  /* Override the `margin-left:auto` baked into `.tool-call__status` so
+   * dots pack tightly inside the dots row instead of each one trying
+   * to push itself to the far right. */
+  margin-left: 0;
+}
+.tool-call-cluster__body {
+  margin-top: 4px;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 2px solid var(--s2-border-subtle);
+  margin-left: 10px;
+}
+/* Stale dim — same treatment as individual rows so retired clusters
+ * fade into the background once a new user turn arrives. */
+.tool-call-cluster.tool-call--stale > summary .tool-call__status {
+  opacity: 0.5;
+}
+.tool-call-cluster.tool-call--stale > summary .tool-call__status--running {
+  animation: none;
+}
+
 /* ── Expanded body ────────────────────────────────────────────────── */
 .tool-call__details {
   padding: 8px 12px 12px 30px;

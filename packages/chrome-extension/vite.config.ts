@@ -15,12 +15,18 @@ import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } fro
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../..');
+const rootPkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf-8')) as {
+  version: string;
+};
+const sliccReleasedAt = process.env['SLICC_RELEASED_AT'] ?? null;
 
 export default defineConfig(({ mode }) => ({
   root: repoRoot,
   publicDir: resolve(repoRoot, 'packages/assets'),
   define: {
     __DEV__: JSON.stringify(mode !== 'production'),
+    __SLICC_VERSION__: JSON.stringify(rootPkg.version),
+    __SLICC_RELEASED_AT__: JSON.stringify(sliccReleasedAt),
   },
   resolve: {
     alias: {
@@ -181,17 +187,18 @@ export default defineConfig(({ mode }) => ({
       closeBundle() {
         const outDir = resolve(repoRoot, 'dist/extension');
         mkdirSync(outDir, { recursive: true });
-        // Copy manifest — strip "key" field in dev builds so Chrome assigns a random ID
-        // (avoids stale storage from previous installs). Set SLICC_EXT_DEV=1 to enable.
+        // Always override manifest.version from root package.json — the
+        // committed source value is a sentinel and never read at runtime.
+        // SLICC_EXT_DEV=1 also strips "key" so Chrome assigns a random ID
+        // (avoids stale storage from previous installs).
         const manifestSrc = resolve(__dirname, 'manifest.json');
         const manifestDest = resolve(outDir, 'manifest.json');
+        const manifest = JSON.parse(readFileSync(manifestSrc, 'utf-8'));
+        manifest.version = rootPkg.version;
         if (process.env['SLICC_EXT_DEV']) {
-          const manifest = JSON.parse(readFileSync(manifestSrc, 'utf-8'));
           delete manifest.key;
-          writeFileSync(manifestDest, JSON.stringify(manifest, null, 2));
-        } else {
-          copyFileSync(manifestSrc, manifestDest);
         }
+        writeFileSync(manifestDest, JSON.stringify(manifest, null, 2));
         copyFileSync(resolve(__dirname, 'sandbox.html'), resolve(outDir, 'sandbox.html'));
         copyFileSync(
           resolve(__dirname, 'sprinkle-sandbox.html'),

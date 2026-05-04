@@ -16,8 +16,8 @@ export type { ThinkingLevel };
  * {@link ThinkingLevel} enum (`off | minimal | low | medium | high | xhigh`)
  * remains valid for programmatic / shell-flag callers; the UI only steps
  * through this 4-bucket subset for clarity. `xhigh` is silently skipped to
- * `off` when the active model doesn't support it (see `supportsXhigh()` in
- * `@mariozechner/pi-ai`).
+ * `off` when the active model doesn't support it (see
+ * `getSupportedThinkingLevels()` in `@mariozechner/pi-ai`).
  */
 export const THINKING_LEVEL_CYCLE: readonly ThinkingLevel[] = [
   'off',
@@ -117,7 +117,8 @@ export interface ScoopConfig {
    * scoop inherits its parent's level (or `off` for non-reasoning models).
    *
    * `xhigh` is silently clamped to `high` when the active model doesn't
-   * advertise xhigh support — see `supportsXhigh()` from `@mariozechner/pi-ai`.
+   * advertise xhigh support — see `getSupportedThinkingLevels()` from
+   * `@mariozechner/pi-ai`.
    * For non-reasoning models the value is ignored entirely.
    */
   thinkingLevel?: ThinkingLevel;

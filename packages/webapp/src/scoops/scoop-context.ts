@@ -25,7 +25,7 @@ import type {
   ImageContent,
   Model,
 } from '../core/index.js';
-import { isContextOverflow, streamSimple, supportsXhigh } from '@mariozechner/pi-ai';
+import { isContextOverflow, streamSimple, getSupportedThinkingLevels } from '@mariozechner/pi-ai';
 import type { Api, AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
 import type { ThinkingLevel } from '@mariozechner/pi-agent-core';
 import type { SessionStore } from '../core/session.js';
@@ -54,7 +54,8 @@ const log = createLogger('scoop-context');
  * Rules:
  *   - Non-reasoning model → always `'off'`, regardless of `requested`.
  *   - `requested === undefined` → `'off'` (default; UI/CLI can opt in).
- *   - `requested === 'xhigh'` and `!supportsXhigh(model)` → clamped to `'high'`.
+ *   - `requested === 'xhigh'` and the model does not advertise xhigh support
+ *     (via `thinkingLevelMap`) → clamped to `'high'`.
  *   - Otherwise the requested value is passed through.
  *
  * Exposed for tests and re-used by `agent-bridge.ts`.
@@ -65,7 +66,7 @@ export function resolveThinkingLevel(
 ): ThinkingLevel {
   if (!model.reasoning) return 'off';
   if (requested === undefined) return 'off';
-  if (requested === 'xhigh' && !supportsXhigh(model)) return 'high';
+  if (requested === 'xhigh' && !getSupportedThinkingLevels(model).includes('xhigh')) return 'high';
   return requested;
 }
 
@@ -111,7 +112,9 @@ export function isRetryableError(msg: string): boolean {
       msg
     ) ||
     // Network issues
-    /network.*error|connection.*refused|timeout|econnreset|socket.*hang.*up/i.test(msg) ||
+    /network.*error|failed to fetch|connection.*refused|timeout|econnreset|socket.*hang.*up/i.test(
+      msg
+    ) ||
     // Temporary overload
     /overloaded|temporarily.*unavailable|try.*again/i.test(msg)
   );
@@ -202,6 +205,7 @@ export class ScoopContext {
   private isProcessing = false;
   private disposed = false;
   private didStreamDeltas = false;
+  private promptStreamErrorMessage: string | null = null;
   private unsubscribe: (() => void) | null = null;
   /** Aborts the in-flight prompt() retry loop and any pending backoff sleep. */
   private promptAbortController: AbortController | null = null;
@@ -504,7 +508,13 @@ export class ScoopContext {
         this.didStreamDeltas = false;
 
         try {
+          this.promptStreamErrorMessage = null;
           await agent.prompt(text, images);
+          if (this.promptStreamErrorMessage) {
+            const streamError = this.promptStreamErrorMessage;
+            this.promptStreamErrorMessage = null;
+            throw new Error(streamError);
+          }
           // Success - exit retry loop
           lastError = null;
           break;
@@ -831,7 +841,17 @@ export class ScoopContext {
               this.recoverFromOverflow(messages);
               break;
             }
-            // Already recovering (either type) — surface error, reset flag
+            if (!this.isRecovering && this.isProcessing && !this.didStreamDeltas) {
+              // Transparent retry is only safe when no partial assistant
+              // text has been streamed yet. Once deltas have hit the UI/
+              // orchestrator buffers, retrying would render the new
+              // response on top of the broken one (or as a duplicate
+              // bubble), so surface the error instead.
+              this.promptStreamErrorMessage = errorMsg;
+              break;
+            }
+            // Already recovering, no prompt() retry loop is active, or a
+            // partial response has already been streamed — surface error.
             this.isRecovering = false;
             this.callbacks.onError(errorMsg);
           } else {

@@ -27,7 +27,7 @@ import {
   resolveCurrentModel,
   resolveModelById,
 } from './provider-settings.js';
-import { supportsXhigh } from '@mariozechner/pi-ai';
+import { getSupportedThinkingLevels } from '@mariozechner/pi-ai';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
@@ -93,6 +93,7 @@ import {
   setPlaywrightTeleportConnectedFollowers,
 } from '../shell/supplemental-commands/playwright-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
+import { resolveSprinkleIconHtml } from './sprinkle-icon.js';
 import { initTelemetry } from './telemetry.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
 import { recoverMounts } from '../fs/mount-recovery.js';
@@ -785,7 +786,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   const syncThinkingButtonForExtensionScoop = (scoop: RegisteredScoop): void => {
     const modelId = scoop.config?.modelId;
     const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
-    layout.panels.chat.setModelSupportsReasoning(!!model.reasoning, supportsXhigh(model));
+    layout.panels.chat.setModelSupportsReasoning(
+      !!model.reasoning,
+      getSupportedThinkingLevels(model).includes('xhigh')
+    );
     layout.panels.chat.setThinkingLevel(scoop.config?.thinkingLevel);
   };
 
@@ -856,7 +860,16 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           description: cfg.description,
           requiresApiKey: cfg.requiresApiKey ?? true,
           requiresBaseUrl: cfg.requiresBaseUrl ?? false,
+          requiresDeployment: !!cfg.requiresDeployment,
+          requiresApiVersion: !!cfg.requiresApiVersion,
+          apiKeyPlaceholder: cfg.apiKeyPlaceholder ?? undefined,
+          apiKeyEnvVar: cfg.apiKeyEnvVar ?? undefined,
           defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+          baseUrlDescription: cfg.baseUrlDescription ?? undefined,
+          deploymentPlaceholder: cfg.deploymentPlaceholder ?? undefined,
+          deploymentDescription: cfg.deploymentDescription ?? undefined,
+          apiVersionDefault: cfg.apiVersionDefault ?? undefined,
+          apiVersionDescription: cfg.apiVersionDescription ?? undefined,
           isOAuth: !!cfg.isOAuth,
         };
       })
@@ -884,7 +897,8 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       postSystemMessage: (line) => layout.panels.chat.addSystemMessage(line),
       postDipReference: (md) => layout.panels.chat.addSystemMessage(md),
       getProviderCatalogue: buildExtProviderCatalogue,
-      saveAccount: (id, key, baseUrl) => addAccountExt(id, key, baseUrl),
+      saveAccount: (id, key, baseUrl, deployment, apiVersion) =>
+        addAccountExt(id, key, baseUrl, deployment, apiVersion),
       setSelectedModel: (id) => setSelectedModelIdExt(id),
       resolveModelLabel: (provider, modelId) => {
         try {
@@ -1057,6 +1071,14 @@ async function mainExtension(app: HTMLElement): Promise<void> {
             provider: String(data.provider ?? ''),
             apiKey: String(data.apiKey ?? ''),
             baseUrl: typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+            deployment:
+              typeof data.deployment === 'string' && data.deployment
+                ? String(data.deployment)
+                : null,
+            apiVersion:
+              typeof data.apiVersion === 'string' && data.apiVersion
+                ? String(data.apiVersion)
+                : null,
             model: data.model == null ? null : String(data.model),
           })
           .catch((err) => log.warn('handleConnectAttempt failed', err));
@@ -1261,6 +1283,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   await sprinkleManager.refresh();
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);
+  layout.onSprinkleActivate = (name) => sprinkleManager.markActivated(name);
   layout.getAvailableSprinkles = () => {
     const opened = new Set(sprinkleManager.opened());
     return sprinkleManager
@@ -1269,8 +1292,23 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       .map((p) => ({ name: p.name, title: p.title }));
   };
   layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
+  layout.resolveSprinkleIcon = (spec) => resolveSprinkleIconHtml(spec, localFs);
   layout.updateAddButtons();
   await sprinkleManager.restoreOpenSprinkles();
+
+  // Auto-surface newly-added .shtml files in the rail. The panel's
+  // `localFs` doesn't have the orchestrator's watcher (that lives in
+  // offscreen), so attach a fresh one to catch panel-side writes
+  // (e.g. skill drag-and-drop installs). Offscreen-side writes are
+  // relayed separately from `offscreen.ts` via the sprinkle proxy.
+  if (!localFs.getWatcher()) {
+    const { FsWatcher } = await import('../fs/index.js');
+    localFs.setWatcher(new FsWatcher());
+  }
+  const panelWatcher = localFs.getWatcher();
+  if (panelWatcher) {
+    sprinkleManager.setupWatcher(panelWatcher);
+  }
 
   // Migrate legacy localStorage flag to VFS marker
   if (!(await localFs.exists('/shared/.welcomed')) && localStorage.getItem('slicc-welcomed')) {
@@ -1421,6 +1459,19 @@ async function main(): Promise<void> {
     try {
       await navigator.serviceWorker.register('/preview-sw.js', { scope: '/preview/' });
       log.info('Preview SW registered');
+      // CLI standalone only — extension mode bypasses CORS via
+      // host_permissions and never needs the LLM proxy SW. Registering it
+      // there would intercept side-panel fetches the extension expects to
+      // reach the network directly.
+      const isExtensionForSw = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+      if (!isExtensionForSw) {
+        try {
+          await navigator.serviceWorker.register('/llm-proxy-sw.js', { scope: '/' });
+          log.info('LLM-proxy SW registered');
+        } catch (err) {
+          log.error('LLM-proxy SW registration failed — cross-origin LLM calls will hit CORS', err);
+        }
+      }
       if (!navigator.serviceWorker.controller) {
         // Wait briefly for clients.claim() to attach the page.
         await Promise.race([
@@ -1433,9 +1484,12 @@ async function main(): Promise<void> {
         ]);
       }
       if (!navigator.serviceWorker.controller && !sessionStorage.getItem('slicc-sw-reloaded')) {
-        // Still uncontrolled — force one reload so the SW can claim us.
+        // Still uncontrolled — force one reload so both SWs can claim us.
+        // This also guarantees the LLM proxy SW is active before the
+        // first cross-origin provider request, otherwise the very first
+        // fetch slips past it and hits CORS directly.
         sessionStorage.setItem('slicc-sw-reloaded', '1');
-        log.info('Reloading once to gain preview SW control');
+        log.info('Reloading once to gain SW control');
         location.reload();
         return;
       }
@@ -2035,7 +2089,16 @@ async function main(): Promise<void> {
           description: cfg.description,
           requiresApiKey: cfg.requiresApiKey ?? true,
           requiresBaseUrl: cfg.requiresBaseUrl ?? false,
+          requiresDeployment: !!cfg.requiresDeployment,
+          requiresApiVersion: !!cfg.requiresApiVersion,
+          apiKeyPlaceholder: cfg.apiKeyPlaceholder ?? undefined,
+          apiKeyEnvVar: cfg.apiKeyEnvVar ?? undefined,
           defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+          baseUrlDescription: cfg.baseUrlDescription ?? undefined,
+          deploymentPlaceholder: cfg.deploymentPlaceholder ?? undefined,
+          deploymentDescription: cfg.deploymentDescription ?? undefined,
+          apiVersionDefault: cfg.apiVersionDefault ?? undefined,
+          apiVersionDescription: cfg.apiVersionDescription ?? undefined,
           isOAuth: !!cfg.isOAuth,
         };
       })
@@ -2063,7 +2126,8 @@ async function main(): Promise<void> {
       postSystemMessage: (line) => layout.panels.chat.addSystemMessage(line),
       postDipReference: (md) => layout.panels.chat.addSystemMessage(md),
       getProviderCatalogue: buildProviderCatalogue,
-      saveAccount: (id, key, baseUrl) => addAccount(id, key, baseUrl),
+      saveAccount: (id, key, baseUrl, deployment, apiVersion) =>
+        addAccount(id, key, baseUrl, deployment, apiVersion),
       setSelectedModel: (id) => setSelectedModelId(id),
       resolveModelLabel: (provider, modelId) => {
         try {
@@ -2288,6 +2352,14 @@ async function main(): Promise<void> {
               apiKey: String(data.apiKey ?? ''),
               baseUrl:
                 typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+              deployment:
+                typeof data.deployment === 'string' && data.deployment
+                  ? String(data.deployment)
+                  : null,
+              apiVersion:
+                typeof data.apiVersion === 'string' && data.apiVersion
+                  ? String(data.apiVersion)
+                  : null,
               model: data.model == null ? null : String(data.model),
             })
             .catch((err) => log.warn('handleConnectAttempt failed', err));
@@ -2501,16 +2573,17 @@ async function main(): Promise<void> {
   }
 
   // ── Upgrade detection ────────────────────────────────────────────────
-  // Compares the bundled SLICC version (baked into /shared/version.json
-  // at release time) against the value last seen on a previous boot and
-  // emits an `upgrade` lick when it bumped. Aligned with the session-
-  // reload (mount-recovery) lick above: both fire after the orchestrator
-  // is fully initialized so a cone is guaranteed to be present as a
-  // routable target. The "last seen" marker is only advanced AFTER the
-  // lick has actually been routed — otherwise a transient no-cone state
-  // would silently lose the upgrade notification for that version.
+  // Compares the bundled SLICC version (baked into the bundle at build
+  // time from root package.json) against the value last seen on a
+  // previous boot and emits an `upgrade` lick when it bumped. Aligned
+  // with the session-reload (mount-recovery) lick above: both fire after
+  // the orchestrator is fully initialized so a cone is guaranteed to be
+  // present as a routable target. The "last seen" marker is only
+  // advanced AFTER the lick has actually been routed — otherwise a
+  // transient no-cone state would silently lose the upgrade notification
+  // for that version.
   if (sharedFs) {
-    detectUpgrade(sharedFs)
+    detectUpgrade()
       .then(async (result) => {
         if (!result.isUpgrade || result.lastSeen === null) return;
         const event: LickEvent = {
@@ -2554,8 +2627,14 @@ async function main(): Promise<void> {
       sharedFs,
       routeLickToScoop,
       {
-        addSprinkle: (name, title, element, zone) =>
-          layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
+        addSprinkle: (name, title, element, zone, options) =>
+          layout.addSprinkle(
+            name,
+            title,
+            element,
+            zone as 'primary' | 'drawer' | undefined,
+            options
+          ),
         removeSprinkle: (name) => layout.removeSprinkle(name),
       },
       () => {
@@ -2578,6 +2657,7 @@ async function main(): Promise<void> {
 
     await sprinkleManager.refresh();
     layout.onSprinkleClose = (name) => sprinkleManager!.close(name);
+    layout.onSprinkleActivate = (name) => sprinkleManager!.markActivated(name);
 
     // Wire [+] picker: available sprinkles + open callback
     layout.getAvailableSprinkles = () => {
@@ -2588,7 +2668,17 @@ async function main(): Promise<void> {
         .map((p) => ({ name: p.name, title: p.title }));
     };
     layout.onOpenSprinkle = (name, zone) => sprinkleManager!.open(name, zone);
+    layout.resolveSprinkleIcon = (spec) => resolveSprinkleIconHtml(spec, sharedFs);
     layout.updateAddButtons();
+
+    // Auto-surface newly-added .shtml files in the rail (skill installs,
+    // direct file writes, mounted folders). Reuses the orchestrator's
+    // shared FsWatcher — same instance the bsh watchdog and other
+    // subsystems hang off of.
+    const sharedWatcher = sharedFs.getWatcher();
+    if (sharedWatcher) {
+      sprinkleManager.setupWatcher(sharedWatcher);
+    }
 
     // Migrate legacy localStorage flag to VFS marker
     if (!(await sharedFs.exists('/shared/.welcomed')) && localStorage.getItem('slicc-welcomed')) {
@@ -2792,7 +2882,10 @@ async function main(): Promise<void> {
   const syncThinkingButtonForScoop = (scoop: RegisteredScoop): void => {
     const modelId = scoop.config?.modelId;
     const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
-    layout.panels.chat.setModelSupportsReasoning(!!model.reasoning, supportsXhigh(model));
+    layout.panels.chat.setModelSupportsReasoning(
+      !!model.reasoning,
+      getSupportedThinkingLevels(model).includes('xhigh')
+    );
     layout.panels.chat.setThinkingLevel(scoop.config?.thinkingLevel);
   };
 

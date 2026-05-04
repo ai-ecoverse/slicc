@@ -137,11 +137,24 @@ export class Layout {
   public onClearChat?: () => Promise<void>;
   public onClearFilesystem?: () => Promise<void>;
   public onSprinkleClose?: (name: string) => void;
+  /**
+   * Fired when the user clicks a sprinkle's rail icon. Lets the
+   * SprinkleManager promote attention-mode entries (which the user
+   * has now actually engaged with) into persistently-open ones.
+   */
+  public onSprinkleActivate?: (name: string) => void;
 
   /** Callback to get available sprinkles for the [+] picker. */
   public getAvailableSprinkles?: () => Array<{ name: string; title: string }>;
   /** Callback to open a sprinkle by name. */
   public onOpenSprinkle?: (name: string, zone?: ZoneId) => Promise<void>;
+  /**
+   * Resolver for sprinkle icon specs → SVG/HTML markup.
+   * `addSprinkle()` calls this when a sprinkle declares an icon
+   * (Lucide name, VFS path, inline SVG, or data URL). Returns null
+   * to fall back to the default Sparkles glyph.
+   */
+  public resolveSprinkleIcon?: (spec: string | undefined) => Promise<string | null>;
 
   // Layout uses CSS flex — no manual width fractions needed
 
@@ -275,9 +288,24 @@ export class Layout {
    */
   private initModelSelection(): void {
     const ensureModelSelected = () => {
-      const currentModelId = getSelectedModelId();
-      if (currentModelId) return;
       const groups = getAllAvailableModels();
+      // Validate that the stored selection still resolves against
+      // a configured account. Without this, deleting the active
+      // provider through Settings leaves a dangling `selected-model`
+      // (e.g. `bedrock-camp:…`) that the header dropdown silently
+      // ignores while message-send continues routing to the removed
+      // provider — surfacing as "No API key configured for provider".
+      const raw = localStorage.getItem('selected-model') ?? '';
+      const sep = raw.indexOf(':');
+      const storedProvider = sep > 0 ? raw.slice(0, sep) : '';
+      const storedModelId = sep > 0 ? raw.slice(sep + 1) : raw;
+      const stillResolves =
+        !!storedProvider &&
+        groups.some(
+          (g) => g.providerId === storedProvider && g.models.some((m) => m.id === storedModelId)
+        );
+      if (raw && stillResolves) return;
+      // Re-pick a default from the surviving accounts.
       for (const group of groups) {
         if (group.models.length > 0) {
           const { defaultModelId } = getProviderConfig(group.providerId);
@@ -288,6 +316,12 @@ export class Layout {
           setSelectedModelId(`${group.providerId}:${model.id}`);
           return;
         }
+      }
+      // No accounts at all → leave the selection empty so the chat
+      // header surfaces the "no provider configured" state instead
+      // of silently routing to a stale one.
+      if (raw && groups.length === 0) {
+        localStorage.removeItem('selected-model');
       }
     };
     ensureModelSelected();
@@ -789,6 +823,9 @@ export class Layout {
         onItemActivate: (id) => {
           if (id === 'terminal') this.panels?.terminal?.refit();
           if (id === 'memory') this.panels?.memory?.refresh();
+          if (id.startsWith('sprinkle-')) {
+            this.onSprinkleActivate?.(id.slice(9));
+          }
         },
         onItemClose: (id) => {
           const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
@@ -1042,7 +1079,7 @@ export class Layout {
     title: string,
     element: HTMLElement,
     targetZone?: ZoneId,
-    options?: { attention?: boolean }
+    options?: { attention?: boolean; icon?: string }
   ): void {
     const zone = targetZone ?? 'primary';
     const tabId = `sprinkle-${name}`;
@@ -1070,6 +1107,20 @@ export class Layout {
       closable: true,
     });
     this.dynamicSprinkles.set(name, container);
+
+    // Resolve the per-sprinkle icon asynchronously and swap it in
+    // when ready. We add the rail item with the default icon
+    // first so the entry is clickable immediately, then upgrade
+    // the SVG once the resolver responds.
+    if (options?.icon && this.resolveSprinkleIcon) {
+      this.resolveSprinkleIcon(options.icon)
+        .then((html) => {
+          if (html) this.primaryRail.setItemIcon(tabId, html);
+        })
+        .catch(() => {
+          /* fall back to default — already rendered */
+        });
+    }
 
     if (options?.attention) {
       // Auto-installed sprinkle in extension mode: leave the panel

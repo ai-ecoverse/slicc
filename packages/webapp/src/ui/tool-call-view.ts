@@ -27,6 +27,7 @@ import {
   Volume2,
   Hourglass,
   Wrench,
+  Cog,
 } from 'lucide';
 import type { ToolCall } from './types.js';
 import { escapeHtml } from './message-renderer.js';
@@ -191,6 +192,53 @@ export function toolStatus(tc: ToolCall): ToolStatus {
 export function createToolIcon(name: string): SVGElement {
   const desc = getToolDescriptor(name);
   return iconNodeToSvg(desc.icon);
+}
+
+/** Cluster icon used in the collapsed "working" header. */
+export function createClusterIcon(): SVGElement {
+  return iconNodeToSvg(Cog as unknown as IconNode);
+}
+
+/** Threshold above which consecutive tool calls collapse into a cluster.
+ *  Three or more in a row is enough to start pushing real content out of
+ *  view; one or two stay rendered inline. */
+export const TOOL_CLUSTER_MIN = 3;
+
+/** Result of grouping a flat tool-call list into singletons + clusters.
+ *  Pure data so renderers and tests can share the same shape. */
+export type ToolGroup =
+  | { kind: 'single'; toolCall: ToolCall }
+  | { kind: 'cluster'; toolCalls: ToolCall[] };
+
+/** Group a flat tool-call list into render groups. Currently every call
+ *  in `toolCalls` renders as one visual run (the chat bubble shows them
+ *  all at the bottom of the message), so this collapses the entire run
+ *  into a single cluster as soon as it crosses {@link TOOL_CLUSTER_MIN}.
+ *  Smaller runs render inline. The function is pure to keep the rule
+ *  testable without a DOM. */
+export function groupToolCalls(toolCalls: readonly ToolCall[]): ToolGroup[] {
+  if (toolCalls.length === 0) return [];
+  if (toolCalls.length < TOOL_CLUSTER_MIN) {
+    return toolCalls.map((tc) => ({ kind: 'single' as const, toolCall: tc }));
+  }
+  return [{ kind: 'cluster', toolCalls: [...toolCalls] }];
+}
+
+/** Build the comma-joined preview shown next to the cluster's "Working"
+ *  label, e.g. `read, bash, edit, list, scoop, message`. Truncates with
+ *  an ellipsis if it would overflow the row. */
+export function clusterPreview(toolCalls: readonly ToolCall[]): string {
+  return clusterPreviewFromTitles(toolCalls.map((tc) => getToolDescriptor(tc.name).title));
+}
+
+/** Same shape as {@link clusterPreview} but driven by pre-resolved titles.
+ *  Used by the chain-level reflow pass which builds clusters from existing
+ *  `.tool-call` DOM elements where the descriptor lookup has already been
+ *  done at element-creation time. Keeping the truncation rule in one place
+ *  prevents the cross-message cluster from disagreeing with the per-message
+ *  cluster about how the preview should look. */
+export function clusterPreviewFromTitles(titles: readonly string[]): string {
+  return truncate(titles.join(', '), 120);
 }
 
 /** Build the expanded body for a tool call. Custom bodies for bash/edit_file

@@ -101,6 +101,48 @@ jobs:
             echo "::error::packages/vfs-root/shared/CLAUDE.md exceeds 3KB limit ($size bytes). Keep agent instructions concise."
             exit 1
           fi
+      - name: Dead code detection (knip)
+        # Hard-fail on unused files, missing/unlisted dependencies,
+        # unresolved imports, duplicate exports, and unused binaries.
+        # Unused individual exports/types are NOT enforced here — they
+        # often represent intentional public API surface and are
+        # tracked separately via 'npm run deadcode:full'.
+        # Selector flags live in package.json so the CI gate cannot
+        # silently diverge from the documented local command.
+        run: npm run deadcode -- --no-progress --reporter compact
+
+  # Lightweight test matrix that re-runs the TypeScript test suites across
+  # supported Node majors. The package engines field is `>=22.13.0`, so
+  # any one-version pin in the heavier per-package jobs misses regressions
+  # that only surface on newer runtimes (e.g. jsdom + Node >= 25 quirks
+  # around vi.unstubAllGlobals + localStorage). Build/E2E stay on a single
+  # Node version in the per-package jobs to keep CI time bounded.
+  node-matrix-tests:
+    needs: changes
+    if: >-
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.extension == 'true' ||
+      needs.changes.outputs.cloudflare-worker == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['24', '25']
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - name: Vitest (all projects, no coverage thresholds)
+        run: npm run test
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
 
   webapp:
     needs: changes
@@ -119,10 +161,17 @@ jobs:
       - run: npm ci
       - name: Typecheck
         run: tsc --noEmit -p tsconfig.json
-      - name: Test
-        run: npx vitest run --project webapp
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:webapp
         env:
           NODE_OPTIONS: '--max-old-space-size=6144'
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-webapp
+          path: coverage/
+          if-no-files-found: ignore
       - name: Build
         run: npm run build -w @slicc/webapp
       - name: Check bundle for Node-only APIs
@@ -179,8 +228,15 @@ jobs:
       - run: npm ci
       - name: Typecheck
         run: tsc --noEmit -p tsconfig.cli.json
-      - name: Test
-        run: npx vitest run --project node-server
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:node-server
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-node-server
+          path: coverage/
+          if-no-files-found: ignore
       - name: Build
         run: npm run build -w @slicc/node-server
 
@@ -200,8 +256,15 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Test
-        run: npx vitest run --project chrome-extension
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:chrome-extension
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-chrome-extension
+          path: coverage/
+          if-no-files-found: ignore
       - name: Build webapp (dependency)
         run: npm run build -w @slicc/webapp
       - name: Build extension
@@ -260,8 +323,15 @@ jobs:
         run: npm run build -w @slicc/webapp
       - name: Typecheck
         run: tsc --noEmit -p tsconfig.worker.json
-      - name: Test
-        run: npx vitest run --project cloudflare-worker
+      - name: Test (with coverage threshold gate)
+        run: npm run test:coverage:cloudflare-worker
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-cloudflare-worker
+          path: coverage/
+          if-no-files-found: ignore
 
       # Deploy to staging on PRs (not forks) and pushes to main
       - name: Deploy staging worker (attempt 1)
@@ -358,8 +428,24 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Build
         run: cd packages/swift-server && swift build -c release
-      - name: Test
-        run: cd packages/swift-server && swift test
+      - name: Test (with coverage threshold gate)
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-server SliccServerPackageTests 40 40 35
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-swift-server
+          path: packages/swift-server/.build/coverage/
+          if-no-files-found: ignore
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+          # Informational scan; surfaces unused Swift declarations without
+          # blocking PRs while existing findings get cleaned up incrementally.
+          cd packages/swift-server && periphery scan --disable-update-check || true
 
   swift-launcher:
     needs: [changes, lint]
@@ -384,8 +470,26 @@ jobs:
         run: npm run build -w @slicc/webapp
       - name: Build swift-server (dependency)
         run: cd packages/swift-server && swift build -c release
+      - name: Test (with coverage threshold gate)
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-launcher SliccstartPackageTests 5 5 8
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-swift-launcher
+          path: packages/swift-launcher/.build/coverage/
+          if-no-files-found: ignore
       - name: Build
         run: npm run build -w @slicc/swift-launcher
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+          # Informational scan; surfaces unused Swift declarations without
+          # blocking PRs while existing findings get cleaned up incrementally.
+          cd packages/swift-launcher && periphery scan --disable-update-check || true
 
   # Wait for any in-progress release before allowing merge queue to land.
   # Only runs on merge_group events; skipped (= passing) for PRs.
@@ -418,6 +522,7 @@ jobs:
       [
         changes,
         lint,
+        node-matrix-tests,
         webapp,
         node-server,
         chrome-extension,

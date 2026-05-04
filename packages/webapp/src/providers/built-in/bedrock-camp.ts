@@ -2,7 +2,9 @@
  * Bedrock CAMP provider — config + stream function registration.
  *
  * Uses the Converse API with Bearer token auth instead of SigV4.
- * Routes through /api/fetch-proxy in CLI mode, direct fetch in extension mode.
+ * Issues a plain cross-origin fetch; CORS routing in CLI mode is handled
+ * transparently by `llm-proxy-sw.ts` (rewrites to /api/fetch-proxy at
+ * the SW layer). Extension mode bypasses CORS via host_permissions.
  * Registers as api: "bedrock-camp-converse" via pi-ai's registerApiProvider().
  */
 
@@ -106,9 +108,6 @@ export function getBedrockCampExtraModels(): Model<Api>[] {
 function supportsTemperature(modelId: string): boolean {
   return !modelId.includes('claude-opus-4-7');
 }
-
-// Extension detection
-const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
 
 type BedrockCampOnPayload =
   | ((payload: unknown) => void)
@@ -542,19 +541,19 @@ export const streamBedrockCamp = (
       // Build URL: POST {baseUrl}/model/{modelId}/converse
       const targetUrl = `${baseUrl.replace(/\/$/, '')}/model/${model.id}/converse`;
 
-      // Route through CORS proxy in CLI mode, direct in extension mode
-      const fetchUrl = isExtension ? targetUrl : '/api/fetch-proxy';
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      };
-      if (!isExtension) {
-        headers['X-Target-URL'] = targetUrl;
-      }
-
-      const response = await fetch(fetchUrl, {
+      // CORS routing in CLI mode is handled transparently by
+      // `llm-proxy-sw.ts` — cross-origin fetches from the page get
+      // rewritten to /api/fetch-proxy with the X-Target-URL header at
+      // the SW layer. Extension mode bypasses CORS via host_permissions
+      // and never registers the SW, so a direct fetch works there too.
+      // Either way, this provider issues a plain fetch and lets the
+      // platform handle transport.
+      const response = await fetch(targetUrl, {
         method: 'POST',
-        headers,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
         body: JSON.stringify(body),
         signal: options.signal,
       });
