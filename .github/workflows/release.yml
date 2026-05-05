@@ -71,10 +71,21 @@ jobs:
           import_p12() {
             local label="$1" b64="$2" pass="$3"
             local mode="${4:-required}"
-            local raw="$RUNNER_TEMP/${label}-raw.p12"
-            local pem="$RUNNER_TEMP/${label}.pem"
-            local norm="$RUNNER_TEMP/${label}.p12"
-            local errlog="$RUNNER_TEMP/${label}.openssl.log"
+            # Per-call private tempdir so the unencrypted PEM and raw
+            # .p12 are wiped even if openssl / security fail under
+            # `set -e`. The trap fires on every function exit (success,
+            # error, or interrupt) — addressed Copilot review on
+            # release.yml#L89 from PR #572.
+            local tmpdir
+            tmpdir="$(mktemp -d "$RUNNER_TEMP/p12-${label}.XXXXXX")"
+            chmod 700 "$tmpdir"
+            # shellcheck disable=SC2064
+            trap "rm -rf '$tmpdir'" RETURN
+
+            local raw="$tmpdir/raw.p12"
+            local pem="$tmpdir/cert.pem"
+            local norm="$tmpdir/normalized.p12"
+            local errlog="$tmpdir/openssl.log"
             local size
 
             printf '%s' "$b64" | base64 --decode > "$raw" 2>/dev/null || true
@@ -82,7 +93,6 @@ jobs:
             echo "  ${label}: decoded .p12 = ${size} bytes"
 
             if [ "$size" -eq 0 ]; then
-              rm -f "$raw"
               if [ "$mode" = "required" ]; then
                 echo "::error::${label} secret is empty after base64 decode"
                 return 1
@@ -102,7 +112,6 @@ jobs:
               fi
               echo "::warning::openssl could not read ${label} .p12 — skipping import"
               cat "$errlog"
-              rm -f "$raw" "$pem" "$errlog"
               return 0
             fi
 
@@ -111,7 +120,6 @@ jobs:
               -keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256
 
             security import "$norm" -P "${pass}" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-            rm -f "$raw" "$pem" "$norm" "$errlog"
           }
 
           echo "Importing Developer ID Application cert (macOS / Sliccstart)..."

@@ -39,16 +39,31 @@ fi
 # block the macOS DMG / Chrome / Worker publish too. Exiting 0 here lets
 # the rest of the pipeline ship and we can re-set the iOS secrets out of
 # band without rolling back a release.
-if [ -z "${APPLE_DISTRIBUTION_CERT_BASE64:-}" ] || [ "${APPLE_DISTRIBUTION_CERT_BASE64:-}" = "-" ] \
-   || [ -z "${APPLE_API_KEY_P8_BASE64:-}" ] || [ "${APPLE_API_KEY_P8_BASE64:-}" = "-" ] \
-   || [ -z "${APPLE_PROVISIONING_PROFILE_BASE64:-}" ] || [ "${APPLE_PROVISIONING_PROFILE_BASE64:-}" = "-" ]; then
-  if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
-    echo "::warning::TestFlight secrets are missing or empty — skipping iOS upload."
-  else
-    echo "TestFlight secrets are missing or empty — skipping iOS upload."
+#
+# Cover ALL six TestFlight secrets, not just the base64 ones. The
+# original `gh secret set --body -` bug corrupted plain-text fields too
+# (APPLE_DISTRIBUTION_CERT_PASSWORD / APPLE_API_KEY_ID /
+# APPLE_API_KEY_ISSUER_ID), and if any of those are still set to "-"
+# while the base64 values are real, the script would otherwise abort
+# later in `security import` / `xcodebuild` instead of skipping cleanly.
+# Addressed Copilot review comment on PR #573.
+secret_unusable() {
+  local v="${!1:-}"
+  [ -z "$v" ] || [ "$v" = "-" ]
+}
+for var in APPLE_DISTRIBUTION_CERT_BASE64 APPLE_DISTRIBUTION_CERT_PASSWORD \
+           APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_KEY_ISSUER_ID \
+           APPLE_PROVISIONING_PROFILE_BASE64; do
+  if secret_unusable "$var"; then
+    msg="TestFlight secret \$$var is missing or set to \"-\" — skipping iOS upload."
+    if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
+      echo "::warning::$msg"
+    else
+      echo "$msg"
+    fi
+    exit 0
   fi
-  exit 0
-fi
+done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IOS_PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -72,37 +87,66 @@ CLEANUP=()
 trap 'for f in "${CLEANUP[@]:-}"; do rm -rf "$f" 2>/dev/null || true; done; if [ "${OWN_KEYCHAIN:-0}" = "1" ] && [ -n "${KEYCHAIN_PATH:-}" ]; then security delete-keychain "$KEYCHAIN_PATH" || true; fi' EXIT
 
 # --- Cert: import the Apple Distribution .p12 into a keychain --------------
-if [ -n "${APPLE_DISTRIBUTION_CERT_BASE64:-}" ]; then
+#
+# When running from CI's release.yml, the "Import Apple certificates"
+# step has already created KEYCHAIN_PATH and imported the Apple
+# Distribution cert (after openssl-normalizing the .p12 so legacy
+# RC2-40 PKCS#12 exports can be read by macos-15-arm64's `security`).
+# Re-importing the raw base64 here would either duplicate the cert or,
+# worse, fail with "SecKeychainItemImport: Unable to decode the
+# provided data" on the legacy export path — negating the workflow's
+# normalization.
+#
+# So:
+#   * CI path (KEYCHAIN_PATH already set): skip the cert import. Trust
+#     that release.yml seeded the keychain.
+#   * Local path (no KEYCHAIN_PATH): create a temp keychain and apply
+#     the same openssl re-encrypt round-trip the workflow uses.
+#
+# Addressed Copilot review comment on PR #572 line 97.
+if [ -n "${KEYCHAIN_PATH:-}" ]; then
+  echo "  reusing keychain seeded by workflow: $KEYCHAIN_PATH"
+  echo "  (skipping APPLE_DISTRIBUTION_CERT_BASE64 import — already done)"
+elif [ -n "${APPLE_DISTRIBUTION_CERT_BASE64:-}" ]; then
   if [ -z "${APPLE_DISTRIBUTION_CERT_PASSWORD:-}" ]; then
     echo "error: APPLE_DISTRIBUTION_CERT_PASSWORD must accompany APPLE_DISTRIBUTION_CERT_BASE64" >&2
     exit 1
   fi
-  P12_TMP="$(mktemp -t apple-dist).p12"
-  CLEANUP+=("$P12_TMP")
-  printf '%s' "$APPLE_DISTRIBUTION_CERT_BASE64" | base64 --decode > "$P12_TMP"
 
-  if [ -z "${KEYCHAIN_PATH:-}" ]; then
-    KEYCHAIN_PATH="${RUNNER_TEMP:-/tmp}/ios-signing-$$.keychain-db"
-    KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
-    security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-    security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-    security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-    security list-keychain -d user -s "$KEYCHAIN_PATH"
-    OWN_KEYCHAIN=1
-    echo "  created temp keychain: $KEYCHAIN_PATH"
-  else
-    echo "  reusing keychain: $KEYCHAIN_PATH"
+  KEYCHAIN_PATH="${RUNNER_TEMP:-/tmp}/ios-signing-$$.keychain-db"
+  KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+  security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+  security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+  security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+  security list-keychain -d user -s "$KEYCHAIN_PATH"
+  OWN_KEYCHAIN=1
+  echo "  created temp keychain: $KEYCHAIN_PATH"
+
+  CERT_TMPDIR="$(mktemp -d -t slicc-tf-cert)"
+  chmod 700 "$CERT_TMPDIR"
+  CLEANUP+=("$CERT_TMPDIR")
+
+  RAW="$CERT_TMPDIR/raw.p12"
+  PEM="$CERT_TMPDIR/cert.pem"
+  NORM="$CERT_TMPDIR/normalized.p12"
+
+  printf '%s' "$APPLE_DISTRIBUTION_CERT_BASE64" | base64 --decode > "$RAW"
+  if ! openssl pkcs12 -in "$RAW" -nodes -out "$PEM" \
+       -passin "pass:${APPLE_DISTRIBUTION_CERT_PASSWORD}" 2>/dev/null; then
+    echo "error: openssl could not read APPLE_DISTRIBUTION_CERT_BASE64" >&2
+    exit 1
   fi
+  openssl pkcs12 -export -in "$PEM" -out "$NORM" \
+    -password "pass:${APPLE_DISTRIBUTION_CERT_PASSWORD}" \
+    -keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256
 
-  security import "$P12_TMP" \
+  security import "$NORM" \
     -P "$APPLE_DISTRIBUTION_CERT_PASSWORD" \
     -A -t cert -f pkcs12 \
     -k "$KEYCHAIN_PATH"
-  if [ "${OWN_KEYCHAIN:-0}" = "1" ]; then
-    security set-key-partition-list \
-      -S apple-tool:,apple:,codesign: \
-      -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
-  fi
+  security set-key-partition-list \
+    -S apple-tool:,apple:,codesign: \
+    -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
   echo "  imported Apple Distribution cert"
 fi
 
