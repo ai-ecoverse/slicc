@@ -83,6 +83,43 @@ Each secret has a list of glob patterns controlling where it can be injected:
 
 A secret is only unmasked in a request if the target URL's hostname matches at least one pattern.
 
+## Mount backend secrets
+
+The `mount --source s3://...` and `mount --source da://...` shell commands resolve credentials from the same secret store. S3 uses a profile-namespaced convention; DA reuses the existing Adobe IMS token.
+
+### S3 / S3-compatible (AWS, R2, MinIO, …)
+
+Each S3 mount selects a profile via `--profile <name>` (defaults to `default`). The backend looks up these keys in the secret store:
+
+| Key                              | Required | Notes                                                                                           |
+| -------------------------------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `s3.<profile>.access_key_id`     | Yes      | AWS access key ID (or R2/MinIO equivalent).                                                     |
+| `s3.<profile>.secret_access_key` | Yes      | Matching secret key.                                                                            |
+| `s3.<profile>.region`            | No       | Defaults to `us-east-1`. R2 typically uses `auto`.                                              |
+| `s3.<profile>.endpoint`          | No       | Custom endpoint host for S3-compatible services. Omit for AWS S3 (host is derived from region). |
+| `s3.<profile>.session_token`     | No       | For STS temporary credentials.                                                                  |
+
+Multiple profiles coexist — e.g. `s3.aws.*` for AWS plus `s3.r2.*` for Cloudflare R2 — and `--profile` selects between them per mount. Profiles are resolved server-side (CLI: by node-server's `EnvSecretStore`; extension: by the SW reading `chrome.storage.local`) on every signed request, so rotated credentials apply immediately on the next mount operation — no client-side cache to invalidate. A 401/403 from upstream surfaces directly as `EACCES`; the user can re-mount or update the profile and retry.
+
+**Example: setting up an R2 profile via `~/.slicc/secrets.env`**
+
+```env
+s3.r2.access_key_id=R2_ACCESS_KEY_ID_HERE
+s3.r2.access_key_id_DOMAINS=*.r2.cloudflarestorage.com
+s3.r2.secret_access_key=R2_SECRET_ACCESS_KEY_HERE
+s3.r2.secret_access_key_DOMAINS=*.r2.cloudflarestorage.com
+s3.r2.endpoint=https://<account-id>.r2.cloudflarestorage.com
+s3.r2.endpoint_DOMAINS=*.r2.cloudflarestorage.com
+```
+
+The mount backend reads the secret values directly (it doesn't go through the fetch-proxy domain check for the read itself), but every secret still needs a `_DOMAINS` entry — the runtime rejects unscoped secrets, and the same domain list is applied if any of these values ever appear in agent-visible output. Use the bucket's hostname pattern (`*.r2.cloudflarestorage.com` for R2, `*.amazonaws.com` for AWS) so the masked values can also flow through `bash` invocations like `aws s3 ...` if needed.
+
+### Adobe da.live
+
+DA mounts authenticate with the IMS bearer token from the existing Adobe provider. There is no DA-specific secret to set: if you've already configured Adobe as your LLM provider, `mount --source da://org/repo /mnt/da` will reuse that identity. The `--profile` flag is accepted for symmetry but multi-identity DA support is a v2 follow-up.
+
+When IMS hasn't been authed (or the token has expired beyond what a refresh can recover), mount-time fails with an `EACCES` pointing at `oauth-token adobe` or the provider settings UI.
+
 ## How the fetch proxy works
 
 All HTTP requests from the agent route through a server-side fetch proxy (`/api/fetch-proxy`). The proxy handles secrets in both directions:
@@ -113,7 +150,33 @@ The secrets system defends against multiple exfiltration paths:
 
 ## Extension mode
 
-In Chrome extension mode, there is no server-side fetch proxy. Secrets require a CLI or desktop backend (node-server or swift-server). When no backend is available, the agent is informed that secrets are unavailable.
+In Chrome extension mode, there is no server-side fetch proxy and no shell `secret` injection into request headers — that flow needs node-server or swift-server.
+
+For **mount backends specifically** (`mount --source s3://...` and `mount --source da://...`), the extension is self-contained. Secrets live in `chrome.storage.local`, the service worker holds them, signs requests with SigV4 (S3) or attaches the IMS Bearer (DA), and forwards via `fetch()` (extension `host_permissions: <all_urls>` covers any S3/da.live host). The agent's tools (`bash` WASM, `node -e` and `javascript` in CSP-locked sandbox iframes) have no `chrome.*` API access, so they cannot read `chrome.storage` directly — the same isolation property that keeps `~/.slicc/secrets.env` out of the agent in CLI mode.
+
+### Extension Options page (recommended)
+
+Right-click the SLICC toolbar icon → **Options** (or `chrome://extensions` → SLICC → **Extension options**, or `secret edit` in the side-panel terminal). The page has a real form with a password input — paste from your password manager, no shell history involved.
+
+The **S3 / R2 / MinIO profile** tab is a wizard: one form fills the five paired keys (`s3.<profile>.access_key_id`, `secret_access_key`, `region`, `endpoint`, `path_style`) with auto-derived domain wildcards from the endpoint host. The **Custom secret** tab handles arbitrary domain-scoped tokens.
+
+### Shell command alternative
+
+If you prefer the terminal:
+
+```bash
+secret set s3.r2.access_key_id   R2_ACCESS_KEY_ID   --domain "*.r2.cloudflarestorage.com"
+secret set s3.r2.secret_access_key R2_SECRET_KEY    --domain "*.r2.cloudflarestorage.com"
+secret set s3.r2.endpoint        https://<account>.r2.cloudflarestorage.com --domain "*.r2.cloudflarestorage.com"
+```
+
+Either way, `mount --source s3://my-bucket --profile r2 /mnt/r2` works the same as in CLI mode.
+
+For **arbitrary HTTP secret injection** (e.g. `$GITHUB_TOKEN` in a `curl` call from `bash`), the extension still has no equivalent — that's the fetch-proxy injection, which requires a server backend.
+
+### Where to look next
+
+For the full mount setup guide (intent → backend mapping, lifecycle, error patterns, architecture), see [docs/mounts.md](mounts.md).
 
 ## Platform support
 

@@ -33,6 +33,10 @@ import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
 import { createLogger } from '../../../packages/webapp/src/core/index.js';
 import type { ExtensionMessage } from './messages.js';
 import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
+import { formatLickEventForCone } from '../../../packages/webapp/src/scoops/lick-formatting.js';
+import { recoverMounts } from '../../../packages/webapp/src/fs/mount-recovery.js';
+import { getAllMountEntries } from '../../../packages/webapp/src/fs/mount-table-store.js';
+import type { LickEvent } from '../../../packages/webapp/src/scoops/lick-manager.js';
 
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: Keep in sync with packages/webapp/src/ui/main.ts — both entry points need all providers.
@@ -161,12 +165,27 @@ async function init(): Promise<void> {
   orchestrator.setLickManager(lickManager);
 
   // Route lick events to scoops (mirrors CLI mode logic in main.ts)
+  // Route lick events to scoops. Content rendering is shared with main.ts
+  // (formatLickEventForCone) so CLI and extension produce identical UX —
+  // including session-reload + mount-recovery prompts. Without the shared
+  // formatter, the previous offscreen handler only special-cased upgrade
+  // events and rendered everything else as a malformed JSON dump.
   lickManager.setEventHandler((event) => {
+    const formatted = formatLickEventForCone(event);
+    if (formatted === null) {
+      console.debug('[slicc-offscreen] dropping lick event with no renderable content', {
+        type: event.type,
+      });
+      return;
+    }
+
+    // Compute eventName + eventId for routing / message id (unchanged).
     const isWebhook = event.type === 'webhook';
     const isSprinkle = event.type === 'sprinkle';
     const isFsWatch = event.type === 'fswatch';
     const isNavigate = event.type === 'navigate';
     const isUpgrade = event.type === 'upgrade';
+    const isSessionReload = event.type === 'session-reload';
     const eventName = isWebhook
       ? event.webhookName
       : isSprinkle
@@ -177,7 +196,9 @@ async function init(): Promise<void> {
             ? event.navigateUrl
             : isUpgrade
               ? `${event.upgradeFromVersion ?? 'unknown'}\u2192${event.upgradeToVersion ?? 'unknown'}`
-              : event.cronName;
+              : isSessionReload
+                ? 'mount-recovery'
+                : event.cronName;
     const eventId = isWebhook
       ? event.webhookId
       : isSprinkle
@@ -188,12 +209,13 @@ async function init(): Promise<void> {
             ? event.navigateUrl
             : isUpgrade
               ? `upgrade-${event.upgradeToVersion ?? 'unknown'}`
-              : event.cronId;
+              : isSessionReload
+                ? `session-reload-${event.timestamp}`
+                : event.cronId;
     const channel = event.type;
 
     const scoops = orchestrator.getScoops();
     let resolvedTarget: (typeof scoops)[number] | undefined;
-
     if (!event.targetScoop) {
       // Untargeted events → cone
       resolvedTarget = scoops.find((s) => s.isCone);
@@ -208,46 +230,16 @@ async function init(): Promise<void> {
 
     if (resolvedTarget) {
       const msgId = `${channel}-${eventId}-${Date.now()}`;
-      const eventLabel = isWebhook
-        ? 'Webhook Event'
-        : isSprinkle
-          ? 'Sprinkle Event'
-          : isFsWatch
-            ? 'File Watch Event'
-            : isNavigate
-              ? 'Navigate Event'
-              : isUpgrade
-                ? 'Upgrade Event'
-                : 'Cron Event';
-      let content: string;
-      if (isUpgrade) {
-        const from = event.upgradeFromVersion ?? 'unknown';
-        const to = event.upgradeToVersion ?? 'unknown';
-        const releasedAt =
-          (event.body as { releasedAt?: string | null } | null | undefined)?.releasedAt ?? null;
-        const releaseLine = releasedAt ? `\nReleased: ${releasedAt}` : '';
-        content =
-          `[${eventLabel}: ${from}\u2192${to}]\n\n` +
-          `SLICC was upgraded from \`${from}\` to \`${to}\`.${releaseLine}\n\n` +
-          `Use the **upgrade** skill (\`/workspace/skills/upgrade/SKILL.md\`) to:\n` +
-          `- Show the user the changelog between these tags from GitHub\n` +
-          `- Offer to merge new bundled vfs-root content into their workspace ` +
-          `(three-way merge: bundled snapshot vs user's VFS, reconciled with the GitHub tag-to-tag diff).`;
-      } else {
-        content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
-      }
-
       const channelMsg: import('../../../packages/webapp/src/scoops/types.js').ChannelMessage = {
         id: msgId,
         chatJid: resolvedTarget.jid,
         senderId: channel,
         senderName: `${channel}:${eventName}`,
-        content,
+        content: formatted.content,
         timestamp: event.timestamp,
         fromAssistant: false,
         channel,
       };
-
       orchestrator.handleMessage(channelMsg);
     } else {
       console.warn('[slicc-offscreen] Lick target scoop not found', event.targetScoop);
@@ -261,6 +253,32 @@ async function init(): Promise<void> {
   const { startLickManagerHost } = await import('./lick-manager-proxy.js');
   startLickManagerHost(lickManager);
   console.log('[slicc-offscreen] LickManager initialized (host + proxy)');
+
+  // Restore persisted mounts. MUST run AFTER setEventHandler is registered
+  // (so the session-reload lick we may emit below routes through the shared
+  // formatter installed above). Mirrors main.ts:1748-1763 for CLI/Electron
+  // — without this branch, persisted s3:// and da:// mounts would not
+  // auto-restore on extension reopen.
+  const sharedFsForRecovery = orchestrator.getSharedFS();
+  if (sharedFsForRecovery) {
+    void getAllMountEntries()
+      .then(async (entries) => {
+        if (entries.length === 0) return;
+        const { needsRecovery } = await recoverMounts(entries, sharedFsForRecovery, console);
+        if (needsRecovery.length === 0) return;
+        const event: LickEvent = {
+          type: 'session-reload',
+          targetScoop: undefined,
+          timestamp: new Date().toISOString(),
+          body: { reason: 'mount-recovery', mounts: needsRecovery },
+        };
+        // routeLickToScoop is a private helper inside main(); offscreen uses
+        // the public emit API. The handler installed via setEventHandler
+        // above formats the event via formatLickEventForCone.
+        lickManager.emitEvent(event);
+      })
+      .catch((err) => console.warn('[slicc-offscreen] mount recovery failed:', err));
+  }
 
   // Listen for navigate-lick events forwarded from the service worker's
   // chrome.webRequest observer and emit them as lick events.

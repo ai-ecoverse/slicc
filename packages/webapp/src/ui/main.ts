@@ -97,7 +97,10 @@ import { SprinkleManager } from './sprinkle-manager.js';
 import { resolveSprinkleIconHtml } from './sprinkle-icon.js';
 import { initTelemetry } from './telemetry.js';
 import { getAllMountEntries } from '../fs/mount-table-store.js';
-import { recoverMounts, formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
+import { recoverMounts } from '../fs/mount-recovery.js';
+import { formatLickEventForCone } from '../scoops/lick-formatting.js';
+import { LocalMountBackend } from '../fs/mount/backend-local.js';
+import { newMountId } from '../fs/mount/mount-id.js';
 import {
   openMountPickerPopup,
   loadAndClearPendingHandle,
@@ -264,7 +267,8 @@ async function applyPendingMount(fs: VirtualFS): Promise<void> {
     tx.objectStore('handles').delete(PENDING_MOUNT_KEY);
     await new Promise<void>((r) => (tx.oncomplete = () => r()));
     const mountPath = `/mnt/${handle.name}`;
-    await fs.mount(mountPath, handle);
+    const backend = LocalMountBackend.fromHandle(handle, { mountId: newMountId() });
+    await fs.mount(mountPath, backend);
     log.info('Mounted folder from welcome onboarding', { name: handle.name, path: mountPath });
   }
   db.close();
@@ -540,6 +544,28 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   const localFs = await VirtualFS.create({ dbName: 'slicc-fs' });
   layout.panels.fileBrowser.setFs(localFs);
   log.info('File browser wired to shared VFS (local IndexedDB)');
+
+  // Restore persisted mounts. The side panel and the offscreen document
+  // each have their own VirtualFS instance (sharing only the underlying
+  // IDB store), so each must rebuild its own in-memory mount table on
+  // boot. Without this, terminal-typed `mount` commands survive the
+  // current session but vanish from the side panel's view as soon as
+  // the panel is closed/reopened — even though the descriptors are
+  // still in IDB and the offscreen agent can still see the mount.
+  void getAllMountEntries()
+    .then(async (entries) => {
+      if (entries.length === 0) return;
+      const { needsRecovery } = await recoverMounts(entries, localFs, log);
+      if (needsRecovery.length === 0) return;
+      // The offscreen already routes a session-reload lick when its own
+      // recovery surfaces unrecoverable mounts; routing a second one
+      // here from the panel would double-message the cone. Just log.
+      log.warn('Some mounts could not be recovered in the panel VFS', {
+        count: needsRecovery.length,
+        paths: needsRecovery.map((r) => r.path),
+      });
+    })
+    .catch((err) => log.warn('Failed to restore persisted mounts in panel VFS', err));
 
   // Listen for preview SW file-read requests (falls back here for mounted dirs).
   // Uses BroadcastChannel because the SW's `/preview/` scope excludes this page.
@@ -2448,62 +2474,29 @@ async function main(): Promise<void> {
 
     if (resolvedTarget) {
       const msgId = `${channel}-${eventId}-${Date.now()}`;
-      const eventLabel = isWebhook
-        ? 'Webhook Event'
-        : isSprinkle
-          ? 'Sprinkle Event'
-          : isFsWatch
-            ? 'File Watch Event'
-            : isSessionReload
-              ? 'Session Reload'
-              : isNavigate
-                ? 'Navigate Event'
-                : isUpgrade
-                  ? 'Upgrade Event'
-                  : 'Cron Event';
-      let content: string | null = null;
-      if (isSessionReload) {
-        const body = event.body as
-          | {
-              reason?: string;
-              mounts?: Array<{ path: string; dirName: string }>;
-            }
-          | null
-          | undefined;
-        if (body?.reason === 'mount-recovery') {
-          content = formatMountRecoveryPrompt(body.mounts ?? []);
-          if (content === null) {
-            // Nothing actually needs recovery — drop the lick instead of
-            // pestering the cone with an empty notification.
-            log.debug('Dropping session-reload lick with empty mount-recovery list');
-            return;
-          }
-        }
+      // Cone-side rendering shared with offscreen.ts (extension parity).
+      // Returns null when the event should be dropped entirely (e.g. an empty
+      // mount-recovery list — nothing actionable to surface).
+      const formatted = formatLickEventForCone(event);
+      if (formatted === null) {
+        log.debug('Dropping lick event with no renderable content', { type: event.type });
+        return;
       }
-      if (isUpgrade) {
-        const from = event.upgradeFromVersion ?? 'unknown';
-        const to = event.upgradeToVersion ?? 'unknown';
-        const releasedAt =
-          (event.body as { releasedAt?: string | null } | null | undefined)?.releasedAt ?? null;
-        const releaseLine = releasedAt ? `\nReleased: ${releasedAt}` : '';
-        content =
-          `[${eventLabel}: ${from}\u2192${to}]\n\n` +
-          `SLICC was upgraded from \`${from}\` to \`${to}\`.${releaseLine}\n\n` +
-          `Use the **upgrade** skill (\`/workspace/skills/upgrade/SKILL.md\`) to:\n` +
-          `- Show the user the changelog between these tags from GitHub\n` +
-          `- Offer to merge new bundled vfs-root content into their workspace ` +
-          `(three-way merge: bundled snapshot vs user's VFS, reconciled with the GitHub tag-to-tag diff).`;
-      }
+      // formatLickEventForCone (Phase 14) owns the general-case rendering —
+      // upgrade events, session-reload mount-recovery, and the JSON fallback
+      // all live there. The welcome-sprinkle override below is a special
+      // case main added during this branch's lifetime: first-run welcome
+      // events render the inline welcome dip instead of the generic
+      // sprinkle-event content. Kept as an inline override (rather than
+      // moving into the formatter) to avoid expanding the scope of this PR.
+      let content: string = formatted.content;
       if (
         isSprinkle &&
         event.sprinkleName === 'welcome' &&
         (event.body as Record<string, unknown> | null)?.action === 'first-run'
       ) {
-        // First-run welcome — render the welcome dip inline in chat
-        // instead of auto-opening the legacy panel. The welcome skill
-        // already covers profile collection + skill recommendations.
         content =
-          `[${eventLabel}: welcome]\n\n` +
+          `[${formatted.label}: welcome]\n\n` +
           `New user — no \`/shared/.welcomed\` marker yet. Greet them by ` +
           `rendering the welcome onboarding inline:\n\n` +
           `\`\`\`markdown\n![Welcome to slicc](/shared/sprinkles/welcome/welcome.shtml)\n\`\`\`\n\n` +
@@ -2512,10 +2505,6 @@ async function main(): Promise<void> {
           `when the user finishes — see \`/workspace/skills/welcome/SKILL.md\` ` +
           `for the follow-up flow.`;
       }
-      if (content === null) {
-        content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
-      }
-
       const msg: ChannelMessage = {
         id: msgId,
         chatJid: resolvedTarget.jid,

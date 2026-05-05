@@ -25,6 +25,14 @@ import type {
   OAuthRequestMsg,
   OAuthResultMsg,
 } from './messages.js';
+import {
+  executeDaSignAndForward,
+  executeS3SignAndForward,
+  type DaSignAndForwardEnvelope,
+  type S3SignAndForwardEnvelope,
+  type SecretGetter,
+  type SignAndForwardReply,
+} from '../../webapp/src/fs/mount/sign-and-forward-shared.js';
 // ---------------------------------------------------------------------------
 // Side panel behavior
 // ---------------------------------------------------------------------------
@@ -287,6 +295,89 @@ chrome.runtime.onMessage.addListener(
 function isExtMsg(msg: unknown): boolean {
   return typeof msg === 'object' && msg !== null && 'source' in msg && 'payload' in msg;
 }
+
+// ---------------------------------------------------------------------------
+// Mount sign-and-forward — keep credentials out of the offscreen agent.
+//
+// Browser-side mount backends (running in the offscreen document for the
+// agent's bash tool, or the side panel for terminal-typed `mount` commands)
+// post envelopes here. The service worker owns the credential channel:
+//
+//   - S3: reads `s3.<profile>.*` from chrome.storage.local
+//   - DA: takes a transient IMS bearer in the envelope (Adobe LLM provider's
+//         token, browser-side; v2 will move OAuth here)
+//
+// The agent's tools never reach chrome.storage (their `bash` runs in a WASM
+// context with no chrome APIs; `node -e` runs in a CSP-locked sandbox iframe
+// with opaque origin) so secrets stay out of the agent's reach.
+//
+// Promise-return + sendResponse pattern keeps client code awaitable. Returns
+// `false` for unrelated messages so the existing relay listener still runs.
+// ---------------------------------------------------------------------------
+
+interface MountSignAndForwardRequest {
+  type: 'mount.s3-sign-and-forward' | 'mount.da-sign-and-forward';
+  envelope: unknown;
+}
+
+function isMountSignAndForwardRequest(msg: unknown): msg is MountSignAndForwardRequest {
+  return (
+    typeof msg === 'object' &&
+    msg !== null &&
+    'type' in msg &&
+    'envelope' in msg &&
+    ((msg as { type: string }).type === 'mount.s3-sign-and-forward' ||
+      (msg as { type: string }).type === 'mount.da-sign-and-forward')
+  );
+}
+
+const chromeStorageSecretGetter: SecretGetter = {
+  async get(key: string): Promise<string | undefined> {
+    const result = await chrome.storage.local.get(key);
+    const value = result[key];
+    return typeof value === 'string' ? value : undefined;
+  },
+};
+
+async function handleMountSignAndForward(
+  msg: MountSignAndForwardRequest
+): Promise<SignAndForwardReply> {
+  if (msg.type === 'mount.s3-sign-and-forward') {
+    return executeS3SignAndForward(
+      msg.envelope as Partial<S3SignAndForwardEnvelope> | undefined,
+      chromeStorageSecretGetter
+    );
+  }
+  return executeDaSignAndForward(msg.envelope as Partial<DaSignAndForwardEnvelope> | undefined);
+}
+
+chrome.runtime.onMessage.addListener(
+  (message: unknown, _sender: ChromeMessageSender, sendResponse: (response?: unknown) => void) => {
+    if (!isMountSignAndForwardRequest(message)) return false;
+    // Wrap the handler call in a sync try/catch in addition to the promise
+    // .catch. If the handler throws synchronously *before* returning a
+    // promise (e.g. a cast on a malformed envelope that passed the type
+    // guard but fails at first access), the .then().catch() chain never
+    // runs and sendResponse is never called → caller hangs forever on
+    // chrome.runtime.sendMessage. Belt-and-suspenders.
+    const respondError = (err: unknown): void => {
+      sendResponse({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        errorCode: 'internal' as const,
+      });
+    };
+    try {
+      handleMountSignAndForward(message)
+        .then((reply) => sendResponse(reply))
+        .catch(respondError);
+    } catch (err) {
+      respondError(err);
+    }
+    // Keep the channel open so sendResponse can be called asynchronously.
+    return true;
+  }
+);
 
 function isTraySocketCommand(
   payload: ExtensionMessage['payload']

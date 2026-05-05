@@ -69,6 +69,7 @@ interface ChromeActionAPI {
 interface ChromeStorageArea {
   get(keys?: string | string[] | Record<string, unknown> | null): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
+  remove(keys: string | string[]): Promise<void>;
 }
 
 interface ChromeAPI {
@@ -79,6 +80,8 @@ interface ChromeAPI {
     getURL(path: string): string;
     lastError: { message?: string } | undefined;
     sendMessage(message: unknown, callback?: (response: unknown) => void): Promise<void>;
+    /** Open the manifest's options_ui page in a new tab (or popup). */
+    openOptionsPage(): Promise<void>;
     onInstalled?: {
       addListener?(callback: () => void): void;
     };

@@ -133,6 +133,25 @@ export default defineConfig(({ mode }) => ({
       },
     },
     {
+      name: 'build-secrets-page',
+      async closeBundle() {
+        // The Mount Secrets options page (secrets.html) loads
+        // dist/extension/secrets.js as a classic script. Bundle the
+        // TypeScript entry to a single self-contained IIFE so it
+        // works without ES-module imports.
+        const esbuild = await import('esbuild');
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, 'src/secrets-entry.ts')],
+          bundle: true,
+          outfile: resolve(repoRoot, 'dist/extension/secrets.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+      },
+    },
+    {
       name: 'build-slicc-editor',
       async closeBundle() {
         const esbuild = await import('esbuild');
@@ -212,6 +231,9 @@ export default defineConfig(({ mode }) => ({
         copyFileSync(resolve(__dirname, 'voice-popup.js'), resolve(outDir, 'voice-popup.js'));
         copyFileSync(resolve(__dirname, 'mount-popup.html'), resolve(outDir, 'mount-popup.html'));
         copyFileSync(resolve(__dirname, 'mount-popup.js'), resolve(outDir, 'mount-popup.js'));
+        copyFileSync(resolve(__dirname, 'secrets.html'), resolve(outDir, 'secrets.html'));
+        // secrets.js is built from src/secrets-entry.ts via esbuild below;
+        // see the 'build-secrets-page' plugin.
 
         // Copy logo files for extension icons and header
         const logosSrc = resolve(__dirname, '../assets/logos');

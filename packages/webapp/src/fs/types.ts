@@ -63,7 +63,11 @@ export type FsErrorCode =
   | 'ENOTEMPTY' // Directory not empty
   | 'EINVAL' // Invalid argument
   | 'EACCES' // Permission denied
-  | 'ELOOP'; // Too many levels of symbolic links
+  | 'ELOOP' // Too many levels of symbolic links
+  | 'EBUSY' // Resource busy — used for 412 concurrent-write conflicts on remote mounts
+  | 'EFBIG' // File too large — used when remote-mount body exceeds maxBodyBytes
+  | 'EBADF' // Bad file descriptor — used when an op runs against a closed/unmounted backend
+  | 'EIO'; // I/O error — used for transient network failures, 5xx, AbortError-from-timeout
 
 /** Custom error class for filesystem operations. */
 export class FsError extends Error {

@@ -72,6 +72,12 @@ If a shell command needs to affect the panel UI, use the dual-context pattern:
 - **Persistence**: offscreen code is the source of truth for chat/session state that must survive panel close/reopen.
 - **CDP access**: offscreen documents cannot call `chrome.debugger` directly; always proxy via the service worker.
 
+## Mount Secrets Options Page
+
+`secrets.html` is the manifest's `options_ui` page. Users reach it via right-click the toolbar icon → Options, `chrome://extensions` → SLICC → Extension options, or the side-panel terminal command `secret edit`. The page reads/writes `chrome.storage.local` directly (full chrome.\* API access, not sandboxed) and is the extension-mode equivalent of editing `~/.slicc/secrets.env` in CLI mode.
+
+Pure logic lives in `src/secrets-storage.ts` (testable; `tests/secrets-storage.test.ts` covers it). The DOM entrypoint `src/secrets-entry.ts` is bundled to `dist/extension/secrets.js` via the `build-secrets-page` esbuild plugin in `vite.config.ts` — same pattern as `slicc-editor` and `lucide-icons`.
+
 ## Telemetry
 
 The side panel emits Helix RUM beacons via the inlined `packages/webapp/src/ui/rum.js` (extension-only). CLI/Electron use `@adobe/helix-rum-js` instead; the choice is made by `telemetry.ts:initTelemetry()` based on `getModeLabel()`. Offscreen and the service worker are not instrumented. Force 100% sampling for debugging by setting `localStorage.setItem('slicc-rum-debug', '1')` in the side panel's DevTools and reloading. See `docs/operational-telemetry.md`.
