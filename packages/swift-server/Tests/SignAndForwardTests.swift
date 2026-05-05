@@ -522,7 +522,7 @@ final class SignAndForwardTests: XCTestCase {
             await captured.record(
                 method: "POST",
                 path: String(request.uri.path),
-                query: request.uri.query.map(String.init) ?? "",
+                query: request.uri.query.map { String($0) } ?? "",
                 authorization: request.headers[HTTPField.Name("Authorization")!],
                 contentType: request.headers[HTTPField.Name("Content-Type")!],
                 bodyBytes: Array(body.readableBytesView)
