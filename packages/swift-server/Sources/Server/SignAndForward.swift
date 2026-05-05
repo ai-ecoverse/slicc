@@ -321,13 +321,16 @@ enum SignAndForward {
             )
         }
 
-        var components = URLComponents(string: daOrigin + path)
+        guard var components = URLComponents(string: daOrigin + path) else {
+            return errorResponse(.badRequest, error: "failed to build URL", errorCode: "invalid_request")
+        }
         if let query = env.query, !query.isEmpty {
             let sortedItems = query.sorted(by: { $0.key < $1.key })
                 .map { URLQueryItem(name: $0.key, value: $0.value) }
-            components?.queryItems = (components?.queryItems ?? []) + sortedItems
+            let existing = components.queryItems ?? []
+            components.queryItems = existing + sortedItems
         }
-        guard let url = components?.url else {
+        guard let url = components.url else {
             return errorResponse(.badRequest, error: "failed to build URL", errorCode: "invalid_request")
         }
 
