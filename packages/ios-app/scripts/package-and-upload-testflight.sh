@@ -215,6 +215,13 @@ EOF
 
 # --- Archive ---------------------------------------------------------------
 echo "  archiving..."
+# Force manual signing for the archive even though the project file
+# defaults to Automatic. CI's keychain only has the Apple Distribution
+# cert (Development is intentionally not in the secrets surface), so
+# automatic signing aborts looking for "Apple Development". Overriding
+# at the command line keeps the .pbxproj friendly for local Xcode
+# builds while pinning CI to the manual cert + provisioning profile we
+# already imported.
 xcodebuild \
   -project "$IOS_PROJECT_DIR/SliccFollower.xcodeproj" \
   -scheme SliccFollower \
@@ -225,6 +232,11 @@ xcodebuild \
   -authenticationKeyID "$APPLE_API_KEY_ID" \
   -authenticationKeyIssuerID "$APPLE_API_KEY_ISSUER_ID" \
   -authenticationKeyPath "$P8_PATH" \
+  CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="Apple Distribution" \
+  DEVELOPMENT_TEAM="$TEAM_ID" \
+  PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+  PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
   MARKETING_VERSION="$VERSION" \
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   archive >/tmp/slicc-archive.log 2>&1 \
