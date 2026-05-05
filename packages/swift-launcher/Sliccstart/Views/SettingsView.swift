@@ -8,6 +8,38 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "Settings"
 /// "None". Read at app startup by `SliccstartApp.initialize`.
 let autoLaunchAppIdKey = "autoLaunchAppId"
 
+/// Validation rules for secret names entered in the Settings → Secrets
+/// editor. Accepted set: `^[a-zA-Z0-9._-]+$` (ASCII letters/digits plus
+/// dot, underscore, hyphen, non-empty). Mount-profile keys use the shape
+/// `s3.<profile>.<field>` (dots), and tokens are commonly named with
+/// hyphens (e.g. `gh-prod`).
+///
+/// **Must stay byte-for-byte identical with `SignAndForward.isValidProfileName`
+/// in `packages/swift-server/Sources/Server/SignAndForward.swift`.** The UI
+/// saves names that the server later validates on every signed request;
+/// any character the UI accepts that the server rejects becomes a
+/// post-save failure that surfaces as `400 invalid_profile` on each mount
+/// call rather than as inline feedback. We therefore explicitly enumerate
+/// ASCII bytes rather than using `CharacterSet.alphanumerics`, which is
+/// Unicode-broad and would silently accept e.g. Cyrillic homoglyphs that
+/// the server rejects.
+///
+/// Lives at file scope (not nested inside the private `SecretEditorSheet`)
+/// so unit tests can reach it via `@testable import Sliccstart`.
+enum SecretNameValidator {
+    static func isValid(_ name: String) -> Bool {
+        guard !name.isEmpty else { return false }
+        for scalar in name.unicodeScalars {
+            let v = scalar.value
+            let alpha = (v >= 0x41 && v <= 0x5A) || (v >= 0x61 && v <= 0x7A)
+            let digit = v >= 0x30 && v <= 0x39
+            let punct = v == 0x2E || v == 0x5F || v == 0x2D  // . _ -
+            if !(alpha || digit || punct) { return false }
+        }
+        return true
+    }
+}
+
 struct SettingsView: View {
     var body: some View {
         TabView {
@@ -359,9 +391,7 @@ private struct SecretEditorSheet: View {
     }
 
     private var nameIsValid: Bool {
-        guard !trimmedName.isEmpty else { return false }
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_"))
-        return CharacterSet(charactersIn: trimmedName).isSubset(of: allowed)
+        SecretNameValidator.isValid(trimmedName)
     }
 
     private var nameCollides: Bool {
@@ -383,7 +413,7 @@ private struct SecretEditorSheet: View {
 
     private var validationMessage: String? {
         if trimmedName.isEmpty { return "Name is required." }
-        if !nameIsValid { return "Name may only contain letters, numbers, and underscores." }
+        if !nameIsValid { return "Name may only contain letters, numbers, dots, underscores, and hyphens." }
         if nameCollides { return "A secret named \"\(trimmedName)\" already exists." }
         if value.isEmpty { return "Value is required." }
         if trimmedDomains.isEmpty { return "Add at least one hostname pattern." }
