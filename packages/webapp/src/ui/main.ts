@@ -3266,6 +3266,7 @@ async function main(): Promise<void> {
       let leaderSync!: LeaderSyncManager;
       let trayPeers!: LeaderTrayPeerManager;
       let leaderTargetRefreshInterval: ReturnType<typeof setInterval>;
+      let followerListsRefreshInterval: ReturnType<typeof setInterval>;
       const tabPersistenceGuard = new TabPersistenceGuard();
 
       const createAndWireLeaderSync = () => {
@@ -3373,6 +3374,7 @@ async function main(): Promise<void> {
 
         // Periodically rebroadcast scoops + sprinkles lists so followers stay
         // in sync when scoops are added/removed or sprinkles change.
+        if (followerListsRefreshInterval) clearInterval(followerListsRefreshInterval);
         const refreshFollowerLists = () => {
           try {
             leaderSync.broadcastScoopsList();
@@ -3383,7 +3385,7 @@ async function main(): Promise<void> {
             });
           }
         };
-        setInterval(refreshFollowerLists, 5000);
+        followerListsRefreshInterval = setInterval(refreshFollowerLists, 5000);
 
         trayPeers = new LeaderTrayPeerManager({
           sendControlMessage: (message) => leaderTray.sendControlMessage(message),
@@ -3483,6 +3485,7 @@ async function main(): Promise<void> {
         'beforeunload',
         () => {
           clearInterval(leaderTargetRefreshInterval);
+          clearInterval(followerListsRefreshInterval);
           leaderSync.stop();
           trayPeers.stop();
           leaderTray.stop();

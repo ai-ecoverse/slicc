@@ -18,6 +18,7 @@ class WebRTCManager: NSObject {
 
     private var peerConnection: RTCPeerConnection?
     private var dataChannel: RTCDataChannel?
+    private var dataChannelOpenAnnounced: Bool = false
     private let factory: RTCPeerConnectionFactory
 
     /// Whether the data channel is currently open and usable.
@@ -137,8 +138,21 @@ class WebRTCManager: NSObject {
     func close() {
         dataChannel?.close()
         dataChannel = nil
+        dataChannelOpenAnnounced = false
         peerConnection?.close()
         peerConnection = nil
+    }
+
+    /// Notify the delegate exactly once per channel that the data channel
+    /// is open and ready. Both `peerConnection(_:didOpen:)` and
+    /// `dataChannelDidChangeState` can race for `.open` depending on how
+    /// quickly the channel materializes; deduping here keeps higher
+    /// layers (`AppState.dataChannelOpened`, keepalive timers) from
+    /// double-initializing.
+    private func announceDataChannelOpenIfNeeded(_ channel: RTCDataChannel) {
+        guard !dataChannelOpenAnnounced else { return }
+        dataChannelOpenAnnounced = true
+        delegate?.webRTCManager(self, didOpenDataChannel: channel)
     }
 
     deinit {
@@ -207,8 +221,12 @@ extension WebRTCManager: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
         // The leader creates the data channel; the follower receives it here.
         self.dataChannel = dataChannel
+        dataChannelOpenAnnounced = false
         dataChannel.delegate = self
-        delegate?.webRTCManager(self, didOpenDataChannel: dataChannel)
+        if dataChannel.readyState == .open {
+            announceDataChannelOpenIfNeeded(dataChannel)
+        }
+        // Otherwise wait for dataChannelDidChangeState(.open) to fire below.
     }
 }
 
@@ -218,7 +236,7 @@ extension WebRTCManager: RTCDataChannelDelegate {
     func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
         switch dataChannel.readyState {
         case .open:
-            delegate?.webRTCManager(self, didOpenDataChannel: dataChannel)
+            announceDataChannelOpenIfNeeded(dataChannel)
         case .closed:
             delegate?.webRTCManagerDidDisconnect(self, reason: "Data channel closed")
         default:

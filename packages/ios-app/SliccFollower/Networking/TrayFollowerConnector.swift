@@ -51,6 +51,10 @@ class TrayFollowerConnector: NSObject {
     private var controllerId: String = ""
     /// Current bootstrap ID — used for sending ICE candidates during signaling.
     private var currentBootstrapId: String?
+    /// Set once the data-channel-open callback has been delivered to the
+    /// delegate so that the polling loop and the WebRTC delegate don't
+    /// each fire `didConnect` for the same channel. Reset on tearDown.
+    private var didConnectAnnounced: Bool = false
 
     /// Exponential backoff configuration (mirrors startFollowerWithAutoReconnect).
     var baseDelaySeconds: TimeInterval = 2.0
@@ -130,10 +134,13 @@ class TrayFollowerConnector: NSObject {
         let webrtcManager = WebRTCManager()
         webrtcManager.delegate = self
         self.webrtc = webrtcManager
+        didConnectAnnounced = false
 
-        if let iceServers = attachPlan.iceServers {
-            webrtcManager.configure(iceServers: iceServers)
-        }
+        // Always configure: when iceServers is omitted we still need a
+        // peerConnection so that handleOffer (Phase 3) doesn't throw
+        // notConfigured. An empty server list lets WebRTC fall back to
+        // host-only candidates which is fine on a LAN tray.
+        webrtcManager.configure(iceServers: attachPlan.iceServers ?? [])
 
         // --- Phase 3: Bootstrap polling loop ---
         guard let bootstrap = attachPlan.bootstrap else {
@@ -162,7 +169,7 @@ class TrayFollowerConnector: NSObject {
                 let sendClosure: (Data) -> Bool = { data in
                     rtc.sendData(data)
                 }
-                delegate?.connector(self, didConnect: sendClosure)
+                announceDidConnectIfNeeded(sendClosure)
                 return
             }
 
@@ -312,6 +319,18 @@ class TrayFollowerConnector: NSObject {
         webrtc?.close()
         webrtc = nil
         signaling = nil
+        didConnectAnnounced = false
+    }
+
+    /// Notify the delegate exactly once per connection that the data
+    /// channel is ready. Both the bootstrap polling loop and the
+    /// `WebRTCManagerDelegate.didOpenDataChannel` callback can race for
+    /// this; deduping keeps higher layers from setting up duplicate
+    /// message readers and keepalive timers.
+    private func announceDidConnectIfNeeded(_ send: @escaping (Data) -> Bool) {
+        guard !didConnectAnnounced else { return }
+        didConnectAnnounced = true
+        delegate?.connector(self, didConnect: send)
     }
 
     private func ensureNotStopped() throws {
@@ -331,7 +350,7 @@ extension TrayFollowerConnector: WebRTCManagerDelegate {
         let sendClosure: (Data) -> Bool = { [weak manager] data in
             manager?.sendData(data) ?? false
         }
-        delegate?.connector(self, didConnect: sendClosure)
+        announceDidConnectIfNeeded(sendClosure)
     }
 
     func webRTCManager(_ manager: WebRTCManager, didReceiveMessage data: Data) {
