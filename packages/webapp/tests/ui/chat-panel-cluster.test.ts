@@ -52,6 +52,16 @@ const tc = (overrides: Partial<ToolCall> & { name: string; id: string }): ToolCa
   isError: overrides.isError,
 });
 
+/** Typed view of the private `ChatPanel` members the streaming-path tests
+ *  need to drive — mirrors what the agent loop calls into in production
+ *  but keeps the tests honest with `unknown`-cast accesses. */
+type ChatPanelInternals = {
+  messages: ChatMessage[];
+  appendMessageEl: (msg: ChatMessage) => void;
+  updateMessageEl: (messageId: string) => void;
+};
+const internals = (p: ChatPanel): ChatPanelInternals => p as unknown as ChatPanelInternals;
+
 const assistantMsg = (
   id: string,
   toolCalls: ToolCall[],
@@ -198,19 +208,17 @@ describe('ChatPanel cross-message tool-call clustering', () => {
     expect(container.querySelectorAll('.tool-call-cluster').length).toBe(0);
 
     // Streaming append crosses the threshold — cluster should appear.
-    (panel as any).messages.push(
-      assistantMsg('a3', [tc({ id: 'tc-3', name: 'read_file', result: 'c' })], 2200)
-    );
-    (panel as any).appendMessageEl((panel as any).messages.at(-1));
+    const a3 = assistantMsg('a3', [tc({ id: 'tc-3', name: 'read_file', result: 'c' })], 2200);
+    internals(panel).messages.push(a3);
+    internals(panel).appendMessageEl(a3);
 
     expect(container.querySelectorAll('.tool-call-cluster').length).toBe(1);
     expect(container.querySelectorAll('.tool-call-cluster .tool-call-cluster__dot').length).toBe(3);
 
     // A fourth continuation message extends the cluster — still one cluster.
-    (panel as any).messages.push(
-      assistantMsg('a4', [tc({ id: 'tc-4', name: 'bash', result: 'd' })], 2300)
-    );
-    (panel as any).appendMessageEl((panel as any).messages.at(-1));
+    const a4 = assistantMsg('a4', [tc({ id: 'tc-4', name: 'bash', result: 'd' })], 2300);
+    internals(panel).messages.push(a4);
+    internals(panel).appendMessageEl(a4);
 
     expect(container.querySelectorAll('.tool-call-cluster').length).toBe(1);
     expect(container.querySelectorAll('.tool-call-cluster .tool-call-cluster__dot').length).toBe(4);
@@ -234,7 +242,7 @@ describe('ChatPanel cross-message tool-call clustering', () => {
 
     // Tool result for a2 lands — its dot should flip to success after rebuild.
     t2.result = 'ok';
-    (panel as any).updateMessageEl('a2');
+    internals(panel).updateMessageEl('a2');
 
     const afterDots = [...container.querySelectorAll('.tool-call-cluster__dot')].map((d) =>
       [...d.classList].find((c) => c.startsWith('tool-call--'))
@@ -244,6 +252,62 @@ describe('ChatPanel cross-message tool-call clustering', () => {
     // Cluster still anchors at the chain's first tool call.
     const firstGroup = container.querySelector('.msg-group[data-msg-id="a1"]');
     expect(firstGroup!.querySelector(':scope > .tool-call-cluster')).not.toBeNull();
+  });
+
+  it('keeps the cluster expanded when new continuation tool calls stream in', () => {
+    panel.loadMessages([
+      { id: 'u1', role: 'user', content: 'go', timestamp: 1000 },
+      assistantMsg('a1', [tc({ id: 'tc-1', name: 'read_file', result: 'a' })], 2000),
+      assistantMsg('a2', [tc({ id: 'tc-2', name: 'read_file', result: 'b' })], 2100),
+      assistantMsg('a3', [tc({ id: 'tc-3', name: 'read_file', result: 'c' })], 2200),
+    ]);
+
+    const cluster = container.querySelector('.tool-call-cluster');
+    expect(cluster).toBeInstanceOf(HTMLDetailsElement);
+    expect((cluster as HTMLDetailsElement).open).toBe(false);
+
+    // User expands the cluster.
+    (cluster as HTMLDetailsElement).open = true;
+
+    // A new tool call streams in via append. The reflow must not snap
+    // the cluster shut while the user is reading it.
+    const a4 = assistantMsg('a4', [tc({ id: 'tc-4', name: 'read_file', result: 'd' })], 2300);
+    internals(panel).messages.push(a4);
+    internals(panel).appendMessageEl(a4);
+
+    const rebuilt = container.querySelector('.tool-call-cluster');
+    expect(rebuilt).toBeInstanceOf(HTMLDetailsElement);
+    expect((rebuilt as HTMLDetailsElement).open).toBe(true);
+    expect(container.querySelectorAll('.tool-call-cluster .tool-call-cluster__dot').length).toBe(4);
+
+    // And again when an existing message gets a tool result update —
+    // updateMessageEl rebuilds the wrapper from scratch, so this is the
+    // path most likely to lose the open state.
+    internals(panel).updateMessageEl('a2');
+    const afterUpdate = container.querySelector('.tool-call-cluster');
+    expect(afterUpdate).toBeInstanceOf(HTMLDetailsElement);
+    expect((afterUpdate as HTMLDetailsElement).open).toBe(true);
+  });
+
+  it('lets the user re-collapse the cluster after the streaming reflow', () => {
+    panel.loadMessages([
+      { id: 'u1', role: 'user', content: 'go', timestamp: 1000 },
+      assistantMsg('a1', [tc({ id: 'tc-1', name: 'read_file', result: 'a' })], 2000),
+      assistantMsg('a2', [tc({ id: 'tc-2', name: 'read_file', result: 'b' })], 2100),
+      assistantMsg('a3', [tc({ id: 'tc-3', name: 'read_file', result: 'c' })], 2200),
+    ]);
+
+    const cluster = container.querySelector('.tool-call-cluster') as HTMLDetailsElement;
+    cluster.open = true;
+    cluster.open = false;
+
+    // Append after collapse — must stay collapsed.
+    const a4 = assistantMsg('a4', [tc({ id: 'tc-4', name: 'read_file', result: 'd' })], 2300);
+    internals(panel).messages.push(a4);
+    internals(panel).appendMessageEl(a4);
+
+    const rebuilt = container.querySelector('.tool-call-cluster') as HTMLDetailsElement;
+    expect(rebuilt.open).toBe(false);
   });
 
   it('does not double-cluster when a single message already has 3+ tool calls in the chain', () => {
