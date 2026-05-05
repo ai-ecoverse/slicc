@@ -471,6 +471,12 @@ jobs:
       - name: Build swift-server (dependency)
         run: cd packages/swift-server && swift build -c release
       - name: Test (with coverage threshold gate)
+        env:
+          # UpdateCheckIntegrationTests hits the real GitHub API.
+          # Authenticate to lift the 60/hr unauth limit (which is shared per
+          # runner IP and routinely exhausted on `macos-latest`) up to the
+          # 5,000/hr authenticated limit.
+          GH_TOKEN: ${{ github.token }}
         run: |
           ./packages/dev-tools/tools/swift-coverage-check.sh \
             packages/swift-launcher SliccstartPackageTests 5 5 8

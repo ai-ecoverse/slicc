@@ -9,12 +9,27 @@ import Version
 /// rejects the "v" prefix. Setting `DecodingMethod.tolerant` in the decoder's
 /// `userInfo` causes `Version.init?(tolerant:)` to be used instead, which
 /// strips the prefix before parsing.
+///
+/// If a `GH_TOKEN` environment variable is set, the request is authenticated
+/// with `Authorization: Bearer <token>`. GitHub's unauthenticated API limit
+/// is 60 requests/hour per IP and is hit easily by users behind corporate
+/// NAT or shared CI runners; an authenticated request gets 5,000/hour. The
+/// provider falls back to anonymous requests when no token is present so
+/// regular users — who do not need to set anything — keep working.
 struct TolerantGithubReleaseProvider: ReleaseProvider {
     private let github = GithubReleaseProvider()
+    private let authToken: String?
+
+    init(authToken: String? = nil) {
+        self.authToken = authToken ?? ProcessInfo.processInfo.environment["GH_TOKEN"]
+    }
 
     func fetchReleases(owner: String, repo: String, proxy: URLRequestProxy?) async throws -> [Release] {
         let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases")!
         var request = URLRequest(url: url)
+        if let authToken {
+            request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
+        }
         request = request.applyOrOriginal(proxy: proxy)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
