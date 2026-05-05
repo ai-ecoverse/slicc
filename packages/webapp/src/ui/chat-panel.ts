@@ -2142,11 +2142,16 @@ export class ChatPanel {
 
   /** Walk continuation chains (one non-continuation `.msg-group` followed
    *  by zero or more `--continuation` siblings) and collapse runs of
-   *  three or more direct-child `.tool-call` elements into a single
-   *  "Working" cluster appended to the chain's last msg-group. This
-   *  generalises the per-message clustering to spans where each individual
-   *  message contributes one or two calls but the whole assistant turn
-   *  fires many — exactly the case the per-message rule misses. */
+   *  three or more direct-child `.tool-call` elements into a "Working"
+   *  cluster anchored at the run's first tool call.
+   *
+   *  A run is a maximal sequence of contiguous tool calls in DOM order
+   *  with no assistant text bubble between them. Text bubbles in
+   *  continuation groups represent content the agent emitted *between*
+   *  tool runs and must split clusters — otherwise the cluster would
+   *  hoist later tool calls above the prose the agent produced before
+   *  them. Leading text in the very first group of the chain doesn't
+   *  break anything because the run hasn't started yet. */
   private reflowToolClusters(): void {
     this.unwrapToolClusters();
     const groups = Array.from(
@@ -2159,28 +2164,32 @@ export class ChatPanel {
         j++;
       }
       const chain = groups.slice(i, j);
-      const toolCallEls: HTMLElement[] = [];
+
+      const runs: HTMLElement[][] = [];
+      let current: HTMLElement[] = [];
       for (const grp of chain) {
-        grp
-          .querySelectorAll<HTMLElement>(':scope > .tool-call')
-          .forEach((el) => toolCallEls.push(el));
+        // `.msg` is appended before any tool calls inside a group (see
+        // createMessageEl), so a text bubble here always sits between
+        // the prior group's tools and this group's tools.
+        const hasText = !!grp.querySelector(':scope > .msg');
+        if (hasText && current.length > 0) {
+          runs.push(current);
+          current = [];
+        }
+        grp.querySelectorAll<HTMLElement>(':scope > .tool-call').forEach((el) => current.push(el));
       }
-      if (toolCallEls.length >= TOOL_CLUSTER_MIN) {
-        // Anchor the cluster at the chronological position of the first
-        // tool call so any text the assistant produces *after* the tool
-        // run (typically a summary in a continuation msg-group) renders
-        // below the cluster instead of above it. Appending to the
-        // chain's last msg-group reorders post-tool text to appear
-        // before the tools, which contradicts how the agent generated
-        // them.
-        const firstCall = toolCallEls[0];
+      if (current.length > 0) runs.push(current);
+
+      for (const run of runs) {
+        if (run.length < TOOL_CLUSTER_MIN) continue;
+        const firstCall = run[0];
         const anchorParent = firstCall.parentElement;
-        const moved = new Set<Node>(toolCallEls);
+        const moved = new Set<Node>(run);
         let anchorNext: Node | null = firstCall.nextSibling;
         while (anchorNext && moved.has(anchorNext)) {
           anchorNext = anchorNext.nextSibling;
         }
-        const cluster = this.buildClusterFromElements(toolCallEls);
+        const cluster = this.buildClusterFromElements(run);
         if (anchorParent && anchorParent.isConnected) {
           anchorParent.insertBefore(cluster, anchorNext);
         } else {

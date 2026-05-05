@@ -133,7 +133,14 @@ describe('ChatPanel cross-message tool-call clustering', () => {
     expect(container.querySelectorAll('.tool-call').length).toBe(4);
   });
 
-  it('anchors the cluster at the chain’s first tool call so post-tool text renders below it', () => {
+  it('splits clusters when text in a continuation group sits between tool calls', () => {
+    // The agent emitted text inside `a3` *before* `tc-3` (per render
+    // order), so chronologically the run looks like
+    //   tc-1, tc-2, "done", tc-3
+    // Collapsing all three calls would hoist `tc-3` above the "done"
+    // text, contradicting the order the agent produced. Each side of
+    // the text break is shorter than the cluster threshold, so neither
+    // side clusters.
     panel.loadMessages([
       { id: 'u1', role: 'user', content: 'go', timestamp: 1000 },
       assistantMsg('a1', [tc({ id: 'tc-1', name: 'read_file', result: 'a' })], 2000),
@@ -141,22 +148,93 @@ describe('ChatPanel cross-message tool-call clustering', () => {
       assistantMsg('a3', [tc({ id: 'tc-3', name: 'read_file', result: 'c' })], 2200, 'done'),
     ]);
 
-    const firstGroup = container.querySelector('.msg-group[data-msg-id="a1"]');
-    expect(firstGroup).not.toBeNull();
-    const cluster = firstGroup!.querySelector(':scope > .tool-call-cluster');
-    expect(cluster).not.toBeNull();
+    expect(container.querySelectorAll('.tool-call-cluster').length).toBe(0);
+    expect(container.querySelectorAll('.tool-call').length).toBe(3);
 
     const lastGroup = container.querySelector('.msg-group[data-msg-id="a3"]') as HTMLElement;
-    expect(lastGroup.querySelector(':scope > .tool-call-cluster')).toBeNull();
-
-    // The cluster must precede the assistant's post-tool text bubble in
-    // document order — otherwise the reply visually jumps above the
-    // tools that produced it.
     const summary = lastGroup.querySelector('.msg__content');
+    const tcThree = lastGroup.querySelector(':scope > .tool-call[data-msg-id="a3"]');
     expect(summary?.textContent ?? '').toContain('done');
-    expect(cluster!.compareDocumentPosition(summary!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+    expect(tcThree).not.toBeNull();
+    // The text in `a3` still precedes `tc-3` inside its own group.
+    expect(summary!.compareDocumentPosition(tcThree!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING
     );
+  });
+
+  it('splits a chain into two clusters when a pure-text continuation lands between tool runs', () => {
+    // Three calls before the text break and three after — both sides
+    // cluster independently, with the text bubble preserved in between.
+    panel.loadMessages([
+      { id: 'u1', role: 'user', content: 'go', timestamp: 1000 },
+      assistantMsg(
+        'a1',
+        [
+          tc({ id: 'tc-1', name: 'bash', result: 'a' }),
+          tc({ id: 'tc-2', name: 'bash', result: 'b' }),
+          tc({ id: 'tc-3', name: 'bash', result: 'c' }),
+        ],
+        2000
+      ),
+      assistantMsg('a2', [], 2100, 'thinking…'),
+      assistantMsg(
+        'a3',
+        [
+          tc({ id: 'tc-4', name: 'bash', result: 'd' }),
+          tc({ id: 'tc-5', name: 'bash', result: 'e' }),
+          tc({ id: 'tc-6', name: 'bash', result: 'f' }),
+        ],
+        2200
+      ),
+    ]);
+
+    const clusters = container.querySelectorAll('.tool-call-cluster');
+    expect(clusters.length).toBe(2);
+
+    const dotCounts = [...clusters].map(
+      (c) => c.querySelectorAll('.tool-call-cluster__dot').length
+    );
+    expect(dotCounts).toEqual([3, 3]);
+
+    const text = container.querySelector('.msg-group[data-msg-id="a2"] .msg__content');
+    expect(text?.textContent ?? '').toContain('thinking');
+
+    // First cluster precedes the text bubble; second cluster follows it.
+    expect(clusters[0].compareDocumentPosition(text!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+    expect(text!.compareDocumentPosition(clusters[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  it('does not merge two short tool runs across a pure-text continuation', () => {
+    // Two calls on each side of the text break — neither side meets the
+    // cluster threshold on its own, so the calls render inline rather
+    // than being hoisted into a single misleading cluster.
+    panel.loadMessages([
+      { id: 'u1', role: 'user', content: 'go', timestamp: 1000 },
+      assistantMsg(
+        'a1',
+        [
+          tc({ id: 'tc-1', name: 'bash', result: 'a' }),
+          tc({ id: 'tc-2', name: 'bash', result: 'b' }),
+        ],
+        2000
+      ),
+      assistantMsg('a2', [], 2100, 'let me think'),
+      assistantMsg(
+        'a3',
+        [
+          tc({ id: 'tc-3', name: 'bash', result: 'c' }),
+          tc({ id: 'tc-4', name: 'bash', result: 'd' }),
+        ],
+        2200
+      ),
+    ]);
+
+    expect(container.querySelectorAll('.tool-call-cluster').length).toBe(0);
+    expect(container.querySelectorAll('.tool-call').length).toBe(4);
   });
 
   it('keeps a continuation summary message after the cluster when text follows the tools', () => {
