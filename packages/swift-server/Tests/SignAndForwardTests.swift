@@ -573,7 +573,12 @@ final class SignAndForwardTests: XCTestCase {
                         headers: [.contentType: "application/json"],
                         body: ByteBuffer(string: envelope)
                     ) { response in
-                        XCTAssertEqual(response.status, .ok)
+                        // Surface the SUT's error envelope on non-200 — without
+                        // this the assertion only sees "400 Bad Request" with
+                        // no clue which validation guard fired.
+                        guard response.status == .ok else {
+                            return XCTFail("expected 200 OK; got \(response.status). body: \(String(buffer: response.body))")
+                        }
                         let env = try self.decodeJSONObject(from: response.body)
                         XCTAssertEqual(env["ok"], .bool(true))
                         XCTAssertEqual(env["status"], .number(201))
