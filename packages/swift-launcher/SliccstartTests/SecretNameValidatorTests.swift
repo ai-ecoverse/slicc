@@ -59,4 +59,55 @@ final class SecretNameValidatorTests: XCTestCase {
         XCTAssertFalse(SecretNameValidator.isValid("foo#bar"))
     }
 
+    func testRejectsNonAsciiAlphanumerics() {
+        // A previous iteration used `CharacterSet.alphanumerics`, which is
+        // Unicode-broad and silently accepted Cyrillic homoglyphs, CJK
+        // ideographs, accented Latin, Arabic-Indic digits, full-width
+        // digits, etc. — the kind of input the server-side ASCII check
+        // rejects with `400 invalid_profile` after the UI has saved.
+        // These cases pin the implementation to ASCII-only.
+        XCTAssertFalse(SecretNameValidator.isValid("café"))                 // accented Latin
+        XCTAssertFalse(SecretNameValidator.isValid("s3.р2.access_key_id"))  // Cyrillic 'р' (U+0440)
+        XCTAssertFalse(SecretNameValidator.isValid("数字"))                   // CJK ideographs
+        XCTAssertFalse(SecretNameValidator.isValid("token\u{0661}"))        // Arabic-Indic digit 1
+        XCTAssertFalse(SecretNameValidator.isValid("token\u{FF11}"))        // full-width digit 1
+        XCTAssertFalse(SecretNameValidator.isValid("Ω"))                    // Greek capital omega
+    }
+
+    /// Pinned corpus shared with the server-side validator's tests. Each
+    /// row is `(input, expected)`. If this test fails on a particular
+    /// row, the UI/server contract on that input has drifted — at least
+    /// one side needs an update so they agree.
+    ///
+    /// The corpus reuses inputs from `SignAndForwardTests.swift`'s profile-name
+    /// suite (`packages/swift-server/Tests/SignAndForwardTests.swift`) so
+    /// the two test files visibly share vocabulary.
+    func testValidatorMatchesServerProfileNameSpec() {
+        let cases: [(String, Bool)] = [
+            // Positives — exercised in SignAndForwardTests.testValidProfileName...
+            ("default", true),
+            ("dev-1", true),
+            ("team.us_west", true),
+            ("ABC123", true),
+            ("s3.r2.access_key_id", true),
+            // Negatives — exercised in SignAndForwardTests.testInvalidProfileName...
+            ("", false),
+            ("foo/bar", false),
+            ("../etc", false),
+            ("foo bar", false),
+            ("foo;rm", false),
+            // Unicode drift sentinels — UI must agree with server (both reject)
+            ("s3.р2.x", false),
+            ("\u{FF11}23", false),
+        ]
+        for (input, expected) in cases {
+            let scalars = input.unicodeScalars
+                .map { String(format: "U+%04X", $0.value) }
+                .joined(separator: " ")
+            XCTAssertEqual(
+                SecretNameValidator.isValid(input), expected,
+                "Drift on input \(input.debugDescription) (scalars: \(scalars))"
+            )
+        }
+    }
 }

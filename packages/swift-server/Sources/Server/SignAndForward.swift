@@ -24,6 +24,11 @@ enum SignAndForward {
     /// Allowed characters in profile names — restricts secret-key path traversal.
     /// `^[a-zA-Z0-9._-]+$` expressed as a character predicate to avoid pulling in
     /// NSRegularExpression for one match.
+    ///
+    /// **Kept in sync with `SecretNameValidator.isValid` in swift-launcher**
+    /// (`packages/swift-launcher/Sliccstart/Views/SettingsView.swift`). Tighten
+    /// only after updating both sides — narrowing the server alone would silently
+    /// reject names the UI claimed to save.
     static func isValidProfileName(_ name: String) -> Bool {
         guard !name.isEmpty else { return false }
         for ch in name.unicodeScalars {
