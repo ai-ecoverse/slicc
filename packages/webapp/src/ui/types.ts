@@ -67,6 +67,10 @@ export interface ToolCall {
   isError?: boolean;
   /** Transient screenshot data URL — not persisted to session store. */
   _screenshotDataUrl?: string;
+  /** Transient tool-UI request id used by `handleToolUI` to thread the
+   *  approval/result roundtrip back to the offscreen agent. Not
+   *  persisted. */
+  _toolUIRequestId?: string;
 }
 
 // ---------------------------------------------------------------------------
