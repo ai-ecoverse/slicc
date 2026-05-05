@@ -15,6 +15,12 @@ import XCTest
 ///   - service: service (the suite is service-agnostic; not 's3', so our
 ///     impl skips the x-amz-content-sha256 header for these cases)
 ///   - now: 2015-08-30T12:36:00Z
+///
+/// The `Signature=...` strings asserted in the AWS-vector tests are the
+/// AWS-published expected values. Changing any of the constants above
+/// (region, service, credentials, date) invalidates the expected
+/// signature — the test will then fail not because the signer is wrong
+/// but because the inputs no longer match what AWS published.
 final class SigV4SignerTests: XCTestCase {
 
     private let testCreds = SigV4Credentials(
@@ -43,7 +49,7 @@ final class SigV4SignerTests: XCTestCase {
     func testGetVanilla() {
         let signed = SigV4Signer.sign(
             SigV4Request(
-                method: "GET",
+                method: .GET,
                 url: URL(string: "https://example.amazonaws.com/")!,
                 headers: ["host": "example.amazonaws.com"]
             ),
@@ -64,7 +70,7 @@ final class SigV4SignerTests: XCTestCase {
         let body = Data("Param1=value1".utf8)
         let signed = SigV4Signer.sign(
             SigV4Request(
-                method: "POST",
+                method: .POST,
                 url: URL(string: "https://example.amazonaws.com/")!,
                 headers: [
                     "host": "example.amazonaws.com",
@@ -90,7 +96,7 @@ final class SigV4SignerTests: XCTestCase {
     func testAddsContentSha256HeaderWhenServiceIsS3() {
         let signed = SigV4Signer.sign(
             SigV4Request(
-                method: "GET",
+                method: .GET,
                 url: URL(string: "https://my-bucket.s3.us-east-1.amazonaws.com/foo.txt")!,
                 headers: ["host": "my-bucket.s3.us-east-1.amazonaws.com"]
             ),
@@ -113,7 +119,7 @@ final class SigV4SignerTests: XCTestCase {
     func testOmitsContentSha256ForNonS3Services() {
         let signed = SigV4Signer.sign(
             SigV4Request(
-                method: "GET",
+                method: .GET,
                 url: URL(string: "https://example.amazonaws.com/")!,
                 headers: ["host": "example.amazonaws.com"]
             ),
@@ -133,7 +139,7 @@ final class SigV4SignerTests: XCTestCase {
         )
         let signed = SigV4Signer.sign(
             SigV4Request(
-                method: "GET",
+                method: .GET,
                 url: URL(string: "https://my-bucket.s3.us-east-1.amazonaws.com/foo.txt")!,
                 headers: ["host": "my-bucket.s3.us-east-1.amazonaws.com"]
             ),
@@ -152,7 +158,7 @@ final class SigV4SignerTests: XCTestCase {
         let body = Data("hello world".utf8)
         let signed = SigV4Signer.sign(
             SigV4Request(
-                method: "PUT",
+                method: .PUT,
                 url: URL(string: "https://my-bucket.s3.us-east-1.amazonaws.com/foo.txt")!,
                 headers: ["host": "my-bucket.s3.us-east-1.amazonaws.com"],
                 body: body

@@ -6,12 +6,24 @@ import Foundation
 /// **Mirrors `packages/webapp/src/fs/mount/signing-s3.ts` and
 /// `packages/node-server/src/secrets/signing-s3.ts`.** All three files
 /// implement the same algorithm and must produce byte-identical signatures
-/// for the same inputs. Drift between any of them is caught by all three
-/// test suites running the same canonical AWS test vectors:
+/// for the same inputs. The functions/types that must stay aligned across
+/// all three implementations:
+///
+///   - `signSigV4` / `SigV4Signer.sign` — entry point and HMAC chain
+///   - `canonicalUri` — path percent-encoding
+///   - `canonicalQuery` — query parameter sorting + encoding
+///   - `canonicalHeaders` — lowercase + trim + collapse whitespace + sort
+///
+/// Drift between any of them is caught by all three test suites running
+/// the same canonical AWS test vectors:
 ///
 ///   - `packages/webapp/tests/fs/mount/signing-s3.test.ts`
 ///   - `packages/node-server/tests/secrets/signing-s3.test.ts`
 ///   - `packages/swift-server/Tests/SigV4SignerTests.swift`
+///
+/// The AWS service-agnostic vectors only exercise empty queries; non-empty
+/// query parity (e.g. R2 listing's `?list-type=2&prefix=...`) is exercised
+/// by the upstream-success handler tests in `SignAndForwardTests`.
 ///
 /// If you change one, change the others and verify all three suites pass.
 ///
@@ -34,13 +46,21 @@ public struct SigV4Credentials: Sendable, Equatable {
     }
 }
 
+/// HTTP methods accepted by the SigV4 signer and the sign-and-forward
+/// handlers. Closed enum so the call site can switch exhaustively and the
+/// validation surface in `SignAndForward` doesn't have to maintain a
+/// parallel string set.
+public enum SigV4Method: String, Sendable, Equatable, CaseIterable {
+    case GET, PUT, POST, DELETE, HEAD
+}
+
 public struct SigV4Request: Sendable, Equatable {
-    public let method: String  // "GET", "PUT", "POST", "DELETE", "HEAD"
+    public let method: SigV4Method
     public let url: URL
-    public var headers: [String: String]
+    public let headers: [String: String]
     public let body: Data?
 
-    public init(method: String, url: URL, headers: [String: String] = [:], body: Data? = nil) {
+    public init(method: SigV4Method, url: URL, headers: [String: String] = [:], body: Data? = nil) {
         self.method = method
         self.url = url
         self.headers = headers
@@ -96,7 +116,7 @@ public enum SigV4Signer {
 
         let canonicalHeadersResult = canonicalHeaders(headers)
         let canonicalRequest = [
-            request.method,
+            request.method.rawValue,
             canonicalUri(request.url),
             canonicalQuery(request.url),
             canonicalHeadersResult.canonical,

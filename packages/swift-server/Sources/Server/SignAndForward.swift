@@ -21,9 +21,6 @@ enum SignAndForward {
 
     // MARK: - Constants
 
-    /// Methods we permit through the signed proxies.
-    static let allowedMethods: Set<String> = ["GET", "PUT", "POST", "DELETE", "HEAD"]
-
     /// Allowed characters in profile names — restricts secret-key path traversal.
     /// `^[a-zA-Z0-9._-]+$` expressed as a character predicate to avoid pulling in
     /// NSRegularExpression for one match.
@@ -51,8 +48,10 @@ enum SignAndForward {
         "upgrade",
     ]
 
-    /// Adobe da.live API origin. Hard-coded — clients send only the path component.
-    static let daOrigin = "https://admin.da.live"
+    /// Adobe da.live API origin used in production. Tests inject a localhost
+    /// stub via the `daOrigin` parameter on `registerRoutes` / `handleDa` so
+    /// they can verify the bytes we put on the wire end-to-end.
+    static let defaultDaOrigin = "https://admin.da.live"
 
     // MARK: - Envelope shapes
 
@@ -194,15 +193,17 @@ enum SignAndForward {
 
     /// Register POST `/api/s3-sign-and-forward` and POST `/api/da-sign-and-forward`
     /// against the given router. Outbound requests use the shared `httpClient`.
+    /// `daOrigin` is overridable for end-to-end tests against a local stub.
     static func registerRoutes(
         router: Router<some RequestContext>,
-        httpClient: HTTPClient
+        httpClient: HTTPClient,
+        daOrigin: String = defaultDaOrigin
     ) {
         router.post("/api/s3-sign-and-forward") { request, _ in
             await handleS3(request: request, httpClient: httpClient)
         }
         router.post("/api/da-sign-and-forward") { request, _ in
-            await handleDa(request: request, httpClient: httpClient)
+            await handleDa(request: request, httpClient: httpClient, daOrigin: daOrigin)
         }
     }
 
@@ -217,6 +218,12 @@ enum SignAndForward {
         let env: S3Envelope
         do {
             env = try await decodeEnvelope(request: request)
+        } catch is NIOTooManyBytesError {
+            return errorResponse(
+                .payloadTooLarge,
+                error: "request body exceeds \(maxEnvelopeBytesHumanReadable) limit",
+                errorCode: "body_too_large"
+            )
         } catch {
             return errorResponse(.badRequest, error: "invalid JSON body", errorCode: "invalid_request")
         }
@@ -228,7 +235,7 @@ enum SignAndForward {
                 errorCode: "invalid_profile"
             )
         }
-        guard let method = env.method, allowedMethods.contains(method) else {
+        guard let methodStr = env.method, let method = SigV4Method(rawValue: methodStr) else {
             return errorResponse(.badRequest, error: "invalid method", errorCode: "invalid_request")
         }
         guard let bucket = env.bucket, !bucket.isEmpty else {
@@ -259,7 +266,12 @@ enum SignAndForward {
 
         let body: Data?
         if let b64 = env.bodyBase64, !b64.isEmpty {
-            guard let decoded = Data(base64Encoded: b64) else {
+            // Permissive base64 — matches Node's `Buffer.from(b64, 'base64')`
+            // (which silently ignores whitespace / unknown chars). Strict
+            // decoding would reject MIME-style line-broken base64 that the
+            // node-server happily accepts, so the swift- and node-server
+            // surfaces would otherwise diverge on input shape.
+            guard let decoded = Data(base64Encoded: b64, options: [.ignoreUnknownCharacters]) else {
                 return errorResponse(.badRequest, error: "invalid bodyBase64", errorCode: "invalid_request")
             }
             body = decoded
@@ -298,11 +310,18 @@ enum SignAndForward {
     /// arbitrary hosts.
     static func handleDa(
         request: Request,
-        httpClient: HTTPClient
+        httpClient: HTTPClient,
+        daOrigin: String = defaultDaOrigin
     ) async -> Response {
         let env: DaEnvelope
         do {
             env = try await decodeEnvelope(request: request)
+        } catch is NIOTooManyBytesError {
+            return errorResponse(
+                .payloadTooLarge,
+                error: "request body exceeds \(maxEnvelopeBytesHumanReadable) limit",
+                errorCode: "body_too_large"
+            )
         } catch {
             return errorResponse(.badRequest, error: "invalid JSON body", errorCode: "invalid_request")
         }
@@ -310,7 +329,7 @@ enum SignAndForward {
         guard let imsToken = env.imsToken, !imsToken.isEmpty else {
             return errorResponse(.badRequest, error: "imsToken is required", errorCode: "invalid_request")
         }
-        guard let method = env.method, allowedMethods.contains(method) else {
+        guard let methodStr = env.method, let method = SigV4Method(rawValue: methodStr) else {
             return errorResponse(.badRequest, error: "invalid method", errorCode: "invalid_request")
         }
         guard let path = env.path, path.hasPrefix("/") else {
@@ -336,7 +355,8 @@ enum SignAndForward {
 
         let body: Data?
         if let b64 = env.bodyBase64, !b64.isEmpty {
-            guard let decoded = Data(base64Encoded: b64) else {
+            // See `handleS3` for the rationale on permissive base64.
+            guard let decoded = Data(base64Encoded: b64, options: [.ignoreUnknownCharacters]) else {
                 return errorResponse(.badRequest, error: "invalid bodyBase64", errorCode: "invalid_request")
             }
             body = decoded
@@ -359,34 +379,59 @@ enum SignAndForward {
 
     // MARK: - Internals
 
+    /// Body-size cap shared by inbound envelope collection and outbound
+    /// upstream-response collection. Exposed so error messages can quote
+    /// the same number the code enforces.
+    static let maxEnvelopeBytes = 50 * 1024 * 1024
+    static let maxEnvelopeBytesHumanReadable = "50 MB"
+
     private static func decodeEnvelope<T: Decodable>(request: Request) async throws -> T {
-        let buffer = try await request.body.collect(upTo: 50 * 1024 * 1024)
+        let buffer = try await request.body.collect(upTo: maxEnvelopeBytes)
         var b = buffer
         let data = b.readData(length: b.readableBytes) ?? Data()
         return try JSONDecoder().decode(T.self, from: data)
     }
 
-    /// Forward a signed request to the upstream and wrap the response in
-    /// the JSON envelope shape: `{ ok: true, status, headers, bodyBase64 }`.
-    /// Network failures return a 502 envelope with `errorCode: "fetch_failed"`.
-    private static func forward(
+    /// Build the AHC `HTTPClientRequest` we'd send upstream. Extracted from
+    /// `forward()` so tests can assert byte-for-byte parity with the JS
+    /// handler without standing up a TLS upstream.
+    static func buildClientRequest(
         url: URL,
-        method: String,
+        method: SigV4Method,
         headers: [String: String],
-        body: Data?,
-        httpClient: HTTPClient,
-        failureLabel: String
-    ) async -> Response {
+        body: Data?
+    ) -> HTTPClientRequest {
         var clientRequest = HTTPClientRequest(url: url.absoluteString)
-        clientRequest.method = httpMethod(from: method)
+        clientRequest.method = method.nioHTTPMethod
         for (name, value) in headers {
             // Skip Host — AHC sets it from the URL.
             if name.lowercased() == "host" { continue }
             clientRequest.headers.add(name: name, value: value)
         }
-        if let body, !body.isEmpty, method != "GET" && method != "HEAD" {
+        // AHC attaches Content-Length even for empty `.bytes(...)` bodies
+        // and S3 rejects GET requests that carry a content-length header.
+        // JS `fetch` strips bodies on GET/HEAD by spec, which is why the
+        // node-server handler doesn't need this gate; we replicate the
+        // spec-level behavior explicitly here.
+        if let body, !body.isEmpty, method != .GET && method != .HEAD {
             clientRequest.body = .bytes(ByteBuffer(bytes: body))
         }
+        return clientRequest
+    }
+
+    /// Forward a signed request to the upstream and wrap the response in
+    /// the JSON envelope shape: `{ ok: true, status, headers, bodyBase64 }`.
+    /// Network failures return a 502 envelope with `errorCode: "fetch_failed"`;
+    /// oversized responses return 502 with `errorCode: "response_too_large"`.
+    private static func forward(
+        url: URL,
+        method: SigV4Method,
+        headers: [String: String],
+        body: Data?,
+        httpClient: HTTPClient,
+        failureLabel: String
+    ) async -> Response {
+        let clientRequest = buildClientRequest(url: url, method: method, headers: headers, body: body)
 
         let upstream: HTTPClientResponse
         do {
@@ -394,53 +439,64 @@ enum SignAndForward {
         } catch {
             return errorResponse(
                 .badGateway,
-                error: "\(failureLabel) fetch failed: \(error.localizedDescription)",
+                error: "\(failureLabel) fetch failed: \(forwardErrorMessage(error))",
                 errorCode: "fetch_failed"
             )
         }
 
         let bodyBuffer: ByteBuffer
         do {
-            bodyBuffer = try await upstream.body.collect(upTo: 50 * 1024 * 1024)
+            bodyBuffer = try await upstream.body.collect(upTo: maxEnvelopeBytes)
+        } catch is NIOTooManyBytesError {
+            return errorResponse(
+                .badGateway,
+                error: "\(failureLabel) response exceeds \(maxEnvelopeBytesHumanReadable) proxy limit",
+                errorCode: "response_too_large"
+            )
         } catch {
             return errorResponse(
                 .badGateway,
-                error: "\(failureLabel) fetch failed: \(error.localizedDescription)",
+                error: "\(failureLabel) fetch failed: \(forwardErrorMessage(error))",
                 errorCode: "fetch_failed"
             )
         }
 
-        let upstreamBytes = bodyBuffer.getBytes(at: bodyBuffer.readerIndex, length: bodyBuffer.readableBytes) ?? []
+        let envelope = buildSuccessEnvelope(status: upstream.status.code, headers: upstream.headers, body: bodyBuffer)
+        return jsonEnvelopeResponse(envelope, status: .ok)
+    }
+
+    /// Build the JSON envelope returned to the client on a successful forward.
+    /// Hop-by-hop headers per RFC 7230 are stripped; the response body is
+    /// base64-encoded. Extracted so tests can assert envelope shape, header
+    /// filtering, and body round-trip without a real upstream.
+    static func buildSuccessEnvelope(status: UInt, headers: HTTPHeaders, body: ByteBuffer) -> LickSystem.JSONValue {
+        let upstreamBytes = body.getBytes(at: body.readerIndex, length: body.readableBytes) ?? []
         let bodyBase64 = Data(upstreamBytes).base64EncodedString()
 
         var headerObject: [String: LickSystem.JSONValue] = [:]
-        for header in upstream.headers {
+        for header in headers {
             if hopByHopHeaders.contains(header.name.lowercased()) { continue }
             headerObject[header.name] = .string(header.value)
         }
 
-        let envelope: LickSystem.JSONValue = .object([
+        return .object([
             "ok": .bool(true),
-            "status": .number(Double(upstream.status.code)),
+            "status": .number(Double(status)),
             "headers": .object(headerObject),
             "bodyBase64": .string(bodyBase64),
         ])
-        return jsonEnvelopeResponse(envelope, status: .ok)
     }
 
-    /// Map our string-typed `SigV4Request.method` (always one of the entries
-    /// in `allowedMethods`) to NIO's `HTTPMethod` for AHC. We pre-validate so
-    /// the `default` branch is unreachable in practice; we map it to `.RAW`
-    /// rather than crashing as a defensive fallback.
-    private static func httpMethod(from method: String) -> HTTPMethod {
-        switch method {
-        case "GET": return .GET
-        case "PUT": return .PUT
-        case "POST": return .POST
-        case "DELETE": return .DELETE
-        case "HEAD": return .HEAD
-        default: return .RAW(value: method)
-        }
+    /// Render an AHC / NIO error in a form useful to a debugging operator.
+    /// `error.localizedDescription` returns the misleading
+    /// `"The operation could not be completed."` Cocoa default for many
+    /// NIO error types, so we prefer `String(describing:)` (which yields
+    /// case names like `connectTimeout` for `HTTPClientError`) and fall
+    /// back only when that produces something obviously empty.
+    private static func forwardErrorMessage(_ error: Error) -> String {
+        let described = String(describing: error)
+        if !described.isEmpty { return described }
+        return error.localizedDescription
     }
 
     private static func errorResponse(_ status: HTTPResponse.Status, error: String, errorCode: String) -> Response {
@@ -468,5 +524,20 @@ enum SignAndForward {
             headers: [.contentType: "application/json; charset=utf-8"],
             body: .init(byteBuffer: ByteBuffer(bytes: data))
         )
+    }
+}
+
+extension SigV4Method {
+    /// Map the closed `SigV4Method` enum to NIO's open `HTTPMethod`. Lives
+    /// here (next to the only consumer) rather than in `SigV4Signer.swift`
+    /// so the signer module doesn't need to import `NIOHTTP1`.
+    var nioHTTPMethod: HTTPMethod {
+        switch self {
+        case .GET: return .GET
+        case .PUT: return .PUT
+        case .POST: return .POST
+        case .DELETE: return .DELETE
+        case .HEAD: return .HEAD
+        }
     }
 }

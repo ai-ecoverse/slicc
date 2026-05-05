@@ -168,9 +168,11 @@ The browser bundle never computes signatures or holds credentials. Backends cons
                      signSigV4 → fetch → upstream
 ```
 
-The Swift-server endpoint (`Sources/Server/SignAndForward.swift`) ports the
-node-server handler line-for-line and reuses the same canonical SigV4 test
-vectors, so byte-identical signatures are enforced across all three runtimes.
+The Swift-server endpoint (`Sources/Server/SignAndForward.swift`) is a
+behavior-parity port of the node-server handler — same envelope contract,
+same hop-by-hop filter, same profile/key resolution rules — and reuses the
+canonical AWS SigV4 test vectors, so byte-identical signatures are enforced
+across all three runtimes.
 
 For DA, the IMS bearer token transits the same envelope (browser-side state today; v2 will move OAuth server-side / SW-side).
 
