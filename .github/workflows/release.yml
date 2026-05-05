@@ -46,6 +46,8 @@ jobs:
           APPLE_DISTRIBUTION_CERT_BASE64: ${{ secrets.APPLE_DISTRIBUTION_CERT_BASE64 }}
           APPLE_DISTRIBUTION_CERT_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERT_PASSWORD }}
         run: |
+          set -euo pipefail
+
           # Create temporary keychain
           KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
           KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
@@ -54,20 +56,48 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          # Import Developer ID Application cert (macOS / Sliccstart)
-          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
-          security import $RUNNER_TEMP/certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          # Helper: decode a base64 .p12, re-encrypt with modern AES-256
+          # ciphers, then import. The repo's existing macOS Developer ID
+          # cert was exported with legacy RC2-40 PKCS#12 encryption which
+          # newer macOS-arm64 runners' `security import` rejects with
+          # "SecKeychainItemImport: Unable to decode the provided data".
+          # Round-tripping via openssl normalizes both legacy and modern
+          # exports to a format `security` reliably accepts.
+          import_p12() {
+            local label="$1" b64="$2" pass="$3"
+            local raw="$RUNNER_TEMP/${label}-raw.p12"
+            local pem="$RUNNER_TEMP/${label}.pem"
+            local norm="$RUNNER_TEMP/${label}.p12"
 
-          # Import Apple Distribution cert (iOS / SliccFollower TestFlight)
-          if [ -n "$APPLE_DISTRIBUTION_CERT_BASE64" ]; then
-            echo "$APPLE_DISTRIBUTION_CERT_BASE64" | base64 --decode > $RUNNER_TEMP/apple-distribution.p12
-            security import $RUNNER_TEMP/apple-distribution.p12 -P "$APPLE_DISTRIBUTION_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-            rm -f $RUNNER_TEMP/apple-distribution.p12
+            printf '%s' "$b64" | base64 --decode > "$raw"
+            echo "  ${label}: raw .p12 = $(wc -c < "$raw") bytes"
+
+            # Try modern read first; fall back to -legacy for OpenSSL 3.x
+            # decoding RC2-40 / SHA-1 PKCS#12.
+            if ! openssl pkcs12 -in "$raw" -nodes -out "$pem" \
+                 -passin "pass:${pass}" 2>/dev/null; then
+              openssl pkcs12 -in "$raw" -nodes -out "$pem" \
+                -passin "pass:${pass}" -legacy
+            fi
+
+            openssl pkcs12 -export -in "$pem" -out "$norm" \
+              -password "pass:${pass}" \
+              -keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256
+
+            security import "$norm" -P "${pass}" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+            rm -f "$raw" "$pem" "$norm"
+          }
+
+          echo "Importing Developer ID Application cert (macOS / Sliccstart)..."
+          import_p12 certificate "$APPLE_CERTIFICATE_BASE64" "$APPLE_CERTIFICATE_PASSWORD"
+
+          if [ -n "${APPLE_DISTRIBUTION_CERT_BASE64:-}" ]; then
+            echo "Importing Apple Distribution cert (iOS / SliccFollower TestFlight)..."
+            import_p12 apple-distribution "$APPLE_DISTRIBUTION_CERT_BASE64" "$APPLE_DISTRIBUTION_CERT_PASSWORD"
           fi
 
           security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychain -d user -s "$KEYCHAIN_PATH"
-          rm -f $RUNNER_TEMP/certificate.p12
 
           # Store keychain path for later steps
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
