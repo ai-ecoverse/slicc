@@ -34,4 +34,4 @@ targets:
 packages:
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
-    exactVersion: 125.0.0
+    exactVersion: 147.0.0
