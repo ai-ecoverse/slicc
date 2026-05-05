@@ -399,7 +399,7 @@ final class SignAndForwardTests: XCTestCase {
     // these tests prove is that the handler propagates that signature
     // (plus the SigV4-mandated headers) into the AHC request unchanged.
 
-    func testBuildClientRequestPropagatesSignedHeaders() throws {
+    func testPrepareForwardRequestPropagatesSignedHeaders() throws {
         let url = URL(string: "https://my-bucket.s3.us-east-1.amazonaws.com/foo.txt")!
         let signed = SigV4Signer.sign(
             SigV4Request(method: .GET, url: url, headers: ["host": url.host!]),
@@ -407,61 +407,53 @@ final class SignAndForwardTests: XCTestCase {
             region: "us-east-1",
             service: "s3"
         )
-        let req = SignAndForward.buildClientRequest(
+        let prepared = SignAndForward.prepareForwardRequest(
             url: url, method: signed.method, headers: signed.headers, body: signed.body
         )
-        XCTAssertEqual(req.method, .GET)
-        XCTAssertEqual(req.url, url.absoluteString)
-        // Every signer-emitted header must reach the AHC request (except
+        XCTAssertEqual(prepared.method, .GET)
+        XCTAssertEqual(prepared.url, url.absoluteString)
+        // Every signer-emitted header must reach the prepared request (except
         // host, which AHC sets from the URL itself).
-        XCTAssertNotNil(req.headers.first(name: "Authorization"))
-        XCTAssertTrue(req.headers.first(name: "Authorization")!.hasPrefix("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/"))
-        XCTAssertNotNil(req.headers.first(name: "x-amz-date"))
+        XCTAssertNotNil(prepared.headers["Authorization"])
+        XCTAssertTrue(prepared.headers["Authorization"]!.hasPrefix("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/"))
+        XCTAssertNotNil(prepared.headers["x-amz-date"])
         XCTAssertEqual(
-            req.headers.first(name: "x-amz-content-sha256"),
+            prepared.headers["x-amz-content-sha256"],
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         )
         // Host is dropped — AHC sets it from the URL. Either case must be absent.
-        XCTAssertNil(req.headers.first(name: "Host"))
-        XCTAssertNil(req.headers.first(name: "host"))
+        XCTAssertNil(prepared.headers["Host"])
+        XCTAssertNil(prepared.headers["host"])
     }
 
-    func testBuildClientRequestRoundTripsBodyOnPut() {
+    func testPrepareForwardRequestRoundTripsBodyOnPut() {
         let url = URL(string: "https://b.s3.us-east-1.amazonaws.com/foo.txt")!
         let body = Data("hello world".utf8)
-        let req = SignAndForward.buildClientRequest(
+        let prepared = SignAndForward.prepareForwardRequest(
             url: url, method: .PUT, headers: [:], body: body
         )
-        XCTAssertEqual(req.method, .PUT)
-        // `HTTPClientRequest.body` is `Body?`. The .bytes branch is the only
-        // one our handler populates; matching against it confirms the
-        // method != GET/HEAD path executed and that the bytes survived
-        // round-trip into the AHC request.
-        guard case .some(.bytes(let buffer, _)) = req.body else {
-            return XCTFail("expected .bytes body, got \(String(describing: req.body))")
-        }
-        XCTAssertEqual(buffer.readableBytes, body.count)
-        XCTAssertEqual(String(buffer: buffer), "hello world")
+        XCTAssertEqual(prepared.method, .PUT)
+        XCTAssertEqual(prepared.body, body)
     }
 
-    func testBuildClientRequestSuppressesBodyOnGetEvenIfProvided() {
+    func testPrepareForwardRequestSuppressesBodyOnGetEvenIfProvided() {
         // S3 rejects GET requests with a Content-Length header. AHC adds
         // Content-Length whenever .body is set, even to empty bytes — so
         // the Swift handler explicitly skips body assignment on GET/HEAD.
         let url = URL(string: "https://b.s3.us-east-1.amazonaws.com/foo.txt")!
         let body = Data("ignored".utf8)
-        let req = SignAndForward.buildClientRequest(
+        let prepared = SignAndForward.prepareForwardRequest(
             url: url, method: .GET, headers: [:], body: body
         )
-        XCTAssertNil(req.body, "GET requests must never carry a body to S3")
+        XCTAssertNil(prepared.body, "GET requests must never carry a body to S3")
     }
 
-    func testBuildClientRequestSuppressesBodyOnHead() {
+    func testPrepareForwardRequestSuppressesBodyOnHead() {
         let url = URL(string: "https://b.s3.us-east-1.amazonaws.com/foo.txt")!
-        let req = SignAndForward.buildClientRequest(
+        let prepared = SignAndForward.prepareForwardRequest(
             url: url, method: .HEAD, headers: [:], body: Data("ignored".utf8)
         )
-        XCTAssertNil(req.body)
+        XCTAssertNil(prepared.body)
     }
 
     func testBuildSuccessEnvelopeStripsHopByHopHeaders() {
@@ -547,9 +539,10 @@ final class SignAndForwardTests: XCTestCase {
                 body: .init(byteBuffer: ByteBuffer(string: "stub-ok"))
             )
         }
+        let upstreamConfig = ApplicationConfiguration(address: .hostname("127.0.0.1", port: 0))
         let upstreamApp = Application(
             responder: upstreamRouter.buildResponder(),
-            configuration: .init(address: .hostname("127.0.0.1", port: 0))
+            configuration: upstreamConfig
         )
 
         try await upstreamApp.test(.live) { upstreamClient in

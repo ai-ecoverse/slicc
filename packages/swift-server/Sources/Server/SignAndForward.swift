@@ -392,31 +392,49 @@ enum SignAndForward {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
-    /// Build the AHC `HTTPClientRequest` we'd send upstream. Extracted from
-    /// `forward()` so tests can assert byte-for-byte parity with the JS
-    /// handler without standing up a TLS upstream.
-    static func buildClientRequest(
+    /// Inspectable shape of an outbound request. Tests assert against this;
+    /// `forward()` then assembles the equivalent `HTTPClientRequest`. AHC's
+    /// `HTTPClientRequest.Body` is an opaque struct (not an enum we can
+    /// pattern-match), so we expose the body bytes here rather than going
+    /// through AHC's representation just to inspect them.
+    struct ForwardRequest: Equatable {
+        let url: String
+        let method: SigV4Method
+        /// Headers that will be set on the AHC request. The Host header is
+        /// always stripped — AHC sets it from the URL — so it never appears
+        /// here. Keys are kept in their original case (callers may pass
+        /// either `Authorization` or `authorization`).
+        let headers: [String: String]
+        /// Bytes the wire body will carry. `nil` when no body is appropriate
+        /// (no input, empty input, or method is GET/HEAD).
+        let body: Data?
+    }
+
+    /// Plan the upstream request without committing to AHC's opaque body
+    /// type. Extracted from `forward()` so tests can assert byte-for-byte
+    /// parity with the JS handler without standing up a TLS upstream.
+    static func prepareForwardRequest(
         url: URL,
         method: SigV4Method,
         headers: [String: String],
         body: Data?
-    ) -> HTTPClientRequest {
-        var clientRequest = HTTPClientRequest(url: url.absoluteString)
-        clientRequest.method = method.nioHTTPMethod
-        for (name, value) in headers {
-            // Skip Host — AHC sets it from the URL.
-            if name.lowercased() == "host" { continue }
-            clientRequest.headers.add(name: name, value: value)
+    ) -> ForwardRequest {
+        var filtered: [String: String] = [:]
+        for (name, value) in headers where name.lowercased() != "host" {
+            filtered[name] = value
         }
         // AHC attaches Content-Length even for empty `.bytes(...)` bodies
         // and S3 rejects GET requests that carry a content-length header.
         // JS `fetch` strips bodies on GET/HEAD by spec, which is why the
         // node-server handler doesn't need this gate; we replicate the
         // spec-level behavior explicitly here.
+        let actualBody: Data?
         if let body, !body.isEmpty, method != .GET && method != .HEAD {
-            clientRequest.body = .bytes(ByteBuffer(bytes: body))
+            actualBody = body
+        } else {
+            actualBody = nil
         }
-        return clientRequest
+        return ForwardRequest(url: url.absoluteString, method: method, headers: filtered, body: actualBody)
     }
 
     /// Forward a signed request to the upstream and wrap the response in
@@ -431,7 +449,15 @@ enum SignAndForward {
         httpClient: HTTPClient,
         failureLabel: String
     ) async -> Response {
-        let clientRequest = buildClientRequest(url: url, method: method, headers: headers, body: body)
+        let prepared = prepareForwardRequest(url: url, method: method, headers: headers, body: body)
+        var clientRequest = HTTPClientRequest(url: prepared.url)
+        clientRequest.method = prepared.method.nioHTTPMethod
+        for (name, value) in prepared.headers {
+            clientRequest.headers.add(name: name, value: value)
+        }
+        if let body = prepared.body {
+            clientRequest.body = .bytes(ByteBuffer(bytes: body))
+        }
 
         let upstream: HTTPClientResponse
         do {
