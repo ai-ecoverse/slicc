@@ -78,52 +78,32 @@ PROFILE_NAME="${APPLE_PROVISIONING_PROFILE_NAME:-Slicc Follower App Store}"
 echo "=== SliccFollower TestFlight v${VERSION} (build ${BUILD_NUMBER}) ==="
 
 # Apple requires App Store submissions to be built with Xcode 26+
-# (iOS 26 SDK). The default Xcode on macos-15 runners is 16.x, which
-# fails altool validation with "SDK version issue ... must be built
-# with the iOS 26 SDK or later". Pick the highest /Applications/Xcode_*
-# we can find and set DEVELOPER_DIR for the rest of this script. If
-# none are >= 26, surface a clear error so we know to bump the runner
-# image (or wait for macos-26 GA) instead of getting another opaque
-# 409 from altool.
-pick_xcode() {
-  local best="" best_major=0 candidate major
-  for candidate in /Applications/Xcode_26*.app /Applications/Xcode-26*.app /Applications/Xcode_*.app; do
-    [ -d "$candidate" ] || continue
-    # Grab the leading numeric component of the version, e.g. "26" from
-    # "Xcode_26.0.1.app". Anything we can't parse is treated as 0.
-    major="$(basename "$candidate" | sed -E 's/^Xcode[_-]?([0-9]+).*/\1/' | grep -E '^[0-9]+$' || echo 0)"
-    if [ "${major:-0}" -gt "$best_major" ]; then
-      best="$candidate"
-      best_major="$major"
-    fi
-  done
-  if [ -z "$best" ]; then
-    return 1
+# (iOS 26 SDK). On the macos-26 runner the default Xcode is 26.2 with
+# the iOS 26.2 device platform fully provisioned. Older Xcode 26.x
+# apps under /Applications also exist but only the *default* one has
+# its iOS device platform fully installed — picking, say, Xcode 26.0.1
+# explicitly causes `xcodebuild archive` to fail with
+# "iOS 26.0 is not installed. Please download and install the
+# platform from Xcode > Settings > Components." Use the runner's
+# default Xcode (no DEVELOPER_DIR override) and just verify it's
+# Xcode 26+.
+#
+# Avoid `xcodebuild -version | head -1`: under `set -o pipefail`,
+# xcodebuild prints two lines and SIGPIPEs when head closes early,
+# bubbling exit code 141 up out of the script.
+XCODE_VERSION_RAW="$(xcodebuild -version 2>/dev/null || true)"
+XCODE_VERSION="${XCODE_VERSION_RAW%%$'\n'*}"
+XCODE_MAJOR="$(echo "$XCODE_VERSION" | sed -E 's/^Xcode[[:space:]]+([0-9]+).*/\1/')"
+if [ -z "$XCODE_MAJOR" ] || ! [ "$XCODE_MAJOR" -ge 26 ] 2>/dev/null; then
+  msg="Default Xcode is '${XCODE_VERSION:-unknown}' (< 26). App Store now rejects pre-Xcode-26 builds. Skipping iOS upload."
+  if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
+    echo "::warning::$msg"
+  else
+    echo "warn: $msg"
   fi
-  echo "$best"
-}
-
-if XCODE_APP="$(pick_xcode)" && [ -n "$XCODE_APP" ]; then
-  # Don't use `xcodebuild -version | head -1` here. Under
-  # `set -o pipefail`, if xcodebuild keeps writing after head closes
-  # its stdin (it has 2 lines), xcodebuild takes SIGPIPE and the
-  # pipeline exits 141 — which kills this entire script and leaves
-  # semantic-release wedged. Capture the full output, take the first
-  # line in pure shell.
-  XCODE_VERSION_RAW="$("$XCODE_APP/Contents/Developer/usr/bin/xcodebuild" -version 2>/dev/null || true)"
-  XCODE_VERSION="${XCODE_VERSION_RAW%%$'\n'*}"
-  XCODE_MAJOR="$(echo "$XCODE_VERSION" | sed -E 's/^Xcode[[:space:]]+([0-9]+).*/\1/')"
-  if [ -z "$XCODE_MAJOR" ] || [ "$XCODE_MAJOR" -lt 26 ]; then
-    if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
-      echo "::warning::Highest installed Xcode is '$XCODE_VERSION' (< 26). App Store now rejects pre-Xcode-26 builds. Skipping iOS upload."
-    else
-      echo "warn: Highest installed Xcode is '$XCODE_VERSION' (< 26). App Store now rejects pre-Xcode-26 builds. Skipping iOS upload."
-    fi
-    exit 0
-  fi
-  export DEVELOPER_DIR="$XCODE_APP/Contents/Developer"
-  echo "  using $XCODE_VERSION (DEVELOPER_DIR=$DEVELOPER_DIR)"
+  exit 0
 fi
+echo "  using $XCODE_VERSION (default Xcode)"
 
 ARCHIVE="$IOS_PROJECT_DIR/.build/SliccFollower.xcarchive"
 EXPORT_DIR="$IOS_PROJECT_DIR/.build/export"
