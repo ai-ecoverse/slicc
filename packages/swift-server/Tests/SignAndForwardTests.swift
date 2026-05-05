@@ -553,7 +553,11 @@ final class SignAndForwardTests: XCTestCase {
             guard let upstreamPort = upstreamClient.port else {
                 return XCTFail("upstream live server did not expose a port")
             }
-            let daOrigin = "http://127.0.0.1:\(upstreamPort)"
+            // Use the host the test framework actually exposed rather than
+            // hardcoding 127.0.0.1 — Hummingbird's `.live` reports
+            // "localhost", which resolves to both v4 and v6, while binding
+            // 127.0.0.1 directly may only reach the v4 listener.
+            let daOrigin = "http://\(upstreamClient.host):\(upstreamPort)"
 
             try await self.withHTTPClient { httpClient in
                 let router = Router()
