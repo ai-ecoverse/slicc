@@ -34,6 +34,22 @@ if [ "${SLICC_SKIP_TESTFLIGHT:-}" = "1" ]; then
   exit 0
 fi
 
+# Soft-skip when the TestFlight secrets aren't usable. semantic-release's
+# prepareCmd treats any non-zero exit as a release failure, which would
+# block the macOS DMG / Chrome / Worker publish too. Exiting 0 here lets
+# the rest of the pipeline ship and we can re-set the iOS secrets out of
+# band without rolling back a release.
+if [ -z "${APPLE_DISTRIBUTION_CERT_BASE64:-}" ] || [ "${APPLE_DISTRIBUTION_CERT_BASE64:-}" = "-" ] \
+   || [ -z "${APPLE_API_KEY_P8_BASE64:-}" ] || [ "${APPLE_API_KEY_P8_BASE64:-}" = "-" ] \
+   || [ -z "${APPLE_PROVISIONING_PROFILE_BASE64:-}" ] || [ "${APPLE_PROVISIONING_PROFILE_BASE64:-}" = "-" ]; then
+  if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
+    echo "::warning::TestFlight secrets are missing or empty — skipping iOS upload."
+  else
+    echo "TestFlight secrets are missing or empty — skipping iOS upload."
+  fi
+  exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 IOS_PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROJECT_ROOT="$(cd "$IOS_PROJECT_DIR/../.." && pwd)"

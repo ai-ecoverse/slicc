@@ -129,8 +129,12 @@ fi
 set_secret() {
   local name="$1" value="$2"
   printf '  %-40s ' "$name"
-  if printf '%s' "$value" | "$GH_BIN" secret set "$name" -R "$REPO" --body - >/dev/null; then
-    echo "ok"
+  # NOTE: pass the value via stdin WITHOUT `--body -`. `gh secret set
+  # --body -` treats the literal "-" as the body string and ignores the
+  # pipe, which is how every TestFlight secret on this repo ended up
+  # set to a single dash. Omitting `--body` makes gh read stdin.
+  if printf '%s' "$value" | "$GH_BIN" secret set "$name" -R "$REPO" >/dev/null; then
+    echo "ok ($(printf '%s' "$value" | wc -c | tr -d ' ') bytes)"
   else
     echo "FAILED"
     return 1
