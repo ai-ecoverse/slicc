@@ -546,19 +546,14 @@ final class SignAndForwardTests: XCTestCase {
         )
 
         try await upstreamApp.test(.live) { upstreamClient in
-            let upstreamPort = upstreamClient.port
-            let daOrigin = "http://127.0.0.1:\(upstreamPort)"
-            // Pre-flight: prove the daOrigin string is parseable AND that
-            // .url survives query-item mutation, since the SUT does both
-            // and a failure in either looks the same in the error envelope.
-            guard var pre = URLComponents(string: daOrigin + "/source/foo/bar/baz.html") else {
-                return XCTFail("daOrigin produced a string URLComponents rejects: \(daOrigin)")
+            // `upstreamClient.port` is `Int?` — interpolating an Optional
+            // into a URL string yields `Optional(49203)` which URLComponents
+            // rejects. Unwrap explicitly so the error message points at the
+            // actual cause rather than at downstream URL parsing.
+            guard let upstreamPort = upstreamClient.port else {
+                return XCTFail("upstream live server did not expose a port")
             }
-            pre.queryItems = [URLQueryItem(name: "editor", value: "0"), URLQueryItem(name: "preview", value: "1")]
-            XCTAssertNotNil(
-                pre.url,
-                "URLComponents.url is nil after queryItems mutation (port: \(upstreamPort), daOrigin: \(daOrigin))"
-            )
+            let daOrigin = "http://127.0.0.1:\(upstreamPort)"
 
             try await self.withHTTPClient { httpClient in
                 let router = Router()
