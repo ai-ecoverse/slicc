@@ -2155,6 +2155,7 @@ export class ChatPanel {
         } else {
           home.appendChild(call);
         }
+        home.classList.remove('msg-group--emptied');
       }
       cluster.remove();
     }
@@ -2211,6 +2212,12 @@ export class ChatPanel {
           } else {
             lastGroup.appendChild(cluster);
           }
+        }
+        // Hide continuation groups that are now empty (all tool calls moved
+        // into the cluster). Kept in the DOM so unwrapToolClusters can find
+        // and restore calls on the next reflow.
+        for (let k = 1; k < chain.length; k++) {
+          if (chain[k].children.length === 0) chain[k].classList.add('msg-group--emptied');
         }
       }
       i = j;

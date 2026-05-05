@@ -216,6 +216,13 @@
   gap: 8px;
 }
 
+/* Continuation groups whose tool calls were absorbed into a cluster become
+   empty shells. JS marks them with this class; unwrapToolClusters removes it
+   when calls are restored, keeping the DOM node alive for re-clustering. */
+.msg-group--emptied {
+  display: none;
+}
+
 /* Queued messages — dimmed to distinguish from sent messages */
 .msg--queued {
   opacity: 0.55;
