@@ -196,6 +196,14 @@ export class ChatPanel {
   // load→mutate→save cycles behind the previous in-flight call so bursty
   // licks (e.g. fswatch) for a non-selected scoop can't clobber each other.
   private lickPersistQueues = new Map<string, Promise<void>>();
+  /** Anchor msgIds of tool-call clusters that were expanded immediately
+   *  before the most recent unwrap. Populated by `unwrapToolClusters` and
+   *  consumed (then cleared) by `reflowToolClusters`, so the rebuilt
+   *  cluster preserves the user's expanded state when a new tool call
+   *  streams into the chain. The first contained tool-call's owning
+   *  msgId is used as the anchor: it's the chain's first call and stays
+   *  stable as the cluster grows. */
+  private openClusterAnchors = new Set<string>();
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -1109,7 +1117,7 @@ export class ChatPanel {
     }
 
     // Store the request ID for later cleanup
-    (tc as any)._toolUIRequestId = requestId;
+    tc._toolUIRequestId = requestId;
 
     // Find the tool call element and add a UI container
     const wrapper = this.messagesEl.querySelector(`.msg-group[data-msg-id="${messageId}"]`);
@@ -2109,11 +2117,19 @@ export class ChatPanel {
       if (id && g.querySelector(':scope > .tool-call')) freshGroups.add(id);
     });
 
-    const clusters = this.messagesInner.querySelectorAll('.tool-call-cluster');
+    const clusters = this.messagesInner.querySelectorAll<HTMLElement>('.tool-call-cluster');
     for (const cluster of clusters) {
       const calls = cluster.querySelectorAll<HTMLElement>(
         ':scope > .tool-call-cluster__body > .tool-call'
       );
+      // If the user (or `handleToolUI`) had this cluster expanded, record
+      // its anchor so the next reflow can re-open the rebuilt cluster.
+      // The anchor is the first contained call's owning msgId — the
+      // chain's first call, which stays put as the cluster grows.
+      if (cluster instanceof HTMLDetailsElement && cluster.open) {
+        const anchorId = calls[0]?.dataset.msgId;
+        if (anchorId) this.openClusterAnchors.add(anchorId);
+      }
       for (const call of calls) {
         const msgId = call.dataset.msgId;
         // Restrict the home lookup to top-level msg-group wrappers —
@@ -2142,11 +2158,16 @@ export class ChatPanel {
 
   /** Walk continuation chains (one non-continuation `.msg-group` followed
    *  by zero or more `--continuation` siblings) and collapse runs of
-   *  three or more direct-child `.tool-call` elements into a single
-   *  "Working" cluster appended to the chain's last msg-group. This
-   *  generalises the per-message clustering to spans where each individual
-   *  message contributes one or two calls but the whole assistant turn
-   *  fires many — exactly the case the per-message rule misses. */
+   *  three or more direct-child `.tool-call` elements into a "Working"
+   *  cluster anchored at the run's first tool call.
+   *
+   *  A run is a maximal sequence of contiguous tool calls in DOM order
+   *  with no assistant text bubble between them. Text bubbles in
+   *  continuation groups represent content the agent emitted *between*
+   *  tool runs and must split clusters — otherwise the cluster would
+   *  hoist later tool calls above the prose the agent produced before
+   *  them. Leading text in the very first group of the chain doesn't
+   *  break anything because the run hasn't started yet. */
   private reflowToolClusters(): void {
     this.unwrapToolClusters();
     const groups = Array.from(
@@ -2159,28 +2180,39 @@ export class ChatPanel {
         j++;
       }
       const chain = groups.slice(i, j);
-      const toolCallEls: HTMLElement[] = [];
+
+      const runs: HTMLElement[][] = [];
+      let current: HTMLElement[] = [];
       for (const grp of chain) {
-        grp
-          .querySelectorAll<HTMLElement>(':scope > .tool-call')
-          .forEach((el) => toolCallEls.push(el));
+        // `.msg` is appended before any tool calls inside a group (see
+        // createMessageEl), so a text bubble here always sits between
+        // the prior group's tools and this group's tools.
+        const hasText = !!grp.querySelector(':scope > .msg');
+        if (hasText && current.length > 0) {
+          runs.push(current);
+          current = [];
+        }
+        grp.querySelectorAll<HTMLElement>(':scope > .tool-call').forEach((el) => current.push(el));
       }
-      if (toolCallEls.length >= TOOL_CLUSTER_MIN) {
-        // Anchor the cluster at the chronological position of the first
-        // tool call so any text the assistant produces *after* the tool
-        // run (typically a summary in a continuation msg-group) renders
-        // below the cluster instead of above it. Appending to the
-        // chain's last msg-group reorders post-tool text to appear
-        // before the tools, which contradicts how the agent generated
-        // them.
-        const firstCall = toolCallEls[0];
+      if (current.length > 0) runs.push(current);
+
+      for (const run of runs) {
+        if (run.length < TOOL_CLUSTER_MIN) continue;
+        const firstCall = run[0];
         const anchorParent = firstCall.parentElement;
-        const moved = new Set<Node>(toolCallEls);
+        const moved = new Set<Node>(run);
         let anchorNext: Node | null = firstCall.nextSibling;
         while (anchorNext && moved.has(anchorNext)) {
           anchorNext = anchorNext.nextSibling;
         }
-        const cluster = this.buildClusterFromElements(toolCallEls);
+        const cluster = this.buildClusterFromElements(run);
+        // Restore the user-expanded state captured by the most recent
+        // unwrap so a streaming tool call doesn't snap the cluster shut
+        // while the user is reading it.
+        const anchorId = firstCall.dataset.msgId;
+        if (anchorId && this.openClusterAnchors.has(anchorId)) {
+          cluster.open = true;
+        }
         if (anchorParent && anchorParent.isConnected) {
           anchorParent.insertBefore(cluster, anchorNext);
         } else {
@@ -2195,6 +2227,9 @@ export class ChatPanel {
       }
       i = j;
     }
+    // Drop any anchors that didn't map to a rebuilt cluster — chain may
+    // have shrunk below the threshold or been broken by a user turn.
+    this.openClusterAnchors.clear();
   }
 
   /** Build a "Working" cluster around an existing list of `.tool-call`
@@ -2202,7 +2237,7 @@ export class ChatPanel {
    *  derived from each element's name text and status class so the
    *  cluster reflects the live per-call state captured by the most
    *  recent `createToolCallEl` render. */
-  private buildClusterFromElements(toolCallEls: readonly HTMLElement[]): HTMLElement {
+  private buildClusterFromElements(toolCallEls: readonly HTMLElement[]): HTMLDetailsElement {
     const stale = toolCallEls.every((el) => el.classList.contains('tool-call--stale'));
 
     const el = document.createElement('details');
