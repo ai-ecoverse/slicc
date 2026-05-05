@@ -8,6 +8,23 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "Settings"
 /// "None". Read at app startup by `SliccstartApp.initialize`.
 let autoLaunchAppIdKey = "autoLaunchAppId"
 
+/// Validation rules for secret names entered in the Settings → Secrets
+/// editor. Mount-profile keys use the shape `s3.<profile>.<field>` (dots),
+/// and tokens are commonly named with hyphens (e.g. `gh-prod`). The
+/// swift-server's `SignAndForward.isValidProfileName` accepts the same
+/// set for the profile portion of the key, so the UI and server agree on
+/// what's a valid name.
+///
+/// Lives at file scope (not nested inside the private `SecretEditorSheet`)
+/// so unit tests can reach it via `@testable import Sliccstart`.
+enum SecretNameValidator {
+    static func isValid(_ name: String) -> Bool {
+        guard !name.isEmpty else { return false }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_.-"))
+        return CharacterSet(charactersIn: name).isSubset(of: allowed)
+    }
+}
+
 struct SettingsView: View {
     var body: some View {
         TabView {
@@ -359,13 +376,7 @@ private struct SecretEditorSheet: View {
     }
 
     private var nameIsValid: Bool {
-        guard !trimmedName.isEmpty else { return false }
-        // Allow dot and hyphen as well as underscore. Mount-profile keys
-        // use the shape `s3.<profile>.<field>` (dots), and tokens are
-        // commonly named with hyphens (e.g. `gh-prod`). The swift-server's
-        // `SignAndForward.isValidProfileName` accepts the same set.
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_.-"))
-        return CharacterSet(charactersIn: trimmedName).isSubset(of: allowed)
+        SecretNameValidator.isValid(trimmedName)
     }
 
     private var nameCollides: Bool {
