@@ -221,6 +221,12 @@ func registerAPIRoutes(
         return try jsonResponse(.array(items))
     }
 
+    // Server-side request signing for S3 / DA mounts. Browser-side mount
+    // backends post envelopes here; the server resolves credentials from the
+    // Keychain (S3) or accepts a transient IMS bearer (DA), signs/forwards
+    // upstream, and returns a JSON envelope. See Sources/Server/SignAndForward.swift.
+    SignAndForward.registerRoutes(router: router, httpClient: httpClient)
+
     for method in fetchProxyMethods {
         router.on("/api/fetch-proxy", method: method) { request, _ in
             guard let targetURLValue = request.headers[targetURLHeader],
