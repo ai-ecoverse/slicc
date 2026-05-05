@@ -174,6 +174,8 @@ export class ChatPanel {
   private streamingRafId: number | null = null;
   private dips = new Map<string, DipInstance[]>();
   public onDipLick?: (action: string, data: unknown) => void;
+  private userOpenedToolCalls = new Set<string>();
+  private userOpenedClusters = new Set<string>();
   private modelSelectorEl!: HTMLElement;
   public onModelChange?: (modelId: string) => void;
   private thinkingBtn!: HTMLButtonElement;
@@ -1964,6 +1966,15 @@ export class ChatPanel {
     // Tag with the owning message id so reflow can return the element to
     // its home msg-group when unwrapping a cross-message cluster.
     el.dataset.msgId = msgId;
+    el.dataset.toolCallId = tc.id;
+    if (this.userOpenedToolCalls.has(tc.id)) el.open = true;
+    el.addEventListener('toggle', () => {
+      if (el.open) {
+        this.userOpenedToolCalls.add(tc.id);
+      } else {
+        this.userOpenedToolCalls.delete(tc.id);
+      }
+    });
 
     const summary = document.createElement('summary');
     summary.className = 'tool-call__header';
@@ -2033,8 +2044,17 @@ export class ChatPanel {
    *  glance; expanding the cluster reveals the individual tool-call rows
    *  (each with their own full row + status bubble). */
   private createToolClusterEl(toolCalls: ToolCall[], msgId: string, stale = false): HTMLElement {
+    const clusterKey = toolCalls.map((tc) => tc.id).join(',');
     const el = document.createElement('details');
     el.className = `tool-call-cluster${stale ? ' tool-call--stale' : ''}`;
+    if (this.userOpenedClusters.has(clusterKey)) el.open = true;
+    el.addEventListener('toggle', () => {
+      if (el.open) {
+        this.userOpenedClusters.add(clusterKey);
+      } else {
+        this.userOpenedClusters.delete(clusterKey);
+      }
+    });
 
     const summary = document.createElement('summary');
     summary.className = 'tool-call__header';
@@ -2204,9 +2224,18 @@ export class ChatPanel {
    *  recent `createToolCallEl` render. */
   private buildClusterFromElements(toolCallEls: readonly HTMLElement[]): HTMLElement {
     const stale = toolCallEls.every((el) => el.classList.contains('tool-call--stale'));
+    const clusterKey = toolCallEls.map((tcEl) => tcEl.dataset.toolCallId ?? '').join(',');
 
     const el = document.createElement('details');
     el.className = `tool-call-cluster${stale ? ' tool-call--stale' : ''}`;
+    if (this.userOpenedClusters.has(clusterKey)) el.open = true;
+    el.addEventListener('toggle', () => {
+      if (el.open) {
+        this.userOpenedClusters.add(clusterKey);
+      } else {
+        this.userOpenedClusters.delete(clusterKey);
+      }
+    });
 
     const summary = document.createElement('summary');
     summary.className = 'tool-call__header';
