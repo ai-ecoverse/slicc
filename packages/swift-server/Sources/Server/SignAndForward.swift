@@ -220,7 +220,7 @@ enum SignAndForward {
             env = try await decodeEnvelope(request: request)
         } catch is NIOTooManyBytesError {
             return errorResponse(
-                .payloadTooLarge,
+                .contentTooLarge,
                 error: "request body exceeds \(maxEnvelopeBytesHumanReadable) limit",
                 errorCode: "body_too_large"
             )
@@ -318,7 +318,7 @@ enum SignAndForward {
             env = try await decodeEnvelope(request: request)
         } catch is NIOTooManyBytesError {
             return errorResponse(
-                .payloadTooLarge,
+                .contentTooLarge,
                 error: "request body exceeds \(maxEnvelopeBytesHumanReadable) limit",
                 errorCode: "body_too_large"
             )
