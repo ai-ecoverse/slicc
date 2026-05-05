@@ -107,23 +107,41 @@ jobs:
               return 0
             fi
 
-            # macOS-15 runner ships LibreSSL, which decodes legacy
-            # RC2-40 / SHA-1 PKCS#12 natively (no `-legacy` flag).
+            # macos-15 ran LibreSSL (decodes legacy RC2-40 / SHA-1
+            # PKCS#12 natively, no `-legacy` flag and chokes on it).
+            # macos-26 ships OpenSSL 3.x, which DOES require `-legacy`
+            # to enable RC2-40-CBC. Try the modern call first, fall
+            # back to `-legacy` only when the first call fails — that
+            # way LibreSSL never runs the failing -legacy branch and
+            # OpenSSL 3.x gets the legacy provider.
             if ! openssl pkcs12 -in "$raw" -nodes -out "$pem" \
                  -passin "pass:${pass}" 2>"$errlog"; then
-              if [ "$mode" = "required" ]; then
-                echo "::error::openssl could not read ${label} .p12:"
+              if ! openssl pkcs12 -in "$raw" -nodes -out "$pem" \
+                   -passin "pass:${pass}" -legacy 2>>"$errlog"; then
+                if [ "$mode" = "required" ]; then
+                  echo "::error::openssl could not read ${label} .p12 (modern + -legacy both failed):"
+                  cat "$errlog"
+                  return 1
+                fi
+                echo "::warning::openssl could not read ${label} .p12 — skipping import"
                 cat "$errlog"
-                return 1
+                return 0
               fi
-              echo "::warning::openssl could not read ${label} .p12 — skipping import"
-              cat "$errlog"
-              return 0
             fi
 
-            openssl pkcs12 -export -in "$pem" -out "$norm" \
-              -password "pass:${pass}" \
-              -keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256
+            # On OpenSSL 3.x, `-legacy` is also needed to write a
+            # PKCS#12 with the modern AES-256 ciphers from a key that
+            # came in via the legacy provider. Be permissive: try
+            # without `-legacy` first, fall back if that errors.
+            if ! openssl pkcs12 -export -in "$pem" -out "$norm" \
+                 -password "pass:${pass}" \
+                 -keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256 \
+                 2>"$errlog"; then
+              openssl pkcs12 -export -in "$pem" -out "$norm" \
+                -password "pass:${pass}" \
+                -keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256 \
+                -legacy
+            fi
 
             security import "$norm" -P "${pass}" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
           }
