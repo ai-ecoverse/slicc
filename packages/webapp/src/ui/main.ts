@@ -3266,6 +3266,7 @@ async function main(): Promise<void> {
       let leaderSync!: LeaderSyncManager;
       let trayPeers!: LeaderTrayPeerManager;
       let leaderTargetRefreshInterval: ReturnType<typeof setInterval>;
+      let followerListsRefreshInterval: ReturnType<typeof setInterval>;
       const tabPersistenceGuard = new TabPersistenceGuard();
 
       const createAndWireLeaderSync = () => {
@@ -3275,7 +3276,62 @@ async function main(): Promise<void> {
           getMessages: () => {
             return layout.panels.chat.getMessages();
           },
+          getMessagesForScoop: (scoopJid: string) => {
+            // Use the in-memory buffer that captures all scoop events.
+            // Empty array if the scoop hasn't produced anything yet.
+            return scoopMessageBuffers.get(scoopJid) ?? [];
+          },
           getScoopJid: () => selectedScoop?.jid ?? 'cone',
+          getScoops: () =>
+            orchestrator.getScoops().map((s) => ({
+              jid: s.jid,
+              name: s.name,
+              folder: s.folder,
+              isCone: s.isCone,
+              assistantLabel: s.assistantLabel,
+              trigger: s.trigger,
+            })),
+          getSprinkles: () => {
+            if (!sprinkleManager) return [];
+            const opened = new Set(sprinkleManager.opened());
+            return sprinkleManager.available().map((p) => ({
+              name: p.name,
+              title: p.title,
+              path: p.path,
+              open: opened.has(p.name),
+              autoOpen: p.autoOpen,
+            }));
+          },
+          readSprinkleContent: async (sprinkleName: string) => {
+            if (!sprinkleManager) return null;
+            const sprinkle = sprinkleManager.available().find((s) => s.name === sprinkleName);
+            if (!sprinkle) return null;
+            try {
+              const raw = await sharedFs?.readFile(sprinkle.path, { encoding: 'utf-8' });
+              if (raw === undefined || raw === null) return null;
+              return typeof raw === 'string' ? raw : new TextDecoder('utf-8').decode(raw);
+            } catch {
+              return null;
+            }
+          },
+          onSprinkleLick: (sprinkleName, body, targetScoop) => {
+            // Re-emit through the lick system so it follows the same path
+            // as a leader-local sprinkle event (cone notifications, etc.).
+            try {
+              lickManager.emitEvent({
+                type: 'sprinkle',
+                sprinkleName,
+                body,
+                targetScoop,
+                timestamp: new Date().toISOString(),
+              });
+            } catch (err) {
+              log.warn('Failed to emit sprinkle lick from follower', {
+                sprinkleName,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          },
           onFollowerMessage: (text, messageId, attachments) => {
             // Display the follower's message in the leader's chat panel
             layout.panels.chat.addUserMessage(text, attachments);
@@ -3315,6 +3371,21 @@ async function main(): Promise<void> {
         };
         leaderTargetRefreshInterval = setInterval(refreshLeaderTargets, 5000);
         void refreshLeaderTargets();
+
+        // Periodically rebroadcast scoops + sprinkles lists so followers stay
+        // in sync when scoops are added/removed or sprinkles change.
+        if (followerListsRefreshInterval) clearInterval(followerListsRefreshInterval);
+        const refreshFollowerLists = () => {
+          try {
+            leaderSync.broadcastScoopsList();
+            leaderSync.broadcastSprinklesList();
+          } catch (err) {
+            log.debug('Failed to broadcast follower lists', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        };
+        followerListsRefreshInterval = setInterval(refreshFollowerLists, 5000);
 
         trayPeers = new LeaderTrayPeerManager({
           sendControlMessage: (message) => leaderTray.sendControlMessage(message),
@@ -3414,6 +3485,7 @@ async function main(): Promise<void> {
         'beforeunload',
         () => {
           clearInterval(leaderTargetRefreshInterval);
+          clearInterval(followerListsRefreshInterval);
           leaderSync.stop();
           trayPeers.stop();
           leaderTray.stop();
