@@ -14,7 +14,13 @@ concurrency:
 
 jobs:
   release:
-    runs-on: macos-latest
+    # macos-26 GA'd 2026-02-26 and is the image that ships Xcode 26
+    # by default. Apple now rejects App Store submissions built with
+    # anything older: "Validation failed (409) SDK version issue.
+    # This app was built with the iOS 18.5 SDK. All iOS and iPadOS
+    # apps must be built with the iOS 26 SDK or later." macos-latest
+    # still resolves to macos-15 (Xcode 16.x) as of this commit.
+    runs-on: macos-26
     timeout-minutes: 30
     permissions:
       contents: write
