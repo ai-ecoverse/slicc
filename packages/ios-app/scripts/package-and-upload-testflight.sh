@@ -104,7 +104,14 @@ pick_xcode() {
 }
 
 if XCODE_APP="$(pick_xcode)" && [ -n "$XCODE_APP" ]; then
-  XCODE_VERSION="$("$XCODE_APP/Contents/Developer/usr/bin/xcodebuild" -version 2>/dev/null | head -1)"
+  # Don't use `xcodebuild -version | head -1` here. Under
+  # `set -o pipefail`, if xcodebuild keeps writing after head closes
+  # its stdin (it has 2 lines), xcodebuild takes SIGPIPE and the
+  # pipeline exits 141 — which kills this entire script and leaves
+  # semantic-release wedged. Capture the full output, take the first
+  # line in pure shell.
+  XCODE_VERSION_RAW="$("$XCODE_APP/Contents/Developer/usr/bin/xcodebuild" -version 2>/dev/null || true)"
+  XCODE_VERSION="${XCODE_VERSION_RAW%%$'\n'*}"
   XCODE_MAJOR="$(echo "$XCODE_VERSION" | sed -E 's/^Xcode[[:space:]]+([0-9]+).*/\1/')"
   if [ -z "$XCODE_MAJOR" ] || [ "$XCODE_MAJOR" -lt 26 ]; then
     if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
