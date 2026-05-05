@@ -169,14 +169,28 @@ if [ -z "${APPLE_API_KEY_ID:-}" ] || [ -z "${APPLE_API_KEY_ISSUER_ID:-}" ]; then
   exit 1
 fi
 if [ -n "${APPLE_API_KEY_P8_BASE64:-}" ]; then
-  # Write to a private temp dir so we never clobber a developer's local
-  # ~/.appstoreconnect/private_keys/ key. xcodebuild + altool both accept
-  # an explicit path so the standard location isn't required.
-  P8_TMPDIR="$(mktemp -d -t slicc-p8)"
-  CLEANUP+=("$P8_TMPDIR")
-  P8_PATH="$P8_TMPDIR/AuthKey_${APPLE_API_KEY_ID}.p8"
-  printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$P8_PATH"
-  echo "  wrote API key: $P8_PATH"
+  # altool --upload-app's --apiKey only takes the 10-char key ID, not
+  # a path; it searches standard locations for AuthKey_<KEY_ID>.p8:
+  #   ./private_keys, ~/private_keys, ~/.private_keys,
+  #   ~/.appstoreconnect/private_keys
+  # xcodebuild has -authenticationKeyPath which accepts arbitrary paths,
+  # but altool does not, so we have to write to one of the well-known
+  # locations. Use ~/.appstoreconnect/private_keys/ — it's the canonical
+  # one and on a fresh CI runner this directory doesn't exist, so we
+  # never clobber a developer's pre-existing key. We track it in
+  # CLEANUP so an interrupted run doesn't leave the key on disk.
+  P8_DIR="$HOME/.appstoreconnect/private_keys"
+  mkdir -p "$P8_DIR"
+  P8_PATH="$P8_DIR/AuthKey_${APPLE_API_KEY_ID}.p8"
+  if [ -f "$P8_PATH" ] && [ -z "${GITHUB_RUN_NUMBER:-}" ]; then
+    echo "  refusing to overwrite existing $P8_PATH (running locally)"
+    echo "  (delete it manually if you want this script to manage it)"
+  else
+    printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$P8_PATH"
+    chmod 600 "$P8_PATH"
+    CLEANUP+=("$P8_PATH")
+    echo "  wrote API key: $P8_PATH"
+  fi
 else
   P8_PATH="${APPLE_API_KEY_P8_PATH:-$HOME/.appstoreconnect/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8}"
   if [ ! -f "$P8_PATH" ]; then
