@@ -2044,7 +2044,7 @@ export class ChatPanel {
    *  glance; expanding the cluster reveals the individual tool-call rows
    *  (each with their own full row + status bubble). */
   private createToolClusterEl(toolCalls: ToolCall[], msgId: string, stale = false): HTMLElement {
-    const clusterKey = toolCalls.map((tc) => tc.id).join(',');
+    const clusterKey = toolCalls[0].id;
     const el = document.createElement('details');
     el.className = `tool-call-cluster${stale ? ' tool-call--stale' : ''}`;
     if (this.userOpenedClusters.has(clusterKey)) el.open = true;
@@ -2224,7 +2224,7 @@ export class ChatPanel {
    *  recent `createToolCallEl` render. */
   private buildClusterFromElements(toolCallEls: readonly HTMLElement[]): HTMLElement {
     const stale = toolCallEls.every((el) => el.classList.contains('tool-call--stale'));
-    const clusterKey = toolCallEls.map((tcEl) => tcEl.dataset.toolCallId ?? '').join(',');
+    const clusterKey = toolCallEls[0].dataset.toolCallId ?? '';
 
     const el = document.createElement('details');
     el.className = `tool-call-cluster${stale ? ' tool-call--stale' : ''}`;
