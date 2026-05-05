@@ -360,7 +360,11 @@ private struct SecretEditorSheet: View {
 
     private var nameIsValid: Bool {
         guard !trimmedName.isEmpty else { return false }
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_"))
+        // Allow dot and hyphen as well as underscore. Mount-profile keys
+        // use the shape `s3.<profile>.<field>` (dots), and tokens are
+        // commonly named with hyphens (e.g. `gh-prod`). The swift-server's
+        // `SignAndForward.isValidProfileName` accepts the same set.
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_.-"))
         return CharacterSet(charactersIn: trimmedName).isSubset(of: allowed)
     }
 
@@ -383,7 +387,7 @@ private struct SecretEditorSheet: View {
 
     private var validationMessage: String? {
         if trimmedName.isEmpty { return "Name is required." }
-        if !nameIsValid { return "Name may only contain letters, numbers, and underscores." }
+        if !nameIsValid { return "Name may only contain letters, numbers, dots, underscores, and hyphens." }
         if nameCollides { return "A secret named \"\(trimmedName)\" already exists." }
         if value.isEmpty { return "Value is required." }
         if trimmedDomains.isEmpty { return "Add at least one hostname pattern." }
