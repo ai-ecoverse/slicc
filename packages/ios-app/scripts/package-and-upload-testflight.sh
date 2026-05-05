@@ -77,6 +77,47 @@ PROFILE_NAME="${APPLE_PROVISIONING_PROFILE_NAME:-Slicc Follower App Store}"
 
 echo "=== SliccFollower TestFlight v${VERSION} (build ${BUILD_NUMBER}) ==="
 
+# Apple requires App Store submissions to be built with Xcode 26+
+# (iOS 26 SDK). The default Xcode on macos-15 runners is 16.x, which
+# fails altool validation with "SDK version issue ... must be built
+# with the iOS 26 SDK or later". Pick the highest /Applications/Xcode_*
+# we can find and set DEVELOPER_DIR for the rest of this script. If
+# none are >= 26, surface a clear error so we know to bump the runner
+# image (or wait for macos-26 GA) instead of getting another opaque
+# 409 from altool.
+pick_xcode() {
+  local best="" best_major=0 candidate major
+  for candidate in /Applications/Xcode_26*.app /Applications/Xcode-26*.app /Applications/Xcode_*.app; do
+    [ -d "$candidate" ] || continue
+    # Grab the leading numeric component of the version, e.g. "26" from
+    # "Xcode_26.0.1.app". Anything we can't parse is treated as 0.
+    major="$(basename "$candidate" | sed -E 's/^Xcode[_-]?([0-9]+).*/\1/' | grep -E '^[0-9]+$' || echo 0)"
+    if [ "${major:-0}" -gt "$best_major" ]; then
+      best="$candidate"
+      best_major="$major"
+    fi
+  done
+  if [ -z "$best" ]; then
+    return 1
+  fi
+  echo "$best"
+}
+
+if XCODE_APP="$(pick_xcode)" && [ -n "$XCODE_APP" ]; then
+  XCODE_VERSION="$("$XCODE_APP/Contents/Developer/usr/bin/xcodebuild" -version 2>/dev/null | head -1)"
+  XCODE_MAJOR="$(echo "$XCODE_VERSION" | sed -E 's/^Xcode[[:space:]]+([0-9]+).*/\1/')"
+  if [ -z "$XCODE_MAJOR" ] || [ "$XCODE_MAJOR" -lt 26 ]; then
+    if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
+      echo "::warning::Highest installed Xcode is '$XCODE_VERSION' (< 26). App Store now rejects pre-Xcode-26 builds. Skipping iOS upload."
+    else
+      echo "warn: Highest installed Xcode is '$XCODE_VERSION' (< 26). App Store now rejects pre-Xcode-26 builds. Skipping iOS upload."
+    fi
+    exit 0
+  fi
+  export DEVELOPER_DIR="$XCODE_APP/Contents/Developer"
+  echo "  using $XCODE_VERSION (DEVELOPER_DIR=$DEVELOPER_DIR)"
+fi
+
 ARCHIVE="$IOS_PROJECT_DIR/.build/SliccFollower.xcarchive"
 EXPORT_DIR="$IOS_PROJECT_DIR/.build/export"
 EXPORT_OPTS="$IOS_PROJECT_DIR/.build/ExportOptions-AppStore.generated.plist"
