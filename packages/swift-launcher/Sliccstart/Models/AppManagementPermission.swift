@@ -4,27 +4,75 @@ import AppKit
 @Observable
 final class AppManagementPermission {
     private(set) var isGranted: Bool = false
-    private var checkTimer: Timer?
-    
+    /// Number of times the probe has run since this instance was
+    /// created. `init()` runs once, so this starts at 1. Each probe
+    /// writes a temp file into a user app bundle (see
+    /// `probeAppManagementAccess`), and on macOS Sonoma+ each *denied*
+    /// probe posts a Notification Center alert — so this is also the
+    /// upper bound on how many alerts we may have caused this session.
+    /// Tests use it to prove the activation observer actually fires.
+    private(set) var probeCount: Int = 0
+    private var activationObserver: NSObjectProtocol?
+
     init() {
         checkPermission()
     }
-    
+
+    deinit {
+        if let activationObserver {
+            NotificationCenter.default.removeObserver(activationObserver)
+        }
+    }
+
     func checkPermission() {
+        probeCount += 1
         isGranted = Self.probeAppManagementAccess()
     }
-    
-    func startPolling(interval: TimeInterval = 2.0) {
-        stopPolling()
-        checkPermission()
-        checkTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+
+    /// Re-probe whenever Sliccstart regains focus. The common case for a
+    /// state transition is the user toggling the switch in System Settings
+    /// → Privacy & Security → App Management and then switching back to
+    /// Sliccstart, which fires `didBecomeActive` synchronously on the
+    /// return.
+    ///
+    /// **Why not a timer.** The probe writes a temp file inside a user
+    /// app bundle (`/Applications/<App>/Contents/.sliccstart_probe_…`)
+    /// because TCC has no read-only API for the App Management
+    /// entitlement. On macOS Sonoma+ every denied write into another
+    /// app's bundle posts a "Sliccstart was prevented from modifying
+    /// apps on your Mac" Notification Center alert, and the previous
+    /// 2-second polling timer turned that into a continuous stream of
+    /// notifications until the user granted the permission. Focus-driven
+    /// re-probing fires at most once per app switch, which matches when
+    /// the answer can actually change.
+    ///
+    /// Note: `init()` already ran the first probe, so we only register
+    /// the observer here — no extra probe at startup. That keeps the
+    /// total at exactly one alert worth of probes during launch.
+    func startWatchingForGrant() {
+        stopWatchingForGrant()
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
             self?.checkPermission()
         }
     }
-    
-    func stopPolling() {
-        checkTimer?.invalidate()
-        checkTimer = nil
+
+    func stopWatchingForGrant() {
+        if let activationObserver {
+            NotificationCenter.default.removeObserver(activationObserver)
+            self.activationObserver = nil
+        }
+    }
+
+    /// True between `startWatchingForGrant()` and `stopWatchingForGrant()`.
+    /// Exists so tests (and any future debug surface) can confirm the
+    /// observer slot lifecycle without reflecting into `@Observable`'s
+    /// rewritten storage.
+    var isWatching: Bool {
+        activationObserver != nil
     }
     
     func openSystemSettings() {
