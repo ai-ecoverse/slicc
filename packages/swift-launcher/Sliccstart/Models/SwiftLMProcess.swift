@@ -74,7 +74,26 @@ final class SwiftLMProcess {
             throw LaunchError.alreadyRunning
         }
         if Self.isPortInUse(swiftLMPort) {
-            throw LaunchError.portInUse(swiftLMPort)
+            // A previous Sliccstart that crashed or was force-killed
+            // can leave its SwiftLM child reparented to launchd, still
+            // bound to 5413 (Cmd-Q triggers `applicationWillTerminate`
+            // and a clean SIGTERM, but `kill -9` / panics don't).
+            // Try to reclaim the port — but only if the holding process
+            // is verifiably our own installed SwiftLM binary, never an
+            // unrelated app that happens to use 5413.
+            let reclaimedAny = Self.reclaimOurOrphans(
+                onPort: swiftLMPort,
+                ourBinaryPath: installer.binaryURL.path
+            )
+            if reclaimedAny {
+                // Give the kernel a beat to release the socket; SIGTERM
+                // returns immediately but the listening socket can sit
+                // in TIME_WAIT/CLOSE for a moment.
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+            if Self.isPortInUse(swiftLMPort) {
+                throw LaunchError.portInUse(swiftLMPort)
+            }
         }
 
         state = .starting
@@ -197,5 +216,104 @@ final class SwiftLMProcess {
             }
         }
         return result == 0
+    }
+
+    // MARK: - Orphan reclaim
+
+    /// Resolve the executable path for a running PID via `proc_pidpath`.
+    /// Returns `nil` if the process isn't ours to inspect, doesn't exist
+    /// any more, or the syscall fails — every "no" maps to "don't kill",
+    /// which is the safe default. Internal so tests can pin the predicate.
+    static func executablePath(forPID pid: pid_t) -> String? {
+        // PROC_PIDPATHINFO_MAXSIZE is 4 * MAXPATHLEN. Use a slightly
+        // larger buffer to dodge any OS rev that bumps the constant.
+        let bufSize = 4 * Int(MAXPATHLEN)
+        var buf = [Int8](repeating: 0, count: bufSize)
+        let written = proc_pidpath(pid, &buf, UInt32(bufSize))
+        guard written > 0 else { return nil }
+        return String(cString: buf)
+    }
+
+    /// PIDs of TCP processes listening on `port` on loopback. Shells out
+    /// to `lsof -nP -iTCP:<port> -sTCP:LISTEN -Fp` because there's no
+    /// public API for "who owns this socket" on macOS that doesn't
+    /// require root or special entitlements. `-Fp` prints exactly one
+    /// line per match, in the form `p<pid>`, which is trivial to parse.
+    static func pidsListening(onPort port: UInt16) -> [pid_t] {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        proc.arguments = ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fp"]
+        let stdout = Pipe()
+        proc.standardOutput = stdout
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+        } catch {
+            return []
+        }
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        guard let raw = String(data: data, encoding: .utf8) else { return [] }
+        return raw
+            .split(whereSeparator: \.isNewline)
+            .compactMap { line -> pid_t? in
+                guard line.first == "p" else { return nil }
+                return pid_t(line.dropFirst())
+            }
+    }
+
+    /// Decide whether `pid` is one of our orphaned SwiftLM children that
+    /// we're allowed to terminate. The predicate is intentionally narrow:
+    /// the executable path on disk must match our installer's
+    /// `binaryURL.path` byte-for-byte. That covers every SwiftLM Sliccstart
+    /// itself launched (since both go through `SwiftLMInstaller`), and
+    /// nothing else — a third-party binary called "SwiftLM", a different
+    /// install rooted under a different `~/.slicc`, or any unrelated app
+    /// that happens to bind 5413 (foreman, a dev server, etc.) all
+    /// reject and stay alive.
+    static func isOurOrphanedSwiftLM(pid: pid_t, ourBinaryPath: String) -> Bool {
+        guard !ourBinaryPath.isEmpty else { return false }
+        guard let actual = executablePath(forPID: pid) else { return false }
+        return actual == ourBinaryPath
+    }
+
+    /// SIGTERM `pid`, wait up to ~1 s for it to exit, then SIGKILL if
+    /// still alive. Returns true if the process is gone by the time we
+    /// return. Caller is expected to have already verified ownership
+    /// via `isOurOrphanedSwiftLM`.
+    @discardableResult
+    static func terminateOurOrphan(pid: pid_t) -> Bool {
+        kill(pid, SIGTERM)
+        for _ in 0..<10 {
+            if kill(pid, 0) != 0 { return true }   // ESRCH → gone
+            usleep(100_000)                        // 100 ms
+        }
+        // Still alive → escalate. SwiftLM can be slow to drain in-flight
+        // requests on a loaded model; SIGKILL is the right answer for
+        // an already-orphaned instance the user has decided to replace.
+        kill(pid, SIGKILL)
+        usleep(200_000)
+        return kill(pid, 0) != 0
+    }
+
+    /// Sweep `port` for SwiftLM children that match `ourBinaryPath`,
+    /// terminating each. Returns true if at least one was reclaimed.
+    /// Anything we don't own — or anything we couldn't identify — is
+    /// left alone; the caller's port-in-use error path then surfaces
+    /// to the user so they can sort it out by hand.
+    static func reclaimOurOrphans(onPort port: UInt16, ourBinaryPath: String) -> Bool {
+        let pids = pidsListening(onPort: port)
+        var reclaimed = false
+        for pid in pids {
+            guard isOurOrphanedSwiftLM(pid: pid, ourBinaryPath: ourBinaryPath) else {
+                log.info("reclaim: skipping pid=\(pid) on port \(port) — not our SwiftLM")
+                continue
+            }
+            log.info("reclaim: terminating orphan SwiftLM pid=\(pid) on port \(port)")
+            if terminateOurOrphan(pid: pid) {
+                reclaimed = true
+            }
+        }
+        return reclaimed
     }
 }
