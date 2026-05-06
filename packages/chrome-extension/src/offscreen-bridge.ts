@@ -351,9 +351,10 @@ export class OffscreenBridge {
     return {
       leader: {
         state: leader.state,
-        joinUrl: leader.session?.joinUrl ?? null,
-        workerBaseUrl: leader.session?.workerBaseUrl ?? null,
-        trayId: leader.session?.trayId ?? null,
+        // Carry the whole session so the panel singleton matches
+        // offscreen field-for-field. `getLeaderTrayRuntimeStatus()`
+        // already returns a defensive copy.
+        session: leader.session,
         error: leader.error ?? null,
         reconnectAttempts: leader.reconnectAttempts ?? 0,
       },

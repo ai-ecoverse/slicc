@@ -201,6 +201,22 @@ describe('subscribeToFollowerTrayRuntimeStatus', () => {
     expect(states).toEqual(['connecting', 'connected']);
   });
 
+  it('gives each listener its own snapshot so mutations do not leak', () => {
+    const observed: string[] = [];
+    const unsubscribeBad = subscribeToFollowerTrayRuntimeStatus((status) => {
+      (status as { state: string }).state = 'inactive';
+    });
+    const unsubscribeGood = subscribeToFollowerTrayRuntimeStatus((status) => {
+      observed.push(status.state);
+    });
+
+    setFollowerTrayRuntimeStatus(makeStatus({ state: 'connected' }));
+
+    expect(observed).toEqual(['connected']);
+    unsubscribeBad();
+    unsubscribeGood();
+  });
+
   it('also fires on resetReconnectAttempts and setFollowerLastPingTime', () => {
     setFollowerTrayRuntimeStatus(
       makeStatus({ state: 'connected', reconnectAttempts: 5, lastPingTime: 0 })

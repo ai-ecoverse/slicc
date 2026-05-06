@@ -86,6 +86,11 @@ export function subscribeToLeaderTrayRuntimeStatus(
  * Replace the leader tray status singleton and notify subscribers.
  * Exported so the extension panel can mirror updates pushed from the
  * offscreen document; the local manager calls this internally too.
+ *
+ * Each listener receives a fresh deep-copied snapshot so a listener
+ * that mutates its argument can't change what later listeners observe.
+ * Iterating a copy of the listener set means an unsubscribe / subscribe
+ * during dispatch doesn't perturb the in-flight delivery either.
  */
 export function setLeaderTrayRuntimeStatus(status: LeaderTrayRuntimeStatus): void {
   leaderTrayRuntimeStatus = {
@@ -93,10 +98,9 @@ export function setLeaderTrayRuntimeStatus(status: LeaderTrayRuntimeStatus): voi
     session: status.session ? { ...status.session } : null,
   };
   if (leaderTrayRuntimeStatusListeners.size === 0) return;
-  const snapshot = getLeaderTrayRuntimeStatus();
-  for (const listener of leaderTrayRuntimeStatusListeners) {
+  for (const listener of [...leaderTrayRuntimeStatusListeners]) {
     try {
-      listener(snapshot);
+      listener(getLeaderTrayRuntimeStatus());
     } catch {
       // Listener errors must not break the manager's state machine.
     }

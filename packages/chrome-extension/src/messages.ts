@@ -307,11 +307,30 @@ export interface TrayRuntimeStatusMsg {
   follower: TrayFollowerStatusSnapshot;
 }
 
+/**
+ * Mirror of `LeaderTraySession` from `tray-leader.ts`. Carried on the
+ * wire so the panel-side singleton matches offscreen field-for-field —
+ * panel consumers like the lick-WebSocket `create_webhook` handler in
+ * `ui/main.ts` read `session.webhookUrl` to build tray-aware webhook
+ * URLs and would silently fall back to local URLs if we shipped only a
+ * subset.
+ */
+export interface TrayLeaderSessionSnapshot {
+  workerBaseUrl: string;
+  trayId: string;
+  createdAt: string;
+  controllerId: string;
+  controllerUrl: string;
+  joinUrl: string;
+  webhookUrl: string;
+  leaderKey?: string;
+  leaderWebSocketUrl?: string | null;
+  runtime: string;
+}
+
 export interface TrayLeaderStatusSnapshot {
   state: 'inactive' | 'connecting' | 'leader' | 'reconnecting' | 'error';
-  joinUrl: string | null;
-  workerBaseUrl: string | null;
-  trayId: string | null;
+  session: TrayLeaderSessionSnapshot | null;
   error: string | null;
   reconnectAttempts: number;
 }

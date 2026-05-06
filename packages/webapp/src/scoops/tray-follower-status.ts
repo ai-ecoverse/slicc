@@ -59,12 +59,16 @@ export function subscribeToFollowerTrayRuntimeStatus(
   };
 }
 
+// Each listener receives a fresh shallow copy so a listener that mutates
+// its argument can't change what later listeners observe. Iterating a
+// copy of the listener set means an unsubscribe / subscribe during
+// dispatch doesn't perturb the in-flight delivery either. (Status
+// fields are flat scalars, so a shallow copy is a full deep copy here.)
 function notifyFollowerListeners(): void {
   if (followerTrayRuntimeStatusListeners.size === 0) return;
-  const snapshot = { ...followerTrayRuntimeStatus };
-  for (const listener of followerTrayRuntimeStatusListeners) {
+  for (const listener of [...followerTrayRuntimeStatusListeners]) {
     try {
-      listener(snapshot);
+      listener({ ...followerTrayRuntimeStatus });
     } catch {
       // Listener errors must not break the manager's state machine.
     }

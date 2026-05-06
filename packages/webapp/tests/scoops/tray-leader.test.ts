@@ -1016,6 +1016,44 @@ describe('subscribeToLeaderTrayRuntimeStatus', () => {
     setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
   });
 
+  it('gives each listener its own snapshot so mutations do not leak', () => {
+    // A buggy listener that mutates its argument must not be able to
+    // change what subsequent listeners observe. The setter dispatches
+    // a fresh deep copy per listener.
+    const observed: Array<{ state: string; sessionTrayId: string | null }> = [];
+    const unsubscribeBad = subscribeToLeaderTrayRuntimeStatus((status) => {
+      // Mutate both top-level and nested fields.
+      (status as { state: string }).state = 'inactive';
+      if (status.session) (status.session as { trayId: string }).trayId = 'mutated';
+    });
+    const unsubscribeGood = subscribeToLeaderTrayRuntimeStatus((status) => {
+      observed.push({
+        state: status.state,
+        sessionTrayId: status.session?.trayId ?? null,
+      });
+    });
+
+    setLeaderTrayRuntimeStatus({
+      state: 'leader',
+      session: {
+        workerBaseUrl: 'https://tray.example.com',
+        trayId: 'tray-y',
+        createdAt: '2026-05-06T00:00:00.000Z',
+        controllerId: 'c-1',
+        controllerUrl: 'https://tray.example.com/controller/y',
+        joinUrl: 'https://tray.example.com/join/y',
+        webhookUrl: 'https://tray.example.com/webhook/y',
+        runtime: 'slicc-test',
+      },
+      error: null,
+    });
+
+    expect(observed).toEqual([{ state: 'leader', sessionTrayId: 'tray-y' }]);
+    unsubscribeBad();
+    unsubscribeGood();
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+  });
+
   it('isolates listener errors so the manager state machine keeps running', () => {
     const calls: string[] = [];
     const unsubscribeBad = subscribeToLeaderTrayRuntimeStatus(() => {

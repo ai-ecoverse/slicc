@@ -557,10 +557,12 @@ function isExtMsg(msg: unknown): boolean {
 
 /**
  * Mirror an offscreen tray status snapshot into the panel-side singletons
- * so `Layout.appendTrayMenu` (and anything else reading
- * `getLeaderTrayRuntimeStatus` / `getFollowerTrayRuntimeStatus`) sees the
- * same view as offscreen. Reconstructs the `session` object the panel's
- * leader-status getter expects from the flat snapshot fields.
+ * so `Layout.appendTrayMenu` and any other panel code reading
+ * `getLeaderTrayRuntimeStatus` / `getFollowerTrayRuntimeStatus` sees the
+ * same view as offscreen. The wire snapshot carries the full
+ * `LeaderTraySession`, so consumers like the lick-WebSocket
+ * `create_webhook` handler that read `session.webhookUrl` get real
+ * values instead of falling back silently.
  */
 function applyTrayRuntimeStatusSnapshot(
   leader: TrayLeaderStatusSnapshot,
@@ -570,23 +572,7 @@ function applyTrayRuntimeStatusSnapshot(
     state: leader.state,
     error: leader.error,
     reconnectAttempts: leader.reconnectAttempts,
-    session:
-      leader.joinUrl && leader.workerBaseUrl && leader.trayId
-        ? {
-            joinUrl: leader.joinUrl,
-            workerBaseUrl: leader.workerBaseUrl,
-            trayId: leader.trayId,
-            // The remaining fields aren't used by the avatar popover or
-            // host-command output; fill with sentinels so the type still
-            // satisfies LeaderTraySession without inventing values that
-            // would mislead callers.
-            createdAt: '',
-            controllerId: '',
-            controllerUrl: '',
-            webhookUrl: '',
-            runtime: 'slicc-extension-offscreen',
-          }
-        : null,
+    session: leader.session ? { ...leader.session } : null,
   });
   setFollowerTrayRuntimeStatus({
     state: follower.state,
