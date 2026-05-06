@@ -180,6 +180,7 @@ struct SliccstartApp: App {
         }
 
         autoLaunchConfiguredBrowser()
+        autoRunConfiguredLocalModel()
     }
 
     /// Launch the browser the user picked in Settings > Startup, if any.
@@ -197,6 +198,38 @@ struct SliccstartApp: App {
             try sliccProcess.launchStandalone(target)
         } catch {
             log.error("autoLaunch failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Start the local LLM the user pinned in Settings > Models, if any.
+    /// Stored as a HuggingFace `repoId` under `autoRunModelIdKey`. Skipped
+    /// silently when:
+    ///   - the Models tab is hidden on this hardware (<64 GB RAM); the
+    ///     setting can't have come from this install, but a defensive
+    ///     no-op keeps a synced UserDefaults blob from triggering an
+    ///     auto-start on a laptop that can't run the model.
+    ///   - the saved model isn't in the HF cache anymore; auto-run must
+    ///     not block launch behind a multi-GB download or a `start()`
+    ///     that would error out on a missing snapshot.
+    /// `swiftLM.start(model:)` is async and may take seconds (model load)
+    /// or longer (first-launch SwiftLM tarball download); it runs detached
+    /// so the launcher window paints immediately.
+    private func autoRunConfiguredLocalModel() {
+        guard LocalModelsAvailability.isSupported else { return }
+        let savedId = UserDefaults.standard.string(forKey: autoRunModelIdKey) ?? ""
+        guard !savedId.isEmpty else { return }
+        let installed = HFCache.listInstalledMLXModels().map { $0.repoId }
+        guard installed.contains(savedId) else {
+            log.info("autoRun: configured model \(savedId, privacy: .public) not installed — skipping")
+            return
+        }
+        log.info("autoRun: starting \(savedId, privacy: .public)")
+        Task {
+            do {
+                try await swiftLMProcess.start(model: savedId)
+            } catch {
+                log.error("autoRun failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 

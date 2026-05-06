@@ -9,6 +9,7 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "ModelsSet
 struct ModelsSettingsView: View {
     @Environment(SwiftLMProcess.self) private var swiftLM
     @Environment(ModelDownloadManager.self) private var downloads
+    @AppStorage(autoRunModelIdKey) private var autoRunModelId: String = ""
 
     @State private var installed: [CachedModel] = []
     @State private var deletionTarget: CachedModel?
@@ -18,6 +19,7 @@ struct ModelsSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 installerStatusBanner
+                autoRunSection
                 installedSection
                 suggestedSection
             }
@@ -86,6 +88,43 @@ struct ModelsSettingsView: View {
         case .idle, .ready:
             EmptyView()
         }
+    }
+
+    /// Picker that designates one installed model as the auto-run target
+    /// at Sliccstart launch. Mirrors the Startup tab's auto-launch
+    /// browser picker — same `@AppStorage` pattern, same "None ▾" idiom.
+    /// Only installed models populate the list, since auto-run kicks off
+    /// `swiftLM.start(model:)` directly and a missing model would either
+    /// silently no-op or trigger a multi-GB blocking download at launch.
+    /// If the saved model later disappears (user clicked Delete), we
+    /// reset the picker to "None" so the menu always reflects what can
+    /// actually run.
+    private var autoRunSection: some View {
+        HStack(spacing: 8) {
+            Text("Auto-run on launch:")
+                .font(.callout)
+            Picker(selection: $autoRunModelId) {
+                Text("None").tag("")
+                if !installed.isEmpty {
+                    Divider()
+                    ForEach(installed) { model in
+                        Text(model.repoId).tag(model.repoId)
+                    }
+                }
+            } label: {
+                EmptyView()
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(.separator, lineWidth: 0.5)
+        )
     }
 
     private var installedSection: some View {
@@ -163,6 +202,15 @@ struct ModelsSettingsView: View {
 
     private func reload() {
         installed = HFCache.listInstalledMLXModels()
+        // If the saved auto-run model has been deleted from the cache,
+        // drop the setting so the picker shows "None" instead of a stale
+        // tag that wouldn't match any of the available rows. Empty
+        // string is the canonical "no auto-run" value.
+        if !autoRunModelId.isEmpty,
+           !installed.contains(where: { $0.repoId == autoRunModelId })
+        {
+            autoRunModelId = ""
+        }
     }
 
     private func isStarting(_ repoId: String) -> Bool {

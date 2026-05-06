@@ -8,6 +8,14 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "Settings"
 /// "None". Read at app startup by `SliccstartApp.initialize`.
 let autoLaunchAppIdKey = "autoLaunchAppId"
 
+/// UserDefaults key for the auto-run local LLM. The value is a
+/// HuggingFace `repoId` (e.g. `mlx-community/Qwen3.6-35B-A3B-4bit`),
+/// or an empty string for "None". Read at app startup by
+/// `SliccstartApp.autoRunConfiguredLocalModel`. The model must still
+/// be in the HF cache at launch time — if the user deleted it, auto-run
+/// silently no-ops rather than blocking startup behind a download.
+let autoRunModelIdKey = "autoRunModelId"
+
 /// Validation rules for secret names entered in the Settings → Secrets
 /// editor. Accepted set: `^[a-zA-Z0-9._-]+$` (ASCII letters/digits plus
 /// dot, underscore, hyphen, non-empty). Mount-profile keys use the shape
