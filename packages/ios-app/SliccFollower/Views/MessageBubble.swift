@@ -74,18 +74,15 @@ struct MessageBubble: View {
     /// Style inline-`code` runs against the purple user bubble. The
     /// MarkdownText pill (white@10 background, lavender text) doesn't
     /// have enough contrast on accent purple, so we lift the background
-    /// to white@22 and keep the text white.
+    /// to white@22 and keep the text white. Delegates to the shared
+    /// `styledInlineCode` helper in MarkdownText.swift so font size and
+    /// run-walking stay in one place.
     private func styleUserBubbleCode(_ input: AttributedString) -> AttributedString {
-        var output = input
-        let codeBg = Color.white.opacity(0.22)
-        for run in output.runs {
-            if let intent = run.inlinePresentationIntent, intent.contains(.code) {
-                output[run.range].font = .system(size: 14, design: .monospaced)
-                output[run.range].backgroundColor = codeBg
-                output[run.range].foregroundColor = Color.white
-            }
-        }
-        return output
+        return styledInlineCode(
+            input,
+            background: Color.white.opacity(0.22),
+            foreground: Color.white
+        )
     }
 
     @ViewBuilder
@@ -294,6 +291,9 @@ struct MessageBubble: View {
     /// caps the dot row to ~50% of the row width via `flex-wrap`; the
     /// SwiftUI HStack here just stays on one line — long runs are rare
     /// and the dots are 5px, so even 12 fit comfortably on a phone.
+    /// Each dot carries its own `accessibilityLabel` mirroring the
+    /// webapp's `aria-label="<tool>: <status>"` so VoiceOver users still
+    /// get per-call status when the cluster is collapsed.
     @ViewBuilder
     private func clusterDots(for toolCalls: [ToolCall]) -> some View {
         HStack(spacing: 4) {
@@ -301,9 +301,17 @@ struct MessageBubble: View {
                 Circle()
                     .fill(SliccIcons.toolStatusColor(tc))
                     .frame(width: 5, height: 5)
+                    .accessibilityLabel("\(SliccIcons.toolTitle(tc.name)): \(toolStatusLabel(for: tc))")
             }
         }
-        .accessibilityHidden(true)
+    }
+
+    /// Human-readable status used by VoiceOver inside the cluster dots
+    /// row. Mirrors the webapp's `toolStatus()` mapping.
+    private func toolStatusLabel(for tc: ToolCall) -> String {
+        if tc.isError == true { return "error" }
+        if tc.result == nil { return "running" }
+        return "done"
     }
 
     /// Comma-joined list of tool titles, truncated for overflow. Mirrors

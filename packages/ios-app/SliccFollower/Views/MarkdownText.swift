@@ -140,22 +140,16 @@ struct MarkdownText: View {
         }
     }
 
-    /// Walk the AttributedString runs and apply a subtle background pill +
-    /// monospace font to `inlinePresentationIntent: .code` ranges so
-    /// backticked tokens read as code and not just italic-ish prose. The
-    /// markdown parser already tags them; we just style the runs.
+    /// Apply the assistant-bubble inline-code style: white@10 background,
+    /// lavender foreground, 14pt monospace. Wrapper around the shared
+    /// `styledInlineCode(...)` helper so the assistant call sites stay
+    /// terse.
     private func styledForInlineCode(_ input: AttributedString) -> AttributedString {
-        var output = input
-        let codeBg = Color.white.opacity(0.10)
-        let codeFg = Color(red: 0xC9 / 255, green: 0xBC / 255, blue: 0xFF / 255)
-        for run in output.runs {
-            if let intent = run.inlinePresentationIntent, intent.contains(.code) {
-                output[run.range].font = .system(size: 14, design: .monospaced)
-                output[run.range].backgroundColor = codeBg
-                output[run.range].foregroundColor = codeFg
-            }
-        }
-        return output
+        return styledInlineCode(
+            input,
+            background: Color.white.opacity(0.10),
+            foreground: Color(red: 0xC9 / 255, green: 0xBC / 255, blue: 0xFF / 255)
+        )
     }
 
     // MARK: - Heading Rendering
@@ -241,6 +235,32 @@ struct MarkdownText: View {
         .background(Color(red: 0x1A / 255, green: 0x1A / 255, blue: 0x2E / 255))
         .cornerRadius(8)
     }
+}
+
+// MARK: - Shared inline-code styling
+
+/// Walk the AttributedString runs and apply a background pill + monospace
+/// font to `inlinePresentationIntent: .code` ranges so backticked tokens
+/// read as code and not just italic-ish prose. The markdown parser
+/// already tags them; we just style the runs. Colors are passed in
+/// because the assistant message background and the user-bubble accent
+/// purple need different contrast — see `MarkdownText.styledForInlineCode`
+/// and `MessageBubble.styleUserBubbleCode` for the two call sites.
+func styledInlineCode(
+    _ input: AttributedString,
+    background: Color,
+    foreground: Color,
+    fontSize: CGFloat = 14
+) -> AttributedString {
+    var output = input
+    for run in output.runs {
+        if let intent = run.inlinePresentationIntent, intent.contains(.code) {
+            output[run.range].font = .system(size: fontSize, design: .monospaced)
+            output[run.range].backgroundColor = background
+            output[run.range].foregroundColor = foreground
+        }
+    }
+    return output
 }
 
 // MARK: - Preview
