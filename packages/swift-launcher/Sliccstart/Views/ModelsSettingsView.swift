@@ -10,6 +10,7 @@ struct ModelsSettingsView: View {
     @Environment(SwiftLMProcess.self) private var swiftLM
     @Environment(ModelDownloadManager.self) private var downloads
     @AppStorage(autoRunModelIdKey) private var autoRunModelId: String = ""
+    @AppStorage(swiftLMContextSizeKey) private var swiftLMContextSize: Int = 0
 
     @State private var installed: [CachedModel] = []
     @State private var deletionTarget: CachedModel?
@@ -20,6 +21,7 @@ struct ModelsSettingsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 installerStatusBanner
                 autoRunSection
+                contextSizeSection
                 installedSection
                 suggestedSection
             }
@@ -125,6 +127,50 @@ struct ModelsSettingsView: View {
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(.separator, lineWidth: 0.5)
         )
+    }
+
+    /// Picker that overrides SwiftLM's `--ctx-size`. Hard-capped at
+    /// 75 % of physical RAM at launch (see `ContextWindowPolicy`),
+    /// regardless of what the user picks here — but a smaller user
+    /// choice is honored, since trimming the context window is a
+    /// reasonable knob to turn when the model is OOM-thrashing.
+    /// Default ("Auto") delegates to `ContextWindowPolicy.autoDefault`.
+    private var contextSizeSection: some View {
+        HStack(spacing: 8) {
+            Text("Context window:")
+                .font(.callout)
+            Picker(selection: $swiftLMContextSize) {
+                ForEach(ContextWindowPolicy.pickerChoices, id: \.self) { choice in
+                    Text(label(forContextSize: choice)).tag(choice)
+                }
+            } label: {
+                EmptyView()
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            Spacer()
+            Text("Capped at 75 % of system RAM")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(.separator, lineWidth: 0.5)
+        )
+    }
+
+    /// Render token counts as Auto / 8K / 16K / 32K / 64K / 128K / 256K
+    /// to match how everyone (HF model cards, OpenAI docs, the ML
+    /// research community) writes them.
+    private func label(forContextSize tokens: Int) -> String {
+        guard tokens > 0 else { return "Auto" }
+        if tokens >= 1024 && tokens.isMultiple(of: 1024) {
+            return "\(tokens / 1024)K"
+        }
+        return "\(tokens)"
     }
 
     private var installedSection: some View {

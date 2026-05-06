@@ -19,7 +19,22 @@ struct ModelCapabilities: Equatable {
     /// default in that case.
     let maxContextSize: Int?
 
-    static let unknown = ModelCapabilities(supportsVision: false, maxContextSize: nil)
+    /// Architecture parameters needed to estimate per-token KV-cache
+    /// footprint before launch. All `nil` when we couldn't read the
+    /// config — caller must fall back to a conservative default.
+    let numHiddenLayers: Int?
+    let numAttentionHeads: Int?
+    let numKeyValueHeads: Int?
+    let headDim: Int?
+
+    static let unknown = ModelCapabilities(
+        supportsVision: false,
+        maxContextSize: nil,
+        numHiddenLayers: nil,
+        numAttentionHeads: nil,
+        numKeyValueHeads: nil,
+        headDim: nil
+    )
 }
 
 /// Mirrors `ModelArchitectureProbe` in SwiftLM (Sources/MLXInferenceCore).
@@ -93,15 +108,21 @@ enum ModelArchProbe {
 
         // Some configs put context length at the top level (text-only
         // models), others tuck it into `text_config` (Gemma 4, Qwen-VL).
-        // Try both before giving up.
+        // Try both before giving up. Same pattern for the arch params
+        // we use to estimate KV cache footprint.
         let textConfig = config?["text_config"] as? [String: Any]
-        let maxContext =
-            (config?["max_position_embeddings"] as? Int)
-            ?? (textConfig?["max_position_embeddings"] as? Int)
+        func intKey(_ key: String) -> Int? {
+            (config?[key] as? Int) ?? (textConfig?[key] as? Int)
+        }
+        let maxContext = intKey("max_position_embeddings")
 
         return ModelCapabilities(
             supportsVision: supportsVision,
-            maxContextSize: maxContext
+            maxContextSize: maxContext,
+            numHiddenLayers: intKey("num_hidden_layers"),
+            numAttentionHeads: intKey("num_attention_heads"),
+            numKeyValueHeads: intKey("num_key_value_heads"),
+            headDim: intKey("head_dim")
         )
     }
 

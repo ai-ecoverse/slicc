@@ -111,9 +111,24 @@ final class SwiftLMProcess {
         // Probe the cached config.json once and use it for every flag
         // that depends on the model: vision routing, context window.
         let capabilities = ModelArchProbe.capabilities(for: model)
-        let contextSize = capabilities.maxContextSize ?? Self.fallbackContextSize
+
+        // Resolve --ctx-size against the user's preference, the model's
+        // declared maximum, and a 75 %-of-RAM ceiling derived from the
+        // model's per-token KV-cache footprint. See `ContextWindowPolicy`
+        // for the math; the cap exists because passing the model's full
+        // 262K window for Qwen 3.6 35B caused a 120 GB peak resident on
+        // a 128 GB Mac, swap-thrashing the user's machine.
+        let userChoice = UserDefaults.standard.integer(forKey: swiftLMContextSizeKey)
+        let modelWeightsBytes = Self.estimatedModelWeightsBytes(forRepoId: model)
+        let contextSize = ContextWindowPolicy.resolve(
+            userChoice: userChoice,
+            modelMaxContext: capabilities.maxContextSize,
+            perTokenKVBytes: ContextWindowPolicy.perTokenKVBytes(capabilities),
+            physicalMemoryBytes: ProcessInfo.processInfo.physicalMemory,
+            modelWeightsBytes: modelWeightsBytes
+        )
         log.info(
-            "start: \(model, privacy: .public) ctx=\(contextSize) vision=\(capabilities.supportsVision)"
+            "start: \(model, privacy: .public) ctx=\(contextSize) (userChoice=\(userChoice), modelMax=\(capabilities.maxContextSize ?? -1)) vision=\(capabilities.supportsVision)"
         )
 
         var args: [String] = [
@@ -216,6 +231,25 @@ final class SwiftLMProcess {
             }
         }
         return result == 0
+    }
+
+    /// Estimate of the on-disk weight footprint for `repoId`, used as
+    /// the "weights" term in `ContextWindowPolicy.resolve`. We prefer
+    /// the actual cached size on disk (HF snapshot folder) when the
+    /// model is installed; otherwise fall back to the catalog hint
+    /// (`SuggestedModel.approxSizeGB`); otherwise zero.
+    ///
+    /// The estimate doesn't have to be accurate to the byte — it's
+    /// subtracted from the 75 %-of-RAM budget before computing the KV
+    /// ceiling, so getting it within a few GB is enough.
+    static func estimatedModelWeightsBytes(forRepoId repoId: String) -> UInt64 {
+        for installed in HFCache.listInstalled() where installed.repoId == repoId {
+            return UInt64(max(0, installed.sizeBytes))
+        }
+        if let suggested = SuggestedModels.all.first(where: { $0.repoId == repoId }) {
+            return UInt64(suggested.approxSizeGB * Double(1 << 30))
+        }
+        return 0
     }
 
     // MARK: - Orphan reclaim
