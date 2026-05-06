@@ -1300,12 +1300,18 @@ export class ChatPanel {
     const currentProvider = getSelectedProvider();
 
     // Flatten all models with their provider info
-    const allModels: Array<{ providerId: string; id: string; name: string; reasoning?: boolean }> =
-      [];
+    const allModels: Array<{
+      providerId: string;
+      providerName: string;
+      id: string;
+      name: string;
+      reasoning?: boolean;
+    }> = [];
     for (const group of groups) {
       for (const model of group.models) {
         allModels.push({
           providerId: group.providerId,
+          providerName: group.providerName,
           id: model.id,
           name: model.name,
           reasoning: (model as { reasoning?: boolean }).reasoning,
@@ -1324,13 +1330,26 @@ export class ChatPanel {
       allModels[0];
     if (!activeModel) return;
 
+    // Show provider labels only when more than one provider is configured —
+    // single-provider users already know the cost center, multi-provider
+    // users need the disambiguator to know which account a model bills to.
+    const showProviderLabel = new Set(allModels.map((m) => m.providerId)).size > 1;
+
     // Dropdown is always available except during active streaming
     const locked = this.isStreaming;
 
     const btn = document.createElement('button');
     btn.className = 'chat__model-btn chat__model-btn--compact';
     if (locked) btn.classList.add('chat__model-btn--disabled');
-    btn.textContent = activeModel.name;
+    const btnLabel = document.createElement('span');
+    btnLabel.textContent = activeModel.name;
+    btn.appendChild(btnLabel);
+    if (showProviderLabel) {
+      const btnProvider = document.createElement('span');
+      btnProvider.className = 'chat__model-btn-provider';
+      btnProvider.textContent = activeModel.providerName;
+      btn.appendChild(btnProvider);
+    }
     if (!locked) {
       const chevron = document.createElement('span');
       chevron.className = 'chat__model-chevron';
@@ -1357,9 +1376,18 @@ export class ChatPanel {
           item.className = 'chat__model-menu-item';
           const isActive = model.id === currentModelId && model.providerId === currentProvider;
           if (isActive) item.classList.add('chat__model-menu-item--active');
+          const left = document.createElement('span');
+          left.className = 'chat__model-menu-left';
           const label = document.createElement('span');
           label.textContent = model.name;
-          item.appendChild(label);
+          left.appendChild(label);
+          if (showProviderLabel) {
+            const provider = document.createElement('span');
+            provider.className = 'chat__model-menu-provider';
+            provider.textContent = model.providerName;
+            left.appendChild(provider);
+          }
+          item.appendChild(left);
           if (isActive) {
             const check = document.createElement('span');
             check.className = 'chat__model-check';
