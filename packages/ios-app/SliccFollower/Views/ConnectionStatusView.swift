@@ -56,7 +56,6 @@ struct ConnectionStatusView: View {
                             .stroke(dotColor.opacity(0.3), lineWidth: 0.5)
                     )
             )
-            .opacity(state == .connecting ? 1.0 : 1.0)
             .animation(
                 state == .connecting
                     ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true)
@@ -71,16 +70,12 @@ struct ConnectionStatusView: View {
             .padding(.top, 4)
             .padding(.bottom, 2)
             .transition(.move(edge: .top).combined(with: .opacity))
-        } else {
-            // Connected: minimal green dot
-            HStack {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 6, height: 6)
-            }
-            .padding(.top, 2)
-            .transition(.move(edge: .top).combined(with: .opacity))
         }
+        // Connected: render nothing. The presence of chat content
+        // already signals connectivity; a stray green dot in its own
+        // VStack row floats unattached and visually overlaps the first
+        // chat message. Only surface the banner when something needs
+        // the user's attention.
     }
 }
 
