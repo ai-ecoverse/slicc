@@ -111,8 +111,8 @@ struct SliccstartApp: App {
             }
             .frame(width: 340)
             .task { await initialize() }
-            .onAppear { appManagementPermission.startPolling() }
-            .onDisappear { appManagementPermission.stopPolling() }
+            .onAppear { appManagementPermission.startWatchingForGrant() }
+            .onDisappear { appManagementPermission.stopWatchingForGrant() }
             .onChange(of: appManagementPermission.isGranted) {
                 // Re-scan when permission is granted so Electron apps appear
                 if isReady {
