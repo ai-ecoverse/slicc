@@ -27,7 +27,7 @@ struct MessageBubble: View {
         } else if message.role == .user {
             HStack {
                 Spacer(minLength: UIScreen.main.bounds.width * 0.2)
-                Text(message.content)
+                userBubbleText
                     .font(.system(size: 15))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 14)
@@ -50,6 +50,42 @@ struct MessageBubble: View {
                 assistantBody
             }
         }
+    }
+
+    /// Inline-only markdown for user bubbles. Delegation rows and other
+    /// system-prefixed user messages contain `**bold**`, `*italic*`, and
+    /// `` `code` `` runs that the previous plain `Text(message.content)`
+    /// rendered as raw asterisks/backticks. We keep block syntax disabled
+    /// (`.inlineOnlyPreservingWhitespace`) so a stray `#` at line-start
+    /// doesn't accidentally become a heading inside a chat bubble.
+    @ViewBuilder
+    private var userBubbleText: some View {
+        if let attributed = try? AttributedString(
+            markdown: message.content,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            Text(styleUserBubbleCode(attributed))
+                .tint(.white)
+        } else {
+            Text(message.content)
+        }
+    }
+
+    /// Style inline-`code` runs against the purple user bubble. The
+    /// MarkdownText pill (white@10 background, lavender text) doesn't
+    /// have enough contrast on accent purple, so we lift the background
+    /// to white@22 and keep the text white.
+    private func styleUserBubbleCode(_ input: AttributedString) -> AttributedString {
+        var output = input
+        let codeBg = Color.white.opacity(0.22)
+        for run in output.runs {
+            if let intent = run.inlinePresentationIntent, intent.contains(.code) {
+                output[run.range].font = .system(size: 14, design: .monospaced)
+                output[run.range].backgroundColor = codeBg
+                output[run.range].foregroundColor = Color.white
+            }
+        }
+        return output
     }
 
     @ViewBuilder
@@ -149,59 +185,172 @@ struct MessageBubble: View {
 
     @ViewBuilder
     private func toolCallsSection(_ toolCalls: [ToolCall]) -> some View {
-        ForEach(toolCalls) { tc in
-            DisclosureGroup {
-                VStack(alignment: .leading, spacing: 4) {
-                    if let preview = toolPreview(for: tc), !preview.isEmpty {
-                        Text(preview)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.55))
-                            .textSelection(.enabled)
-                    }
-                    if let result = tc.result {
-                        let abbreviated = result.count > 300
-                            ? String(result.prefix(300)) + "…" : result
-                        Text(abbreviated)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(
-                                tc.isError == true
-                                    ? Color.red.opacity(0.8) : .white.opacity(0.6))
-                            .textSelection(.enabled)
-                    }
-                }
-                .padding(.top, 2)
-            } label: {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(SliccIcons.toolStatusColor(tc))
-                        .frame(width: 6, height: 6)
-                    Image(systemName: SliccIcons.tool(tc.name))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.55))
-                    Text(SliccIcons.toolTitle(tc.name))
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.7))
-                    if let preview = toolPreview(for: tc), !preview.isEmpty {
-                        Text(preview)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.4))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    if tc.result == nil {
-                        ProgressView()
-                            .scaleEffect(0.5)
-                            .frame(width: 12, height: 12)
-                    }
-                }
+        ForEach(Array(groupToolCalls(toolCalls).enumerated()), id: \.offset) { _, group in
+            switch group {
+            case .single(let tc):
+                singleToolCallRow(tc)
+            case .cluster(let tcs):
+                workingClusterRow(tcs)
             }
-            .tint(.white.opacity(0.4))
         }
     }
 
+    /// Render a single tool call as a disclosure row. Header shows status
+    /// dot + tool icon + title + short input preview; expansion reveals
+    /// the parsed input + (truncated) result.
+    @ViewBuilder
+    private func singleToolCallRow(_ tc: ToolCall) -> some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 4) {
+                if let preview = toolPreview(for: tc), !preview.isEmpty {
+                    Text(preview)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .textSelection(.enabled)
+                }
+                if let result = tc.result {
+                    let abbreviated = result.count > 300
+                        ? String(result.prefix(300)) + "…" : result
+                    Text(abbreviated)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(
+                            tc.isError == true
+                                ? Color.red.opacity(0.8) : .white.opacity(0.6))
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(.top, 2)
+        } label: {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(SliccIcons.toolStatusColor(tc))
+                    .frame(width: 6, height: 6)
+                Image(systemName: SliccIcons.tool(tc.name))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.55))
+                Text(SliccIcons.toolTitle(tc.name))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.7))
+                if let preview = toolPreview(for: tc), !preview.isEmpty {
+                    Text(preview)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                if tc.result == nil {
+                    ProgressView()
+                        .scaleEffect(0.5)
+                        .frame(width: 12, height: 12)
+                }
+            }
+        }
+        .tint(.white.opacity(0.4))
+    }
+
+    /// Collapsed "Working" cluster — mirrors the webapp's
+    /// `.tool-call-cluster` (`packages/webapp/src/ui/chat-panel.ts` →
+    /// `createToolClusterEl`). Three or more consecutive tool calls
+    /// collapse behind a single disclosure so they don't push assistant
+    /// content out of view; one small dot per inner call shows the run's
+    /// progression at a glance, and the comma-joined preview hints at
+    /// what's running.
+    @ViewBuilder
+    private func workingClusterRow(_ toolCalls: [ToolCall]) -> some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(toolCalls) { tc in
+                    singleToolCallRow(tc)
+                }
+            }
+            .padding(.leading, 10)
+            .padding(.top, 4)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(.white.opacity(0.10))
+                    .frame(width: 2)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.55))
+                Text("Working")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.7))
+                Text(clusterPreview(for: toolCalls))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
+                clusterDots(for: toolCalls)
+            }
+        }
+        .tint(.white.opacity(0.4))
+    }
+
+    /// One small dot per inner tool call in a cluster header. Webapp
+    /// caps the dot row to ~50% of the row width via `flex-wrap`; the
+    /// SwiftUI HStack here just stays on one line — long runs are rare
+    /// and the dots are 5px, so even 12 fit comfortably on a phone.
+    @ViewBuilder
+    private func clusterDots(for toolCalls: [ToolCall]) -> some View {
+        HStack(spacing: 4) {
+            ForEach(toolCalls) { tc in
+                Circle()
+                    .fill(SliccIcons.toolStatusColor(tc))
+                    .frame(width: 5, height: 5)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    /// Comma-joined list of tool titles, truncated for overflow. Mirrors
+    /// `clusterPreview` in `packages/webapp/src/ui/tool-call-view.ts`.
+    /// The 80-char cap is tighter than the webapp's 120 since the dots
+    /// row eats more horizontal space on a phone.
+    private func clusterPreview(for toolCalls: [ToolCall]) -> String {
+        let joined = toolCalls.map { SliccIcons.toolTitle($0.name) }.joined(separator: ", ")
+        guard joined.count > 80 else { return joined }
+        return String(joined.prefix(80)) + "…"
+    }
+}
+
+// MARK: - Tool Call Grouping
+
+/// One render slot in a tool-call run. Mirrors `ToolGroup` from
+/// `packages/webapp/src/ui/tool-call-view.ts`.
+private enum ToolGroup {
+    case single(ToolCall)
+    case cluster([ToolCall])
+}
+
+/// Threshold above which consecutive tool calls collapse into a cluster.
+/// Three or more starts pushing real content out of view; one or two
+/// stay rendered inline. Matches `TOOL_CLUSTER_MIN` in the webapp.
+private let toolClusterMin = 3
+
+/// Group a flat tool-call list into render groups. Currently every call
+/// in `toolCalls` belongs to one visual run (the chat bubble shows them
+/// all at the bottom of the message), so this collapses the entire run
+/// into a single cluster as soon as it crosses `toolClusterMin`.
+/// Smaller runs render inline.
+private func groupToolCalls(_ toolCalls: [ToolCall]) -> [ToolGroup] {
+    if toolCalls.isEmpty { return [] }
+    if toolCalls.count < toolClusterMin {
+        return toolCalls.map { .single($0) }
+    }
+    return [.cluster(toolCalls)]
+}
+
+extension MessageBubble {
+
     /// Short preview string for a tool call's input — mirrors the web UI's
     /// per-tool preview (path for read/write, command for bash, etc.).
-    private func toolPreview(for tc: ToolCall) -> String? {
+    /// `fileprivate` (not `private`) so the row builders defined in the
+    /// main struct body can call into it across the extension boundary.
+    fileprivate func toolPreview(for tc: ToolCall) -> String? {
         guard let input = tc.input?.value as? [String: Any] else { return nil }
         switch tc.name {
         case "read_file", "write_file", "edit_file":
