@@ -95,16 +95,20 @@ describe('GitHub identity helpers', () => {
 
   describe('syncGitIdentityFromGitHub', () => {
     /**
-     * The provider hardcodes GLOBAL_FS_DB_NAME, so each test wipes that
-     * shared db before running. fake-indexeddb gives us full isolation
-     * across test files, but tests within this file share the db within
-     * the same vitest worker — wipe explicitly for a clean slate.
+     * The provider hardcodes GLOBAL_FS_DB_NAME so we cannot pass a unique db
+     * per test. Instead share one VirtualFS instance for the whole describe
+     * and reset state by deleting the single file the tests touch. We avoid
+     * `VirtualFS.create({ wipe: true })` per-test because that races with
+     * still-open IndexedDB handles from prior tests — Node 24+'s Web Locks
+     * API rejects the second wipe with an AbortError and trips Vitest's
+     * unhandled-rejection guard. (Locally on Node 22 it slips through.)
      */
+    let sharedFs: VirtualFS;
+
     beforeEach(async () => {
-      const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME, wipe: true });
-      // touch to ensure wipe took effect
+      sharedFs ??= await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
       try {
-        await fs.rm(GLOBAL_GITCONFIG_PATH);
+        await sharedFs.rm(GLOBAL_GITCONFIG_PATH);
       } catch {
         /* not present */
       }
@@ -114,9 +118,8 @@ describe('GitHub identity helpers', () => {
       const { syncGitIdentityFromGitHub } = await import('../../providers/github.js');
       await syncGitIdentityFromGitHub({ id: 42, login: 'octocat', name: 'The Octocat' });
 
-      const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
-      expect(await readGlobalGitConfigValue(fs, 'user.name')).toBe('The Octocat');
-      expect(await readGlobalGitConfigValue(fs, 'user.email')).toBe(
+      expect(await readGlobalGitConfigValue(sharedFs, 'user.name')).toBe('The Octocat');
+      expect(await readGlobalGitConfigValue(sharedFs, 'user.email')).toBe(
         '42+octocat@users.noreply.github.com'
       );
     });
@@ -125,29 +128,26 @@ describe('GitHub identity helpers', () => {
       const { syncGitIdentityFromGitHub } = await import('../../providers/github.js');
       await syncGitIdentityFromGitHub({ id: 7, login: 'mona', name: undefined });
 
-      const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
-      expect(await readGlobalGitConfigValue(fs, 'user.name')).toBe('mona');
+      expect(await readGlobalGitConfigValue(sharedFs, 'user.name')).toBe('mona');
     });
 
     it('preserves existing user.name and user.email values (idempotent)', async () => {
-      const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
-      await writeGlobalGitConfigValue(fs, 'user.name', 'Custom Name');
-      await writeGlobalGitConfigValue(fs, 'user.email', 'custom@example.com');
+      await writeGlobalGitConfigValue(sharedFs, 'user.name', 'Custom Name');
+      await writeGlobalGitConfigValue(sharedFs, 'user.email', 'custom@example.com');
 
       const { syncGitIdentityFromGitHub } = await import('../../providers/github.js');
       await syncGitIdentityFromGitHub({ id: 42, login: 'octocat', name: 'The Octocat' });
 
-      expect(await readGlobalGitConfigValue(fs, 'user.name')).toBe('Custom Name');
-      expect(await readGlobalGitConfigValue(fs, 'user.email')).toBe('custom@example.com');
+      expect(await readGlobalGitConfigValue(sharedFs, 'user.name')).toBe('Custom Name');
+      expect(await readGlobalGitConfigValue(sharedFs, 'user.email')).toBe('custom@example.com');
     });
 
     it('skips silently when the profile is missing id or login', async () => {
       const { syncGitIdentityFromGitHub } = await import('../../providers/github.js');
       await syncGitIdentityFromGitHub({ name: 'Anonymous' });
 
-      const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
-      expect(await readGlobalGitConfigValue(fs, 'user.name')).toBeUndefined();
-      expect(await readGlobalGitConfigValue(fs, 'user.email')).toBeUndefined();
+      expect(await readGlobalGitConfigValue(sharedFs, 'user.name')).toBeUndefined();
+      expect(await readGlobalGitConfigValue(sharedFs, 'user.email')).toBeUndefined();
     });
   });
 });
