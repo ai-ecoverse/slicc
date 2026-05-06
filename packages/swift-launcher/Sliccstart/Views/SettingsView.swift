@@ -40,13 +40,36 @@ enum SecretNameValidator {
     }
 }
 
+/// Gate for the Models tab. The suggested local-LLM catalog (Qwen
+/// 3.6 27B-4bit, 35B-A3B-4bit) needs 14–18 GB just for the weights,
+/// plus headroom for the KV cache, the rest of macOS, and whatever
+/// browser/dev workload the user is actually running. Below 64 GB
+/// the experience falls off a cliff (swap thrash, OOM kills), so we
+/// hide the tab entirely rather than ship a footgun.
+///
+/// `ProcessInfo.physicalMemory` reports binary bytes; a 64 GB Apple
+/// Silicon Mac reports exactly `64 * 1024^3 = 68_719_476_736`.
+enum LocalModelsAvailability {
+    static let minimumPhysicalMemoryBytes: UInt64 = 64 * 1024 * 1024 * 1024
+
+    static func isSupported(physicalMemoryBytes bytes: UInt64) -> Bool {
+        bytes >= minimumPhysicalMemoryBytes
+    }
+
+    static var isSupported: Bool {
+        isSupported(physicalMemoryBytes: ProcessInfo.processInfo.physicalMemory)
+    }
+}
+
 struct SettingsView: View {
     var body: some View {
         TabView {
             StartupSettingsView()
                 .tabItem { Label("Startup", systemImage: "power") }
-            ModelsSettingsView()
-                .tabItem { Label("Models", systemImage: "cube") }
+            if LocalModelsAvailability.isSupported {
+                ModelsSettingsView()
+                    .tabItem { Label("Models", systemImage: "cube") }
+            }
             SecretsSettingsView()
                 .tabItem { Label("Secrets", systemImage: "key.fill") }
         }
