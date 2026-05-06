@@ -2139,6 +2139,72 @@ describe('GitCommands', () => {
       expect(row?.slice(1)).toEqual([1, 0, 0]); // staged deletion
     });
   });
+
+  describe('author identity resolution', () => {
+    /**
+     * Reads the author from the most recent commit using isomorphic-git's
+     * own log API. We assert against this rather than parsing `git log`
+     * output to keep the test independent of formatting changes.
+     */
+    async function readLatestAuthor(
+      cwd: string
+    ): Promise<{ name: string; email: string } | undefined> {
+      const log = await isoGit.log({ fs: vfs.getLightningFS(), dir: cwd, depth: 1 });
+      const entry = log[0];
+      return entry
+        ? { name: entry.commit.author.name, email: entry.commit.author.email }
+        : undefined;
+    }
+
+    it('uses constructor defaults when no config is set', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'hello');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      expect(await readLatestAuthor('/project')).toEqual({
+        name: 'Test User',
+        email: 'test@example.com',
+      });
+    });
+
+    it('uses values written directly to /workspace/.gitconfig (OAuth provider path)', async () => {
+      // Simulate what syncGitIdentityFromGitHub does: write directly to the
+      // global config without going through `git config --global` on this
+      // GitCommands instance. Without a per-command resolveAuthor read, the
+      // commit would still be attributed to the constructor defaults.
+      await git.execute(['init'], '/project');
+      const globalFs = await VirtualFS.create({ dbName: globalDbName });
+      await globalFs.writeFile(
+        '/workspace/.gitconfig',
+        '[user]\n\tname = Octocat\n\temail = 1+octocat@users.noreply.github.com\n'
+      );
+      await vfs.writeFile('/project/file.txt', 'hello');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      expect(await readLatestAuthor('/project')).toEqual({
+        name: 'Octocat',
+        email: '1+octocat@users.noreply.github.com',
+      });
+    });
+
+    it('prefers local repo config over global config', async () => {
+      await git.execute(['init'], '/project');
+      const globalFs = await VirtualFS.create({ dbName: globalDbName });
+      await globalFs.writeFile(
+        '/workspace/.gitconfig',
+        '[user]\n\tname = Global User\n\temail = global@example.com\n'
+      );
+      await git.execute(['config', 'user.name', 'Repo User'], '/project');
+      await git.execute(['config', 'user.email', 'repo@example.com'], '/project');
+      await vfs.writeFile('/project/file.txt', 'hello');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      expect(await readLatestAuthor('/project')).toEqual({
+        name: 'Repo User',
+        email: 'repo@example.com',
+      });
+    });
+  });
 });
 
 // Regression for issue #507: git ops in a scoop sandbox failed because

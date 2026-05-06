@@ -14,6 +14,12 @@ import { GLOBAL_FS_DB_NAME } from '../fs/global-db.js';
 import { gitHttp } from './git-http.js';
 import { unifiedDiff, diffStat } from './diff.js';
 import { createIsomorphicGitFs, type IsoGitFsPromises } from './vfs-fs-adapter.js';
+import {
+  GLOBAL_GITCONFIG_PATH,
+  readGlobalGitConfigValue,
+  writeGlobalGitConfigValue,
+  removeGitConfigKey,
+} from './git-config.js';
 
 export interface GitCommandResult {
   stdout: string;
@@ -112,6 +118,33 @@ export class GitCommands {
     }
     await globalFs.writeFile('/workspace/.git/github-token', trimmed);
     this.githubToken = trimmed;
+  }
+
+  /**
+   * Resolve the git author identity for an operation, mirroring git's lookup
+   * order: local repo config → global config → in-memory defaults from the
+   * constructor. This way values written to /workspace/.gitconfig (e.g. by
+   * the GitHub OAuth provider or by `git config --global`) take effect on
+   * subsequent commits without requiring a fresh GitCommands instance.
+   */
+  private async resolveAuthor(cwd: string): Promise<{ name: string; email: string }> {
+    const readLocal = async (key: string): Promise<string | undefined> => {
+      try {
+        return await git.getConfig({ fs: this.lfs, dir: cwd, path: key });
+      } catch {
+        return undefined;
+      }
+    };
+    const globalFs = await this.getGlobalFs();
+    const name =
+      (await readLocal('user.name')) ??
+      (await readGlobalGitConfigValue(globalFs, 'user.name')) ??
+      this.authorName;
+    const email =
+      (await readLocal('user.email')) ??
+      (await readGlobalGitConfigValue(globalFs, 'user.email')) ??
+      this.authorEmail;
+    return { name, email };
   }
 
   /**
@@ -555,10 +588,7 @@ Available commands:
       fs: this.lfs,
       dir: cwd,
       message,
-      author: {
-        name: this.authorName,
-        email: this.authorEmail,
-      },
+      author: await this.resolveAuthor(cwd),
       amend,
       noUpdateBranch: undefined,
     });
@@ -1354,10 +1384,7 @@ Available commands:
       dir: cwd,
       remote,
       corsProxy: this.corsProxy,
-      author: {
-        name: this.authorName,
-        email: this.authorEmail,
-      },
+      author: await this.resolveAuthor(cwd),
       onAuth: this.getOnAuth(),
       onProgress: (event) => {
         output += `${event.phase}: ${event.loaded}/${event.total}\n`;
@@ -1445,10 +1472,7 @@ Available commands:
         theirs,
         fastForward: !noFf,
         fastForwardOnly: ffOnly,
-        author: {
-          name: this.authorName,
-          email: this.authorEmail,
-        },
+        author: await this.resolveAuthor(cwd),
         abortOnConflict: true,
       });
 
@@ -1563,6 +1587,7 @@ Available commands:
     const target = positional[1]; // optional commit
 
     if (annotate || message) {
+      const tagger = await this.resolveAuthor(cwd);
       // Annotated tag
       await git.annotatedTag({
         fs: this.lfs,
@@ -1571,8 +1596,7 @@ Available commands:
         message: message ?? tagName,
         object: target,
         tagger: {
-          name: this.authorName,
-          email: this.authorEmail,
+          ...tagger,
           timestamp: Math.floor(Date.now() / 1000),
           timezoneOffset: 0,
         },
@@ -1694,9 +1718,9 @@ Available commands:
       if (globalFlag) {
         const globalFs = await this.getGlobalFs();
         try {
-          const content = await globalFs.readTextFile('/workspace/.gitconfig');
-          const newContent = this.removeConfigKey(content, path);
-          await globalFs.writeFile('/workspace/.gitconfig', newContent);
+          const content = await globalFs.readTextFile(GLOBAL_GITCONFIG_PATH);
+          const newContent = removeGitConfigKey(content, path);
+          await globalFs.writeFile(GLOBAL_GITCONFIG_PATH, newContent);
         } catch {
           /* file may not exist */
         }
@@ -1705,7 +1729,7 @@ Available commands:
         try {
           const configPath = `${cwd}/.git/config`;
           const content = await this.options.fs.readTextFile(configPath);
-          const newContent = this.removeConfigKey(content, path);
+          const newContent = removeGitConfigKey(content, path);
           await this.options.fs.writeFile(configPath, newContent);
         } catch {
           /* ignore */
@@ -1742,7 +1766,7 @@ Available commands:
 
       if (globalFlag) {
         // Store in global config file
-        await this.setGlobalConfig(path, value);
+        await writeGlobalGitConfigValue(await this.getGlobalFs(), path, value);
       } else {
         // Set config in repo
         await git.setConfig({ fs: this.lfs, dir: cwd, path, value });
@@ -1765,11 +1789,11 @@ Available commands:
     // When --global, only read global config; otherwise try repo first, then global
     let result: string | undefined;
     if (globalFlag) {
-      result = await this.getGlobalConfig(path);
+      result = await readGlobalGitConfigValue(await this.getGlobalFs(), path);
     } else {
       result = await git.getConfig({ fs: this.lfs, dir: cwd, path });
       if (!result) {
-        result = await this.getGlobalConfig(path);
+        result = await readGlobalGitConfigValue(await this.getGlobalFs(), path);
       }
     }
 
@@ -1800,7 +1824,7 @@ Available commands:
     // Read global config
     try {
       const globalFs = await this.getGlobalFs();
-      const content = await globalFs.readTextFile('/workspace/.gitconfig');
+      const content = await globalFs.readTextFile(GLOBAL_GITCONFIG_PATH);
       output += this.parseGitConfigToList(content);
     } catch {
       /* no global config */
@@ -1838,159 +1862,6 @@ Available commands:
     }
 
     return output;
-  }
-
-  /**
-   * Remove a key from git config INI content.
-   */
-  private removeConfigKey(content: string, key: string): string {
-    const parts = key.split('.');
-    const targetKey = parts.pop()!;
-    const targetSection = parts.join('.');
-
-    const lines = content.split('\n');
-    const result: string[] = [];
-    let currentSection = '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      const sectionMatch = trimmed.match(/^\[(\w+)(?:\s+"([^"]*)")?\]$/);
-      if (sectionMatch) {
-        const sec = sectionMatch[1].toLowerCase();
-        const sub = sectionMatch[2] ?? '';
-        currentSection = sub ? `${sec}.${sub}` : sec;
-        result.push(line);
-        continue;
-      }
-
-      if (currentSection === targetSection) {
-        const kvMatch = trimmed.match(/^(\w+)\s*=/);
-        if (kvMatch && kvMatch[1] === targetKey) {
-          continue; // Skip this line (remove it)
-        }
-      }
-
-      result.push(line);
-    }
-
-    return result.join('\n');
-  }
-
-  /**
-   * Set a value in the global config file.
-   */
-  private async setGlobalConfig(key: string, value: string): Promise<void> {
-    const globalFs = await this.getGlobalFs();
-    const configPath = '/workspace/.gitconfig';
-
-    let content = '';
-    try {
-      content = await globalFs.readTextFile(configPath);
-    } catch {
-      /* file doesn't exist yet */
-    }
-
-    const parts = key.split('.');
-    const configKey = parts.pop()!;
-    const section = parts.join('.');
-
-    // Try to update existing key in the right section
-    const lines = content.split('\n');
-    let currentSection = '';
-    let found = false;
-    let sectionExists = false;
-
-    for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trim();
-      const sectionMatch = trimmed.match(/^\[(\w+)(?:\s+"([^"]*)")?\]$/);
-      if (sectionMatch) {
-        const sec = sectionMatch[1].toLowerCase();
-        const sub = sectionMatch[2] ?? '';
-        currentSection = sub ? `${sec}.${sub}` : sec;
-        if (currentSection === section) sectionExists = true;
-        continue;
-      }
-
-      if (currentSection === section) {
-        const kvMatch = trimmed.match(/^(\w+)\s*=/);
-        if (kvMatch && kvMatch[1] === configKey) {
-          lines[i] = `\t${configKey} = ${value}`;
-          found = true;
-          break;
-        }
-      }
-    }
-
-    if (found) {
-      await globalFs.writeFile(configPath, lines.join('\n'));
-      return;
-    }
-
-    if (sectionExists) {
-      // Add key to existing section
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const trimmed = lines[i].trim();
-        const sectionMatch = trimmed.match(/^\[(\w+)(?:\s+"([^"]*)")?\]$/);
-        if (sectionMatch) {
-          const sec = sectionMatch[1].toLowerCase();
-          const sub = sectionMatch[2] ?? '';
-          const cs = sub ? `${sec}.${sub}` : sec;
-          if (cs === section) {
-            lines.splice(i + 1, 0, `\t${configKey} = ${value}`);
-            break;
-          }
-        }
-      }
-      await globalFs.writeFile(configPath, lines.join('\n'));
-      return;
-    }
-
-    // Create new section
-    const sectionParts = section.split('.');
-    let sectionHeader: string;
-    if (sectionParts.length > 1) {
-      sectionHeader = `[${sectionParts[0]} "${sectionParts.slice(1).join('.')}"]`;
-    } else {
-      sectionHeader = `[${section}]`;
-    }
-    const newContent = content
-      ? content.trimEnd() + `\n${sectionHeader}\n\t${configKey} = ${value}\n`
-      : `${sectionHeader}\n\t${configKey} = ${value}\n`;
-    await globalFs.writeFile(configPath, newContent);
-  }
-
-  /**
-   * Get a value from the global config file.
-   */
-  private async getGlobalConfig(key: string): Promise<string | undefined> {
-    const globalFs = await this.getGlobalFs();
-    try {
-      const content = await globalFs.readTextFile('/workspace/.gitconfig');
-      const parts = key.split('.');
-      const configKey = parts.pop()!;
-      const section = parts.join('.');
-
-      let currentSection = '';
-      for (const rawLine of content.split('\n')) {
-        const line = rawLine.trim();
-        const sectionMatch = line.match(/^\[(\w+)(?:\s+"([^"]*)")?\]$/);
-        if (sectionMatch) {
-          const sec = sectionMatch[1].toLowerCase();
-          const sub = sectionMatch[2] ?? '';
-          currentSection = sub ? `${sec}.${sub}` : sec;
-          continue;
-        }
-        if (currentSection === section) {
-          const kvMatch = line.match(/^(\w+)\s*=\s*(.*)$/);
-          if (kvMatch && kvMatch[1] === configKey) {
-            return kvMatch[2].trim();
-          }
-        }
-      }
-    } catch {
-      /* no global config */
-    }
-    return undefined;
   }
 
   private async reset(cwd: string, args: string[]): Promise<GitCommandResult> {
@@ -2259,24 +2130,16 @@ Available commands:
 
     const { commit: headCommit } = await git.readCommit({ fs: this.lfs, dir: cwd, oid: headOid });
     const message = `WIP on ${branch}: ${headOid.slice(0, 7)} ${headCommit.message.split('\n')[0]}`;
+    const author = await this.resolveAuthor(cwd);
+    const timestamp = Math.floor(Date.now() / 1000);
     const stashOid = await git.writeCommit({
       fs: this.lfs,
       dir: cwd,
       commit: {
         tree: treeOid,
         parent: parents,
-        author: {
-          name: this.authorName,
-          email: this.authorEmail,
-          timestamp: Math.floor(Date.now() / 1000),
-          timezoneOffset: 0,
-        },
-        committer: {
-          name: this.authorName,
-          email: this.authorEmail,
-          timestamp: Math.floor(Date.now() / 1000),
-          timezoneOffset: 0,
-        },
+        author: { ...author, timestamp, timezoneOffset: 0 },
+        committer: { ...author, timestamp, timezoneOffset: 0 },
         message,
       },
     });

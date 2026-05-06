@@ -145,8 +145,18 @@ export function extractCodeFromUrl(url: string): string | null {
   }
 }
 
-/** Fetch GitHub user profile (name + avatar). */
-async function fetchUserProfile(accessToken: string): Promise<{ name?: string; avatar?: string }> {
+interface GitHubUserProfile {
+  /** Display name to surface in the UI (full name or login fallback). */
+  name?: string;
+  avatar?: string;
+  /** GitHub login (username). */
+  login?: string;
+  /** Numeric account id, used to compose the privacy-preserving noreply email. */
+  id?: number;
+}
+
+/** Fetch GitHub user profile (name + avatar + login + id). */
+async function fetchUserProfile(accessToken: string): Promise<GitHubUserProfile> {
   try {
     const res = await fetch('https://api.github.com/user', {
       headers: {
@@ -156,6 +166,7 @@ async function fetchUserProfile(accessToken: string): Promise<{ name?: string; a
     });
     if (res.ok) {
       const user = (await res.json()) as {
+        id?: number;
         login?: string;
         name?: string;
         avatar_url?: string;
@@ -163,6 +174,8 @@ async function fetchUserProfile(accessToken: string): Promise<{ name?: string; a
       return {
         name: user.name || user.login,
         avatar: user.avatar_url,
+        login: user.login,
+        id: user.id,
       };
     }
   } catch (err) {
@@ -172,6 +185,16 @@ async function fetchUserProfile(accessToken: string): Promise<{ name?: string; a
     );
   }
   return {};
+}
+
+/**
+ * Compose GitHub's privacy-preserving "noreply" email for a given account.
+ * Format: `<id>+<login>@users.noreply.github.com`. This is the safe default
+ * — it works even when the user has "Keep my email addresses private"
+ * enabled, and never leaks a real email address.
+ */
+export function buildNoreplyEmail(id: number, login: string): string {
+  return `${id}+${login}@users.noreply.github.com`;
 }
 
 // ── Git token bridge ───────────────────────────────────────────────
@@ -204,6 +227,51 @@ async function clearGitToken(): Promise<void> {
     }
   } catch {
     // Ignore if file doesn't exist
+  }
+}
+
+// ── Git identity bridge ────────────────────────────────────────────
+
+/**
+ * Seed `user.name` and `user.email` in the global git config from the
+ * authenticated GitHub identity. Idempotent — only fills in values that are
+ * not already set, so any prior `git config --global user.{name,email} ...`
+ * customizations are preserved.
+ *
+ * Email defaults to GitHub's privacy-preserving noreply address
+ * (`<id>+<login>@users.noreply.github.com`) so we don't expose a real email
+ * unless the user explicitly chooses to override it later.
+ */
+export async function syncGitIdentityFromGitHub(profile: GitHubUserProfile): Promise<void> {
+  if (!profile.login || profile.id === undefined) {
+    // Profile fetch failed or token doesn't grant the needed scope; skip
+    // silently — git identity stays at whatever the user already configured.
+    return;
+  }
+
+  try {
+    const { VirtualFS } = await import('../src/fs/index.js');
+    const { readGlobalGitConfigValue, writeGlobalGitConfigValue } =
+      await import('../src/git/git-config.js');
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+
+    const desiredName = profile.name || profile.login;
+    const desiredEmail = buildNoreplyEmail(profile.id, profile.login);
+
+    const existingName = await readGlobalGitConfigValue(fs, 'user.name');
+    if (!existingName && desiredName) {
+      await writeGlobalGitConfigValue(fs, 'user.name', desiredName);
+    }
+
+    const existingEmail = await readGlobalGitConfigValue(fs, 'user.email');
+    if (!existingEmail) {
+      await writeGlobalGitConfigValue(fs, 'user.email', desiredEmail);
+    }
+  } catch (err) {
+    console.warn(
+      '[github] Failed to seed git identity:',
+      err instanceof Error ? err.message : String(err)
+    );
   }
 }
 
@@ -455,6 +523,11 @@ export const config: ProviderConfig = {
 
     // Bridge token to isomorphic-git
     await writeGitToken(tokenResult.access_token);
+
+    // Seed git user.name / user.email so commits are attributed to the
+    // authenticated GitHub identity instead of the placeholder
+    // "User <user@example.com>". Idempotent: existing values are preserved.
+    await syncGitIdentityFromGitHub(userProfile);
 
     onSuccess();
   },
