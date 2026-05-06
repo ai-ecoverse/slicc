@@ -3,9 +3,9 @@ import XCTest
 @testable import Sliccstart
 
 /// Pins the math in `ContextWindowPolicy.resolve` — the hot path that
-/// turns "user picked Auto / 32K / 256K" + the running model's arch +
-/// the host's physical memory into the integer that lands on
-/// SwiftLM's `--ctx-size`.
+/// turns the running model's arch + the host's physical memory into
+/// the integer that lands on SwiftLM's `--ctx-size`. There is no user
+/// override; the policy alone owns the decision.
 ///
 /// Hardcoded numbers come from real Apple Silicon configurations the
 /// suggested catalog targets:
@@ -16,7 +16,7 @@ import XCTest
 ///   - 128 GiB Mac (development workstation) → 75 % budget = 96 GiB.
 ///
 /// These are the inputs that previously crashed the user's machine
-/// (256K context allocated up front pushed resident past 120 GB).
+/// (256 K context allocated up front pushed resident past 120 GB).
 /// The tests below pin the resolved ctx-size so a future "let's pass
 /// the model's full max again" refactor regresses loudly.
 final class ContextWindowPolicyTests: XCTestCase {
@@ -64,46 +64,31 @@ final class ContextWindowPolicyTests: XCTestCase {
 
     /// On a 64 GiB Mac with Qwen 3.6 35B (18 GiB weights), 75 % budget
     /// is 48 GiB minus 18 GiB = 30 GiB for KV. At 640 KB/token that's
-    /// ~49 152 tokens. The user picked "Auto" (= 65 536 default), so
-    /// the RAM ceiling clips it down to ~49 K.
-    func testAutoOnSixtyFourGiBClipsToRamCeiling() {
+    /// ~49 152 tokens — well below the model's declared 256 K. Resolve
+    /// must return the RAM-derived value, not the model max.
+    func testRamCeilingClipsBelowModelMaxOnSixtyFourGiB() {
         let resolved = ContextWindowPolicy.resolve(
-            userChoice: 0,
             modelMaxContext: qwenModelMax,
             perTokenKVBytes: qwenPerTokenKV,
             physicalMemoryBytes: 64 * oneGiB,
             modelWeightsBytes: qwenWeights
         )
         XCTAssertGreaterThan(resolved, 32_000)
-        XCTAssertLessThan(resolved, 65_536, "Auto must NOT return the full 65 K default on a 64 GiB Mac")
+        XCTAssertLessThan(resolved, 65_536, "RAM ceiling must clip below the 256K model max on a 64 GiB Mac")
     }
 
-    /// On a 128 GiB Mac the same model has a 78 GiB KV budget (~125 K
-    /// tokens at 640 KB/tok). Auto returns 65 536 (the default,
-    /// because the ceiling is well above it).
-    func testAutoOnOneTwentyEightGiBReturnsDefault() {
+    /// **The exact regression we're fixing.** On a 128 GiB Mac with the
+    /// same model, the RAM budget is 78 GiB → ~125 K tokens. Resolve
+    /// must NOT pass the model's full 262 144 to SwiftLM, even though
+    /// "use the largest window that fits" would be tempting.
+    func testRamCeilingClampsTwoFiftySixKOnOneTwentyEightGiB() {
         let resolved = ContextWindowPolicy.resolve(
-            userChoice: 0,
             modelMaxContext: qwenModelMax,
             perTokenKVBytes: qwenPerTokenKV,
             physicalMemoryBytes: 128 * oneGiB,
             modelWeightsBytes: qwenWeights
         )
-        XCTAssertEqual(resolved, ContextWindowPolicy.autoDefault)
-    }
-
-    /// **The exact regression we're fixing.** On a 128 GiB machine the
-    /// user explicitly picks 256K — but the RAM ceiling caps below the
-    /// model's declared max, so we must NOT pass 262 144 to SwiftLM.
-    func testRamCapClampsBelowExplicitTwoFiftySixK() {
-        let resolved = ContextWindowPolicy.resolve(
-            userChoice: 262_144,
-            modelMaxContext: qwenModelMax,
-            perTokenKVBytes: qwenPerTokenKV,
-            physicalMemoryBytes: 128 * oneGiB,
-            modelWeightsBytes: qwenWeights
-        )
-        XCTAssertLessThan(resolved, 262_144, "The user's 256K request must be RAM-capped, not passed straight through")
+        XCTAssertLessThan(resolved, qwenModelMax, "Must not pass the full 256 K window — that's the bug")
         // 78 GiB / 640 KB ≈ 127 720 tokens. Allow a generous tolerance
         // for the integer arithmetic in resolve().
         XCTAssertGreaterThan(resolved, 100_000)
@@ -112,50 +97,33 @@ final class ContextWindowPolicyTests: XCTestCase {
 
     // MARK: - resolve: model ceiling
 
-    /// User asks for 128K but the model only declares 32K → resolved
-    /// must clip to the model's max.
-    func testModelMaxBeatsUserRequest() {
+    /// On a giant machine the RAM ceiling is far above the model's
+    /// declared max — so the model max wins. Pins the precedence: we
+    /// never exceed what the model itself says it supports, no matter
+    /// how much RAM is available.
+    func testModelMaxBeatsHugeRamCeiling() {
         let resolved = ContextWindowPolicy.resolve(
-            userChoice: 131_072,
             modelMaxContext: 32_768,
             perTokenKVBytes: qwenPerTokenKV,
-            physicalMemoryBytes: 128 * oneGiB,
+            physicalMemoryBytes: 1024 * oneGiB,    // 1 TiB — way more than needed
             modelWeightsBytes: qwenWeights
         )
         XCTAssertEqual(resolved, 32_768)
     }
 
-    // MARK: - resolve: user choice precedence
-
-    /// User picks a small value (8K) on a giant machine → honor it.
-    /// Trimming the context is a perfectly reasonable knob for the
-    /// user to turn (e.g. limit the agent's memory footprint when
-    /// running the model alongside other heavy apps).
-    func testUserCanRequestSmallerThanAutoDefault() {
-        let resolved = ContextWindowPolicy.resolve(
-            userChoice: 8_192,
-            modelMaxContext: qwenModelMax,
-            perTokenKVBytes: qwenPerTokenKV,
-            physicalMemoryBytes: 128 * oneGiB,
-            modelWeightsBytes: qwenWeights
-        )
-        XCTAssertEqual(resolved, 8_192)
-    }
-
     // MARK: - resolve: degenerate inputs
 
-    /// Unknown perTokenKV → no RAM-derived ceiling. Honor user choice
-    /// up to the model max. (Better to trust the user than to silently
-    /// pick a guess that might be far off.)
-    func testUnknownArchSkipsRamCeiling() {
+    /// Unknown perTokenKV → no RAM-derived ceiling, fall back to the
+    /// model's declared maximum. (We refuse to invent a guess based
+    /// on "what the model probably looks like.")
+    func testUnknownArchUsesModelMaxAsCeiling() {
         let resolved = ContextWindowPolicy.resolve(
-            userChoice: 131_072,
             modelMaxContext: qwenModelMax,
             perTokenKVBytes: nil,
             physicalMemoryBytes: 64 * oneGiB,
             modelWeightsBytes: qwenWeights
         )
-        XCTAssertEqual(resolved, 131_072)
+        XCTAssertEqual(resolved, qwenModelMax)
     }
 
     /// Model declares no max → fall back to the policy's `fallback`
@@ -163,7 +131,6 @@ final class ContextWindowPolicyTests: XCTestCase {
     /// rejected at launch.
     func testFallbackWhenModelMaxIsNil() {
         let resolved = ContextWindowPolicy.resolve(
-            userChoice: 0,
             modelMaxContext: nil,
             perTokenKVBytes: nil,
             physicalMemoryBytes: 128 * oneGiB,
@@ -178,36 +145,11 @@ final class ContextWindowPolicyTests: XCTestCase {
     /// surface the OOM rather than bail at arg parsing.
     func testReturnsAtLeastOneEvenWhenBudgetIsExhausted() {
         let resolved = ContextWindowPolicy.resolve(
-            userChoice: 0,
             modelMaxContext: qwenModelMax,
             perTokenKVBytes: qwenPerTokenKV,
             physicalMemoryBytes: 8 * oneGiB,        // tiny
             modelWeightsBytes: 100 * oneGiB         // bigger than RAM
         )
         XCTAssertGreaterThanOrEqual(resolved, 1)
-    }
-
-    // MARK: - constants
-
-    /// The Models tab picker labels are derived from these tokens.
-    /// Pinning the order so `0` (Auto) stays first and the values
-    /// match the K-suffix labels rendered by `label(forContextSize:)`.
-    func testPickerChoicesAreOrderedAndPowersOfTwo() {
-        let choices = ContextWindowPolicy.pickerChoices
-        XCTAssertEqual(choices.first, 0, "Auto must come first")
-        let nonZero = choices.dropFirst()
-        XCTAssertEqual(Array(nonZero), nonZero.sorted())
-        for c in nonZero {
-            XCTAssertTrue(
-                c.isMultiple(of: 1024),
-                "Picker choice \(c) doesn't render cleanly as `K`"
-            )
-        }
-    }
-
-    /// `swiftLMContextSizeKey` is what users' UserDefaults blobs are
-    /// keyed by; renaming it silently loses everyone's setting.
-    func testKeyNameIsStable() {
-        XCTAssertEqual(swiftLMContextSizeKey, "swiftLMContextSize")
     }
 }

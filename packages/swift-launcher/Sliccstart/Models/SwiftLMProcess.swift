@@ -112,23 +112,21 @@ final class SwiftLMProcess {
         // that depends on the model: vision routing, context window.
         let capabilities = ModelArchProbe.capabilities(for: model)
 
-        // Resolve --ctx-size against the user's preference, the model's
-        // declared maximum, and a 75 %-of-RAM ceiling derived from the
-        // model's per-token KV-cache footprint. See `ContextWindowPolicy`
-        // for the math; the cap exists because passing the model's full
-        // 262K window for Qwen 3.6 35B caused a 120 GB peak resident on
-        // a 128 GB Mac, swap-thrashing the user's machine.
-        let userChoice = UserDefaults.standard.integer(forKey: swiftLMContextSizeKey)
+        // Resolve --ctx-size against the model's declared maximum and a
+        // 75 %-of-RAM ceiling derived from its per-token KV-cache
+        // footprint. Sliccstart owns this decision — there is no user
+        // override. The cap exists because passing the model's full
+        // 262 K window for Qwen 3.6 35B caused a 120 GB peak resident
+        // on a 128 GB Mac, swap-thrashing the user's machine.
         let modelWeightsBytes = Self.estimatedModelWeightsBytes(forRepoId: model)
         let contextSize = ContextWindowPolicy.resolve(
-            userChoice: userChoice,
             modelMaxContext: capabilities.maxContextSize,
             perTokenKVBytes: ContextWindowPolicy.perTokenKVBytes(capabilities),
             physicalMemoryBytes: ProcessInfo.processInfo.physicalMemory,
             modelWeightsBytes: modelWeightsBytes
         )
         log.info(
-            "start: \(model, privacy: .public) ctx=\(contextSize) (userChoice=\(userChoice), modelMax=\(capabilities.maxContextSize ?? -1)) vision=\(capabilities.supportsVision)"
+            "start: \(model, privacy: .public) ctx=\(contextSize) (modelMax=\(capabilities.maxContextSize ?? -1)) vision=\(capabilities.supportsVision)"
         )
 
         var args: [String] = [

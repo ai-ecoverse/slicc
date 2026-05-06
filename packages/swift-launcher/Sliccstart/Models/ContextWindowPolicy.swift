@@ -1,13 +1,11 @@
 import Foundation
 
-/// UserDefaults key for the user-chosen SwiftLM context window size, in
-/// tokens. `0` means "auto" — use the policy's default. Read at model
-/// launch by `SwiftLMProcess.start()` via `ContextWindowPolicy`.
-let swiftLMContextSizeKey = "swiftLMContextSize"
-
-/// Pure helper that resolves the value to pass to SwiftLM's `--ctx-size`
-/// flag, hard-capped at 75 % of physical RAM after subtracting the
-/// model's weight footprint.
+/// Pure helper that decides what to pass to SwiftLM's `--ctx-size` flag.
+/// There is no user-visible knob — Sliccstart looks at the host's RAM,
+/// the model's declared maximum, and the per-token KV-cache footprint,
+/// and picks the largest window that still fits inside 75 % of physical
+/// memory after the weights are accounted for. The UI lives with
+/// whatever this returns.
 ///
 /// Why this exists: SwiftLM allocates KV-cache slots up front for the
 /// requested context window. Passing the model's full declared
@@ -15,26 +13,12 @@ let swiftLMContextSizeKey = "swiftLMContextSize"
 /// peak resident on a 128 GB Mac because the per-token KV cost is
 /// dominated by `num_attention_heads × head_dim` — turbo-kv's
 /// past-8K compression doesn't shrink the *slot pool*, only its
-/// in-place encoding. The cap here pre-empts that explosion, the user
-/// override lets advanced users push it back up if they have headroom.
+/// in-place encoding.
 enum ContextWindowPolicy {
 
-    /// Default ctx-size when the user picks "Auto" and the policy can't
-    /// derive a tighter value. Generous enough for typical SLICC agent
-    /// loops (~40 K-token prompts after a few tool rounds), conservative
-    /// enough to fit comfortably on every machine that passes the 64 GB
-    /// `LocalModelsAvailability` floor.
-    static let autoDefault = 65_536
-
-    /// Last-resort fallback when nothing about the model is known and
-    /// `--ctx-size` would otherwise be omitted. Matches the historical
-    /// `SwiftLMProcess.fallbackContextSize`.
+    /// Last-resort fallback when nothing about the model is known.
+    /// Matches the historical `SwiftLMProcess.fallbackContextSize`.
     static let fallback = 32_768
-
-    /// Discrete choices surfaced in the Models tab picker. `0` = auto.
-    /// Real cap at run time is the lesser of the user's choice, the
-    /// model's declared maximum, and the RAM-derived ceiling.
-    static let pickerChoices: [Int] = [0, 8_192, 16_384, 32_768, 65_536, 131_072, 262_144]
 
     /// Per-token KV-cache cost in bytes, conservatively estimated.
     ///
@@ -59,18 +43,16 @@ enum ContextWindowPolicy {
 
     /// Resolve the final ctx-size to pass to `--ctx-size`.
     ///
-    /// Precedence:
-    ///   1. RAM ceiling = `(0.75 × physicalMemory − modelWeightsBytes) / perTokenKV`.
-    ///   2. Model ceiling = `modelMaxContext` (the declared
-    ///      `max_position_embeddings`).
-    ///   3. User choice if non-zero, else the auto default.
+    /// Returns `min(modelCeiling, ramCeiling)` — the largest window
+    /// that fits both the model's declared maximum and the host's
+    /// 75 %-of-RAM KV-cache budget. When the model arch is unknown the
+    /// RAM ceiling drops out (we have no per-token estimate) and we
+    /// fall back to the model ceiling alone; when both are unknown we
+    /// return `fallback`.
     ///
-    /// The returned value is `min(userChoice ?? auto, modelCeiling, ramCeiling)`.
-    /// When `perTokenKVBytes` is unknown the RAM ceiling is treated as
-    /// "no constraint" (we'd rather honor the user's request than
-    /// silently downgrade based on a guess).
+    ///   - modelCeiling = `modelMaxContext ?? fallback`
+    ///   - ramCeiling   = `(0.75 × physicalMemory − modelWeightsBytes) / perTokenKV`
     static func resolve(
-        userChoice: Int,
         modelMaxContext: Int?,
         perTokenKVBytes: Int?,
         physicalMemoryBytes: UInt64,
@@ -81,9 +63,6 @@ enum ContextWindowPolicy {
         let ramCeiling: Int
         if let kvCost = perTokenKVBytes, kvCost > 0 {
             let ramBudget = (physicalMemoryBytes * 75) / 100
-            // Leave at least a token of room for arithmetic safety on
-            // pathologically small machines (the LocalModelsAvailability
-            // gate already excludes them, but this is the math floor).
             let kvBudget: UInt64 = ramBudget > modelWeightsBytes
                 ? ramBudget - modelWeightsBytes
                 : 0
@@ -92,11 +71,10 @@ enum ContextWindowPolicy {
             ramCeiling = Int.max
         }
 
-        let ceiling = min(modelCeiling, ramCeiling)
-        let requested = userChoice > 0 ? userChoice : Self.autoDefault
-        // If the ceiling itself is below 1, we have no choice but to
-        // ask for at least 1; SwiftLM would reject 0. Caller can
-        // surface this as an OOM-likely warning.
-        return max(1, min(requested, ceiling))
+        // Floor at 1 token so SwiftLM doesn't reject the flag at parse
+        // time on pathologically small machines (the
+        // LocalModelsAvailability 64 GB gate already excludes them, but
+        // this is the math floor).
+        return max(1, min(modelCeiling, ramCeiling))
     }
 }
