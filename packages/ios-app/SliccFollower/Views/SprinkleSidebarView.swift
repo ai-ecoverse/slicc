@@ -5,6 +5,8 @@ import SwiftUI
 /// Discriminator for what to show in the NavigationSplitView's detail column.
 enum DetailRoute: Hashable {
     case conversation
+    /// Synthetic chat session for design iteration. DEBUG-only sidebar entry.
+    case fixture
     case tabs
     case sprinkle(name: String)
 }
@@ -25,6 +27,10 @@ struct SprinkleSidebarView: View {
             Section("Chat") {
                 conversationRow
                     .tag(DetailRoute.conversation)
+                #if DEBUG
+                fixtureRow
+                    .tag(DetailRoute.fixture)
+                #endif
             }
 
             Section("Browser") {
@@ -84,6 +90,27 @@ struct SprinkleSidebarView: View {
         }
         .contentShape(Rectangle())
     }
+
+    #if DEBUG
+    @ViewBuilder
+    private var fixtureRow: some View {
+        HStack {
+            Image(systemName: "paintbrush.pointed.fill")
+                .foregroundStyle(.pink)
+                .frame(width: 22)
+            Text("UI Fixture")
+                .foregroundStyle(.primary)
+            Spacer()
+            Text("DEBUG")
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.pink.opacity(0.18)))
+        }
+        .contentShape(Rectangle())
+    }
+    #endif
 
     @ViewBuilder
     private var tabsRow: some View {

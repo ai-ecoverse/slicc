@@ -1,3 +1,4 @@
+import os
 import SwiftUI
 
 /// Top-level container view with a NavigationSplitView whose sidebar lists
@@ -17,6 +18,8 @@ struct ChatView: View {
             switch route {
             case .conversation, .none:
                 ConversationView(showSettings: $showSettings)
+            case .fixture:
+                FixtureConversationView()
             case .tabs:
                 TabsCarouselView()
             case let .sprinkle(name):
@@ -126,6 +129,76 @@ struct ConversationView: View {
                     appState.swipeToPreviousScoop()
                 }
             }
+    }
+}
+
+// MARK: - FixtureConversationView
+
+/// Synthetic chat conversation rendered from `ChatFixture.makeMessages()`.
+/// Lives alongside the live `ConversationView` so designers can preview
+/// every chat variant without disconnecting from the leader. Lick taps
+/// log to the console — there's no scoop on the other end of the bridge.
+struct FixtureConversationView: View {
+    @State private var messages: [ChatMessage] = ChatFixture.makeMessages()
+    @State private var lastLick: String?
+    private let background = Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255)
+    private static let log = Logger(subsystem: "com.slicc.follower", category: "Fixture")
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "paintbrush.pointed.fill")
+                    .foregroundStyle(.pink)
+                if let lastLick {
+                    Text("lick → \(lastLick)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.pink)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    Text("UI Fixture — synthetic session")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                Spacer()
+                Button("Reload") {
+                    messages = ChatFixture.makeMessages()
+                    lastLick = nil
+                }
+                .font(.caption)
+                .buttonStyle(.bordered)
+                .tint(.pink)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.pink.opacity(0.10))
+
+            MessageListView(
+                messages: messages,
+                isStreaming: messages.last?.isStreaming == true,
+                onInlineSprinkleLick: { body, target in
+                    let summary = describeLick(body: body, target: target)
+                    Self.log.info("sprinkle lick: \(summary)")
+                    lastLick = summary
+                }
+            )
+        }
+        .background(background)
+        .navigationTitle("UI Fixture")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// Format a lick body for the on-screen indicator. Surfaces `action`
+    /// keys so it's obvious which button just fired.
+    private func describeLick(body: AnyCodable?, target: String?) -> String {
+        let action: String = {
+            guard let value = body?.value else { return "—" }
+            if let s = value as? String { return s }
+            if let dict = value as? [String: Any], let a = dict["action"] as? String { return a }
+            return String(describing: value)
+        }()
+        if let target { return "\(action) (→\(target))" }
+        return action
     }
 }
 

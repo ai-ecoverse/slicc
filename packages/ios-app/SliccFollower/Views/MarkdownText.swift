@@ -13,6 +13,10 @@ struct MarkdownText: View {
                 switch segment {
                 case .text(let text):
                     markdownTextView(text)
+                case .heading(let level, let text):
+                    headingView(level: level, text: text)
+                case .blockquote(let text):
+                    blockquoteView(text: text)
                 case .codeBlock(let lang, let code):
                     codeBlockView(language: lang, code: code)
                 }
@@ -24,6 +28,8 @@ struct MarkdownText: View {
 
     private enum Segment {
         case text(String)
+        case heading(level: Int, text: String)
+        case blockquote(String)
         case codeBlock(language: String?, code: String)
     }
 
@@ -34,15 +40,29 @@ struct MarkdownText: View {
         var inCodeBlock = false
         var codeLines: [String] = []
         var codeLang: String?
+        var quoteLines: [String] = []
+
+        func flushText() {
+            let joined = currentText.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !joined.isEmpty { result.append(.text(joined)) }
+            currentText = []
+        }
+        func flushQuote() {
+            guard !quoteLines.isEmpty else { return }
+            // Strip the leading `>` (and optional single space) from each line.
+            let body = quoteLines.map { line -> String in
+                var s = line
+                if s.hasPrefix(">") { s.removeFirst() }
+                if s.hasPrefix(" ") { s.removeFirst() }
+                return s
+            }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !body.isEmpty { result.append(.blockquote(body)) }
+            quoteLines = []
+        }
 
         for line in lines {
             if !inCodeBlock && line.hasPrefix("```") {
-                // Flush accumulated text
-                let joined = currentText.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !joined.isEmpty {
-                    result.append(.text(joined))
-                }
-                currentText = []
+                flushQuote(); flushText()
                 inCodeBlock = true
                 let langStr = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                 codeLang = langStr.isEmpty ? nil : langStr
@@ -54,7 +74,14 @@ struct MarkdownText: View {
                 codeLang = nil
             } else if inCodeBlock {
                 codeLines.append(line)
+            } else if let heading = parseAtxHeading(line) {
+                flushQuote(); flushText()
+                result.append(.heading(level: heading.level, text: heading.text))
+            } else if line.hasPrefix(">") {
+                flushText()
+                quoteLines.append(line)
             } else {
+                flushQuote()
                 currentText.append(line)
             }
         }
@@ -64,13 +91,34 @@ struct MarkdownText: View {
             // Unclosed code block — render as code anyway
             result.append(.codeBlock(language: codeLang, code: codeLines.joined(separator: "\n")))
         } else {
-            let joined = currentText.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !joined.isEmpty {
-                result.append(.text(joined))
-            }
+            flushQuote()
+            flushText()
         }
 
         return result
+    }
+
+    /// Parse a leading `# … ######` ATX heading. Returns nil for lines that
+    /// aren't headings (so callers fall through to plain text).
+    private func parseAtxHeading(_ line: String) -> (level: Int, text: String)? {
+        let trimmed = line.drop(while: { $0 == " " })
+        guard trimmed.first == "#" else { return nil }
+        var level = 0
+        var i = trimmed.startIndex
+        while i < trimmed.endIndex, trimmed[i] == "#", level < 6 {
+            level += 1
+            i = trimmed.index(after: i)
+        }
+        // Must be followed by whitespace or end-of-line for it to be a heading.
+        guard level >= 1 else { return nil }
+        if i == trimmed.endIndex { return (level, "") }
+        guard trimmed[i] == " " || trimmed[i] == "\t" else { return nil }
+        let text = trimmed[i...].trimmingCharacters(in: .whitespaces)
+        // Strip optional trailing `#` run (CommonMark closing sequence).
+        let stripped = text.reversed().drop(while: { $0 == " " })
+        let withoutTrailingHashes = stripped.drop(while: { $0 == "#" })
+        let final = String(withoutTrailingHashes.reversed()).trimmingCharacters(in: .whitespaces)
+        return (level, final.isEmpty ? text : final)
     }
 
     // MARK: - Text Rendering
@@ -81,7 +129,7 @@ struct MarkdownText: View {
             markdown: text,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
-            Text(attributed)
+            Text(styledForInlineCode(attributed))
                 .font(.system(size: 15))
                 .foregroundStyle(.white.opacity(0.9))
                 .tint(Color(red: 0x71 / 255, green: 0x55 / 255, blue: 0xFA / 255))
@@ -90,6 +138,81 @@ struct MarkdownText: View {
                 .font(.system(size: 15))
                 .foregroundStyle(.white.opacity(0.9))
         }
+    }
+
+    /// Walk the AttributedString runs and apply a subtle background pill +
+    /// monospace font to `inlinePresentationIntent: .code` ranges so
+    /// backticked tokens read as code and not just italic-ish prose. The
+    /// markdown parser already tags them; we just style the runs.
+    private func styledForInlineCode(_ input: AttributedString) -> AttributedString {
+        var output = input
+        let codeBg = Color.white.opacity(0.10)
+        let codeFg = Color(red: 0xC9 / 255, green: 0xBC / 255, blue: 0xFF / 255)
+        for run in output.runs {
+            if let intent = run.inlinePresentationIntent, intent.contains(.code) {
+                output[run.range].font = .system(size: 14, design: .monospaced)
+                output[run.range].backgroundColor = codeBg
+                output[run.range].foregroundColor = codeFg
+            }
+        }
+        return output
+    }
+
+    // MARK: - Heading Rendering
+
+    /// ATX heading. Levels 1-6 map onto a decreasing type scale; the bottom
+    /// margin/spacing is owned by the parent VStack.
+    @ViewBuilder
+    private func headingView(level: Int, text: String) -> some View {
+        let size: CGFloat = {
+            switch level {
+            case 1: return 22
+            case 2: return 19
+            case 3: return 17
+            case 4: return 15
+            default: return 14
+            }
+        }()
+        let weight: Font.Weight = level <= 2 ? .bold : .semibold
+        if let attributed = try? AttributedString(
+            markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            Text(styledForInlineCode(attributed))
+                .font(.system(size: size, weight: weight))
+                .foregroundStyle(.white)
+        } else {
+            Text(text)
+                .font(.system(size: size, weight: weight))
+                .foregroundStyle(.white)
+        }
+    }
+
+    // MARK: - Blockquote Rendering
+
+    /// Blockquote: faint left bar + secondary text color. The body itself
+    /// is rendered through the same inline parser so nested **bold**,
+    /// `code`, links, etc. still work.
+    private func blockquoteView(text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(.white.opacity(0.20))
+                .frame(width: 3)
+            Group {
+                if let attributed = try? AttributedString(
+                    markdown: text,
+                    options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+                ) {
+                    Text(styledForInlineCode(attributed))
+                } else {
+                    Text(text)
+                }
+            }
+            .font(.system(size: 15))
+            .foregroundStyle(.white.opacity(0.65))
+            .italic()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Code Block Rendering
