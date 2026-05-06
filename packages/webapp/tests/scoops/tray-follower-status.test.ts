@@ -4,6 +4,7 @@ import {
   setFollowerTrayRuntimeStatus,
   resetReconnectAttempts,
   setFollowerLastPingTime,
+  subscribeToFollowerTrayRuntimeStatus,
   type FollowerTrayRuntimeStatus,
 } from '../../src/scoops/tray-follower-status.js';
 
@@ -177,5 +178,43 @@ describe('follower tray runtime status', () => {
     expect(status.lastAttachCode).toBe('LEADER_NOT_ELECTED');
     expect(status.connectingSince).toBe(connectingSince);
     expect(status.lastError).toBe('some transient error');
+  });
+});
+
+describe('subscribeToFollowerTrayRuntimeStatus', () => {
+  // Mirrors the leader-side subscriber contract: every setter (including
+  // resetReconnectAttempts and setFollowerLastPingTime) must notify so
+  // the offscreen→panel pipe doesn't drop intermediate states.
+  beforeEach(() => {
+    setFollowerTrayRuntimeStatus(makeStatus());
+  });
+
+  it('fires on setFollowerTrayRuntimeStatus and respects unsubscribe', () => {
+    const states: string[] = [];
+    const unsubscribe = subscribeToFollowerTrayRuntimeStatus((s) => states.push(s.state));
+
+    setFollowerTrayRuntimeStatus(makeStatus({ state: 'connecting' }));
+    setFollowerTrayRuntimeStatus(makeStatus({ state: 'connected' }));
+    unsubscribe();
+    setFollowerTrayRuntimeStatus(makeStatus({ state: 'disconnected' as never }));
+
+    expect(states).toEqual(['connecting', 'connected']);
+  });
+
+  it('also fires on resetReconnectAttempts and setFollowerLastPingTime', () => {
+    setFollowerTrayRuntimeStatus(
+      makeStatus({ state: 'connected', reconnectAttempts: 5, lastPingTime: 0 })
+    );
+    const calls: number[] = [];
+    const unsubscribe = subscribeToFollowerTrayRuntimeStatus((s) => {
+      calls.push(s.lastPingTime ?? -1);
+    });
+
+    resetReconnectAttempts();
+    setFollowerLastPingTime(123);
+
+    expect(calls).toEqual([0, 123]);
+    expect(getFollowerTrayRuntimeStatus().reconnectAttempts).toBe(0);
+    unsubscribe();
   });
 });

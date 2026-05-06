@@ -5,6 +5,8 @@ import {
   createTrayFetch,
   getLeaderTrayRuntimeStatus,
   parseLeaderTraySession,
+  setLeaderTrayRuntimeStatus,
+  subscribeToLeaderTrayRuntimeStatus,
   type LeaderTraySession,
   type LeaderTraySessionStore,
   type LeaderTrayWebSocket,
@@ -973,5 +975,63 @@ describe('createTrayFetch', () => {
     } finally {
       restore();
     }
+  });
+});
+
+describe('subscribeToLeaderTrayRuntimeStatus', () => {
+  // The extension panel mirrors offscreen status by calling
+  // setLeaderTrayRuntimeStatus on every push. We rely on subscribers
+  // firing synchronously after each set so the offscreen→panel pipe
+  // doesn't drop intermediate states; these tests pin that contract.
+  it('notifies subscribers on every status change and returns a working unsubscribe', () => {
+    const events: Array<{ state: string; joinUrl: string | null }> = [];
+    const unsubscribe = subscribeToLeaderTrayRuntimeStatus((status) => {
+      events.push({ state: status.state, joinUrl: status.session?.joinUrl ?? null });
+    });
+
+    setLeaderTrayRuntimeStatus({ state: 'connecting', session: null, error: null });
+    setLeaderTrayRuntimeStatus({
+      state: 'leader',
+      session: {
+        workerBaseUrl: 'https://tray.example.com',
+        trayId: 'tray-x',
+        createdAt: '2026-05-06T00:00:00.000Z',
+        controllerId: 'c-1',
+        controllerUrl: 'https://tray.example.com/controller/x',
+        joinUrl: 'https://tray.example.com/join/x',
+        webhookUrl: 'https://tray.example.com/webhook/x',
+        runtime: 'slicc-test',
+      },
+      error: null,
+    });
+
+    unsubscribe();
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+
+    expect(events).toEqual([
+      { state: 'connecting', joinUrl: null },
+      { state: 'leader', joinUrl: 'https://tray.example.com/join/x' },
+    ]);
+    // Restore module state for sibling tests that read getLeaderTrayRuntimeStatus().
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+  });
+
+  it('isolates listener errors so the manager state machine keeps running', () => {
+    const calls: string[] = [];
+    const unsubscribeBad = subscribeToLeaderTrayRuntimeStatus(() => {
+      throw new Error('listener boom');
+    });
+    const unsubscribeGood = subscribeToLeaderTrayRuntimeStatus((status) => {
+      calls.push(status.state);
+    });
+
+    expect(() =>
+      setLeaderTrayRuntimeStatus({ state: 'connecting', session: null, error: null })
+    ).not.toThrow();
+    expect(calls).toEqual(['connecting']);
+
+    unsubscribeBad();
+    unsubscribeGood();
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
   });
 });

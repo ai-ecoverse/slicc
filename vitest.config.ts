@@ -97,6 +97,13 @@ export default defineConfig({
       },
       {
         extends: true,
+        define: {
+          // Extension code transitively imports webapp modules (e.g.
+          // offscreen-bridge → tray-leader → core/logger), which read
+          // __DEV__ at module load. Without this, those tests fail to
+          // import with `ReferenceError: __DEV__ is not defined`.
+          __DEV__: 'true',
+        },
         test: {
           name: 'chrome-extension',
           include: ['packages/chrome-extension/tests/**/*.test.ts'],

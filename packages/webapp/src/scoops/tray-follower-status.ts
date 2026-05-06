@@ -42,16 +42,48 @@ export function getFollowerTrayRuntimeStatus(): FollowerTrayRuntimeStatus {
   return { ...followerTrayRuntimeStatus };
 }
 
+type FollowerTrayRuntimeStatusListener = (status: FollowerTrayRuntimeStatus) => void;
+const followerTrayRuntimeStatusListeners = new Set<FollowerTrayRuntimeStatusListener>();
+
+/**
+ * Subscribe to follower tray status changes. Mirrors the leader-side
+ * subscriber API in tray-leader.ts; used by the extension offscreen
+ * runtime to push status into the side-panel context.
+ */
+export function subscribeToFollowerTrayRuntimeStatus(
+  listener: FollowerTrayRuntimeStatusListener
+): () => void {
+  followerTrayRuntimeStatusListeners.add(listener);
+  return () => {
+    followerTrayRuntimeStatusListeners.delete(listener);
+  };
+}
+
+function notifyFollowerListeners(): void {
+  if (followerTrayRuntimeStatusListeners.size === 0) return;
+  const snapshot = { ...followerTrayRuntimeStatus };
+  for (const listener of followerTrayRuntimeStatusListeners) {
+    try {
+      listener(snapshot);
+    } catch {
+      // Listener errors must not break the manager's state machine.
+    }
+  }
+}
+
 export function setFollowerTrayRuntimeStatus(status: FollowerTrayRuntimeStatus): void {
   followerTrayRuntimeStatus = { ...status };
+  notifyFollowerListeners();
 }
 
 /** Reset reconnect attempt counter to 0, preserving other fields. */
 export function resetReconnectAttempts(): void {
   followerTrayRuntimeStatus = { ...followerTrayRuntimeStatus, reconnectAttempts: 0 };
+  notifyFollowerListeners();
 }
 
 /** Update the lastPingTime timestamp, preserving other fields. */
 export function setFollowerLastPingTime(timestamp: number): void {
   followerTrayRuntimeStatus = { ...followerTrayRuntimeStatus, lastPingTime: timestamp };
+  notifyFollowerListeners();
 }

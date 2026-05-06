@@ -64,11 +64,43 @@ export function getLeaderTrayRuntimeStatus(): LeaderTrayRuntimeStatus {
   };
 }
 
-function setLeaderTrayRuntimeStatus(status: LeaderTrayRuntimeStatus): void {
+type LeaderTrayRuntimeStatusListener = (status: LeaderTrayRuntimeStatus) => void;
+const leaderTrayRuntimeStatusListeners = new Set<LeaderTrayRuntimeStatusListener>();
+
+/**
+ * Subscribe to leader tray status changes. Called synchronously after
+ * each update with the new (deep-copied) status. Returns an unsubscribe
+ * function. The extension offscreen runtime uses this to mirror status
+ * into the side-panel context, where the avatar popover lives.
+ */
+export function subscribeToLeaderTrayRuntimeStatus(
+  listener: LeaderTrayRuntimeStatusListener
+): () => void {
+  leaderTrayRuntimeStatusListeners.add(listener);
+  return () => {
+    leaderTrayRuntimeStatusListeners.delete(listener);
+  };
+}
+
+/**
+ * Replace the leader tray status singleton and notify subscribers.
+ * Exported so the extension panel can mirror updates pushed from the
+ * offscreen document; the local manager calls this internally too.
+ */
+export function setLeaderTrayRuntimeStatus(status: LeaderTrayRuntimeStatus): void {
   leaderTrayRuntimeStatus = {
     ...status,
     session: status.session ? { ...status.session } : null,
   };
+  if (leaderTrayRuntimeStatusListeners.size === 0) return;
+  const snapshot = getLeaderTrayRuntimeStatus();
+  for (const listener of leaderTrayRuntimeStatusListeners) {
+    try {
+      listener(snapshot);
+    } catch {
+      // Listener errors must not break the manager's state machine.
+    }
+  }
 }
 
 export interface LeaderTraySessionStore {

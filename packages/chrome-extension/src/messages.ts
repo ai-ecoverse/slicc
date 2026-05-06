@@ -224,6 +224,13 @@ export interface StateSnapshotMsg {
   type: 'state-snapshot';
   scoops: ScoopListMsg['scoops'];
   activeScoopJid: string | null;
+  /**
+   * Optional tray runtime snapshot, included so a panel attaching late
+   * (e.g. side panel reopened after the offscreen leader is already up)
+   * sees the leader's join URL without waiting for the next status
+   * change. Older offscreen builds may omit this.
+   */
+  trayRuntimeStatus?: { leader: TrayLeaderStatusSnapshot; follower: TrayFollowerStatusSnapshot };
 }
 
 export interface ErrorMsg {
@@ -284,6 +291,44 @@ export interface OffscreenReadyMsg {
   type: 'offscreen-ready';
 }
 
+/**
+ * Snapshot of the leader/follower tray runtime status, mirrored from
+ * the offscreen document into the side panel so the avatar popover
+ * (`Layout.appendTrayMenu`) can render the same "Enable multi-browser
+ * sync" surface in extension mode that standalone has. The panel
+ * applies the snapshot via `setLeaderTrayRuntimeStatus` /
+ * `setFollowerTrayRuntimeStatus` so its module-level singletons match
+ * offscreen — without this, the panel's singletons stay 'inactive'
+ * because the actual managers run in offscreen.
+ */
+export interface TrayRuntimeStatusMsg {
+  type: 'tray-runtime-status';
+  leader: TrayLeaderStatusSnapshot;
+  follower: TrayFollowerStatusSnapshot;
+}
+
+export interface TrayLeaderStatusSnapshot {
+  state: 'inactive' | 'connecting' | 'leader' | 'reconnecting' | 'error';
+  joinUrl: string | null;
+  workerBaseUrl: string | null;
+  trayId: string | null;
+  error: string | null;
+  reconnectAttempts: number;
+}
+
+export interface TrayFollowerStatusSnapshot {
+  state: 'inactive' | 'connecting' | 'connected' | 'reconnecting' | 'error';
+  joinUrl: string | null;
+  trayId: string | null;
+  error: string | null;
+  lastError: string | null;
+  reconnectAttempts: number;
+  attachAttempts: number;
+  lastAttachCode: string | null;
+  connectingSince: number | null;
+  lastPingTime: number | null;
+}
+
 export interface PanelCdpResponseMsg {
   type: 'panel-cdp-response';
   id: number;
@@ -325,7 +370,8 @@ export type OffscreenToPanelMessage =
   | IncomingMessageMsg
   | ScoopMessagesReplacedMsg
   | PanelCdpResponseMsg
-  | OAuthResultMsg;
+  | OAuthResultMsg
+  | TrayRuntimeStatusMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen ↔ Service Worker (CDP proxy)
