@@ -544,16 +544,91 @@ private func extractFencedShtml(from content: String) -> (cleaned: String, fragm
 /// `<div>` tags via depth counting so nested divs stay inside the
 /// fragment. `startIndex` offsets the marker numbering so callers can
 /// concatenate fragments from multiple passes.
+///
+/// Content inside non-shtml fenced code blocks (```html, ```xml, plain
+/// ```, etc.) is preserved verbatim — sprinkle classes that show up in
+/// those regions are documentation samples, not live UI, so they must
+/// not be hoisted into iframes. The shtml fences have already been
+/// stripped by `extractFencedShtml` before this runs.
 private func extractBareSprinkleDivs(
     from content: String,
     startIndex: Int
 ) -> (cleaned: String, fragments: [String]) {
     var fragments: [String] = []
     var cleaned = ""
+    // Walk the content alternating between "outside any fence" segments
+    // (which are scanned for bare sprinkle divs) and "inside a fence"
+    // segments (copied through verbatim).
     var i = content.startIndex
     while i < content.endIndex {
-        guard let openStart = findSprinkleDivOpen(in: content, from: i) else {
-            cleaned.append(contentsOf: content[i..<content.endIndex])
+        if let fence = nextFencedRange(in: content, from: i) {
+            // Scan the segment before the fence for sprinkle divs.
+            let scanResult = scanForSprinkleDivs(
+                in: content,
+                range: i..<fence.lowerBound,
+                fragmentStart: startIndex + fragments.count
+            )
+            cleaned.append(scanResult.cleaned)
+            fragments.append(contentsOf: scanResult.fragments)
+            // Append the fence (open + body + close) verbatim.
+            cleaned.append(contentsOf: content[fence])
+            i = fence.upperBound
+        } else {
+            let scanResult = scanForSprinkleDivs(
+                in: content,
+                range: i..<content.endIndex,
+                fragmentStart: startIndex + fragments.count
+            )
+            cleaned.append(scanResult.cleaned)
+            fragments.append(contentsOf: scanResult.fragments)
+            break
+        }
+    }
+    return (cleaned, fragments)
+}
+
+/// Find the next fenced code block in `content` starting at or after
+/// `from`. Returns the range covering the opening fence, body, and
+/// closing fence (whichever portion exists). Unterminated fences extend
+/// to end-of-string so callers preserve them verbatim instead of
+/// treating partial buffers as scannable text.
+private func nextFencedRange(in content: String, from: String.Index) -> Range<String.Index>? {
+    guard let openTicks = content.range(of: "```", range: from..<content.endIndex) else {
+        return nil
+    }
+    // Find the closing ``` after the opening line — the matching
+    // sequence we look for is "\n```" so a fence with text on the
+    // opening line still terminates correctly.
+    let afterOpen = openTicks.upperBound
+    if let closeTicks = content.range(of: "\n```", range: afterOpen..<content.endIndex) {
+        // Include any trailing characters on the closing fence's line
+        // (e.g. ```end-of-block) up to and including the next newline,
+        // so we don't accidentally re-scan the same close.
+        var end = closeTicks.upperBound
+        if let nl = content.range(of: "\n", range: end..<content.endIndex) {
+            end = nl.upperBound
+        } else {
+            end = content.endIndex
+        }
+        return openTicks.lowerBound..<end
+    }
+    // Unterminated fence — swallow the rest of the string so we don't
+    // pretend its contents are scannable markdown.
+    return openTicks.lowerBound..<content.endIndex
+}
+
+/// Inner pass: extract sprinkle divs from a single fence-free range.
+private func scanForSprinkleDivs(
+    in content: String,
+    range: Range<String.Index>,
+    fragmentStart: Int
+) -> (cleaned: String, fragments: [String]) {
+    var fragments: [String] = []
+    var cleaned = ""
+    var i = range.lowerBound
+    while i < range.upperBound {
+        guard let openStart = findSprinkleDivOpen(in: content, from: i, end: range.upperBound) else {
+            cleaned.append(contentsOf: content[i..<range.upperBound])
             break
         }
         cleaned.append(contentsOf: content[i..<openStart])
@@ -561,40 +636,45 @@ private func extractBareSprinkleDivs(
         // matching close. If anything looks malformed (unterminated tag,
         // missing close), bail out and keep the rest as text — better
         // than swallowing half a message into an iframe.
-        guard let blockEnd = matchDivBlockEnd(in: content, openStart: openStart) else {
-            cleaned.append(contentsOf: content[openStart..<content.endIndex])
+        guard let blockEnd = matchDivBlockEnd(in: content, openStart: openStart, end: range.upperBound) else {
+            cleaned.append(contentsOf: content[openStart..<range.upperBound])
             break
         }
         let fragment = String(content[openStart..<blockEnd])
         fragments.append(fragment)
-        cleaned.append(sprinkleMarker(index: startIndex + fragments.count - 1))
+        cleaned.append(sprinkleMarker(index: fragmentStart + fragments.count - 1))
         i = blockEnd
         // Swallow a trailing newline so the marker doesn't leave a blank line.
-        if i < content.endIndex, content[i] == "\n" {
+        if i < range.upperBound, content[i] == "\n" {
             i = content.index(after: i)
         }
     }
     return (cleaned, fragments)
 }
 
-/// Locate the next `<div ... class="… sprinkle-… …" …>` opening tag.
-/// Case-insensitive on the tag name; class attribute is searched for a
-/// `sprinkle-` token to avoid matching unrelated classes named e.g.
-/// `my-sprinkle-toy`.
-private func findSprinkleDivOpen(in content: String, from start: String.Index) -> String.Index? {
+/// Locate the next `<div ... class="… sprinkle-… …" …>` opening tag
+/// within `start..<end`. Case-insensitive on the tag name; class
+/// attribute is searched for a `sprinkle-` token to avoid matching
+/// unrelated classes named e.g. `my-sprinkle-toy`.
+private func findSprinkleDivOpen(
+    in content: String,
+    from start: String.Index,
+    end: String.Index? = nil
+) -> String.Index? {
+    let upper = end ?? content.endIndex
     var cursor = start
-    while cursor < content.endIndex {
-        guard let lt = content.range(of: "<", range: cursor..<content.endIndex) else { return nil }
+    while cursor < upper {
+        guard let lt = content.range(of: "<", range: cursor..<upper) else { return nil }
         let afterLt = lt.upperBound
         // Match `div` (case insensitive) followed by whitespace.
-        if afterLt < content.endIndex {
-            let three = content[afterLt..<min(content.index(afterLt, offsetBy: 3, limitedBy: content.endIndex) ?? content.endIndex,
-                                              content.endIndex)]
+        if afterLt < upper {
+            let three = content[afterLt..<min(content.index(afterLt, offsetBy: 3, limitedBy: upper) ?? upper,
+                                              upper)]
             if three.lowercased() == "div" {
-                let afterDiv = content.index(afterLt, offsetBy: 3, limitedBy: content.endIndex) ?? content.endIndex
-                if afterDiv < content.endIndex,
+                let afterDiv = content.index(afterLt, offsetBy: 3, limitedBy: upper) ?? upper
+                if afterDiv < upper,
                    content[afterDiv].isWhitespace || content[afterDiv] == ">" {
-                    if let tagEnd = content.range(of: ">", range: afterDiv..<content.endIndex) {
+                    if let tagEnd = content.range(of: ">", range: afterDiv..<upper) {
                         let tagText = content[lt.lowerBound..<tagEnd.upperBound]
                         if isSprinkleClassed(tagText) {
                             return lt.lowerBound
@@ -634,27 +714,34 @@ private func isSprinkleClassed(_ tag: Substring) -> Bool {
     return classValue.split(whereSeparator: { $0.isWhitespace }).contains { $0.hasPrefix("sprinkle-") }
 }
 
-/// Given the start of a `<div…>`, return the index just past the matching
-/// `</div>`. `nil` if the block is unterminated (e.g. the message was
-/// truncated mid-stream) — callers fall back to plain text.
-private func matchDivBlockEnd(in content: String, openStart: String.Index) -> String.Index? {
+/// Given the start of a `<div…>`, return the index just past the
+/// matching `</div>` within `openStart..<end`. `nil` if the block is
+/// unterminated (e.g. the message was truncated mid-stream, or the
+/// matching close lives past the surrounding fence-free segment) —
+/// callers fall back to plain text.
+private func matchDivBlockEnd(
+    in content: String,
+    openStart: String.Index,
+    end: String.Index? = nil
+) -> String.Index? {
+    let upper = end ?? content.endIndex
     // Find end of the opening tag itself first.
-    guard let openTagEnd = content.range(of: ">", range: openStart..<content.endIndex) else {
+    guard let openTagEnd = content.range(of: ">", range: openStart..<upper) else {
         return nil
     }
     var depth = 1
     var cursor = openTagEnd.upperBound
-    while cursor < content.endIndex {
-        guard let lt = content.range(of: "<", range: cursor..<content.endIndex) else { return nil }
+    while cursor < upper {
+        guard let lt = content.range(of: "<", range: cursor..<upper) else { return nil }
         let afterLt = lt.upperBound
-        if afterLt < content.endIndex, content[afterLt] == "/" {
+        if afterLt < upper, content[afterLt] == "/" {
             // </div…>
             let afterSlash = content.index(after: afterLt)
-            if afterSlash < content.endIndex {
-                let endLimit = content.index(afterSlash, offsetBy: 3, limitedBy: content.endIndex) ?? content.endIndex
+            if afterSlash < upper {
+                let endLimit = content.index(afterSlash, offsetBy: 3, limitedBy: upper) ?? upper
                 let three = content[afterSlash..<endLimit]
                 if three.lowercased() == "div" {
-                    guard let gt = content.range(of: ">", range: endLimit..<content.endIndex) else {
+                    guard let gt = content.range(of: ">", range: endLimit..<upper) else {
                         return nil
                     }
                     depth -= 1
@@ -666,12 +753,12 @@ private func matchDivBlockEnd(in content: String, openStart: String.Index) -> St
             cursor = afterLt
         } else {
             // Possibly <div…> opening — bump depth.
-            let endLimit = content.index(afterLt, offsetBy: 3, limitedBy: content.endIndex) ?? content.endIndex
+            let endLimit = content.index(afterLt, offsetBy: 3, limitedBy: upper) ?? upper
             let three = content[afterLt..<endLimit]
             if three.lowercased() == "div",
-               endLimit < content.endIndex,
+               endLimit < upper,
                content[endLimit].isWhitespace || content[endLimit] == ">" {
-                guard let gt = content.range(of: ">", range: endLimit..<content.endIndex) else {
+                guard let gt = content.range(of: ">", range: endLimit..<upper) else {
                     return nil
                 }
                 // Self-closing `<div … />` doesn't push depth.
