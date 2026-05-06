@@ -39,6 +39,7 @@ import {
   getProviderConfig,
 } from './provider-settings.js';
 import { trackChatSend, trackImageView } from './telemetry.js';
+import { attachLongPressGesture } from './long-press.js';
 
 const log = createLogger('chat-panel');
 
@@ -136,6 +137,31 @@ function renderChatMessageContent(msg: ChatMessage): string {
   return msg.role === 'assistant'
     ? renderAssistantMessageContent(msg.content)
     : renderMessageContent(msg.content);
+}
+
+/**
+ * Render a chat as Markdown for the clipboard. Each message becomes a
+ * `## User`/`## Assistant` block, attachments and tool calls are
+ * appended underneath their owning message. Used by the copy-chat
+ * long-press gesture.
+ */
+export function formatChatForClipboard(messages: ChatMessage[]): string {
+  let formatted = '';
+  for (const msg of messages) {
+    const heading = msg.role === 'user' ? 'User' : 'Assistant';
+    formatted += `## ${heading}\n${msg.content}\n\n`;
+    if (msg.attachments?.length) {
+      formatted += `Attachments:\n${msg.attachments
+        .map((attachment) => `- ${formatAttachmentSummary(attachment)}`)
+        .join('\n')}\n\n`;
+    }
+    if (msg.toolCalls) {
+      for (const tc of msg.toolCalls) {
+        formatted += `### Tool: ${tc.name}\nInput: ${JSON.stringify(tc.input, null, 2)}\nResult: ${tc.result ?? ''}\n\n`;
+      }
+    }
+  }
+  return formatted;
 }
 
 export class ChatPanel {
@@ -1884,35 +1910,72 @@ export class ChatPanel {
     const row = document.createElement('div');
     row.className = 'msg__feedback';
 
-    // Copy Chat — S2_Icon_Copy_20_N (same action as header copy chat)
+    // Copy — short click copies the most recent assistant response,
+    // long-press (>=1s, same gesture as the side rail) or a
+    // modifier-click copies the entire chat.
     const copyBtn = document.createElement('button');
     copyBtn.className = 'msg__feedback-btn';
-    copyBtn.dataset.tooltip = 'Copy chat';
-    copyBtn.setAttribute('aria-label', 'Copy chat');
+    copyBtn.dataset.tooltip = 'Copy last response · hold to copy chat';
+    copyBtn.setAttribute('aria-label', 'Copy last response — hold to copy entire chat');
     copyBtn.innerHTML =
       '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="m11.75,18h-7.5c-1.24,0-2.25-1.01-2.25-2.25v-7.5c0-1.24,1.01-2.25,2.25-2.25.41,0,.75.34.75.75s-.34.75-.75.75c-.41,0-.75.34-.75.75v7.5c0,.41.34.75.75.75h7.5c.41,0,.75-.34.75-.75,0-.41.34-.75.75-.75s.75.34.75.75c0,1.24-1.01,2.25-2.25,2.25Z"/><path d="m6.75,5c-.41,0-.75-.34-.75-.75,0-1.24,1.01-2.25,2.25-2.25.41,0,.75.34.75.75s-.34.75-.75.75c-.41,0-.75.34-.75.75,0,.41-.34.75-.75.75Z"/><path d="m13,3.5h-2c-.41,0-.75-.34-.75-.75s.34-.75.75-.75h2c.41,0,.75.34.75.75s-.34.75-.75.75Z"/><path d="m13,14h-2c-.41,0-.75-.34-.75-.75s.34-.75.75-.75h2c.41,0,.75.34.75.75s-.34.75-.75.75Z"/><path d="m15.75,14c-.41,0-.75-.34-.75-.75s.34-.75.75-.75c.41,0,.75-.34.75-.75,0-.41.34-.75.75-.75s.75.34.75.75c0,1.24-1.01,2.25-2.25,2.25Z"/><path d="m17.25,5c-.41,0-.75-.34-.75-.75,0-.41-.34-.75-.75-.75-.41,0-.75-.34-.75-.75s.34-.75.75-.75c1.24,0,2.25,1.01,2.25,2.25,0,.41-.34.75-.75.75Z"/><path d="m17.25,9.75c-.41,0-.75-.34-.75-.75v-2c0-.41.34-.75.75-.75s.75.34.75.75v2c0,.41-.34.75-.75.75Z"/><path d="m6.75,9.75c-.41,0-.75-.34-.75-.75v-2c0-.41.34-.75.75-.75s.75.34.75.75v2c0,.41-.34.75-.75.75Z"/><path d="m8.25,14c-1.24,0-2.25-1.01-2.25-2.25,0-.41.34-.75.75-.75s.75.34.75.75c0,.41.34.75.75.75.41,0,.75.34.75.75s-.34.75-.75.75Z"/></svg>';
-    copyBtn.addEventListener('click', async () => {
-      const messages = this.getMessages();
-      let formatted = '';
-      for (const msg of messages) {
-        const heading = msg.role === 'user' ? 'User' : 'Assistant';
-        formatted += `## ${heading}\n${msg.content}\n\n`;
-        if (msg.attachments?.length) {
-          formatted += `Attachments:\n${msg.attachments
-            .map((attachment) => `- ${formatAttachmentSummary(attachment)}`)
-            .join('\n')}\n\n`;
-        }
-        if (msg.toolCalls) {
-          for (const tc of msg.toolCalls) {
-            formatted += `### Tool: ${tc.name}\nInput: ${JSON.stringify(tc.input, null, 2)}\nResult: ${tc.result ?? ''}\n\n`;
-          }
-        }
-      }
-      await navigator.clipboard.writeText(formatted);
+
+    const flashSuccess = () => {
       copyBtn.style.color = 'var(--s2-positive)';
       setTimeout(() => {
         copyBtn.style.color = '';
       }, 1500);
+    };
+
+    const copyAll = async () => {
+      const formatted = formatChatForClipboard(this.getMessages());
+      if (!formatted) return;
+      await navigator.clipboard.writeText(formatted);
+      flashSuccess();
+    };
+
+    const copyLastAssistant = async () => {
+      const messages = this.getMessages();
+      // Walk back to the most recent fully-rendered assistant message.
+      // Skip streaming/queued placeholders so partial output doesn't
+      // land on the clipboard.
+      let target: ChatMessage | null = null;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m.role !== 'assistant') continue;
+        if (m.isStreaming || m.queued) continue;
+        target = m;
+        break;
+      }
+      // Fallback: if every assistant message is mid-stream (we got
+      // here right as it finished), copy the last assistant entry
+      // anyway — better than copying nothing.
+      if (!target) {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'assistant') {
+            target = messages[i];
+            break;
+          }
+        }
+      }
+      // Final fallback: copy whole chat. Should be unreachable when
+      // the row is rendered because the row only appears after an
+      // assistant message has streamed in.
+      if (!target) {
+        await copyAll();
+        return;
+      }
+      await navigator.clipboard.writeText(target.content);
+      flashSuccess();
+    };
+
+    attachLongPressGesture(copyBtn, {
+      onShortClick: () => {
+        void copyLastAssistant();
+      },
+      onLongPress: () => {
+        void copyAll();
+      },
     });
     row.appendChild(copyBtn);
 

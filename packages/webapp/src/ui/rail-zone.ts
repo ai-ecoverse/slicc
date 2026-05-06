@@ -18,6 +18,7 @@
  */
 
 import type { ZoneId } from './panel-types.js';
+import { LONG_PRESS_MS, attachLongPressGesture } from './long-press.js';
 
 export interface RailItem {
   id: string;
@@ -57,9 +58,6 @@ export interface RailZoneOptions {
    */
   defaultFullpage?: boolean;
 }
-
-/** Long-press threshold in milliseconds for the click-and-hold gesture. */
-const LONG_PRESS_MS = 1000;
 
 interface RailEntry {
   btn: HTMLButtonElement;
@@ -338,8 +336,6 @@ export class RailZone {
 
   /** Wire click + long-press + modifier-click activation. */
   private attachActivationHandlers(btn: HTMLButtonElement, id: string): void {
-    let pressTimer: ReturnType<typeof setTimeout> | null = null;
-    let firedLongPress = false;
     let pressEl: HTMLSpanElement | null = null;
 
     const removePressVisual = () => {
@@ -347,14 +343,6 @@ export class RailZone {
         pressEl.remove();
         pressEl = null;
       }
-    };
-
-    const clearTimer = () => {
-      if (pressTimer !== null) {
-        clearTimeout(pressTimer);
-        pressTimer = null;
-      }
-      removePressVisual();
     };
 
     /**
@@ -391,47 +379,22 @@ export class RailZone {
       });
     };
 
-    btn.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
-      // Modifier-clicks are an instant trigger — no press animation.
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      firedLongPress = false;
-      clearTimer();
-      startPressVisual(e);
-      pressTimer = setTimeout(() => {
-        firedLongPress = true;
-        removePressVisual();
-        this.activateItem(id, { fullpage: true });
-      }, LONG_PRESS_MS);
-    });
-
-    btn.addEventListener('mouseup', () => clearTimer());
-    btn.addEventListener('mouseleave', () => clearTimer());
-    btn.addEventListener('blur', () => clearTimer());
-    btn.addEventListener('contextmenu', () => clearTimer());
-
-    btn.addEventListener('click', (e) => {
-      // Skip the click that the long-press already handled.
-      if (firedLongPress) {
-        firedLongPress = false;
-        e.preventDefault();
-        return;
-      }
-      const modifierClick = e.metaKey || e.ctrlKey || e.shiftKey || e.altKey;
-      if (modifierClick) {
-        this.activateItem(id, { fullpage: true });
-        return;
-      }
-      // Plain click: toggle. In `defaultFullpage` mode (extension
-      // side panel) the active rail item already covers the panel,
-      // so collapsing on a second click on the same icon takes the
-      // user back to chat naturally.
-      const wantsFullpage = this.defaultFullpage;
-      if (this.activeId === id && (wantsFullpage ? this.fullpage : !this.fullpage)) {
-        this.collapse();
-      } else {
-        this.activateItem(id, { fullpage: wantsFullpage });
-      }
+    attachLongPressGesture(btn, {
+      onPressStart: startPressVisual,
+      onPressEnd: removePressVisual,
+      onLongPress: () => this.activateItem(id, { fullpage: true }),
+      onShortClick: () => {
+        // Plain click: toggle. In `defaultFullpage` mode (extension
+        // side panel) the active rail item already covers the panel,
+        // so collapsing on a second click on the same icon takes the
+        // user back to chat naturally.
+        const wantsFullpage = this.defaultFullpage;
+        if (this.activeId === id && (wantsFullpage ? this.fullpage : !this.fullpage)) {
+          this.collapse();
+        } else {
+          this.activateItem(id, { fullpage: wantsFullpage });
+        }
+      },
     });
   }
 
