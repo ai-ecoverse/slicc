@@ -64,11 +64,47 @@ export function getLeaderTrayRuntimeStatus(): LeaderTrayRuntimeStatus {
   };
 }
 
-function setLeaderTrayRuntimeStatus(status: LeaderTrayRuntimeStatus): void {
+type LeaderTrayRuntimeStatusListener = (status: LeaderTrayRuntimeStatus) => void;
+const leaderTrayRuntimeStatusListeners = new Set<LeaderTrayRuntimeStatusListener>();
+
+/**
+ * Subscribe to leader tray status changes. Called synchronously after
+ * each update with the new (deep-copied) status. Returns an unsubscribe
+ * function. The extension offscreen runtime uses this to mirror status
+ * into the side-panel context, where the avatar popover lives.
+ */
+export function subscribeToLeaderTrayRuntimeStatus(
+  listener: LeaderTrayRuntimeStatusListener
+): () => void {
+  leaderTrayRuntimeStatusListeners.add(listener);
+  return () => {
+    leaderTrayRuntimeStatusListeners.delete(listener);
+  };
+}
+
+/**
+ * Replace the leader tray status singleton and notify subscribers.
+ * Exported so the extension panel can mirror updates pushed from the
+ * offscreen document; the local manager calls this internally too.
+ *
+ * Each listener receives a fresh deep-copied snapshot so a listener
+ * that mutates its argument can't change what later listeners observe.
+ * Iterating a copy of the listener set means an unsubscribe / subscribe
+ * during dispatch doesn't perturb the in-flight delivery either.
+ */
+export function setLeaderTrayRuntimeStatus(status: LeaderTrayRuntimeStatus): void {
   leaderTrayRuntimeStatus = {
     ...status,
     session: status.session ? { ...status.session } : null,
   };
+  if (leaderTrayRuntimeStatusListeners.size === 0) return;
+  for (const listener of [...leaderTrayRuntimeStatusListeners]) {
+    try {
+      listener(getLeaderTrayRuntimeStatus());
+    } catch {
+      // Listener errors must not break the manager's state machine.
+    }
+  }
 }
 
 export interface LeaderTraySessionStore {
@@ -581,7 +617,10 @@ function parseSocketMessage(data: unknown): WorkerToLeaderControlMessage | null 
 export function createTrayFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   if (isExtension) {
-    return fetchImpl;
+    // Wrap so calling `this.fetchImpl(...)` doesn't rebind `this` to the
+    // LeaderTrayManager instance and trigger "Illegal invocation" against
+    // the global fetch.
+    return (url, init) => fetchImpl(url, init);
   }
 
   return async (url, init = {}) => {

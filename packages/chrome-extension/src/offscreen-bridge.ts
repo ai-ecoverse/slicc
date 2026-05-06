@@ -29,7 +29,12 @@ import type {
   ErrorMsg,
   ScoopCreatedMsg,
   IncomingMessageMsg,
+  TrayFollowerStatusSnapshot,
+  TrayLeaderStatusSnapshot,
+  TrayRuntimeStatusMsg,
 } from './messages.js';
+import { getLeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
+import { getFollowerTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-follower-status.js';
 import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
 import { toolUIRegistry } from '../../../packages/webapp/src/tools/tool-ui.js';
 import type { ChatMessage } from '../../../packages/webapp/src/ui/types.js';
@@ -317,6 +322,54 @@ export class OffscreenBridge {
       type: 'state-snapshot',
       scoops,
       activeScoopJid: cone?.jid ?? null,
+      trayRuntimeStatus: this.buildTrayRuntimeStatus(),
+    };
+  }
+
+  /**
+   * Read the offscreen-side tray status singletons and emit them to the
+   * panel. Called whenever the underlying status changes (subscribed in
+   * offscreen.ts) so the panel's avatar popover can render the same
+   * "Enable multi-browser sync" surface that standalone has.
+   */
+  emitTrayRuntimeStatus(): void {
+    const status = this.buildTrayRuntimeStatus();
+    const msg: TrayRuntimeStatusMsg = {
+      type: 'tray-runtime-status',
+      leader: status.leader,
+      follower: status.follower,
+    };
+    this.emit(msg);
+  }
+
+  private buildTrayRuntimeStatus(): {
+    leader: TrayLeaderStatusSnapshot;
+    follower: TrayFollowerStatusSnapshot;
+  } {
+    const leader = getLeaderTrayRuntimeStatus();
+    const follower = getFollowerTrayRuntimeStatus();
+    return {
+      leader: {
+        state: leader.state,
+        // Carry the whole session so the panel singleton matches
+        // offscreen field-for-field. `getLeaderTrayRuntimeStatus()`
+        // already returns a defensive copy.
+        session: leader.session,
+        error: leader.error ?? null,
+        reconnectAttempts: leader.reconnectAttempts ?? 0,
+      },
+      follower: {
+        state: follower.state,
+        joinUrl: follower.joinUrl,
+        trayId: follower.trayId,
+        error: follower.error,
+        lastError: follower.lastError,
+        reconnectAttempts: follower.reconnectAttempts,
+        attachAttempts: follower.attachAttempts,
+        lastAttachCode: follower.lastAttachCode,
+        connectingSince: follower.connectingSince,
+        lastPingTime: follower.lastPingTime,
+      },
     };
   }
 

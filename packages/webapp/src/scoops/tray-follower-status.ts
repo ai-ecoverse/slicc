@@ -42,16 +42,52 @@ export function getFollowerTrayRuntimeStatus(): FollowerTrayRuntimeStatus {
   return { ...followerTrayRuntimeStatus };
 }
 
+type FollowerTrayRuntimeStatusListener = (status: FollowerTrayRuntimeStatus) => void;
+const followerTrayRuntimeStatusListeners = new Set<FollowerTrayRuntimeStatusListener>();
+
+/**
+ * Subscribe to follower tray status changes. Mirrors the leader-side
+ * subscriber API in tray-leader.ts; used by the extension offscreen
+ * runtime to push status into the side-panel context.
+ */
+export function subscribeToFollowerTrayRuntimeStatus(
+  listener: FollowerTrayRuntimeStatusListener
+): () => void {
+  followerTrayRuntimeStatusListeners.add(listener);
+  return () => {
+    followerTrayRuntimeStatusListeners.delete(listener);
+  };
+}
+
+// Each listener receives a fresh shallow copy so a listener that mutates
+// its argument can't change what later listeners observe. Iterating a
+// copy of the listener set means an unsubscribe / subscribe during
+// dispatch doesn't perturb the in-flight delivery either. (Status
+// fields are flat scalars, so a shallow copy is a full deep copy here.)
+function notifyFollowerListeners(): void {
+  if (followerTrayRuntimeStatusListeners.size === 0) return;
+  for (const listener of [...followerTrayRuntimeStatusListeners]) {
+    try {
+      listener({ ...followerTrayRuntimeStatus });
+    } catch {
+      // Listener errors must not break the manager's state machine.
+    }
+  }
+}
+
 export function setFollowerTrayRuntimeStatus(status: FollowerTrayRuntimeStatus): void {
   followerTrayRuntimeStatus = { ...status };
+  notifyFollowerListeners();
 }
 
 /** Reset reconnect attempt counter to 0, preserving other fields. */
 export function resetReconnectAttempts(): void {
   followerTrayRuntimeStatus = { ...followerTrayRuntimeStatus, reconnectAttempts: 0 };
+  notifyFollowerListeners();
 }
 
 /** Update the lastPingTime timestamp, preserving other fields. */
 export function setFollowerLastPingTime(timestamp: number): void {
   followerTrayRuntimeStatus = { ...followerTrayRuntimeStatus, lastPingTime: timestamp };
+  notifyFollowerListeners();
 }

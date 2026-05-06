@@ -24,8 +24,13 @@ import type {
   IncomingMessageMsg,
   ScoopListMsg,
   ScoopMessagesReplacedMsg,
+  TrayFollowerStatusSnapshot,
+  TrayLeaderStatusSnapshot,
+  TrayRuntimeStatusMsg,
 } from '../../../chrome-extension/src/messages.js';
 import { createLogger } from '../core/logger.js';
+import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 
 const log = createLogger('offscreen-client');
 
@@ -335,6 +340,12 @@ export class OffscreenClient {
         this.callbacks.onScoopMessagesReplaced?.(m.scoopJid, m.messages);
         break;
       }
+
+      case 'tray-runtime-status': {
+        const m = msg as TrayRuntimeStatusMsg;
+        applyTrayRuntimeStatusSnapshot(m.leader, m.follower);
+        break;
+      }
     }
   }
 
@@ -462,6 +473,10 @@ export class OffscreenClient {
       this.scoopStatuses.set(s.jid, s.status);
     }
 
+    if (msg.trayRuntimeStatus) {
+      applyTrayRuntimeStatusSnapshot(msg.trayRuntimeStatus.leader, msg.trayRuntimeStatus.follower);
+    }
+
     const isFirstReady = !this.ready;
     if (isFirstReady) {
       this.ready = true;
@@ -538,4 +553,37 @@ function uid(): string {
 
 function isExtMsg(msg: unknown): boolean {
   return typeof msg === 'object' && msg !== null && 'source' in msg && 'payload' in msg;
+}
+
+/**
+ * Mirror an offscreen tray status snapshot into the panel-side singletons
+ * so `Layout.appendTrayMenu` and any other panel code reading
+ * `getLeaderTrayRuntimeStatus` / `getFollowerTrayRuntimeStatus` sees the
+ * same view as offscreen. The wire snapshot carries the full
+ * `LeaderTraySession`, so consumers like the lick-WebSocket
+ * `create_webhook` handler that read `session.webhookUrl` get real
+ * values instead of falling back silently.
+ */
+function applyTrayRuntimeStatusSnapshot(
+  leader: TrayLeaderStatusSnapshot,
+  follower: TrayFollowerStatusSnapshot
+): void {
+  setLeaderTrayRuntimeStatus({
+    state: leader.state,
+    error: leader.error,
+    reconnectAttempts: leader.reconnectAttempts,
+    session: leader.session ? { ...leader.session } : null,
+  });
+  setFollowerTrayRuntimeStatus({
+    state: follower.state,
+    joinUrl: follower.joinUrl,
+    trayId: follower.trayId,
+    error: follower.error,
+    lastError: follower.lastError,
+    reconnectAttempts: follower.reconnectAttempts,
+    attachAttempts: follower.attachAttempts,
+    lastAttachCode: follower.lastAttachCode,
+    connectingSince: follower.connectingSince,
+    lastPingTime: follower.lastPingTime,
+  });
 }

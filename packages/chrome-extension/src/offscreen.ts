@@ -15,8 +15,14 @@ import {
   type AgentSpawnOptions,
   type AgentSpawnResult,
 } from '../../../packages/webapp/src/scoops/agent-bridge.js';
-import { LeaderTrayManager } from '../../../packages/webapp/src/scoops/tray-leader.js';
 import {
+  LeaderTrayManager,
+  subscribeToLeaderTrayRuntimeStatus,
+} from '../../../packages/webapp/src/scoops/tray-leader.js';
+import { subscribeToFollowerTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-follower-status.js';
+import {
+  DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+  DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
   hasStoredTrayJoinUrl,
   resolveTrayRuntimeConfig,
   TRAY_JOIN_STORAGE_KEY,
@@ -76,6 +82,13 @@ async function init(): Promise<void> {
   // Bind the orchestrator to the bridge (sets up message listener + session store)
   // Pass BrowserAPI so the bridge can proxy panel CDP commands through the offscreen transport.
   await bridge.bind(orchestrator, browser);
+
+  // Mirror tray runtime status into the side panel so its avatar popover
+  // can render the "Enable multi-browser sync" surface. The leader and
+  // follower runtimes both live in this offscreen document; the panel's
+  // module-level singletons would otherwise stay 'inactive' forever.
+  subscribeToLeaderTrayRuntimeStatus(() => bridge.emitTrayRuntimeStatus());
+  subscribeToFollowerTrayRuntimeStatus(() => bridge.emitTrayRuntimeStatus());
 
   console.log('[slicc-offscreen] Orchestrator created, calling init()...');
   await orchestrator.init();
@@ -363,6 +376,9 @@ async function init(): Promise<void> {
       locationHref: window.location.href,
       storage: window.localStorage,
       envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+      defaultWorkerBaseUrl: __DEV__
+        ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
+        : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
     });
     const nextTrayRuntimeKey = JSON.stringify(trayRuntimeConfig);
     if (nextTrayRuntimeKey === activeTrayRuntimeKey) {

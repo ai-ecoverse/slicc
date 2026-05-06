@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   LeaderTrayManager,
+  createTrayFetch,
   getLeaderTrayRuntimeStatus,
   parseLeaderTraySession,
+  setLeaderTrayRuntimeStatus,
+  subscribeToLeaderTrayRuntimeStatus,
   type LeaderTraySession,
   type LeaderTraySessionStore,
   type LeaderTrayWebSocket,
@@ -915,5 +918,158 @@ describe('tray-leader', () => {
     expect(sockets[0].closeCalls).toBe(1);
 
     manager.stop();
+  });
+});
+
+describe('createTrayFetch', () => {
+  // Browsers reject `fetch` calls whose `this` is not the global Window /
+  // WorkerGlobalScope, throwing "Illegal invocation". The leader stores the
+  // returned function on `this.fetchImpl` and invokes it as a method, so
+  // returning a bare reference to `fetch` would rebind `this` to the
+  // LeaderTrayManager and break every request. The wrappers below assert that
+  // the returned function tolerates an arbitrary `this` for both the
+  // extension and standalone branches.
+  const stubChromeRuntime = (mode: 'extension' | 'standalone') => {
+    const original = (globalThis as { chrome?: unknown }).chrome;
+    if (mode === 'extension') {
+      (globalThis as { chrome?: unknown }).chrome = { runtime: { id: 'test' } };
+    } else {
+      delete (globalThis as { chrome?: unknown }).chrome;
+    }
+    return () => {
+      if (original === undefined) {
+        delete (globalThis as { chrome?: unknown }).chrome;
+      } else {
+        (globalThis as { chrome?: unknown }).chrome = original;
+      }
+    };
+  };
+
+  it('preserves the underlying fetch when invoked as a method (extension branch)', async () => {
+    const restore = stubChromeRuntime('extension');
+    try {
+      const inner = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'));
+      const wrapped = createTrayFetch(inner);
+      const holder = { call: wrapped };
+      await expect(holder.call('https://example.com/x')).resolves.toBeInstanceOf(Response);
+      expect(inner).toHaveBeenCalledTimes(1);
+      expect(inner.mock.calls[0]?.[0]).toBe('https://example.com/x');
+    } finally {
+      restore();
+    }
+  });
+
+  it('routes cross-origin requests through the fetch proxy in non-extension mode', async () => {
+    const restore = stubChromeRuntime('standalone');
+    try {
+      // Non-extension branch already wraps fetch in an arrow, so this case
+      // existed pre-fix; included to lock in the existing behavior alongside
+      // the new method-call invariant above.
+      const inner = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'));
+      const wrapped = createTrayFetch(inner);
+      const holder = { call: wrapped };
+      await expect(holder.call('https://tray.example.com/tray')).resolves.toBeInstanceOf(Response);
+      expect(inner).toHaveBeenCalledTimes(1);
+      // Standalone branch routes off-origin requests through /api/fetch-proxy.
+      expect(inner.mock.calls[0]?.[0]).toBe('/api/fetch-proxy');
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe('subscribeToLeaderTrayRuntimeStatus', () => {
+  // The extension panel mirrors offscreen status by calling
+  // setLeaderTrayRuntimeStatus on every push. We rely on subscribers
+  // firing synchronously after each set so the offscreen→panel pipe
+  // doesn't drop intermediate states; these tests pin that contract.
+  it('notifies subscribers on every status change and returns a working unsubscribe', () => {
+    const events: Array<{ state: string; joinUrl: string | null }> = [];
+    const unsubscribe = subscribeToLeaderTrayRuntimeStatus((status) => {
+      events.push({ state: status.state, joinUrl: status.session?.joinUrl ?? null });
+    });
+
+    setLeaderTrayRuntimeStatus({ state: 'connecting', session: null, error: null });
+    setLeaderTrayRuntimeStatus({
+      state: 'leader',
+      session: {
+        workerBaseUrl: 'https://tray.example.com',
+        trayId: 'tray-x',
+        createdAt: '2026-05-06T00:00:00.000Z',
+        controllerId: 'c-1',
+        controllerUrl: 'https://tray.example.com/controller/x',
+        joinUrl: 'https://tray.example.com/join/x',
+        webhookUrl: 'https://tray.example.com/webhook/x',
+        runtime: 'slicc-test',
+      },
+      error: null,
+    });
+
+    unsubscribe();
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+
+    expect(events).toEqual([
+      { state: 'connecting', joinUrl: null },
+      { state: 'leader', joinUrl: 'https://tray.example.com/join/x' },
+    ]);
+    // Restore module state for sibling tests that read getLeaderTrayRuntimeStatus().
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+  });
+
+  it('gives each listener its own snapshot so mutations do not leak', () => {
+    // A buggy listener that mutates its argument must not be able to
+    // change what subsequent listeners observe. The setter dispatches
+    // a fresh deep copy per listener.
+    const observed: Array<{ state: string; sessionTrayId: string | null }> = [];
+    const unsubscribeBad = subscribeToLeaderTrayRuntimeStatus((status) => {
+      // Mutate both top-level and nested fields.
+      (status as { state: string }).state = 'inactive';
+      if (status.session) (status.session as { trayId: string }).trayId = 'mutated';
+    });
+    const unsubscribeGood = subscribeToLeaderTrayRuntimeStatus((status) => {
+      observed.push({
+        state: status.state,
+        sessionTrayId: status.session?.trayId ?? null,
+      });
+    });
+
+    setLeaderTrayRuntimeStatus({
+      state: 'leader',
+      session: {
+        workerBaseUrl: 'https://tray.example.com',
+        trayId: 'tray-y',
+        createdAt: '2026-05-06T00:00:00.000Z',
+        controllerId: 'c-1',
+        controllerUrl: 'https://tray.example.com/controller/y',
+        joinUrl: 'https://tray.example.com/join/y',
+        webhookUrl: 'https://tray.example.com/webhook/y',
+        runtime: 'slicc-test',
+      },
+      error: null,
+    });
+
+    expect(observed).toEqual([{ state: 'leader', sessionTrayId: 'tray-y' }]);
+    unsubscribeBad();
+    unsubscribeGood();
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+  });
+
+  it('isolates listener errors so the manager state machine keeps running', () => {
+    const calls: string[] = [];
+    const unsubscribeBad = subscribeToLeaderTrayRuntimeStatus(() => {
+      throw new Error('listener boom');
+    });
+    const unsubscribeGood = subscribeToLeaderTrayRuntimeStatus((status) => {
+      calls.push(status.state);
+    });
+
+    expect(() =>
+      setLeaderTrayRuntimeStatus({ state: 'connecting', session: null, error: null })
+    ).not.toThrow();
+    expect(calls).toEqual(['connecting']);
+
+    unsubscribeBad();
+    unsubscribeGood();
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
   });
 });
