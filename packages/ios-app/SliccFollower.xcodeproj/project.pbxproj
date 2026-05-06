@@ -10,7 +10,6 @@
 		02019B8CFDC4B36D610933B8 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 434BBAD25E91BD0B7D626821 /* AppState.swift */; };
 		07D3C6559F4B00E26067D5C4 /* chat.css in Resources */ = {isa = PBXBuildFile; fileRef = E0052066D742EEE8123EDE79 /* chat.css */; };
 		0CAAEE94D02D4006193FA4BB /* InputBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */; };
-		0E6ABE1BE4750990FE352E48 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B26DA62FD50A37F19C808293 /* QRScannerView.swift */; };
 		15CF4C85551B4FE239D55E94 /* SliccIcons.swift in Sources */ = {isa = PBXBuildFile; fileRef = 438577405ABBCA33F117862C /* SliccIcons.swift */; };
 		238295F68E3669C0968C9934 /* WebRTCManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9AF8A8A50FCC9C2DBECA0CF /* WebRTCManager.swift */; };
 		2401C7FE702795E1066A7C9F /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB646EF0D0006D1A43F527D /* ChatMessage.swift */; };
@@ -22,15 +21,16 @@
 		487756D13ED6B5D4FB9FF6A0 /* TrayFollowerConnector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93EE217FAA3F9F7DD3A0B07F /* TrayFollowerConnector.swift */; };
 		4BA93B0DC88934132A09F1D6 /* FollowerSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82060520ADE3CE44E0D0FAE0 /* FollowerSyncManager.swift */; };
 		532EBF4FC79CF40ABCD366F0 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4E99369A8A6B1A9B8EBE996E /* WebKit.framework */; };
+		541C36C1FB80D6EDBA337FE6 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A69E83B7BB267C230C892A29 /* PrivacyInfo.xcprivacy */; };
 		58AACC678F1000C41BC7AA1A /* TabsCarouselView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39ADD0645C7DD3B30664E997 /* TabsCarouselView.swift */; };
 		5A678420A08BBB43297E1D8D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F0583BDF50B1A1B9CE68AE67 /* Assets.xcassets */; };
-		8A0F1C2D3E4F5A6B7C8D9E0F /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7A8B9C0D1E2F /* PrivacyInfo.xcprivacy */; };
 		5DBC389110F337A40762C4E1 /* MessageListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E727142147B0FB449F418D1 /* MessageListView.swift */; };
 		73CC65978EB7E4B1818441ED /* MessageWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 293EF6D00AE2A86081777881 /* MessageWebView.swift */; };
 		73CD8FDB68D950291A923BCD /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B186EDFDE184DC8B3215C4 /* ChatView.swift */; };
 		7AFB535E78304FCE5CE7058A /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 523A4A068180D7EE98435885 /* MarkdownText.swift */; };
 		7BEE859F6C68FEAFD63D1FBB /* SyncProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618555E73F15FDB4DB0CAA6F /* SyncProtocol.swift */; };
 		8A4DC8067E31936EA9C475BC /* TrayTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EDB6F858D918DBBE06D4702 /* TrayTypes.swift */; };
+		8EEACE6ED76E43E36FC9F0AB /* ChatFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BA9A527E2D4BBCE1BDFA89C /* ChatFixture.swift */; };
 		977007CC44BE2B53361DF256 /* Keepalive.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDA931BF1BE121985E2FB3EE /* Keepalive.swift */; };
 		A2488147A916BDDB57B9A41C /* CDPTarget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FE6B46ECEC5C79FA6D986F9 /* CDPTarget.swift */; };
 		A50239DCBBAD6235AC7C296A /* MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF78C09597C5D63A373EB126 /* MessageBubble.swift */; };
@@ -51,6 +51,7 @@
 		293EF6D00AE2A86081777881 /* MessageWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageWebView.swift; sourceTree = "<group>"; };
 		2EDB6F858D918DBBE06D4702 /* TrayTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayTypes.swift; sourceTree = "<group>"; };
 		39ADD0645C7DD3B30664E997 /* TabsCarouselView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsCarouselView.swift; sourceTree = "<group>"; };
+		3BA9A527E2D4BBCE1BDFA89C /* ChatFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatFixture.swift; sourceTree = "<group>"; };
 		3FE6B46ECEC5C79FA6D986F9 /* CDPTarget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDPTarget.swift; sourceTree = "<group>"; };
 		407939337779F91986E8DAB3 /* SprinkleSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SprinkleSidebarView.swift; sourceTree = "<group>"; };
 		434BBAD25E91BD0B7D626821 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -65,8 +66,8 @@
 		93EE217FAA3F9F7DD3A0B07F /* TrayFollowerConnector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayFollowerConnector.swift; sourceTree = "<group>"; };
 		940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusView.swift; sourceTree = "<group>"; };
 		A47A1376F89AB8ECBC3F688B /* chat.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = chat.html; sourceTree = "<group>"; };
+		A69E83B7BB267C230C892A29 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		AF78C09597C5D63A373EB126 /* MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubble.swift; sourceTree = "<group>"; };
-		B26DA62FD50A37F19C808293 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		B4C27643E1CF51B1F1B38003 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		BBB646EF0D0006D1A43F527D /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		BBE0A7D88487F7712E451646 /* CDPBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CDPBridge.swift; sourceTree = "<group>"; };
@@ -78,7 +79,6 @@
 		CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputBar.swift; sourceTree = "<group>"; };
 		E0052066D742EEE8123EDE79 /* chat.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = chat.css; sourceTree = "<group>"; };
 		F0583BDF50B1A1B9CE68AE67 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		1A2B3C4D5E6F7A8B9C0D1E2F /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		F0A069AA812629AC5FE70AC9 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -135,6 +135,7 @@
 		8004F77F534D7D3B9F54E8C3 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				3BA9A527E2D4BBCE1BDFA89C /* ChatFixture.swift */,
 				11B186EDFDE184DC8B3215C4 /* ChatView.swift */,
 				940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */,
 				1F8BFCDA8C3F71C0A853D573 /* ContentView.swift */,
@@ -144,7 +145,6 @@
 				AF78C09597C5D63A373EB126 /* MessageBubble.swift */,
 				7E727142147B0FB449F418D1 /* MessageListView.swift */,
 				293EF6D00AE2A86081777881 /* MessageWebView.swift */,
-				B26DA62FD50A37F19C808293 /* QRScannerView.swift */,
 				F0A069AA812629AC5FE70AC9 /* SettingsView.swift */,
 				438577405ABBCA33F117862C /* SliccIcons.swift */,
 				407939337779F91986E8DAB3 /* SprinkleSidebarView.swift */,
@@ -220,7 +220,7 @@
 			isa = PBXGroup;
 			children = (
 				F0583BDF50B1A1B9CE68AE67 /* Assets.xcassets */,
-				1A2B3C4D5E6F7A8B9C0D1E2F /* PrivacyInfo.xcprivacy */,
+				A69E83B7BB267C230C892A29 /* PrivacyInfo.xcprivacy */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -287,10 +287,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				5A678420A08BBB43297E1D8D /* Assets.xcassets in Resources */,
+				541C36C1FB80D6EDBA337FE6 /* PrivacyInfo.xcprivacy in Resources */,
 				07D3C6559F4B00E26067D5C4 /* chat.css in Resources */,
 				44FAA1B19D8705A9AAD4D458 /* chat.html in Resources */,
 				E9A8037C43172F9E94827567 /* chat.js in Resources */,
-				8A0F1C2D3E4F5A6B7C8D9E0F /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -304,6 +304,7 @@
 				02019B8CFDC4B36D610933B8 /* AppState.swift in Sources */,
 				2CE789AA836BB0713F1250D7 /* CDPBridge.swift in Sources */,
 				A2488147A916BDDB57B9A41C /* CDPTarget.swift in Sources */,
+				8EEACE6ED76E43E36FC9F0AB /* ChatFixture.swift in Sources */,
 				2401C7FE702795E1066A7C9F /* ChatMessage.swift in Sources */,
 				73CD8FDB68D950291A923BCD /* ChatView.swift in Sources */,
 				C43F5710585B9C800CAAA0A2 /* ConnectionStatusView.swift in Sources */,
@@ -316,7 +317,6 @@
 				A50239DCBBAD6235AC7C296A /* MessageBubble.swift in Sources */,
 				5DBC389110F337A40762C4E1 /* MessageListView.swift in Sources */,
 				73CC65978EB7E4B1818441ED /* MessageWebView.swift in Sources */,
-				0E6ABE1BE4750990FE352E48 /* QRScannerView.swift in Sources */,
 				3A9E122F6A6C4C0F6258C5C6 /* SettingsView.swift in Sources */,
 				3EDEBD047CEC3F24BC3ED785 /* SliccFollowerApp.swift in Sources */,
 				15CF4C85551B4FE239D55E94 /* SliccIcons.swift in Sources */,
@@ -338,13 +338,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = S8LB56P782;
-				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_NSCameraUsageDescription = "Scan QR codes to connect to a tray";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -395,7 +390,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -426,13 +421,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = S8LB56P782;
-				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
-				INFOPLIST_KEY_NSCameraUsageDescription = "Scan QR codes to connect to a tray";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -546,7 +536,7 @@
 			repositoryURL = "https://github.com/stasel/WebRTC.git";
 			requirement = {
 				kind = exactVersion;
-				version = 125.0.0;
+				version = 147.0.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

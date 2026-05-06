@@ -1,11 +1,9 @@
 import SwiftUI
-import VisionKit
 
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
     @AppStorage("joinUrl") private var storedJoinUrl: String = ""
-    @State private var showScanner = false
 
     var body: some View {
         NavigationStack {
@@ -55,20 +53,62 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.borderless)
             }
-            if DataScannerViewController.isSupported {
-                Button {
-                    showScanner = true
-                } label: {
-                    Label("Scan QR Code", systemImage: "qrcode.viewfinder")
-                }
-                .sheet(isPresented: $showScanner) {
-                    QRScannerView(scannedURL: $appState.joinUrl)
-                }
-            }
+            joinUrlHelpDisclosure
             connectDisconnectButton
             connectionStatusRow
         } header: {
             Text("Connection")
+        } footer: {
+            Text("The Join URL pairs this phone with a SLICC desktop browser so it can mirror the conversation.")
+        }
+    }
+
+    /// Mirrors the webapp's "How do I get the sync URL?" disclosure
+    /// (provider-settings.ts → renderJoinTrayForm). New users repeatedly
+    /// hit the empty Join URL field with no idea where to find one;
+    /// inline guidance points them at the desktop SLICC's avatar menu
+    /// or the agent prompt that returns a tray URL.
+    private var joinUrlHelpDisclosure: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 10) {
+                joinUrlStep(
+                    number: 1,
+                    text: "Open SLICC on your computer (Sliccstart, the Chrome extension, or the standalone CLI)."
+                )
+                joinUrlStep(
+                    number: 2,
+                    text: "Click your avatar in the top-right corner and choose **Enable multi-browser sync** — the Join URL is copied to your clipboard."
+                )
+                joinUrlStep(
+                    number: 3,
+                    text: "On the latest version you can also ask the agent: _“Run host for me and give me the tray join URL.”_"
+                )
+                joinUrlStep(
+                    number: 4,
+                    text: "Paste the URL into the **Join URL** field above. Both sides must be on the same SLICC version."
+                )
+            }
+            .padding(.vertical, 4)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        } label: {
+            Label("How do I get a Join URL?", systemImage: "questionmark.circle")
+                .font(.subheadline)
+        }
+    }
+
+    private func joinUrlStep(number: Int, text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("\(number).")
+                .font(.footnote.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 18, alignment: .trailing)
+            // Inline markdown gives us **bold** + _italic_ rendering in
+            // Form rows without dragging in the heavier MarkdownText path.
+            Text((try? AttributedString(markdown: text)) ?? AttributedString(text))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
