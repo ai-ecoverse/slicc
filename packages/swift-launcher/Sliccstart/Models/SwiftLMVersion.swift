@@ -8,7 +8,7 @@ import Foundation
 /// look like `b602` rather than semver, hence `versioning=loose`.
 enum SwiftLMVersion {
     // renovate: datasource=github-releases depName=SharpAI/SwiftLM versioning=loose
-    static let pinned = "b602"
+    static let pinned = "b644"
 
     /// Released asset name for the macOS arm64 build. SwiftLM ships one
     /// tarball per release with the version baked into the file name.
