@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   LeaderTrayManager,
+  createTrayFetch,
   getLeaderTrayRuntimeStatus,
   parseLeaderTraySession,
   type LeaderTraySession,
@@ -915,5 +916,62 @@ describe('tray-leader', () => {
     expect(sockets[0].closeCalls).toBe(1);
 
     manager.stop();
+  });
+});
+
+describe('createTrayFetch', () => {
+  // Browsers reject `fetch` calls whose `this` is not the global Window /
+  // WorkerGlobalScope, throwing "Illegal invocation". The leader stores the
+  // returned function on `this.fetchImpl` and invokes it as a method, so
+  // returning a bare reference to `fetch` would rebind `this` to the
+  // LeaderTrayManager and break every request. The wrappers below assert that
+  // the returned function tolerates an arbitrary `this` for both the
+  // extension and standalone branches.
+  const stubChromeRuntime = (mode: 'extension' | 'standalone') => {
+    const original = (globalThis as { chrome?: unknown }).chrome;
+    if (mode === 'extension') {
+      (globalThis as { chrome?: unknown }).chrome = { runtime: { id: 'test' } };
+    } else {
+      delete (globalThis as { chrome?: unknown }).chrome;
+    }
+    return () => {
+      if (original === undefined) {
+        delete (globalThis as { chrome?: unknown }).chrome;
+      } else {
+        (globalThis as { chrome?: unknown }).chrome = original;
+      }
+    };
+  };
+
+  it('preserves the underlying fetch when invoked as a method (extension branch)', async () => {
+    const restore = stubChromeRuntime('extension');
+    try {
+      const inner = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'));
+      const wrapped = createTrayFetch(inner);
+      const holder = { call: wrapped };
+      await expect(holder.call('https://example.com/x')).resolves.toBeInstanceOf(Response);
+      expect(inner).toHaveBeenCalledTimes(1);
+      expect(inner.mock.calls[0]?.[0]).toBe('https://example.com/x');
+    } finally {
+      restore();
+    }
+  });
+
+  it('routes cross-origin requests through the fetch proxy in non-extension mode', async () => {
+    const restore = stubChromeRuntime('standalone');
+    try {
+      // Non-extension branch already wraps fetch in an arrow, so this case
+      // existed pre-fix; included to lock in the existing behavior alongside
+      // the new method-call invariant above.
+      const inner = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'));
+      const wrapped = createTrayFetch(inner);
+      const holder = { call: wrapped };
+      await expect(holder.call('https://tray.example.com/tray')).resolves.toBeInstanceOf(Response);
+      expect(inner).toHaveBeenCalledTimes(1);
+      // Standalone branch routes off-origin requests through /api/fetch-proxy.
+      expect(inner.mock.calls[0]?.[0]).toBe('/api/fetch-proxy');
+    } finally {
+      restore();
+    }
   });
 });

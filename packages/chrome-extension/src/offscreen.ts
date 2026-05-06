@@ -17,6 +17,8 @@ import {
 } from '../../../packages/webapp/src/scoops/agent-bridge.js';
 import { LeaderTrayManager } from '../../../packages/webapp/src/scoops/tray-leader.js';
 import {
+  DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+  DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
   hasStoredTrayJoinUrl,
   resolveTrayRuntimeConfig,
   TRAY_JOIN_STORAGE_KEY,
@@ -363,6 +365,9 @@ async function init(): Promise<void> {
       locationHref: window.location.href,
       storage: window.localStorage,
       envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+      defaultWorkerBaseUrl: __DEV__
+        ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
+        : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
     });
     const nextTrayRuntimeKey = JSON.stringify(trayRuntimeConfig);
     if (nextTrayRuntimeKey === activeTrayRuntimeKey) {

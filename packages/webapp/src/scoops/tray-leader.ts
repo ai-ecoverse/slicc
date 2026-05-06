@@ -581,7 +581,10 @@ function parseSocketMessage(data: unknown): WorkerToLeaderControlMessage | null 
 export function createTrayFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   if (isExtension) {
-    return fetchImpl;
+    // Wrap so calling `this.fetchImpl(...)` doesn't rebind `this` to the
+    // LeaderTrayManager instance and trigger "Illegal invocation" against
+    // the global fetch.
+    return (url, init) => fetchImpl(url, init);
   }
 
   return async (url, init = {}) => {
