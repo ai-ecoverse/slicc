@@ -100,8 +100,24 @@ struct MarkdownText: View {
 
     /// Parse a leading `# … ######` ATX heading. Returns nil for lines that
     /// aren't headings (so callers fall through to plain text).
+    ///
+    /// Follows CommonMark's ATX-heading rules:
+    /// - 0-3 leading spaces are allowed (4+ → indented code block, not heading).
+    /// - The opening `#` run must be followed by whitespace or end-of-line.
+    /// - A trailing `#` run is only treated as a closing sequence when it's
+    ///   preceded by whitespace; e.g. `# C#` keeps the `#` as part of the
+    ///   title, while `# Heading ##` strips the closing `##`.
     private func parseAtxHeading(_ line: String) -> (level: Int, text: String)? {
-        let trimmed = line.drop(while: { $0 == " " })
+        // Allow up to 3 leading spaces. 4+ leading spaces is an indented
+        // code block in CommonMark, never a heading.
+        var leadingSpaces = 0
+        var cursor = line.startIndex
+        while cursor < line.endIndex, line[cursor] == " ", leadingSpaces < 4 {
+            leadingSpaces += 1
+            cursor = line.index(after: cursor)
+        }
+        guard leadingSpaces < 4 else { return nil }
+        let trimmed = line[cursor...]
         guard trimmed.first == "#" else { return nil }
         var level = 0
         var i = trimmed.startIndex
@@ -113,12 +129,38 @@ struct MarkdownText: View {
         guard level >= 1 else { return nil }
         if i == trimmed.endIndex { return (level, "") }
         guard trimmed[i] == " " || trimmed[i] == "\t" else { return nil }
-        let text = trimmed[i...].trimmingCharacters(in: .whitespaces)
-        // Strip optional trailing `#` run (CommonMark closing sequence).
-        let stripped = text.reversed().drop(while: { $0 == " " })
-        let withoutTrailingHashes = stripped.drop(while: { $0 == "#" })
-        let final = String(withoutTrailingHashes.reversed()).trimmingCharacters(in: .whitespaces)
-        return (level, final.isEmpty ? text : final)
+        let rawText = String(trimmed[i...])
+        // Strip trailing whitespace first.
+        var endIdx = rawText.endIndex
+        while endIdx > rawText.startIndex,
+            rawText[rawText.index(before: endIdx)] == " "
+                || rawText[rawText.index(before: endIdx)] == "\t"
+        {
+            endIdx = rawText.index(before: endIdx)
+        }
+        // Walk back over a trailing run of `#`. Only treat it as a closing
+        // sequence if the character before the run is whitespace (or the
+        // entire body is hashes). Otherwise keep them — `# C#` should not
+        // become `# C`.
+        var hashStart = endIdx
+        while hashStart > rawText.startIndex,
+            rawText[rawText.index(before: hashStart)] == "#"
+        {
+            hashStart = rawText.index(before: hashStart)
+        }
+        let hadTrailingHashes = hashStart < endIdx
+        let bodyEnd: String.Index
+        if hadTrailingHashes,
+            hashStart == rawText.startIndex
+                || rawText[rawText.index(before: hashStart)] == " "
+                || rawText[rawText.index(before: hashStart)] == "\t"
+        {
+            bodyEnd = hashStart
+        } else {
+            bodyEnd = endIdx
+        }
+        let final = String(rawText[rawText.startIndex..<bodyEnd]).trimmingCharacters(in: .whitespaces)
+        return (level, final)
     }
 
     // MARK: - Text Rendering
