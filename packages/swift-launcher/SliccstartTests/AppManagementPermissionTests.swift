@@ -18,21 +18,34 @@ import XCTest
 /// a timer (or drops the activation observer) breaks loudly.
 final class AppManagementPermissionTests: XCTestCase {
 
-    func testInitProbesOnce() {
-        // The probe runs in the initializer; we don't assert what value
-        // it returned (CI runners can be either) — only that nothing
-        // throws and the `isGranted` flag is set to a concrete bool.
+    func testInitProbesExactlyOnce() {
+        // Pins the launch-time alert budget: `init()` runs the probe
+        // once, registers no observer, and `startWatchingForGrant()`
+        // (called next from `.onAppear`) must NOT add a second probe.
+        // Each probe is one potential Sonoma+ "prevented from
+        // modifying" alert — keeping `probeCount == 1` after
+        // `start...()` keeps the launch budget at one alert.
         let permission = AppManagementPermission()
-        XCTAssertTrue(permission.isGranted == true || permission.isGranted == false)
+        XCTAssertEqual(permission.probeCount, 1, "init should probe exactly once")
         XCTAssertFalse(permission.isWatching, "init must not register an observer")
+
+        permission.startWatchingForGrant()
+        defer { permission.stopWatchingForGrant() }
+        XCTAssertEqual(
+            permission.probeCount, 1,
+            "startWatchingForGrant() must not add a second probe — init already did it"
+        )
+        XCTAssertTrue(permission.isWatching)
     }
 
     func testCheckPermissionIsIdempotent() {
         let permission = AppManagementPermission()
         let first = permission.isGranted
+        let initialCount = permission.probeCount
         permission.checkPermission()
         permission.checkPermission()
         XCTAssertEqual(permission.isGranted, first, "Two probes in a row should agree")
+        XCTAssertEqual(permission.probeCount, initialCount + 2)
     }
 
     func testStartWatchingDoesNotRetainATimer() {
@@ -81,16 +94,17 @@ final class AppManagementPermissionTests: XCTestCase {
 
     func testActivationNotificationRetriggersProbe() {
         // End-to-end: posting `didBecomeActive` while the observer is
-        // installed should land in `checkPermission()`. We can't easily
-        // stub the static probe, but we can pin the round-trip by
-        // observing that `isGranted` is reachable and unchanged across
-        // the notification (the probe is deterministic for a given
-        // process).
+        // installed must land in `checkPermission()`. `probeCount`
+        // makes that observable — without it, the test would also pass
+        // if the handler never fired (since `isGranted` is deterministic
+        // per process).
         let permission = AppManagementPermission()
         permission.startWatchingForGrant()
         defer { permission.stopWatchingForGrant() }
 
-        let before = permission.isGranted
+        let beforeCount = permission.probeCount
+        let beforeGranted = permission.isGranted
+
         NotificationCenter.default.post(
             name: NSApplication.didBecomeActiveNotification,
             object: nil
@@ -102,6 +116,34 @@ final class AppManagementPermissionTests: XCTestCase {
         DispatchQueue.main.async { expectation.fulfill() }
         wait(for: [expectation], timeout: 1.0)
 
-        XCTAssertEqual(permission.isGranted, before, "Probe is deterministic per-process; result should match")
+        XCTAssertEqual(
+            permission.probeCount, beforeCount + 1,
+            "didBecomeActive must trigger exactly one re-probe"
+        )
+        XCTAssertEqual(
+            permission.isGranted, beforeGranted,
+            "Probe is deterministic per-process; the value should not flip"
+        )
+    }
+
+    func testMultipleActivationsTriggerOneProbeEach() {
+        // Pins that the handler stays attached across multiple firings —
+        // i.e. it's not a one-shot. Three activations → three probes.
+        let permission = AppManagementPermission()
+        permission.startWatchingForGrant()
+        defer { permission.stopWatchingForGrant() }
+
+        let beforeCount = permission.probeCount
+        for _ in 0..<3 {
+            NotificationCenter.default.post(
+                name: NSApplication.didBecomeActiveNotification,
+                object: nil
+            )
+        }
+        let expectation = XCTestExpectation(description: "main queue drain")
+        DispatchQueue.main.async { expectation.fulfill() }
+        wait(for: [expectation], timeout: 1.0)
+
+        XCTAssertEqual(permission.probeCount, beforeCount + 3)
     }
 }

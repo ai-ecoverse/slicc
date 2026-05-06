@@ -4,6 +4,14 @@ import AppKit
 @Observable
 final class AppManagementPermission {
     private(set) var isGranted: Bool = false
+    /// Number of times the probe has run since this instance was
+    /// created. `init()` runs once, so this starts at 1. Each probe
+    /// writes a temp file into a user app bundle (see
+    /// `probeAppManagementAccess`), and on macOS Sonoma+ each *denied*
+    /// probe posts a Notification Center alert — so this is also the
+    /// upper bound on how many alerts we may have caused this session.
+    /// Tests use it to prove the activation observer actually fires.
+    private(set) var probeCount: Int = 0
     private var activationObserver: NSObjectProtocol?
 
     init() {
@@ -17,6 +25,7 @@ final class AppManagementPermission {
     }
 
     func checkPermission() {
+        probeCount += 1
         isGranted = Self.probeAppManagementAccess()
     }
 
@@ -36,9 +45,12 @@ final class AppManagementPermission {
     /// notifications until the user granted the permission. Focus-driven
     /// re-probing fires at most once per app switch, which matches when
     /// the answer can actually change.
+    ///
+    /// Note: `init()` already ran the first probe, so we only register
+    /// the observer here — no extra probe at startup. That keeps the
+    /// total at exactly one alert worth of probes during launch.
     func startWatchingForGrant() {
         stopWatchingForGrant()
-        checkPermission()
         activationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
