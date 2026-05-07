@@ -320,9 +320,17 @@ xcrun altool --upload-app \
 # Capture both halves of the pipeline before re-enabling errexit. tee
 # can fail independently of altool (e.g. .build is read-only), and we
 # don't want a write failure to look like a successful upload.
-ALTOOL_STATUS="${PIPESTATUS[0]}"
-TEE_STATUS="${PIPESTATUS[1]}"
+#
+# PIPESTATUS is rewritten after EVERY command (including a plain
+# assignment), so two separate `VAR=${PIPESTATUS[N]}` lines read from a
+# stale, single-element array — under `set -u` that aborts with
+# "PIPESTATUS[1]: unbound variable" (broke release v2.34.3 → 0 GitHub
+# release after a successful TestFlight upload). Capture the whole
+# array in one expansion so both indices are available afterwards.
+PIPE_STATUS=("${PIPESTATUS[@]}")
 set -e
+ALTOOL_STATUS="${PIPE_STATUS[0]}"
+TEE_STATUS="${PIPE_STATUS[1]}"
 if [ "$ALTOOL_STATUS" -ne 0 ]; then
   echo "error: altool exited $ALTOOL_STATUS" >&2
   exit 1
