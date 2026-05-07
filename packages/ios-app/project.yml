@@ -22,7 +22,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: 'UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight'
-        TARGETED_DEVICE_FAMILY: '1,2'
+        TARGETED_DEVICE_FAMILY: '1'
         PRODUCT_NAME: SliccFollower
         SUPPORTED_PLATFORMS: 'iphoneos iphonesimulator'
         SUPPORTS_MACCATALYST: NO
