@@ -41,6 +41,12 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: packages/cloudflare-worker
+          # `environment:` is required so `wrangler secret bulk` targets the
+          # staging Worker. wrangler-action@v3 does not parse `--env` out of
+          # `command:` for the secret upload step — it only honors the
+          # `environment:` input. Without this, secrets uploaded here land on
+          # the production Worker (slicc-tray-hub) instead of slicc-tray-hub-staging.
+          environment: staging
           command: deploy --env staging
           secrets: |
             CLOUDFLARE_TURN_API_TOKEN
@@ -62,6 +68,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: packages/cloudflare-worker
+          environment: staging
           command: deploy --env staging
           secrets: |
             CLOUDFLARE_TURN_API_TOKEN
