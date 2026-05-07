@@ -414,19 +414,7 @@ async function init(): Promise<void> {
             log.info('Extension follower connected', { trayId: connection.trayId });
             detachSync();
             const runtimeId = `follower-${connection.bootstrapId}`;
-            const refreshTargets = async () => {
-              if (!activeSync) return;
-              try {
-                const pages = await browser.listPages();
-                activeSync.advertiseTargets(
-                  pages.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url })),
-                  runtimeId
-                );
-              } catch {
-                /* ignore — best-effort target advertisement */
-              }
-            };
-            const sync = new FollowerSyncManager(connection.channel, {
+            const sync: FollowerSyncManager = new FollowerSyncManager(connection.channel, {
               browserTransport: browser.getTransport(),
               browserAPI: browser,
               onSnapshot: (messages) => bridge.applyFollowerSnapshot(messages),
@@ -439,6 +427,21 @@ async function init(): Promise<void> {
                 detachSync();
               },
             });
+            const refreshTargets = async () => {
+              try {
+                const pages = await browser.listPages();
+                // Bail if a reconnect swapped activeSync while listPages was in
+                // flight — otherwise we'd advertise this connection's runtimeId
+                // against the new sync (or vice versa), polluting the registry.
+                if (activeSync !== sync) return;
+                sync.advertiseTargets(
+                  pages.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url })),
+                  runtimeId
+                );
+              } catch {
+                /* ignore — best-effort target advertisement */
+              }
+            };
             sync.onEvent((event) => bridge.emitFollowerAgentEvent(event));
             activeSync = sync;
             browser.setTrayTargetProvider(sync);
