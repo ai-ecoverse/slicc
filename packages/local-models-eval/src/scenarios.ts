@@ -123,6 +123,47 @@ const verifyFileExploration = (r: RunResult): VerifierResult => {
   return pass(`reported total = ${FILE_EXPECTED_TOTAL}`);
 };
 
+// ── edit_file_round_trip ───────────────────────────────────────────
+
+const EDIT_SYSTEM =
+  'You are a helpful coding assistant. Use read_file to inspect the ' +
+  'current contents, edit_file to make a single string replacement, ' +
+  'and read_file again to verify. Then give a brief final answer.';
+
+const EDIT_USER =
+  'The file `config.txt` in the workspace contains a placeholder value. ' +
+  'Find the line `port = OLD_PORT` and change `OLD_PORT` to `5413`. ' +
+  'Then verify the change and tell me what the updated line says.';
+
+const EDIT_FIXTURES: Record<string, string> = {
+  'config.txt':
+    '# auto-generated config\n' + 'host = 127.0.0.1\n' + 'port = OLD_PORT\n' + 'timeout = 30\n',
+};
+
+const setupEditFile = (sandbox: Sandbox): void => {
+  for (const [name, content] of Object.entries(EDIT_FIXTURES)) {
+    writeFileSync(join(sandbox.root, name), content);
+  }
+};
+
+const verifyEditFile = (r: RunResult): VerifierResult => {
+  if (r.error) return fail(r.error);
+  if (!r.finished) return fail('agent loop did not reach a tool-call-free turn');
+  // The user-visible answer must mention 5413 (the actual new value).
+  // A model that hallucinates the diff without calling edit_file
+  // could produce "5413" in text — so also pin that the agent
+  // actually called edit_file at least once.
+  if (!/\b5413\b/.test(r.finalText)) {
+    return fail(`final answer missing new port 5413: ${JSON.stringify(r.finalText.slice(0, 240))}`);
+  }
+  let sawEdit = false;
+  for (const round of r.rounds) {
+    for (const tc of round.toolCalls) if (tc.name === 'edit_file') sawEdit = true;
+  }
+  if (!sawEdit) return fail('agent never called edit_file');
+  return pass('edited and verified the new port value');
+};
+
 // ── write_then_run ────────────────────────────────────────────────
 
 const WRITE_SYSTEM =
@@ -172,7 +213,7 @@ export const SCENARIOS: Scenario[] = [
   {
     name: 'parallel_math',
     description:
-      'Parallel tool calls in round 1, sequential rounds 2–3, final natural-language answer in round 4. Pure tools (no sandbox).',
+      'Parallel tool calls in round 1, sequential rounds 2–3, final natural-language answer in round 4. Pure tools (no sandbox). is_prime expects a strict integer; if the model emits "720" as a string, pi-ai\'s validator rejects it the same way SLICC\'s would (see is_prime schema).',
     system: MATH_SYSTEM,
     user: MATH_USER,
     toolNames: ['calculator', 'is_prime'],
@@ -194,6 +235,19 @@ export const SCENARIOS: Scenario[] = [
     expectedPass: true,
   },
   {
+    name: 'edit_file_round_trip',
+    description:
+      'read_file + edit_file + read_file: read a config, replace a placeholder via single-string match, verify the change.',
+    system: EDIT_SYSTEM,
+    user: EDIT_USER,
+    toolNames: ['read_file', 'edit_file'],
+    verify: verifyEditFile,
+    setup: setupEditFile,
+    needsSandbox: true,
+    maxRounds: 6,
+    expectedPass: true,
+  },
+  {
     name: 'write_then_run',
     description:
       'write_file + bash: create a script, execute it, surface stdout in the final answer.',
@@ -205,11 +259,20 @@ export const SCENARIOS: Scenario[] = [
     maxRounds: 6,
     // Qwen 3.6 35B-A3B-4bit (b644) loops on write_file in this
     // scenario — its thinking trace insists "I forgot the parameters"
-    // even when the call clearly includes them, so it never advances
-    // to bash. Three prompt iterations + a louder tool success
-    // message all failed to break the loop. Re-test on the next
-    // SwiftLM bump or model swap; if it passes, the model has
-    // improved (XPASS) and this xfail can be removed.
+    // even when the call clearly includes them. Investigation log:
+    //   - --repeat-penalty 1.1 (vendor recommendation): 0/4 reliable
+    //   - Qwen-recommended sampling (top_p=0.95, top_k=20):  0/5
+    //   - --thinking off + alternate sampling:              1/5
+    //   - SLICC-aligned tool result wording (`File written:
+    //     <path>`):                                          3/5
+    // After alignment we get a real ~60% pass rate (vs 0% before),
+    // and the failure mode now also exercises pi-ai's strict
+    // validation of empty `bash({})` calls — which is a useful
+    // production-shape failure. Still flaky enough to xfail. The
+    // dense Qwen 3.6 27B-4bit also fails the same way, so it's a
+    // family-level weakness, not the MoE variant. Re-test on the
+    // next SwiftLM/model bump; if it passes, the model has improved
+    // (XPASS) and this xfail can be removed.
     expectedPass: false,
   },
 ];
