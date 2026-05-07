@@ -26,6 +26,7 @@ targets:
         PRODUCT_NAME: SliccFollower
         SUPPORTED_PLATFORMS: 'iphoneos iphonesimulator'
         SUPPORTS_MACCATALYST: NO
+        INFOPLIST_KEY_NSCameraUsageDescription: 'SliccFollower uses WebRTC for screen sharing and remote browser control between your devices.'
     dependencies:
       - package: WebRTC
       - sdk: WebKit.framework
