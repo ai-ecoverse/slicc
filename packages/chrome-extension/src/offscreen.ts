@@ -391,9 +391,15 @@ async function init(): Promise<void> {
 
     if (trayRuntimeConfig?.joinUrl) {
       let activeSync: FollowerSyncManager | null = null;
+      let targetRefreshInterval: ReturnType<typeof setInterval> | null = null;
       const detachSync = () => {
+        if (targetRefreshInterval) {
+          clearInterval(targetRefreshInterval);
+          targetRefreshInterval = null;
+        }
         if (!activeSync) return;
         bridge.setFollowerSync(null);
+        browser.setTrayTargetProvider(null);
         activeSync.close();
         activeSync = null;
       };
@@ -407,11 +413,27 @@ async function init(): Promise<void> {
           onConnected: (connection) => {
             log.info('Extension follower connected', { trayId: connection.trayId });
             detachSync();
+            const runtimeId = `follower-${connection.bootstrapId}`;
+            const refreshTargets = async () => {
+              if (!activeSync) return;
+              try {
+                const pages = await browser.listPages();
+                activeSync.advertiseTargets(
+                  pages.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url })),
+                  runtimeId
+                );
+              } catch {
+                /* ignore — best-effort target advertisement */
+              }
+            };
             const sync = new FollowerSyncManager(connection.channel, {
+              browserTransport: browser.getTransport(),
+              browserAPI: browser,
               onSnapshot: (messages) => bridge.applyFollowerSnapshot(messages),
               onUserMessage: (text, messageId) =>
                 bridge.emitFollowerIncomingMessage(messageId, text),
               onStatus: (scoopStatus) => bridge.emitFollowerStatus(scoopStatus),
+              onTargetsChanged: () => void refreshTargets(),
               onDisconnect: (reason) => {
                 log.warn('Follower sync disconnected', { reason });
                 detachSync();
@@ -419,8 +441,11 @@ async function init(): Promise<void> {
             });
             sync.onEvent((event) => bridge.emitFollowerAgentEvent(event));
             activeSync = sync;
+            browser.setTrayTargetProvider(sync);
             bridge.setFollowerSync(sync);
             sync.requestSnapshot();
+            targetRefreshInterval = setInterval(() => void refreshTargets(), 5000);
+            void refreshTargets();
           },
           onGaveUp: (lastError) => {
             log.warn('Extension follower reconnect gave up', { lastError });
