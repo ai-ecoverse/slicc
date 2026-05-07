@@ -303,10 +303,28 @@ echo "  export ok ($(du -h "$IPA" | cut -f1))"
 
 # --- Upload to TestFlight -------------------------------------------------
 echo "  uploading to TestFlight..."
+# altool --upload-app returns exit 0 even when App Store Connect rejects
+# the bundle at pre-flight validation (e.g. "Validation failed (409)
+# Invalid bundle..."). It logs the error to stderr and walks away — so a
+# bare `|| exit 1` doesn't catch it, and the workflow goes green while
+# zero builds reach TestFlight. Tee output and grep for the failure
+# markers altool actually emits before declaring success.
+ALTOOL_LOG="$IOS_PROJECT_DIR/.build/altool.log"
+set +e
 xcrun altool --upload-app \
   -f "$IPA" \
   --type ios \
   --apiKey "$APPLE_API_KEY_ID" \
   --apiIssuer "$APPLE_API_KEY_ISSUER_ID" \
-  || { echo "error: altool upload failed" >&2; exit 1; }
+  2>&1 | tee "$ALTOOL_LOG"
+ALTOOL_STATUS="${PIPESTATUS[0]}"
+set -e
+if [ "$ALTOOL_STATUS" -ne 0 ]; then
+  echo "error: altool exited $ALTOOL_STATUS" >&2
+  exit 1
+fi
+if grep -qE 'ERROR: \[altool\.|Validation failed' "$ALTOOL_LOG"; then
+  echo "error: altool reported a validation/upload failure (see log above)" >&2
+  exit 1
+fi
 echo "=== SliccFollower v${VERSION} (build ${BUILD_NUMBER}) uploaded ==="
