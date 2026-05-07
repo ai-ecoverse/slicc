@@ -29,7 +29,8 @@
     "packages/chrome-extension",
     "packages/cloudflare-worker",
     "packages/swift-launcher",
-    "packages/swift-server"
+    "packages/swift-server",
+    "packages/local-models-eval"
   ],
   "scripts": {
     "dev": "tsx packages/node-server/src/index.ts --dev",

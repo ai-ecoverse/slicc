@@ -1,0 +1,10 @@
+{
+  "name": "@slicc/local-models-eval",
+  "private": true,
+  "description": "Optional eval suite that drives a SLICC-shaped agent loop against a running SwiftLM (or any OpenAI-compatible) endpoint. Stdlib-only Python; no node deps.",
+  "scripts": {
+    "eval": "python3 -m eval --pkg-root .",
+    "eval:smoke": "python3 -m eval --pkg-root . --scenario parallel_math",
+    "eval:list": "python3 -m eval --pkg-root . --list"
+  }
+}

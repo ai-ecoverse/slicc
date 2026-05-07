@@ -17,6 +17,7 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 | `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                     |
 | `packages/dev-tools/`         | Repo-level tooling guidance for build helpers, QA setup, configs, and test utilities |
 | `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages                |
+| `packages/local-models-eval/` | Optional Python eval suite that drives a SLICC-shaped agent loop against SwiftLM     |
 
 ### Other Top-Level Directories
 
@@ -48,6 +49,7 @@ For runtime-specific commands, use the nearest guide:
 - [`packages/swift-launcher/CLAUDE.md`](packages/swift-launcher/CLAUDE.md)
 - [`packages/swift-server/CLAUDE.md`](packages/swift-server/CLAUDE.md)
 - [`packages/dev-tools/CLAUDE.md`](packages/dev-tools/CLAUDE.md)
+- [`packages/local-models-eval/CLAUDE.md`](packages/local-models-eval/CLAUDE.md)
 - [`docs/CLAUDE.md`](docs/CLAUDE.md)
 
 ## External Handoffs
