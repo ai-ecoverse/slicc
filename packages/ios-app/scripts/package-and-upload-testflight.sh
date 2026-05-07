@@ -317,14 +317,37 @@ xcrun altool --upload-app \
   --apiKey "$APPLE_API_KEY_ID" \
   --apiIssuer "$APPLE_API_KEY_ISSUER_ID" \
   2>&1 | tee "$ALTOOL_LOG"
+# Capture both halves of the pipeline before re-enabling errexit. tee
+# can fail independently of altool (e.g. .build is read-only), and we
+# don't want a write failure to look like a successful upload.
 ALTOOL_STATUS="${PIPESTATUS[0]}"
+TEE_STATUS="${PIPESTATUS[1]}"
 set -e
 if [ "$ALTOOL_STATUS" -ne 0 ]; then
   echo "error: altool exited $ALTOOL_STATUS" >&2
   exit 1
 fi
-if grep -qE 'ERROR: \[altool\.|Validation failed' "$ALTOOL_LOG"; then
-  echo "error: altool reported a validation/upload failure (see log above)" >&2
+if [ "$TEE_STATUS" -ne 0 ]; then
+  echo "error: tee failed (exit $TEE_STATUS) writing $ALTOOL_LOG — log capture is unreliable, refusing to declare success" >&2
   exit 1
 fi
+# grep can return 0 (match → fail), 1 (no match → ship), or 2 (I/O
+# error — log missing/unreadable). The naked `if grep …; then` form
+# treats 2 the same as 1 and would ship a build whose validation status
+# we couldn't actually verify. Branch on the exact status instead.
+set +e
+grep -qE 'ERROR: \[altool\.|Validation failed' "$ALTOOL_LOG"
+GREP_STATUS=$?
+set -e
+case "$GREP_STATUS" in
+  0)
+    echo "error: altool reported a validation/upload failure (see log above)" >&2
+    exit 1
+    ;;
+  1) ;;
+  *)
+    echo "error: grep failed (exit $GREP_STATUS) reading $ALTOOL_LOG — cannot verify upload" >&2
+    exit 1
+    ;;
+esac
 echo "=== SliccFollower v${VERSION} (build ${BUILD_NUMBER}) uploaded ==="
