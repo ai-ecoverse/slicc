@@ -1004,7 +1004,9 @@ describe('compat propagation through resolveModelById and resolveCurrentModel', 
 
     const model = resolveModelById('claude-haiku-4-5');
     expect(model.id).toBe('claude-haiku-4-5');
-    expect((model as any).compat).toEqual({ supportsEagerToolInputStreaming: false });
+    expect((model as { compat?: unknown }).compat).toEqual({
+      supportsEagerToolInputStreaming: false,
+    });
   });
 
   it('resolveCurrentModel preserves compat from getModelIds for Haiku (regression)', () => {
@@ -1013,7 +1015,9 @@ describe('compat propagation through resolveModelById and resolveCurrentModel', 
 
     const model = resolveCurrentModel();
     expect(model.id).toBe('claude-haiku-4-5');
-    expect((model as any).compat).toEqual({ supportsEagerToolInputStreaming: false });
+    expect((model as { compat?: unknown }).compat).toEqual({
+      supportsEagerToolInputStreaming: false,
+    });
   });
 
   it('resolveModelById leaves compat undefined for models without overrides', () => {
@@ -1022,7 +1026,7 @@ describe('compat propagation through resolveModelById and resolveCurrentModel', 
 
     const model = resolveModelById('claude-opus-4-6');
     expect(model.id).toBe('claude-opus-4-6');
-    expect((model as any).compat).toBeUndefined();
+    expect((model as { compat?: unknown }).compat).toBeUndefined();
   });
 });
 
@@ -1058,7 +1062,7 @@ describe('resolveCurrentModel with getModelDynamic returning undefined', () => {
         api: 'mock-api',
         baseUrl: 'https://default.example.com',
       };
-    }) as any);
+    }) as never);
 
     addAccount('custom-oauth', '');
     storage.set('selected-model', 'custom-oauth:ghost-model');
@@ -1094,7 +1098,7 @@ describe('resolveCurrentModel with getModelDynamic returning undefined', () => {
         api: 'mock-api',
         baseUrl: 'https://default.example.com',
       };
-    }) as any);
+    }) as never);
 
     addAccount('custom-oauth', '');
     storage.set('selected-model', 'custom-oauth:ghost-model');
@@ -1128,7 +1132,7 @@ describe('fallback model fields', () => {
     mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
 
     const models = getProviderModels('custom-oauth');
-    const model = models[0] as any;
+    const model = models[0] as Record<string, unknown>;
 
     // These fields are required by pi-ai's streamAnthropic
     expect(model.baseUrl).toBe('');
@@ -1348,7 +1352,7 @@ describe('model metadata overrides', () => {
     const models = getProviderModels('test-proxy');
     expect(models).toHaveLength(1);
     expect(models[0].contextWindow).toBe(1000000);
-    expect((models[0] as any).maxTokens).toBe(128000);
+    expect(models[0]?.maxTokens).toBe(128000);
   });
 
   it('getModelIds metadata creates correct model for unknown IDs with api field', () => {
@@ -1379,7 +1383,7 @@ describe('model metadata overrides', () => {
     expect(models).toHaveLength(1);
     expect(models[0].id).toBe('zai-glm-4.7');
     expect(models[0].contextWindow).toBe(131072);
-    expect((models[0] as any).maxTokens).toBe(40960);
+    expect(models[0]?.maxTokens).toBe(40960);
     expect(models[0].reasoning).toBe(true);
   });
 
@@ -1488,7 +1492,7 @@ describe('model metadata overrides', () => {
       // Layer 2: modelOverrides — adds a different flag
       modelOverrides: {
         'claude-haiku-4-5': {
-          compat: { supportsEagerToolInputStreaming: true } as any,
+          compat: { supportsEagerToolInputStreaming: true } as never,
         },
       },
       // Layer 3: getModelIds — overrides one flag from layer 2 but leaves
@@ -1506,7 +1510,7 @@ describe('model metadata overrides', () => {
     const models = getProviderModels('test-proxy');
     expect(models).toHaveLength(1);
     // Layer 1 flag survives, layer 3 flag wins over layer 2
-    expect((models[0] as any).compat).toEqual({
+    expect((models[0] as { compat?: unknown }).compat).toEqual({
       supportsLongCacheRetention: true,
       supportsEagerToolInputStreaming: false,
     });

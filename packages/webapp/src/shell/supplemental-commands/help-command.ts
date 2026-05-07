@@ -53,6 +53,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
       'secret',
       'nuke',
       'models',
+      'local-llm',
       'cost',
     ],
   ],

@@ -86,6 +86,17 @@ export interface ProviderConfig {
   name: string;
   description: string;
   requiresApiKey: boolean;
+  /**
+   * When true, the dialog still shows the API key field but does not require
+   * a value. `getApiKeyForProvider` returns the literal `'local'` instead of
+   * `null` when the user leaves it blank, so callers that gate on a non-null
+   * key (scoop init, pi-ai's stream) stay happy.
+   *
+   * Set this for providers that talk to local servers where the key is
+   * usually ignored but might be needed for hosted OpenAI-compatible
+   * endpoints (Together, Anyscale, Fireworks).
+   */
+  optionalApiKey?: boolean;
   apiKeyPlaceholder?: string;
   apiKeyEnvVar?: string;
   requiresBaseUrl: boolean;
