@@ -44,6 +44,39 @@ Output is one line per scenario plus a final summary. Exit code is
 | `edit_file_round_trip` | `read_file`, `edit_file` | expected pass                                      | `read_file` to inspect → `edit_file` for a single-string replacement → `read_file` to verify. Pins `edit_file`'s unique-match contract (errors when 0 or >1 occurrences).                                                                                                                                            |
 | `write_then_run`       | `write_file`, `bash`     | expected **xfail** on Qwen 3.6 35B-A3B-4bit (b644) | Round-trip: create script, execute, surface stdout. ~60 % pass rate after SLICC-aligned tool wording (was 0 % before). Fail mode loops on `write_file` with the model thinking it forgot parameters. See the long log in `src/scenarios.ts` for what was tried (sampling, repeat-penalty, thinking off, alt models). |
 
+## Realistic context (`--pad-to`)
+
+Production cone prompts are ~33 K tokens after `buildSystemPrompt`
+loads the project's CLAUDE.md and `workspace/skills/*/SKILL.md`
+files. Without padding, the eval runs each scenario at ~300 tokens
+of input — way under the regime where Qwen 3.x's long-context
+weaknesses kick in. To get a realistic answer, pad with the actual
+vfs-root markdown:
+
+```bash
+npm run eval -w @slicc/local-models-eval -- --pad-to 25000
+```
+
+Padding sources from `packages/vfs-root/**/*.md` (real CLAUDE.md and
+SKILL.md content, not synthetic look-alikes), prepended to each
+scenario's system prompt up to the requested token budget. Files are
+included in alphabetical order; symlinks (e.g. `AGENTS.md → CLAUDE.md`)
+are skipped to avoid duplicates.
+
+Recorded comparison against SwiftLM b644 + Qwen 3.6 35B-A3B-4bit:
+
+| `--pad-to`             | parallel_math | file_exploration | edit_file_round_trip | write_then_run |
+| ---------------------- | ------------- | ---------------- | -------------------- | -------------- |
+| `0`                    | PASS 9 s      | PASS 9 s         | PASS 6 s             | XFAIL 18 s     |
+| `8000` (6 vfs files)   | PASS 60 s     | PASS 37 s        | **FAIL 89 s**        | XFAIL 94 s     |
+| `25000` (13 vfs files) | PASS 183 s    | PASS 60 s        | **FAIL 175 s**       | XFAIL 159 s    |
+
+The `edit_file_round_trip` regression at production scale is the
+load-bearing finding: the model handles its multi-round inspect →
+edit → verify pattern fine in a clean prompt, but loses the thread
+under realistic context. Wall clock scales ~20× from 0 to 25 K
+padding — almost entirely prefill cost.
+
 ## Outcome markers (pytest style)
 
 - `PASS` — expected pass, actual pass.
