@@ -27,6 +27,7 @@ targets:
         SUPPORTED_PLATFORMS: 'iphoneos iphonesimulator'
         SUPPORTS_MACCATALYST: NO
         INFOPLIST_KEY_NSCameraUsageDescription: 'This app does not access the camera. This entry is required because the bundled WebRTC framework references camera APIs.'
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
     dependencies:
       - package: WebRTC
       - sdk: WebKit.framework
