@@ -52,7 +52,9 @@ describe('isExtensionMessage', () => {
       payload: {
         type: 'navigate-lick',
         url: 'https://example.com/',
-        sliccHeader: 'handoff:do the thing',
+        verb: 'handoff',
+        target: 'https://example.com/',
+        instruction: 'do the thing',
       },
     };
     expect(isExtensionMessage(msg)).toBe(true);

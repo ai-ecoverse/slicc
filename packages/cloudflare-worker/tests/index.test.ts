@@ -1146,6 +1146,9 @@ describe('tray worker skeleton', () => {
         'POST /tray',
         'GET /download/slicc.dmg',
         'GET /handoff',
+        'GET /.well-known/api-catalog',
+        'GET /llms.txt',
+        'GET /rel/:name',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
@@ -1193,17 +1196,74 @@ describe('tray worker skeleton', () => {
     expect(response.status).toBe(200);
   });
 
-  it('serves the handoff page without x-slicc header when msg is absent', async () => {
+  it('serves the handoff page without a Link header when no payload is provided', async () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/handoff'), env);
     expect(response.status).toBe(200);
     expect(response.headers.get('Content-Type')).toContain('text/html');
+    expect(response.headers.get('Link')).toBeNull();
     expect(response.headers.get('x-slicc')).toBeNull();
     const html = await response.text();
     expect(html).toContain('SLICC handoff');
   });
 
-  it('percent-encodes the msg into the x-slicc header', async () => {
+  it('emits an upskill rel Link when ?upskill=<github-url> is provided', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/handoff?upskill=https%3A%2F%2Fgithub.com%2Ffoo%2Fbar'),
+      env
+    );
+    expect(response.status).toBe(200);
+    const link = response.headers.get('Link');
+    expect(link).toBe('<https://github.com/foo/bar>; rel="https://www.sliccy.ai/rel/upskill"');
+    // The legacy header is gone (clean break).
+    expect(response.headers.get('x-slicc')).toBeNull();
+  });
+
+  it('emits a handoff rel Link with title* when ?handoff=<text> is provided', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/handoff?handoff=Continue%20the%20signup%20flow'),
+      env
+    );
+    expect(response.status).toBe(200);
+    const link = response.headers.get('Link');
+    expect(link).toBe(
+      '<>; rel="https://www.sliccy.ai/rel/handoff"; title*=UTF-8\'\'Continue%20the%20signup%20flow'
+    );
+  });
+
+  it('handles non-Latin1 handoff payloads via RFC 8187 title*', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/handoff?handoff=%F0%9F%9A%80%20%E4%BD%A0%E5%A5%BD'),
+      env
+    );
+    expect(response.status).toBe(200);
+    const link = response.headers.get('Link');
+    expect(link).toBeTruthy();
+    expect(link).toContain('rel="https://www.sliccy.ai/rel/handoff"');
+    // Emoji + CJK round-trips via percent-encoded UTF-8.
+    expect(link).toContain('%F0%9F%9A%80');
+    expect(link).toContain('%E4%BD%A0%E5%A5%BD');
+  });
+
+  it('neutralises CR/LF header-injection attempts in the handoff payload', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/handoff?handoff=foo%0D%0AX-Injected%3A+bar'),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-Injected')).toBeNull();
+    const link = response.headers.get('Link');
+    // CR/LF survive as percent-escaped bytes inside the title* ext-value.
+    expect(link).toContain('%0D%0A');
+    expect(link).not.toContain('\r');
+    expect(link).not.toContain('\n');
+  });
+
+  it('parses the legacy ?msg=verb:payload shape into the new Link form', async () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(
       new Request(
@@ -1212,33 +1272,76 @@ describe('tray worker skeleton', () => {
       env
     );
     expect(response.status).toBe(200);
-    // encodeURIComponent preserves ':' and '/' as unreserved-for-components.
-    expect(response.headers.get('x-slicc')).toBe('upskill%3Ahttps%3A%2F%2Fgithub.com%2Ffoo%2Fbar');
+    expect(response.headers.get('Link')).toBe(
+      '<https://github.com/foo/bar>; rel="https://www.sliccy.ai/rel/upskill"'
+    );
   });
 
-  it('survives non-Latin1 msg values (emoji, CJK) instead of throwing', async () => {
+  it('serves the linkset api-catalog at /.well-known/api-catalog', async () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(
-      new Request('https://www.sliccy.ai/handoff?msg=handoff%3A%F0%9F%9A%80%20%E4%BD%A0%E5%A5%BD'),
+      new Request('https://www.sliccy.ai/.well-known/api-catalog'),
       env
     );
     expect(response.status).toBe(200);
-    const header = response.headers.get('x-slicc');
-    expect(header).toBeTruthy();
-    expect(decodeURIComponent(header!)).toBe('handoff:🚀 你好');
+    expect(response.headers.get('Content-Type')).toContain('application/linkset+json');
+    const body = (await response.json()) as { linkset: Array<{ anchor: string }> };
+    expect(Array.isArray(body.linkset)).toBe(true);
+    const anchors = body.linkset.map((e) => e.anchor);
+    expect(anchors).toContain('https://www.sliccy.ai/handoff');
+    expect(anchors).toContain('https://www.sliccy.ai/tray');
   });
 
-  it('neutralises CR/LF header injection attempts', async () => {
+  it('serves the llms.txt digest', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/llms.txt'), env);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toContain('text/markdown');
+    const body = await response.text();
+    expect(body).toMatch(/^# SLICC/m);
+    expect(body).toContain('/.well-known/api-catalog');
+    expect(body).toContain('/rel/handoff');
+  });
+
+  it('serves dereferenceable rel docs at /rel/handoff and /rel/upskill', async () => {
+    const { env } = createTestHarness();
+    for (const name of ['handoff', 'upskill']) {
+      const response = await handleWorkerRequest(
+        new Request(`https://www.sliccy.ai/rel/${name}`),
+        env
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toContain('text/html');
+      const body = await response.text();
+      expect(body).toContain(`rel: ${name}`);
+    }
+  });
+
+  it('returns 404 for unknown rel docs', async () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(
-      new Request('https://www.sliccy.ai/handoff?msg=handoff%3Afoo%0D%0AX-Injected%3A+bar'),
+      new Request('https://www.sliccy.ai/rel/unknown'),
       env
     );
-    expect(response.status).toBe(200);
-    expect(response.headers.get('X-Injected')).toBeNull();
-    // The CRLF bytes are percent-encoded inside the value, not split into
-    // a new header line.
-    expect(response.headers.get('x-slicc')).toBe('handoff%3Afoo%0D%0AX-Injected%3A%20bar');
+    expect(response.status).toBe(404);
+  });
+});
+
+describe('standard Link header set', () => {
+  // The outer fetch handler wraps every response with applySliccLinks. The
+  // unit tests above call handleWorkerRequest directly, which intentionally
+  // does NOT add the standard set so individual route assertions stay
+  // focused. This test exercises the wrapped path via the default worker.
+  it('attaches api-catalog, service-desc, service-doc, llms-txt rels to every response', async () => {
+    const idx = await import('../src/index.js');
+    const { env } = createTestHarness();
+    const response = await idx.default.fetch(new Request('https://www.sliccy.ai/llms.txt'), env);
+    const linkValues = response.headers.get('Link') ?? '';
+    expect(linkValues).toContain('rel="api-catalog"');
+    expect(linkValues).toContain('rel="service-desc"');
+    expect(linkValues).toContain('rel="service-doc"');
+    expect(linkValues).toContain('rel="https://llmstxt.org/rel/llms-txt"');
+    expect(linkValues).toContain('rel="terms-of-service"');
   });
 });
 

@@ -37,6 +37,7 @@ import { createModelsCommand } from './models-command.js';
 import { createCostCommand } from './cost-command.js';
 import { createNukeCommand } from './nuke-command.js';
 import { createAgentCommand } from './agent-command.js';
+import { createDiscoverCommand } from './discover-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 export type {
@@ -103,6 +104,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createCostCommand(),
     createNukeCommand(),
     createAgentCommand({ getParentJid: options.getParentJid }),
+    createDiscoverCommand(),
   ];
 
   // Extension-only commands

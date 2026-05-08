@@ -31,6 +31,7 @@ import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
 
 import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
+import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
@@ -607,6 +608,8 @@ async function main() {
 
   const app = express();
   app.use(requestLogger);
+  // Append SLICC's standard RFC 8288 Link header set on every /api/* response.
+  app.use(sliccLinksMiddleware());
 
   // ---------------------------------------------------------------------------
   // Lick system — WebSocket bridge for webhooks/crontasks (all logic in browser)
@@ -784,6 +787,14 @@ async function main() {
     });
   });
 
+  // Localhost API descriptor — the discoverable surface advertised by the
+  // `service-desc` Link rel. Matches the cloudflare-worker's
+  // `/.well-known/api-catalog` in shape but is scoped to the local CLI.
+  app.get('/api', (req, res) => {
+    const host = req.headers.host ?? `localhost:${SERVE_PORT}`;
+    res.json(buildLocalApiDescriptor(host));
+  });
+
   // Tray status API — forwards to browser to get leader tray join info
   app.get('/api/tray-status', async (_req, res) => {
     try {
@@ -918,19 +929,44 @@ async function main() {
   // is installed. External tools (e.g. the slicc-handoff helper) post here
   // so a handoff reaches the cone regardless of which browser profile the
   // user is currently driving.
+  //
+  // The payload mirrors the parsed RFC 8288 `Link` form used by the
+  // observers: `verb` ∈ {handoff, upskill}, `target` is the resolved URL,
+  // `instruction` is optional free-form prose (handoff verb).
   app.post('/api/handoff', (req, res) => {
     const payload = req.body as {
-      sliccHeader?: unknown;
+      verb?: unknown;
+      target?: unknown;
+      instruction?: unknown;
       url?: unknown;
       title?: unknown;
+      // Detect legacy x-slicc-style payloads for a clear error message.
+      sliccHeader?: unknown;
     };
-    if (typeof payload?.sliccHeader !== 'string' || payload.sliccHeader.length === 0) {
-      res.status(400).json({ error: 'sliccHeader is required (non-empty string)' });
+    if (typeof payload?.sliccHeader === 'string') {
+      res.status(400).json({
+        error:
+          'The legacy `sliccHeader` payload was removed; post `{ verb, target, instruction? }` instead. See docs/slicc-handoff.md.',
+      });
+      return;
+    }
+    if (payload?.verb !== 'handoff' && payload?.verb !== 'upskill') {
+      res.status(400).json({ error: 'verb must be "handoff" or "upskill"' });
+      return;
+    }
+    if (typeof payload.target !== 'string' || payload.target.length === 0) {
+      res.status(400).json({ error: 'target is required (non-empty string)' });
+      return;
+    }
+    if (payload.instruction != null && typeof payload.instruction !== 'string') {
+      res.status(400).json({ error: 'instruction must be a string when provided' });
       return;
     }
     broadcastLickEvent({
       type: 'navigate_event',
-      sliccHeader: payload.sliccHeader,
+      verb: payload.verb,
+      target: payload.target,
+      instruction: typeof payload.instruction === 'string' ? payload.instruction : undefined,
       url:
         typeof payload.url === 'string' && payload.url.length > 0 ? payload.url : 'about:handoff',
       title: typeof payload.title === 'string' ? payload.title : undefined,

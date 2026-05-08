@@ -17,7 +17,7 @@ Use this skill when the user says things like `handoff to slicc`, `move this to 
 The script builds a URL like `https://www.sliccy.ai/handoff?msg=<urlencoded>`. Two delivery paths fire in parallel:
 
 - **Localhost POST** to `http://localhost:${SLICC_PORT ?? 5710}/api/handoff` with `{sliccHeader, url, title}`. The node-server rebroadcasts it as a navigate lick to the connected webapp. This is the profile-independent path — it reaches SLICC even when the user's default browser is a different Chrome profile than the one SLICC controls.
-- **`--open`** opens the URL in the local browser. If that browser profile has the SLICC extension installed, `chrome.webRequest` observes the `x-slicc` response header and emits the navigate lick.
+- **`--open`** opens the URL in the local browser. If that browser profile has the SLICC extension installed, `chrome.webRequest` parses the response's RFC 8288 `Link` header and emits the navigate lick when a SLICC handoff or upskill rel is present.
 
 Either path results in a yes/no approval card in the cone; accept dispatches by verb prefix.
 

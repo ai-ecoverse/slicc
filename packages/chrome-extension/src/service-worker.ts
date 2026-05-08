@@ -25,6 +25,7 @@ import type {
   OAuthRequestMsg,
   OAuthResultMsg,
 } from './messages.js';
+import { extractHandoffFromWebRequest } from '../../webapp/src/net/handoff-link.js';
 import {
   executeDaSignAndForward,
   executeS3SignAndForward,
@@ -129,38 +130,22 @@ async function addToSliccGroup(tabId: number): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// x-slicc header observer — emit a navigate lick when a main-frame document
-// response carries the x-slicc header.
+// Handoff `Link` header observer — emits a navigate lick when a main-frame
+// document response advertises a SLICC handoff rel via RFC 8288 Link.
 // ---------------------------------------------------------------------------
-
-function findSliccHeader(
-  headers: Array<{ name: string; value?: string }> | undefined
-): string | null {
-  if (!headers) return null;
-  for (const h of headers) {
-    if (h.name.toLowerCase() === 'x-slicc' && typeof h.value === 'string' && h.value.length > 0) {
-      // Producers percent-encode the value so non-Latin1 input survives
-      // transport. Decode on read; fall back to raw if malformed.
-      try {
-        return decodeURIComponent(h.value);
-      } catch {
-        return h.value;
-      }
-    }
-  }
-  return null;
-}
 
 chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
-    const sliccHeader = findSliccHeader(details.responseHeaders);
-    if (!sliccHeader) return;
+    const { match } = extractHandoffFromWebRequest(details.responseHeaders, details.url);
+    if (!match) return;
     const payload: NavigateLickMsg = {
       type: 'navigate-lick',
       url: details.url,
-      sliccHeader,
+      verb: match.verb,
+      target: match.target,
       tabId: details.tabId >= 0 ? details.tabId : undefined,
     };
+    if (match.instruction) payload.instruction = match.instruction;
     const tabId = details.tabId;
     const dispatch = (title?: string) => {
       if (title) payload.title = title;
