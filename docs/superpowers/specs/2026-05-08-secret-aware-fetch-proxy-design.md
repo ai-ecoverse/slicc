@@ -90,7 +90,17 @@ Concrete mechanics:
 - `oauth-token <provider>` shell command: awaits the proxy/SW push to complete and the masked value to be cached, then prints the cached masked value. If the cached masked is stale (e.g. token refreshed but mask not updated), force a fresh push first.
 - `--scope` flag forces a fresh login → new real token → new push → new masked. The command awaits the new mask before printing.
 
-**Tripwire test (in every flavor of test suite)**: assert `webapp.getCachedOAuthMask(providerId) === proxy.mask(name, realToken)` (CLI), and the SW equivalent via a synthetic `secrets.mask-oauth-token` call. If these ever drift apart, the tripwire fires loudly.
+**SessionId persistence across restarts (all three runtimes).** Without persistence, a node-server / SW / swift-server restart with the SLICC tab still open invalidates every cached masked value (webapp's `slicc_accounts` cache; agent's bash env; any masked tokens in `/workspace/.git/github-token`). The only recovery is page reload, which is poor UX and confuses users.
+
+The fix: persist sessionId so it survives the runtime's restart.
+
+- **node-server**: read/write to `~/.slicc/session-id` (or `<env-file-dir>/session-id` if `--env-file` is in play). On startup: if file exists and is non-empty, reuse it; otherwise generate a fresh UUID and write it (mode 0600). Same `EnvSecretStore` file-permissions posture.
+- **swift-server**: equivalent — read/write to the same path; or use macOS Keychain with service `ai.sliccy.slicc.session-id` (consistent with how Swift already stores secrets in Keychain). Pick file-based for parity with node-server unless Keychain is materially better.
+- **chrome-extension SW**: persist to `chrome.storage.local._session.id`. Documented in Risk #8.
+
+With persistence, a runtime restart with no code change still produces the same sessionId, the same masks, and the same unmask round-trip succeeds against the webapp's still-valid cached masks.
+
+**Tripwire test (in every flavor of test suite)**: assert `webapp.getCachedOAuthMask(providerId) === proxy.mask(name, realToken)` (CLI), and the SW equivalent via a synthetic `secrets.mask-oauth-token` call. Plus: assert that after a runtime restart (simulated), the sessionId is unchanged and previously-cached masks still round-trip. If these drift, the tripwire fires loudly.
 
 **Why this answer**: the alternatives (distributing the server's sessionId to the webapp, or replacing HMAC with a stable per-token mask) either couple the webapp to a server-side rotation or weaken the cryptographic posture. Single-source-of-mask preserves both today's masking algorithm and the round-trip invariant.
 
@@ -134,9 +144,12 @@ NEW
 │
 └── packages/chrome-extension/src/fetch-proxy-shared.ts
     Pure SW handler logic, extracted from service-worker.ts for testability.
-    Inputs: { url, method, headers, body }, SecretGetter.
-    Outputs: { status, headers, bodyBase64 }.
-    Wraps secrets-pipeline; performs upstream fetch; scrubs response.
+    Entry: handleFetchProxyConnection(port, secretSource).
+    Wire: { type: 'request' } in via port.onMessage; { type: 'response-head' },
+    streaming { type: 'response-chunk' }*N, then { type: 'response-end' } |
+    { type: 'response-error' } out via port.postMessage.
+    Wraps secrets-pipeline; performs upstream fetch with AbortController;
+    scrubs response; aborts on port.onDisconnect.
 
 REFACTORED
 ├── packages/node-server/src/secrets/proxy-manager.ts
@@ -180,13 +193,16 @@ REFACTORED
 │
 ├── packages/webapp/src/shell/  (just-bash SecureFetch wrapper)
 │   The CENTRAL hook for agent-side outbound HTTP.
-│     CLI branch:       → POST /api/fetch-proxy        (unchanged)
-│     Extension branch: → chrome.runtime.sendMessage('fetch-proxy.fetch', ...)
-│   Gains a small pre-send + post-receive OAuth-pipeline pass.
+│     CLI branch:       → POST /api/fetch-proxy                                  (unchanged)
+│     Extension branch: → chrome.runtime.connect({ name: 'fetch-proxy.fetch' })  (Port-based; streaming response)
 │   git-http.ts, node-fetch-adapter, bash curl/wget/fetch all flow through this.
 │
 ├── packages/webapp/src/shell/supplemental-commands/oauth-token-command.ts
-│   Returns masked Bearer (mask() on the real token, prefix-preserving).
+│   Reads the cached masked value from slicc_accounts (populated by the
+│   sync hook in provider-settings.ts:saveOAuthAccount). Forces a fresh sync
+│   if the cached masked is stale or missing. Prints masked Bearer to stdout.
+│   The webapp NEVER computes mask() locally for OAuth output — see the
+│   Mask Consistency section: only the proxy/SW mints OAuth masked values.
 │
 ├── packages/webapp/src/ui/provider-settings.ts (modified — `saveOAuthAccount` is the OAuth sync hook)
 │   `saveOAuthAccount` (line 430) is the SINGLE funnel for every OAuth lifecycle event:
@@ -232,8 +248,9 @@ ADDITIONS
 ├── packages/webapp/src/providers/types.ts
 │   ProviderConfig gains `oauthTokenDomains?: string[]`.
 │
-├── packages/webapp/src/providers/built-in/*.ts
-│   Set oauthTokenDomains for built-in OAuth providers (adobe, github).
+├── packages/webapp/providers/github.ts and packages/webapp/providers/adobe.ts
+│   Set oauthTokenDomains. (External providers live under packages/webapp/providers/, NOT
+│   src/providers/built-in/ — that subtree is API-key-only.)
 │
 ├── Bash-env population in extension mode
 │   Mirror CLI: when scoop init builds the WasmShell env, populate masked
@@ -284,9 +301,10 @@ Agent shell:
   $ curl -H "Authorization: Bearer $(oauth-token github)" https://api.github.com/user
 
 oauth-token-command.ts:
-  Reads real token from webapp's getOAuthAccountInfo.
-  Computes masked = mask('oauth.github.token', realToken).
-  Prints masked to stdout.
+  Reads cached maskedValue from slicc_accounts (populated by saveOAuthAccount sync).
+  If stale or missing: force POST /api/secrets/oauth-update first; await response;
+  cache the server-minted maskedValue.
+  Prints cached maskedValue to stdout.
 
 curl (just-bash supplemental):
   Authorization: Bearer <masked> sent through SecureFetch → /api/fetch-proxy
@@ -340,13 +358,13 @@ SecureFetch.extension (page side):
 ```
 User clicks Login on options page → chrome.identity.launchWebAuthFlow → token returned.
 
-oauth-service:
+provider-settings.ts:saveOAuthAccount (the sync hook):
   - Save to webapp's slicc_accounts localStorage (UNCHANGED — keeps LLM streaming fast).
   - chrome.storage.local.set({
       'oauth.github.token': realToken,
-      'oauth.github.token_DOMAINS': '*.github.com,api.github.com',
+      'oauth.github.token_DOMAINS': '*.github.com,api.github.com,raw.githubusercontent.com,models.github.ai',
     }).
-  - SW exposes `secrets.mask-oauth-token` message; webapp sends to receive the SW-minted masked value, caches in slicc_accounts.
+  - SW exposes `secrets.mask-oauth-token` message; webapp sends to receive the SW-minted masked value, caches in the slicc_accounts Account entry.
   - SW's FetchProxySecretSource sees the new entry via secrets-storage.listSecretsWithValues() on the next fetch-proxy.fetch unmask pass.
 ```
 
@@ -355,11 +373,15 @@ oauth-service:
 ```
 chrome popup → /auth/callback → postMessage → webapp receives token.
 
-oauth-service:
+provider-settings.ts:saveOAuthAccount (the sync hook):
   - Save to webapp's slicc_accounts localStorage (UNCHANGED).
-  - POST /api/secrets/oauth-update { providerId: 'github', token: realToken,
-                                     domains: ['*.github.com', 'api.github.com'] }
-  - node-server's OauthSecretStore now has the entry.
+  - POST /api/secrets/oauth-update {
+      providerId: 'github',
+      accessToken: realToken,
+      domains: ['*.github.com', 'api.github.com', 'raw.githubusercontent.com', 'models.github.ai']
+    }
+  - Server response: { providerId, name, maskedValue, domains } — webapp caches maskedValue in slicc_accounts.
+  - node-server's OauthSecretStore now has the entry; rebuilds maskedToSecret map.
   - On next /api/fetch-proxy call, proxy unmasks against both stores.
 ```
 
@@ -369,11 +391,20 @@ oauth-service:
 Webapp init (after a node-server restart or first connection):
   Read all OAuth accounts from local slicc_accounts.
   For each non-expired entry: POST /api/secrets/oauth-update (idempotent).
+  Refresh the cached maskedValue from each response (sessionId is persistent
+  across restarts, so masks should match — but re-cache anyway for safety).
 
   No GET endpoint needed; webapp is the source of truth and the push is
   idempotent — the in-memory store either accepts the new value or
-  overwrites with the same. Simpler than diff-based reconciliation.
+  overwrites with the same.
 ```
+
+**Asymmetry between env-style and OAuth secrets across server restart:**
+
+- **env-style** (`.env` / Keychain / `chrome.storage.local`): always re-loaded by the runtime from disk/storage on startup. SessionId persistence (the per-runtime session-id file) means masks minted before the restart are still recognized after. Agent's bash env (populated once at scoop init) stays valid; no re-push needed.
+- **OAuth replicas** (in-memory `OauthSecretStore` on node/swift; `chrome.storage.local` on extension): node/swift restart drops the in-memory store entirely. Bootstrap-on-init re-pushes from the webapp, but bootstrap only fires on page load. **If the user restarts node-server with the SLICC tab still open, no bootstrap fires; OAuth replica stays empty until the user reloads the page.** Outbound calls using a cached OAuth masked Bearer will 403 until reload. Extension is unaffected (chrome.storage.local persists across SW cold starts).
+
+For v1 we document this asymmetry as a known limitation. v2 follow-up to consider: persist `OauthSecretStore` to disk (`~/.slicc/oauth-replica.json`, mode 0600), or have node-server emit a "restart" event over an existing channel that the webapp can react to.
 
 ### Bootstrap recovery (extension reload)
 
@@ -385,10 +416,10 @@ Ordered for incremental landing. Each phase ends in a green commit.
 
 ### Phase 1: Extract `secrets-pipeline` (shared core)
 
-- Move `unmaskHeaders` / `unmaskBody` / `scrubResponse{Headers,Body}` from `packages/node-server/src/secrets/proxy-manager.ts` into a new `packages/webapp/src/core/secrets-pipeline.ts`.
+- Move `unmaskHeaders` / `unmaskBody` / `scrubResponse(text)` / `scrubHeaders(headers)` from `packages/node-server/src/secrets/proxy-manager.ts` into a new `packages/webapp/src/core/secrets-pipeline.ts`. (Existing API names — no `scrubResponseBody` / `scrubResponseHeaders` methods exist; don't accidentally rename.)
 - Define the `FetchProxySecretSource` interface (`get(name)`, `listAll(): Promise<{name, value, domains}[]>`). DELIBERATELY distinct from mount's existing `SecretGetter` (`{ get(key) }` only) at `packages/webapp/src/fs/mount/sign-and-forward-shared.ts:91` — keep the names distinct to prevent collision and accidental cross-import. `listAll` is what enables the proxy/SW to build a `mask→real` map for unmasking incoming requests.
 - Standardize scrub method names to match the existing API: `scrubResponse(text)` and `scrubHeaders(headers)` (per `proxy-manager.ts:155,162`). Swift-server's `scrub(text:)` becomes `scrubResponse(text:)` for cross-implementation consistency.
-- `proxy-manager.ts` becomes a thin wrapper that injects `EnvSecretStore` as the SecretGetter.
+- `proxy-manager.ts` becomes a thin wrapper that injects `EnvSecretStore` as the SecretGetter. **SessionId persistence**: on construction, read from `~/.slicc/session-id` (or `<env-file-dir>/session-id`); if missing, generate a fresh UUID and write it with mode 0600. Reuse on subsequent process starts. This is what makes the agent's cached masks (in `slicc_accounts` and bash env) survive a node-server restart with the tab still open. Test: simulate restart by re-instantiating `SecretProxyManager` against the same on-disk session-id; assert masks for the same `(name, value)` are identical across instances.
 - All existing CLI tests under `packages/node-server/tests/secrets/` keep passing unchanged.
 - New tests under `packages/webapp/tests/core/secrets-pipeline.test.ts` for the platform-agnostic surface.
 
@@ -475,7 +506,7 @@ SW side (fetch-proxy-shared):
 - **`/api/secrets/masked` endpoint** continues to return only env-style secrets (matches existing behavior). OAuth tokens are never exposed via this endpoint — they're accessed via `oauth-token` shell command output.
 - `packages/node-server/src/index.ts`: new endpoints `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId`. Localhost-only (no extra auth — same posture as the rest of node-server's local-only API). POST returns `{providerId, name, maskedValue, domains}` so the webapp can cache it.
 - Bootstrap: webapp on init reads `slicc_accounts`, for every non-expired entry POSTs to `/api/secrets/oauth-update` (idempotent), refreshes the cached `maskedValue` from each response.
-- **`nuke` integration: NONE.** The existing `nuke` shell command intentionally preserves provider keys / OAuth state in localStorage by design (see comment at `nuke-command.ts:38`). Clearing the OAuth replica from the proxy would only be transient — bootstrap on next page load re-pushes from `slicc_accounts`. The public security page's framing of nuke is "wipes the VFS, scoops, and ledger state"; provider credentials surviving is intentional. Update `docs/secrets.md` and the public security page wording to make this explicit; do not add an OAuth-clear step to nuke.
+- **`nuke` integration: NONE.** The existing `nuke` shell command intentionally preserves provider keys / OAuth state in localStorage by design (see comment at `nuke-command.ts:38`). Clearing the OAuth replica from the proxy would only be transient — bootstrap on next page load re-pushes from `slicc_accounts`. The public security page's framing of nuke is "wipes the VFS, scoops, and ledger state"; provider credentials surviving is intentional. Phase 6 covers the docs update; this PR adds no nuke code change.
 - Tests for: masked `oauth-token` output round-trip end-to-end (the tripwire test from "Mask consistency" section); sync on login/refresh/logout via `saveOAuthAccount` covering Adobe silent refresh path; bootstrap re-push; `--scope` race; `oauth.*` namespace collision rejection.
 
 ### Phase 5: Direct-fetch migration (extension parity)
@@ -552,7 +583,7 @@ Migration policy added to `docs/secrets.md`: agent-context outbound HTTP routes 
 
 - `packages/swift-server/Sources/Keychain/SecretsPipeline.swift` (new) — port of `secrets-pipeline.ts`. `unmaskAuthorizationBasic`, `unmaskUrlCredentials`, plus the literal-substring path. Same SecretGetter-style abstraction so the chained Keychain + OAuth store wiring works.
 - `packages/swift-server/Sources/Keychain/OAuthSecretStore.swift` (new) — in-memory writable. `set(name:value:domains:)`, `delete(name:)`, `list() -> [String]`. Thread-safe (use `actor` or `DispatchQueue` lock).
-- `packages/swift-server/Sources/Keychain/SecretInjector.swift` (modified) — chain Keychain store + OAuthSecretStore in unmask. Keep public surface stable.
+- `packages/swift-server/Sources/Keychain/SecretInjector.swift` (modified) — chain Keychain store + OAuthSecretStore in unmask. Keep public surface stable. **SessionId persistence**: read/write to `~/.slicc/session-id` on construction (matches node-server). On startup: reuse if file exists; otherwise generate fresh UUID and write with mode 0600. Closes the same tab-open + restart → stale-masks failure that node-server's persistence closes.
 - `packages/swift-server/Sources/Server/APIRoutes.swift` (modified) — new endpoints `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId`. Same JSON shape and status codes as the node-server endpoints.
 
 **Tests (write blind, run in CI):**
@@ -639,7 +670,12 @@ Manual smoke (in PR body, not automated):
 
 7. **Extension git large-PUSH regression risk** (narrow). Response streaming via Port (Phase 3) means `git clone` / `git fetch` / large file downloads work at any size in extension. The remaining cap is on the **request body** (32 MB) — affects `git push` of multi-GB packfiles only. Workaround: use CLI / Electron / swift-server for those repos. v2 may lift the request cap via Port-based request streaming. Significantly narrower than the all-buffered v1 we'd considered — only the push-large-repo case regresses, and even that has a clear, documented workaround.
 
-8. **Service worker lifecycle / cold starts.** Chrome can kill the SW at any time. After cold start, in-memory state is lost. Design constraint: the new `fetch-proxy.fetch` handler and `secrets.list-masked-entries` / `secrets.mask-oauth-token` handlers must be **stateless across SW cold starts**. All persistent state lives in `chrome.storage.local`. Per-request: rebuild the unmask map from `secrets-storage.listSecretsWithValues()` (cached in-memory but invalidated on cold start). The SW's sessionId is generated lazily on first need and persisted to `chrome.storage.local` (key: `_session.id`), so cross-cold-start mask round-trips remain consistent. Tests must include a "kill-and-restart-SW between two requests" scenario.
+8. **Runtime lifecycle / restarts (all three modes).** Chrome can kill the SW; node-server / swift-server can be restarted by the user. In every case, in-memory state is lost. Design constraint: handlers must be **stateless across cold starts**, and the sessionId must persist so cached masked values on the webapp side remain valid after the restart. Persistence locations:
+   - **chrome-extension SW**: `chrome.storage.local._session.id` (lazy on first need, then read).
+   - **node-server**: `~/.slicc/session-id` (or `<env-file-dir>/session-id`), mode 0600. Read on startup; generate if absent.
+   - **swift-server**: same path as node-server (file-based) for parity, unless Keychain proves materially better.
+
+   Per-request: rebuild the unmask map from the platform's secret store (`secrets-storage.listSecretsWithValues()` in extension; `EnvSecretStore.list() + OauthSecretStore.list()` in node/swift). Cached in-memory but invalidated on cold start. Tests must include "kill-and-restart-runtime between two requests" scenarios — the second request's outbound `Authorization` header (using a mask from the first session) must still unmask successfully.
 
 9. **Swift-server work is write-blind.** Phase 7 is written with no local Swift compile feedback — local toolchain is older than swift-server requires. CI is the only signal of correctness. Mitigations:
    - Tests written first, parallel-vector with the TS test cases.
@@ -653,7 +689,6 @@ Manual smoke (in PR body, not automated):
 - **OAuth storage unification (Option Y).** v1 keeps webapp localStorage as source of truth. A follow-up PR can collapse to a single store, removing the dual-storage sync. Worth doing eventually for architectural cleanliness.
 - **API keys in the secret store.** Same shape as OAuth Y. Follow-up.
 - **Extension request-body streaming.** v1 buffers request bodies in extension with a 32 MB cap (matches CLI's de-facto-bounded-by-memory request handling). Lifting the cap via Port-based request streaming is deferred. Most agent flows fit comfortably; large `git push` of multi-GB packfiles in extension is the failure mode, with CLI as the workaround.
-- **Multi-Authorization-value, Digest, NTLM** for the proxy.
 - **Glob-pattern OAuth domain matching** beyond `*.host`.
 - **A "reload secrets" UI button** in extension options that broadcasts to scoops to refresh env.
 
@@ -664,7 +699,7 @@ Seven commits, mirroring the implementation phases:
 1. `refactor(secrets): extract platform-agnostic secrets-pipeline core`
 2. `feat(node-server/secrets): Basic-auth-aware + URL-embedded credential unmask`
 3. `feat(chrome-extension/secrets): generic SW fetch-proxy handler + bash env population`
-4. `feat(secrets/oauth): masked oauth-token + dual-storage replica + nuke cleanup`
+4. `feat(secrets/oauth): masked oauth-token + dual-storage replica + saveOAuthAccount sync hook`
 5. `refactor(shell): migrate user-driven direct-fetch sites to SecureFetch`
 6. `docs(secrets): platform-support matrix + oauth-token semantic + migration notes`
 7. `feat(swift-server/secrets): port pipeline + OAuth replica store + endpoints (write-blind, CI-tested)`
