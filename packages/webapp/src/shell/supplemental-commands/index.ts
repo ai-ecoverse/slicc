@@ -20,6 +20,7 @@ import { createCrontaskCommand } from './crontask-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createOAuthTokenCommand } from './oauth-token-command.js';
+import { createLocalLlmCommand } from './local-llm-command.js';
 import { createSecretCommand } from './secret-command.js';
 import { createRsyncCommand } from './rsync-command.js';
 import { createWhichCommand } from './which-command.js';
@@ -89,6 +90,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createUnameCommand(),
     createManCommand(),
     createOAuthTokenCommand(),
+    createLocalLlmCommand(),
     createSecretCommand(),
     createRsyncCommand({ fs: options.fs }),
     createScreencaptureCommand(),
@@ -106,7 +108,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
   ];
 
   // Extension-only commands
-  const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
+  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   if (isExtension) {
     commands.push(createDebugCommand());
   }

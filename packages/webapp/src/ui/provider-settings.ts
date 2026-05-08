@@ -174,7 +174,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     const providerConfig = getProviderConfig(providerId);
     if (providerConfig.getModelIds) {
       // Provider specifies its own model list — resolve against all pi-ai registries
-      let modelIds: Array<{ id: string; name?: string }>;
+      let modelIds: ReturnType<NonNullable<ProviderConfig['getModelIds']>>;
       try {
         modelIds = providerConfig.getModelIds();
       } catch (err) {
@@ -196,7 +196,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
       }
       return modelIds.map((pm) => {
         // Determine API type from metadata: 'openai' or 'anthropic' (default)
-        const apiType = (pm as any).api === 'openai' ? 'openai' : 'anthropic';
+        const apiType = pm.api === 'openai' ? 'openai' : 'anthropic';
         const customApi = `${providerId}-${apiType}` as Api;
         const base = modelMap.get(pm.id);
         const model: Record<string, any> = base
@@ -218,10 +218,12 @@ export function getProviderModels(providerId: string): Model<Api>[] {
               reasoning: true,
             };
 
-        // Apply modelOverrides (layer 2) then getModelIds metadata (layer 3)
+        // Apply modelOverrides (layer 2) then getModelIds metadata (layer 3).
+        // pm is a superset of ModelMetadata (adds id/name) — applyModelMetadata
+        // reads only the fields it knows about and ignores extras.
         const overrides = providerConfig.modelOverrides?.[pm.id];
         if (overrides) applyModelMetadata(model, overrides);
-        applyModelMetadata(model, pm as any);
+        applyModelMetadata(model, pm);
 
         return model as unknown as Model<Api>;
       });
@@ -449,11 +451,41 @@ export function saveOAuthAccount(opts: {
   saveAccounts(accounts);
 }
 
-export function getApiKeyForProvider(providerId: string): string | null {
+/** Fallback returned by getApiKeyForProvider for providers with
+ *  `optionalApiKey: true` when the user hasn't stored one. Local LLM
+ *  servers ignore the value but pi-ai's openai-completions stream and
+ *  the scoop init guard require something non-null. */
+const OPTIONAL_API_KEY_PLACEHOLDER = 'local';
+
+/** What the user actually typed (or the OAuth flow stored). Returns null
+ *  when the account has no key — does NOT inject the optional-provider
+ *  placeholder. Use this from code that needs to round-trip the user's
+ *  intent (e.g. `local-llm discover` upserting back into Settings); use
+ *  {@link getApiKeyForProvider} from code that needs a non-null value to
+ *  pass downstream (scoop init, pi-ai's stream). */
+export function getRawApiKeyForProvider(providerId: string): string | null {
   const account = getAccounts().find((a) => a.providerId === providerId);
   if (!account) return null;
   // OAuth providers use accessToken instead of apiKey
   return account.accessToken || account.apiKey || null;
+}
+
+export function getApiKeyForProvider(providerId: string): string | null {
+  const account = getAccounts().find((a) => a.providerId === providerId);
+  // No account configured at all — return null so the scoop init guard
+  // defers agent creation until the user sets the provider up.
+  if (!account) return null;
+  const stored = account.accessToken || account.apiKey;
+  if (stored) return stored;
+  // Account exists but the user left the key blank: providers that mark
+  // the key optional get a placeholder so the scoop init guard and pi-ai's
+  // stream don't fail. NOTE: the literal 'local' placeholder must match
+  // local-llm.ts's PLACEHOLDER_API_KEY — they're independent guards at
+  // different layers but must agree.
+  if (getProviderConfig(providerId).optionalApiKey) {
+    return OPTIONAL_API_KEY_PLACEHOLDER;
+  }
+  return null;
 }
 
 export function getBaseUrlForProvider(providerId: string): string | null {
@@ -541,7 +573,10 @@ export function getBaseUrl(): string | null {
 
 export function setBaseUrl(url: string): void {
   const provider = getSelectedProvider();
-  const apiKey = getApiKeyForProvider(provider);
+  // Use the raw stored key — passing through getApiKeyForProvider would
+  // resolve the optionalApiKey placeholder ('local') and durably persist
+  // it as the user's apiKey, shadowing the placeholder fallback.
+  const apiKey = getRawApiKeyForProvider(provider);
   if (apiKey) {
     addAccount(provider, apiKey, url || undefined);
   }
@@ -549,7 +584,7 @@ export function setBaseUrl(url: string): void {
 
 export function clearBaseUrl(): void {
   const provider = getSelectedProvider();
-  const apiKey = getApiKeyForProvider(provider);
+  const apiKey = getRawApiKeyForProvider(provider);
   if (apiKey) {
     addAccount(provider, apiKey);
   }
@@ -1205,9 +1240,11 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           saveBtn.style.display = 'none';
         } else {
           oauthSection.style.display = 'none';
-          apiKeyLabel.textContent = `API Key${providerConfig.apiKeyEnvVar ? ` (${providerConfig.apiKeyEnvVar})` : ''}:`;
+          const keyLabel = providerConfig.requiresApiKey ? 'API Key' : 'API Key (optional)';
+          apiKeyLabel.textContent = `${keyLabel}${providerConfig.apiKeyEnvVar ? ` (${providerConfig.apiKeyEnvVar})` : ''}:`;
           apiKeyInput.placeholder = providerConfig.apiKeyPlaceholder || 'API key';
-          apiKeySection.style.display = providerConfig.requiresApiKey ? '' : 'none';
+          const showApiKey = providerConfig.requiresApiKey || providerConfig.optionalApiKey;
+          apiKeySection.style.display = showApiKey ? '' : 'none';
           baseUrlInput.placeholder = providerConfig.baseUrlPlaceholder || 'https://...';
           baseUrlDesc.textContent = providerConfig.baseUrlDescription || '';
           baseUrlSection.style.display = providerConfig.requiresBaseUrl ? '' : 'none';
