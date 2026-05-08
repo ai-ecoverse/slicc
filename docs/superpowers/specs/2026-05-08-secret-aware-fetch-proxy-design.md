@@ -30,8 +30,8 @@ After this lands:
 
 ## Non-goals (v1)
 
-- **Streaming change for the extension SW.** v1 SW handler buffers both request and response. The CLI proxy continues to behave as today (request body buffered; response body **already streams** via the existing `Transform` pipeline in `node-server/src/index.ts` — see chunk-boundary scrub limitation comments). Multi-GB git clones / file downloads through the extension SW are out of scope; document the limit. swift-server inherits node-server's existing behavior for v1.
-- **Cancel-on-disconnect** for SW fetches. Fire-and-forget like the existing mount handlers.
+- **Request-body streaming.** Both CLI and extension buffer the request body in v1. CLI has no cap (bounded by Node memory; multi-GB pushes work in practice). Extension is hard-capped at 32 MB; request bodies above the cap return `payload-too-large`. Multi-GB `git push` of huge packfiles in the extension is out of scope; the canonical workaround is to use CLI / Electron / swift-server for those repos. v2 may lift the extension request-body cap via Port-based request streaming.
+- **Streaming for swift-server.** swift-server's `/api/fetch-proxy` follows node-server's existing behavior unchanged — request buffered, response streamed via Hummingbird's response stream. No new streaming work in Phase 7 beyond what already exists.
 - **Full OAuth-token storage move into the secret store** (Option Y). v1 keeps OAuth tokens dual-stored: webapp localStorage (for fast LLM streaming) + proxy-side replica (for unmask). Follow-up PR can unify.
 - **API keys.** Stay in `slicc_accounts` localStorage; not agent-exposed today, no shell surface. Migrating them to the secret store is consistent but not load-bearing.
 - **Multi-Authorization-value headers, Digest, NTLM.**
@@ -157,9 +157,13 @@ REFACTORED
 │   Process-local, lost on restart (webapp re-pushes on bootstrap).
 │
 ├── packages/chrome-extension/src/service-worker.ts
-│   New message handler: `fetch-proxy.fetch`. Mirrors mount.* shape:
-│     in:  { url, method, headers, body }
-│     out: { status, headers, bodyBase64 }  via single sendResponse
+│   New `chrome.runtime.onConnect` handler filtered by `port.name === 'fetch-proxy.fetch'`.
+│   Port-based for response streaming (matches CLI's response-streams behavior):
+│     IN:   port message { type: 'request', url, method, headers, bodyBase64?, requestBodyTooLarge? }
+│     OUT:  port message { type: 'response-head', status, statusText, headers }
+│           port messages { type: 'response-chunk', dataBase64 } (streaming)
+│           port message { type: 'response-end' } | { type: 'response-error', error }
+│   Page disconnect → SW aborts upstream via AbortController.
 │
 ├── packages/chrome-extension/src/secrets-storage.ts (extended)
 │   Today's `chromeStorageSecretGetter` only does `get(key)` for known
@@ -302,20 +306,33 @@ node-server proxy:
 ```
 isomorphic-git → getOnAuth → ... Authorization: Basic base64(...)
 
-git-http.ts extension branch → SecureFetch.extension →
-  chrome.runtime.sendMessage('fetch-proxy.fetch', { url, method, headers, body })
+git-http.ts extension branch → SecureFetch.extension:
+  port = chrome.runtime.connect({ name: 'fetch-proxy.fetch' })
+  port.postMessage({ type: 'request', url, method, headers,
+                     bodyBase64: encode(packfileBuffer) })
 
-SW handler (fetch-proxy-shared):
-  Read SecretGetter view of chrome.storage.local.
-  Run secrets-pipeline.unmaskHeaders (same module as CLI side).
-  Run unmaskUrlCredentials on url (if userinfo present).
-  fetch(url, ...) → upstream.
-  Read response body to ArrayBuffer; scrubResponse + scrubHeaders; encode bodyBase64.
-  sendResponse({ status, headers, bodyBase64 }).
+SW handler (fetch-proxy-shared, on connect):
+  Read FetchProxySecretSource view over chrome.storage.local.
+  Run secrets-pipeline.unmaskHeaders + extractAndUnmaskUrlCredentials
+  + byte-safe unmaskBody (decoded from bodyBase64).
+  upstream = fetch(url, { signal: abortController.signal, ... })
 
-git-http.ts:
-  Decode bodyBase64 → wrap as single-chunk AsyncIterableIterator<Uint8Array>
-  → return to isomorphic-git.
+  port.postMessage({ type: 'response-head',
+                     status, statusText, headers: scrubHeaders(...) })
+  for await (chunk of upstream.body):
+    port.postMessage({ type: 'response-chunk',
+                       dataBase64: encode(scrubResponse(chunk)) })
+  port.postMessage({ type: 'response-end' })
+
+  on port disconnect: abortController.abort()
+
+SecureFetch.extension (page side):
+  Receives 'response-head' → resolve fetch() with a Response whose
+  body is a controlled ReadableStream.
+  Receives each 'response-chunk' → enqueue Uint8Array into stream.
+  Receives 'response-end' → close the stream.
+  Bridge ReadableStream → AsyncIterableIterator<Uint8Array> for
+  isomorphic-git's http plugin contract.
 ```
 
 ### Extension OAuth login (sync)
@@ -385,23 +402,58 @@ Ordered for incremental landing. Each phase ends in a green commit.
 - `index.ts` `/api/fetch-proxy`: after `unmaskHeaders`, call `extractAndUnmaskUrlCredentials` on the `X-Target-URL` value (or on the local `targetUrl` variable, after deriving it from the header bag). If a `syntheticAuthorization` is returned, set it on the outbound request unless an `Authorization` header is already present. Pass the cleaned URL to `fetch()`.
 - Tests under `packages/node-server/tests/secrets/proxy-manager.test.ts` (extended) and `secrets-pipeline.test.ts`. Include binary fixtures (e.g. a synthetic git packfile with a hex-string-coincidence in the byte stream) to lock down byte-safety.
 
-### Phase 3: Extension SW fetch proxy
+### Phase 3: Extension SW fetch proxy (Port-based streaming response)
+
+**Wire shape**: `chrome.runtime.connect` Port for every fetch-proxy call. Request body is sent buffered (single `postMessage` payload, capped at 32 MB); response body is **streamed** as a sequence of chunk messages over the same Port (matches CLI's response-streamed / request-buffered behavior exactly).
+
+```text
+Page side (SecureFetch.extension):
+  port = chrome.runtime.connect({ name: 'fetch-proxy.fetch' })
+  port.postMessage({ type: 'request', url, method, headers, bodyBase64?, requestBodyTooLarge? })
+  port.onMessage:
+    { type: 'response-head', status, statusText, headers }    → resolve fetch() with a Response whose body is a ReadableStream we control
+    { type: 'response-chunk', dataBase64 }                    → enqueue Uint8Array(decode(dataBase64)) into the ReadableStream
+    { type: 'response-end' }                                  → close the ReadableStream
+    { type: 'response-error', error }                         → error the ReadableStream
+  page disconnect (e.g. tab close, agent abort)               → SW aborts upstream fetch via AbortController
+
+SW side (fetch-proxy-shared):
+  on connect:
+    receive 'request' message
+    run secrets-pipeline.unmaskHeaders + extractAndUnmaskUrlCredentials + byte-safe unmaskBody
+    upstream = await fetch(url, { signal: abortController.signal, ... })
+    post 'response-head' with status, statusText, scrubbed headers
+    for await (chunk of upstream.body):
+      run secrets-pipeline.scrubResponse on text-content-type chunks (byte-safe pass-through for binary)
+      post 'response-chunk' with dataBase64
+    post 'response-end'
+  on disconnect:
+    abortController.abort()
+```
 
 - New `packages/chrome-extension/src/fetch-proxy-shared.ts`:
-  - `executeFetchProxy(req, secretSource): Promise<reply>` where:
-    - `req = { url, method, headers, bodyBase64?: string, requestBodyTooLarge?: boolean }` — request body always base64-encoded for byte preservation across `chrome.runtime.sendMessage`. Empty body → `bodyBase64` omitted.
-    - `reply = { status, statusText, headers, bodyBase64, responseBodyTooLarge?: boolean }` — `statusText` matches CLI SecureFetch's existing return shape so curl / node / .jsh callers see consistent results.
-  - Calls `secrets-pipeline.unmaskHeaders` + `extractAndUnmaskUrlCredentials` + byte-safe `unmaskBody` (same module as CLI side).
-  - **Forbidden-header transport parity with CLI**: extension SW recognizes the same `X-Proxy-Cookie` / `X-Proxy-Set-Cookie` envelope CLI uses (see `node-server/src/index.ts:1071,1206`). Cookies, Origin, Referer, and other browser-forbidden request headers come in encoded; SW decodes before upstream `fetch`; response Set-Cookie comes back encoded.
-  - **Payload size cap**: hard limit at 32 MB total per request body and per response body (matches typical chrome.runtime.sendMessage practical limits with safety margin). Above the cap → handler returns `{ status: 0, error: 'payload-too-large', limit: 33554432 }`. Document the limit; v2 introduces Port-based streaming to lift it.
-- New SW message handler `fetch-proxy.fetch` registered in `service-worker.ts`. Reads `chrome.storage.local` via the new `FetchProxySecretSource` adapter that wraps `secrets-storage.listSecretsWithValues()`. Returns single sendResponse.
-- Update `packages/chrome-extension/src/chrome.d.ts`: today `runtime.sendMessage(...)` is declared `Promise<void>`. Update the typing for the new handler so callers get the structured `reply` typed end-to-end.
-- Update `packages/webapp/src/shell/` `SecureFetch` extension branch: route through `chrome.runtime.sendMessage('fetch-proxy.fetch', ...)`. Encode request body to base64 before send; decode `bodyBase64` from reply into a real `Response` instance.
-- Update `packages/webapp/src/git/git-http.ts` extension branch: same route. The extension-branch logic in `git-http.ts` reduces to a thin shim over SecureFetch; the proxy hand-off lives entirely in SecureFetch. (Fold rather than duplicate.)
+  - `handleFetchProxyConnection(port, secretSource)` — pure logic, takes a Port-shaped object so the implementation is unit-testable without a live SW.
+  - Calls `secrets-pipeline.unmaskHeaders` + `extractAndUnmaskUrlCredentials` + byte-safe `unmaskBody` on the request, plus byte-safe `scrubResponse` / `scrubHeaders` on the response (chunk-boundary scrub limitation matches the existing CLI Transform pipeline behavior — same caveat documented in `index.ts` comments).
+  - **Forbidden-header transport parity with CLI**: SW recognizes the same `X-Proxy-Cookie` / `X-Proxy-Set-Cookie` envelope CLI uses (`node-server/src/index.ts:1071,1206`). Cookies, Origin, Referer, and other browser-forbidden request headers come in encoded; SW decodes before upstream `fetch`; response Set-Cookie comes back encoded over the response-head message.
+  - **Request body size cap**: hard limit at 32 MB. Above the cap, the page-side wrapper sets `requestBodyTooLarge: true` and the SW returns a `response-head` with `{ status: 0, statusText: 'payload-too-large', headers: {} }` immediately, no upstream call. Documented in pitfalls.md and recommended workaround is CLI mode for large repos.
+  - **Response body has no buffer cap** — streamed chunk-by-chunk. Memory residency on the page side is bounded by what the consumer doesn't drain; backpressure is implicit (the page's ReadableStream controller pauses when the agent's downstream consumer is slow; the SW's `for await` naturally yields).
+  - **Cancel-on-disconnect** (now load-bearing in v1): SW listens for `port.onDisconnect`; calls `abortController.abort()` on the upstream fetch; cleans up. Tests cover mid-stream abort.
+- New SW connect handler `chrome.runtime.onConnect` filtering by `port.name === 'fetch-proxy.fetch'` registered in `service-worker.ts`. Reads `chrome.storage.local` via the new `FetchProxySecretSource` adapter that wraps `secrets-storage.listSecretsWithValues()`.
+- Update `packages/chrome-extension/src/chrome.d.ts` if the existing typing needs the connect/disconnect/Port lifecycle to be properly typed for the new code path.
+- Update `packages/webapp/src/shell/` `SecureFetch` extension branch: open a `chrome.runtime.connect` Port per fetch call; encode request body to base64; receive response-head + chunks; reconstruct a `Response` with a `ReadableStream` body whose chunks come from the Port. Closes Port on response-end / response-error / consumer abort.
+- Update `packages/webapp/src/git/git-http.ts` extension branch: same route. The extension-branch logic in `git-http.ts` reduces to a thin shim over SecureFetch; the proxy hand-off and stream reconstruction lives entirely in SecureFetch. isomorphic-git's `http` plugin contract requires `body: AsyncIterableIterator<Uint8Array>` for the response — bridge the ReadableStream to an iterator at the SecureFetch boundary.
 - **Bash env population in extension — SW is the sole mask producer.** Mirror the CLI pattern (where node-server's `SecretProxyManager` is the sole mask producer and webapp pulls via `/api/secrets/masked`). New SW message handler `secrets.list-masked-entries` returns `{name, maskedValue, domains}[]` for every secret in `chrome.storage.local`, computed against the SW's own sessionId via `mask()`. Offscreen calls this on scoop init and populates the agent's WasmShell env from the response. **Offscreen never computes masks itself**; this guarantees the masked values in agent env match what `fetch-proxy.fetch` will recognize at the unmask boundary, and avoids the cross-context sessionId problem that would otherwise require either distributing the SW's sessionId to offscreen or wider drift fixes.
 - The same `secrets.list-masked-entries` handler covers both `.env`-style secrets and OAuth replicas in `chrome.storage.local`. The earlier `secrets.mask-oauth-token` (single-secret) is a thin specialization of this general handler used by the OAuth sync hook on login/refresh; both can be implemented as the same code path.
 - **Storage enumeration includes mount keys.** `secrets-storage.listSecretsWithValues()` returns every `<key>+<key>_DOMAINS` pair in `chrome.storage.local`, which includes `s3.<profile>.*` mount credentials. They flow into the fetch-proxy unmask map. This is harmless because mount keys have mount-host `_DOMAINS` (e.g. `*.r2.cloudflarestorage.com`) so they only unmask for S3-host requests — and agent calls to S3 hosts go through mount-side `s3-sign-and-forward` (not the fetch-proxy unmask). The few extra entries in the map are not a correctness or perf concern. Document the choice explicitly so a future reviewer doesn't try to filter.
-- Tests under `packages/chrome-extension/tests/fetch-proxy-shared.test.ts` and `service-worker.test.ts` (extended). Include payload-cap rejection tests, forbidden-header round-trip, statusText parity.
+- Tests under `packages/chrome-extension/tests/fetch-proxy-shared.test.ts` and `service-worker.test.ts` (extended). Cases:
+  - request-body-cap rejection (request payload > 32 MB → response-head with status 0, statusText 'payload-too-large', no upstream call).
+  - forbidden-header round-trip (X-Proxy-Cookie, X-Proxy-Set-Cookie).
+  - statusText parity with CLI SecureFetch.
+  - **streaming**: receive multiple response-chunk messages in order; ReadableStream reassembles to identical bytes; large-response (≥10 MB) round-trip without OOM.
+  - **mid-stream abort**: page disconnects port mid-stream → SW's upstream fetch is aborted (verify AbortController fires); no further chunks emitted.
+  - **mid-stream upstream error**: upstream connection drops between chunks → SW posts response-error with the error message; page-side ReadableStream errors with the same message.
+  - **SW killed mid-stream** (cold-start scenario): simulate Chrome killing the SW after 'response-head' but before 'response-end' → page sees Port disconnect; SecureFetch surfaces it as a stream error rather than silent truncation.
+  - secret never appears in any Port message back to the page (string-search across all postMessage payloads).
 
 ### Phase 4: OAuth masking + dual-storage sync
 
@@ -585,7 +637,7 @@ Manual smoke (in PR body, not automated):
 
 6. **Service worker IIFE bundling.** The SW is built as a single IIFE (no shared chunks). The new `fetch-proxy-shared.ts` will be bundled into the SW. Since `secrets-pipeline.ts` is also imported by the SW, both modules need to compile cleanly into the IIFE bundle. Vite/esbuild should handle this; verify during impl.
 
-7. **Extension git large-body regression risk.** Today extension git uses **direct** `fetch()` with no body-size cap; clones / pushes of large repos work transparently because `host_permissions: <all_urls>` lets browser fetch handle them at native scale. After this PR, extension git routes through the new SW `fetch-proxy.fetch` handler with a 32 MB request/response cap (`payload-too-large` error response). Repos with packfiles larger than 32 MB that work today will fail in extension mode after the PR. **Mitigation for v1**: document the limit prominently in `docs/secrets.md` and `docs/pitfalls.md`; recommend using CLI mode for large-repo work; keep the v2 follow-up (Port-based streaming) clearly tracked. **Mitigation for v2**: chrome.runtime.connect Port-based streaming, deferred per the non-goals section. Worth flagging to users on the PR and in the release notes.
+7. **Extension git large-PUSH regression risk** (narrow). Response streaming via Port (Phase 3) means `git clone` / `git fetch` / large file downloads work at any size in extension. The remaining cap is on the **request body** (32 MB) — affects `git push` of multi-GB packfiles only. Workaround: use CLI / Electron / swift-server for those repos. v2 may lift the request cap via Port-based request streaming. Significantly narrower than the all-buffered v1 we'd considered — only the push-large-repo case regresses, and even that has a clear, documented workaround.
 
 8. **Service worker lifecycle / cold starts.** Chrome can kill the SW at any time. After cold start, in-memory state is lost. Design constraint: the new `fetch-proxy.fetch` handler and `secrets.list-masked-entries` / `secrets.mask-oauth-token` handlers must be **stateless across SW cold starts**. All persistent state lives in `chrome.storage.local`. Per-request: rebuild the unmask map from `secrets-storage.listSecretsWithValues()` (cached in-memory but invalidated on cold start). The SW's sessionId is generated lazily on first need and persisted to `chrome.storage.local` (key: `_session.id`), so cross-cold-start mask round-trips remain consistent. Tests must include a "kill-and-restart-SW between two requests" scenario.
 
@@ -600,8 +652,7 @@ Manual smoke (in PR body, not automated):
 
 - **OAuth storage unification (Option Y).** v1 keeps webapp localStorage as source of truth. A follow-up PR can collapse to a single store, removing the dual-storage sync. Worth doing eventually for architectural cleanliness.
 - **API keys in the secret store.** Same shape as OAuth Y. Follow-up.
-- **Streaming.** Both for large git pushes (request body) and large clones (response body). Currently buffered. Port-based streaming pattern is net-new infra; defer.
-- **Cancel-on-disconnect** for SW fetches.
+- **Extension request-body streaming.** v1 buffers request bodies in extension with a 32 MB cap (matches CLI's de-facto-bounded-by-memory request handling). Lifting the cap via Port-based request streaming is deferred. Most agent flows fit comfortably; large `git push` of multi-GB packfiles in extension is the failure mode, with CLI as the workaround.
 - **Multi-Authorization-value, Digest, NTLM** for the proxy.
 - **Glob-pattern OAuth domain matching** beyond `*.host`.
 - **A "reload secrets" UI button** in extension options that broadcasts to scoops to refresh env.
