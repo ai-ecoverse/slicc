@@ -611,28 +611,28 @@ Migration policy added to `docs/secrets.md`: agent-context outbound HTTP routes 
 - README.md: update if it mentions GitHub auth.
 - **Public security page** (`https://www.sliccy.com/security`, separate repo): the page says "Secrets stored in browser local storage" — that's a slight oversimplification (CLI uses `~/.slicc/secrets.env` on disk, extension uses `chrome.storage.local`, macOS uses Keychain, OAuth tokens dual-stored after this PR). Plus the `nuke`-clears-state framing needs the provider-creds-survive caveat. File a follow-up issue for that page after this PR merges; out of scope for this repo.
 
-### Phase 7: swift-server port (write-only; CI is the only feedback loop)
+### Phase 7: swift-server port
 
-**Constraint**: the developer's local machine cannot compile Swift for swift-server (toolchain mismatch — `swift-log` 1.12.1 needs Swift tools 6.2.0 / >= 5.10; local environment is older). All Phase 7 work is **write-only** locally. CI is the only compile and test feedback loop. There is no way to iterate on Swift code locally before opening the PR.
+Mirror the CLI proxy changes in swift-server so macOS-native users get the same secret-aware fetch proxy behavior. Cross-language port — important to be careful about subtle semantic differences between TypeScript and Swift APIs.
 
-**Implications for how we write Phase 7:**
+**How to approach Phase 7:**
 
-1. **Tests are mechanical, exhaustive, and parallel to the TS test cases**. For every TypeScript test case in `secrets-pipeline.test.ts` and the proxy-manager / OAuth-store / API-routes tests, write the equivalent in Swift (`SecretsPipelineTests.swift`, `OAuthSecretStoreTests.swift`, extended `SecretInjectorTests.swift` and `SecretAPIRoutesTests.swift`). Use parallel test vectors so a CI failure on either side reveals a real divergence rather than a Swift-vs-TS idiom drift.
+1. **Tests parallel to the TS test cases**. For every TypeScript test case in `secrets-pipeline.test.ts` and the proxy-manager / OAuth-store / API-routes tests, write the equivalent in Swift (`SecretsPipelineTests.swift`, `OAuthSecretStoreTests.swift`, extended `SecretInjectorTests.swift` and `SecretAPIRoutesTests.swift`). Parallel test vectors expose divergences (Swift idiom drift, Foundation API differences) loudly.
 
 2. **Mirror the TS structure deliberately, even where Swift idioms would diverge.** Use the same function names, the same parameter ordering, the same intermediate variables. Foundation's `Data.base64EncodedString()` and `URL.user`/`URL.password` have small semantic differences from `btoa`/`atob`/the `URL` Web API; mirror the TS algorithm step-by-step rather than relying on Foundation conveniences that _might_ be equivalent. Comment any place a Foundation API is invoked with the equivalent TS expression as a tripwire.
 
-3. **CI gate**: `swift test --enable-code-coverage` runs in `.github/workflows/ci.yml`'s `swift-server` job. Per-package coverage floor in `packages/dev-tools/tools/swift-coverage-check.sh` is currently 40% lines / 35% regions — must hold. Write tests first; then write the implementation against them. Everything we add must come with tests, both because it's the policy AND because tests are the only signal of correctness.
+3. **CI gate**: `swift test --enable-code-coverage` runs in `.github/workflows/ci.yml`'s `swift-server` job. Per-package coverage floor in `packages/dev-tools/tools/swift-coverage-check.sh` is currently 40% lines / 35% regions — must hold. Tests-first development is the recommended workflow.
 
-4. **Be conservative with new Swift dependencies.** Use only what's already in `Package.swift`. Adding new Swift packages cascades into platform constraints we can't validate locally.
+4. **Be conservative with new Swift dependencies.** Use only what's already in `Package.swift`. Adding new Swift packages cascades into platform constraints across the project.
 
-**Files to write/modify (all write-blind):**
+**Files to write/modify:**
 
 - `packages/swift-server/Sources/Keychain/SecretsPipeline.swift` (new) — port of `secrets-pipeline.ts`. `unmaskAuthorizationBasic`, `unmaskUrlCredentials`, plus the literal-substring path. Same SecretGetter-style abstraction so the chained Keychain + OAuth store wiring works.
 - `packages/swift-server/Sources/Keychain/OAuthSecretStore.swift` (new) — in-memory writable. `set(name:value:domains:)`, `delete(name:)`, `list() -> [String]`. Thread-safe (use `actor` or `DispatchQueue` lock).
 - `packages/swift-server/Sources/Keychain/SecretInjector.swift` (modified) — chain Keychain store + OAuthSecretStore in unmask. Keep public surface stable. **SessionId persistence**: read/write to `~/.slicc/session-id` on construction (matches node-server). On startup: reuse if file exists; otherwise generate fresh UUID and write with mode 0600. Closes the same tab-open + restart → stale-masks failure that node-server's persistence closes.
 - `packages/swift-server/Sources/Server/APIRoutes.swift` (modified) — new endpoints `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId`. Same JSON shape and status codes as the node-server endpoints.
 
-**Tests (write blind, run in CI):**
+**Tests (run in CI):**
 
 - `packages/swift-server/Tests/SecretsPipelineTests.swift` (new) — full test vector parity with `packages/webapp/tests/core/secrets-pipeline.test.ts`. Bearer regression, Basic-auth-aware (matched + decoded → real; non-allowed domain → forbidden; non-base64 → unchanged; no-colon → unchanged; URL-safe vs standard base64; padding; whitespace), URL-embedded credentials (matched, mismatched, malformed URL, IDN host).
 - `packages/swift-server/Tests/OAuthSecretStoreTests.swift` (new) — set/delete/list round-trip, case-sensitive provider IDs, rejection of empty domain list, thread-safety smoke (concurrent set/delete).
@@ -673,7 +673,7 @@ Integration:
 - `packages/webapp/tests/git/git-auth-extension.test.ts` — mock isomorphic-git, mock SW handler, assert real PAT goes upstream + masked stays in agent context.
 - `packages/webapp/tests/git/git-auth-cli.test.ts` — mock proxy, assert Basic-auth round-trip end-to-end.
 
-Swift-server (write-blind; runs in CI only — see Phase 7 for the workflow constraints):
+Swift-server (runs in CI):
 
 - `packages/swift-server/Tests/SecretsPipelineTests.swift` — full parity with `packages/webapp/tests/core/secrets-pipeline.test.ts`. Same input vectors, same expected outputs.
 - `packages/swift-server/Tests/OAuthSecretStoreTests.swift` — set/delete/list, concurrency smoke.
@@ -731,12 +731,11 @@ Manual smoke (in PR body, not automated):
 
    Per-request: rebuild the unmask map from the platform's secret store (`secrets-storage.listSecretsWithValues()` in extension; `EnvSecretStore.list() + OauthSecretStore.list()` in node/swift). Cached in-memory but invalidated on cold start. Tests must include "kill-and-restart-runtime between two requests" scenarios — the second request's outbound `Authorization` header (using a mask from the first session) must still unmask successfully.
 
-9. **Swift-server work is write-blind.** Phase 7 is written with no local Swift compile feedback — local toolchain is older than swift-server requires. CI is the only signal of correctness. Mitigations:
-   - Tests written first, parallel-vector with the TS test cases.
+9. **Cross-language port semantic divergence (Swift ↔ TS).** Foundation's `Data(base64Encoded:)` is stricter than `atob` about padding and whitespace; `URL.user` / `URL.password` differ from the Web `URL` API; HMAC output ordering needs care. Catching these requires deliberate parallel test vectors. Mitigations:
+   - Tests-first development, parallel-vector with the TS test cases.
    - `CrossImplementationTests.swift` pinning HMAC outputs across implementations.
    - Mirroring TS structure step-by-step to make Swift-vs-TS divergence obvious in code review.
    - Conservative use of Foundation conveniences whose semantics differ from Web APIs (base64 padding, URL parsing of userinfo, regex flavors).
-   - Expect at least one CI round-trip per swift-server commit. Be prepared to chase a few CI failures before things go green.
 
 ## Open questions / follow-ups
 
@@ -756,8 +755,8 @@ Seven commits, mirroring the implementation phases:
 4. `feat(secrets/oauth): masked oauth-token + dual-storage replica + saveOAuthAccount sync hook`
 5. `refactor(shell): migrate user-driven direct-fetch sites to SecureFetch`
 6. `docs(secrets): platform-support matrix + oauth-token semantic + migration notes`
-7. `feat(swift-server/secrets): port pipeline + OAuth replica store + endpoints (write-blind, CI-tested)`
+7. `feat(swift-server/secrets): port pipeline + OAuth replica store + endpoints`
 
 Run repo-wide gates before opening: `npx prettier --write` on every touched file, then `npm run typecheck`, `npm run test`, `npm run test:coverage`, `npm run build`, `npm run build -w @slicc/chrome-extension`. CI's `prettier --check` is the most common failure.
 
-For commit 7 (swift-server), expect to push the commit, watch CI, fix Swift bugs from CI logs, push again. Plan for at least one or two iteration rounds. The TS tests on commits 1–6 are the spec; the Swift tests on commit 7 must produce the same observable behavior. If a CI failure on commit 7 is something subtle like a base64 padding mismatch, the fix is in the Swift code, not the TS spec — the TS side is the canonical reference.
+For commit 7 (swift-server), the TS tests on commits 1–6 are the spec; the Swift tests on commit 7 must produce the same observable behavior. If CI surfaces a subtle divergence (base64 padding mismatch, HMAC byte order, URL userinfo parsing), the fix is in the Swift code — the TS side is the canonical reference.
