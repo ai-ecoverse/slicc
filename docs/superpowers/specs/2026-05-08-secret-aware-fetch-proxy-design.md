@@ -10,7 +10,7 @@ slicc has a secret-management story (`docs/secrets.md`) that lets users put API 
 
 Three cracks in the model surfaced in production use:
 
-1. **HTTP Basic auth (the git case).** isomorphic-git authenticates with `Authorization: Basic base64('x-access-token:<token>')`. When `<token>` is masked, the masked value disappears inside the base64 blob and the literal-substring matcher misses it. Upstream gets the masked PAT and 401s. Bruce hit this trying to `git push` a skill repo to GitHub from inside slicc and worked around it by writing the real PAT to a file the agent could `cat`.
+1. **HTTP Basic auth (the git case).** isomorphic-git authenticates with `Authorization: Basic base64('x-access-token:<token>')`. When `<token>` is masked, the masked value disappears inside the base64 blob and the literal-substring matcher misses it. Upstream gets the masked PAT and 401s. User hit this trying to `git push` a skill repo to GitHub from inside slicc and worked around it by writing the real PAT to a file the agent could `cat`.
 
 2. **The extension has no fetch proxy at all.** Today CLAUDE.md says "Network behavior differs by runtime: CLI routes git/fetch traffic through `/api/fetch-proxy`; the extension uses direct fetch." That's correct — the extension has only `mount.s3-sign-and-forward` and `mount.da-sign-and-forward` SW handlers for specific mount-backend traffic. Generic agent-initiated HTTP from the extension has no secret injection; `docs/secrets.md` documents this with: _"For arbitrary HTTP secret injection (e.g. $GITHUB_TOKEN in a curl call from bash), the extension still has no equivalent — that's the fetch-proxy injection, which requires a server backend."_
 
@@ -100,7 +100,9 @@ The fix: persist sessionId so it survives the runtime's restart.
 
 With persistence, a runtime restart with no code change still produces the same sessionId, the same masks, and the same unmask round-trip succeeds against the webapp's still-valid cached masks.
 
-**Tripwire test (in every flavor of test suite)**: assert `webapp.getCachedOAuthMask(providerId) === proxy.mask(name, realToken)` (CLI), and the SW equivalent via a synthetic `secrets.mask-oauth-token` call. If these drift, the tripwire fires loudly.
+**Tripwire test (in every flavor of test suite)**: assert `getOAuthAccountInfo(providerId).maskedValue === proxy.mask(name, realToken)` (CLI), and the SW equivalent via a synthetic `secrets.mask-oauth-token` call. If these drift, the tripwire fires loudly.
+
+**API contract for the cached mask** (resolves the Mask-Consistency / Phase-4 reference inconsistency): `getOAuthAccountInfo(providerId)` is **extended** with a new optional `maskedValue?: string` field, populated from the cached `Account.maskedValue`. Existing fields (`token`, `expiresAt`, `userName`, `userAvatar`, `expired`) are unchanged — webapp-internal trusted callers (LLM streaming, `fetchUserProfile`, etc.) keep using `token` (the real access token). Agent-facing callers (`oauth-token` shell command, `github.ts`'s `writeGitToken`) read `maskedValue` instead. No new `getCachedOAuthMask` function — extend the existing API surface for minimal churn.
 
 **Restart round-trip property (narrower than the tripwire above)**:
 
@@ -580,6 +582,7 @@ Migration policy added to `docs/secrets.md`: agent-context outbound HTTP routes 
   - Update platform-support matrix: extension flips to ✅ for arbitrary HTTP secret injection.
   - New "OAuth tokens as secrets" subsection explaining the masked-output model + dual-storage sync.
   - Migration note for users on the file-PAT workaround.
+  - **Fix the GITHUB_TOKEN_DOMAINS example at line 22**: today says `GITHUB_TOKEN_DOMAINS=api.github.com,*.github.com`. Must include bare `github.com` for `git push https://github.com/...` to work — `*.github.com` does not match `github.com` itself (per `secret-masking.ts:124-125`). Update the example to `GITHUB_TOKEN_DOMAINS=github.com,*.github.com,api.github.com,raw.githubusercontent.com`. This is the same bug as Phase 4's GitHub provider config; both must be fixed for users on either PAT-in-.env or OAuth flow.
   - **`oauth-token` per-invocation approval semantic clarification**: pre-this-PR, the public security doc claims "every invocation requires approval"; in reality only the _fresh-mint_ path runs the OAuth popup — cached-token reuse returned the real token without approval. After this PR the cached path returns masked (no approval needed there, but masked is benign), and the fresh-mint path retains the OAuth popup. Doc the framing shift honestly: the gate is on the OAuth login flow, not on the model getting a usable value.
   - **Threat-model addendum**: the agent code-execution surface gap (jsh-executor in CLI page context can read localStorage). Document as a known acknowledged gap distinct from the secrets pipeline. Reference the follow-up issue for the JS-sandbox workstream.
   - **`oauth.*` reserved namespace**: keys starting with `oauth.` are reserved for OAuth replicas; user-defined `.env` / `chrome.storage.local` entries with that prefix are rejected/warned at load.
