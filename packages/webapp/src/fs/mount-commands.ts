@@ -3,10 +3,16 @@
  * their respective backend factories. Handles flag parsing for --source,
  * --profile, --no-probe, --max-body-mb, --clear-cache, and --bodies.
  *
- * Local mounts (no --source) launch the picker UI (cone approval / extension popup / direct).
- * Remote mounts (s3://... or da://...) dispatch through resolveS3Profile / resolveDaProfile
- * and render approval cards for cone-initiated calls (no picker integration for remotes).
- * Scoop fail-fast moved into LocalMountBackend.create().
+ * Local mounts (no --source) launch the picker UI via LocalMountBackend.create
+ * (cone approval card + popup, extension terminal popup, or standalone direct
+ * picker). The click is required to satisfy Chrome's user-gesture rule for the
+ * File System Access API, not as a consent gate.
+ *
+ * Remote mounts (s3://... or da://...) build their backend, probe the source,
+ * and mount directly — no approval ceremony, since the trust boundary lives at
+ * the credential profile resolver in node-server / SW, not in the chat.
+ *
+ * Scoop fail-fast lives in LocalMountBackend.create().
  */
 
 import type { VirtualFS } from './virtual-fs.js';
@@ -16,7 +22,7 @@ import { DaMountBackend, type SignedFetchDa } from './mount/backend-da.js';
 import { RemoteMountCache } from './mount/remote-cache.js';
 import { makeSignedFetchS3, makeSignedFetchDa } from './mount/signed-fetch.js';
 import { newMountId } from './mount/mount-id.js';
-import { getToolExecutionContext, showToolUI, toolUIRegistry } from '../tools/tool-ui.js';
+import { getToolExecutionContext } from '../tools/tool-ui.js';
 
 export interface MountCommandResult {
   stdout: string;
@@ -198,22 +204,6 @@ export class MountCommands {
       }
     }
 
-    // Cone-initiated: render approval card.
-    const ctx = getToolExecutionContext();
-    if (ctx) {
-      const approved = await this.renderApprovalCard(
-        {
-          summary: `Mount S3: ${parsed.source}`,
-          needsPicker: false,
-        },
-        ctx
-      );
-      if (!approved) {
-        await backend.close();
-        return { stdout: '', stderr: 'mount: denied by user\n', exitCode: 1 };
-      }
-    }
-
     await this.options.fs.mount(targetPath, backend);
     const desc = backend.describe();
     return {
@@ -254,22 +244,6 @@ export class MountCommands {
           stderr: `mount: probe failed for ${parsed.source} — ${err instanceof Error ? err.message : String(err)}\n`,
           exitCode: 1,
         };
-      }
-    }
-
-    // Cone-initiated: render approval card.
-    const ctx = getToolExecutionContext();
-    if (ctx) {
-      const approved = await this.renderApprovalCard(
-        {
-          summary: `Mount DA: ${parsed.source}`,
-          needsPicker: false,
-        },
-        ctx
-      );
-      if (!approved) {
-        await backend.close();
-        return { stdout: '', stderr: 'mount: denied by user\n', exitCode: 1 };
       }
     }
 
@@ -387,57 +361,6 @@ export class MountCommands {
         exitCode: 1,
       };
     }
-  }
-
-  private async renderApprovalCard(
-    copy: { summary: string; needsPicker: boolean },
-    ctx: Exclude<ReturnType<typeof getToolExecutionContext>, null>
-  ): Promise<boolean> {
-    const uiRequestId = toolUIRegistry.generateId();
-    let timedOut = false;
-    const TIMEOUT_MS = 5 * 60 * 1000;
-
-    const rawUiPromise = showToolUI(
-      {
-        id: uiRequestId,
-        html: `
-        <div class="sprinkle-action-card">
-          <div class="sprinkle-action-card__header">${copy.summary} <span class="sprinkle-badge sprinkle-badge--notice">approval</span></div>
-          <div class="sprinkle-action-card__actions">
-            <button class="sprinkle-btn sprinkle-btn--secondary" data-action="deny">Deny</button>
-            <button class="sprinkle-btn sprinkle-btn--primary" data-action="approve">Approve</button>
-          </div>
-        </div>
-      `,
-        onAction: async (action) => {
-          if (action === 'approve') {
-            return { approved: true };
-          }
-          return { denied: true };
-        },
-      },
-      ctx.onUpdate
-    );
-
-    const safeUiPromise = rawUiPromise.catch((err: unknown) => {
-      if (timedOut) return { timeout: true };
-      throw err;
-    });
-
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<{ timeout: true }>((resolve) => {
-      timeoutHandle = setTimeout(() => {
-        timedOut = true;
-        toolUIRegistry.cancel(uiRequestId, 'mount: timed out');
-        resolve({ timeout: true });
-      }, TIMEOUT_MS);
-    });
-
-    const result = await Promise.race([safeUiPromise, timeoutPromise]);
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-
-    const res = result as { approved?: boolean; denied?: boolean; timeout?: boolean };
-    return res.approved === true;
   }
 
   private resolvePath(target: string, cwd: string): string {

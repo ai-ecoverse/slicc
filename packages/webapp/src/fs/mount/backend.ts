@@ -57,17 +57,6 @@ export interface MountDescription {
   extra?: string;
 }
 
-/**
- * Approval-card copy used by mount-commands.ts when a cone-initiated mount
- * needs user confirmation. Never used outside the approval flow — keep
- * approval strings out of `MountDescription`.
- */
-export interface MountApprovalCopy {
-  summary: string;
-  needsPicker: boolean;
-  pickerKind?: 'directory';
-}
-
 export interface MountBackend {
   readonly kind: MountKind;
   /** URL form: 's3://bucket/prefix', 'da://org/repo', undefined for local. */
@@ -90,7 +79,6 @@ export interface MountBackend {
   refresh(opts?: { bodies?: boolean }): Promise<RefreshReport>;
 
   describe(): MountDescription;
-  describeForApproval(): MountApprovalCopy;
 
   /**
    * Lifecycle: marks the backend closed (subsequent ops throw EBADF), aborts

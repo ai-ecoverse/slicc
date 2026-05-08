@@ -26,7 +26,6 @@ import type {
   MountDirEntry,
   MountStat,
   MountDescription,
-  MountApprovalCopy,
   RefreshReport,
 } from './backend.js';
 import { type RemoteMountCache } from './remote-cache.js';
@@ -512,13 +511,6 @@ export class S3MountBackend implements MountBackend {
         : this.parsed.bucket,
       source: this.source,
       profile: this.profile,
-    };
-  }
-
-  describeForApproval(): MountApprovalCopy {
-    return {
-      summary: `Approve mount of \`${this.source}\` (profile \`${this.profile}\`)`,
-      needsPicker: false,
     };
   }
 

@@ -1,9 +1,23 @@
 /**
  * `LocalMountBackend` wraps a `FileSystemDirectoryHandle` and implements
- * `MountBackend` on top of the File System Access API. Lifts the read/write
- * paths that previously lived directly in `virtual-fs.ts`; the picker dance
- * (cone approval, extension popup, standalone direct picker) lifts in a
- * follow-up task as the `create()` factory.
+ * `MountBackend` over the File System Access API.
+ *
+ * The static `create()` factory drives the picker dance — required because
+ * `showDirectoryPicker()` must run inside a real user gesture, and because
+ * Chrome crashes when the picker is invoked from side-panel context for
+ * system directories. Three picker contexts are handled:
+ *   - cone (toolContext present) — render approval card via `showToolUI`.
+ *     The factory itself only ever calls `showDirectoryPicker()` inline
+ *     from `onAction`; the popup detour for the extension is invisible
+ *     here — the panel-side `tool-ui-renderer.ts` transparently swaps in
+ *     `openMountPickerPopup` for buttons marked `data-picker="directory"`
+ *     and posts back `{ handleInIdb, idbKey }`, which `create()` then
+ *     resolves via `loadAndClearPendingHandle` + `reactivateHandle`.
+ *   - extension terminal (no toolContext, isExtension true) — popup picker.
+ *   - standalone (no toolContext, no extension) — direct picker.
+ *
+ * `create()` also enforces scoop fail-fast: scoops have no human at chat to
+ * approve a picker, so they get an immediate error.
  */
 
 import { FsError } from '../types.js';
@@ -18,7 +32,6 @@ import type {
   MountDirEntry,
   MountStat,
   MountDescription,
-  MountApprovalCopy,
   RefreshReport,
 } from './backend.js';
 
@@ -414,15 +427,6 @@ export class LocalMountBackend implements MountBackend {
 
   describe(): MountDescription {
     return { displayName: this.handle.name };
-  }
-
-  describeForApproval(): MountApprovalCopy {
-    return {
-      summary: `Mount local directory '${this.handle.name}'`,
-      // `create()` factory owns the picker; reactivation after recovery
-      // needs a separate user gesture flow not driven from here.
-      needsPicker: false,
-    };
   }
 
   async close(): Promise<void> {

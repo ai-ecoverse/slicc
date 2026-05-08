@@ -284,6 +284,73 @@ describe('MountCommands', () => {
       expect(backend.kind).toBe('da');
       expect(backend.source).toBe('da://my-org/my-repo');
     });
+
+    // Lock-down for the new contract (PR #603): remote mounts mount directly
+    // even when called from a cone-style ToolExecutionContext. A regression
+    // that re-introduces an Approve/Deny dip would register a `tool_ui`
+    // entry on toolUIRegistry and emit a `tool_ui` content block on
+    // ctx.onUpdate; both must stay zero for s3:// and da://.
+    it('s3:// in cone (tool) context mounts directly without registering a tool_ui', async () => {
+      const fs = makeFs();
+      const onUpdate = vi.fn();
+      const ctx: ToolExecutionContext = pushToolExecutionContext({
+        onUpdate,
+        toolName: 'bash',
+        toolCallId: 'tc-mount-s3-no-consent',
+      });
+      try {
+        const cmd = new MountCommands({
+          fs,
+          signedFetchS3: async () => new Response('', { status: 200 }),
+        });
+        const pendingBefore = toolUIRegistry.getPendingIds().length;
+        const result = await cmd.execute(
+          ['--source', 's3://b/p', '--no-probe', '/mnt/r2'],
+          '/workspace'
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(toolUIRegistry.getPendingIds().length).toBe(pendingBefore);
+        const blocks = onUpdate.mock.calls.flatMap(
+          (call) => (call[0]?.content ?? []) as Array<{ type?: string }>
+        );
+        expect(blocks.some((b) => b.type === 'tool_ui')).toBe(false);
+        expect(fs.mount as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+      } finally {
+        popToolExecutionContext(ctx);
+      }
+    });
+
+    it('da:// in cone (tool) context mounts directly without registering a tool_ui', async () => {
+      const fs = makeFs();
+      const onUpdate = vi.fn();
+      const ctx: ToolExecutionContext = pushToolExecutionContext({
+        onUpdate,
+        toolName: 'bash',
+        toolCallId: 'tc-mount-da-no-consent',
+      });
+      try {
+        const cmd = new MountCommands({
+          fs,
+          signedFetchDa: async () => new Response('[]', { status: 200 }),
+        });
+        const pendingBefore = toolUIRegistry.getPendingIds().length;
+        const result = await cmd.execute(
+          ['--source', 'da://my-org/my-repo', '--no-probe', '/mnt/da'],
+          '/workspace'
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(toolUIRegistry.getPendingIds().length).toBe(pendingBefore);
+        const blocks = onUpdate.mock.calls.flatMap(
+          (call) => (call[0]?.content ?? []) as Array<{ type?: string }>
+        );
+        expect(blocks.some((b) => b.type === 'tool_ui')).toBe(false);
+        expect(fs.mount as ReturnType<typeof vi.fn>).toHaveBeenCalledTimes(1);
+      } finally {
+        popToolExecutionContext(ctx);
+      }
+    });
   });
 
   describe('mount refresh outputs RefreshReport summary', () => {

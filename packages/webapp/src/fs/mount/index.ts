@@ -6,7 +6,6 @@ export type {
   MountStat,
   RefreshReport,
   MountDescription,
-  MountApprovalCopy,
   MountBackend,
 } from './backend.js';
 export { RemoteMountCache } from './remote-cache.js';
