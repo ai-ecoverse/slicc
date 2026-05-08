@@ -30,13 +30,15 @@ After this lands:
 
 ## Non-goals (v1)
 
-- **Streaming.** Both request and response bodies are buffered through the proxy/SW. Today's CLI proxy already buffers requests and streams responses; the extension SW will buffer both. Documented size limit, deferred to a follow-up. Multi-GB git clones / file downloads are out of scope.
+- **Streaming change for the extension SW.** v1 SW handler buffers both request and response. The CLI proxy continues to behave as today (request body buffered; response body **already streams** via the existing `Transform` pipeline in `node-server/src/index.ts` — see chunk-boundary scrub limitation comments). Multi-GB git clones / file downloads through the extension SW are out of scope; document the limit. swift-server inherits node-server's existing behavior for v1.
 - **Cancel-on-disconnect** for SW fetches. Fire-and-forget like the existing mount handlers.
 - **Full OAuth-token storage move into the secret store** (Option Y). v1 keeps OAuth tokens dual-stored: webapp localStorage (for fast LLM streaming) + proxy-side replica (for unmask). Follow-up PR can unify.
 - **API keys.** Stay in `slicc_accounts` localStorage; not agent-exposed today, no shell surface. Migrating them to the secret store is consistent but not load-bearing.
 - **Multi-Authorization-value headers, Digest, NTLM.**
 - **Glob-pattern OAuth domain config.** Use exact + simple `*.host` wildcard.
 - **The handful of supplemental commands that load static assets via direct `fetch()`** (`magick-wasm.ts`, Pyodide loader). Asset-loading is not user-driven; leave direct.
+- **Tray traffic** (`tray-leader.ts:createTrayFetch`'s extension branch returns raw `fetch`). Tray is for cross-instance signaling and TURN credentials; it does not carry user secrets. Documenting the explicit out-of-scope decision so a future audit doesn't have to re-derive it. If tray ever grows a secret-bearing payload, it joins the migration in a follow-up.
+- **GitHub provider's `fetchUserProfile` direct fetch** (`packages/webapp/providers/github.ts`). This is webapp-internal — the real Bearer goes from webapp localStorage to api.github.com to populate the user's display name/avatar in provider settings. The token never enters agent context; it is visible only in DevTools network logs (same posture as the LLM streaming calls that use real API keys for inference). Treated as accepted webapp-internal exposure, consistent with how API keys flow today.
 
 ## Threat model recap
 
@@ -47,6 +49,7 @@ The model we're enforcing for every secret in the system:
 - The masked value is unmasked **only** at the network boundary (`/api/fetch-proxy` in CLI, `fetch-proxy.fetch` SW handler in extension), **only** if the URL host matches the secret's `_DOMAINS` allowlist.
 - A masked value bound for a non-allowlisted domain in a request header → 403. In a request body → pass-through (the masked value is harmless, and rejecting would break the agent's own LLM API calls which contain masked values in conversation context — same rule as today).
 - Real values echoed back in upstream response bodies/headers are scrubbed back to masked before reaching the agent.
+- **Storage-surface tradeoff.** Pre-PR, OAuth tokens lived only in webapp localStorage (used internally for LLM streaming). Post-PR, they're additionally replicated into the proxy/SW store: `chrome.storage.local` (extension), in-memory on node-server / swift-server (CLI / native). The storage surface is wider; in exchange, the masked-value-at-network-boundary substitution closes the agent-exfil hole that's the bigger threat for the prompt-injection model. Net win for the agent-isolation model the public security page commits to, with the cost stated explicitly.
 
 ## Public security model alignment
 
@@ -79,8 +82,12 @@ NEW
 │   and chrome-extension SW. Includes new helpers:
 │     - unmaskAuthorizationBasic(value, ctx) → string | { forbidden }
 │     - unmaskUrlCredentials(url, ctx) → string | { forbidden }
-│   plus wraps the existing literal-substring path. Exposes a SecretGetter
-│   interface (platform-injected).
+│   plus wraps the existing literal-substring path. Exposes a
+│   FetchProxySecretSource interface (platform-injected) — DELIBERATELY
+│   distinct from mount's existing SecretGetter (the mount one only has
+│   `get(key)`; FetchProxySecretSource adds `listAll()` because the
+│   proxy needs to enumerate all secrets to build a mask→real map).
+│   Same naming would collide; pick the new one carefully.
 │
 └── packages/chrome-extension/src/fetch-proxy-shared.ts
     Pure SW handler logic, extracted from service-worker.ts for testability.
@@ -96,6 +103,12 @@ REFACTORED
 │     2. NEW writable in-memory OauthSecretStore (populated by webapp)
 │   unmask consults both; same domain enforcement.
 │
+├── packages/node-server/src/secrets/masking.ts
+│   Becomes a thin re-export of packages/webapp/src/core/secret-masking.ts
+│   (or deleted entirely if all callers can import from webapp directly).
+│   Single source of truth for HMAC-SHA256 masking; eliminates the drift
+│   risk the inline comments today already warn about.
+│
 ├── packages/node-server/src/secrets/oauth-secret-store.ts (NEW)
 │   In-memory writable store. set(name, value, domains) / delete(name) / list().
 │   Process-local, lost on restart (webapp re-pushes on bootstrap).
@@ -104,6 +117,19 @@ REFACTORED
 │   New message handler: `fetch-proxy.fetch`. Mirrors mount.* shape:
 │     in:  { url, method, headers, body }
 │     out: { status, headers, bodyBase64 }  via single sendResponse
+│
+├── packages/chrome-extension/src/secrets-storage.ts (extended)
+│   Today's `chromeStorageSecretGetter` only does `get(key)` for known
+│   keys (sufficient for mount handlers that look up specific
+│   `s3.<profile>.*` paths). The new fetch-proxy handler needs to
+│   ENUMERATE all configured secrets to build a mask→real map at unmask
+│   time. Extend the storage layer to support `listAll()`:
+│     - chrome.storage.local.get(null) for the full bag
+│     - filter by naming convention: keys with a paired <name>_DOMAINS
+│       entry are secrets; everything else (settings, UI state) is not
+│     - return [{ name, value, domains: string[] }]
+│   The existing `get(key)` API stays for mount handlers (no churn for
+│   them). The new `listAll()` is consumed only by FetchProxySecretSource.
 │
 ├── packages/webapp/src/shell/  (just-bash SecureFetch wrapper)
 │   The CENTRAL hook for agent-side outbound HTTP.
@@ -318,10 +344,10 @@ Ordered for incremental landing. Each phase ends in a green commit.
 ### Phase 4: OAuth masking + dual-storage sync
 
 - `packages/webapp/src/providers/types.ts`: add `oauthTokenDomains?: string[]` to `ProviderConfig`.
-- Set `oauthTokenDomains` on each existing built-in OAuth provider config:
+- Set `oauthTokenDomains` on each existing OAuth provider config. Note: external/auto-discovered providers live under `packages/webapp/providers/`, NOT `packages/webapp/src/providers/built-in/` (that path holds API-key/configuration-only built-ins; today's OAuth providers are external-style):
   - `packages/webapp/providers/github.ts` → `['*.github.com', 'api.github.com', 'raw.githubusercontent.com']`
-  - `packages/webapp/providers/adobe.ts` (or wherever the Adobe IMS provider lives) → Adobe IMS hosts.
-  - Other OAuth-isOAuth providers in `packages/webapp/providers/` and `packages/webapp/src/providers/built-in/` get audited the same way.
+  - `packages/webapp/providers/adobe.ts` → Adobe IMS hosts.
+  - Audit any other `isOAuth: true` providers under `packages/webapp/providers/` and set the field accordingly.
 - `packages/webapp/src/shell/supplemental-commands/oauth-token-command.ts`: mask the token before printing. Use a synthetic name like `oauth.<providerId>.token` for the mask key.
 - `packages/webapp/providers/github.ts` line ~15: the existing auto-write of the OAuth token to `/workspace/.git/github-token` becomes a write of the **masked** token. The agent can `cat` the file but only sees the mask; isomorphic-git reads it (via `git-commands.ts:loadGithubToken`), builds `Authorization: Basic base64('x-access-token:<masked>')`, the Basic-aware unmask at the proxy/SW boundary turns it into the real token upstream. **Net result: `git push` works automatically after GitHub OAuth login, no explicit `git config github.token` step required.**
 - `packages/webapp/src/providers/oauth-service.ts`: add sync logic. After login/refresh/logout, push to `/api/secrets/oauth-update` (CLI) or `chrome.storage.local` (extension). Errors logged but non-blocking.
@@ -337,21 +363,23 @@ Ordered for incremental landing. Each phase ends in a green commit.
 
 ### Phase 5: Direct-fetch migration
 
-Audit + migrate the user-driven direct-fetch sites. Leave asset loaders alone.
+Audit + migrate the user-driven direct-fetch sites. Leave asset loaders and local same-origin APIs alone.
 
-| File                     | Sites   | Action                                                                                                                                                          |
-| ------------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `magick-wasm.ts:70`      | 1       | **Leave** (WASM asset)                                                                                                                                          |
-| `man-command.ts:42`      | 1       | **Migrate** to SecureFetch                                                                                                                                      |
-| `models-command.ts:50`   | 1       | **Migrate** (verify URL is external)                                                                                                                            |
-| `crontask-command.ts:94` | 1       | **Leave** (`/api/crontasks`, local)                                                                                                                             |
-| `webhook-command.ts:59`  | 1       | **Leave** (`/api/webhooks`, local)                                                                                                                              |
-| `upskill-command.ts`     | 7       | **Migrate all** — most important. Each fetch reviewed individually.                                                                                             |
-| `node-command.ts`        | several | **Audit carefully**; sandbox already has its own fetch-proxy handler. Verify it routes through SecureFetch in extension mode and that we don't duplicate logic. |
+| File                     | Sites   | Action                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `magick-wasm.ts:70`      | 1       | **Leave** (WASM asset; `chrome.runtime.getURL` in extension)                                                                                                                                                                                                                                                                                                                         |
+| `man-command.ts:42`      | 1       | **Migrate** to SecureFetch                                                                                                                                                                                                                                                                                                                                                           |
+| `models-command.ts:50`   | 1       | **Migrate** (verify `AA_API_URL` is external)                                                                                                                                                                                                                                                                                                                                        |
+| `crontask-command.ts:94` | 1       | **Leave** (`/api/crontasks`, local same-origin)                                                                                                                                                                                                                                                                                                                                      |
+| `webhook-command.ts:59`  | 1       | **Leave** (`/api/webhooks`, local same-origin)                                                                                                                                                                                                                                                                                                                                       |
+| `secret-command.ts`      | n       | **Leave** (`/api/secrets/*`, local same-origin)                                                                                                                                                                                                                                                                                                                                      |
+| `upskill-command.ts`     | 7       | **Migrate all + fix shadowing bug.** Critical detail: `installFromClawHub` takes `fetch: SecureFetch` as a parameter but at line ~701 invokes the global `fetch` (parameter is shadowed/unused). That's a pre-existing bug, not just a migration target. Fix: actually use the injected parameter at every site; rename to `secureFetch` to make the shadowing visible if it recurs. |
+| `node-command.ts`        | several | **Audit + careful migration.** The sandbox iframe path already has its own fetch-proxy handler (line ~475). Verify it routes through SecureFetch in extension mode after our changes; verify we don't duplicate logic. Mostly a read-and-confirm task with selective edits.                                                                                                          |
+| `jsh-executor.ts`        | n       | **Migrate the global `fetch`.** `.jsh` scripts execute with platform-native `fetch` today. Replace the `fetch` global injected into the `.jsh` execution scope (AsyncFunction in CLI; sandbox iframe in extension) with SecureFetch. User `.jsh` scripts using masked `$TOKEN` substitution then get the unmask end-to-end. ~10 LoC + tests.                                         |
 
-For each migrated site: replace `fetch(url, init)` with the equivalent SecureFetch call (`ctx.fetch` for shell-context commands; the appropriate alternative for non-shell paths). Add tests where the site's HTTP behavior is non-trivial (especially `upskill-command.ts`).
+For each migrated site: replace `fetch(url, init)` with the equivalent SecureFetch call (`ctx.fetch` for shell-context commands; the appropriate alternative for non-shell paths). Add tests where the site's HTTP behavior is non-trivial (especially `upskill-command.ts` for the ClawHub install path).
 
-Migration policy added to `docs/secrets.md`: agent-context outbound HTTP routes through SecureFetch by default; asset-loading and local-API exceptions called out by name.
+Migration policy added to `docs/secrets.md`: agent-context outbound HTTP routes through SecureFetch by default; asset-loading and local same-origin API exceptions called out by name.
 
 ### Phase 6: Documentation
 
@@ -414,7 +442,7 @@ Unit:
 
 - `packages/webapp/tests/core/secrets-pipeline.test.ts` — Bearer (regression), Basic-auth-aware, URL-embedded credentials, scrub paths, domain enforcement edge cases (case-insensitive, glob patterns).
 - `packages/node-server/tests/secrets/proxy-manager.test.ts` — refactor preservation; OauthSecretStore + EnvSecretStore chained lookup.
-- `packages/node-server/tests/secrets/oauth-store-endpoints.test.ts` — POST/DELETE/GET round-trip; auth check; rejects unknown providers; rejects missing domains.
+- `packages/node-server/tests/secrets/oauth-store-endpoints.test.ts` — POST/DELETE round-trip; rejects unknown providers; rejects missing/empty domains; rejects malformed JSON; localhost binding. (No GET — design says "webapp is source of truth and re-pushes are idempotent.")
 - `packages/chrome-extension/tests/fetch-proxy-shared.test.ts` — pure handler with mocked `chrome.storage.local` + `fetch`; assert real value never appears in any returned payload (string-search).
 - `packages/chrome-extension/tests/service-worker.test.ts` — handler registration + dispatch.
 - `packages/webapp/tests/shell/oauth-token-command.test.ts` — masked output; real never crosses stdout.
@@ -449,7 +477,7 @@ Manual smoke (in PR body, not automated):
 - Domain mismatch on body unmask → leave unchanged (matches existing).
 - Upstream fetch error → propagate as response with the appropriate status.
 - `chrome.storage.local` read error in SW → fail closed.
-- OAuth sync error (network blip on push) → log, don't block login flow. Webapp re-tries on next request via 403 retry path.
+- OAuth sync error (network blip on push at login time) → log, don't block login flow. Recovery is the existing bootstrap-on-init path: webapp re-pushes all valid OAuth tokens on next page load / next webapp init. There is no automatic on-403 re-push — the webapp is the source of truth, and the next manual or automatic webapp restart picks up the missing entries. (We considered adding an on-403 lazy re-push retry; rejected as adds complexity to the proxy without real benefit, since the user can always reload to recover.)
 - Real value echoed in upstream response body → scrubbed (existing behavior preserved).
 
 ## Risks
