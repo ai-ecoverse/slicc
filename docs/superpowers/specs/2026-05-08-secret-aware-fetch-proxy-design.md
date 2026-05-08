@@ -48,6 +48,26 @@ The model we're enforcing for every secret in the system:
 - A masked value bound for a non-allowlisted domain in a request header → 403. In a request body → pass-through (the masked value is harmless, and rejecting would break the agent's own LLM API calls which contain masked values in conversation context — same rule as today).
 - Real values echoed back in upstream response bodies/headers are scrubbed back to masked before reaching the agent.
 
+## Public security model alignment
+
+The public security page at <https://www.sliccy.com/security>, Control #5 — "Secrets Kept Out of Model Context" — makes the central claim:
+
+> "API keys, OAuth tokens, and other sensitive values you give SLICC are managed through a secrets layer. The values themselves are not placed into the LLM's context window. The model sees a reference; the runtime substitutes the real value when it makes the actual outbound call."
+
+> "A model that is being prompt-injected cannot reveal a value it never saw in its prompt."
+
+That claim has four exceptions today which this PR closes:
+
+| Public claim says…                           | Today                                                                                                   | After this PR                                                           |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| API keys never in model context              | ✅ True — no shell surface exposes them                                                                 | ✅ Unchanged                                                            |
+| OAuth tokens never in model context          | ⚠️ **False** — `oauth-token <provider>` returns the real token to agent stdout                          | ✅ True — returns masked Bearer; real resolved at the proxy/SW boundary |
+| Runtime substitutes at outbound call         | ⚠️ True only in CLI, only for literal-substring matches; **fails on Basic auth and URL-embedded creds** | ✅ True for all three encoding cases                                    |
+| Substitution works in extension              | ⚠️ **False** — extension has only mount-specific SW handlers                                            | ✅ True via the new generic `fetch-proxy.fetch` SW handler              |
+| Substitution covers all agent-initiated HTTP | ⚠️ **False** — direct `fetch()` in `upskill`, `man`, etc. bypasses the proxy entirely                   | ✅ True — direct-fetch migration to `SecureFetch`                       |
+
+This is the architectural follow-through that makes the public commitment uniformly true rather than partially true with caveats.
+
 ## Architecture
 
 ### File map
@@ -107,6 +127,23 @@ REFACTORED
     New endpoints: POST /api/secrets/oauth-update,
                    DELETE /api/secrets/oauth/:providerId.
     (No GET /list — webapp is source of truth and re-pushes are idempotent.)
+
+SWIFT-SERVER (parallel port; CI-only feedback loop — see Phase 7)
+├── packages/swift-server/Sources/Keychain/SecretsPipeline.swift (NEW)
+│   Swift port of webapp's secrets-pipeline.ts. Same contract:
+│     - unmaskAuthorizationBasic(value, ctx)
+│     - unmaskUrlCredentials(url, ctx)
+│     - the existing literal-substring path
+│   Test vectors mirror packages/webapp/tests/core/secrets-pipeline.test.ts.
+│
+├── packages/swift-server/Sources/Keychain/OAuthSecretStore.swift (NEW)
+│   In-memory writable store. Mirror of node-server/src/secrets/oauth-secret-store.ts.
+│
+├── packages/swift-server/Sources/Keychain/SecretInjector.swift (REFACTORED)
+│   Use the new SecretsPipeline. Chain Keychain store + OAuthSecretStore in unmask lookup.
+│
+└── packages/swift-server/Sources/Server/APIRoutes.swift (UPDATED)
+    Same new endpoints as node-server. Signatures match byte-for-byte.
 
 ADDITIONS
 ├── packages/webapp/src/providers/types.ts
@@ -292,6 +329,10 @@ Ordered for incremental landing. Each phase ends in a green commit.
 - `packages/node-server/src/secrets/proxy-manager.ts`: chain OauthSecretStore + EnvSecretStore in unmask lookup.
 - `packages/node-server/src/index.ts`: new endpoints `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId`. Localhost-only (no extra auth — same posture as the rest of node-server's local-only API).
 - Bootstrap: webapp on init pushes all currently-valid OAuth tokens to `/api/secrets/oauth-update` (idempotent).
+- **`nuke` integration**: the existing `nuke` factory-reset shell command must also clear the OAuth replica so the public commitment ("nuke wipes stored state") stays true after our changes:
+  - **CLI**: webapp issues `DELETE /api/secrets/oauth/:providerId` for every entry in `slicc_accounts` before clearing localStorage.
+  - **Extension**: webapp issues `chrome.storage.local.remove([…])` for every `oauth.<provider>.token` and `oauth.<provider>.token_DOMAINS` key before clearing localStorage.
+  - **swift-server**: same DELETE call as CLI (Phase 7 covers the swift endpoint).
 - Tests for: masked oauth-token output, sync on login/refresh/logout, bootstrap re-push, end-to-end OAuth Bearer through proxy.
 
 ### Phase 5: Direct-fetch migration
@@ -318,9 +359,54 @@ Migration policy added to `docs/secrets.md`: agent-context outbound HTTP routes 
   - Update platform-support matrix: extension flips to ✅ for arbitrary HTTP secret injection.
   - New "OAuth tokens as secrets" subsection explaining the masked-output model + dual-storage sync.
   - Migration note for users on the file-PAT workaround.
+  - **`oauth-token` per-invocation approval semantic clarification**: pre-this-PR, the public security doc claims "every invocation requires approval"; in reality only the _fresh-mint_ path runs the OAuth popup — cached-token reuse returned the real token without approval. After this PR the cached path returns masked (no approval needed there, but masked is benign), and the fresh-mint path retains the OAuth popup. Doc the framing shift honestly: the gate is on the OAuth login flow, not on the model getting a usable value. The masking change _strengthens_ the actual property the doc was claiming, but our doc text needs to match the new semantic.
 - Root `CLAUDE.md`: update the "Network behavior differs by runtime" line — both modes now have a fetch proxy.
-- `packages/webapp/CLAUDE.md`, `packages/chrome-extension/CLAUDE.md`, `packages/node-server/CLAUDE.md`: small navigation-only updates.
+- `packages/webapp/CLAUDE.md`, `packages/chrome-extension/CLAUDE.md`, `packages/node-server/CLAUDE.md`, `packages/swift-server/CLAUDE.md`: small navigation-only updates.
 - README.md: update if it mentions GitHub auth.
+- **Public security page** (`https://www.sliccy.com/security`, separate repo): the page says "Secrets stored in browser local storage" — that's a slight oversimplification (CLI uses `~/.slicc/secrets.env` on disk, extension uses `chrome.storage.local`, macOS uses Keychain, OAuth tokens dual-stored after this PR). File a follow-up issue for that page after this PR merges; out of scope for this repo.
+
+### Phase 7: swift-server port (write-only; CI is the only feedback loop)
+
+**Constraint**: the developer's local machine cannot compile Swift for swift-server (toolchain mismatch — `swift-log` 1.12.1 needs Swift tools 6.2.0 / >= 5.10; local environment is older). All Phase 7 work is **write-only** locally. CI is the only compile and test feedback loop. There is no way to iterate on Swift code locally before opening the PR.
+
+**Implications for how we write Phase 7:**
+
+1. **Tests are mechanical, exhaustive, and parallel to the TS test cases**. For every TypeScript test case in `secrets-pipeline.test.ts` and the proxy-manager / OAuth-store / API-routes tests, write the equivalent in Swift (`SecretsPipelineTests.swift`, `OAuthSecretStoreTests.swift`, extended `SecretInjectorTests.swift` and `SecretAPIRoutesTests.swift`). Use parallel test vectors so a CI failure on either side reveals a real divergence rather than a Swift-vs-TS idiom drift.
+
+2. **Mirror the TS structure deliberately, even where Swift idioms would diverge.** Use the same function names, the same parameter ordering, the same intermediate variables. Foundation's `Data.base64EncodedString()` and `URL.user`/`URL.password` have small semantic differences from `btoa`/`atob`/the `URL` Web API; mirror the TS algorithm step-by-step rather than relying on Foundation conveniences that _might_ be equivalent. Comment any place a Foundation API is invoked with the equivalent TS expression as a tripwire.
+
+3. **CI gate**: `swift test --enable-code-coverage` runs in `.github/workflows/ci.yml`'s `swift-server` job. Per-package coverage floor in `packages/dev-tools/tools/swift-coverage-check.sh` is currently 40% lines / 35% regions — must hold. Write tests first; then write the implementation against them. Everything we add must come with tests, both because it's the policy AND because tests are the only signal of correctness.
+
+4. **Be conservative with new Swift dependencies.** Use only what's already in `Package.swift`. Adding new Swift packages cascades into platform constraints we can't validate locally.
+
+**Files to write/modify (all write-blind):**
+
+- `packages/swift-server/Sources/Keychain/SecretsPipeline.swift` (new) — port of `secrets-pipeline.ts`. `unmaskAuthorizationBasic`, `unmaskUrlCredentials`, plus the literal-substring path. Same SecretGetter-style abstraction so the chained Keychain + OAuth store wiring works.
+- `packages/swift-server/Sources/Keychain/OAuthSecretStore.swift` (new) — in-memory writable. `set(name:value:domains:)`, `delete(name:)`, `list() -> [String]`. Thread-safe (use `actor` or `DispatchQueue` lock).
+- `packages/swift-server/Sources/Keychain/SecretInjector.swift` (modified) — chain Keychain store + OAuthSecretStore in unmask. Keep public surface stable.
+- `packages/swift-server/Sources/Server/APIRoutes.swift` (modified) — new endpoints `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId`. Same JSON shape and status codes as the node-server endpoints.
+
+**Tests (write blind, run in CI):**
+
+- `packages/swift-server/Tests/SecretsPipelineTests.swift` (new) — full test vector parity with `packages/webapp/tests/core/secrets-pipeline.test.ts`. Bearer regression, Basic-auth-aware (matched + decoded → real; non-allowed domain → forbidden; non-base64 → unchanged; no-colon → unchanged; URL-safe vs standard base64; padding; whitespace), URL-embedded credentials (matched, mismatched, malformed URL, IDN host).
+- `packages/swift-server/Tests/OAuthSecretStoreTests.swift` (new) — set/delete/list round-trip, case-sensitive provider IDs, rejection of empty domain list, thread-safety smoke (concurrent set/delete).
+- `packages/swift-server/Tests/SecretInjectorTests.swift` (extended) — chained-store unmask: secret in OAuth store + secret in Keychain store; secret in OAuth store overrides Keychain on name collision (or vice versa — pick one and document); per-store domain enforcement.
+- `packages/swift-server/Tests/SecretAPIRoutesTests.swift` (extended) — POST /api/secrets/oauth-update happy path; rejects missing `domains`; rejects malformed JSON; DELETE happy path; DELETE 404 on unknown provider; localhost binding.
+
+**Risks unique to Phase 7:**
+
+- **Subtle base64 / URL-encoding divergence**. Foundation's `Data(base64Encoded:)` is stricter than `atob` about padding and whitespace. Test vectors with edge-case input (no padding, trailing whitespace, URL-safe alphabet) catch this in CI but not before.
+- **HMAC-SHA256 byte-order mismatch**. Both implementations must produce identical masked values for identical (sessionId, name, value) tuples. Otherwise the webapp's mask doesn't match what the swift-server proxy unmasks for. Cross-implementation test vectors are the only way to catch this; include a `CrossImplementationTests.swift` with hard-coded inputs and expected outputs that match the TS test vectors exactly.
+- **Hummingbird endpoint registration order or middleware** behaving slightly differently from Express. The existing `SecretAPIRoutesTests.swift` already covers some of this; extend it with the same test cases as the new node-server endpoints.
+
+**What's NOT in Phase 7's scope:**
+
+- The SW fetch proxy (extension-only).
+- The direct-fetch migration (webapp code, not swift-server).
+- Bash env population for extension (extension-only).
+- Phase 6's documentation updates that cover the swift-server CLAUDE.md include navigation-only changes; not deep doc work.
+
+swift-server only mirrors the CLI proxy changes (Phases 1, 2, 4) plus the OAuth-update endpoints.
 
 ## Test strategy
 
@@ -339,6 +425,14 @@ Integration:
 
 - `packages/webapp/tests/git/git-auth-extension.test.ts` — mock isomorphic-git, mock SW handler, assert real PAT goes upstream + masked stays in agent context.
 - `packages/webapp/tests/git/git-auth-cli.test.ts` — mock proxy, assert Basic-auth round-trip end-to-end.
+
+Swift-server (write-blind; runs in CI only — see Phase 7 for the workflow constraints):
+
+- `packages/swift-server/Tests/SecretsPipelineTests.swift` — full parity with `packages/webapp/tests/core/secrets-pipeline.test.ts`. Same input vectors, same expected outputs.
+- `packages/swift-server/Tests/OAuthSecretStoreTests.swift` — set/delete/list, concurrency smoke.
+- `packages/swift-server/Tests/SecretInjectorTests.swift` (extended) — chained-store unmask + Basic-auth + URL-embedded creds.
+- `packages/swift-server/Tests/SecretAPIRoutesTests.swift` (extended) — POST/DELETE OAuth-update endpoints.
+- **`packages/swift-server/Tests/CrossImplementationTests.swift` (new)** — hard-coded `(sessionId, name, value)` triples with matching expected masked outputs taken from the TS test vectors. Single most important test: it's the only thing that catches mask divergence between TS and Swift before it bites a real OAuth call.
 
 Manual smoke (in PR body, not automated):
 
@@ -372,6 +466,13 @@ Manual smoke (in PR body, not automated):
 
 6. **Service worker IIFE bundling.** The SW is built as a single IIFE (no shared chunks). The new `fetch-proxy-shared.ts` will be bundled into the SW. Since `secrets-pipeline.ts` is also imported by the SW, both modules need to compile cleanly into the IIFE bundle. Vite/esbuild should handle this; verify during impl.
 
+7. **Swift-server work is write-blind.** Phase 7 is written with no local Swift compile feedback — local toolchain is older than swift-server requires. CI is the only signal of correctness. Mitigations:
+   - Tests written first, parallel-vector with the TS test cases.
+   - `CrossImplementationTests.swift` pinning HMAC outputs across implementations.
+   - Mirroring TS structure step-by-step to make Swift-vs-TS divergence obvious in code review.
+   - Conservative use of Foundation conveniences whose semantics differ from Web APIs (base64 padding, URL parsing of userinfo, regex flavors).
+   - Expect at least one CI round-trip per swift-server commit. Be prepared to chase a few CI failures before things go green.
+
 ## Open questions / follow-ups
 
 - **OAuth storage unification (Option Y).** v1 keeps webapp localStorage as source of truth. A follow-up PR can collapse to a single store, removing the dual-storage sync. Worth doing eventually for architectural cleanliness.
@@ -384,4 +485,16 @@ Manual smoke (in PR body, not automated):
 
 ## Suggested PR shape
 
-Six commits, mirroring the implementation phases. Run repo-wide gates before opening: `npx prettier --write` on every touched file, then `npm run typecheck`, `npm run test`, `npm run test:coverage`, `npm run build`, `npm run build -w @slicc/chrome-extension`. CI's `prettier --check` is the most common failure.
+Seven commits, mirroring the implementation phases:
+
+1. `refactor(secrets): extract platform-agnostic secrets-pipeline core`
+2. `feat(node-server/secrets): Basic-auth-aware + URL-embedded credential unmask`
+3. `feat(chrome-extension/secrets): generic SW fetch-proxy handler + bash env population`
+4. `feat(secrets/oauth): masked oauth-token + dual-storage replica + nuke cleanup`
+5. `refactor(shell): migrate user-driven direct-fetch sites to SecureFetch`
+6. `docs(secrets): platform-support matrix + oauth-token semantic + migration notes`
+7. `feat(swift-server/secrets): port pipeline + OAuth replica store + endpoints (write-blind, CI-tested)`
+
+Run repo-wide gates before opening: `npx prettier --write` on every touched file, then `npm run typecheck`, `npm run test`, `npm run test:coverage`, `npm run build`, `npm run build -w @slicc/chrome-extension`. CI's `prettier --check` is the most common failure.
+
+For commit 7 (swift-server), expect to push the commit, watch CI, fix Swift bugs from CI logs, push again. Plan for at least one or two iteration rounds. The TS tests on commits 1–6 are the spec; the Swift tests on commit 7 must produce the same observable behavior. If a CI failure on commit 7 is something subtle like a base64 padding mismatch, the fix is in the Swift code, not the TS spec — the TS side is the canonical reference.
