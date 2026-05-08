@@ -10,7 +10,7 @@
  */
 declare module '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js' {
   import type { AgentMessage } from '@mariozechner/pi-agent-core';
-  import type { Model } from '@mariozechner/pi-ai';
+  import type { Api, Model } from '@mariozechner/pi-ai';
 
   export interface CompactionSettings {
     enabled: boolean;
@@ -30,9 +30,10 @@ declare module '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js
 
   export function generateSummary(
     currentMessages: AgentMessage[],
-    model: Model<any>,
+    model: Model<Api>,
     reserveTokens: number,
     apiKey: string,
+    headers?: Record<string, string>,
     signal?: AbortSignal,
     customInstructions?: string,
     previousSummary?: string

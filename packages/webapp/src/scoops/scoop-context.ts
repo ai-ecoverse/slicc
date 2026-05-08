@@ -70,6 +70,22 @@ export function resolveThinkingLevel(
   return requested;
 }
 
+/**
+ * Structural view of an `AgentMessage` used by the overflow / image recovery
+ * passes. They walk every kind of message and only need `role` plus a list of
+ * content blocks discriminated by `type` — narrower than the full union of
+ * pi-ai message shapes, but enough to do the trimming safely without `any`.
+ */
+type RecoveryContentBlock = {
+  type: string;
+  text?: string;
+  data?: string;
+};
+type RecoveryMessage = {
+  role: string;
+  content: RecoveryContentBlock[] | string;
+};
+
 /** Detect API errors caused by invalid/oversized images. */
 export function isImageProcessingError(msg: string): boolean {
   return (
@@ -391,11 +407,6 @@ export class ScoopContext {
         }
       }
 
-      const compactFn = createCompactContext({
-        model,
-        getApiKey: () => getApiKey() ?? undefined,
-      });
-
       // Compute the Adobe session identifier once per init. It is a
       // daily-rotating random UUID for the cone, and `<uuid>/<hash(folder, uuid)>`
       // for scoops — salted with the UUID so the scoop folder name never
@@ -409,6 +420,18 @@ export class ScoopContext {
           headers: { ...opts?.headers, 'X-Session-Id': adobeSessionId },
         });
       };
+
+      // Compaction hits the LLM via pi-coding-agent's `completeSimple`, which
+      // bypasses our `streamWithSessionId` wrapper. Forward the same Adobe
+      // session header through `createCompactContext` so summarization calls
+      // join the same session as the agent's tool turns.
+      const compactionHeaders =
+        model.provider === 'adobe' ? { 'X-Session-Id': adobeSessionId } : undefined;
+      const compactFn = createCompactContext({
+        model,
+        getApiKey: () => getApiKey() ?? undefined,
+        headers: compactionHeaders,
+      });
 
       // Guard: dispose() may have run while init() was awaiting above.
       if (this.disposed) return;
@@ -920,7 +943,7 @@ export class ScoopContext {
       let replaced = 0;
 
       for (let i = trimmed.length - 1; i >= 0 && replaced < 5; i--) {
-        const msg = trimmed[i] as any;
+        const msg = trimmed[i] as RecoveryMessage;
         if (!Array.isArray(msg.content)) continue;
 
         let msgSize = 0;
@@ -940,16 +963,16 @@ export class ScoopContext {
           // must stay paired with subsequent toolResult messages. Only replace
           // text/image/thinking content blocks.
           if (msg.role === 'assistant') {
-            const toolCalls = msg.content.filter((block: any) => block.type === 'toolCall');
+            const toolCalls = msg.content.filter((block) => block.type === 'toolCall');
             trimmed[i] = {
               ...msg,
               content: [placeholder, ...toolCalls],
-            };
+            } as AgentMessage;
           } else {
             trimmed[i] = {
               ...msg,
               content: [placeholder],
-            };
+            } as AgentMessage;
           }
           replaced++;
           log.info('Replaced oversized message', {
@@ -958,7 +981,7 @@ export class ScoopContext {
             size: msgSize,
             preservedToolCalls:
               msg.role === 'assistant'
-                ? msg.content.filter((b: any) => b.type === 'toolCall').length
+                ? msg.content.filter((b) => b.type === 'toolCall').length
                 : 0,
           });
         }
@@ -1023,23 +1046,23 @@ export class ScoopContext {
       const limit = Math.max(0, trimmed.length - 10);
 
       for (let i = trimmed.length - 1; i >= limit; i--) {
-        const msg = trimmed[i] as any;
+        const msg = trimmed[i] as RecoveryMessage;
         if (!Array.isArray(msg.content)) continue;
 
-        const hasImages = msg.content.some((block: any) => block.type === 'image');
+        const hasImages = msg.content.some((block) => block.type === 'image');
         if (!hasImages) continue;
 
         // Remove image blocks, keep text blocks
-        const filtered = msg.content.filter((block: any) => block.type !== 'image');
+        const filtered = msg.content.filter((block) => block.type !== 'image');
 
         if (filtered.length === 0) {
           // All content was images — replace with placeholder
           trimmed[i] = {
             ...msg,
             content: [{ type: 'text' as const, text: '[Image removed: rejected by API]' }],
-          };
+          } as AgentMessage;
         } else {
-          trimmed[i] = { ...msg, content: filtered };
+          trimmed[i] = { ...msg, content: filtered } as AgentMessage;
         }
         stripped++;
       }

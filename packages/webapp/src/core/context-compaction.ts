@@ -11,7 +11,7 @@
  */
 
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
-import type { Model } from '@mariozechner/pi-ai';
+import type { Api, Model, UserMessage } from '@mariozechner/pi-ai';
 // Deep import to the compaction submodule — the main entry re-exports 113 Node-only
 // modules that would break Vite's browser bundle. The compaction submodule itself
 // only depends on @mariozechner/pi-ai (already a browser-safe dependency).
@@ -29,12 +29,28 @@ const log = createLogger('context-compaction');
 /** Default context window for Claude models. */
 const DEFAULT_CONTEXT_WINDOW = 200000;
 
+/**
+ * Discriminator narrow on `AgentMessage`. The union includes pi-agent-core's
+ * `CustomAgentMessages` extension point, so a plain `m.role === 'x'` check
+ * does not narrow cleanly; a typed shape view does the same job without `any`.
+ */
+function hasRole(message: AgentMessage, role: string): boolean {
+  return (message as { role: string }).role === role;
+}
+
 export interface CompactionConfig {
-  model: Model<any>;
+  model: Model<Api>;
   getApiKey: () => string | undefined;
   contextWindow?: number;
   reserveTokens?: number;
   keepRecentTokens?: number;
+  /**
+   * HTTP headers forwarded to the LLM provider for the summarization
+   * request. Used by the Adobe LLM proxy path to attach `X-Session-Id`
+   * so compaction calls land in the same session as the agent's tool
+   * turns. Other providers ignore unknown headers.
+   */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -91,7 +107,7 @@ export function createCompactContext(
 
     // Don't split assistant+toolResult pairs: if cutIndex lands on a toolResult,
     // walk backward to include its assistant message
-    while (cutIndex > 0 && (messages[cutIndex] as any).role === 'toolResult') {
+    while (cutIndex > 0 && hasRole(messages[cutIndex], 'toolResult')) {
       cutIndex--;
     }
 
@@ -118,13 +134,15 @@ export function createCompactContext(
           config.model,
           reserveTokens,
           apiKey,
+          config.headers,
           signal
         );
 
-        const summaryMessage: AgentMessage = {
+        const summaryMessage: UserMessage = {
           role: 'user',
           content: [{ type: 'text', text: `<context-summary>\n${summary}\n</context-summary>` }],
-        } as any;
+          timestamp: Date.now(),
+        };
 
         log.info('LLM summarization successful', {
           originalMessages: messages.length,
@@ -143,7 +161,7 @@ export function createCompactContext(
     }
 
     // Fallback: naive drop (same as old behavior but without eager truncation)
-    const compactedMsg: AgentMessage = {
+    const compactedMsg: UserMessage = {
       role: 'user',
       content: [
         {
@@ -151,7 +169,8 @@ export function createCompactContext(
           text: '[Earlier conversation messages were compacted to save context space]',
         },
       ],
-    } as any;
+      timestamp: Date.now(),
+    };
 
     log.info('Naive compaction applied', {
       originalMessages: messages.length,
@@ -195,7 +214,7 @@ export async function compactContext(messages: AgentMessage[]): Promise<AgentMes
   }
 
   // Don't split assistant+toolResult pairs
-  while (cutIndex > 0 && (messages[cutIndex] as any).role === 'toolResult') {
+  while (cutIndex > 0 && hasRole(messages[cutIndex], 'toolResult')) {
     cutIndex--;
   }
 
@@ -203,7 +222,7 @@ export async function compactContext(messages: AgentMessage[]): Promise<AgentMes
     return messages;
   }
 
-  const compactedMsg: AgentMessage = {
+  const compactedMsg: UserMessage = {
     role: 'user',
     content: [
       {
@@ -211,7 +230,8 @@ export async function compactContext(messages: AgentMessage[]): Promise<AgentMes
         text: '[Earlier conversation messages were compacted to save context space]',
       },
     ],
-  } as any;
+    timestamp: Date.now(),
+  };
 
   const result = [compactedMsg, ...messages.slice(cutIndex)];
 
