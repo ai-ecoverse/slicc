@@ -24,7 +24,6 @@ import type {
   MountDirEntry,
   MountStat,
   MountDescription,
-  MountApprovalCopy,
   RefreshReport,
 } from './backend.js';
 import { type RemoteMountCache } from './remote-cache.js';
@@ -499,13 +498,6 @@ export class DaMountBackend implements MountBackend {
       displayName: `${this.parsed.org}/${this.parsed.repo}${this.parsed.path ? `/${this.parsed.path}` : ''}`,
       source: this.source,
       profile: this.profile,
-    };
-  }
-
-  describeForApproval(): MountApprovalCopy {
-    return {
-      summary: `Approve mount of \`${this.source}\` using your IMS identity`,
-      needsPicker: false,
     };
   }
 

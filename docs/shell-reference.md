@@ -216,11 +216,9 @@ mount unmount --clear-cache /mnt/r2  # drops cache as well
 
 ### Approval flow
 
-Cone-initiated mounts always render an approval card before the mount lands. Backend-specific copy comes from `MountBackend.describeForApproval()`:
+Only **local** mounts render an approval card. The card is not a consent gate — it's the click that satisfies Chrome's user-gesture rule for the File System Access API, since `showDirectoryPicker()` must be invoked from inside a user event handler. In the extension, the click also routes through a popup window because Chrome crashes if the picker is invoked from side-panel context for system directories.
 
-- **Local**: "Approve and select directory" with the picker integration.
-- **S3**: "Approve mount of `s3://<bucket>/<prefix>` (profile `<name>`)".
-- **DA**: "Approve mount of `da://<org>/<repo>` using your IMS identity".
+**S3** and **DA** mounts have no approval card. The trust boundary lives at the credential profile resolver in node-server (`/api/s3-sign-and-forward`, `/api/da-sign-and-forward`) or the SW signing path in extension mode — not in the chat. The probe at mount time will fail with an actionable error if the profile is misconfigured.
 
 Local mounts are gated to cone context only because the directory picker requires a real user gesture. S3 and DA mounts are allowed from scoops since their credentials come from the secret store and no UI gesture is required.
 

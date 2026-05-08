@@ -102,14 +102,6 @@ describe('LocalMountBackend basic ops', () => {
     const backend = LocalMountBackend.fromHandle(handle, { mountId: 'm1' });
     expect(backend.describe()).toEqual({ displayName: 'my-dir' });
   });
-
-  it('describeForApproval references the handle name', async () => {
-    const handle = createDirectoryHandle({}, 'my-dir');
-    const backend = LocalMountBackend.fromHandle(handle, { mountId: 'm1' });
-    const copy = backend.describeForApproval();
-    expect(copy.summary).toContain('my-dir');
-    expect(copy.needsPicker).toBe(false);
-  });
 });
 
 describe('LocalMountBackend close lifecycle', () => {

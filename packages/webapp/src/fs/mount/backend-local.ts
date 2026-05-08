@@ -18,7 +18,6 @@ import type {
   MountDirEntry,
   MountStat,
   MountDescription,
-  MountApprovalCopy,
   RefreshReport,
 } from './backend.js';
 
@@ -414,15 +413,6 @@ export class LocalMountBackend implements MountBackend {
 
   describe(): MountDescription {
     return { displayName: this.handle.name };
-  }
-
-  describeForApproval(): MountApprovalCopy {
-    return {
-      summary: `Mount local directory '${this.handle.name}'`,
-      // `create()` factory owns the picker; reactivation after recovery
-      // needs a separate user gesture flow not driven from here.
-      needsPicker: false,
-    };
   }
 
   async close(): Promise<void> {
