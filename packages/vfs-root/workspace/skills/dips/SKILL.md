@@ -1,19 +1,19 @@
 ---
-name: inline-widgets
-description: Interactive widget patterns for inline shtml cards in chat messages
+name: dips
+description: Patterns for authoring dips — interactive shtml widgets that hydrate inline in chat messages
 allowed-tools: bash
 ---
 
-# Inline Widget Patterns
+# Dips
 
-Use ` ```shtml ` fenced code blocks to render interactive widgets inline in chat. These are ephemeral — no state persistence, no readFile. Only `slicc.lick()` is available for agent communication.
+Dips are inline `shtml` code blocks in chat that hydrate into sandboxed interactive widgets. Ephemeral — no state persistence, no `readFile`. Only `slicc.lick()` is available for agent communication.
 
-**Use inline widgets for**: quick interactions, calculators, explorers, visualizations embedded in conversation.
-**Use panel sprinkles for**: persistent dashboards, editors, multi-page apps.
+**Use dips for**: quick interactions, calculators, explorers, visualizations embedded in conversation.
+**Use sprinkles for**: persistent dashboards, editors, multi-page apps.
 
 ## Pre-styled elements
 
-Inside inline shtml blocks, bare HTML form elements are pre-styled to match S2:
+Inside dips, bare HTML form elements are pre-styled to match S2:
 
 - `<input type="range">` — 4px track, 18px accent-colored thumb
 - `<input type="text">`, `<textarea>` — S2 layer-2 background, accent focus ring
@@ -267,4 +267,4 @@ if (total > budget) {
 slicc.lick({ action: 'sort-complete', algorithm: algo, comparisons: n });
 ```
 
-The agent receives the lick as a structured message and can respond with prose, another inline widget, or spawn a scoop.
+The agent receives the lick as a structured message and can respond with prose, another dip, or spawn a scoop.
