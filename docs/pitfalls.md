@@ -523,3 +523,95 @@ When adding a feature that touches:
 - [ ] Test in extension mode (`npm run build -w @slicc/chrome-extension` → load in chrome://extensions)
 - [ ] If added WASM, verify bundled path in extension build
 - [ ] If added command, test in both terminal modes
+
+## Adobe Proxy `X-Session-Id` on LLM Call Paths
+
+**The Problem**
+
+Every request from SLICC to the Adobe LLM proxy must carry an
+`X-Session-Id` HTTP header. The proxy uses it to group requests into
+one logical session for usage telemetry. When the header is absent,
+the proxy falls back to a content-derived `sha256(userId +
+firstHumanText[:200])` — a 64-char hex hash that fragments multi-turn
+conversations across many session ids and leaves them unclassified in
+the dashboard. Every individual event is still captured correctly;
+only session-level grouping breaks.
+
+The header rides on `pi-ai`'s `StreamOptions.headers`, which every
+provider's `streamSimple` honors. Any code path that calls the LLM
+without going through the agent loop or the compaction transformer
+will silently bypass it — and the resulting events can't be re-grouped
+after the fact.
+
+**The Two Enforcement Points**
+
+| Code path                                     | Wiring                                           | Where                                                               |
+| --------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------- |
+| Agent loop (cone, scoops, tool turns)         | `streamFn` wrapper passed to `Agent` constructor | `packages/webapp/src/scoops/scoop-context.ts` `streamWithSessionId` |
+| Compaction summaries (Pi packed-conversation) | `headers` config on `createCompactContext`       | `packages/webapp/src/scoops/scoop-context.ts` `compactionHeaders`   |
+
+Both paths attach the same identifier from `getAdobeSessionId(scoop,
+coneJid)` in `packages/webapp/src/scoops/llm-session-id.ts` (a
+daily-rotating UUID for the cone, `<uuid>/<hash(folder, uuid)>` for
+scoops), gated on `model.provider === 'adobe'`. Other providers
+receive no header.
+
+**Adding a New LLM Call Site**
+
+If you add code that calls `pi-ai`'s `streamSimple` / `completeSimple`
+directly — or any helper from `@mariozechner/pi-coding-agent` that
+routes there (compaction, branch summarization, etc.) — you MUST
+attach `X-Session-Id` for the Adobe provider. The cleanest pattern is
+to take a `headers: Record<string, string>` parameter and let the
+caller inject it the same way `createCompactContext` does. Don't
+replicate the Adobe-provider check at every site — push it up to
+whoever owns the call.
+
+**The pi-coding-agent Stub Tripwire**
+
+`pi-coding-agent`'s `generateSummary` is positional, and our local
+ambient stub at
+`packages/webapp/src/types/pi-coding-agent-compaction.d.ts` shadows
+resolution to upstream's `.d.ts` under `moduleResolution: bundler`.
+Upstream 0.63.0 inserted `headers?` at slot 4 and shifted `signal?`
+to slot 5. Our stub kept the pre-0.63 shape, so our positional caller
+silently routed the AbortSignal into the new `headers` slot — and we
+lost the header on every compaction summary for ~6 weeks before proxy
+telemetry surfaced it.
+
+The compile-time contract at
+`packages/webapp/src/types/pi-coding-agent-compaction.contract.ts`
+pins slot 4 (`headers`) and slot 5 (`signal`). If a future stub edit
+shifts those positions, `tsc` fails. It does **not** catch
+upstream-only drift (a renovate bump that ships without any stub
+edit) — that requires either an upstream PR exposing `./compaction` in
+pi-coding-agent's exports map (so we can drop the stub) or a tsconfig
+`paths` mapping bypassing the exports map. The upstream PR is in
+flight; tracked separately.
+
+**Verifying a Fix**
+
+After deploying anything that touches LLM call paths or the session-id
+wiring, query the LLM-monitoring D1:
+
+```sql
+SELECT date(created_at) AS day, COUNT(*) AS hex_events
+FROM usage_events
+WHERE created_at >= '<deploy-day>T00:00:00Z'
+  AND length(session_id) = 64
+  AND session_id GLOB '[0-9a-f]*'
+  AND session_id NOT LIKE '%-%'
+GROUP BY day ORDER BY day DESC;
+```
+
+`hex_events` should be ~0 on new days. If it spikes after a change
+that touched LLM call paths, a new code path is bypassing the wiring.
+
+**Related**
+
+- Bug fix: PR #600 attached `X-Session-Id` to compaction; PR #378
+  attached it to the agent loop.
+- Tripwire: PR #600 added the positional contract.
+- Coverage: `tests/scoops/scoop-context.session-id.test.ts` asserts
+  both wiring points use the same identifier; gates against future
+  reverts.
