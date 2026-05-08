@@ -424,10 +424,21 @@ Ordered for incremental landing. Each phase ends in a green commit.
 
 ### Phase 1: Extract `secrets-pipeline` (shared core)
 
-- Move `unmaskHeaders` / `unmaskBody` / `scrubResponse(text)` / `scrubHeaders(headers)` from `packages/node-server/src/secrets/proxy-manager.ts` into a new `packages/webapp/src/core/secrets-pipeline.ts`. (Existing API names — no `scrubResponseBody` / `scrubResponseHeaders` methods exist; don't accidentally rename.)
-- Define the `FetchProxySecretSource` interface (`get(name)`, `listAll(): Promise<{name, value, domains}[]>`). DELIBERATELY distinct from mount's existing `SecretGetter` (`{ get(key) }` only) at `packages/webapp/src/fs/mount/sign-and-forward-shared.ts:91` — keep the names distinct to prevent collision and accidental cross-import. `listAll` is what enables the proxy/SW to build a `mask→real` map for unmasking incoming requests.
-- Standardize scrub method names to match the existing API: `scrubResponse(text)` and `scrubHeaders(headers)` (per `proxy-manager.ts:155,162`). Swift-server's `scrub(text:)` becomes `scrubResponse(text:)` for cross-implementation consistency.
-- `proxy-manager.ts` becomes a thin wrapper that injects `EnvSecretStore` as the SecretGetter. **SessionId persistence**: on construction, read from `~/.slicc/session-id` (or `<env-file-dir>/session-id`); if missing, generate a fresh UUID and write it with mode 0600. Reuse on subsequent process starts. This is what makes the agent's cached masks (in `slicc_accounts` and bash env) survive a node-server restart with the tab still open. Test: simulate restart by re-instantiating `SecretProxyManager` against the same on-disk session-id; assert masks for the same `(name, value)` are identical across instances.
+**Existing module landscape (verified in code)**:
+
+- `packages/webapp/src/core/secret-masking.ts` — already exists. Pure functions: `mask`, `buildScrubber`, `domainMatches`, `isAllowedDomain`, plus the `SecretPair` type. Uses `crypto.subtle` (the global, available in browser, SW, and Node 22+). Importable from any platform without modification.
+- `packages/node-server/src/secrets/masking.ts` — parallel copy with `mask` + `buildScrubber` only. Uses `import { subtle } from 'node:crypto'` (redundant defensive import; the global works on Node 22+).
+- `packages/node-server/src/secrets/domain-match.ts` — separate file with `matchesDomains` (different name from webapp's `domainMatches` / `isAllowedDomain`).
+- `packages/node-server/src/secrets/proxy-manager.ts` — class `SecretProxyManager` with state (`sessionId`, `maskedToSecret` map, `scrubber`) and methods `unmask` / `unmaskBody` / `unmaskHeaders` / `scrubResponse(text)` / `scrubHeaders(headers: Headers)` / `getByMaskedValue` / `getMaskedEntries` / `reload`.
+
+**Phase 1 work**:
+
+- **Consolidate the pure functions in `webapp/src/core/secret-masking.ts`.** It's already importable cross-platform. Add `matchesDomains` as an alias for `domainMatches` (or rename node-server callers to `domainMatches`) so there's one canonical name. Delete `packages/node-server/src/secrets/masking.ts` and `packages/node-server/src/secrets/domain-match.ts`; have node-server import directly from webapp/src/core. Per Risk #1b: this is feasible because webapp's masking.ts is pure web-Crypto with no browser-specific deps — `crypto.subtle` is a global in Node 22+. Verified by reading both files during review.
+- **Create new `packages/webapp/src/core/secrets-pipeline.ts`** for the stateful pipeline. This holds what `SecretProxyManager` holds today (sessionId, maskedToSecret map, scrubber closure) plus the new helpers (`unmaskAuthorizationBasic`, `extractAndUnmaskUrlCredentials`). Methods: `unmask` (existing primitive), `unmaskBody` (byte-safe per Phase 2), `unmaskHeaders` (Basic-aware per Phase 2), `scrubResponse(text)`, `scrubHeaders(headers: Headers): Record<string, string>`. **Existing API names — no `scrubResponseBody` / `scrubResponseHeaders` methods exist; don't accidentally rename.**
+- **Define the `FetchProxySecretSource` interface** (`get(name)`, `listAll(): Promise<{name, value, domains}[]>`). DELIBERATELY distinct from mount's existing `SecretGetter` (`{ get(key) }` only) at `packages/webapp/src/fs/mount/sign-and-forward-shared.ts:91` — keep the names distinct to prevent collision and accidental cross-import. `listAll` is what enables the proxy/SW to build a `mask→real` map for unmasking incoming requests.
+- **Refactor `proxy-manager.ts`** to be a thin wrapper that injects `EnvSecretStore` as the `FetchProxySecretSource` into a `SecretsPipeline` instance (or extends it; pick whichever needs less call-site churn). Keep public surface stable — existing tests pass unchanged.
+- **SessionId persistence (CLI)**: on construction, read from `~/.slicc/session-id` (or `<env-file-dir>/session-id` if `--env-file` is in play); if missing, generate a fresh UUID and write it with mode 0600. Reuse on subsequent process starts. This is what makes the agent's cached masks (in `slicc_accounts` and bash env) survive a node-server restart with the tab still open. Test: re-instantiate `SecretProxyManager` against the same on-disk session-id and assert masks for the same `(name, value)` tuple are identical across instances.
+- **Swift-server gets the same persistence treatment** — see Phase 7 for the file-based read-or-create pattern in Swift.
 - All existing CLI tests under `packages/node-server/tests/secrets/` keep passing unchanged.
 - New tests under `packages/webapp/tests/core/secrets-pipeline.test.ts` for the platform-agnostic surface.
 
@@ -463,7 +474,10 @@ SW side (fetch-proxy-shared):
     upstream = await fetch(url, { signal: abortController.signal, ... })
     post 'response-head' with status, statusText, scrubbed headers
     for await (chunk of upstream.body):
-      run secrets-pipeline.scrubResponse on text-content-type chunks (byte-safe pass-through for binary)
+      run byte-safe scrubResponse on every chunk (Uint8Array in / Uint8Array out;
+      no content-type gating — byte-safe means coincidental hex matches don't corrupt
+      surrounding bytes; chunk-boundary scrub limitation is the same as CLI today,
+      see existing comments in node-server/src/index.ts streaming pipeline)
       post 'response-chunk' with dataBase64
     post 'response-end'
   on disconnect:
@@ -625,6 +639,7 @@ Unit:
 
 - `packages/webapp/tests/core/secrets-pipeline.test.ts` — Bearer (regression), Basic-auth-aware, URL-embedded credentials, scrub paths, domain enforcement edge cases (case-insensitive, glob patterns).
 - `packages/node-server/tests/secrets/proxy-manager.test.ts` — refactor preservation; OauthSecretStore + EnvSecretStore chained lookup.
+- `packages/node-server/tests/secrets/session-persistence.test.ts` (new) — write `~/.slicc/session-id` (or test-temp dir override); construct `SecretProxyManager`; capture mask of a known `(name, value)` pair; destroy and re-construct against the same on-disk file; assert mask is identical. Plus: missing-file path generates and writes a fresh UUID with mode 0600. Plus: corrupt-file (empty / non-UUID) path overwrites with a fresh UUID and warns.
 - `packages/node-server/tests/secrets/oauth-store-endpoints.test.ts` — POST/DELETE round-trip; rejects unknown providers; rejects missing/empty domains; rejects malformed JSON; localhost binding. (No GET — design says "webapp is source of truth and re-pushes are idempotent.")
 - `packages/chrome-extension/tests/fetch-proxy-shared.test.ts` — pure handler with mocked `chrome.storage.local` + `fetch`; assert real value never appears in any returned payload (string-search).
 - `packages/chrome-extension/tests/service-worker.test.ts` — handler registration + dispatch.
@@ -643,6 +658,7 @@ Swift-server (write-blind; runs in CI only — see Phase 7 for the workflow cons
 - `packages/swift-server/Tests/OAuthSecretStoreTests.swift` — set/delete/list, concurrency smoke.
 - `packages/swift-server/Tests/SecretInjectorTests.swift` (extended) — chained-store unmask + Basic-auth + URL-embedded creds.
 - `packages/swift-server/Tests/SecretAPIRoutesTests.swift` (extended) — POST/DELETE OAuth-update endpoints.
+- `packages/swift-server/Tests/SessionPersistenceTests.swift` (new) — parallel to the node-server session-persistence test. Read-or-create against a temp directory; verify mask round-trip across re-instantiations.
 - **`packages/swift-server/Tests/CrossImplementationTests.swift` (new)** — hard-coded `(sessionId, name, value)` triples with matching expected masked outputs taken from the TS test vectors. Single most important test: it's the only thing that catches mask divergence between TS and Swift before it bites a real OAuth call.
 
 Manual smoke (in PR body, not automated):
@@ -667,7 +683,7 @@ Manual smoke (in PR body, not automated):
 
 1. **Phase 5 (`upskill-command.ts`) verification risk.** All 7 fetches already route through the injected `SecureFetch` parameter (the `fetch:` parameter shadow at line 701 IS used; it's not a bug). Verification is checking that after Phase 4 makes `/workspace/.git/github-token` masked, the upskill GitHub-private-repo path picks up the right Authorization value. Mitigation: GitHub-private-repo install test covering both ClawHub and direct-Github code paths.
 
-1b. **Cross-package import (M2) — node-server importing `webapp/src/core/secret-masking.ts`.** webapp is bundled (Vite, ESM, browser shims); node-server is plain TS for Node. Importing `secret-masking.ts` directly from webapp into node-server requires either (a) the file is browser-shim-free pure ESM TS that Node can consume directly via tsconfig path mapping, or (b) we keep the duplicate twin and add a `CrossImplementationTests` pinning HMAC outputs across implementations (same approach as Phase 7 swift). Verify (a) is feasible during Phase 1; if not, fall back to (b). Document the decision in the commit.
+1b. **Cross-package import (verified feasible).** `packages/webapp/src/core/secret-masking.ts` uses only `crypto.subtle` (the global) and `TextEncoder` — both available in Node 22+ (engines requirement) without any browser-shim dependency. Importing it from `packages/node-server` works via standard workspace path mapping. Node-server's parallel `masking.ts` and `domain-match.ts` files can be deleted in Phase 1, with all callers re-pointing to the webapp module. Confirmed by reading both files during the spec review. No twin-with-tests fallback needed.
 
 2. **`node-command.ts` sandbox fetch-proxy.** This file already has its own fetch-proxy handler for the sandbox iframe. Care needed to ensure the sandbox path keeps working and the SecureFetch path covers the right cases. Mitigation: read carefully before touching; add a test asserting sandbox fetch still functions.
 
