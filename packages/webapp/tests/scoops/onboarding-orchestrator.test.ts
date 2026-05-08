@@ -7,6 +7,18 @@ import {
 } from '../../src/scoops/onboarding-orchestrator.js';
 import { __test__ as messageTest } from '../../src/scoops/onboarding-messages.js';
 
+type AccountSnapshot = {
+  id: string;
+  key: string;
+  baseUrl?: string;
+  deployment?: string;
+  apiVersion?: string;
+};
+
+type DipMessage = Record<string, unknown> & { type: string };
+
+type FinalLickPayload = Record<string, unknown> & { action: string };
+
 function fakeFetch(impl: (url: string) => Response | Promise<Response>) {
   return vi.fn(async (input: RequestInfo | URL) => {
     return await impl(String(input));
@@ -57,11 +69,10 @@ function makeHarness(
   const fs = new VirtualFS('test-' + Math.random());
   const systemMessages: string[] = [];
   const dipRefs: string[] = [];
-  const dipInbox: any[] = [];
-  const finalLicks: any[] = [];
-  const accounts: any[] = [];
+  const dipInbox: DipMessage[] = [];
+  const finalLicks: FinalLickPayload[] = [];
+  const accounts: AccountSnapshot[] = [];
   const selectedModels: string[] = [];
-  const skillInstallCalls: Array<{ at: number; profile: unknown }> = [];
   const orchestrator = new OnboardingOrchestrator({
     fs,
     postSystemMessage: (line) => systemMessages.push(line),
@@ -73,9 +84,6 @@ function makeHarness(
     resolveModelLabel: (_p, m) => m.toUpperCase(),
     broadcastToDip: (msg) => dipInbox.push(msg),
     fireFinalLick: (data) => finalLicks.push(data),
-    installRecommendedSkills: async (profile) => {
-      skillInstallCalls.push({ at: Date.now(), profile });
-    },
     fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
     rand: () => 0,
   });
@@ -88,7 +96,6 @@ function makeHarness(
     finalLicks,
     accounts,
     selectedModels,
-    skillInstallCalls,
   };
 }
 
@@ -145,37 +152,6 @@ describe('OnboardingOrchestrator', () => {
         await new Promise((r) => setTimeout(r, 10));
       }
       expect(await h.fs.exists('/home/user/.welcome.json')).toBe(true);
-    });
-
-    it('kicks off the recommended-skills installer with the in-memory profile', async () => {
-      const h = makeHarness();
-      await h.orchestrator.handleOnboardingComplete({ name: 'Kim', role: 'developer' });
-      await new Promise((r) => setTimeout(r, 5));
-      expect(h.skillInstallCalls).toHaveLength(1);
-      // Profile is passed by reference so the installer doesn't have to wait
-      // for the parallel persistProfile write to land on disk.
-      expect(h.skillInstallCalls[0].profile).toMatchObject({ name: 'Kim', role: 'developer' });
-    });
-
-    it('silently no-ops when no skill installer was wired', async () => {
-      const fs = new VirtualFS('no-installer-' + Math.random());
-      const finalLicks: any[] = [];
-      const orch = new OnboardingOrchestrator({
-        fs,
-        postSystemMessage: () => {},
-        postDipReference: () => {},
-        getProviderCatalogue: () => baseCatalogue,
-        saveAccount: () => {},
-        setSelectedModel: () => {},
-        broadcastToDip: () => {},
-        fireFinalLick: (data) => finalLicks.push(data),
-        // installRecommendedSkills omitted on purpose.
-        rand: () => 0,
-      });
-      const handled = await orch.handleOnboardingComplete({ name: 'NoInstaller' });
-      expect(handled).toBe(true);
-      // No throw, orchestrator still advances to awaiting-connect.
-      expect(orch.getStage()).toBe('awaiting-connect');
     });
 
     it('is idempotent for duplicate complete events in the same session', async () => {
@@ -269,9 +245,9 @@ describe('OnboardingOrchestrator', () => {
     it('rejects when the validator says the key is bad — does NOT save or fire the cone lick', async () => {
       const fetchImpl = fakeFetch(() => new Response('{"error":"bad"}', { status: 401 }));
       const fs = new VirtualFS('reject-' + Math.random());
-      const accounts: any[] = [];
-      const finalLicks: any[] = [];
-      const dipInbox: any[] = [];
+      const accounts: AccountSnapshot[] = [];
+      const finalLicks: FinalLickPayload[] = [];
+      const dipInbox: DipMessage[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
         postSystemMessage: () => {},
@@ -300,9 +276,9 @@ describe('OnboardingOrchestrator', () => {
         throw new TypeError('Failed to fetch');
       }) as unknown as typeof fetch;
       const fs = new VirtualFS('skipped-' + Math.random());
-      const accounts: any[] = [];
-      const finalLicks: any[] = [];
-      const dipInbox: any[] = [];
+      const accounts: AccountSnapshot[] = [];
+      const finalLicks: FinalLickPayload[] = [];
+      const dipInbox: DipMessage[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
         postSystemMessage: () => {},
@@ -348,7 +324,7 @@ describe('OnboardingOrchestrator', () => {
     it('leaves the selected model untouched when the catalogue has no models for the provider', async () => {
       const fs = new VirtualFS('no-models-' + Math.random());
       const selectedModels: string[] = [];
-      const finalLicks: any[] = [];
+      const finalLicks: FinalLickPayload[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
         postSystemMessage: () => {},
@@ -437,7 +413,7 @@ describe('OnboardingOrchestrator', () => {
       await h.orchestrator.handleConnectAttempt({
         provider: '',
         apiKey: '',
-      } as any);
+      });
       expect(h.accounts).toEqual([]);
       const reject = h.dipInbox.find((m) => m.type === 'slicc-connect-result');
       expect(reject.ok).toBe(false);

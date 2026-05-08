@@ -975,24 +975,6 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           };
         }
       },
-      installRecommendedSkills: async (profile) => {
-        // Direct (no-shell) skill install — reuses the same code path the
-        // upskill command does, but via a non-shell entry point so it
-        // works from the panel side of the extension where the agent
-        // shell isn't reachable. Profile is forwarded so the installer
-        // doesn't race the parallel persistProfile write.
-        const [{ installRecommendedSkills }, { createProxiedFetch }] = await Promise.all([
-          import('../shell/supplemental-commands/upskill-command.js'),
-          import('../shell/proxied-fetch.js'),
-        ]);
-        const result = await installRecommendedSkills(localFs, createProxiedFetch(), profile);
-        log.info('Recommended skills install finished', {
-          installedNames: result.installedNames,
-          errors: result.errors,
-          skipped: result.skipped,
-          elapsedSeconds: result.elapsedSeconds,
-        });
-      },
     });
     return extOnboardingOrchestrator;
   };
@@ -2185,23 +2167,6 @@ async function main(): Promise<void> {
         // so this synthetic `onboarding-complete-with-provider` lick
         // falls straight through to the cone like a regular sprinkle.
         routeLickToScoop(completionEvent);
-      },
-      installRecommendedSkills: async (profile) => {
-        // Direct (no-shell) skill install — see extension wiring above
-        // for why we deliberately avoid going through `__slicc_shell`.
-        // Profile is forwarded so the installer doesn't race persistProfile.
-        if (!sharedFs) return;
-        const [{ installRecommendedSkills }, { createProxiedFetch }] = await Promise.all([
-          import('../shell/supplemental-commands/upskill-command.js'),
-          import('../shell/proxied-fetch.js'),
-        ]);
-        const result = await installRecommendedSkills(sharedFs, createProxiedFetch(), profile);
-        log.info('Recommended skills install finished', {
-          installedNames: result.installedNames,
-          errors: result.errors,
-          skipped: result.skipped,
-          elapsedSeconds: result.elapsedSeconds,
-        });
       },
       launchOAuth: async (providerId, baseUrl) => {
         try {

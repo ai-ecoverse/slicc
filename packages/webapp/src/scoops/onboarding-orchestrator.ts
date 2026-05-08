@@ -144,16 +144,6 @@ export interface OrchestratorDeps {
    * Optional — providers without OAuth support can skip this.
    */
   launchOAuth?: (providerId: string, baseUrl?: string | null) => Promise<OAuthLaunchResult>;
-  /**
-   * Direct (no-shell) installer for the recommended-skills set. Used to
-   * land the user's matching skills immediately after the welcome wizard
-   * without going through the wasm shell layer (which lives in a different
-   * execution context in extension mode and isn't reachable from the
-   * panel-side orchestrator). The orchestrator passes the freshly-collected
-   * profile so the installer doesn't race with the parallel `persistProfile`
-   * write. Errors are logged and swallowed by the orchestrator.
-   */
-  installRecommendedSkills?: (profile: OnboardingProfile) => Promise<void>;
   /** Optional fetch override for tests. */
   fetchImpl?: typeof fetch;
   /** Optional RNG for deterministic message picking in tests. */
@@ -211,19 +201,12 @@ export class OnboardingOrchestrator {
     // Persist the welcome marker + profile in parallel. We don't
     // wait for the writes — even if they fail, the on-screen flow
     // continues so the user is never blocked by a transient FS hiccup.
+    // Skill install happens at the tail of the cone's
+    // `onboarding-complete-with-provider` reply (see welcome/SKILL.md),
+    // not here — keeping it cone-driven gives the user one canonical
+    // install point and avoids racing two concurrent installs.
     void recordWelcomed(this.deps.fs).catch((err) => log.warn('recordWelcomed failed', err));
     void this.persistProfile(this.profile).catch((err) => log.warn('persistProfile failed', err));
-
-    // Kick off skill install in the background — no UI block, no shell
-    // round-trip. We pass the in-memory profile directly so the installer
-    // doesn't race the parallel persistProfile write to /home/<user>/.welcome.json.
-    // The helper handles "all installed" / "catalog fetch failed" internally,
-    // so we just fire and forget.
-    if (this.deps.installRecommendedSkills) {
-      void this.deps
-        .installRecommendedSkills(this.profile)
-        .catch((err) => log.warn('installRecommendedSkills failed', err));
-    }
 
     // Three deterministic lines, then the connect-llm dip.
     const lines = buildIntroMessages(this.profile, this.deps.rand);
