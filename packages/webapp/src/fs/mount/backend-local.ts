@@ -6,12 +6,15 @@
  * `showDirectoryPicker()` must run inside a real user gesture, and because
  * Chrome crashes when the picker is invoked from side-panel context for
  * system directories. Three picker contexts are handled:
- *   - cone (toolContext present) — render approval card via `showToolUI`,
- *     then either route the click through the extension popup
- *     (`openMountPickerPopup`, surfaced via `data-picker="directory"`) or
- *     run the picker inline (standalone)
- *   - extension terminal (no toolContext, isExtension true) — popup picker
- *   - standalone (no toolContext, no extension) — direct picker
+ *   - cone (toolContext present) — render approval card via `showToolUI`.
+ *     The factory itself only ever calls `showDirectoryPicker()` inline
+ *     from `onAction`; the popup detour for the extension is invisible
+ *     here — the panel-side `tool-ui-renderer.ts` transparently swaps in
+ *     `openMountPickerPopup` for buttons marked `data-picker="directory"`
+ *     and posts back `{ handleInIdb, idbKey }`, which `create()` then
+ *     resolves via `loadAndClearPendingHandle` + `reactivateHandle`.
+ *   - extension terminal (no toolContext, isExtension true) — popup picker.
+ *   - standalone (no toolContext, no extension) — direct picker.
  *
  * `create()` also enforces scoop fail-fast: scoops have no human at chat to
  * approve a picker, so they get an immediate error.
