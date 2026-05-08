@@ -317,22 +317,21 @@ describe('splitContentSegments', () => {
 describe('mountDraftDip', () => {
   it('returns an instance with a detached iframe element in CLI mode', () => {
     const draft = mountDraftDip(vi.fn());
-    expect(draft).not.toBeNull();
-    expect(draft!.element.tagName).toBe('IFRAME');
-    expect(draft!.element.parentElement).toBeNull();
-    expect(typeof draft!.update).toBe('function');
-    expect(typeof draft!.dispose).toBe('function');
-    draft!.dispose();
+    expect(draft.element.tagName).toBe('IFRAME');
+    expect(draft.element.parentElement).toBeNull();
+    expect(typeof draft.update).toBe('function');
+    expect(typeof draft.dispose).toBe('function');
+    draft.dispose();
   });
 
   it('disables pointer events on the iframe so partial UI is not clickable', () => {
-    const draft = mountDraftDip(vi.fn())!;
+    const draft = mountDraftDip(vi.fn());
     expect(draft.element.style.pointerEvents).toBe('none');
     draft.dispose();
   });
 
   it('queues the first update before iframe load and posts after', async () => {
-    const draft = mountDraftDip(vi.fn())!;
+    const draft = mountDraftDip(vi.fn());
     const iframe = draft.element;
     document.body.appendChild(iframe);
 
@@ -360,7 +359,7 @@ describe('mountDraftDip', () => {
   });
 
   it('skips redundant updates with identical content', async () => {
-    const draft = mountDraftDip(vi.fn())!;
+    const draft = mountDraftDip(vi.fn());
     const iframe = draft.element;
     document.body.appendChild(iframe);
     const postSpy = vi.fn();
@@ -384,7 +383,7 @@ describe('mountDraftDip', () => {
   });
 
   it('removes the iframe and detaches its message listener on dispose', () => {
-    const draft = mountDraftDip(vi.fn())!;
+    const draft = mountDraftDip(vi.fn());
     const iframe = draft.element;
     document.body.appendChild(iframe);
     expect(iframe.isConnected).toBe(true);

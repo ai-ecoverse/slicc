@@ -1639,9 +1639,9 @@ export class ChatPanel {
         if (!draft) {
           draft = mountDraftDip((action, data) => this.onDipLick?.(action, data));
           drafts[shtmlIdx] = draft;
-          if (draft) container.appendChild(draft.element);
+          container.appendChild(draft.element);
         }
-        if (draft && container.dataset.body !== seg.body) {
+        if (container.dataset.body !== seg.body) {
           draft.update(seg.body);
           container.dataset.body = seg.body;
         }

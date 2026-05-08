@@ -452,16 +452,16 @@ export function mountDip(
  * height + link-open all work the same as final dips so partial UI is
  * still interactive (within the same security model as inline shtml).
  *
- * Returns `null` in extension mode — `sprinkle-sandbox.html` has no
- * draft-update path yet, and a sandbox-routed iframe can't be re-
- * parented across innerHTML re-renders without reloading. Callers
- * should leave the placeholder visible and rely on final hydration.
+ * Extension mode routes through `sprinkle-sandbox.html` (CSP-exempt
+ * manifest sandbox) — same shape as the final-dip path, just with a
+ * `dip-draft-render` setup message and `dip-draft-update` relay for
+ * incremental body swaps. The chat panel's segment renderer keeps the
+ * iframe pinned to its container in both runtimes, so re-parenting
+ * isn't an issue here.
  */
-export function mountDraftDip(
-  onLick: (action: string, data: unknown) => void
-): DraftDipInstance | null {
-  if (isExtension) return null;
+export function mountDraftDip(onLick: (action: string, data: unknown) => void): DraftDipInstance {
   const srcdoc = buildDipSrcdoc('', /* isDraft */ true);
+  if (isExtension) return mountDraftDipExtension(srcdoc, onLick);
 
   const iframe = document.createElement('iframe');
   iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
@@ -824,6 +824,85 @@ function mountDipExtension(
         liveDipWindows.delete(iframe.contentWindow);
         trustedDipWindows.delete(iframe.contentWindow);
       }
+      iframe.remove();
+    },
+  };
+}
+
+/**
+ * Extension-mode draft dip. Mirrors `mountDipExtension` but with
+ * draft-specific wiring:
+ *
+ * - Posts `dip-draft-render { srcdoc }` instead of `dip-render` so the
+ *   sandbox knows to mount the child iframe in non-interactive mode.
+ * - `update(content)` posts `dip-draft-update { content }` to the
+ *   sandbox; the sandbox relays it to the nested child iframe, where
+ *   the `DRAFT_BRIDGE_EXTENSION` listener (already inlined into the
+ *   draft srcdoc by `buildDipSrcdoc`) replaces `document.body.innerHTML`.
+ * - `pointer-events: none` lives on the outer (sandbox) iframe and on
+ *   the inner srcdoc — both layers block clicks until final hydration.
+ *
+ * The element is detached on construction so the caller (the chat
+ * panel's segment renderer) controls placement. Drafts are not
+ * registered in `trustedDipWindows` and never service VFS requests.
+ */
+function mountDraftDipExtension(
+  srcdoc: string,
+  onLick: (action: string, data: unknown) => void
+): DraftDipInstance {
+  const iframe = document.createElement('iframe');
+  iframe.src = chrome.runtime.getURL('sprinkle-sandbox.html');
+  iframe.style.cssText =
+    'width:100%;border:none;overflow:hidden;display:block;pointer-events:none;';
+
+  let ready = false;
+  let pendingContent: string | null = null;
+  let lastSent: string | null = null;
+  const sendUpdate = (content: string) => {
+    if (lastSent === content) return;
+    lastSent = content;
+    iframe.contentWindow?.postMessage({ type: 'dip-draft-update', content }, '*');
+  };
+
+  const messageHandler = (event: MessageEvent) => {
+    if (event.source !== iframe.contentWindow) return;
+    const msg = event.data;
+    if (!msg?.type) return;
+    if (msg.type === 'dip-lick') onLick(msg.action, msg.data);
+    else if (msg.type === 'dip-height') iframe.style.height = msg.height + 'px';
+    else if (msg.type === 'dip-open-link') openDipLink(msg.url);
+    // Drafts never service VFS requests — silently ignore them.
+  };
+  window.addEventListener('message', messageHandler);
+
+  iframe.addEventListener(
+    'load',
+    () => {
+      registerSprinkleWindow(iframe.contentWindow);
+      if (iframe.contentWindow) liveDipWindows.add(iframe.contentWindow);
+      iframe.contentWindow?.postMessage(
+        { type: 'dip-draft-render', srcdoc, isLight: isThemeLight() },
+        '*'
+      );
+      ready = true;
+      if (pendingContent !== null) {
+        sendUpdate(pendingContent);
+        pendingContent = null;
+      }
+    },
+    { once: true }
+  );
+
+  return {
+    element: iframe,
+    update(content: string) {
+      if (ready) sendUpdate(content);
+      else pendingContent = content;
+    },
+    dispose() {
+      window.removeEventListener('message', messageHandler);
+      unregisterSprinkleWindow(iframe.contentWindow);
+      if (iframe.contentWindow) liveDipWindows.delete(iframe.contentWindow);
       iframe.remove();
     },
   };
