@@ -39,7 +39,7 @@ Inline `shtml` code blocks in chat that hydrate into sandboxed widgets. Ephemera
 <button onclick="slicc.lick('choose', { value: 42 })">Pick 42</button>
 ```
 
-For persistent UI, use Sprinkles instead. See `man dip` or `/workspace/skills/inline-widgets/SKILL.md`.
+For persistent UI, use Sprinkles instead. See `man dip` or `/workspace/skills/dips/SKILL.md`.
 
 ## Handoffs
 

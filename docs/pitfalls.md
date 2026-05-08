@@ -14,7 +14,7 @@ Chrome extension Manifest V3 blocks dynamic code construction on extension pages
 
 **The Solution: Sandbox Iframe**
 
-All dynamic code execution (JavaScript tool, `node -e`) routes through a sandboxed iframe (`sandbox.html`) exempt from extension CSP. Sprinkles and inline widgets use a separate sandbox (`sprinkle-sandbox.html`).
+All dynamic code execution (JavaScript tool, `node -e`) routes through a sandboxed iframe (`sandbox.html`) exempt from extension CSP. Sprinkles and dips use a separate sandbox (`sprinkle-sandbox.html`).
 
 | Component           | CLI Behavior                                          | Extension Behavior                                          |
 | ------------------- | ----------------------------------------------------- | ----------------------------------------------------------- |
