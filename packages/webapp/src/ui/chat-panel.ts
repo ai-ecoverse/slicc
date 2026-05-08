@@ -16,7 +16,14 @@ import { formatAttachmentSize, formatAttachmentSummary } from '../core/attachmen
 import { getMimeType } from '../core/mime-types.js';
 import { processImageContent, isSupportedImageFormat } from '../core/image-processor.js';
 import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
-import { hydrateDips, disposeDips, type DipInstance } from './dip.js';
+import {
+  hydrateDips,
+  disposeDips,
+  mountDraftDip,
+  splitContentSegments,
+  type DipInstance,
+  type DraftDipInstance,
+} from './dip.js';
 import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
 import {
   getToolDescriptor,
@@ -135,8 +142,22 @@ function isTextLikeFile(file: File, mimeType: string): boolean {
 
 function renderChatMessageContent(msg: ChatMessage): string {
   return msg.role === 'assistant'
-    ? renderAssistantMessageContent(msg.content)
+    ? renderAssistantMessageContent(msg.content, msg.isStreaming === true)
     : renderMessageContent(msg.content);
+}
+
+/**
+ * Render a single prose segment of a streaming assistant message. Called
+ * once per prose segment per flush by `renderStreamingSegmented`. The
+ * `isStreaming` flag is always false here because the caller has
+ * already split shtml fences out into their own segments — there's no
+ * shtml block in the prose to swap for a placeholder, and rendering
+ * with the streaming flag would only suppress legitimate code blocks.
+ */
+function renderProseSegment(text: string, role: ChatMessage['role']): string {
+  return role === 'assistant'
+    ? renderAssistantMessageContent(text, false)
+    : renderMessageContent(text);
 }
 
 /**
@@ -199,6 +220,16 @@ export class ChatPanel {
   private pendingDeltaText = '';
   private streamingRafId: number | null = null;
   private dips = new Map<string, DipInstance[]>();
+  /**
+   * Streaming-draft iframes by message id, indexed in shtml-block order.
+   * Slot is `null` when a placeholder exists but no draft has been mounted
+   * (e.g. extension mode, or the block content is still empty). Drafts
+   * persist across `updateStreamingContent` re-renders by being re-parented
+   * onto the freshly-rendered `.msg__dip-pending` element — re-parenting
+   * within the same document does not reload the iframe, which is the
+   * whole point of this mechanism. Disposed before final `hydrateDips`.
+   */
+  private drafts = new Map<string, Array<DraftDipInstance | null>>();
   public onDipLick?: (action: string, data: unknown) => void;
   private modelSelectorEl!: HTMLElement;
   public onModelChange?: (modelId: string) => void;
@@ -1530,19 +1561,119 @@ export class ChatPanel {
     if (!msg) return;
     const wrapper = this.messagesEl.querySelector(`.msg-group[data-msg-id="${messageId}"]`);
     if (!wrapper) return;
-    const contentEl = wrapper.querySelector('.msg__content');
-    if (contentEl) {
-      contentEl.innerHTML = renderChatMessageContent(msg);
-      if (msg.isStreaming) {
-        const cursor = document.createElement('span');
-        cursor.className = 'streaming-cursor';
-        contentEl.appendChild(cursor);
-      }
-    } else if (msg.content.trim().length > 0) {
-      this.updateMessageEl(messageId);
+    const contentEl = wrapper.querySelector('.msg__content') as HTMLElement | null;
+    if (!contentEl) {
+      if (msg.content.trim().length > 0) this.updateMessageEl(messageId);
       return;
     }
+
+    this.renderStreamingSegmented(contentEl, msg);
+    if (msg.isStreaming) {
+      const cursor = document.createElement('span');
+      cursor.className = 'streaming-cursor';
+      contentEl.appendChild(cursor);
+    }
     this.scrollToBottom();
+  }
+
+  /**
+   * Reconcile `contentEl`'s children against the segments derived from
+   * `msg.content`. Each segment owns a stable container element:
+   *
+   * - **prose** containers use `innerHTML` (no iframes inside, so
+   *   wiping/replacing is safe).
+   * - **shtml** containers hold a draft iframe that is mounted ONCE and
+   *   never re-parented. WHATWG-compliant browsers destroy an iframe's
+   *   contentWindow on disconnect, so any `appendChild` move or
+   *   `innerHTML` wipe of the parent triggers a reload — verified
+   *   empirically against this Canary build. Keeping the iframe pinned
+   *   to its container is the only reliable way to stream into it.
+   *
+   * On the very first call after `createMessageEl` built `contentEl`
+   * with the legacy placeholder-based path, we wipe and re-install
+   * segment containers so subsequent flushes have a stable structure
+   * to reconcile against.
+   */
+  private renderStreamingSegmented(contentEl: HTMLElement, msg: ChatMessage): void {
+    contentEl.querySelector(':scope > .streaming-cursor')?.remove();
+
+    const existing = Array.from(
+      contentEl.querySelectorAll<HTMLElement>(':scope > [data-seg-kind]')
+    );
+    if (existing.length === 0 && contentEl.childNodes.length > 0) {
+      contentEl.replaceChildren();
+    }
+
+    const segments = splitContentSegments(msg.content);
+    let drafts = this.drafts.get(msg.id);
+    if (!drafts) {
+      drafts = [];
+      this.drafts.set(msg.id, drafts);
+    }
+    let shtmlIdx = 0;
+
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      if (!seg) continue;
+      let container: HTMLElement | null = existing[i] ?? null;
+
+      if (container && container.dataset.segKind !== seg.kind) {
+        container.remove();
+        container = null;
+      }
+
+      if (!container) {
+        container = document.createElement('div');
+        container.dataset.segKind = seg.kind;
+        container.className = `msg__seg msg__seg--${seg.kind}`;
+        contentEl.appendChild(container);
+      }
+
+      if (seg.kind === 'prose') {
+        if (container.dataset.text !== seg.text) {
+          container.innerHTML = renderProseSegment(seg.text, msg.role);
+          container.dataset.text = seg.text;
+        }
+      } else {
+        let draft = drafts[shtmlIdx] ?? null;
+        if (!draft) {
+          draft = mountDraftDip((action, data) => this.onDipLick?.(action, data));
+          drafts[shtmlIdx] = draft;
+          if (draft) container.appendChild(draft.element);
+        }
+        if (draft && container.dataset.body !== seg.body) {
+          draft.update(seg.body);
+          container.dataset.body = seg.body;
+        }
+        shtmlIdx++;
+      }
+    }
+
+    // Trim leftover segment containers whose segment vanished.
+    for (let i = segments.length; i < existing.length; i++) {
+      existing[i]?.remove();
+    }
+    // Trim drafts that no longer correspond to an shtml segment.
+    let totalShtml = 0;
+    for (const seg of segments) if (seg.kind === 'shtml') totalShtml++;
+    for (let i = totalShtml; i < drafts.length; i++) {
+      drafts[i]?.dispose();
+    }
+    drafts.length = totalShtml;
+  }
+
+  private disposeDraftsForMessage(messageId: string): void {
+    const drafts = this.drafts.get(messageId);
+    if (!drafts) return;
+    for (const draft of drafts) draft?.dispose();
+    this.drafts.delete(messageId);
+  }
+
+  private disposeAllDrafts(): void {
+    for (const [, drafts] of this.drafts) {
+      for (const draft of drafts) draft?.dispose();
+    }
+    this.drafts.clear();
   }
 
   private updateSendButtonState(): void {
@@ -2410,6 +2541,12 @@ export class ChatPanel {
   }
 
   private disposeDipsForMessage(messageId: string): void {
+    // Drafts (streaming preview iframes) and dips (final hydrated iframes)
+    // share a message lifecycle: when one is being torn down or rebuilt,
+    // the other should go too. The streaming flow disposes drafts itself
+    // before the final hydration call, so most of the time this branch is
+    // a no-op — but it's the right safety net for re-render paths.
+    this.disposeDraftsForMessage(messageId);
     const instances = this.dips.get(messageId);
     if (instances) {
       disposeDips(instances);
@@ -2418,6 +2555,7 @@ export class ChatPanel {
   }
 
   private disposeAllDips(): void {
+    this.disposeAllDrafts();
     for (const [, instances] of this.dips) {
       disposeDips(instances);
     }

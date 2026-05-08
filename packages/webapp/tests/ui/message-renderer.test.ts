@@ -196,6 +196,62 @@ describe('renderAssistantMessageContent', () => {
     expect(html).toContain('class="msg__error"');
     expect(html).toContain('Provider timeout after 30s');
   });
+
+  describe('streaming dip placeholder', () => {
+    const finishedShtml = 'Here you go:\n\n```shtml\n<div class="card">Hi</div>\n```\n\nDone.';
+
+    it('replaces a closed shtml fenced block with the pending placeholder while streaming', () => {
+      const html = renderAssistantMessageContent(finishedShtml, true);
+
+      expect(html).toContain('class="msg__dip-pending"');
+      expect(html).toContain('Pouring a dip…');
+      expect(html).not.toContain('class="language-shtml"');
+      expect(html).not.toContain('&lt;div class="card"&gt;');
+    });
+
+    it('replaces an in-progress (unclosed) shtml fenced block while streaming', () => {
+      const html = renderAssistantMessageContent(
+        'Here you go:\n\n```shtml\n<div class="card">Hi',
+        true
+      );
+
+      expect(html).toContain('class="msg__dip-pending"');
+      expect(html).not.toContain('class="language-shtml"');
+    });
+
+    it('keeps the shtml code block intact when not streaming so hydrateDips can find it', () => {
+      const html = renderAssistantMessageContent(finishedShtml, false);
+
+      expect(html).toContain('class="language-shtml"');
+      expect(html).toContain('&lt;div class="card"&gt;Hi&lt;/div&gt;');
+      expect(html).not.toContain('msg__dip-pending');
+    });
+
+    it('defaults to non-streaming behavior when isStreaming is omitted', () => {
+      const html = renderAssistantMessageContent(finishedShtml);
+
+      expect(html).toContain('class="language-shtml"');
+      expect(html).not.toContain('msg__dip-pending');
+    });
+
+    it('replaces every shtml block when multiple appear in one message', () => {
+      const html = renderAssistantMessageContent(
+        '```shtml\n<div>one</div>\n```\n\nand\n\n```shtml\n<div>two</div>\n```',
+        true
+      );
+
+      const matches = html.match(/msg__dip-pending"/g) ?? [];
+      expect(matches.length).toBe(2);
+      expect(html).not.toContain('class="language-shtml"');
+    });
+
+    it('leaves non-shtml fenced blocks untouched while streaming', () => {
+      const html = renderAssistantMessageContent('```js\nconst x = 1;\n```', true);
+
+      expect(html).toContain('class="language-js"');
+      expect(html).not.toContain('msg__dip-pending');
+    });
+  });
 });
 
 describe('renderToolInput', () => {
