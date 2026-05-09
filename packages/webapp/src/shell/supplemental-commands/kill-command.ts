@@ -116,7 +116,7 @@ export function createKillCommand(options: KillCommandOptions = {}): Command {
         allDelivered = false;
         const proc = pm.get(pid);
         if (!proc) {
-          errors.push(`kill: (${pid}) - No such process`);
+          errors.push(`kill: (${pid}) - no such process`);
         } else {
           errors.push(`kill: (${pid}) - process already terminated`);
         }

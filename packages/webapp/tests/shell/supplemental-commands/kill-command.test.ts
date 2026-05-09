@@ -72,7 +72,7 @@ describe('kill command', () => {
     const cmd = createKillCommand({ processManager: pm });
     const result = await cmd.execute(['99999'], mockCtx);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('No such process');
+    expect(result.stderr).toContain('no such process');
   });
 
   it('returns exit 1 if any pid in a batch fails', async () => {
