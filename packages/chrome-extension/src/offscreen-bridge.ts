@@ -32,6 +32,7 @@ import type {
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
+  OffscreenToPanelMessage,
 } from './messages.js';
 import { getLeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
 import { getFollowerTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-follower-status.js';
@@ -41,6 +42,12 @@ import type { ChatMessage } from '../../../packages/webapp/src/ui/types.js';
 import type { MessageAttachment } from '../../../packages/webapp/src/core/attachments.js';
 import type { BrowserAPI } from '../../../packages/webapp/src/cdp/index.js';
 import type { FollowerSyncManager } from '../../../packages/webapp/src/scoops/tray-follower-sync.js';
+import type {
+  KernelFacade,
+  KernelTransport,
+  FollowerAgentEvent,
+} from '../../../packages/webapp/src/kernel/types.js';
+import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
 
 /** Buffered message for state sync */
 interface BufferedChatMessage {
@@ -61,7 +68,7 @@ interface BufferedChatMessage {
   isStreaming?: boolean;
 }
 
-export class OffscreenBridge {
+export class OffscreenBridge implements KernelFacade {
   private orchestrator: Orchestrator | null = null;
   private browserAPI: BrowserAPI | null = null;
   /** Per-scoop message buffers (mirrors main.ts pattern) */
@@ -80,6 +87,24 @@ export class OffscreenBridge {
    * messages the local orchestrator would emit.
    */
   private followerSync: FollowerSyncManager | null = null;
+  /**
+   * KernelTransport over chrome.runtime — constructed eagerly so `emit()`
+   * works the moment the bridge exists, mirroring today's contract where
+   * `chrome.runtime.sendMessage` is a global. The bridge owns no wire
+   * calls directly anymore; `setupMessageListener` and `emit` go through
+   * this transport. The transport delivers raw `ExtensionMessage`
+   * envelopes so the existing source filter and sprinkle-op-response
+   * peek (in `setupMessageListener`) stay intact. Phase 1 keeps
+   * `chrome.runtime`; Phase 2 adds a `MessageChannel` adapter that
+   * satisfies the same interface.
+   */
+  private transport: KernelTransport<ExtensionMessage, OffscreenToPanelMessage> =
+    createOffscreenChromeRuntimeTransport<OffscreenToPanelMessage>();
+  /**
+   * Unsubscribe handle from `transport.onMessage`. Invoked on rebind so
+   * a second `bind()` doesn't double-register the listener.
+   */
+  private transportUnsubscribe: (() => void) | null = null;
 
   /**
    * Bind the orchestrator and start listening for panel messages.
@@ -88,7 +113,8 @@ export class OffscreenBridge {
   async bind(orchestrator: Orchestrator, browserAPI?: BrowserAPI): Promise<void> {
     this.orchestrator = orchestrator;
     this.browserAPI = browserAPI ?? null;
-    this.setupMessageListener();
+    this.transportUnsubscribe?.();
+    this.transportUnsubscribe = this.setupMessageListener();
     const store = new SessionStore();
     await store.init();
     this.sessionStore = store;
@@ -562,42 +588,37 @@ export class OffscreenBridge {
   // Private
   // -------------------------------------------------------------------------
 
-  private setupMessageListener(): void {
-    chrome.runtime.onMessage.addListener(
-      (
-        message: unknown,
-        _sender: ChromeMessageSender,
-        _sendResponse: (response?: unknown) => void
-      ) => {
-        if (!isExtMsg(message)) return false;
-        const msg = message as ExtensionMessage;
+  private setupMessageListener(): () => void {
+    return this.transport.onMessage((msg) => {
+      // Only handle messages from the panel (relayed by service worker)
+      if (msg.source !== 'panel') return;
 
-        // Only handle messages from the panel (relayed by service worker)
-        if (msg.source !== 'panel') return false;
-
-        // Route sprinkle-op-response to the proxy's pending request map
-        if ((msg.payload as any)?.type === 'sprinkle-op-response') {
-          import('./sprinkle-proxy.js').then(({ handleSprinkleOpResponse }) => {
-            handleSprinkleOpResponse(msg.payload as any);
-          });
-          return false;
-        }
-
-        this.handlePanelMessage(msg.payload as PanelToOffscreenMessage).catch((err) => {
-          console.error('[offscreen-bridge] handlePanelMessage error:', err);
-          // Surface error to the panel so the user sees something instead of a silent hang
-          const scoopJid = (msg.payload as { scoopJid?: string }).scoopJid;
-          if (scoopJid) {
-            this.emit({
-              type: 'error',
-              scoopJid,
-              error: err instanceof Error ? err.message : String(err),
-            } as import('./messages.js').ErrorMsg);
-          }
+      // Route sprinkle-op-response to the proxy's pending request map.
+      // The sprinkle-op-response shape isn't part of `PanelToOffscreenMessage`
+      // (it's a panel→offscreen reply to a sprinkle-op the offscreen sent),
+      // so we reach for the proxy's typed handler via `unknown`.
+      if ((msg.payload as { type?: string })?.type === 'sprinkle-op-response') {
+        import('./sprinkle-proxy.js').then(({ handleSprinkleOpResponse }) => {
+          handleSprinkleOpResponse(
+            msg.payload as unknown as Parameters<typeof handleSprinkleOpResponse>[0]
+          );
         });
-        return false;
+        return;
       }
-    );
+
+      this.handlePanelMessage(msg.payload as PanelToOffscreenMessage).catch((err) => {
+        console.error('[offscreen-bridge] handlePanelMessage error:', err);
+        // Surface error to the panel so the user sees something instead of a silent hang
+        const scoopJid = (msg.payload as { scoopJid?: string }).scoopJid;
+        if (scoopJid) {
+          this.emit({
+            type: 'error',
+            scoopJid,
+            error: err instanceof Error ? err.message : String(err),
+          } satisfies ErrorMsg);
+        }
+      });
+    });
   }
 
   private async handlePanelMessage(msg: PanelToOffscreenMessage): Promise<void> {
@@ -858,23 +879,12 @@ export class OffscreenBridge {
     this.emit({ type: 'scoop-list', scoops } satisfies ScoopListMsg);
   }
 
-  /** Send a message to all panels via the service worker relay. */
-  private emit(payload: import('./messages.js').OffscreenToPanelMessage | StateSnapshotMsg): void {
-    chrome.runtime
-      .sendMessage({
-        source: 'offscreen' as const,
-        payload,
-      })
-      .catch(() => {
-        // No panel open — that's expected
-      });
+  /** Send a message to all panels via the kernel transport. */
+  private emit(payload: OffscreenToPanelMessage): void {
+    this.transport.send(payload);
   }
 }
 
 function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-function isExtMsg(msg: unknown): boolean {
-  return typeof msg === 'object' && msg !== null && 'source' in msg && 'payload' in msg;
 }

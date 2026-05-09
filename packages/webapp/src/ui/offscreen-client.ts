@@ -31,6 +31,8 @@ import type {
 import { createLogger } from '../core/logger.js';
 import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
+import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
+import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
 
 const log = createLogger('offscreen-client');
 
@@ -53,7 +55,7 @@ export interface OffscreenClientCallbacks {
   onReady?: () => void;
 }
 
-export class OffscreenClient {
+export class OffscreenClient implements KernelClientFacade {
   private eventListeners = new Set<(event: UIAgentEvent) => void>();
   private callbacks: OffscreenClientCallbacks;
   private scoops: RegisteredScoop[] = [];
@@ -62,12 +64,23 @@ export class OffscreenClient {
   private ready = false;
   private stateRetryTimer: ReturnType<typeof setInterval> | null = null;
   private localFs: VirtualFS | null = null;
+  /**
+   * KernelTransport over chrome.runtime — constructed in the constructor.
+   * The client owns no wire calls directly anymore; `setupMessageListener`
+   * and `send` go through this transport. The transport delivers raw
+   * `ExtensionMessage` envelopes so the existing source filter and
+   * special-case routing (`debug-tabs`, `sprinkle-op`) stay intact. Phase
+   * 2 swaps this for a `MessageChannel` adapter without changing call
+   * sites.
+   */
+  private transport: KernelTransport<ExtensionMessage, PanelToOffscreenMessage>;
 
   /** Currently selected scoop JID (set by the UI). */
   selectedScoopJid: string | null = null;
 
   constructor(callbacks: OffscreenClientCallbacks) {
     this.callbacks = callbacks;
+    this.transport = createPanelChromeRuntimeTransport<PanelToOffscreenMessage>();
     this.setupMessageListener();
   }
 
@@ -255,46 +268,39 @@ export class OffscreenClient {
   // Internal
   // -------------------------------------------------------------------------
 
-  private sprinkleOpHandler: ((payload: any) => void) | null = null;
+  private sprinkleOpHandler: ((payload: unknown) => void) | null = null;
 
   /** Send a sprinkle lick event to the offscreen orchestrator. */
   sendSprinkleLick(sprinkleName: string, body: unknown, targetScoop?: string): void {
-    this.send({ type: 'sprinkle-lick', sprinkleName, body, targetScoop } as any);
+    this.send({
+      type: 'sprinkle-lick',
+      sprinkleName,
+      body,
+      targetScoop,
+    } as PanelToOffscreenMessage);
   }
 
   /** Register a handler for sprinkle-op messages from the offscreen proxy. */
-  setSprinkleOpHandler(handler: (payload: any) => void): void {
+  setSprinkleOpHandler(handler: (payload: unknown) => void): void {
     this.sprinkleOpHandler = handler;
   }
 
   private setupMessageListener(): void {
-    chrome.runtime.onMessage.addListener(
-      (
-        message: unknown,
-        _sender: ChromeMessageSender,
-        _sendResponse: (response?: unknown) => void
-      ) => {
-        if (!isExtMsg(message)) return false;
-        const msg = message as ExtensionMessage;
-
-        if (msg.source === 'offscreen') {
-          const payload = msg.payload as any;
-          // Route debug-tabs toggle to the panel's Layout
-          if (payload?.type === 'debug-tabs') {
-            const toggle = (window as any).__slicc_debug_tabs as
-              | ((show: boolean) => void)
-              | undefined;
-            toggle?.(!!payload.show);
-          } else if (payload?.type === 'sprinkle-op' && this.sprinkleOpHandler) {
-            this.sprinkleOpHandler(payload);
-          } else {
-            this.handleOffscreenMessage(msg.payload as OffscreenToPanelMessage | StateSnapshotMsg);
-          }
-        }
-
-        return false;
+    this.transport.onMessage((msg) => {
+      if (msg.source !== 'offscreen') return;
+      const payload = msg.payload as { type?: string; show?: unknown };
+      // Route debug-tabs toggle to the panel's Layout
+      if (payload?.type === 'debug-tabs') {
+        const toggle = (window as unknown as Record<string, unknown>).__slicc_debug_tabs as
+          | ((show: boolean) => void)
+          | undefined;
+        toggle?.(!!payload.show);
+      } else if (payload?.type === 'sprinkle-op' && this.sprinkleOpHandler) {
+        this.sprinkleOpHandler(payload);
+      } else {
+        this.handleOffscreenMessage(msg.payload as OffscreenToPanelMessage | StateSnapshotMsg);
       }
-    );
+    });
   }
 
   private handleOffscreenMessage(msg: OffscreenToPanelMessage | StateSnapshotMsg): void {
@@ -534,25 +540,12 @@ export class OffscreenClient {
   }
 
   private send(payload: PanelToOffscreenMessage): void {
-    chrome.runtime
-      .sendMessage({
-        source: 'panel' as const,
-        payload,
-      })
-      .catch((err) => {
-        log.error('Failed to send to offscreen', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
+    this.transport.send(payload);
   }
 }
 
 function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-function isExtMsg(msg: unknown): boolean {
-  return typeof msg === 'object' && msg !== null && 'source' in msg && 'payload' in msg;
 }
 
 /**

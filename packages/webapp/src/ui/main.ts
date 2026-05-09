@@ -1235,7 +1235,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   // Register handler so the offscreen proxy can relay sprinkle operations here.
   // Routed through the OffscreenClient's existing onMessage listener to ensure delivery.
-  client.setSprinkleOpHandler((payload: Record<string, unknown>) => {
+  client.setSprinkleOpHandler((payload: unknown) => {
     const { id, op, name, data } = payload as {
       id: unknown;
       op: string;
