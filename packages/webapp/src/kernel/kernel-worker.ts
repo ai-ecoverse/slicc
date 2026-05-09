@@ -40,6 +40,7 @@ import { createBridgeMessageChannelTransport } from './transport-message-channel
 import { WorkerCdpProxy } from './cdp-worker-proxy.js';
 import { TerminalSessionHost } from './terminal-session-host.js';
 import { WasmShellHeadless } from '../shell/wasm-shell-headless.js';
+import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
 
 // Provider registration is async-explicit (not side-effect import).
 // `providers/index.ts` switched to lazy `import.meta.glob` to break a
@@ -171,13 +172,21 @@ function installLocalStorageShim(seed: Record<string, string>): void {
 let host: KernelHost | null = null;
 let stopTerminalHost: (() => void) | null = null;
 
+/**
+ * Wire the init listener using a double-init guard. Exported via
+ * `makeKernelWorkerInitGuard` so tests can exercise the guard
+ * without pulling in the worker-global side effects of this module.
+ *
+ * Without the guard, two concurrent `boot()` calls would race on
+ * `createKernelHost`, `orchestrator.init`, and `globalThis.__slicc_pm`,
+ * leaving the host in indeterminate state.
+ */
+const initGuard = makeKernelWorkerInitGuard((init) => boot(init));
+
 self.addEventListener('message', (event: MessageEvent) => {
   const data = event.data as { type?: string };
   if (data?.type !== 'kernel-worker-init') return;
-  const init = event.data as KernelWorkerInitMsg;
-  void boot(init).catch((err) => {
-    console.error('[kernel-worker] boot failed', err);
-  });
+  initGuard.handle(event.data as KernelWorkerInitMsg);
 });
 
 async function boot(init: KernelWorkerInitMsg): Promise<void> {
