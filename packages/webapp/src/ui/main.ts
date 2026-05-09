@@ -1593,6 +1593,21 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     send: (msg) => client.sendRaw(msg),
   });
 
+  // Phase 2b step 6 — publish a tool-ui dispatch hook so the panel-side
+  // dip's button clicks route to the WORKER's `toolUIRegistry` over the
+  // kernel transport, not the panel's empty registry. Without this,
+  // every cone-driven dip (mount approval, confirm prompts, …) hangs
+  // on user click because the agent's promise is registered in the
+  // worker. `tool-ui-renderer.ts` checks for this hook and prefers it
+  // over the local registry.
+  (
+    globalThis as typeof globalThis & {
+      __slicc_tool_ui_send?: (requestId: string, action: string, data: unknown) => void;
+    }
+  ).__slicc_tool_ui_send = (requestId, action, data) => {
+    client.sendRaw({ type: 'tool-ui-action', requestId, action, data });
+  };
+
   // Phase 2b step 5c — mount the panel terminal as a `RemoteTerminalView`
   // backed by the worker's `TerminalSessionHost`. Keystrokes assemble
   // into committed lines locally; Enter dispatches each line via

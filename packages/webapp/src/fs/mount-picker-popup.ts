@@ -77,6 +77,42 @@ export function openMountPickerPopup(requestId?: string): Promise<Record<string,
 }
 
 /**
+ * Stash a `FileSystemDirectoryHandle` under `idbKey` so the worker-side
+ * agent can pick it up via {@link loadAndClearPendingHandle}. Used by
+ * the standalone-worker dip path (Phase 2b.6): the picker must fire on
+ * the panel's click activation, but the consuming `LocalMountBackend`
+ * lives in the kernel worker — IDB is the only structurally-cloneable
+ * path that doesn't lose the handle's permission grant.
+ *
+ * Callers must ensure `idbKey` is unique per request (the existing
+ * `pendingMount:<requestId>` convention is fine). The entry is
+ * single-use — `loadAndClearPendingHandle` removes it.
+ */
+export async function storePendingHandle(
+  idbKey: string,
+  handle: FileSystemDirectoryHandle
+): Promise<void> {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const req = indexedDB.open(PENDING_MOUNT_DB, 1);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains('handles')) {
+        req.result.createObjectStore('handles');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  const tx = db.transaction('handles', 'readwrite');
+  tx.objectStore('handles').put(handle, idbKey);
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('IDB transaction failed'));
+    tx.onabort = () => reject(tx.error ?? new Error('IDB transaction aborted'));
+  });
+  db.close();
+}
+
+/**
  * Reads and removes the pending FileSystemDirectoryHandle the popup wrote
  * under `idbKey`. Returns null if the entry is missing.
  */

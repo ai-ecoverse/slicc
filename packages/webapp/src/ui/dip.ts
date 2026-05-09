@@ -154,7 +154,22 @@ const BRIDGE_SCRIPT = `(function() {
       if (el.dataset && el.dataset.action) {
         var actionData = el.dataset.actionData;
         if (actionData) { try { actionData = JSON.parse(actionData); } catch(ex) {} }
-        window.slicc.lick({ action: el.dataset.action, data: actionData || null });
+        /* Picker hint (e.g. data-picker="directory") needs the parent to
+           run File System Access API on the click activation chain.
+           Phase 2b.6 — forward as a separate message so the parent can
+           run showDirectoryPicker, stash the handle in IDB, then dispatch
+           the lick with the IDB key. */
+        var picker = el.dataset.picker;
+        if (picker) {
+          parent.postMessage({
+            type: 'dip-picker-action',
+            action: el.dataset.action,
+            data: actionData || null,
+            picker: picker,
+          }, '*');
+        } else {
+          window.slicc.lick({ action: el.dataset.action, data: actionData || null });
+        }
         e.preventDefault();
         e.stopPropagation();
         return;
@@ -581,6 +596,63 @@ export function disposeDips(instances: DipInstance[]): void {
     }
   }
   instances.length = 0;
+}
+
+/**
+ * Handle a `dip-picker-action` from a CLI dip: run the File System
+ * Access picker on the click activation chain, stash the granted
+ * `FileSystemDirectoryHandle` in the shared mount-handle IDB store,
+ * then forward the click as an `onLick` carrying `{ handleInIdb,
+ * idbKey, dirName }` so a worker-resident `LocalMountBackend.create`
+ * (Phase 2b.6) can pick it up via `loadAndClearPendingHandle`.
+ *
+ * In standalone-CLI (non-worker) mode the same plumbing works: the
+ * agent's `onAction` handler already has the `handleInIdb` branch and
+ * reads from IDB instead of calling `showDirectoryPicker` itself.
+ *
+ * Errors / cancellations are surfaced as `{ cancelled: true }` /
+ * `{ error: <msg> }` so the agent's existing onAction handler renders
+ * them through its own error path.
+ */
+async function handleDipPickerAction(
+  msg: { type: string; action: string; data?: unknown; picker?: string },
+  onLick: (action: string, data: unknown) => void
+): Promise<void> {
+  if (msg.picker !== 'directory') {
+    // Unknown picker kind — forward as a regular lick so the action
+    // still reaches the registry.
+    onLick(msg.action, msg.data);
+    return;
+  }
+  const win = window as Window & {
+    showDirectoryPicker?: (opts?: { mode?: string }) => Promise<FileSystemDirectoryHandle>;
+  };
+  if (typeof win.showDirectoryPicker !== 'function') {
+    onLick(msg.action, { error: 'File System Access API not available' });
+    return;
+  }
+  let handle: FileSystemDirectoryHandle;
+  try {
+    handle = await win.showDirectoryPicker({ mode: 'readwrite' });
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      onLick(msg.action, { cancelled: true });
+      return;
+    }
+    onLick(msg.action, { error: err instanceof Error ? err.message : String(err) });
+    return;
+  }
+  const idbKey = `pendingMount:dip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  try {
+    const { storePendingHandle } = await import('../fs/mount-picker-popup.js');
+    await storePendingHandle(idbKey, handle);
+  } catch (err: unknown) {
+    onLick(msg.action, {
+      error: `failed to store directory handle: ${err instanceof Error ? err.message : String(err)}`,
+    });
+    return;
+  }
+  onLick(msg.action, { handleInIdb: true, idbKey, dirName: handle.name });
 }
 
 /**

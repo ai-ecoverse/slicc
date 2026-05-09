@@ -131,6 +131,11 @@ export class ToolUIRenderer {
    * CLI mode: render using dip iframe.
    * Uses the same srcdoc template, S2 theme, and slicc.lick() bridge.
    * Lick events resolve the Tool UI promise via toolUIRegistry.
+   *
+   * Standalone-worker mode (Phase 2b.6) publishes
+   * `globalThis.__slicc_tool_ui_send` so the action lands in the
+   * worker's registry over the kernel transport instead of the
+   * panel-side (empty) registry.
    */
   private renderWithDip(html: string): void {
     const wrapper = document.createElement('div');
@@ -139,7 +144,16 @@ export class ToolUIRenderer {
 
     this.dip = mountDip(wrapper, html, (action, data) => {
       log.info('Tool UI action (dip)', { id: this.requestId, action });
-      toolUIRegistry.handleAction(this.requestId, { action, data });
+      const send = (
+        globalThis as typeof globalThis & {
+          __slicc_tool_ui_send?: (requestId: string, action: string, data: unknown) => void;
+        }
+      ).__slicc_tool_ui_send;
+      if (typeof send === 'function') {
+        send(this.requestId, action, data);
+      } else {
+        toolUIRegistry.handleAction(this.requestId, { action, data });
+      }
     });
   }
 

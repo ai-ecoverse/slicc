@@ -4,6 +4,7 @@ import {
   openMountPickerPopup,
   loadAndClearPendingHandle,
   reactivateHandle,
+  storePendingHandle,
 } from '../../src/fs/mount-picker-popup.js';
 
 /** Minimal mock of FileSystemDirectoryHandle. */
@@ -220,3 +221,40 @@ function extractRequestId(url: string): string {
   if (!match) throw new Error(`No requestId in url: ${url}`);
   return decodeURIComponent(match[1]);
 }
+
+describe('storePendingHandle (Phase 2b.6)', () => {
+  beforeEach(async () => {
+    indexedDB.deleteDatabase('slicc-pending-mount');
+  });
+
+  it('writes a handle that loadAndClearPendingHandle can retrieve', async () => {
+    const handle = mockHandle('docs');
+    await storePendingHandle('pendingMount:dip-abc', handle);
+    const loaded = await loadAndClearPendingHandle('pendingMount:dip-abc');
+    expect(loaded).not.toBeNull();
+    expect(loaded?.name).toBe('docs');
+  });
+
+  it('subsequent load returns null after clear', async () => {
+    const handle = mockHandle('docs');
+    await storePendingHandle('pendingMount:dip-once', handle);
+    expect(await loadAndClearPendingHandle('pendingMount:dip-once')).not.toBeNull();
+    expect(await loadAndClearPendingHandle('pendingMount:dip-once')).toBeNull();
+  });
+
+  it('multiple keys round-trip independently', async () => {
+    await storePendingHandle('pendingMount:dip-1', mockHandle('one'));
+    await storePendingHandle('pendingMount:dip-2', mockHandle('two'));
+    const a = await loadAndClearPendingHandle('pendingMount:dip-1');
+    const b = await loadAndClearPendingHandle('pendingMount:dip-2');
+    expect(a?.name).toBe('one');
+    expect(b?.name).toBe('two');
+  });
+
+  it('overwrites a previously stored handle for the same key', async () => {
+    await storePendingHandle('pendingMount:dip-x', mockHandle('first'));
+    await storePendingHandle('pendingMount:dip-x', mockHandle('second'));
+    const loaded = await loadAndClearPendingHandle('pendingMount:dip-x');
+    expect(loaded?.name).toBe('second');
+  });
+});

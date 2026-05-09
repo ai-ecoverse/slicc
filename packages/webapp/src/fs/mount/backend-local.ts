@@ -96,10 +96,13 @@ export class LocalMountBackend implements MountBackend {
       throw new Error('mount: cannot mount local directories from a scoop (no UI). Ask the cone.');
     }
 
-    if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
-      throw new Error('mount: File System Access API not available in this environment');
-    }
-
+    // The picker itself only ever runs on the panel side. Cone-driven
+    // mounts route through `showToolUI` → dip click → panel's
+    // `handleDipPickerAction` (Phase 2b.6) → IDB. Standalone direct
+    // pickers (no toolContext, no extension) need a real `window`,
+    // which is checked inline at that branch. Worker contexts (kernel
+    // worker) never hit the standalone branch — `toolContext` is
+    // present whenever a cone-driven mount is in flight.
     let dirHandle: FileSystemDirectoryHandle;
 
     if (opts.toolContext) {
@@ -240,7 +243,20 @@ export class LocalMountBackend implements MountBackend {
         throw new Error(`mount: ${err instanceof Error ? err.message : String(err)}`);
       }
     } else {
-      // CLI/standalone: direct picker (TCC dialogs work in regular page context)
+      // CLI/standalone: direct picker (TCC dialogs work in regular page context).
+      // Worker contexts (kernel-worker mode, no `toolContext`) hit this
+      // branch when a panel-terminal user types `mount --source local`
+      // directly. The picker requires `window` + a recent user gesture,
+      // neither of which the worker has — surface a clear error
+      // pointing the user at the agent flow (which routes through
+      // `showToolUI` → panel dip → `handleDipPickerAction`, all of
+      // which DO have `window`).
+      if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
+        throw new Error(
+          'mount: local picker requires a user gesture in the panel ' +
+            '(unavailable in this runtime). Ask the agent to mount it instead.'
+        );
+      }
       try {
         dirHandle = await (
           window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
