@@ -409,7 +409,67 @@ export class RemoteTerminalView {
     if (this.history[this.history.length - 1] !== command) {
       this.history.push(command);
     }
+    // Pre-intercept local mount commands. The worker has no
+    // `window.showDirectoryPicker`; without this hook a user-typed
+    // `mount /mnt/foo` in the panel terminal would error with
+    // "ask the agent to mount it". The Enter keystroke IS a user
+    // activation gesture; we run the picker on the page side
+    // synchronously, stash the granted handle in IDB keyed by
+    // target path, then forward the original command. The
+    // worker's `mountLocal` checks IDB for a handle keyed by the
+    // typed target and uses it directly when present.
+    const mountTarget = parseLocalMountTarget(command);
+    if (mountTarget) {
+      void this.runRemoteWithLocalPicker(command, mountTarget);
+      return;
+    }
     void this.runRemote(command);
+  }
+
+  /**
+   * Pre-pick a local directory before forwarding the `mount` command
+   * to the worker. Runs `showDirectoryPicker` on the keystroke
+   * activation chain. Cancellation surfaces as a brief terminal
+   * line and skips the exec entirely (so the worker doesn't
+   * receive a no-op `mount` call).
+   */
+  private async runRemoteWithLocalPicker(command: string, target: string): Promise<void> {
+    this.isExecuting = true;
+    try {
+      const win = window as Window & {
+        showDirectoryPicker?: (opts?: { mode?: string }) => Promise<FileSystemDirectoryHandle>;
+      };
+      if (typeof win.showDirectoryPicker !== 'function') {
+        this.terminal?.writeln(`mount: File System Access API not available\n`);
+        return;
+      }
+      let handle: FileSystemDirectoryHandle;
+      try {
+        handle = await win.showDirectoryPicker({ mode: 'readwrite' });
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          this.terminal?.writeln(`mount: cancelled`);
+          return;
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        this.terminal?.writeln(`mount: ${msg}`);
+        return;
+      }
+      try {
+        const { storePendingHandle } = await import('../fs/mount-picker-popup.js');
+        await storePendingHandle(localMountIdbKey(target), handle);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.terminal?.writeln(`mount: failed to stash handle: ${msg}`);
+        return;
+      }
+      // Forward the command to the worker. `mountLocal` will pick
+      // up the stashed handle keyed by the typed target.
+      await this.runRemoteImpl(command);
+    } finally {
+      this.isExecuting = false;
+      this.showPrompt();
+    }
   }
 
   /**
@@ -420,15 +480,27 @@ export class RemoteTerminalView {
    */
   private async runRemote(command: string): Promise<TerminalExecResult> {
     this.isExecuting = true;
-    const promise = this.client.exec(command);
-    this.execInFlight = promise;
     try {
-      const result = await promise;
-      return result;
+      return await this.runRemoteImpl(command);
     } finally {
       this.isExecuting = false;
       this.execInFlight = null;
       this.showPrompt();
+    }
+  }
+
+  /**
+   * Bare exec — no isExecuting / showPrompt bookkeeping. Callers
+   * (`runRemote`, `runRemoteWithLocalPicker`) wrap this with their
+   * own lifecycle.
+   */
+  private async runRemoteImpl(command: string): Promise<TerminalExecResult> {
+    const promise = this.client.exec(command);
+    this.execInFlight = promise;
+    try {
+      return await promise;
+    } finally {
+      this.execInFlight = null;
     }
   }
 
@@ -472,4 +544,55 @@ export class RemoteTerminalView {
     }
     event satisfies never;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Mount pre-intercept helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a typed command line and return the local-mount target
+ * path if it looks like `mount /some/path` with no `--source` flag
+ * and no recognized subcommand. Returns `null` for anything else
+ * (`mount list`, `mount unmount`, `mount /x --source s3://…`,
+ * `mount` alone, …).
+ *
+ * The match is intentionally narrow — false positives would fire
+ * a directory picker for commands the user didn't intend, which is
+ * jarring. The user's `mount /mnt/foo` (the canonical local mount
+ * invocation) reliably matches; everything else falls through to
+ * the worker, which produces the right error message itself.
+ */
+function parseLocalMountTarget(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('mount')) return null;
+  const tokens = trimmed.split(/\s+/);
+  if (tokens[0] !== 'mount') return null;
+  if (tokens.includes('--source') || tokens.includes('--help') || tokens.includes('-h')) {
+    return null;
+  }
+  // First non-flag arg.
+  const target = tokens.slice(1).find((t) => !t.startsWith('-'));
+  if (!target) return null;
+  // Skip subcommand-like tokens that don't take a directory picker.
+  if (['list', 'unmount', 'refresh', 'recover'].includes(target)) return null;
+  // Heuristic: only intercept absolute paths (typical mount targets).
+  if (!target.startsWith('/')) return null;
+  return target;
+}
+
+/**
+ * Build the IDB key under which the panel stashes a pre-picked
+ * directory handle for a typed `mount <target>` command. The
+ * worker's `mountLocal` looks up the same key and uses the handle
+ * if present. Different paths get different keys, so multiple
+ * pending mounts don't collide.
+ *
+ * Exported so `fs/mount-commands.ts` (worker side) can use the
+ * exact same key format. The leading `pendingMount:term:` prefix
+ * keeps it disjoint from the cone path's `pendingMount:dip-…`
+ * keys.
+ */
+export function localMountIdbKey(target: string): string {
+  return `pendingMount:term:${target}`;
 }
