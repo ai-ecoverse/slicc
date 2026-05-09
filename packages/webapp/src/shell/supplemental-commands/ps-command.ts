@@ -75,9 +75,18 @@ export function createPsCommand(options: PsCommandOptions = {}): Command {
 
     let columns: Column[] = DEFAULT_COLUMNS;
     let tree = false;
+    // By default `ps` shows only live processes (running / pending).
+    // Phase 4 doesn't reap exited/killed entries — they linger so
+    // post-mortem `ps` after `kill` can still show the exit code —
+    // but listing them by default is noisy. `-a`/`-A`/`-e` includes
+    // them.
+    let showAll = false;
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
-      if (a === '-e') continue; // POSIX-compatible no-op
+      if (a === '-a' || a === '-A' || a === '-e' || a === '--all') {
+        showAll = true;
+        continue;
+      }
       if (a === '-T' || a === '--tree') {
         tree = true;
         continue;
@@ -101,7 +110,10 @@ export function createPsCommand(options: PsCommandOptions = {}): Command {
       return { stdout: '', stderr: `ps: unrecognized argument '${a}'\n`, exitCode: 2 };
     }
 
-    const procs = pm.list().sort((a, b) => a.pid - b.pid);
+    const all = pm.list().sort((a, b) => a.pid - b.pid);
+    const procs = showAll
+      ? all
+      : all.filter((p) => p.status === 'running' || p.status === 'pending');
     const ordered = tree ? orderAsTree(procs) : procs.map((p) => ({ proc: p, depth: 0 }));
     const rows = ordered.map(({ proc, depth }) => renderRow(proc, columns, depth, tree));
     const header = renderHeader(columns);
@@ -251,16 +263,21 @@ function orderAsTree(procs: Process[]): Array<{ proc: Process; depth: number }> 
 
 function psHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
-    stdout: `Usage: ps [-e] [-T] [-o col[,col…]]
+    stdout: `Usage: ps [-a] [-T] [-o col[,col…]]
 
 List processes tracked by the kernel.
 
+By default ps shows only LIVE processes (running / pending).
+Exited and killed entries linger in the table so post-mortem
+\`ps\` after \`kill\` can still show their exit code, but listing
+them every time is noisy — pass \`-a\` to include them.
+
 Flags:
-  -e            show all processes (default)
-  -T, --tree    indent children under parents
-  -o COLS       column selector (comma-separated). Available:
-                pid, ppid, kind, stat, start, scoop, command
-  -h, --help    show this help
+  -a, -A, -e, --all   include exited / killed processes
+  -T, --tree          indent children under parents
+  -o COLS             column selector (comma-separated):
+                        pid, ppid, kind, stat, start, scoop, command
+  -h, --help          show this help
 
 Columns (default: pid,ppid,stat,start,scoop,command):
   PID/PPID      process / parent pid
@@ -271,8 +288,10 @@ Columns (default: pid,ppid,stat,start,scoop,command):
   COMMAND       argv (truncated; tree mode draws connectors)
 
 Examples:
-  ps                  default columns, every process
-  ps -T               tree view
+  ps                  live processes only
+  ps -a               every process, including the dead
+  ps -T               live tree
+  ps -a -T            full tree
   ps -o pid,kind,stat just three columns
 `,
     stderr: '',

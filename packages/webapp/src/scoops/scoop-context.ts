@@ -683,6 +683,18 @@ export class ScoopContext {
       }
     } finally {
       this.isProcessing = false;
+      // Bug fix: every early-return path above (disposed, aborted,
+      // retry-loop bail-outs) skips the `setStatus('ready')` line
+      // at the bottom of the try block, so the panel never gets a
+      // wire-level signal to clear its "processing" spinner. Flip
+      // status here as a backstop — but only if it's still
+      // 'processing'. The non-retryable / retries-exhausted paths
+      // already set 'error' before returning; we don't want to
+      // overwrite that. When the scoop is disposed entirely,
+      // setStatus is a no-op (guarded inside).
+      if (!this.disposed && this.status === 'processing') {
+        this.setStatus('ready');
+      }
       // Only clear the reference if it's still ours — a later prompt() may
       // have already installed a new controller.
       if (this.promptAbortController === abortController) {

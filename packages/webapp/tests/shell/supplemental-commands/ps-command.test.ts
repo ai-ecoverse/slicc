@@ -44,18 +44,38 @@ describe('ps command', () => {
     expect(lines[2]).toMatch(/scoop_abc1/); // truncated jid
   });
 
-  it('shows STAT as Z for exited processes and K for killed', async () => {
+  it('default hides exited / killed processes (Phase 4 follow-up: --all to see them)', async () => {
     const pm = new ProcessManager();
     const a = pm.spawn({ kind: 'shell', argv: ['a'], owner: { kind: 'cone' } });
     const b = pm.spawn({ kind: 'shell', argv: ['b'], owner: { kind: 'cone' } });
+    const c = pm.spawn({ kind: 'shell', argv: ['c'], owner: { kind: 'cone' } });
     pm.exit(a.pid, 0); // exited (clean)
     pm.signal(b.pid, 'SIGINT');
     pm.exit(b.pid, null); // killed
+    // c is still running
     const cmd = createPsCommand({ processManager: pm });
     const result = await cmd.execute([], mockCtx);
     const dataLines = result.stdout.trim().split('\n').slice(1);
-    expect(dataLines[0]).toMatch(/\bZ\b/);
-    expect(dataLines[1]).toMatch(/\bK\b/);
+    expect(dataLines).toHaveLength(1);
+    expect(dataLines[0]).toMatch(/\bR\b/);
+    expect(dataLines[0]).toContain('c');
+  });
+
+  it('-a (or -A / -e / --all) shows STAT Z for exited and K for killed', async () => {
+    const pm = new ProcessManager();
+    const a = pm.spawn({ kind: 'shell', argv: ['a'], owner: { kind: 'cone' } });
+    const b = pm.spawn({ kind: 'shell', argv: ['b'], owner: { kind: 'cone' } });
+    pm.exit(a.pid, 0);
+    pm.signal(b.pid, 'SIGINT');
+    pm.exit(b.pid, null);
+    const cmd = createPsCommand({ processManager: pm });
+    for (const flag of ['-a', '-A', '-e', '--all']) {
+      const result = await cmd.execute([flag], mockCtx);
+      const dataLines = result.stdout.trim().split('\n').slice(1);
+      expect(dataLines).toHaveLength(2);
+      expect(dataLines[0]).toMatch(/\bZ\b/);
+      expect(dataLines[1]).toMatch(/\bK\b/);
+    }
   });
 
   it('-T tree mode indents children under their parents', async () => {
