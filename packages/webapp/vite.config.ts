@@ -229,28 +229,14 @@ export default defineConfig(({ mode }) => ({
           }
         });
 
-        server.middlewares.use('/kernel-worker.js', async (_req, res) => {
-          try {
-            const esbuild = await import('esbuild');
-            const result = await esbuild.build({
-              entryPoints: [kernelWorkerEntry],
-              bundle: true,
-              write: false,
-              format: 'iife',
-              target: 'esnext',
-              define: { __DEV__: 'true', global: 'globalThis' },
-              plugins: [pierreDiffsPlugin()],
-            });
-            res.setHeader('Content-Type', 'application/javascript');
-            res.end(result.outputFiles![0].text);
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            console.error('[kernel-worker] Failed to build:', errMsg);
-            res.statusCode = 500;
-            res.setHeader('Content-Type', 'application/javascript');
-            res.end(`console.error('[kernel-worker] Build failed:', ${JSON.stringify(errMsg)});`);
-          }
-        });
+        // Note: `kernel-worker.ts` is loaded via Vite's native
+        // `new Worker(new URL('./kernel-worker.ts', import.meta.url),
+        // { type: 'module' })` pattern in `kernel/spawn.ts`. Vite handles
+        // dev serving and production bundling through the same Rollup
+        // pipeline that resolves `resolve.alias` and the `stub-pi-node-internals`
+        // resolveId plugin — no dev middleware or closeBundle entry
+        // needed. The `kernelWorkerEntry` constant above is kept as a
+        // navigation aid for grep / IDE go-to-definition.
 
         server.middlewares.use('/lucide-icons.js', async (_req, res) => {
           try {
@@ -362,21 +348,11 @@ export default defineConfig(({ mode }) => ({
           define: { __DEV__: 'false', global: 'globalThis' },
         });
 
-        // NOTE: kernel-worker.ts production bundle is intentionally NOT
-        // emitted here yet. The worker's import graph reaches through
-        // `createKernelHost` → `Orchestrator` → pi-coding-agent into
-        // node:* modules and pi-ai paths that today's Rollup pipeline
-        // resolves via the `resolveId` plugin and `resolve.alias` map
-        // above. esbuild called directly here doesn't see those —
-        // duplicating the full alias surface is non-trivial.
-        //
-        // Phase 2 step 6d (the standalone main.ts wire-through) is the
-        // first consumer of `/kernel-worker.js`. That step will either
-        // (a) replicate the resolution as a shared esbuild plugin and
-        // emit the bundle here, or (b) move the worker entry into the
-        // Rollup graph as a `?worker` import. Until then the dev
-        // middleware (`/kernel-worker.js` above) builds on demand,
-        // which is enough for Phase 2 step 6c's test scaffolding.
+        // Note: `kernel-worker.ts` rides the Rollup pipeline via
+        // Vite's native `new Worker(new URL(...), { type: 'module' })`
+        // detection in `kernel/spawn.ts`. The `resolve.alias` map and
+        // the `stub-pi-node-internals` resolveId plugin above apply to
+        // the worker bundle for free. No standalone esbuild call needed.
         copyFileSync(
           resolve(__dirname, '../assets/logos/favicon.png'),
           resolve(uiOutDir, 'favicon.png')

@@ -46,8 +46,13 @@ export interface WorkerLike {
 }
 
 export interface KernelWorkerSpawnOptions {
-  /** URL of the bundled kernel worker JS (e.g. `/kernel-worker.js`). */
-  workerUrl: string | URL;
+  /**
+   * Optional override for the worker URL. Defaults to
+   * `DEFAULT_KERNEL_WORKER_URL` (the Vite-bundled
+   * `./kernel-worker.ts`). Override only if loading the worker from a
+   * non-default location (e.g. a test harness or a custom asset path).
+   */
+  workerUrl?: string | URL;
   /** Real CDP transport (WebSocket-backed `CDPClient` in standalone). */
   realCdpTransport: CDPTransport;
   /** Panel UI callbacks the `OffscreenClient` dispatches into. */
@@ -161,15 +166,33 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
 // ---------------------------------------------------------------------------
 
 /**
- * Construct a real `Worker` from `/kernel-worker.js` and bootstrap it.
- * Standalone `main.ts` is the production caller (Phase 2 step 6d).
+ * Default worker URL — the Vite-native `new URL('./kernel-worker.ts',
+ * import.meta.url)` pattern. Vite detects this in source, runs the
+ * referenced TS file through its own bundler (with the existing
+ * `resolve.alias` + `resolveId` plugin map applied), and emits the
+ * worker as a separate hashed asset under `dist/ui/assets/`. At
+ * runtime, the URL resolves to the bundled worker file. In dev,
+ * Vite's dev server serves the worker via the same pipeline.
+ *
+ * Module-worker form (`{ type: 'module' }` on `new Worker`) is what
+ * Vite recommends — it preserves ES module semantics and keeps the
+ * import graph intact across the page/worker boundary.
+ *
+ * Lives at module top level so Vite's static-analysis pass sees it
+ * during build. Tree-shaking does NOT remove the worker emission
+ * even if `spawnKernelWorker` ends up unused at runtime — Vite's
+ * worker resolution treats the `new URL` pattern as a side-effect.
+ */
+export const DEFAULT_KERNEL_WORKER_URL: URL = new URL('./kernel-worker.ts', import.meta.url);
+
+/**
+ * Construct a real `Worker` from the bundled kernel-worker entry and
+ * bootstrap it. Standalone `main.ts` is the production caller (Phase 2
+ * step 6d).
  */
 export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKernelHost {
-  // The kernel-worker bundle is an IIFE (classic worker), not a module
-  // worker, so omit `{ type: 'module' }`. See `vite.config.ts` —
-  // bundling as IIFE avoids Rollup's code-splitting which a worker
-  // can't import from.
-  const worker = new Worker(options.workerUrl);
+  const url = options.workerUrl ?? DEFAULT_KERNEL_WORKER_URL;
+  const worker = new Worker(url, { type: 'module' });
   return bootstrapKernelWorker({
     worker,
     realCdpTransport: options.realCdpTransport,
