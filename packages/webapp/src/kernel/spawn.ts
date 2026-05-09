@@ -59,6 +59,15 @@ export interface KernelWorkerSpawnOptions {
   callbacks: OffscreenClientCallbacks;
   /** Boot timeout in ms. Default 30s. */
   readyTimeoutMs?: number;
+  /**
+   * Optional snapshot of `window.localStorage` for the worker's shim.
+   * Phase 2.6d: workers don't have a real `localStorage`; we seed a
+   * read-only shim from the page's snapshot so
+   * `provider-settings.getApiKey()` etc. work in the worker. Phase 2.7
+   * replaces this with a proper page↔worker state-sync channel.
+   * Defaults to all `slicc*`-prefixed keys via `collectLocalStorageSeed()`.
+   */
+  localStorageSeed?: Record<string, string>;
 }
 
 export interface KernelWorkerBootstrapOptions {
@@ -66,6 +75,30 @@ export interface KernelWorkerBootstrapOptions {
   realCdpTransport: CDPTransport;
   callbacks: OffscreenClientCallbacks;
   readyTimeoutMs?: number;
+  localStorageSeed?: Record<string, string>;
+}
+
+/**
+ * Collect every page-side `localStorage` key/value pair for the
+ * worker's shim. Returns an empty object if `localStorage` isn't
+ * available (e.g. test environment).
+ *
+ * No filtering: the worker's import graph reaches into bedrock-camp,
+ * tray-runtime-config, telemetry, primary-rail, etc., each with their
+ * own key namespace. Phase 2.7's bidirectional state sync should
+ * replace this snapshot mechanism.
+ */
+export function collectLocalStorageSeed(): Record<string, string> {
+  const seed: Record<string, string> = {};
+  if (typeof localStorage === 'undefined') return seed;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key === null) continue;
+    const value = localStorage.getItem(key);
+    if (value === null) continue;
+    seed[key] = value;
+  }
+  return seed;
 }
 
 export interface SpawnedKernelHost {
@@ -88,6 +121,7 @@ export interface SpawnedKernelHost {
 export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): SpawnedKernelHost {
   const { worker, realCdpTransport, callbacks } = options;
   const readyTimeoutMs = options.readyTimeoutMs ?? 30_000;
+  const localStorageSeed = options.localStorageSeed ?? {};
 
   const kernelChannel = new MessageChannel();
   const cdpChannel = new MessageChannel();
@@ -133,6 +167,7 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
     type: 'kernel-worker-init',
     kernelPort: kernelChannel.port2,
     cdpPort: cdpChannel.port2,
+    localStorageSeed,
   };
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 
@@ -198,5 +233,6 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     realCdpTransport: options.realCdpTransport,
     callbacks: options.callbacks,
     readyTimeoutMs: options.readyTimeoutMs,
+    localStorageSeed: options.localStorageSeed ?? collectLocalStorageSeed(),
   });
 }

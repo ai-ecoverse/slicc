@@ -58,7 +58,12 @@ declare const self: DedicatedWorkerGlobalScope;
  * The page sends this once at boot. `kernelPort` carries the
  * `ExtensionMessage` envelope stream that `OffscreenBridge` listens on
  * and emits over. `cdpPort` carries the kernel-CDP wire that
- * `WorkerCdpProxy` ⇄ `startPageCdpForwarder` use.
+ * `WorkerCdpProxy` ⇄ `startPageCdpForwarder` use. `localStorageSeed`
+ * is a snapshot of the page's `localStorage` keys/values so the
+ * worker — which doesn't have its own `localStorage` — can serve
+ * `provider-settings.getApiKey()` and friends from a shim. Phase 2.7
+ * will replace this with a proper page↔worker state-sync mechanism;
+ * the seed is a Phase 2.6d minimal fix to unblock the smoke test.
  *
  * Sent via `worker.postMessage(init, [kernelPort, cdpPort])` so the
  * ports are transferred (not copied).
@@ -67,11 +72,59 @@ export interface KernelWorkerInitMsg {
   type: 'kernel-worker-init';
   kernelPort: MessagePort;
   cdpPort: MessagePort;
+  localStorageSeed?: Record<string, string>;
 }
 
 /** Posted back over the kernel port once `createKernelHost` resolves. */
 export interface KernelWorkerReadyMsg {
   type: 'kernel-worker-ready';
+}
+
+// ---------------------------------------------------------------------------
+// localStorage shim (Phase 2.6d)
+// ---------------------------------------------------------------------------
+
+/**
+ * Install a Storage-shaped shim on `globalThis.localStorage`. Web
+ * Workers don't have a real `localStorage`; the page passes a snapshot
+ * of its keys/values via `kernel-worker-init.localStorageSeed`. The
+ * shim is read-only at this Phase — writes from the worker only stay
+ * in the worker's Map and don't propagate back to the page (changes
+ * to model/provider come FROM the page, so the worker just needs to
+ * read).
+ *
+ * Phase 2.7 will replace this with a proper bidirectional state-sync
+ * channel (e.g. a Storage-event mirror over the kernel transport).
+ */
+function installLocalStorageShim(seed: Record<string, string>): void {
+  const store = new Map<string, string>(Object.entries(seed));
+  const shim: Storage = {
+    get length(): number {
+      return store.size;
+    },
+    key(index: number): string | null {
+      return Array.from(store.keys())[index] ?? null;
+    },
+    getItem(key: string): string | null {
+      return store.has(key) ? store.get(key)! : null;
+    },
+    setItem(key: string, value: string): void {
+      store.set(key, value);
+    },
+    removeItem(key: string): void {
+      store.delete(key);
+    },
+    clear(): void {
+      store.clear();
+    },
+  };
+  // Define on globalThis so `localStorage.getItem(...)` and
+  // `window.localStorage` (where guarded) resolve to the shim.
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: shim,
+    configurable: true,
+    writable: true,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +143,16 @@ self.addEventListener('message', (event: MessageEvent) => {
 });
 
 async function boot(init: KernelWorkerInitMsg): Promise<void> {
+  // Phase 2.6d minimal fix: the worker has no `localStorage` (Web
+  // Workers don't get one). `provider-settings.getApiKey()` and
+  // `selected-model` reads on the worker side would otherwise crash
+  // or return empty, which makes `ScoopContext.init` fail with no
+  // provider configured. Seed a Map-backed shim from the page's
+  // `localStorage` snapshot the page passed in `kernel-worker-init`.
+  // Phase 2.7 will replace this with proper page↔worker state sync
+  // (live updates when the user changes settings).
+  installLocalStorageShim(init.localStorageSeed ?? {});
+
   // Register providers first — kernel host construction reads the
   // provider registry (via scoop-context → provider-settings).
   await registerProviders();
