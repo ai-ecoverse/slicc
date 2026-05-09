@@ -204,9 +204,13 @@ export async function runPreemptiveJs(opts: RunPreemptiveOptions): Promise<Preem
     unsubSignal = opts.pm.onSignal((signaled, sig) => {
       if (signaled.pid !== proc.pid) return;
       if (sig !== 'SIGKILL') return;
-      // Pass null so `pm.exit` derives the conventional 137 from
-      // `terminatedBy = 'SIGKILL'`.
-      settle({ stdout: '', stderr: '', exitCode: 137 }, null);
+      // Pass 137 explicitly. The PM contract today (see
+      // `process-manager.ts` `exit(pid, exitCode)`) is that `null`
+      // derives the code from `terminatedBy`, but relying on that
+      // implicit derivation couples this runner to PM internals —
+      // the SIGKILL exit code is a stable POSIX convention, so we
+      // own it here.
+      settle({ stdout: '', stderr: '', exitCode: 137 }, 137);
     });
 
     worker.addEventListener('message', messageHandler);
