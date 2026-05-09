@@ -171,19 +171,23 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
  * step 6d).
  *
  * Worker bundling: the `new Worker(new URL('./kernel-worker.ts',
- * import.meta.url), { type: 'module' })` pattern must be **inline** (not
- * pulled out into a constant) for Vite's static-analysis pass to
- * recognize it during build. With the inline form, Vite runs the
+ * import.meta.url), { type: 'module' })` pattern must be **inline**
+ * (not pulled out into a constant) for Vite's static-analysis pass
+ * to recognize it during build. With the inline form, Vite runs the
  * referenced TS file through its own Rollup pipeline (applying the
- * `resolve.alias` map + `stub-pi-node-internals` resolveId plugin from
- * `vite.config.ts`) and emits a hashed worker bundle under
- * `dist/ui/assets/`. The `URL` resolves to that bundle at runtime.
+ * `resolve.alias` map + `stub-pi-node-internals` resolveId plugin
+ * from `vite.config.ts`) and emits a hashed worker bundle under
+ * `dist/ui/assets/`. The optional `workerUrl` override is a runtime
+ * swap (e.g. for tests with a custom server).
  *
- * The optional `workerUrl` override is a *runtime* swap (e.g. for tests
- * with a custom server); it doesn't influence bundling. When the
- * override is present, `?worker&url` semantics don't apply — the
- * caller is responsible for providing a URL pointing at a working
- * worker bundle.
+ * The kernel worker's static graph used to hit a TDZ on the
+ * `providers/index.ts` ↔ `provider-settings.ts` ↔
+ * `built-in/azure-openai.ts` cycle in dev mode (where Vite serves
+ * modules natively, no Rollup hoisting). The fix lives in
+ * `providers/index.ts`: `import.meta.glob` is now lazy and
+ * registration is explicit via `registerProviders()`. Entry points
+ * (this worker's `boot()`, `main.ts`, `offscreen.ts`) await it during
+ * boot.
  */
 export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKernelHost {
   const worker = options.workerUrl

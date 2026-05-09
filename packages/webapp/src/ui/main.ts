@@ -45,7 +45,7 @@ import { createAttachmentTmpWriter } from './attachment-vfs.js';
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
-import '../providers/index.js';
+import { registerProviders } from '../providers/index.js';
 import { BrowserAPI, NavigationWatcher } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
@@ -1732,6 +1732,13 @@ async function main(): Promise<void> {
       log.error('Preview SW registration failed — preview feature will not work', err);
     }
   }
+
+  // Discover and register all built-in + external providers. Switched
+  // from side-effect `import '../providers/index.js'` to explicit
+  // async registration to break the providers/index ↔ provider-settings
+  // module-cycle that the kernel worker hit in dev mode. See
+  // `providers/index.ts:registerProviders` for context.
+  await registerProviders();
 
   // Apply providers.json defaults before checking for API key
   applyProviderDefaults();

@@ -57,34 +57,64 @@ interface ProviderModule {
 }
 
 // ── Discover built-in extensions (only those needing register()) ─────
+//
+// Lazy glob (no `eager: true`): Vite returns an object of importer
+// functions instead of pre-loading the modules. This breaks the
+// circular import chain (providers/index → built-in/azure-openai →
+// ui/provider-settings → providers/index) that hits TDZ in the
+// kernel worker's native ESM module graph. Registration is now
+// explicit via `registerProviders()`; entry points (`main.ts`,
+// `offscreen.ts`, `kernel-worker.ts`) await it during boot.
 
-const builtInModules = import.meta.glob('./built-in/*.ts', {
-  eager: true,
-}) as Record<string, ProviderModule>;
+const builtInModules = import.meta.glob('./built-in/*.ts') as Record<
+  string,
+  () => Promise<ProviderModule>
+>;
 
 // ── Discover external providers ─────────────────────────────────────
 
-const externalModules = import.meta.glob('/packages/webapp/providers/*.ts', {
-  eager: true,
-}) as Record<string, ProviderModule>;
+const externalModules = import.meta.glob('/packages/webapp/providers/*.ts') as Record<
+  string,
+  () => Promise<ProviderModule>
+>;
 
 // ── Build registry ──────────────────────────────────────────────────
 
 const providerConfigRegistry = new Map<string, ProviderConfig>();
 
-// Process built-in extensions (filtered by build config)
-for (const [_path, mod] of Object.entries(builtInModules)) {
-  if (!mod.config) continue;
-  if (!shouldIncludeProvider(mod.config.id)) continue;
-  providerConfigRegistry.set(mod.config.id, mod.config);
-  mod.register?.();
-}
+let registerPromise: Promise<void> | null = null;
 
-// Process external providers (always included, never filtered)
-for (const [_path, mod] of Object.entries(externalModules)) {
-  if (!mod.config) continue;
-  providerConfigRegistry.set(mod.config.id, mod.config);
-  mod.register?.();
+/**
+ * Discover and register all built-in + external providers. Idempotent
+ * — repeat calls return the same promise. Entry points await this
+ * during boot before constructing anything that reads from the
+ * registry.
+ *
+ * Phase 2 step 6d note: the kernel worker calls this from
+ * `kernel-worker.ts`'s `boot()`. The page calls it from `main()` /
+ * `mainExtension()` / `mainStandaloneWorker()`. Multiple awaiters all
+ * resolve once the first call completes.
+ */
+export function registerProviders(): Promise<void> {
+  if (registerPromise) return registerPromise;
+  registerPromise = (async () => {
+    // Built-in extensions (filtered by build config)
+    for (const [_path, importer] of Object.entries(builtInModules)) {
+      const mod = await importer();
+      if (!mod.config) continue;
+      if (!shouldIncludeProvider(mod.config.id)) continue;
+      providerConfigRegistry.set(mod.config.id, mod.config);
+      mod.register?.();
+    }
+    // External providers (always included, never filtered)
+    for (const [_path, importer] of Object.entries(externalModules)) {
+      const mod = await importer();
+      if (!mod.config) continue;
+      providerConfigRegistry.set(mod.config.id, mod.config);
+      mod.register?.();
+    }
+  })();
+  return registerPromise;
 }
 
 // ── Public API ──────────────────────────────────────────────────────

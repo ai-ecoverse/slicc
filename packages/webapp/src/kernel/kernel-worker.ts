@@ -39,10 +39,14 @@ import { createKernelHost, type KernelHost } from './host.js';
 import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
 import { WorkerCdpProxy } from './cdp-worker-proxy.js';
 
-// Provider registration runs as a side-effect import. Both standalone
-// `main.ts` and the extension `offscreen.ts` already import this; the
-// worker needs the same registrations because the kernel runs here.
-import '../providers/index.js';
+// Provider registration is async-explicit (not side-effect import).
+// `providers/index.ts` switched to lazy `import.meta.glob` to break a
+// circular import chain (providers/index → built-in/azure-openai →
+// ui/provider-settings → providers/index) that hit TDZ in the worker's
+// native ESM module graph in dev mode. Entry points await
+// `registerProviders()` during boot before any code that reads from
+// the registry runs.
+import { registerProviders } from '../providers/index.js';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -86,6 +90,10 @@ self.addEventListener('message', (event: MessageEvent) => {
 });
 
 async function boot(init: KernelWorkerInitMsg): Promise<void> {
+  // Register providers first — kernel host construction reads the
+  // provider registry (via scoop-context → provider-settings).
+  await registerProviders();
+
   const bridgeTransport = createBridgeMessageChannelTransport(init.kernelPort);
   const bridge = new OffscreenBridge(bridgeTransport);
   const callbacks = OffscreenBridge.createCallbacks(bridge);

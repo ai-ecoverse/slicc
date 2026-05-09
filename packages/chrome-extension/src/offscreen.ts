@@ -52,8 +52,12 @@ import type { ExtensionMessage } from './messages.js';
 import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
 
 // Auto-discover and register all providers (built-in + external).
-// IMPORTANT: Keep in sync with packages/webapp/src/ui/main.ts — both entry points need all providers.
-import '../../../packages/webapp/src/providers/index.js';
+// IMPORTANT: Keep in sync with packages/webapp/src/ui/main.ts — both
+// entry points need all providers. Registration is explicit (not
+// side-effect import) to break a module-cycle that hit TDZ in the
+// kernel worker; the offscreen entry awaits `registerProviders()` in
+// `init()`.
+import { registerProviders } from '../../../packages/webapp/src/providers/index.js';
 
 const log = createLogger('offscreen');
 
@@ -68,6 +72,11 @@ console.log('[slicc-offscreen] Script loaded');
 
 async function init(): Promise<void> {
   console.log('[slicc-offscreen] init() starting...');
+
+  // Register providers BEFORE the kernel host — the host's
+  // construction reaches into the provider registry via
+  // scoop-context → provider-settings.
+  await registerProviders();
 
   // Create CDP transport that proxies through the service worker
   const cdpProxy = new OffscreenCdpProxy();
