@@ -110,9 +110,12 @@ createKernelHost
   ├── Orchestrator.setProcessManager(pm)
   │     └── ScoopContext (constructor 7th arg)
   │           └── adaptTools({ processManager, owner, getParentPid })
-  └── TerminalSessionHost({ processManager, defaultOwner, … })
-        └── WasmShellHeadless({ processManager, processOwner, getCurrentShellPid? })
-              └── jsh-executor (executeJshFile / executeJsCode)
+  └── createPanelTerminalHost({ processManager, fs, browser, transport })
+        └── TerminalSessionHost({ processManager, … })
+              └── WasmShellHeadless({ processManager, processOwner, getCurrentShellPid? })
+                    └── jsh-executor (executeJshFile / executeJsCode)
 ```
 
 The `globalThis.__slicc_pm` fallback exists for `.jsh` scripts and any code path that can't accept constructor injection. Phase 4's `ps` and `kill` prefer the DI path through `createSupplementalCommands` but fall through to the global as a backup.
+
+`createPanelTerminalHost` is the single source of truth for the panel-terminal wiring: both the standalone DedicatedWorker (`kernel-worker.ts`) and the extension offscreen document (`packages/chrome-extension/src/offscreen.ts`) call it, so panel-typed `ps` / `kill` / `cat /proc/<pid>/...` work uniformly across floats. Tests live at `tests/kernel/panel-terminal-host.test.ts`.

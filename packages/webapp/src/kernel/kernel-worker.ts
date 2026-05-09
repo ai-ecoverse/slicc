@@ -38,8 +38,7 @@ import { OffscreenBridge } from '../../../chrome-extension/src/offscreen-bridge.
 import { createKernelHost, type KernelHost } from './host.js';
 import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
 import { WorkerCdpProxy } from './cdp-worker-proxy.js';
-import { TerminalSessionHost } from './terminal-session-host.js';
-import { WasmShellHeadless } from '../shell/wasm-shell-headless.js';
+import { createPanelTerminalHost } from './panel-terminal-host.js';
 import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
 
 // Provider registration is async-explicit (not side-effect import).
@@ -242,39 +241,24 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   const pm = host.processManager;
 
   // Phase 2b step 5a: stand up the terminal-RPC host on the same kernel
-  // transport. The factory builds a fresh `WasmShellHeadless` per
-  // session over the orchestrator's shared FS so terminal `cd` state
-  // and `mount`/`git` commands hit the same backing store the agent
-  // sees. Sessions are terminal-scoped — each panel terminal-view
-  // opens its own session, and `terminal-close` disposes the shell.
+  // transport. Shared `createPanelTerminalHost` factory pins parity
+  // with the extension offscreen path — both pass `processManager`
+  // into `TerminalSessionHost` AND the per-session `WasmShellHeadless`
+  // so `ps` / `kill` / `/proc` see the same table.
   //
   // Falls back to a no-op if the orchestrator failed to publish a
   // shared FS (logged at host construction); the panel terminal-view
   // surfaces this as a `terminal-status: error` to its open promise.
   const sharedFs = host.sharedFs;
   if (sharedFs) {
-    const terminalHost = new TerminalSessionHost({
+    const handle = createPanelTerminalHost({
       transport: bridgeTransport,
-      createShell: (_sid, opts) =>
-        new WasmShellHeadless({
-          fs: sharedFs,
-          cwd: opts.cwd,
-          env: opts.env,
-          browserAPI: browser,
-          // Phase 3.5: every `.jsh` script the user runs in this
-          // session shows up in `ps` as `kind:'jsh'`. The
-          // `getCurrentShellPid` closure is left undefined for now
-          // (the host's per-session `currentProcess` isn't reachable
-          // from here without a back-reference); jsh procs become
-          // orphans of the kernel-host (ppid 1). Phase 4's `ps -T`
-          // will show them; the tree edge is a future refinement.
-          processManager: pm,
-          processOwner: { kind: 'system' },
-        }),
+      fs: sharedFs,
+      browser,
       processManager: pm,
       logger: console,
     });
-    stopTerminalHost = terminalHost.start();
+    stopTerminalHost = handle.stop;
   } else {
     console.warn('[kernel-worker] shared FS unavailable; terminal sessions will fail to open');
   }

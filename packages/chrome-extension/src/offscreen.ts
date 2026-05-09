@@ -25,9 +25,8 @@
 
 import { BrowserAPI, OffscreenCdpProxy } from '../../../packages/webapp/src/cdp/index.js';
 import { createKernelHost } from '../../../packages/webapp/src/kernel/host.js';
-import { TerminalSessionHost } from '../../../packages/webapp/src/kernel/terminal-session-host.js';
+import { createPanelTerminalHost } from '../../../packages/webapp/src/kernel/panel-terminal-host.js';
 import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
-import { WasmShellHeadless } from '../../../packages/webapp/src/shell/wasm-shell-headless.js';
 import {
   AGENT_SPAWN_REQUEST_TYPE,
   type AgentSpawnOptions,
@@ -123,28 +122,39 @@ async function init(): Promise<void> {
   // Stand up the terminal-RPC host on the same kernel transport — the
   // panel's `RemoteTerminalView` opens sessions here so panel-typed
   // commands hit the same `ProcessManager` and `/proc` view as the
-  // agent's bash tool. Without this, the panel terminal had its own
-  // PM-less WasmShell and `ps`/`/proc`/`kill` were unavailable.
+  // agent's bash tool. Shared `createPanelTerminalHost` factory pins
+  // parity with the standalone DedicatedWorker path (`kernel-worker.ts`):
+  // both pass `processManager: host.processManager` into
+  // `TerminalSessionHost` AND the per-session `WasmShellHeadless`, so
+  // `ps` / `kill` / `cat /proc/<pid>/...` work uniformly.
+  let stopTerminalHost: (() => void) | null = null;
   const sharedFs = host.sharedFs;
   if (sharedFs) {
-    const terminalHost = new TerminalSessionHost({
+    const handle = createPanelTerminalHost({
       transport: bridgeTransport,
+      fs: sharedFs,
+      browser,
       processManager: host.processManager,
-      createShell: (_sid, opts) =>
-        new WasmShellHeadless({
-          fs: sharedFs,
-          cwd: opts.cwd,
-          env: opts.env,
-          browserAPI: browser,
-          processManager: host.processManager,
-          processOwner: { kind: 'system' },
-        }),
       logger: log,
     });
-    terminalHost.start();
+    stopTerminalHost = handle.stop;
   } else {
     log.warn('shared FS unavailable; panel terminal sessions will fail to open');
   }
+
+  // Tear down the terminal host when the offscreen document unloads.
+  // MV3 normally kills the offscreen page abruptly, but graceful
+  // teardown lets the close-on-reload path drop chrome.runtime
+  // listeners cleanly during dev reloads.
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      stopTerminalHost?.();
+      stopTerminalHost = null;
+      void host.dispose();
+    },
+    { once: true }
+  );
 
   // ── Extension-only: chrome.runtime listeners ───────────────────────
 
