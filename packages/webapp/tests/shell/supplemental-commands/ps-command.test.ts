@@ -168,4 +168,46 @@ describe('ps command', () => {
     expect(result.stdout).toContain('…');
     expect(result.stdout).not.toContain(long);
   });
+
+  it('shell-quotes argv elements containing whitespace or shell metacharacters', async () => {
+    const pm = new ProcessManager();
+    pm.spawn({
+      kind: 'tool',
+      argv: ['bash', 'date && sleep 90 && date'],
+      owner: { kind: 'cone' },
+    });
+    const cmd = createPsCommand({ processManager: pm });
+    const result = await cmd.execute([], mockCtx);
+    // Expect: bash "date && sleep 90 && date"
+    expect(result.stdout).toContain('bash "date && sleep 90 && date"');
+  });
+
+  it('leaves bare-acceptable tokens unquoted (paths, names with @ + - etc.)', async () => {
+    const pm = new ProcessManager();
+    pm.spawn({
+      kind: 'tool',
+      argv: ['read_file', '/workspace/foo.ts'],
+      owner: { kind: 'cone' },
+    });
+    pm.spawn({ kind: 'tool', argv: ['fetch', 'https://example.com/api'], owner: { kind: 'cone' } });
+    const cmd = createPsCommand({ processManager: pm });
+    const result = await cmd.execute([], mockCtx);
+    expect(result.stdout).toContain('read_file /workspace/foo.ts');
+    expect(result.stdout).toContain('fetch https://example.com/api');
+    // No spurious quoting around either path.
+    expect(result.stdout).not.toContain('"/workspace/foo.ts"');
+    expect(result.stdout).not.toContain('"https://example.com/api"');
+  });
+
+  it('escapes embedded quotes and backslashes in display-quoted args', async () => {
+    const pm = new ProcessManager();
+    pm.spawn({
+      kind: 'tool',
+      argv: ['bash', 'echo "hi" \\ done'],
+      owner: { kind: 'cone' },
+    });
+    const cmd = createPsCommand({ processManager: pm });
+    const result = await cmd.execute([], mockCtx);
+    expect(result.stdout).toContain('bash "echo \\"hi\\" \\\\ done"');
+  });
 });

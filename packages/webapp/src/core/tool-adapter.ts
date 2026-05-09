@@ -127,10 +127,16 @@ export function adaptTool(
       // it onto the process via `pm.signal(pid, 'SIGINT')` so the
       // recorded `terminatedBy` and the conventional 130 exit code
       // flow back into the table when the tool throws.
+      //
+      // The tool's principal string param (the bash command, the
+      // file path, …) is appended to argv so `ps` surfaces a
+      // meaningful command line: `bash "date && sleep 90 && date"`
+      // instead of just `bash`. See `extractToolArg` for the
+      // ordered candidate list.
       const proc = pmConfig
         ? pmConfig.processManager.spawn({
             kind: 'tool',
-            argv: [tool.name],
+            argv: [tool.name, ...extractToolArg(params)],
             owner: pmConfig.owner,
             ppid: pmConfig.getParentPid?.(),
           })
@@ -201,4 +207,47 @@ export function adaptTools(
   pmConfig?: ToolAdapterProcessConfig
 ): AgentTool<any>[] {
   return tools.map((t) => adaptTool(t, pmConfig));
+}
+
+/**
+ * Extract the principal string argument from a tool's params for
+ * display in `argv`. Tries a small ordered list of well-known
+ * field names common to the agent's tool surface, then falls back
+ * to the first non-empty string value. Returns `[]` if nothing
+ * suitable is found (the tool name alone is enough for `ps`).
+ *
+ * The returned array is appended to argv after the tool name —
+ * the `ps` formatter shell-quotes any element containing
+ * whitespace, so `bash "date && sleep 90 && date"` renders
+ * correctly without us needing to embed quotes here.
+ */
+function extractToolArg(params: unknown): string[] {
+  if (typeof params !== 'object' || params === null) return [];
+  const obj = params as Record<string, unknown>;
+  // Ordered by specificity — we prefer the field most uniquely
+  // identifying the tool's invocation. `command` (bash),
+  // `file_path` / `path` (file ops), `pattern` (search), `url`
+  // (fetch), `key` (memory), …
+  const preferred = [
+    'command',
+    'file_path',
+    'path',
+    'pattern',
+    'url',
+    'key',
+    'name',
+    'query',
+    'message',
+  ];
+  for (const key of preferred) {
+    const v = obj[key];
+    if (typeof v === 'string' && v.length > 0) {
+      return [v];
+    }
+  }
+  // Generic fallback — first non-empty string value.
+  for (const v of Object.values(obj)) {
+    if (typeof v === 'string' && v.length > 0) return [v];
+  }
+  return [];
 }

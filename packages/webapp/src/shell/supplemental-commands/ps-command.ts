@@ -218,9 +218,25 @@ function formatScoop(proc: Process): string {
 
 function formatCommand(proc: Process, depth: number, tree: boolean): string {
   const prefix = tree && depth > 0 ? '  '.repeat(depth - 1) + '└─ ' : '';
-  const text = proc.argv.join(' ') || `[${proc.kind}]`;
+  const text = proc.argv.length === 0 ? `[${proc.kind}]` : proc.argv.map(shellQuote).join(' ');
   const truncated = text.length > COMMAND_MAX ? text.slice(0, COMMAND_MAX - 1) + '…' : text;
   return prefix + truncated;
+}
+
+/**
+ * Shell-style quote an argv element for human display in the
+ * COMMAND column. A bare token stays bare; anything with
+ * whitespace, shell metacharacters, or quotes gets wrapped in
+ * double quotes with internal `"` and `\` escaped. This is for
+ * display only — `cmdline` files in /proc keep the raw NUL-
+ * separated form (procfs convention).
+ */
+function shellQuote(arg: string): string {
+  if (arg === '') return '""';
+  // Bare-acceptable charset: alnum + a few common path / shell
+  // primitives that are unambiguous unquoted.
+  if (/^[A-Za-z0-9_./:=@%+-]+$/.test(arg)) return arg;
+  return `"${arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 /**

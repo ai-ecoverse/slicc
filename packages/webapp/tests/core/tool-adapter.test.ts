@@ -319,4 +319,76 @@ describe('adaptTool — process manager wiring (Phase 3.4)', () => {
     const result = await adapted.execute('call-1', {});
     expect(result.details?.isError).toBe(false);
   });
+
+  describe('argv surfaces the tool argument', () => {
+    async function runWithParams(
+      toolName: string,
+      params: Record<string, unknown>
+    ): Promise<readonly string[]> {
+      const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+      const pm = new ProcessManager();
+      const tool: ToolDefinition = {
+        name: toolName,
+        description: '',
+        inputSchema: { type: 'object' },
+        async execute() {
+          return { content: '', isError: false };
+        },
+      };
+      const adapted = adaptTool(tool, {
+        processManager: pm,
+        owner: { kind: 'cone' },
+      });
+      await adapted.execute('id', params);
+      return pm.list()[0].argv;
+    }
+
+    it('appends `command` for the bash tool', async () => {
+      const argv = await runWithParams('bash', { command: 'date && sleep 90 && date' });
+      expect(argv).toEqual(['bash', 'date && sleep 90 && date']);
+    });
+
+    it('appends `path` for read_file', async () => {
+      const argv = await runWithParams('read_file', { path: '/workspace/foo.ts' });
+      expect(argv).toEqual(['read_file', '/workspace/foo.ts']);
+    });
+
+    it('prefers `file_path` over `path` when both exist', async () => {
+      const argv = await runWithParams('edit_file', {
+        file_path: '/a',
+        path: '/b',
+      });
+      expect(argv).toEqual(['edit_file', '/a']);
+    });
+
+    it('falls back to the first non-empty string param when no preferred field matches', async () => {
+      const argv = await runWithParams('exotic', {
+        flag: true,
+        count: 7,
+        whatever: 'pick-me',
+      });
+      expect(argv).toEqual(['exotic', 'pick-me']);
+    });
+
+    it('returns just the tool name when no string params are present', async () => {
+      const argv = await runWithParams('zero', { count: 7 });
+      expect(argv).toEqual(['zero']);
+    });
+
+    it('returns just the tool name when params is null / undefined', async () => {
+      const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+      const pm = new ProcessManager();
+      const tool: ToolDefinition = {
+        name: 'noargs',
+        description: '',
+        inputSchema: { type: 'object' },
+        async execute() {
+          return { content: '', isError: false };
+        },
+      };
+      const adapted = adaptTool(tool, { processManager: pm, owner: { kind: 'cone' } });
+      await adapted.execute('id', null);
+      expect(pm.list()[0].argv).toEqual(['noargs']);
+    });
+  });
 });
