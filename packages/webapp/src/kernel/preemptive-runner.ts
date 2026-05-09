@@ -152,13 +152,17 @@ export async function runPreemptiveJs(opts: RunPreemptiveOptions): Promise<Preem
     const settle = (result: PreemptiveResult, exitForPm: number | null): void => {
       if (settled) return;
       settled = true;
+      // Order: drop our message/error/signal handlers BEFORE telling
+      // the worker to die so a late event arriving during termination
+      // doesn't re-enter us. `cleanup()` is idempotent.
       cleanup();
-      // Best-effort terminate so the worker doesn't linger past
-      // its done-message. terminate() is idempotent in browsers.
+      // terminate() is idempotent on real Workers; the try/catch is
+      // pure paranoia for an exotic environment that doesn't
+      // implement it (none today).
       try {
         worker.terminate();
       } catch {
-        /* mock workers may not have a real terminate */
+        /* unreachable on real Worker */
       }
       opts.pm.exit(proc.pid, exitForPm);
       resolve(result);

@@ -19,6 +19,8 @@ interface MockWorker extends PreemptiveWorkerLike {
   fireMessage(data: unknown): void;
   /** Test helper: deliver an `error` to all subscribed handlers. */
   fireError(message: string): void;
+  /** Test introspection: how many handlers are currently subscribed. */
+  handlerCount(): { message: number; error: number };
 }
 
 function makeMockWorker(): MockWorker {
@@ -44,6 +46,9 @@ function makeMockWorker(): MockWorker {
       for (const h of [...errorHandlers]) {
         h({ message } as ErrorEvent);
       }
+    },
+    handlerCount() {
+      return { message: messageHandlers.size, error: errorHandlers.size };
     },
   };
 }
@@ -248,7 +253,7 @@ describe('runPreemptiveJs', () => {
     expect(proc.status).toBe('running');
   });
 
-  it('cleans up listeners after settle (no leaks)', async () => {
+  it('cleans up listeners on normal completion (no leaks)', async () => {
     const pm = new ProcessManager();
     const worker = makeMockWorker();
     const promise = runPreemptiveJs({
@@ -257,6 +262,7 @@ describe('runPreemptiveJs', () => {
       owner: { kind: 'cone' },
       code: '',
     });
+    expect(worker.handlerCount()).toEqual({ message: 1, error: 1 });
     const done: PreemptiveDoneMsg = {
       type: 'preemptive-done',
       stdout: '',
@@ -265,8 +271,53 @@ describe('runPreemptiveJs', () => {
     };
     worker.fireMessage(done);
     await promise;
+    expect(worker.handlerCount()).toEqual({ message: 0, error: 0 });
     // Subsequent fires don't double-resolve / throw.
     worker.fireMessage(done);
     worker.fireError('phantom');
+  });
+
+  it('cleans up listeners on preemptive-error (no leaks)', async () => {
+    const pm = new ProcessManager();
+    const worker = makeMockWorker();
+    const promise = runPreemptiveJs({
+      pm,
+      workerFactory: () => worker,
+      owner: { kind: 'cone' },
+      code: '',
+    });
+    expect(worker.handlerCount()).toEqual({ message: 1, error: 1 });
+    worker.fireMessage({ type: 'preemptive-error', message: 'boom' } as PreemptiveErrorMsg);
+    await promise;
+    expect(worker.handlerCount()).toEqual({ message: 0, error: 0 });
+  });
+
+  it('cleans up listeners on SIGKILL (no leaks)', async () => {
+    const pm = new ProcessManager();
+    const worker = makeMockWorker();
+    const promise = runPreemptiveJs({
+      pm,
+      workerFactory: () => worker,
+      owner: { kind: 'cone' },
+      code: 'while(true) {}',
+    });
+    expect(worker.handlerCount()).toEqual({ message: 1, error: 1 });
+    pm.signal(pm.list()[0].pid, 'SIGKILL');
+    await promise;
+    expect(worker.handlerCount()).toEqual({ message: 0, error: 0 });
+  });
+
+  it('cleans up listeners on worker error event (no leaks)', async () => {
+    const pm = new ProcessManager();
+    const worker = makeMockWorker();
+    const promise = runPreemptiveJs({
+      pm,
+      workerFactory: () => worker,
+      owner: { kind: 'cone' },
+      code: '',
+    });
+    worker.fireError('uncaught');
+    await promise;
+    expect(worker.handlerCount()).toEqual({ message: 0, error: 0 });
   });
 });
