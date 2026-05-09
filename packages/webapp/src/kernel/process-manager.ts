@@ -423,21 +423,33 @@ export class ProcessManager {
   // -------------------------------------------------------------------------
 
   private allocatePid(): number {
-    // Linear probe for a free pid. In a 1k-process session this
-    // probes at most a handful of slots; with reaping (Phase 4) the
-    // table stays small.
+    // Linear probe for a free pid. The table size IS the live-process
+    // count (no reaping yet — Phase 4 follow-up), so the probe is
+    // bounded by `processes.size`: starting from `nextPid`, we can hit
+    // at most `size` collisions before finding a hole. Anything beyond
+    // that means our bookkeeping is corrupt; fail loudly. Without
+    // this bound, a corrupt table could spin a multi-billion-step
+    // linear probe across the uint32 space and freeze the kernel
+    // worker — far worse than a thrown error.
     const start = this.nextPid;
+    const ceiling = this.processes.size + 1; // +1 to allow one full hop after the table is empty
     let pid = start;
-    do {
+    let probes = 0;
+    while (probes <= ceiling) {
       if (!this.processes.has(pid)) {
         this.nextPid = pid + 1 > PID_CEIL ? PID_FLOOR : pid + 1;
         return pid;
       }
       pid = pid + 1 > PID_CEIL ? PID_FLOOR : pid + 1;
+      probes++;
       if (pid === start) {
         throw new Error('pm: pid space exhausted');
       }
-    } while (true);
+    }
+    throw new Error(
+      `pm: pid allocation gave up after ${probes} probes (table size=${this.processes.size}); ` +
+        'the process table is likely corrupt'
+    );
   }
 
   private fire(event: ProcessEvent, proc: Process): void {

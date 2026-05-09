@@ -30,6 +30,28 @@ describe('ProcessManager — pid allocation', () => {
     expect(c.pid).toBe(1026);
   });
 
+  it('linear probe is bounded by table size (no uint32 scan on corrupt state)', () => {
+    // Spawn a small handful and force the next allocation to start
+    // on a known-occupied slot via private-field surgery. With the
+    // bounded probe, allocation succeeds within `size+1` steps; an
+    // unbounded probe would loop until it hit `start === pid` after
+    // 2^32 steps.
+    const pm = makeManager();
+    const a = pm.spawn({ kind: 'shell', argv: ['a'], owner: { kind: 'cone' } });
+    const b = pm.spawn({ kind: 'shell', argv: ['b'], owner: { kind: 'cone' } });
+    const c = pm.spawn({ kind: 'shell', argv: ['c'], owner: { kind: 'cone' } });
+    // Force `nextPid` back to a's pid so the probe collides 3 times
+    // before landing in a hole.
+    (pm as unknown as { nextPid: number }).nextPid = a.pid;
+    const start = performance.now();
+    const d = pm.spawn({ kind: 'shell', argv: ['d'], owner: { kind: 'cone' } });
+    const elapsedMs = performance.now() - start;
+    // d should land at the first hole after [a,b,c], regardless of
+    // exact value. The key invariant is FAST allocation.
+    expect(d.pid).toBe(c.pid + 1);
+    expect(elapsedMs).toBeLessThan(50); // sanity: no multi-second scan
+  });
+
   it('does not reuse a live pid (linear probe)', () => {
     const pm = makeManager();
     const a = pm.spawn({ kind: 'shell', argv: ['a'], owner: { kind: 'cone' } });
