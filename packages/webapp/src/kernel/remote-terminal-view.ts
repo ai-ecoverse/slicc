@@ -174,7 +174,7 @@ export class RemoteTerminalView {
     this.resizeObserver = new ResizeObserver(() => this.refit());
     this.resizeObserver.observe(this.terminalHost);
 
-    this.terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel-worker)\x1b[0m');
+    this.terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (kernel)\x1b[0m');
     this.terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m\n');
 
     await this.client.open({ cwd: this.options.cwd, env: this.options.env });

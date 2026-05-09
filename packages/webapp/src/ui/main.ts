@@ -599,25 +599,11 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     (files) => layout.panels.chat.addAttachmentsFromFiles(files)
   );
 
-  // Mount a terminal shell on the local VFS with BrowserAPI via CDP proxy
-  try {
-    const { WasmShell } = await import('../shell/index.js');
-    const { PanelCdpProxy, BrowserAPI: BrowserAPIClass } = await import('../cdp/index.js');
-    const { fetchSecretEnvVars } = await import('../core/secret-env.js');
-    const panelCdp = new PanelCdpProxy();
-    await panelCdp.connect();
-    const panelBrowser = new BrowserAPIClass(panelCdp);
-    const secretEnv = await fetchSecretEnvVars();
-    const shell = new WasmShell({
-      fs: localFs,
-      browserAPI: panelBrowser,
-      env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
-    });
-    await layout.panels.terminal.mountShell(shell);
-    log.info('Terminal mounted with shared VFS and BrowserAPI (CDP proxy)');
-  } catch (e) {
-    log.warn('Failed to mount shell to terminal', e);
-  }
+  // Panel terminal is a `RemoteTerminalView` over the offscreen
+  // `TerminalSessionHost` (mirrors the standalone-worker wiring). This
+  // unifies the panel terminal with the offscreen kernel host so
+  // `ps` / `kill` / `/proc` / mounts all see the same table the agent
+  // sees. Mounted lazily AFTER `client` is constructed below.
 
   // Register session costs provider for the panel's terminal shell.
   // The offscreen document owns the orchestrator, so we request cost data via chrome.runtime.
@@ -793,6 +779,23 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   // Wire local VFS to client so memory panel can read CLAUDE.md files
   client.setLocalFS(localFs);
+
+  // Mount the panel terminal as a `RemoteTerminalView` backed by the
+  // offscreen `TerminalSessionHost`. Keystrokes assemble locally; each
+  // committed line dispatches a `terminal-exec` to the offscreen so
+  // panel-typed commands share the same `ProcessManager` and `/proc`
+  // view as the agent's bash tool.
+  void (async () => {
+    try {
+      const { RemoteTerminalView } = await import('../kernel/remote-terminal-view.js');
+      const remoteTerminal = new RemoteTerminalView({ client, cwd: '/' });
+      await layout.panels.terminal.mountRemoteShell(remoteTerminal);
+      window.addEventListener('beforeunload', () => remoteTerminal.dispose(), { once: true });
+      log.info('Panel terminal mounted as RemoteTerminalView (offscreen TerminalSessionHost)');
+    } catch (err) {
+      log.warn('Failed to mount remote terminal view', err);
+    }
+  })();
 
   // Off-load oversized attachments to /tmp on the local VFS so the
   // offscreen agent can read them via the shared IndexedDB.

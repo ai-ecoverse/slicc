@@ -25,6 +25,9 @@
 
 import { BrowserAPI, OffscreenCdpProxy } from '../../../packages/webapp/src/cdp/index.js';
 import { createKernelHost } from '../../../packages/webapp/src/kernel/host.js';
+import { TerminalSessionHost } from '../../../packages/webapp/src/kernel/terminal-session-host.js';
+import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
+import { WasmShellHeadless } from '../../../packages/webapp/src/shell/wasm-shell-headless.js';
 import {
   AGENT_SPAWN_REQUEST_TYPE,
   type AgentSpawnOptions,
@@ -85,7 +88,15 @@ async function init(): Promise<void> {
 
   const browser = new BrowserAPI(cdpProxy);
 
-  const bridge = new OffscreenBridge();
+  // Construct the chrome.runtime transport up front so the bridge AND
+  // the terminal-session host share the same wire. The transport's
+  // `onMessage` adapter installs a fresh chrome.runtime listener per
+  // call; chrome.runtime supports multiple listeners, so each consumer
+  // (bridge, terminal host) gets every envelope and filters
+  // independently.
+  const bridgeTransport =
+    createOffscreenChromeRuntimeTransport<import('./messages.js').OffscreenToPanelMessage>();
+  const bridge = new OffscreenBridge(bridgeTransport);
   const callbacks = OffscreenBridge.createCallbacks(bridge);
 
   // Skip cone auto-create when joining a tray without a configured
@@ -108,6 +119,32 @@ async function init(): Promise<void> {
   });
   const { orchestrator, lickManager } = host;
   console.log('[slicc-offscreen] Kernel host ready, scoops:', orchestrator.getScoops().length);
+
+  // Stand up the terminal-RPC host on the same kernel transport — the
+  // panel's `RemoteTerminalView` opens sessions here so panel-typed
+  // commands hit the same `ProcessManager` and `/proc` view as the
+  // agent's bash tool. Without this, the panel terminal had its own
+  // PM-less WasmShell and `ps`/`/proc`/`kill` were unavailable.
+  const sharedFs = host.sharedFs;
+  if (sharedFs) {
+    const terminalHost = new TerminalSessionHost({
+      transport: bridgeTransport,
+      processManager: host.processManager,
+      createShell: (_sid, opts) =>
+        new WasmShellHeadless({
+          fs: sharedFs,
+          cwd: opts.cwd,
+          env: opts.env,
+          browserAPI: browser,
+          processManager: host.processManager,
+          processOwner: { kind: 'system' },
+        }),
+      logger: log,
+    });
+    terminalHost.start();
+  } else {
+    log.warn('shared FS unavailable; panel terminal sessions will fail to open');
+  }
 
   // ── Extension-only: chrome.runtime listeners ───────────────────────
 
