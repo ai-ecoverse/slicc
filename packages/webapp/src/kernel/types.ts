@@ -56,28 +56,27 @@ import type { VirtualFS } from '../fs/index.js';
 
 // ---------------------------------------------------------------------------
 // 1. Wire — generic over today's panel/host message shapes.
+//
+// `KernelTransport` lives in `./transport.ts` so it can be imported by
+// worker-side code without dragging in the webapp-orchestrator graph.
+// We re-export it here, defaulted to today's `ExtensionMessage` shapes,
+// so existing imports keep working. Phase 2 introduces a
+// `transport-message-channel.ts` that imports the leaf module directly.
 // ---------------------------------------------------------------------------
 
-/**
- * The wire under the kernel facade. Phase 1 keeps today's chrome.runtime
- * envelope; Phase 2 adds a `MessageChannel` adapter. Both implementations
- * fulfil this interface.
- *
- * `In` / `Out` are the existing message types; they are NOT renamed yet.
- * That intentionally keeps Phase 1 a pure refactor — the bytes on the wire
- * don't change, only the call paths around them.
- *
- * Phase 1 instantiates `In` as the raw `ExtensionMessage` envelope on both
- * sides so the bridge can keep its existing source-filter and
- * sprinkle-op-response peek logic without behavior change.
- */
-export interface KernelTransport<In = PanelToOffscreenMessage, Out = OffscreenToPanelMessage> {
-  /** Subscribe to inbound messages. Returns an unsubscribe function. */
-  onMessage(handler: (message: In) => void): () => void;
+import type { KernelTransport as KernelTransportBase } from './transport.js';
+export type { KernelTransport as KernelTransportRaw } from './transport.js';
 
-  /** Send an outbound message. Fire-and-forget; transports queue or drop. */
-  send(message: Out): void;
-}
+/**
+ * Phase 1 instantiates `In` as the raw `ExtensionMessage` envelope on
+ * both sides so the bridge can keep its existing source-filter and
+ * sprinkle-op-response peek logic without behavior change. The defaults
+ * here are convenience for callers that don't override them.
+ */
+export type KernelTransport<
+  In = PanelToOffscreenMessage,
+  Out = OffscreenToPanelMessage,
+> = KernelTransportBase<In, Out>;
 
 // ---------------------------------------------------------------------------
 // 2. Host surface — `OffscreenBridge` implements this in Phase 1.

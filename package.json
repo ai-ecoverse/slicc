@@ -39,7 +39,7 @@
     "start:electron": "node dist/node-server/index.js --electron",
     "preflight": "node packages/dev-tools/tools/preflight-deps.mjs",
     "pretypecheck": "npm run preflight",
-    "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json",
+    "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.webapp-worker.json",
     "pretest": "npm run preflight",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
