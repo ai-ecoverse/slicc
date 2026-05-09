@@ -46,6 +46,22 @@ export interface PageStorageSyncSink {
   send(message: PanelToOffscreenMessage): void;
 }
 
+/**
+ * Cross-tab `storage` events serialize the key with NUL termination
+ * in some browsers, which silently truncates a key like `"x\0y"` to
+ * `"x"`. The same-tab write path is unaffected (we proxy the call
+ * directly without going through serialization), but we still drop
+ * NUL-bearing keys defensively so the two paths can never disagree
+ * on whether a write is reflected in the worker. Same-shape keys are
+ * not a real workload (no SLICC writer produces them) — this is
+ * defense-in-depth against a buggy third-party caller.
+ *
+ * Returns true when the key is OK to forward.
+ */
+function isForwardableKey(key: string): boolean {
+  return !key.includes('\0');
+}
+
 export function installPageStorageSync(sink: PageStorageSyncSink): () => void {
   if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
     return () => undefined;
@@ -58,10 +74,18 @@ export function installPageStorageSync(sink: PageStorageSyncSink): () => void {
 
   ls.setItem = (key: string, value: string): void => {
     origSetItem(key, value);
+    if (!isForwardableKey(key)) {
+      console.warn('[page-storage-sync] dropping localStorage write with NUL in key', key);
+      return;
+    }
     sink.send({ type: 'local-storage-set', key, value } satisfies LocalStorageSetMsg);
   };
   ls.removeItem = (key: string): void => {
     origRemoveItem(key);
+    if (!isForwardableKey(key)) {
+      console.warn('[page-storage-sync] dropping localStorage remove with NUL in key', key);
+      return;
+    }
     sink.send({ type: 'local-storage-remove', key } satisfies LocalStorageRemoveMsg);
   };
   ls.clear = (): void => {
@@ -79,6 +103,7 @@ export function installPageStorageSync(sink: PageStorageSyncSink): () => void {
       sink.send({ type: 'local-storage-clear' } satisfies LocalStorageClearMsg);
       return;
     }
+    if (!isForwardableKey(event.key)) return;
     if (event.newValue === null) {
       sink.send({
         type: 'local-storage-remove',

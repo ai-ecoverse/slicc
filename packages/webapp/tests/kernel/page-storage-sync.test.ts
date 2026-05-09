@@ -12,7 +12,7 @@
  *     between tests doesn't leak interceptors).
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { installPageStorageSync } from '../../src/kernel/page-storage-sync.js';
 import type { PanelToOffscreenMessage } from '../../../chrome-extension/src/messages.js';
 
@@ -177,5 +177,48 @@ describe('installPageStorageSync', () => {
     expect(dispose).toBeInstanceOf(Function);
     dispose();
     expect(sent).toEqual([]);
+  });
+
+  it('drops setItem with a NUL byte in the key (defensive)', () => {
+    const sent: PanelToOffscreenMessage[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const dispose = installPageStorageSync({ send: (m) => sent.push(m) });
+
+    fakeWindow.localStorage.setItem('x\0y', 'value');
+
+    // The same-tab write still hits page localStorage…
+    expect(fakeWindow.localStorage.getItem('x\0y')).toBe('value');
+    // …but is NOT forwarded over the wire (cross-tab `storage`
+    // events truncate at NUL in some browsers, so reflecting the
+    // same-tab write would create a sync mismatch).
+    expect(sent).toEqual([]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('drops removeItem with a NUL byte in the key', () => {
+    const sent: PanelToOffscreenMessage[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const dispose = installPageStorageSync({ send: (m) => sent.push(m) });
+    fakeWindow.localStorage.removeItem('x\0y');
+    expect(sent).toEqual([]);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+    dispose();
+  });
+
+  it('drops cross-tab storage events with NUL in the key', () => {
+    const sent: PanelToOffscreenMessage[] = [];
+    const dispose = installPageStorageSync({ send: (m) => sent.push(m) });
+    storageListener?.({
+      key: 'x\0y',
+      newValue: 'value',
+      oldValue: null,
+      storageArea: fakeWindow.localStorage,
+      url: '',
+    } as unknown as StorageEvent);
+    expect(sent).toEqual([]);
+    dispose();
   });
 });
