@@ -166,6 +166,63 @@ describe('WorkerCdpProxy ⇄ startPageCdpForwarder', () => {
     channel.port2.close();
   });
 
+  it('drops malformed cdp-response envelopes (id missing) without crashing', async () => {
+    const channel = new MessageChannel();
+    const stub = makeStubTransport();
+    const stop = startPageCdpForwarder(channel.port1, stub.transport);
+
+    const worker = new WorkerCdpProxy(channel.port2);
+    await worker.connect();
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // Pump a malformed response directly down the wire. The worker's
+    // parseResponse should ignore it (warn-and-drop) instead of
+    // routing to `pendingCommands.get(undefined)` and silently
+    // wedging in-flight commands.
+    channel.port1.postMessage({ type: 'cdp-response' /* no id */ });
+    await tick();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('cdp-response with invalid id'),
+      expect.anything()
+    );
+    // A real command issued after the malformed message must still
+    // round-trip — i.e. the proxy isn't wedged.
+    const result = await worker.send('Page.enable');
+    expect(result).toEqual({ ok: true, method: 'Page.enable' });
+    warn.mockRestore();
+    stop();
+    worker.disconnect();
+    channel.port1.close();
+    channel.port2.close();
+  });
+
+  it('drops malformed cdp-event envelopes (method missing) without crashing', async () => {
+    const channel = new MessageChannel();
+    const stub = makeStubTransport();
+    const stop = startPageCdpForwarder(channel.port1, stub.transport);
+    const worker = new WorkerCdpProxy(channel.port2);
+    await worker.connect();
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const handler = vi.fn();
+    worker.on('Page.frameNavigated', handler);
+    await tick();
+
+    channel.port1.postMessage({ type: 'cdp-event' /* no method */, params: {} });
+    await tick();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('cdp-event with invalid method'),
+      expect.anything()
+    );
+    expect(handler).not.toHaveBeenCalled();
+    warn.mockRestore();
+    stop();
+    worker.disconnect();
+    channel.port1.close();
+    channel.port2.close();
+  });
+
   it('forwarder stop() removes any leftover listeners on the real transport', async () => {
     const channel = new MessageChannel();
     const stub = makeStubTransport();

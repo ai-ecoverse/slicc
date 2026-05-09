@@ -108,14 +108,25 @@ export class WorkerCdpProxy extends CdpTransportBridge {
       },
       subscribeIncoming: (handler) => transport.onMessage(handler),
       parseResponse: (env): ParsedCdpResponse | null => {
-        const msg = env as { type?: string };
+        const msg = env as { type?: string; id?: unknown };
         if (msg?.type !== 'cdp-response') return null;
+        // Guard against malformed envelopes with a missing or
+        // non-numeric id — without this, `pendingCommands.get(undefined)`
+        // misses and the response is silently dropped.
+        if (typeof msg.id !== 'number' || !Number.isFinite(msg.id)) {
+          console.warn('[WorkerCdpProxy] dropping cdp-response with invalid id', msg);
+          return null;
+        }
         const r = env as CdpResponseMsg;
         return { id: r.id, result: r.result, error: r.error };
       },
       parseEvent: (env): ParsedCdpEvent | null => {
-        const msg = env as { type?: string };
+        const msg = env as { type?: string; method?: unknown };
         if (msg?.type !== 'cdp-event') return null;
+        if (typeof msg.method !== 'string') {
+          console.warn('[WorkerCdpProxy] dropping cdp-event with invalid method', msg);
+          return null;
+        }
         const e = env as CdpEventMsg;
         return { method: e.method, params: e.params };
       },
