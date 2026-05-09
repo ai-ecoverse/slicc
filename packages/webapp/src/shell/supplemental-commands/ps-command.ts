@@ -225,17 +225,29 @@ function formatCommand(proc: Process, depth: number, tree: boolean): string {
 
 /**
  * Shell-style quote an argv element for human display in the
- * COMMAND column. A bare token stays bare; anything with
- * whitespace, shell metacharacters, or quotes gets wrapped in
- * double quotes with internal `"` and `\` escaped. This is for
- * display only — `cmdline` files in /proc keep the raw NUL-
- * separated form (procfs convention).
+ * COMMAND column. Three cases, matching POSIX practice:
+ *   1. Bare-acceptable charset → bare.
+ *   2. Contains `"` but no `'` → wrap in single quotes (no
+ *      escaping needed inside `'…'`). This is the readability
+ *      win — `bash 'bash -c "date && sleep 8 && date"'` instead
+ *      of `bash "bash -c \"date && sleep 8 && date\""`.
+ *   3. Otherwise → wrap in double quotes with internal `"` and
+ *      `\` escaped (handles strings that contain `'`).
+ *
+ * Strings containing both `'` and `"` use case 3 with `"`
+ * escaping — rare in practice; the result is still parseable.
+ *
+ * This is for display only — `cmdline` files in /proc keep the
+ * raw NUL-separated form (procfs convention).
  */
 function shellQuote(arg: string): string {
-  if (arg === '') return '""';
+  if (arg === '') return "''";
   // Bare-acceptable charset: alnum + a few common path / shell
   // primitives that are unambiguous unquoted.
   if (/^[A-Za-z0-9_./:=@%+-]+$/.test(arg)) return arg;
+  if (arg.includes('"') && !arg.includes("'")) {
+    return `'${arg}'`;
+  }
   return `"${arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 

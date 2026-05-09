@@ -169,7 +169,7 @@ describe('ps command', () => {
     expect(result.stdout).not.toContain(long);
   });
 
-  it('shell-quotes argv elements containing whitespace or shell metacharacters', async () => {
+  it('shell-quotes argv elements containing whitespace (double-quote wrap when no inner quotes)', async () => {
     const pm = new ProcessManager();
     pm.spawn({
       kind: 'tool',
@@ -178,8 +178,33 @@ describe('ps command', () => {
     });
     const cmd = createPsCommand({ processManager: pm });
     const result = await cmd.execute([], mockCtx);
-    // Expect: bash "date && sleep 90 && date"
     expect(result.stdout).toContain('bash "date && sleep 90 && date"');
+  });
+
+  it('prefers single quotes when the content contains double quotes (readability)', async () => {
+    const pm = new ProcessManager();
+    pm.spawn({
+      kind: 'tool',
+      argv: ['bash', 'bash -c "date && sleep 8 && date"'],
+      owner: { kind: 'cone' },
+    });
+    const cmd = createPsCommand({ processManager: pm });
+    const result = await cmd.execute([], mockCtx);
+    // Single-quote wrap means no escape soup — visually parseable.
+    expect(result.stdout).toContain(`bash 'bash -c "date && sleep 8 && date"'`);
+    expect(result.stdout).not.toContain('\\"');
+  });
+
+  it('falls back to double-quote with escaping when content has single quotes', async () => {
+    const pm = new ProcessManager();
+    pm.spawn({
+      kind: 'tool',
+      argv: ['bash', "echo 'hello' world"],
+      owner: { kind: 'cone' },
+    });
+    const cmd = createPsCommand({ processManager: pm });
+    const result = await cmd.execute([], mockCtx);
+    expect(result.stdout).toContain(`bash "echo 'hello' world"`);
   });
 
   it('leaves bare-acceptable tokens unquoted (paths, names with @ + - etc.)', async () => {
@@ -194,20 +219,20 @@ describe('ps command', () => {
     const result = await cmd.execute([], mockCtx);
     expect(result.stdout).toContain('read_file /workspace/foo.ts');
     expect(result.stdout).toContain('fetch https://example.com/api');
-    // No spurious quoting around either path.
     expect(result.stdout).not.toContain('"/workspace/foo.ts"');
     expect(result.stdout).not.toContain('"https://example.com/api"');
   });
 
-  it('escapes embedded quotes and backslashes in display-quoted args', async () => {
+  it('escapes embedded quotes and backslashes when forced into double-quote wrap', async () => {
     const pm = new ProcessManager();
+    // Both ' and " present → forced into double-quote wrap with escaping.
     pm.spawn({
       kind: 'tool',
-      argv: ['bash', 'echo "hi" \\ done'],
+      argv: ['bash', `echo "hi" 'mixed' \\ done`],
       owner: { kind: 'cone' },
     });
     const cmd = createPsCommand({ processManager: pm });
     const result = await cmd.execute([], mockCtx);
-    expect(result.stdout).toContain('bash "echo \\"hi\\" \\\\ done"');
+    expect(result.stdout).toContain(`bash "echo \\"hi\\" 'mixed' \\\\ done"`);
   });
 });
