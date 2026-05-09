@@ -60,10 +60,11 @@ export function parseLinkHeader(
 ): ParsedLink[] {
   if (input == null) return [];
   // CDP joins multi-value headers with `\n`; treat it the same as separate
-  // header instances.
+  // header instances. Normalize for both shapes — array elements may also
+  // contain `\n`-joined values when callers preserve CDP's raw bag verbatim.
   let headerString: string;
   if (Array.isArray(input)) {
-    headerString = input.join(', ');
+    headerString = input.join(', ').replace(/\n/g, ', ');
   } else if (typeof input === 'string') {
     headerString = input.replace(/\n/g, ', ');
   } else {
@@ -90,8 +91,7 @@ export function parseLinkHeader(
     i = uriEnd + 1;
 
     const rawParams: Array<[string, string]> = [];
-    let nextValue = false;
-    while (i < len && !nextValue) {
+    while (i < len) {
       i = skipOWS(headerString, i);
       if (i >= len) break;
       if (headerString[i] === ',') {
@@ -100,7 +100,6 @@ export function parseLinkHeader(
       }
       if (headerString[i] !== ';') {
         i = skipToNextValue(headerString, i);
-        nextValue = true;
         break;
       }
       i++;
@@ -112,7 +111,6 @@ export function parseLinkHeader(
       if (i < len && headerString[i] === '*') i++;
       if (nameStart === i) {
         i = skipToNextValue(headerString, i);
-        nextValue = true;
         break;
       }
       const name = headerString.slice(nameStart, i).toLowerCase();

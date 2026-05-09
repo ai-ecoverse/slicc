@@ -103,6 +103,30 @@ interface ResolvedHandoff {
   payload: string;
 }
 
+/**
+ * Enforce that an upskill payload is a clean `https://github.com/…` URL.
+ * Returns the URL parser's canonical form (which percent-encodes any CR/LF,
+ * whitespace, or other characters that would otherwise let an attacker break
+ * out of the `Link` header's URI-reference). Returns `null` for anything that
+ * isn't a parseable URL on github.com over https.
+ */
+function sanitizeUpskillTarget(payload: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(payload);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:') return null;
+  if (parsed.hostname !== 'github.com') return null;
+  const canonical = parsed.toString();
+  // Defense in depth: refuse if `<`, `>`, or any control character somehow
+  // survives URL canonicalization. `URL.toString()` percent-encodes these in
+  // every shape we expect, but a belt-and-braces check is cheap.
+  if (/[<>\x00-\x20\x7f]/.test(canonical)) return null;
+  return canonical;
+}
+
 function resolveHandoff(url: URL): ResolvedHandoff | null {
   const handoff = url.searchParams.get('handoff');
   if (handoff && handoff.length > 0) {
@@ -110,7 +134,9 @@ function resolveHandoff(url: URL): ResolvedHandoff | null {
   }
   const upskill = url.searchParams.get('upskill');
   if (upskill && upskill.length > 0) {
-    return { verb: 'upskill', payload: upskill.slice(0, MAX_PAYLOAD_LEN) };
+    const safe = sanitizeUpskillTarget(upskill.slice(0, MAX_PAYLOAD_LEN));
+    if (safe) return { verb: 'upskill', payload: safe };
+    return null;
   }
   // Legacy `?msg=verb:payload` — split the colon prefix server-side.
   const msg = url.searchParams.get('msg');
@@ -120,7 +146,12 @@ function resolveHandoff(url: URL): ResolvedHandoff | null {
     if (colon > 0) {
       const verb = trimmed.slice(0, colon);
       const payload = trimmed.slice(colon + 1);
-      if (verb === 'handoff' || verb === 'upskill') {
+      if (verb === 'upskill') {
+        const safe = sanitizeUpskillTarget(payload);
+        if (safe) return { verb: 'upskill', payload: safe };
+        return null;
+      }
+      if (verb === 'handoff') {
         return { verb, payload };
       }
     }
@@ -139,8 +170,8 @@ function resolveHandoff(url: URL): ResolvedHandoff | null {
  */
 function buildHandoffLinkValue(handoff: ResolvedHandoff): string {
   if (handoff.verb === 'upskill') {
-    // The href is a URL; quote-safe characters are URL-allowed by the
-    // page producer. Wrapping in <> preserves any internal ; , characters.
+    // Payload is already canonicalized + allowlisted by `sanitizeUpskillTarget`,
+    // so no header-injection or unintended-link payload is reachable here.
     return `<${handoff.payload}>; rel="${UPSKILL_REL}"`;
   }
   // handoff: target is the page itself (`<>` self-anchor); instruction in title*.

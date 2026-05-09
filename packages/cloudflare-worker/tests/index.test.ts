@@ -1277,6 +1277,68 @@ describe('tray worker skeleton', () => {
     );
   });
 
+  it('rejects upskill payloads that are not parseable URLs', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/handoff?upskill=not-a-url'),
+      env
+    );
+    expect(response.status).toBe(200);
+    // No SLICC handoff/upskill rel — the standard rel set still applies.
+    const links = response.headers.get('Link') ?? '';
+    expect(links).not.toContain('https://www.sliccy.ai/rel/upskill');
+    expect(links).not.toContain('https://www.sliccy.ai/rel/handoff');
+  });
+
+  it('rejects upskill payloads on non-https schemes', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/handoff?upskill=http%3A%2F%2Fgithub.com%2Ffoo%2Fbar'),
+      env
+    );
+    const links = response.headers.get('Link') ?? '';
+    expect(links).not.toContain('https://www.sliccy.ai/rel/upskill');
+  });
+
+  it('rejects upskill payloads outside github.com', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/handoff?upskill=https%3A%2F%2Fattacker.example%2Frepo'),
+      env
+    );
+    const links = response.headers.get('Link') ?? '';
+    expect(links).not.toContain('https://www.sliccy.ai/rel/upskill');
+  });
+
+  it('neutralises CR/LF / >-injection attempts in the upskill payload', async () => {
+    const { env } = createTestHarness();
+    // Even when the URL parser canonicalises the input, the resulting Link
+    // header must never contain raw CR/LF or angle brackets that could
+    // terminate the link-value or open a new header.
+    const response = await handleWorkerRequest(
+      new Request(
+        'https://www.sliccy.ai/handoff?upskill=https%3A%2F%2Fgithub.com%2Ffoo%0D%0AX-Injected%3A+bar%2F%3E%3Cevil'
+      ),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-Injected')).toBeNull();
+    const link = response.headers.get('Link') ?? '';
+    expect(link).not.toContain('\r');
+    expect(link).not.toContain('\n');
+    // If the SLICC upskill rel is emitted, the URI-reference is well-formed.
+    if (link.includes('https://www.sliccy.ai/rel/upskill')) {
+      const upskillSection = link
+        .split(',')
+        .map((s) => s.trim())
+        .find((s) => s.includes('https://www.sliccy.ai/rel/upskill'));
+      expect(upskillSection).toBeDefined();
+      const m = upskillSection!.match(/^<([^>]*)>/);
+      expect(m).not.toBeNull();
+      expect(m![1].startsWith('https://github.com/')).toBe(true);
+    }
+  });
+
   it('serves the linkset api-catalog at /.well-known/api-catalog', async () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(
@@ -1342,6 +1404,15 @@ describe('standard Link header set', () => {
     expect(linkValues).toContain('rel="service-doc"');
     expect(linkValues).toContain('rel="https://llmstxt.org/rel/llms-txt"');
     expect(linkValues).toContain('rel="terms-of-service"');
+  });
+
+  it('skips the standard rel set on 3xx redirect responses', async () => {
+    const { applySliccLinks } = await import('../src/links.js');
+    const req = new Request('https://www.sliccy.ai/anywhere');
+    const redirect = Response.redirect('https://www.sliccy.ai/elsewhere', 302);
+    expect(applySliccLinks(redirect, req).headers.get('Link')).toBeNull();
+    const ok = new Response('hi', { status: 200 });
+    expect(applySliccLinks(ok, req).headers.get('Link')).toContain('rel="api-catalog"');
   });
 });
 

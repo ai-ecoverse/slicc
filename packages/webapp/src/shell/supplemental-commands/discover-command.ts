@@ -1,7 +1,8 @@
 /**
  * `discover` shell command — fetch a URL and surface RFC 8288 / RFC 9727
- * link-discovery results as JSON. Built on top of the proxied fetch the
- * shell uses for `curl` / `upskill`, so it inherits CORS bypass, header
+ * link-discovery results as JSON. The primary fetch and every `--follow`
+ * capability fetch route through the proxied fetch the shell uses for
+ * `curl` / `upskill`, so the command inherits CORS bypass, header
  * forbidden-list bridging, and origin parity.
  *
  * Output shape (JSON):
@@ -25,11 +26,34 @@
  */
 
 import { defineCommand } from 'just-bash';
-import type { Command } from 'just-bash';
+import type { Command, SecureFetch } from 'just-bash';
 import { discoverLinks } from '../../net/discover-links.js';
 import { extractHandoff } from '../../net/handoff-link.js';
 import { parseLinkHeader } from '../../net/link-header.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
+
+/**
+ * Wrap a `SecureFetch` so it can stand in for the Web Fetch API. Used to
+ * give `discoverLinks` (which speaks Web Fetch) the same CORS bypass /
+ * forbidden-header bridging the rest of the shell enjoys.
+ *
+ * The adapter doesn't thread `AbortSignal` into the underlying secure fetch
+ * (the SecureFetch contract has no signal slot) — `discoverLinks` already
+ * caps each call with its own timeout and tolerates non-aborting fetches.
+ */
+function asWebFetch(secureFetch: SecureFetch): typeof fetch {
+  const adapter = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url =
+      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const result = await secureFetch(url, { method: init?.method ?? 'GET' });
+    return new Response(result.body as BodyInit, {
+      status: result.status,
+      statusText: result.statusText,
+      headers: result.headers,
+    });
+  };
+  return adapter as typeof fetch;
+}
 
 function helpText(): string {
   return `discover — fetch a URL and parse RFC 8288 Link headers
@@ -95,10 +119,10 @@ export function createDiscoverCommand(): Command {
     };
 
     if (follow && links.length > 0) {
-      // Use the global fetch — discover never re-routes the discovery
-      // requests through the proxied fetch (their endpoints are public
-      // and the round-trip cost stays small).
-      const discovery = await discoverLinks(links, { fetchImpl: fetch });
+      // Route follow-up capability fetches through the same proxied fetch
+      // the shell uses elsewhere — without this, browser CORS would block
+      // most cross-origin discovery in CLI mode.
+      const discovery = await discoverLinks(links, { fetchImpl: asWebFetch(fetchProxied) });
       result.discovery = {
         catalog: discovery.catalog,
         serviceDesc: discovery.serviceDesc,

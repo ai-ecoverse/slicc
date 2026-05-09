@@ -23,12 +23,13 @@ const STANDARD_RELS_TEMPLATE = (origin: string): string[] => [
  * emitted by `/handoff`). The response status, body, and other headers are
  * left intact.
  *
- * Skips 101 (WebSocket upgrade) and 3xx responses that have an empty body —
- * adding headers to redirects is allowed but rarely useful and inflates
- * tiny responses.
+ * Skips 101 (WebSocket upgrade) and 3xx redirects — clients ignore link
+ * relations on redirect responses, and adding ~500 bytes of headers to a
+ * tiny redirect just bloats them.
  */
 export function applySliccLinks(response: Response, request: Request): Response {
   if (response.status === 101) return response;
+  if (response.status >= 300 && response.status < 400) return response;
   // Don't mutate an immutable response; clone via the constructor.
   const url = new URL(request.url);
   const origin = `${url.protocol}//${url.host}`;

@@ -1,11 +1,13 @@
 /**
  * Express middleware: append SLICC's standard RFC 8288 `Link` header set to
- * every `/api/*` response. Mirrors `applySliccLinks` in the cloudflare-worker
- * so any SLICC HTTP surface advertises the same discoverable capabilities.
+ * every local `/api/*` response that describes a SLICC capability. Mirrors
+ * `applySliccLinks` in the cloudflare-worker so any SLICC HTTP surface
+ * advertises the same discoverable capabilities.
  *
- * Skips when an upstream handler already wrote response headers (the typical
- * Express middleware ordering puts this BEFORE the handlers, so headers are
- * still mutable when each handler returns).
+ * Skipped for `/api/fetch-proxy`: that endpoint is a transparent CORS-bypass
+ * relay, so injecting localhost discovery rels there would pollute downstream
+ * `discover` consumers with bogus self-referential links. Also bails out if
+ * an earlier middleware already flushed response headers.
  */
 
 import type { NextFunction, Request, Response } from 'express';
@@ -18,12 +20,23 @@ const SLICC_BASE_REL = (origin: string): string[] => [
 
 /**
  * Returns Express middleware that appends Link entries on every `/api/*`
- * response. Uses `res.append` so existing Link headers (none expected on
- * the local API surface today) survive intact.
+ * response except `/api/fetch-proxy` (a transparent relay). Uses `res.append`
+ * so existing Link headers survive intact.
  */
 export function sliccLinksMiddleware() {
   return (req: Request, res: Response, next: NextFunction): void => {
+    if (res.headersSent) {
+      next();
+      return;
+    }
     if (!req.path.startsWith('/api/') && req.path !== '/api') {
+      next();
+      return;
+    }
+    // `/api/fetch-proxy` and anything mounted underneath it relays a third-
+    // party response verbatim — adding our own rels would mislead clients
+    // that parse Link headers (e.g. the `discover` shell command).
+    if (req.path === '/api/fetch-proxy' || req.path.startsWith('/api/fetch-proxy/')) {
       next();
       return;
     }

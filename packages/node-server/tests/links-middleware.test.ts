@@ -10,6 +10,10 @@ function makeApp() {
   app.get('/api', (req, res) =>
     res.json(buildLocalApiDescriptor(req.headers.host ?? 'localhost:5710'))
   );
+  // Stand-in for the real `/api/fetch-proxy` handler — the middleware should
+  // not decorate this response since it relays a third-party body.
+  app.all('/api/fetch-proxy', (_req, res) => res.json({ relayed: true }));
+  app.all('/api/fetch-proxy/sub', (_req, res) => res.json({ relayed: true }));
   app.get('/non-api', (_req, res) => res.json({ ok: true }));
   return app;
 }
@@ -54,6 +58,20 @@ describe('sliccLinksMiddleware', () => {
   it('does NOT attach Link to non-/api paths', async () => {
     const app = makeApp();
     const response = await fetchInProcess(app, '/non-api');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('link')).toBeNull();
+  });
+
+  it('does NOT decorate /api/fetch-proxy (transparent relay)', async () => {
+    const app = makeApp();
+    const response = await fetchInProcess(app, '/api/fetch-proxy');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('link')).toBeNull();
+  });
+
+  it('does NOT decorate paths under /api/fetch-proxy/', async () => {
+    const app = makeApp();
+    const response = await fetchInProcess(app, '/api/fetch-proxy/sub');
     expect(response.status).toBe(200);
     expect(response.headers.get('link')).toBeNull();
   });
