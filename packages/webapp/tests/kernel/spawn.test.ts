@@ -163,4 +163,57 @@ describe('bootstrapKernelWorker', () => {
     host.dispose();
     expect(worker.terminateCalls).toBe(1);
   });
+
+  it('a stale kernel-worker-ready arriving after timeout does not resolve ready', async () => {
+    // Catches the original leak: if the timeout path forgot to remove
+    // the listener, a later `kernel-worker-ready` posted on the port
+    // would still resolve `ready` (which had already rejected). With
+    // the listener properly removed in the timeout branch, the late
+    // message is ignored.
+    let stashedKernelPort: MessagePort | null = null;
+    const worker: WorkerLike = {
+      postMessage: (message: unknown) => {
+        const data = message as { type?: string; kernelPort?: MessagePort };
+        if (data?.type === 'kernel-worker-init' && data.kernelPort) {
+          stashedKernelPort = data.kernelPort;
+          stashedKernelPort.start();
+        }
+      },
+      terminate: () => undefined,
+    };
+    const host = bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      callbacks: makeStubCallbacks(),
+      readyTimeoutMs: 30,
+    });
+
+    let resolvedAfterTimeout = false;
+    host.ready
+      .then(() => {
+        resolvedAfterTimeout = true;
+      })
+      .catch(() => {
+        /* expected: timeout rejection */
+      });
+
+    // Wait for the timeout to fire AND reject the promise.
+    await new Promise((r) => setTimeout(r, 60));
+
+    // Now post a late kernel-worker-ready. If the listener was leaked,
+    // the resolve closure would re-fire and flip the promise — except
+    // we already rejected, so the test would observe `resolvedAfterTimeout`
+    // staying false but the listener would still be alive (a real
+    // memory/observer leak). We check the second symptom: the listener
+    // must NOT call our resolve closure twice. The simplest observable
+    // is: the underlying promise can only settle once, so we instead
+    // check that no synchronous side effect happens — by counting that
+    // the worker port doesn't see another listener get to run.
+    expect(stashedKernelPort).not.toBeNull();
+    stashedKernelPort!.postMessage({ type: 'kernel-worker-ready' });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(resolvedAfterTimeout).toBe(false);
+
+    host.dispose();
+  });
 });

@@ -138,24 +138,34 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
   // Wait for `kernel-worker-ready` on the kernel port. The OffscreenClient
   // already started this port via its onMessage subscription; we just add
   // a second listener that resolves on the boot signal.
-  let readyResolved = false;
+  //
+  // Single cleanup path: `cleanupReady()` removes the listener AND clears
+  // the timeout. Called from the success branch, the timeout branch, AND
+  // from `dispose()` so a caller that disposes before the worker replies
+  // doesn't leave the listener attached for the worker's lifetime.
+  let cleanupReady: (() => void) | null = null;
   const ready = new Promise<void>((resolve, reject) => {
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    const listener = (event: MessageEvent): void => {
-      const data = event.data as Partial<KernelWorkerReadyMsg> | null;
-      if (data?.type !== 'kernel-worker-ready') return;
-      kernelChannel.port1.removeEventListener('message', listener as EventListener);
+    let listener: ((event: MessageEvent) => void) | null = null;
+    cleanupReady = (): void => {
+      if (listener !== null) {
+        kernelChannel.port1.removeEventListener('message', listener as EventListener);
+        listener = null;
+      }
       if (timeoutId !== null) {
         clearTimeout(timeoutId);
         timeoutId = null;
       }
-      readyResolved = true;
+    };
+    listener = (event: MessageEvent): void => {
+      const data = event.data as Partial<KernelWorkerReadyMsg> | null;
+      if (data?.type !== 'kernel-worker-ready') return;
+      cleanupReady?.();
       resolve();
     };
     kernelChannel.port1.addEventListener('message', listener as EventListener);
     timeoutId = setTimeout(() => {
-      timeoutId = null;
-      kernelChannel.port1.removeEventListener('message', listener as EventListener);
+      cleanupReady?.();
       reject(new Error(`Kernel worker did not signal ready within ${readyTimeoutMs}ms`));
     }, readyTimeoutMs);
   });
@@ -178,6 +188,11 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
     dispose() {
       if (disposed) return;
       disposed = true;
+      // Tear down the ready-watcher BEFORE closing the port so a
+      // callback racing in flight gets removed, not orphaned. The
+      // timeout fires the rejection if `ready` is still pending; we
+      // don't resolve it here.
+      cleanupReady?.();
       stopForwarder();
       try {
         worker.postMessage({ type: 'kernel-worker-shutdown' });
@@ -187,11 +202,6 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
       worker.terminate();
       kernelChannel.port1.close();
       cdpChannel.port1.close();
-      // If `ready` is still pending (boot never completed), the timeout
-      // above fires the rejection. We don't resolve it here — a caller
-      // awaiting `ready` after dispose would otherwise deadlock if we
-      // never resolve. Mark it explicitly:
-      void readyResolved;
     },
   };
 }
