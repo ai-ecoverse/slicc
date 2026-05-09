@@ -339,6 +339,16 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
       iframe.style.height = msg.height + 'px';
     } else if (msg.type === 'dip-open-link') {
       openDipLink(msg.url);
+    } else if (msg.type === 'dip-picker-action') {
+      // Phase 2b.6 — picker buttons (`data-picker="directory"`)
+      // post their click here instead of inline `dip-lick` so the
+      // parent can run `showDirectoryPicker` on the propagated
+      // user activation, stash the handle in IDB, then dispatch
+      // the lick with `{ handleInIdb, idbKey, dirName }`. Until
+      // this case landed, the message arrived at `mountDip` but
+      // nothing dispatched to `handleDipPickerAction` — every
+      // mount-dialog "Select directory" click was a silent no-op.
+      void handleDipPickerAction(msg, onLick);
     } else if (
       msg.type === 'dip-readfile' ||
       msg.type === 'dip-exists' ||
