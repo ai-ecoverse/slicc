@@ -1384,6 +1384,224 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 2.6d — standalone via kernel worker (opt-in, ?kernel-worker=1)
+//
+// The agent engine moves into a DedicatedWorker. The page keeps the UI,
+// the file-browser local VFS, and the WebSocket-backed `CDPClient`; the
+// worker runs Orchestrator + scoops + WasmShell pool + a worker-side
+// `BrowserAPI` whose CDP commands are forwarded back to the page's
+// `CDPClient` via `startPageCdpForwarder`.
+//
+// What's wired today:
+//   - Layout (split panels)
+//   - Local VFS for file-browser + memory panel + preview-vfs fallback
+//   - `BrowserAPI` (page-side) → `startPageCdpForwarder` → worker
+//   - `OffscreenClient` over MessageChannel as the orchestrator-shim
+//   - Chat panel ⇄ `client.createAgentHandle()`
+//   - `panels.scoops` / `panels.memory` ⇄ `setOrchestrator(client)`
+//   - `selectScoop` flow on scoop chip click
+//
+// What's deferred (smoke-test will hit these as gaps):
+//   - Wizard / OnboardingOrchestrator (welcome.shtml, connect-llm dip)
+//   - Panel-side terminal shell (would need PanelCdpProxy or similar)
+//   - Sprinkle UI rendering (sprinkle-renderer needs panel-side wiring)
+//   - Cost provider via shell `cost` command (no panel→worker query yet)
+//   - Skill-drop install
+//   - Tray runtime sync (page ↔ worker bridge for tray join URL)
+//   - publishAgentBridgeProxy (terminal `agent` shell command)
+//
+// `?kernel-worker=1` makes the choice explicit so smoke testing the new
+// path can't accidentally regress the inline path that ships today.
+// ---------------------------------------------------------------------------
+
+async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean): Promise<void> {
+  log.info('Phase 2.6d preview: starting standalone with kernel worker (?kernel-worker=1)');
+
+  const { spawnKernelWorker } = await import('../kernel/spawn.js');
+  const { VirtualFS } = await import('../fs/index.js');
+  const { BrowserAPI } = await import('../cdp/index.js');
+
+  const layout = new Layout(app, isElectronOverlay);
+  await layout.panels.chat.initSession('session-cone');
+  log.info('Session initialized (kernel-worker mode)');
+
+  // Local VFS for the file browser + memory panel + preview-vfs fallback.
+  // Same IndexedDB as the worker's VFS, so writes from the agent are
+  // visible in the file browser without round-tripping the wire.
+  const localFs = await VirtualFS.create({ dbName: 'slicc-fs' });
+  layout.panels.fileBrowser.setFs(localFs);
+
+  // Recover the panel's view of mounts. The worker recovers its own
+  // mounts inside `createKernelHost`; this is just the page-side
+  // `localFs`'s mount table being repopulated on reload.
+  void getAllMountEntries()
+    .then(async (entries) => {
+      if (entries.length === 0) return;
+      const { needsRecovery } = await recoverMounts(entries, localFs, log);
+      if (needsRecovery.length === 0) return;
+      log.warn('Some mounts could not be recovered in the page VFS', {
+        count: needsRecovery.length,
+        paths: needsRecovery.map((r) => r.path),
+      });
+    })
+    .catch((err) => log.warn('Failed to restore persisted mounts in page VFS', err));
+
+  // Page-side preview-vfs fallback responder. The worker's responder is
+  // the canonical one (lives inside `createKernelHost`); this fires only
+  // when the worker hasn't booted yet or when the request resolves
+  // against a panel-only mount.
+  const previewVfsCh = new BroadcastChannel('preview-vfs');
+  previewVfsCh.onmessage = (event) => {
+    if (event.data?.type !== 'preview-vfs-read') return;
+    const { id, path, asText } = event.data;
+    (async () => {
+      try {
+        const encoding = asText ? 'utf-8' : 'binary';
+        const content = await localFs.readFile(path, { encoding });
+        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (!errMsg.includes('ENOENT')) {
+          log.error('Preview VFS read failed', { path, error: errMsg });
+        }
+        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: errMsg });
+      }
+    })();
+  };
+
+  // Real CDP transport. The worker's `BrowserAPI` proxies CDP commands
+  // back here through the kernel transport.
+  const browser = new BrowserAPI();
+  const realCdpTransport = browser.getTransport();
+
+  let selectedScoop: RegisteredScoop | null = null;
+  let client!: InstanceType<typeof OffscreenClient>;
+
+  const selectScoop = async (scoop: RegisteredScoop): Promise<void> => {
+    selectedScoop = scoop;
+    client.selectedScoopJid = scoop.jid;
+    layout.panels.scoops.setSelectedJid(scoop.jid);
+    layout.panels.memory.setSelectedScoop(scoop.jid);
+    layout.setScoopSwitcherSelected?.(scoop.jid);
+
+    const contextId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+    const scoopName = scoop.isCone ? undefined : scoop.name;
+    await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
+
+    if (client.isProcessing(scoop.jid)) {
+      layout.panels.chat.setProcessing(true);
+    }
+  };
+
+  // Spawn the worker. `spawnKernelWorker` constructs the Worker via
+  // Vite's `new URL` pattern, builds an `OffscreenClient` over a
+  // `MessageChannel`, and starts the page-side CDP forwarder against
+  // `realCdpTransport`. The init handshake transfers two MessagePorts
+  // to the worker; the worker boots `createKernelHost` and posts
+  // `kernel-worker-ready` over the kernel port.
+  const { OffscreenClient } = await import('./offscreen-client.js');
+  void OffscreenClient; // type import for the `client` variable above
+  const host = spawnKernelWorker({
+    realCdpTransport,
+    callbacks: {
+      onStatusChange: (scoopJid, status) => {
+        layout.panels.scoops.updateScoopStatus(scoopJid, status);
+        layout.updateScoopSwitcherStatus?.(scoopJid, status);
+        if (selectedScoop?.jid === scoopJid) {
+          layout.setAgentProcessing(status === 'processing');
+          if (status === 'processing') {
+            layout.panels.chat.setProcessing(true);
+          } else if (status === 'ready') {
+            layout.panels.chat.setProcessing(false);
+          }
+        }
+      },
+      onScoopCreated: (scoop) => {
+        layout.panels.scoops.refreshScoops();
+        layout.refreshScoopSwitcher?.();
+        if (!selectedScoop) {
+          void selectScoop(scoop);
+        }
+      },
+      onScoopListUpdate: () => {
+        layout.panels.scoops.refreshScoops();
+        layout.refreshScoopSwitcher?.();
+      },
+      onIncomingMessage: (scoopJid, message) => {
+        // For lick-channel messages destined to the selected scoop,
+        // surface them in the chat. Persistence is handled by the
+        // worker's bridge writing to IndexedDB; the chat panel reloads
+        // on scoop switch.
+        if (selectedScoop?.jid !== scoopJid) return;
+        if (message.channel !== 'web' && isLickChannel(message.channel)) {
+          layout.panels.chat.addLickMessage(
+            message.id,
+            message.content,
+            message.channel,
+            new Date(message.timestamp).getTime()
+          );
+        }
+      },
+      onReady: () => {
+        log.info('Kernel worker ready, scoop count:', client.getScoops().length);
+        const cone = client.getScoops().find((s) => s.isCone);
+        if (cone && !selectedScoop) {
+          void selectScoop(cone);
+        }
+      },
+    },
+  });
+  client = host.client;
+
+  // Wire panels to the orchestrator-shim provided by the client.
+  layout.panels.scoops.setOrchestrator(client as unknown as Orchestrator);
+  layout.panels.memory.setOrchestrator(client as unknown as Orchestrator);
+  layout.setScoopSwitcherOrchestrator?.(client as unknown as Orchestrator);
+  layout.onScoopSelect = selectScoop;
+
+  // Wire chat agent handle. The handle's `sendMessage` posts a
+  // `user-message` over the wire; the worker's bridge handles it.
+  const agentHandle = client.createAgentHandle();
+  layout.panels.chat.setAgent(agentHandle);
+  layout.panels.chat.setAttachmentWriter(createAttachmentTmpWriter(localFs));
+
+  // Wire delete callback — only meaningful if the underlying client
+  // supports it. The orchestrator-shim's `deleteQueuedMessage` is a
+  // no-op for now.
+  layout.panels.chat.setDeleteQueuedMessageCallback((_messageId) => {
+    log.warn('deleteQueuedMessage is a no-op in kernel-worker mode (Phase 2.6d limitation)');
+  });
+
+  // Wait for the worker to finish boot. After this, request state so
+  // the panel sees the cone the worker auto-created.
+  try {
+    await host.ready;
+    log.info('Worker boot handshake complete');
+  } catch (err) {
+    log.error('Worker failed to signal ready', err);
+    throw err;
+  }
+  client.requestState();
+
+  // Cleanup on unload.
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      host.dispose();
+    },
+    { once: true }
+  );
+
+  // Same UI fixture / telemetry hooks as the inline path.
+  if (isUIFixtureRequested()) {
+    await loadUIFixtureIntoChat(layout.panels.chat);
+  }
+  initTelemetry().catch(() => {});
+
+  log.info('Standalone kernel-worker UI ready');
+}
+
+// ---------------------------------------------------------------------------
 // CLI mode — direct Orchestrator in this page (unchanged)
 // ---------------------------------------------------------------------------
 
@@ -1532,6 +1750,20 @@ async function main(): Promise<void> {
   // Extension mode: delegate to offscreen-backed UI
   if (runtimeMode === 'extension') {
     return mainExtension(app);
+  }
+
+  // Phase 2.6d preview — opt into the kernel-worker path with
+  // `?kernel-worker=1`. The agent engine moves into a DedicatedWorker
+  // so a runaway bash loop can't freeze the UI. The flag is opt-in
+  // because the panel-UI feature parity with the inline path is still
+  // partial (wizard onboarding, panel terminal shell, sprinkle UI,
+  // cost provider, skill-drop install all defer to a follow-up).
+  // Falls through to the existing inline path otherwise.
+  const useKernelWorker =
+    new URLSearchParams(window.location.search).get('kernel-worker') === '1' ||
+    window.localStorage.getItem('slicc.kernel-worker') === '1';
+  if (useKernelWorker) {
+    return mainStandaloneWorker(app, runtimeMode === 'electron-overlay');
   }
 
   const layout = new Layout(app, runtimeMode === 'electron-overlay');

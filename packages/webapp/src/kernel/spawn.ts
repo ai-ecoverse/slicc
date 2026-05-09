@@ -166,33 +166,29 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
 // ---------------------------------------------------------------------------
 
 /**
- * Default worker URL — the Vite-native `new URL('./kernel-worker.ts',
- * import.meta.url)` pattern. Vite detects this in source, runs the
- * referenced TS file through its own bundler (with the existing
- * `resolve.alias` + `resolveId` plugin map applied), and emits the
- * worker as a separate hashed asset under `dist/ui/assets/`. At
- * runtime, the URL resolves to the bundled worker file. In dev,
- * Vite's dev server serves the worker via the same pipeline.
- *
- * Module-worker form (`{ type: 'module' }` on `new Worker`) is what
- * Vite recommends — it preserves ES module semantics and keeps the
- * import graph intact across the page/worker boundary.
- *
- * Lives at module top level so Vite's static-analysis pass sees it
- * during build. Tree-shaking does NOT remove the worker emission
- * even if `spawnKernelWorker` ends up unused at runtime — Vite's
- * worker resolution treats the `new URL` pattern as a side-effect.
- */
-export const DEFAULT_KERNEL_WORKER_URL: URL = new URL('./kernel-worker.ts', import.meta.url);
-
-/**
  * Construct a real `Worker` from the bundled kernel-worker entry and
  * bootstrap it. Standalone `main.ts` is the production caller (Phase 2
  * step 6d).
+ *
+ * Worker bundling: the `new Worker(new URL('./kernel-worker.ts',
+ * import.meta.url), { type: 'module' })` pattern must be **inline** (not
+ * pulled out into a constant) for Vite's static-analysis pass to
+ * recognize it during build. With the inline form, Vite runs the
+ * referenced TS file through its own Rollup pipeline (applying the
+ * `resolve.alias` map + `stub-pi-node-internals` resolveId plugin from
+ * `vite.config.ts`) and emits a hashed worker bundle under
+ * `dist/ui/assets/`. The `URL` resolves to that bundle at runtime.
+ *
+ * The optional `workerUrl` override is a *runtime* swap (e.g. for tests
+ * with a custom server); it doesn't influence bundling. When the
+ * override is present, `?worker&url` semantics don't apply — the
+ * caller is responsible for providing a URL pointing at a working
+ * worker bundle.
  */
 export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKernelHost {
-  const url = options.workerUrl ?? DEFAULT_KERNEL_WORKER_URL;
-  const worker = new Worker(url, { type: 'module' });
+  const worker = options.workerUrl
+    ? new Worker(options.workerUrl, { type: 'module' })
+    : new Worker(new URL('./kernel-worker.ts', import.meta.url), { type: 'module' });
   return bootstrapKernelWorker({
     worker,
     realCdpTransport: options.realCdpTransport,
