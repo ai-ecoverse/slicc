@@ -252,6 +252,15 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
           cwd: opts.cwd,
           env: opts.env,
           browserAPI: browser,
+          // Phase 3.5: every `.jsh` script the user runs in this
+          // session shows up in `ps` as `kind:'jsh'`. The
+          // `getCurrentShellPid` closure is left undefined for now
+          // (the host's per-session `currentProcess` isn't reachable
+          // from here without a back-reference); jsh procs become
+          // orphans of the kernel-host (ppid 1). Phase 4's `ps -T`
+          // will show them; the tree edge is a future refinement.
+          processManager: pm,
+          processOwner: { kind: 'system' },
         }),
       processManager: pm,
       logger: console,

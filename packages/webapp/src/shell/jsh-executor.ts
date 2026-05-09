@@ -4,6 +4,7 @@ import {
   formatConsoleArg,
   nodeRuntimeState,
 } from './supplemental-commands/shared.js';
+import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
 
 const NODE_BUILTINS_UNAVAILABLE = new Set([
   'http',
@@ -46,6 +47,24 @@ export interface JshResult {
 }
 
 /**
+ * Phase 3.5 — optional process-tracking config. When supplied, each
+ * `executeJshFile` / `executeJsCode` call registers a `kind:'jsh'`
+ * process and exits with the right code (0 on clean run, 130/143/…
+ * on signal-derived abort, 1 on thrown error or `process.exit(N)`
+ * with N≠0). Phase 4 `ps` will surface running scripts; cooperative
+ * cancellation depends on the script's own check of
+ * `globalThis.AbortSignal` instances — production .jsh scripts
+ * generally don't, so today the abort is recorded but the script
+ * keeps running until natural completion. Phase 7's preemptive
+ * worker is the real solution for hard kill.
+ */
+export interface JshProcessConfig {
+  processManager: ProcessManager;
+  owner: ProcessOwner;
+  getParentPid?: () => number | undefined;
+}
+
+/**
  * Execute a .jsh file with Node-like globals.
  * Reuses the same dual-mode strategy as `node -e`:
  * - CLI/standalone: AsyncFunction constructor
@@ -54,7 +73,8 @@ export interface JshResult {
 export async function executeJshFile(
   scriptPath: string,
   args: string[],
-  ctx: CommandContext
+  ctx: CommandContext,
+  pmConfig?: JshProcessConfig
 ): Promise<JshResult> {
   if (!(await ctx.fs.exists(scriptPath))) {
     return {
@@ -67,7 +87,7 @@ export async function executeJshFile(
   const code = await ctx.fs.readFile(scriptPath);
   const argv = ['node', scriptPath, ...args];
 
-  return executeJsCode(code, argv, ctx);
+  return executeJsCode(code, argv, ctx, pmConfig);
 }
 
 /**
@@ -77,8 +97,33 @@ export async function executeJshFile(
 export async function executeJsCode(
   code: string,
   argv: string[],
-  ctx: CommandContext
+  ctx: CommandContext,
+  pmConfig?: JshProcessConfig
 ): Promise<JshResult> {
+  const proc = pmConfig
+    ? pmConfig.processManager.spawn({
+        kind: 'jsh',
+        argv,
+        cwd: ctx.cwd,
+        owner: pmConfig.owner,
+        ppid: pmConfig.getParentPid?.(),
+      })
+    : null;
+  try {
+    const result = await runJsCode(code, argv, ctx);
+    if (proc && pmConfig) {
+      pmConfig.processManager.exit(proc.pid, result.exitCode);
+    }
+    return result;
+  } catch (err) {
+    if (proc && pmConfig) {
+      pmConfig.processManager.exit(proc.pid, proc.abort.signal.aborted ? null : 1);
+    }
+    throw err;
+  }
+}
+
+async function runJsCode(code: string, argv: string[], ctx: CommandContext): Promise<JshResult> {
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
   const writeStdout = (value: unknown): void => {

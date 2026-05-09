@@ -38,6 +38,8 @@ import {
   createUpskillCommand,
 } from './supplemental-commands/upskill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
+import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
+import type { JshProcessConfig } from './jsh-executor.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
 import type { JshDiscoveryFS } from './jsh-discovery.js';
 import { executeJshFile, executeJsCode } from './jsh-executor.js';
@@ -75,6 +77,26 @@ export interface HeadlessShellOptions {
   getParentJid?: () => string | undefined;
   /** True if owned by a non-interactive scoop (gates the `mount` picker). */
   isScoop?: () => boolean;
+  /**
+   * Phase 3.5 — process manager for `kind:'jsh'` registration.
+   * When omitted, the shell falls back to its pre-Phase-3 behavior
+   * (no `.jsh` script visibility in `ps`). When supplied alongside
+   * `processOwner`, every `executeScriptFile` and `node -e` call
+   * registers a process record under the active shell's pid (when
+   * `getCurrentShellPid` is also supplied) or as an orphan
+   * (`ppid: 1`) otherwise.
+   */
+  processManager?: ProcessManager;
+  /** Default owner for spawned `kind:'jsh'` processes. */
+  processOwner?: ProcessOwner;
+  /**
+   * Returns the active `kind:'shell'` pid the jsh script runs
+   * under (e.g. the bash command the user typed that resolved
+   * to `myscript.jsh`). When omitted, jsh processes get
+   * `ppid: 1` (kernel-host anchor) — Phase 4 `ps -T` will still
+   * show them but as orphans.
+   */
+  getCurrentShellPid?: () => number | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -339,13 +361,18 @@ export class WasmShellHeadless implements HeadlessShellLike {
     scriptPath: string,
     args: string[] = []
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    return executeJshFile(scriptPath, args, {
-      fs: this.vfsAdapter,
-      cwd: this.cwd,
-      env: new Map(Object.entries(this.lastEnv)),
-      stdin: '',
-      exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
-    });
+    return executeJshFile(
+      scriptPath,
+      args,
+      {
+        fs: this.vfsAdapter,
+        cwd: this.cwd,
+        env: new Map(Object.entries(this.lastEnv)),
+        stdin: '',
+        exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
+      },
+      this.buildJshProcessConfig()
+    );
   }
 
   /**
@@ -466,13 +493,18 @@ export class WasmShellHeadless implements HeadlessShellLike {
                   env: Object.fromEntries(ctx.env),
                   cwd: opts?.cwd ?? ctx.cwd,
                 }));
-            return executeJsCode(code, argv, {
-              fs: ctx.fs,
-              cwd: ctx.cwd,
-              env: ctx.env,
-              stdin: ctx.stdin,
-              exec: execFn,
-            });
+            return executeJsCode(
+              code,
+              argv,
+              {
+                fs: ctx.fs,
+                cwd: ctx.cwd,
+                env: ctx.env,
+                stdin: ctx.stdin,
+                exec: execFn,
+              },
+              shell.buildJshProcessConfig()
+            );
           },
         };
 
@@ -554,19 +586,38 @@ export class WasmShellHeadless implements HeadlessShellLike {
     }
 
     const argv = ['node', scriptPath, ...args];
-    const result = await executeJsCode(code, argv, {
-      fs: this.vfsAdapter,
-      cwd: this.cwd,
-      env: new Map(Object.entries(this.lastEnv)),
-      stdin: '',
-      exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
-    });
+    const result = await executeJsCode(
+      code,
+      argv,
+      {
+        fs: this.vfsAdapter,
+        cwd: this.cwd,
+        env: new Map(Object.entries(this.lastEnv)),
+        stdin: '',
+        exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
+      },
+      this.buildJshProcessConfig()
+    );
 
     return {
       stdout: result.stdout,
       stderr: result.stderr,
       exitCode: result.exitCode,
       env: this.lastEnv,
+    };
+  }
+
+  /**
+   * Build a `JshProcessConfig` from the headless options. Returns
+   * `undefined` when no manager is wired (the jsh-executor then
+   * skips registration).
+   */
+  protected buildJshProcessConfig(): JshProcessConfig | undefined {
+    if (!this.options.processManager || !this.options.processOwner) return undefined;
+    return {
+      processManager: this.options.processManager,
+      owner: this.options.processOwner,
+      getParentPid: this.options.getCurrentShellPid,
     };
   }
 }

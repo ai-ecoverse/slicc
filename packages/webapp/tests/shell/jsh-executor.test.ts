@@ -512,3 +512,61 @@ describe('exec bridge', () => {
     expect(result.stdout.trim()).toBe('1');
   });
 });
+
+describe('jsh-executor — process manager wiring (Phase 3.5)', () => {
+  it('registers a kind:"jsh" process for executeJshFile and exits with the script exit code', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    const ctx = createMockCtx({
+      '/workspace/hi.jsh': 'console.log("hi")',
+    });
+    await executeJshFile('/workspace/hi.jsh', ['a', 'b'], ctx, {
+      processManager: pm,
+      owner: { kind: 'cone' },
+      getParentPid: () => 5000,
+    });
+    const procs = pm.list();
+    expect(procs).toHaveLength(1);
+    expect(procs[0].kind).toBe('jsh');
+    expect(procs[0].argv).toEqual(['node', '/workspace/hi.jsh', 'a', 'b']);
+    expect(procs[0].ppid).toBe(5000);
+    expect(procs[0].exitCode).toBe(0);
+    expect(procs[0].status).toBe('exited');
+  });
+
+  it('records process.exit(N) as the kind:"jsh" exit code', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    const ctx = createMockCtx({
+      '/workspace/fail.jsh': 'process.exit(7);',
+    });
+    const result = await executeJshFile('/workspace/fail.jsh', [], ctx, {
+      processManager: pm,
+      owner: { kind: 'system' },
+    });
+    expect(result.exitCode).toBe(7);
+    expect(pm.list()[0].exitCode).toBe(7);
+  });
+
+  it('exits 1 on a thrown script error', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    const ctx = createMockCtx({
+      '/workspace/throw.jsh': 'throw new Error("boom");',
+    });
+    const result = await executeJshFile('/workspace/throw.jsh', [], ctx, {
+      processManager: pm,
+      owner: { kind: 'system' },
+    });
+    expect(result.exitCode).toBe(1);
+    expect(pm.list()[0].exitCode).toBe(1);
+  });
+
+  it('does not register processes when no pmConfig is supplied (backwards compatible)', async () => {
+    const ctx = createMockCtx({
+      '/workspace/hi.jsh': 'console.log("hi")',
+    });
+    const result = await executeJshFile('/workspace/hi.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+  });
+});
