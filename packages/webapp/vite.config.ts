@@ -16,6 +16,13 @@ const electronOverlayEntry = resolve(__dirname, 'src/ui/electron-overlay-entry.t
 const sliccEditorEntry = resolve(__dirname, 'src/ui/slicc-editor-entry.ts');
 const sliccDiffEntry = resolve(__dirname, 'src/ui/slicc-diff-entry.ts');
 const lucideIconsEntry = resolve(__dirname, 'src/ui/lucide-icons.ts');
+// Phase 2 step 6a: kernel-worker.ts is a DedicatedWorker entry. The page
+// fetches `/kernel-worker.js`, spawns it, transfers two MessagePorts via
+// `kernel-worker-init`, and the worker boots `createKernelHost` over
+// them. Same dev-middleware + production-esbuild pattern as the SW
+// entries — Vite's rollup would code-split shared chunks (LightningFS,
+// providers) which a worker can't import.
+const kernelWorkerEntry = resolve(__dirname, 'src/kernel/kernel-worker.ts');
 
 /** esbuild plugin: resolve @pierre/diffs internal imports that aren't in the exports map. */
 function pierreDiffsPlugin() {
@@ -222,6 +229,29 @@ export default defineConfig(({ mode }) => ({
           }
         });
 
+        server.middlewares.use('/kernel-worker.js', async (_req, res) => {
+          try {
+            const esbuild = await import('esbuild');
+            const result = await esbuild.build({
+              entryPoints: [kernelWorkerEntry],
+              bundle: true,
+              write: false,
+              format: 'iife',
+              target: 'esnext',
+              define: { __DEV__: 'true', global: 'globalThis' },
+              plugins: [pierreDiffsPlugin()],
+            });
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(result.outputFiles![0].text);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.error('[kernel-worker] Failed to build:', errMsg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[kernel-worker] Build failed:', ${JSON.stringify(errMsg)});`);
+          }
+        });
+
         server.middlewares.use('/lucide-icons.js', async (_req, res) => {
           try {
             const esbuild = await import('esbuild');
@@ -331,6 +361,22 @@ export default defineConfig(({ mode }) => ({
           minify: true,
           define: { __DEV__: 'false', global: 'globalThis' },
         });
+
+        // NOTE: kernel-worker.ts production bundle is intentionally NOT
+        // emitted here yet. The worker's import graph reaches through
+        // `createKernelHost` → `Orchestrator` → pi-coding-agent into
+        // node:* modules and pi-ai paths that today's Rollup pipeline
+        // resolves via the `resolveId` plugin and `resolve.alias` map
+        // above. esbuild called directly here doesn't see those —
+        // duplicating the full alias surface is non-trivial.
+        //
+        // Phase 2 step 6d (the standalone main.ts wire-through) is the
+        // first consumer of `/kernel-worker.js`. That step will either
+        // (a) replicate the resolution as a shared esbuild plugin and
+        // emit the bundle here, or (b) move the worker entry into the
+        // Rollup graph as a `?worker` import. Until then the dev
+        // middleware (`/kernel-worker.js` above) builds on demand,
+        // which is enough for Phase 2 step 6c's test scaffolding.
         copyFileSync(
           resolve(__dirname, '../assets/logos/favicon.png'),
           resolve(uiOutDir, 'favicon.png')

@@ -65,22 +65,30 @@ export class OffscreenClient implements KernelClientFacade {
   private stateRetryTimer: ReturnType<typeof setInterval> | null = null;
   private localFs: VirtualFS | null = null;
   /**
-   * KernelTransport over chrome.runtime — constructed in the constructor.
-   * The client owns no wire calls directly anymore; `setupMessageListener`
-   * and `send` go through this transport. The transport delivers raw
-   * `ExtensionMessage` envelopes so the existing source filter and
-   * special-case routing (`debug-tabs`, `sprinkle-op`) stay intact. Phase
-   * 2 swaps this for a `MessageChannel` adapter without changing call
-   * sites.
+   * KernelTransport — defaults to the chrome.runtime adapter. Phase 2
+   * step 6b allows passing a `MessageChannel`-backed transport via the
+   * constructor so the standalone panel can drive the same client over
+   * the kernel worker. The transport delivers raw `ExtensionMessage`
+   * envelopes either way so the existing source filter and special-case
+   * routing (`debug-tabs`, `sprinkle-op`) stay intact.
    */
   private transport: KernelTransport<ExtensionMessage, PanelToOffscreenMessage>;
 
   /** Currently selected scoop JID (set by the UI). */
   selectedScoopJid: string | null = null;
 
-  constructor(callbacks: OffscreenClientCallbacks) {
+  /**
+   * Phase 2: optional transport injection. If omitted (today's
+   * extension panel), the chrome.runtime adapter is constructed.
+   * Standalone passes a `MessageChannel`-backed transport bound to
+   * the kernel worker.
+   */
+  constructor(
+    callbacks: OffscreenClientCallbacks,
+    transport?: KernelTransport<ExtensionMessage, PanelToOffscreenMessage>
+  ) {
     this.callbacks = callbacks;
-    this.transport = createPanelChromeRuntimeTransport<PanelToOffscreenMessage>();
+    this.transport = transport ?? createPanelChromeRuntimeTransport<PanelToOffscreenMessage>();
     this.setupMessageListener();
   }
 
