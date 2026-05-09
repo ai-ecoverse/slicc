@@ -451,6 +451,26 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
           /* not mounted */
         }
       }
+      releaseHostGlobals({ processManager, lickManager });
     },
   };
+}
+
+/**
+ * Clear the kernel-host globals (`__slicc_pm`, `__slicc_lickManager`)
+ * iff they still point at the supplied references. A second host
+ * that booted while we were running would have replaced them, and
+ * tearing down our own ref would re-orphan that host's surface for
+ * shell-script callers (`__slicc_pm` is the fallback for `ps` /
+ * `kill` / `crontask` / `webhook`).
+ *
+ * Exported for tests; production callers go through `dispose()`.
+ */
+export function releaseHostGlobals(refs: {
+  processManager: ProcessManager;
+  lickManager: LickManager;
+}): void {
+  const g = globalThis as Record<string, unknown>;
+  if (g.__slicc_pm === refs.processManager) delete g.__slicc_pm;
+  if (g.__slicc_lickManager === refs.lickManager) delete g.__slicc_lickManager;
 }
