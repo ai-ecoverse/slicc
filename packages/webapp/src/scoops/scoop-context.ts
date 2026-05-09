@@ -44,6 +44,7 @@ import {
 } from './scoop-management-tools.js';
 import { getAdobeSessionId } from './llm-session-id.js';
 import { fetchSecretEnvVars } from '../core/secret-env.js';
+import type { Process, ProcessManager } from '../kernel/process-manager.js';
 
 const log = createLogger('scoop-context');
 
@@ -225,6 +226,20 @@ export class ScoopContext {
   private unsubscribe: (() => void) | null = null;
   /** Aborts the in-flight prompt() retry loop and any pending backoff sleep. */
   private promptAbortController: AbortController | null = null;
+  /**
+   * Phase 3.3 — process manager. When set, `prompt()` registers a
+   * `kind:'scoop-turn'` process whose `Process.abort` is the same
+   * controller as `promptAbortController`. `stop()` / `dispose()`
+   * route through `pm.signal(pid, 'SIGINT')` so the recorded
+   * `terminatedBy` and the exit code match the expected
+   * scoop-turn aborted (130) shape.
+   *
+   * Optional — tests construct `ScoopContext` without a manager and
+   * the existing inline-orchestrator path stays untouched. The
+   * kernel-worker boot wires it through `createKernelHost`.
+   */
+  private processManager: ProcessManager | null = null;
+  private currentTurnProcess: Process | null = null;
 
   private sessionStore: SessionStore | null = null;
   private sessionId: string;
@@ -241,7 +256,8 @@ export class ScoopContext {
     fs: VirtualFS | RestrictedFS,
     sessionStore?: SessionStore,
     skillsFs?: VirtualFS,
-    coneJid?: string
+    coneJid?: string,
+    processManager?: ProcessManager
   ) {
     this.scoop = scoop;
     this.callbacks = callbacks;
@@ -249,6 +265,7 @@ export class ScoopContext {
     this.sessionStore = sessionStore ?? null;
     this.skillsFs = skillsFs ?? null;
     this.coneJid = coneJid;
+    this.processManager = processManager ?? null;
     // Internal persistence key — stable across days/restarts so saved
     // conversations can be restored by `SessionStore.load`. The outgoing
     // Adobe `X-Session-Id` is computed separately in `init()`.
@@ -518,6 +535,29 @@ export class ScoopContext {
     this.isProcessing = true;
     this.setStatus('processing');
 
+    // Phase 3.3: register the scoop turn as a process. The
+    // `Process.abort` adopts `abortController` so existing callers
+    // that hold the controller (stop/dispose) keep working;
+    // `pm.signal(pid, …)` is the new path the future `kill` shell
+    // command will take. Truncate the prompt text to a reasonable
+    // length for `argv` (full text would be visible in
+    // `/proc/<pid>/cmdline` in Phase 5 — fine, but hundreds-of-KB
+    // prompts shouldn't blow up that file).
+    const turnArgv = ['prompt', text.length > 200 ? text.slice(0, 197) + '…' : text];
+    const turnProcess = this.processManager
+      ? this.processManager.spawn({
+          kind: 'scoop-turn',
+          argv: turnArgv,
+          cwd: this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`,
+          owner: {
+            kind: this.scoop.isCone ? 'cone' : 'scoop',
+            scoopJid: this.scoop.jid,
+          },
+          adoptAbort: abortController,
+        })
+      : null;
+    this.currentTurnProcess = turnProcess;
+
     const MAX_RETRIES = 3;
     const BASE_DELAY_MS = 1000;
     let lastError: Error | null = null;
@@ -633,14 +673,35 @@ export class ScoopContext {
       if (this.promptAbortController === abortController) {
         this.promptAbortController = null;
       }
+      // Exit the scoop-turn process. Pass `null` so the manager
+      // derives the conventional exit code from `terminatedBy`
+      // (130 SIGINT, 143 SIGTERM, 137 SIGKILL); a clean turn or a
+      // turn that exhausted retries without an abort gets 0.
+      if (turnProcess && this.processManager) {
+        if (lastError && !abortSignal.aborted) {
+          this.processManager.exit(turnProcess.pid, 1);
+        } else {
+          this.processManager.exit(turnProcess.pid, abortSignal.aborted ? null : 0);
+        }
+      }
+      if (this.currentTurnProcess === turnProcess) {
+        this.currentTurnProcess = null;
+      }
     }
   }
 
   /** Stop the current agent operation and clear any queued prompts */
   stop(): void {
-    // Abort before touching the agent so any pending backoff sleep resolves
-    // and the retry loop exits on its next disposal/abort check.
-    this.promptAbortController?.abort();
+    // Phase 3.3: route the abort through `pm.signal` first so the
+    // turn process records `terminatedBy: 'SIGINT'` before we abort
+    // the controller (the abort would still fire because `signal()`
+    // calls `controller.abort()` internally — but doing it via the
+    // manager keeps the recorded state consistent).
+    if (this.currentTurnProcess && this.processManager) {
+      this.processManager.signal(this.currentTurnProcess.pid, 'SIGINT');
+    } else {
+      this.promptAbortController?.abort();
+    }
     this.agent?.clearAllQueues?.();
     this.agent?.abort?.();
     this.isProcessing = false;
@@ -762,7 +823,14 @@ export class ScoopContext {
   dispose(): void {
     this.disposed = true;
     // Cancel any in-flight retry loop / backoff sleep before tearing down the agent.
-    this.promptAbortController?.abort();
+    if (this.currentTurnProcess && this.processManager) {
+      // SIGTERM matches the conventional shutdown semantic — the
+      // turn loop's `finally` block will run `pm.exit(pid, null)`
+      // and the manager derives the 143 exit code from terminatedBy.
+      this.processManager.signal(this.currentTurnProcess.pid, 'SIGTERM');
+    } else {
+      this.promptAbortController?.abort();
+    }
     this.promptAbortController = null;
     this.agent?.clearAllQueues?.();
     this.agent?.abort?.();

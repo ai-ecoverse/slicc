@@ -66,6 +66,7 @@ import type { LickEvent, LickManager } from '../scoops/lick-manager.js';
 import type { ChannelMessage, RegisteredScoop } from '../scoops/types.js';
 import type { KernelFacade } from './types.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
+import { ProcessManager } from './process-manager.js';
 import { subscribeToLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import { subscribeToFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { formatLickEventForCone } from '../scoops/lick-formatting.js';
@@ -149,6 +150,13 @@ export interface KernelHost {
   bridge: KernelFacade;
   lickManager: LickManager;
   sharedFs: VirtualFS | null;
+  /**
+   * Process manager (Phase 3). Tracks every long-running unit the
+   * kernel performs — scoop turns, tool calls, shell execs, jsh
+   * scripts. Surfaced by Phase 4 `ps` / `kill` shell commands and
+   * the Phase 5 `/proc` mount.
+   */
+  processManager: ProcessManager;
   /**
    * Stop the BshWatchdog and unsubscribe tray-runtime listeners. Idempotent.
    * Callers wire this to their float's lifecycle hook (`beforeunload` in
@@ -252,11 +260,23 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   const { container, browser, bridge, callbacks, skipConeBootstrap = false } = config;
   const log: KernelHostLogger = config.logger ?? console;
 
-  // 1. Construct orchestrator.
+  // 1. Construct orchestrator + process manager (Phase 3.3). The
+  // manager is the single source of truth for live processes —
+  // every scoop turn, tool call, shell exec, jsh script registers
+  // here. Surfaced via `KernelHost.processManager` so callers
+  // (kernel-worker boot wiring it into `TerminalSessionHost`,
+  // future Phase 4 `ps` / `kill` shell commands) share one table.
+  const processManager = new ProcessManager();
   const orchestrator = new Orchestrator(container, {
     ...callbacks,
     getBrowserAPI: () => browser,
   });
+  orchestrator.setProcessManager(processManager);
+  // Fallback global for shell scripts / `.jsh` callers that can't
+  // accept constructor injection. Phase 4 `ps` will prefer the DI
+  // path when the supplemental command is constructed via
+  // `createSupplementalCommands`.
+  (globalThis as Record<string, unknown>).__slicc_pm = processManager;
 
   // 2. Bind bridge — sets up the wire listener and persistence store.
   await bridge.bind(orchestrator, browser);
@@ -398,6 +418,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     bridge,
     lickManager,
     sharedFs: sharedFs ?? null,
+    processManager,
     async dispose(): Promise<void> {
       if (disposed) return;
       disposed = true;

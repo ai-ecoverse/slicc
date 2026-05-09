@@ -25,6 +25,7 @@ import { VirtualFS, FsWatcher } from '../fs/index.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
+import type { ProcessManager } from '../kernel/process-manager.js';
 import { buildActiveLicksError, type LickManager } from './lick-manager.js';
 import { SessionStore } from '../core/session.js';
 import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
@@ -163,6 +164,15 @@ export class Orchestrator {
    * mid-wait.
    */
   private completionWaiters: Map<string, Array<(summary: string | null) => void>> = new Map();
+  /**
+   * Phase 3.3 — process manager threaded into each `ScoopContext`
+   * so prompts and tool calls show up as named processes. Set via
+   * {@link setProcessManager} (mirrors `setLickManager`); the
+   * kernel-worker boot path wires it. Inline standalone / extension
+   * paths can leave it `null` — `ScoopContext` falls back to its
+   * pre-Phase-3 behavior (untracked prompt + AbortController).
+   */
+  private processManager: ProcessManager | null = null;
 
   constructor(
     container: HTMLElement,
@@ -172,6 +182,24 @@ export class Orchestrator {
     this.container = container;
     this.callbacks = callbacks;
     this.config = config;
+  }
+
+  /**
+   * Inject the process manager (Phase 3.3). New `ScoopContext`s
+   * created after this point pick it up. Existing contexts are
+   * unaffected — restart the agent to see them in `ps`.
+   */
+  setProcessManager(pm: ProcessManager): void {
+    this.processManager = pm;
+  }
+
+  /**
+   * Read-only accessor — Phase 4 `ps` / `kill` shell commands look
+   * up the manager via this getter (or via the kernel-worker
+   * `globalThis.__slicc_pm` fallback for code that can't accept DI).
+   */
+  getProcessManager(): ProcessManager | null {
+    return this.processManager;
   }
 
   /** Initialize orchestrator and load saved scoops */
@@ -1510,7 +1538,8 @@ export class Orchestrator {
       fs,
       this.sessionStore ?? undefined,
       this.sharedFs ?? undefined,
-      coneJid
+      coneJid,
+      this.processManager ?? undefined
     );
 
     this.contexts.set(jid, context);
