@@ -67,6 +67,7 @@ import type { ChannelMessage, RegisteredScoop } from '../scoops/types.js';
 import type { KernelFacade } from './types.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
 import { ProcessManager } from './process-manager.js';
+import { ProcMountBackend } from './proc-mount.js';
 import { subscribeToLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import { subscribeToFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { formatLickEventForCone } from '../scoops/lick-formatting.js';
@@ -298,6 +299,20 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     log.warn('AgentBridge not published — orchestrator.getSharedFS() returned null');
   }
 
+  // 5b. Phase 5.3 — mount /proc on the shared FS. `mountInternal`
+  // (Phase 5.2) keeps it out of `listMounts()` (so scoops can't see
+  // it), out of `mount list`, and unpersisted (every reload starts
+  // fresh). The backend reads from the same `processManager` the
+  // kernel host uses, so `cat /proc/<pid>/status` always reflects
+  // the live table.
+  if (sharedFs) {
+    try {
+      await sharedFs.mountInternal('/proc', new ProcMountBackend(processManager));
+    } catch (err) {
+      log.warn('Failed to mount /proc', err);
+    }
+  }
+
   // 6. Register session-costs provider for the `cost` shell command.
   const { registerSessionCostsProvider } =
     await import('../shell/supplemental-commands/cost-command.js');
@@ -426,6 +441,16 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
       unsubFollower?.();
       bshWatchdogStop?.();
       scriptCatalogDispose?.();
+      // Phase 5.3 — tear down /proc. Best-effort: a missing entry
+      // (sharedFs unavailable at boot, or mountInternal failed)
+      // throws ENOENT we swallow.
+      if (sharedFs) {
+        try {
+          await sharedFs.unmountInternal('/proc');
+        } catch {
+          /* not mounted */
+        }
+      }
     },
   };
 }

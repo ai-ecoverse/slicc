@@ -55,6 +55,15 @@ export class VirtualFS {
    * into a handle directly.
    */
   private mountPoints = new Map<string, MountBackend>();
+  /**
+   * Phase 5.2 — paths that were registered via `mountInternal` instead
+   * of the user-facing `mount()`. Hidden from `listMounts()` (so
+   * `RestrictedFS` can't see them, scoops can't browse them, and they
+   * don't appear in `mount list` output) but still routed through
+   * `mountPoints` for path resolution. Used today only for the
+   * kernel `/proc` mount.
+   */
+  private internalMounts = new Set<string>();
   private watcher: FsWatcher | null = null;
   private readonly dbName: string;
   /** BroadcastChannel for syncing mount registrations across VFS instances with the same dbName. */
@@ -527,9 +536,81 @@ export class VirtualFS {
     }
   }
 
-  /** Return the list of currently active mount paths. */
+  /**
+   * Return the list of user-visible mount paths. Internal mounts
+   * (registered via `mountInternal`) are deliberately excluded —
+   * `RestrictedFS` reads from this list to enumerate scoop-readable
+   * prefixes, and `mount list` displays it directly.
+   */
   listMounts(): string[] {
-    return [...this.mountPoints.keys()];
+    const out: string[] = [];
+    for (const path of this.mountPoints.keys()) {
+      if (!this.internalMounts.has(path)) out.push(path);
+    }
+    return out;
+  }
+
+  /**
+   * Return internal mount paths (Phase 5.2). For introspection /
+   * debugging only; not exposed to `RestrictedFS` or `mount list`.
+   */
+  listInternalMounts(): string[] {
+    return [...this.internalMounts];
+  }
+
+  /**
+   * Phase 5.2 — register a backend at `absolutePath` without
+   * persistence or peer-sync. Used by the kernel for `/proc`
+   * (Phase 5.3) and reserved for any future kernel-only mount
+   * (`/dev`, `/sys`, …) that should not be visible to scoops or
+   * survive a reload.
+   *
+   * Differences from `mount()`:
+   *   - skips `saveMountEntry` (no IDB row);
+   *   - skips `mountSyncChannel.postMessage` (no peer sync);
+   *   - tags the path in `internalMounts` so `listMounts()` /
+   *     `RestrictedFS.getAllPrefixes()` exclude it;
+   *   - skips `mountIndex.registerMount` (kernel mounts have no
+   *     `FileSystemDirectoryHandle` to walk).
+   *
+   * Same as `mount()`: the path's parent dirs are created in
+   * LightningFS, and a placeholder directory at `absolutePath` is
+   * created so ancestor lookups (`cd /proc`) resolve. Throws
+   * `EEXIST` if the path is already a mount point (regular or
+   * internal).
+   */
+  async mountInternal(absolutePath: string, backend: MountBackend): Promise<void> {
+    const normalized = normalizePath(absolutePath);
+    if (this.mountPoints.has(normalized)) {
+      throw new FsError('EEXIST', 'mount point is already mounted', normalized);
+    }
+    // Create parent + placeholder so path resolution works.
+    const { dir } = splitPath(normalized);
+    if (dir !== '/') await this.mkdir(dir, { recursive: true });
+    try {
+      await this.lfs.mkdir(normalized);
+    } catch {
+      /* EEXIST is fine */
+    }
+    this.mountPoints.set(normalized, backend);
+    this.internalMounts.add(normalized);
+    this.watcher?.notify([{ type: 'modify', path: normalized, entryType: 'directory' }]);
+  }
+
+  /**
+   * Unregister an internal mount. Idempotent; throws
+   * `ENOENT` if the path was never registered as internal.
+   */
+  async unmountInternal(absolutePath: string): Promise<void> {
+    const normalized = normalizePath(absolutePath);
+    if (!this.internalMounts.has(normalized)) {
+      throw new FsError('ENOENT', 'not an internal mount point', normalized);
+    }
+    const backend = this.mountPoints.get(normalized);
+    this.mountPoints.delete(normalized);
+    this.internalMounts.delete(normalized);
+    this.watcher?.notify([{ type: 'modify', path: normalized, entryType: 'directory' }]);
+    await backend?.close();
   }
 
   /**
