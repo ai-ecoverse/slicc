@@ -38,6 +38,8 @@ import { OffscreenBridge } from '../../../chrome-extension/src/offscreen-bridge.
 import { createKernelHost, type KernelHost } from './host.js';
 import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
 import { WorkerCdpProxy } from './cdp-worker-proxy.js';
+import { TerminalSessionHost } from './terminal-session-host.js';
+import { WasmShellHeadless } from '../shell/wasm-shell-headless.js';
 
 // Provider registration is async-explicit (not side-effect import).
 // `providers/index.ts` switched to lazy `import.meta.glob` to break a
@@ -167,6 +169,7 @@ function installLocalStorageShim(seed: Record<string, string>): void {
 // ---------------------------------------------------------------------------
 
 let host: KernelHost | null = null;
+let stopTerminalHost: (() => void) | null = null;
 
 self.addEventListener('message', (event: MessageEvent) => {
   const data = event.data as { type?: string };
@@ -222,6 +225,34 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     logger: console,
   });
 
+  // Phase 2b step 5a: stand up the terminal-RPC host on the same kernel
+  // transport. The factory builds a fresh `WasmShellHeadless` per
+  // session over the orchestrator's shared FS so terminal `cd` state
+  // and `mount`/`git` commands hit the same backing store the agent
+  // sees. Sessions are terminal-scoped — each panel terminal-view
+  // opens its own session, and `terminal-close` disposes the shell.
+  //
+  // Falls back to a no-op if the orchestrator failed to publish a
+  // shared FS (logged at host construction); the panel terminal-view
+  // surfaces this as a `terminal-status: error` to its open promise.
+  const sharedFs = host.sharedFs;
+  if (sharedFs) {
+    const terminalHost = new TerminalSessionHost({
+      transport: bridgeTransport,
+      createShell: (_sid, opts) =>
+        new WasmShellHeadless({
+          fs: sharedFs,
+          cwd: opts.cwd,
+          env: opts.env,
+          browserAPI: browser,
+        }),
+      logger: console,
+    });
+    stopTerminalHost = terminalHost.start();
+  } else {
+    console.warn('[kernel-worker] shared FS unavailable; terminal sessions will fail to open');
+  }
+
   // Signal readiness to the page over the kernel port.
   init.kernelPort.postMessage({ type: 'kernel-worker-ready' } satisfies KernelWorkerReadyMsg);
 }
@@ -232,5 +263,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
 self.addEventListener('message', (event: MessageEvent) => {
   const data = event.data as { type?: string };
   if (data?.type !== 'kernel-worker-shutdown') return;
+  stopTerminalHost?.();
+  stopTerminalHost = null;
   void host?.dispose();
 });

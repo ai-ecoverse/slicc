@@ -1593,11 +1593,24 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     send: (msg) => client.sendRaw(msg),
   });
 
+  // Phase 2b step 5c — mount the panel terminal as a `RemoteTerminalView`
+  // backed by the worker's `TerminalSessionHost`. Keystrokes assemble
+  // into committed lines locally; Enter dispatches each line via
+  // `terminal-exec` to the worker. Mount must run AFTER `host.ready`
+  // (the worker's `TerminalSessionHost` is instantiated at the tail
+  // of `boot()`).
+  const { RemoteTerminalView } = await import('../kernel/remote-terminal-view.js');
+  const remoteTerminal = new RemoteTerminalView({ client, cwd: '/' });
+  void layout.panels.terminal.mountRemoteShell(remoteTerminal).catch((err) => {
+    log.error('Failed to mount remote terminal view', err);
+  });
+
   // Cleanup on unload.
   window.addEventListener(
     'beforeunload',
     () => {
       stopStorageSync();
+      remoteTerminal.dispose();
       host.dispose();
     },
     { once: true }
