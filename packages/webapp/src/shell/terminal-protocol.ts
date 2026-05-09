@@ -126,10 +126,23 @@ export type TerminalControlMsg =
 /**
  * stdout / stderr chunk. The panel-side `terminal-view` writes
  * directly to xterm; ANSI escapes pass through unchanged.
+ *
+ * `execId` matches the originating `terminal-exec`. The protocol
+ * still allows only one in-flight exec per session today, but
+ * tagging output with the originating execId lets the client
+ * route the bytes to the right buffer if a future streaming-pty
+ * mode interleaves execs. Old hosts that don't set the field are
+ * treated as "broadcast to every in-flight exec" (legacy
+ * fallback).
  */
 export interface TerminalOutputMsg {
   type: 'terminal-output';
   sid: TerminalSessionId;
+  /**
+   * Originating exec id. Optional for backward compatibility with
+   * older hosts; new hosts always set it.
+   */
+  execId?: string;
   /** Discriminator so the panel can color stderr differently if it wants. */
   stream: 'stdout' | 'stderr';
   /** UTF-8 text — possibly partial (no \n required). */

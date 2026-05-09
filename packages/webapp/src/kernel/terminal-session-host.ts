@@ -295,6 +295,7 @@ export class TerminalSessionHost {
           this.emit({
             type: 'terminal-output',
             sid: msg.sid,
+            execId: msg.execId,
             stream: 'stdout',
             data: result.stdout,
           } satisfies TerminalOutputMsg);
@@ -303,6 +304,7 @@ export class TerminalSessionHost {
           this.emit({
             type: 'terminal-output',
             sid: msg.sid,
+            execId: msg.execId,
             stream: 'stderr',
             data: result.stderr,
           } satisfies TerminalOutputMsg);
@@ -340,6 +342,7 @@ export class TerminalSessionHost {
         this.emit({
           type: 'terminal-output',
           sid: msg.sid,
+          execId: msg.execId,
           stream: 'stderr',
           data: `Error: ${message}\n`,
         } satisfies TerminalOutputMsg);

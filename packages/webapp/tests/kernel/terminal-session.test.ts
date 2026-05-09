@@ -446,4 +446,66 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     expect(r2.exitCode).toBe(1);
     ctx.dispose();
   });
+
+  it('host stamps execId on every terminal-output envelope', async () => {
+    const ctx = setupChannel();
+    ctx.shell.executeCommand.mockResolvedValue({
+      stdout: 'hi',
+      stderr: 'oops',
+      exitCode: 0,
+    });
+    await ctx.client.open();
+    await ctx.client.exec('echo hi');
+    const outs = ctx.events.filter((e) => e.type === 'terminal-output');
+    expect(outs.length).toBeGreaterThanOrEqual(2);
+    for (const evt of outs) {
+      const out = evt as { execId?: string };
+      expect(typeof out.execId).toBe('string');
+    }
+    ctx.dispose();
+  });
+
+  it('legacy host without execId broadcasts to every in-flight buffer', async () => {
+    // Pin the backward-compat fallback: a host that emits
+    // `terminal-output` without `execId` (older protocol version)
+    // accumulates against every buffer. The protocol allows only
+    // one in-flight exec per session, so this is unambiguous.
+    //
+    // We exercise this by NOT using the host — push raw envelopes
+    // onto the panel transport directly.
+    const channel = new MessageChannel();
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+    const client = new TerminalSessionClient({ client: panelClient, sid: 'leg' });
+
+    // Start the worker port so we can inject raw envelopes.
+    channel.port2.start();
+    const send = (envelope: unknown): void => {
+      channel.port2.postMessage({ source: 'offscreen', payload: envelope });
+    };
+
+    // Open the session (synthetic).
+    send({ type: 'terminal-status', sid: 'leg', state: 'opened' });
+    await client.open();
+
+    // Kick off an exec then push a legacy output (no execId) BEFORE the exit.
+    const execP = client.exec('whatever');
+    await tick(5);
+    send({ type: 'terminal-output', sid: 'leg', stream: 'stdout', data: 'legacy' });
+    send({ type: 'terminal-exit', sid: 'leg', execId: 'e1', exitCode: 0 });
+    const result = await execP;
+    expect(result.stdout).toBe('legacy');
+
+    client.close();
+    channel.port1.close();
+    channel.port2.close();
+  });
 });

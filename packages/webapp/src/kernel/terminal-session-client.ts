@@ -209,14 +209,27 @@ export class TerminalSessionClient {
       }
       case 'terminal-output': {
         const out = event as TerminalOutputMsg;
-        // Accumulate against EVERY in-flight exec — there's at most
-        // one today so this is unambiguous, but if a future
-        // streaming-pty mode allows interleaved execs the client
-        // can match by execId once that field lands on the output
-        // envelope.
-        for (const buf of this.buffers.values()) {
+        // Phase 7+ host always tags output with the originating
+        // `execId`. Route the chunk to the matching buffer; if the
+        // exec already completed (terminal-exit landed first), the
+        // chunk is dropped instead of bleeding into a sibling exec
+        // that happens to also be in-flight.
+        //
+        // Legacy hosts that don't set `execId` fall back to the
+        // pre-Phase-7 broadcast behavior (accumulate against every
+        // in-flight buffer). The protocol allows only one exec at a
+        // time per session, so the broadcast is unambiguous on
+        // older hosts.
+        if (out.execId !== undefined) {
+          const buf = this.buffers.get(out.execId);
+          if (!buf) return;
           if (out.stream === 'stdout') buf.stdout += out.data;
           else buf.stderr += out.data;
+        } else {
+          for (const buf of this.buffers.values()) {
+            if (out.stream === 'stdout') buf.stdout += out.data;
+            else buf.stderr += out.data;
+          }
         }
         return;
       }
