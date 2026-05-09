@@ -234,6 +234,11 @@ export class WasmShellHeadless implements HeadlessShellLike {
       scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
       getParentJid: options.getParentJid,
+      // Phase 4: thread the manager into `ps` / `kill`. When the
+      // shell is constructed without one (extension offscreen,
+      // inline standalone), the commands fall back to
+      // `globalThis.__slicc_pm` (published by `createKernelHost`).
+      processManager: options.processManager,
     });
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();
