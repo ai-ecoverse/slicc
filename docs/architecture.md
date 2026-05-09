@@ -39,6 +39,31 @@
 | `offscreen-cdp-proxy.ts`          | CDPTransport over chrome.runtime messages (offscreen → service worker → chrome.debugger)                                                                                                                                    |
 | `panel-cdp-proxy.ts`              | CDPTransport for side panel terminal (panel → offscreen → service worker → chrome.debugger)                                                                                                                                 |
 
+### packages/webapp/src/kernel/ — Kernel Host (worker-resident agent engine)
+
+The kernel host is the off-main-thread home for the agent engine. In standalone, it runs in a `DedicatedWorker`; in the extension, the same factory wires the offscreen document. The "kernel" name is by analogy: the panel ↔ host boundary is the user/kernel split. `compat-contract.md` lists the wire envelopes the boundary must preserve.
+
+| File                           | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `host.ts`                      | `createKernelHost(config)` factory. Single boot sequence shared by the offscreen document, the standalone DedicatedWorker, and tests: orchestrator + lick-manager + agent-bridge + tray subs + cone bootstrap + BshWatchdog + `mountInternal('/proc', …)`. Returns `{ orchestrator, browser, bridge, lickManager, sharedFs, processManager, dispose }`.                                                                                      |
+| `kernel-worker.ts`             | DedicatedWorker entry. Receives `{ kernelPort, cdpPort, localStorageSeed }` over `MessagePort` transfer; constructs `OffscreenBridge` + `WorkerCdpProxy` + `BrowserAPI`; calls `createKernelHost`; stands up `TerminalSessionHost`. Posts `kernel-worker-ready` once boot completes. Worker-safety guard via `tsconfig.webapp-worker.json`.                                                                                                  |
+| `spawn.ts`                     | `spawnKernelWorker(opts)` — production wrapper around `new Worker(new URL('./kernel-worker.ts', import.meta.url), { type: 'module' })`. `bootstrapKernelWorker(opts)` is the testable inner loop that takes a `WorkerLike`. Returns `{ client, ready, dispose }`.                                                                                                                                                                            |
+| `transport.ts`                 | `KernelTransport<S, R>` — typed message interface. `OffscreenBridge` and `OffscreenClient` both implement against this; the chrome.runtime adapter and `MessageChannel` adapter are interchangeable.                                                                                                                                                                                                                                         |
+| `transport-message-channel.ts` | `MessagePort`-backed transport with implicit `port.start()` on first subscribe. `createPanelMessageChannelTransport` / `createBridgeMessageChannelTransport` add the source-tagged envelope wrapper.                                                                                                                                                                                                                                         |
+| `transport-chrome-runtime.ts`  | chrome.runtime.sendMessage / onMessage adapter. Used by the extension panel ↔ offscreen path.                                                                                                                                                                                                                                                                                                                                                |
+| `cdp-bridge.ts`                | `CdpTransportBridge` shared base. State (in-flight commands, listener counts, retain refcounts) is identical across the two existing proxies; wire shape and inbound filter pluggable via `CdpBridgeOptions`. `cdp-worker-proxy.ts` extends it.                                                                                                                                                                                              |
+| `cdp-worker-proxy.ts`          | `WorkerCdpProxy` — kernel-side CDP transport over a MessagePort. Pre-subscribe protocol (`cdp-subscribe` / `cdp-unsubscribe`) so the page-side `startPageCdpForwarder` only allocates `chrome.debugger` listeners while the worker is interested.                                                                                                                                                                                            |
+| `process-manager.ts`           | `ProcessManager` (Phase 3) — single source of truth for every running async unit. `Process` record carries pid (uint32, monotonic from 1024+), ppid, kind (`scoop-turn` / `tool` / `shell` / `jsh` / `net` / `preemptive`), argv, cwd, env, owner, AbortController, `Gate` (Phase 6 pause/resume), status, exitCode, terminatedBy, finishedAt. `signal(pid, sig)` for SIGINT/TERM/KILL/STOP/CONT; `onSignal` for kill-handler subscriptions. |
+| `proc-mount.ts`                | `ProcMountBackend` (Phase 5) — read-only `procfs`-shaped view of the manager. Mounted at `/proc` via `vfs.mountInternal` (scoop-invisible). `/proc/<pid>/{status,cmdline,cwd,stat}` plus a synthesized `pid 1` kernel-host anchor.                                                                                                                                                                                                           |
+| `preemptive-runner.ts`         | `runPreemptiveJs(opts)` (Phase 7) — spawns a `kind:'preemptive'` process backed by a per-task fresh DedicatedWorker. SIGKILL → `worker.terminate()` (uncatchable). SIGINT/TERM record state but don't terminate the worker (cooperative-only — the running JS is opaque).                                                                                                                                                                    |
+| `preemptive-worker.ts`         | DedicatedWorker entry for the preemptive runner. Runs JS code inside an `AsyncFunction` with shimmed `console` / `process.argv` / `process.env` / `process.stdout` / `process.stderr` / `process.exit(N)`; posts `preemptive-done` or `preemptive-error`. No FS access (Phase 8 candidate).                                                                                                                                                  |
+| `terminal-session-host.ts`     | Worker-side endpoint for the terminal RPC. Per-session `WasmShellHeadless`. `terminal-exec` registers `kind:'shell'` process and runs the command; `terminal-signal` routes through `pm.signal`. Output gated by `proc.gate.wait()` (Phase 6).                                                                                                                                                                                               |
+| `terminal-session-client.ts`   | Page-side counterpart. Per-call `execId` matching against `terminal-exit` events; subscription stays alive across `close()` so the closed-status event surfaces.                                                                                                                                                                                                                                                                             |
+| `remote-terminal-view.ts`      | `RemoteTerminalView` — page-side xterm view. Minimal line editor (typing, ←/→ ↑/↓ Home/End, Backspace/Delete, Enter, Ctrl+C → SIGINT). Pre-intercepts `mount /<path>` typed lines: runs `showDirectoryPicker` on the keystroke gesture, stashes the handle in IDB, lets the worker's `mountLocal` adopt it.                                                                                                                                  |
+| `page-storage-sync.ts`         | `installPageStorageSync` — page side hook. Monkey-patches `window.localStorage.setItem/removeItem/clear` per-instance (not Storage.prototype, to avoid clobbering sessionStorage); forwards writes over the kernel transport so the worker's localStorage shim stays in sync.                                                                                                                                                                |
+| `local-vfs-client.ts`          | `LocalVfsClient` — read-only structural facade for the file-browser, memory-panel, and preview-VFS responder on the page side. `VirtualFS` satisfies the interface naturally; the narrowing prevents accidental writes from the page realm (writes flow through the kernel transport).                                                                                                                                                       |
+| `types.ts`                     | `KernelFacade` / `KernelClientFacade` typed interfaces (Phase 0/1). `OffscreenBridge` implements `KernelFacade`; `OffscreenClient` implements `KernelClientFacade`. Decouples the wire shape from the implementation.                                                                                                                                                                                                                        |
+
 ### packages/node-server/src/ — CLI + Electron Runtimes
 
 | File                     | Purpose                                                                                                                                                                                                |
@@ -319,31 +344,52 @@ The Chrome extension uses a three-layer design to keep the agent engine alive ac
 
 ## Data Flow Diagrams
 
-### User Message Flow
+### User Message Flow (standalone — kernel-worker mode, default)
 
 ```
-User input in chat → ChatPanel.sendMessage()
-  → Orchestrator.handleMessage()
-    → routeToScoop() [determines cone or specific scoop]
-    → processScoopQueue()
-      → ScoopContext.prompt()
-        → pi-agent-core loop
-          → LLM API call (streaming)
-            → AgentEvent stream
-              → Orchestrator callbacks
-                → per-scoop message buffer
-                  → emitToUI() [if scoop is selected]
-                    → ChatPanel DOM update (streaming)
-      → Tool calls [bash, file, grep/find, NanoClaw, etc.]
-        → RestrictedFS / WasmShell / BrowserAPI
-          → results
-          → back to agent loop
-    → Scoop completes
-      → Orchestrator writes full output to /shared/scoop-notifications/
-      → Orchestrator notification (path + preview + line count)
-        → Cone's message queue
-        → Cone processes completion
+[Page]                                        [DedicatedWorker]
+ChatPanel.sendMessage()
+  → OffscreenClient.sendUserMessage()
+    → KernelTransport (MessagePort) ─────────→ OffscreenBridge.handleMessage()
+                                                 → Orchestrator.handleMessage()
+                                                   → routeToScoop()
+                                                   → processScoopQueue()
+                                                     → ScoopContext.prompt()
+                                                       → pm.spawn({ kind:'scoop-turn', … })
+                                                       → pi-agent-core loop
+                                                         → LLM API call (worker fetch
+                                                           with x-bypass-llm-proxy)
+                                                         → AgentEvent stream
+                                                       → Tool calls (kind:'tool', kind:'shell',
+                                                         kind:'jsh', kind:'preemptive')
+                                                         → RestrictedFS / WasmShellHeadless /
+                                                           BrowserAPI (CDP via WorkerCdpProxy
+                                                           ↔ startPageCdpForwarder)
+                                                       → pm.exit on completion
+                                                     → callbacks fire wire-side events
+                                            ←────── KernelTransport stream of
+agent-events (text_delta, tool_use_start,
+                                                   tool_result, scoop-status, …)
+ChatPanel DOM update (streaming)
 ```
+
+The kernel-worker runs on its own thread; a runaway bash loop or LLM stream can't freeze the page. Page main thread keeps `setInterval(…, 100)` ticking with sub-millisecond jitter while the worker is busy (verified at Phase 2.6d).
+
+### User Message Flow (extension)
+
+```
+[Side panel]                          [Service worker]               [Offscreen document]
+ChatPanel.sendMessage()
+  → OffscreenClient.sendUserMessage()
+    → chrome.runtime.sendMessage ────→ relay ────────────────────→ OffscreenBridge.handleMessage()
+                                                                     → (same Orchestrator path
+                                                                        as worker mode above, but
+                                                                        on the offscreen realm)
+                                                              ←──── chrome.runtime emit
+ChatPanel DOM update
+```
+
+Both deployment modes share `createKernelHost(...)` from `kernel/host.ts` — the SAME boot sequence wires the orchestrator, lick manager, agent bridge, process manager, and `/proc` mount. The only differences are the transport (`MessagePort` vs `chrome.runtime`) and the CDP proxy.
 
 ### Scoop Delegation
 

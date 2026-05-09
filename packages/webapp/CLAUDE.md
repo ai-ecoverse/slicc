@@ -27,6 +27,19 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 
 ## Key Subsystems
 
+### Kernel Host
+
+- Path: `packages/webapp/src/kernel/`
+- `host.ts` — `createKernelHost(config)` factory. Single boot sequence shared by the offscreen document (extension), the standalone DedicatedWorker, and tests: orchestrator + lick-manager + agent-bridge + tray subs + cone bootstrap + BshWatchdog + `/proc` mount. Returns `{ orchestrator, browser, bridge, lickManager, sharedFs, processManager, dispose }`.
+- `kernel-worker.ts` — DedicatedWorker entry. The standalone path defaults to this since the inline orchestrator path was removed; `?inline=1` no longer exists.
+- `process-manager.ts` — `ProcessManager` tracks every long-running async unit: scoop turns, tool calls, shell execs, jsh scripts, preemptive runners. Pids are uint32 from 1024+; `signal(pid, sig)` honors SIGINT/SIGTERM/SIGKILL/SIGSTOP/SIGCONT (SIGKILL escalates uncatchably).
+- `proc-mount.ts` — read-only `procfs`-shaped view, mounted at `/proc` via `vfs.mountInternal` (scoop-invisible, not persisted). `cat /proc/<pid>/{status,cmdline,cwd,stat}` works from any panel terminal.
+- `preemptive-runner.ts` — per-task DedicatedWorker for hard-killable JS execution. SIGKILL = `worker.terminate()`. Drives the `preemptive` shell command.
+- `terminal-session-{host,client}.ts` — terminal RPC over the kernel transport. Each panel-typed command spawns a `kind:'shell'` process; SIGINT routes to `pm.signal`.
+- `remote-terminal-view.ts` — page-side xterm. Pre-intercepts `mount /<path>` so the keystroke gesture can drive `showDirectoryPicker` (the worker has no `window`).
+
+Deep reference: `docs/kernel/process-model.md`. Wire contract: `docs/kernel/compat-contract.md`.
+
 ### Orchestrator
 
 - Path: `packages/webapp/src/scoops/`
