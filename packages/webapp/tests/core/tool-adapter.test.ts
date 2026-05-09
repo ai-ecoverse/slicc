@@ -275,6 +275,47 @@ describe('adaptTool — process manager wiring (Phase 3.4)', () => {
     expect(pm.list()[0].exitCode).toBe(0);
   });
 
+  it('SIGKILL force-exits a hung tool to status killed/137 even if the promise never settles', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    let releaseHang: (() => void) | null = null;
+    const mockTool: ToolDefinition = {
+      name: 'mount',
+      description: 'mount',
+      inputSchema: { type: 'object' },
+      async execute() {
+        // Hang forever — simulates `mount` waiting on a folder
+        // picker that the user never resolves. Even SIGINT on the
+        // signal doesn't unhang us (the bug we're papering over —
+        // the underlying showToolUI await isn't signal-aware).
+        await new Promise<void>((resolve) => {
+          releaseHang = resolve;
+        });
+        return { content: '', isError: false };
+      },
+    };
+    const adapted = adaptTool(mockTool, {
+      processManager: pm,
+      owner: { kind: 'cone' },
+    });
+    const upstream = new AbortController();
+    void adapted.execute('id', { command: 'mount /mnt/x' }, upstream.signal);
+    // Let the spawn land.
+    await new Promise((r) => setTimeout(r, 5));
+    const proc = pm.list()[0];
+    expect(proc.kind).toBe('tool');
+    expect(proc.status).toBe('running');
+    // Operator escalates to SIGKILL — proc record flips to
+    // killed/137 immediately, even though the underlying promise
+    // is still hanging.
+    pm.signal(proc.pid, 'SIGKILL');
+    expect(proc.status).toBe('killed');
+    expect(proc.exitCode).toBe(137);
+    expect(proc.terminatedBy).toBe('SIGKILL');
+    // Cleanup so the test process exits cleanly.
+    releaseHang?.();
+  });
+
   it('exits 130 when the upstream signal aborts mid-execute', async () => {
     const { ProcessManager } = await import('../../src/kernel/process-manager.js');
     const pm = new ProcessManager();

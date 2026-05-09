@@ -141,6 +141,7 @@ export function adaptTool(
             ppid: pmConfig.getParentPid?.(),
           })
         : null;
+      let unsubKill: (() => void) | null = null;
       if (proc && pmConfig && signal) {
         // Mirror the agent-loop's signal onto our process: route
         // through `pm.signal` so `terminatedBy` is recorded.
@@ -153,6 +154,24 @@ export function adaptTool(
             { once: true }
           );
         }
+      }
+      if (proc && pmConfig) {
+        // SIGKILL force-exit (Phase 7+ follow-up). Tools that hang
+        // on UI gestures (mount waiting for a folder picker) or any
+        // non-cooperatively-cancellable async step keep the proc
+        // record stuck in `running` until the underlying promise
+        // settles — which can be never. Subscribing to
+        // `pm.onSignal` lets `kill -KILL <pid>` flip the table
+        // entry to `killed` / 137 immediately. The hung promise
+        // still leaks (we have no way to forcibly cancel an
+        // arbitrary tool's awaits), but at least `ps` reflects
+        // reality and the agent's tool-call view sees an exit.
+        // Phase 8 candidate: thread the signal through showToolUI
+        // so the leak goes away too.
+        unsubKill = pmConfig.processManager.onSignal((signaled, sig) => {
+          if (signaled.pid !== proc.pid || sig !== 'SIGKILL') return;
+          pmConfig.processManager.exit(proc.pid, null);
+        });
       }
       // The signal we hand to the tool's execute is the LARGER
       // union: aborts when either the agent loop or the process
@@ -194,6 +213,11 @@ export function adaptTool(
         if (ctx) {
           popToolExecutionContext(ctx);
         }
+        // Drop the SIGKILL force-exit subscription. `pm.exit` is
+        // idempotent so the subscription firing AFTER our explicit
+        // exit() above is a harmless no-op, but the unsubscribe
+        // keeps the listener set tidy.
+        unsubKill?.();
       }
     },
   };
