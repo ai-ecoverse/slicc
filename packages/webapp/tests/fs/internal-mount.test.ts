@@ -17,7 +17,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import { ProcMountBackend } from '../../src/kernel/proc-mount.js';
 import { ProcessManager } from '../../src/kernel/process-manager.js';
-import { FsError } from '../../src/fs/types.js';
 
 describe('mountInternal', () => {
   let vfs: VirtualFS;

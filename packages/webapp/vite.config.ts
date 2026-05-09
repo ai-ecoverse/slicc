@@ -16,13 +16,6 @@ const electronOverlayEntry = resolve(__dirname, 'src/ui/electron-overlay-entry.t
 const sliccEditorEntry = resolve(__dirname, 'src/ui/slicc-editor-entry.ts');
 const sliccDiffEntry = resolve(__dirname, 'src/ui/slicc-diff-entry.ts');
 const lucideIconsEntry = resolve(__dirname, 'src/ui/lucide-icons.ts');
-// Phase 2 step 6a: kernel-worker.ts is a DedicatedWorker entry. The page
-// fetches `/kernel-worker.js`, spawns it, transfers two MessagePorts via
-// `kernel-worker-init`, and the worker boots `createKernelHost` over
-// them. Same dev-middleware + production-esbuild pattern as the SW
-// entries — Vite's rollup would code-split shared chunks (LightningFS,
-// providers) which a worker can't import.
-const kernelWorkerEntry = resolve(__dirname, 'src/kernel/kernel-worker.ts');
 
 /** esbuild plugin: resolve @pierre/diffs internal imports that aren't in the exports map. */
 function pierreDiffsPlugin() {
@@ -229,14 +222,13 @@ export default defineConfig(({ mode }) => ({
           }
         });
 
-        // Note: `kernel-worker.ts` is loaded via Vite's native
-        // `new Worker(new URL('./kernel-worker.ts', import.meta.url),
-        // { type: 'module' })` pattern in `kernel/spawn.ts`. Vite handles
-        // dev serving and production bundling through the same Rollup
-        // pipeline that resolves `resolve.alias` and the `stub-pi-node-internals`
-        // resolveId plugin — no dev middleware or closeBundle entry
-        // needed. The `kernelWorkerEntry` constant above is kept as a
-        // navigation aid for grep / IDE go-to-definition.
+        // Note: `src/kernel/kernel-worker.ts` is loaded via Vite's
+        // native `new Worker(new URL('./kernel-worker.ts',
+        // import.meta.url), { type: 'module' })` pattern in
+        // `kernel/spawn.ts`. Vite handles dev serving and production
+        // bundling through the same Rollup pipeline that resolves
+        // `resolve.alias` and the `stub-pi-node-internals` resolveId
+        // plugin — no dev middleware or closeBundle entry needed.
 
         server.middlewares.use('/lucide-icons.js', async (_req, res) => {
           try {

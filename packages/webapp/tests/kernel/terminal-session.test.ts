@@ -33,24 +33,25 @@ function makeStubShell(opts?: {
   shouldThrow?: boolean;
   observeAbort?: (signal: AbortSignal) => void;
 }): StubShell {
+  const delayMs = opts?.delayMs;
+  const shouldThrow = opts?.shouldThrow;
+  const stdout = opts?.output?.stdout ?? '';
+  const stderr = opts?.output?.stderr ?? '';
+  const exitCode = opts?.output?.exitCode ?? 0;
   const executeCommand = vi.fn(async (_command: string, signal?: AbortSignal) => {
     opts?.observeAbort?.(signal!);
-    if (opts?.delayMs) {
+    if (delayMs) {
       // Resolve early if aborted; otherwise wait.
       await new Promise<void>((resolve, reject) => {
-        const t = setTimeout(resolve, opts.delayMs);
+        const t = setTimeout(resolve, delayMs);
         signal?.addEventListener('abort', () => {
           clearTimeout(t);
           reject(new Error('aborted'));
         });
       }).catch(() => undefined);
     }
-    if (opts?.shouldThrow) throw new Error('boom');
-    return {
-      stdout: opts?.output?.stdout ?? '',
-      stderr: opts?.output?.stderr ?? '',
-      exitCode: opts?.output?.exitCode ?? 0,
-    };
+    if (shouldThrow) throw new Error('boom');
+    return { stdout, stderr, exitCode };
   });
   return {
     dispose: vi.fn(),

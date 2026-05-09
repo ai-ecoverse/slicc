@@ -16,6 +16,9 @@
 
 import type { ExtensionMessage } from '../../../chrome-extension/src/messages.js';
 import type { KernelTransport } from './types.js';
+import { createLogger } from '../core/logger.js';
+
+const log = createLogger('panel-transport');
 
 function isExtMsg(msg: unknown): msg is ExtensionMessage {
   return typeof msg === 'object' && msg !== null && 'source' in msg && 'payload' in msg;
@@ -85,11 +88,11 @@ export function createPanelChromeRuntimeTransport<Out>(): KernelTransport<Extens
           payload,
         })
         .catch((err: unknown) => {
-          // Panel-side: log because send failures matter for UX. Mirrors
-          // today's `OffscreenClient.send` log line so behavior is
-          // identical — the existing tests pin this on chrome.runtime
-          // rejection.
-          console.error('[panel-transport] failed to send to offscreen', {
+          // Panel-side: log because send failures matter for UX. Routed
+          // through the webapp logger so the prefix and dedup match the
+          // rest of the panel's diagnostics; under DEBUG=0 this is
+          // silent in production and visible during development.
+          log.error('failed to send to offscreen', {
             error: err instanceof Error ? err.message : String(err),
           });
         });

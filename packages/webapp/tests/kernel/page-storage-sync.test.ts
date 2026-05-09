@@ -12,7 +12,7 @@
  *     between tests doesn't leak interceptors).
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { installPageStorageSync } from '../../src/kernel/page-storage-sync.js';
 import type { PanelToOffscreenMessage } from '../../../chrome-extension/src/messages.js';
 

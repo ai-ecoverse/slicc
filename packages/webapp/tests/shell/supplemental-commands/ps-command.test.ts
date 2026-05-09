@@ -48,7 +48,7 @@ describe('ps command', () => {
     const pm = new ProcessManager();
     const a = pm.spawn({ kind: 'shell', argv: ['a'], owner: { kind: 'cone' } });
     const b = pm.spawn({ kind: 'shell', argv: ['b'], owner: { kind: 'cone' } });
-    const c = pm.spawn({ kind: 'shell', argv: ['c'], owner: { kind: 'cone' } });
+    pm.spawn({ kind: 'shell', argv: ['c'], owner: { kind: 'cone' } });
     pm.exit(a.pid, 0); // exited (clean)
     pm.signal(b.pid, 'SIGINT');
     pm.exit(b.pid, null); // killed

@@ -7,8 +7,11 @@ offscreen document, the shell commands that touch DOM (and how each will be
 routed when the kernel runs in a worker), and the explicit ownership decisions
 for CDP, the preview Service Worker, and the VFS.
 
-Every entry has a file:line reference to the current code so the kernel
-extraction can be reviewed against today's behavior, not a sketch of it.
+Every entry has a file:line reference to the **commit at which Phase 0 landed**
+so the kernel extraction can be reviewed against today's behavior, not a sketch
+of it. Line numbers drift as later phases edit the same files; treat the symbol
+names as load-bearing and the line numbers as a starting hint — when in doubt,
+grep for the symbol.
 
 The companion typed surface is `packages/webapp/src/kernel/types.ts` —
 `KernelFacade`, `KernelClientFacade`, and `KernelTransport`. Phase 1 will
@@ -20,8 +23,9 @@ prove the contract by making the existing `OffscreenBridge` and
 ### 1.1 Panel → host requests (today's `PanelToOffscreenMessage` payload types)
 
 Defined in `packages/chrome-extension/src/messages.ts:140-157`. Handled by
-`packages/chrome-extension/src/offscreen-bridge.ts:603-845` (the big `switch
-(msg.type)` that drives the bridge).
+the big `switch (msg.type)` inside `OffscreenBridge.handlePanelMessage`
+(`packages/chrome-extension/src/offscreen-bridge.ts`, around lines 644-919
+at this snapshot — grep for the case label if the line drifts).
 
 | `msg.type`             | Payload                                   | Bridge handler line                                                              | Notes                                                                                                               |
 | ---------------------- | ----------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
@@ -122,8 +126,13 @@ null)` capability.
   kernel keeps the observer registry; observer cleanup on `unregisterScoop` /
   `destroyScoopTab` stays in `orchestrator.ts`.
 - **Idle timer / dropped-scoop cost flush**: `orchestrator.getSessionCosts()`
-  is the canonical accessor; the bridge surfaces it via `get-session-costs`
-  in extension. The kernel facade exposes a single `getSessionCosts()` method.
+  is the canonical accessor. In the extension it's surfaced via a direct
+  `chrome.runtime.onMessage` handler outside the bridge switch (see §1.1
+  `get-session-costs`). The kernel facade does not declare `getSessionCosts()`
+  today — Phase 1 deliberately kept it as an out-of-bridge handler so the
+  facade interface stays minimal until a worker home actually owns the
+  orchestrator. A later phase that moves the orchestrator into the kernel
+  worker can lift it onto `KernelFacade`.
 
 ## 3. Standalone boot side-effects (the things `offscreen.ts` already does
 
@@ -260,8 +269,9 @@ with a kernel-RPC backend later.
 
 - This file is committed.
 - `packages/webapp/src/kernel/types.ts` exists with `KernelFacade`,
-  `KernelClientFacade`, `KernelTransport`, and a deliberately-failing
-  `_assertCompat` line we'll delete at the end of Phase 1 once the existing
-  `OffscreenBridge` and `OffscreenClient` are proven to satisfy the
-  interface.
+  `KernelClientFacade`, and `KernelTransport`. (Earlier drafts called for a
+  deliberately-failing `_assertCompat` line that Phase 1 would delete; in
+  practice Phase 1 used the structural `implements` clauses on
+  `OffscreenBridge` and `OffscreenClient` directly to prove the surface,
+  which gives the same compile-time guarantee with less noise.)
 - `npm run typecheck` passes.

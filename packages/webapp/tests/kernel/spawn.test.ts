@@ -21,10 +21,6 @@ import { bootstrapKernelWorker, type WorkerLike } from '../../src/kernel/spawn.j
 import type { CDPTransport } from '../../src/cdp/transport.js';
 import type { OffscreenClientCallbacks } from '../../src/ui/offscreen-client.js';
 
-function tick(ms = 5): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 function makeStubCdpTransport(): CDPTransport {
   return {
     state: 'connected',
