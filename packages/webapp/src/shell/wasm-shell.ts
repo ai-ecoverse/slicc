@@ -33,6 +33,7 @@ import {
   decodeForbiddenResponseHeaders,
   isTextContentType,
 } from './proxied-fetch.js';
+import type { HeadlessShellLike } from './wasm-shell-headless.js';
 
 // Re-export for backwards compatibility — existing tests import these
 // from `wasm-shell.ts`.
@@ -111,7 +112,7 @@ type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
   signal?: AbortSignal;
 };
 
-export class WasmShell {
+export class WasmShell implements HeadlessShellLike {
   private bash: Bash;
   private vfsAdapter: VfsAdapter;
   private gitCommands: GitCommands;
