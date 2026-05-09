@@ -337,13 +337,16 @@ export class ProcessManager {
       this.fireSignal(proc, sig);
       return true;
     }
-    // Phase 7: SIGKILL escalates — even after a previous SIGINT /
-    // SIGTERM recorded a different `terminatedBy`, SIGKILL takes
-    // precedence. POSIX behavior: SIGKILL is uncatchable. For
-    // SIGINT / SIGTERM, the FIRST terminating signal still wins.
+    // Resolve `terminatedBy` for this signal:
+    //   - SIGKILL escalates unconditionally (POSIX uncatchable
+    //     semantic): even after a previous SIGINT / SIGTERM
+    //     recorded a different `terminatedBy`, SIGKILL takes
+    //     precedence.
+    //   - SIGINT / SIGTERM are first-wins: a later SIGTERM after
+    //     SIGINT leaves `terminatedBy = SIGINT`.
     if (sig === 'SIGKILL') {
       proc.terminatedBy = 'SIGKILL';
-    } else if (!proc.terminatedBy) {
+    } else if (proc.terminatedBy === null) {
       proc.terminatedBy = sig;
     }
     if (!proc.abort.signal.aborted) {
