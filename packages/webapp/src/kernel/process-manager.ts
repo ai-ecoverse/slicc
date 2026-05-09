@@ -60,6 +60,76 @@ export type ProcessStatus = 'pending' | 'running' | 'exited' | 'killed';
 
 export type Signal = 'SIGINT' | 'SIGTERM' | 'SIGSTOP' | 'SIGCONT' | 'SIGKILL';
 
+/**
+ * Phase 6 — pause/resume primitive. A `Gate` is a re-arming barrier
+ * that IO-boundary code awaits before proceeding. Default state is
+ * **resumed** — `wait()` returns immediately. SIGSTOP calls
+ * `pause()`; subsequent `wait()` calls block on a single internal
+ * promise. SIGCONT (`resume()`) resolves that promise so every
+ * waiter wakes up at once. Auto-released on process exit so any
+ * pending waiter doesn't deadlock if the parent code already chose
+ * to exit.
+ *
+ * The gate is purely cooperative: callers must explicitly `await
+ * gate.wait()` at the right points. Phase 6.3 places the awaits
+ * at terminal output boundaries; future expansion can add VFS,
+ * network, and stdin gates as their own commits.
+ */
+export class Gate {
+  private paused = false;
+  private resumePromise: Promise<void> | null = null;
+  private resumeResolve: (() => void) | null = null;
+  private released = false;
+
+  /** Block subsequent `wait()` calls until `resume()` runs. Idempotent. */
+  pause(): void {
+    if (this.released) return;
+    if (this.paused) return;
+    this.paused = true;
+    this.resumePromise = new Promise<void>((resolve) => {
+      this.resumeResolve = resolve;
+    });
+  }
+
+  /** Wake every pending `wait()`. Idempotent. */
+  resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    const r = this.resumeResolve;
+    this.resumePromise = null;
+    this.resumeResolve = null;
+    r?.();
+  }
+
+  /**
+   * Resolve immediately if not paused; otherwise wait until
+   * `resume()` (or the gate is `release()`d on process exit).
+   */
+  wait(): Promise<void> {
+    if (!this.paused || this.released) return Promise.resolve();
+    return this.resumePromise!;
+  }
+
+  /**
+   * Permanently release: resolve any pending waiters, drop into a
+   * "always resolved" state. Called by the manager from `exit()`
+   * so a paused process at termination doesn't leak waiters.
+   */
+  release(): void {
+    if (this.released) return;
+    this.released = true;
+    this.paused = false;
+    const r = this.resumeResolve;
+    this.resumePromise = null;
+    this.resumeResolve = null;
+    r?.();
+  }
+
+  isPaused(): boolean {
+    return this.paused;
+  }
+}
+
 export interface ProcessOwner {
   /** 'cone' | 'scoop' | 'system' — drives the `ps` `SCOOP` column. */
   kind: 'cone' | 'scoop' | 'system';
@@ -104,6 +174,16 @@ export interface Process {
   readonly env: Record<string, string>;
   readonly owner: ProcessOwner;
   readonly abort: AbortController;
+  /**
+   * Phase 6 — pause/resume gate. SIGSTOP → `gate.pause()`; SIGCONT →
+   * `gate.resume()`. IO-boundary code (terminal output emission in
+   * Phase 6.3; future VFS / stdin / network gates) calls
+   * `await proc.gate.wait()` before doing the next chunk of work.
+   * Default state is resumed — `wait()` returns immediately. The
+   * manager `release()`s the gate on `exit()` so a process that
+   * exits while paused doesn't leak waiters.
+   */
+  readonly gate: Gate;
   readonly startedAt: number;
   status: ProcessStatus;
   exitCode: number | null;
@@ -174,6 +254,7 @@ export class ProcessManager {
       env: { ...(options.env ?? {}) },
       owner: { ...options.owner },
       abort,
+      gate: new Gate(),
       startedAt: Date.now(),
       status: 'running',
       exitCode: null,
@@ -205,6 +286,12 @@ export class ProcessManager {
       proc.exitCode = 0;
       proc.status = 'exited';
     }
+    // Phase 6: release the gate so any pending `wait()` resolves
+    // (e.g. a paused stdout chunk that was waiting for SIGCONT
+    // when the process got SIGKILL'd anyway). Callers that observe
+    // `abort.signal.aborted` after their `wait()` resolves can then
+    // bail out cleanly.
+    proc.gate.release();
     this.fire('exit', proc);
   }
 
@@ -224,9 +311,17 @@ export class ProcessManager {
     const proc = this.processes.get(pid);
     if (!proc) return false;
     if (proc.status === 'exited' || proc.status === 'killed') return false;
-    if (sig === 'SIGSTOP' || sig === 'SIGCONT') {
-      // Reserved for Phase 6 (gate). No-op today; record so
-      // observability tools can see the signal was attempted.
+    if (sig === 'SIGSTOP') {
+      // Phase 6 — pause the gate. Subsequent `await proc.gate.wait()`
+      // calls block until SIGCONT. Existing aborts are not cleared
+      // (SIGINT after SIGSTOP still kills, because the abort controller
+      // is independent of the gate).
+      proc.gate.pause();
+      return true;
+    }
+    if (sig === 'SIGCONT') {
+      // Phase 6 — resume the gate. Any waiters wake at once.
+      proc.gate.resume();
       return true;
     }
     // Record the FIRST terminating signal — subsequent SIGKILL after
@@ -238,6 +333,9 @@ export class ProcessManager {
     if (!proc.abort.signal.aborted) {
       proc.abort.abort();
     }
+    // Phase 6: a terminating signal also releases the gate so
+    // any paused waiter wakes (and observes `abort.signal.aborted`).
+    proc.gate.release();
     return true;
   }
 
@@ -323,7 +421,7 @@ export class ProcessManager {
         // they could leave a process in a half-spawned state. Surface
         // via console; the kernel logger isn't always available here
         // (e.g. tests pass a bare `new ProcessManager()`).
-         
+
         console.warn('[pm] listener error', err);
       }
     }

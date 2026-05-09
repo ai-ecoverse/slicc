@@ -285,6 +285,12 @@ export class TerminalSessionHost {
       const result = await session.shell.executeCommand(msg.command, abort.signal);
       const exitCode = abort.signal.aborted ? 130 : result.exitCode;
       if (!abort.signal.aborted) {
+        // Phase 6.3: gate output + exit emission. If the user
+        // (or another shell) sent SIGSTOP between command launch
+        // and now, hold the buffer here until SIGCONT lands. The
+        // gate auto-releases on `pm.exit` / terminating signals
+        // so a SIGINT after SIGSTOP still terminates cleanly.
+        if (proc) await proc.gate.wait();
         if (result.stdout) {
           this.emit({
             type: 'terminal-output',

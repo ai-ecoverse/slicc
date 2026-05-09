@@ -95,13 +95,34 @@ describe('kill command', () => {
     expect(result.stderr).toContain('already terminated');
   });
 
-  it('rejects unsupported signals (SIGSTOP, SIGCONT)', async () => {
+  it('-STOP pauses the process gate (Phase 6)', async () => {
     const pm = new ProcessManager();
-    pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
+    const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
     const cmd = createKillCommand({ processManager: pm });
-    const result = await cmd.execute(['-s', 'SIGSTOP', '1024'], mockCtx);
-    expect(result.exitCode).toBe(2);
-    expect(result.stderr).toContain('not supported');
+    const result = await cmd.execute(['-STOP', String(proc.pid)], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(proc.gate.isPaused()).toBe(true);
+    expect(proc.abort.signal.aborted).toBe(false);
+  });
+
+  it('-CONT resumes the process gate (Phase 6)', async () => {
+    const pm = new ProcessManager();
+    const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
+    pm.signal(proc.pid, 'SIGSTOP');
+    const cmd = createKillCommand({ processManager: pm });
+    const result = await cmd.execute(['-CONT', String(proc.pid)], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(proc.gate.isPaused()).toBe(false);
+  });
+
+  it('-s SIGSTOP / -s SIGCONT also work', async () => {
+    const pm = new ProcessManager();
+    const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
+    const cmd = createKillCommand({ processManager: pm });
+    expect((await cmd.execute(['-s', 'SIGSTOP', String(proc.pid)], mockCtx)).exitCode).toBe(0);
+    expect(proc.gate.isPaused()).toBe(true);
+    expect((await cmd.execute(['-s', 'SIGCONT', String(proc.pid)], mockCtx)).exitCode).toBe(0);
+    expect(proc.gate.isPaused()).toBe(false);
   });
 
   it('rejects malformed pids', async () => {

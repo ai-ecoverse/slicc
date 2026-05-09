@@ -8,7 +8,12 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { ProcessManager, runAsProcess, type Process } from '../../src/kernel/process-manager.js';
+import {
+  Gate,
+  ProcessManager,
+  runAsProcess,
+  type Process,
+} from '../../src/kernel/process-manager.js';
 
 function makeManager(): ProcessManager {
   return new ProcessManager();
@@ -187,13 +192,157 @@ describe('ProcessManager — signals', () => {
     expect(proc.status).toBe('killed');
   });
 
-  it('SIGSTOP and SIGCONT are accepted but do not abort (Phase 6 reservation)', () => {
+  it('SIGSTOP and SIGCONT do not abort (Phase 6 — pause/resume only)', () => {
     const pm = makeManager();
     const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
     expect(pm.signal(proc.pid, 'SIGSTOP')).toBe(true);
     expect(pm.signal(proc.pid, 'SIGCONT')).toBe(true);
     expect(proc.abort.signal.aborted).toBe(false);
     expect(proc.terminatedBy).toBeNull();
+  });
+});
+
+describe('Gate (Phase 6)', () => {
+  it('starts resumed — wait() returns immediately', async () => {
+    const g = new Gate();
+    let resolved = false;
+    await g.wait().then(() => {
+      resolved = true;
+    });
+    expect(resolved).toBe(true);
+  });
+
+  it('pause() blocks subsequent wait() until resume()', async () => {
+    const g = new Gate();
+    g.pause();
+    let resolved = false;
+    const p = g.wait().then(() => {
+      resolved = true;
+    });
+    // Yield to the event loop — wait() must not have resolved yet.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(resolved).toBe(false);
+    g.resume();
+    await p;
+    expect(resolved).toBe(true);
+  });
+
+  it('multiple waiters all resolve on a single resume()', async () => {
+    const g = new Gate();
+    g.pause();
+    let count = 0;
+    const promises = [
+      g.wait().then(() => count++),
+      g.wait().then(() => count++),
+      g.wait().then(() => count++),
+    ];
+    await new Promise((r) => setTimeout(r, 0));
+    expect(count).toBe(0);
+    g.resume();
+    await Promise.all(promises);
+    expect(count).toBe(3);
+  });
+
+  it('pause() is idempotent', async () => {
+    const g = new Gate();
+    g.pause();
+    g.pause();
+    let resolved = false;
+    const p = g.wait().then(() => {
+      resolved = true;
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(resolved).toBe(false);
+    g.resume();
+    await p;
+    expect(resolved).toBe(true);
+  });
+
+  it('resume() before pause() is a no-op', async () => {
+    const g = new Gate();
+    g.resume(); // no-op
+    let resolved = false;
+    await g.wait().then(() => {
+      resolved = true;
+    });
+    expect(resolved).toBe(true);
+  });
+
+  it('release() wakes waiters and locks gate to "always resolved"', async () => {
+    const g = new Gate();
+    g.pause();
+    let resolved = false;
+    const p = g.wait().then(() => {
+      resolved = true;
+    });
+    g.release();
+    await p;
+    expect(resolved).toBe(true);
+    // Subsequent waits return immediately even if pause() is called again.
+    g.pause();
+    await g.wait();
+  });
+
+  it('isPaused() reflects state', () => {
+    const g = new Gate();
+    expect(g.isPaused()).toBe(false);
+    g.pause();
+    expect(g.isPaused()).toBe(true);
+    g.resume();
+    expect(g.isPaused()).toBe(false);
+  });
+});
+
+describe('ProcessManager — Phase 6 gate integration', () => {
+  it('SIGSTOP pauses the process gate', () => {
+    const pm = new ProcessManager();
+    const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
+    expect(proc.gate.isPaused()).toBe(false);
+    pm.signal(proc.pid, 'SIGSTOP');
+    expect(proc.gate.isPaused()).toBe(true);
+  });
+
+  it('SIGCONT resumes the process gate', async () => {
+    const pm = new ProcessManager();
+    const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
+    pm.signal(proc.pid, 'SIGSTOP');
+    let resolved = false;
+    const p = proc.gate.wait().then(() => {
+      resolved = true;
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(resolved).toBe(false);
+    pm.signal(proc.pid, 'SIGCONT');
+    await p;
+    expect(resolved).toBe(true);
+  });
+
+  it('SIGINT after SIGSTOP still aborts and releases the gate', async () => {
+    const pm = new ProcessManager();
+    const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
+    pm.signal(proc.pid, 'SIGSTOP');
+    let resolved = false;
+    const p = proc.gate.wait().then(() => {
+      resolved = true;
+    });
+    pm.signal(proc.pid, 'SIGINT');
+    await p;
+    expect(resolved).toBe(true);
+    expect(proc.abort.signal.aborted).toBe(true);
+    expect(proc.terminatedBy).toBe('SIGINT');
+  });
+
+  it('exit() releases the gate so paused waiters do not leak', async () => {
+    const pm = new ProcessManager();
+    const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
+    pm.signal(proc.pid, 'SIGSTOP');
+    let resolved = false;
+    const p = proc.gate.wait().then(() => {
+      resolved = true;
+    });
+    pm.exit(proc.pid, 0);
+    await p;
+    expect(resolved).toBe(true);
   });
 });
 

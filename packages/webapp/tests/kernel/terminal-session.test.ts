@@ -297,6 +297,127 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     channel.port2.close();
   });
 
+  it('SIGSTOP holds output emission; SIGCONT releases it (Phase 6.3)', async () => {
+    const channel = new MessageChannel();
+    const pm = new ProcessManager();
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+    const shell = makeStubShell();
+    // Make the exec take ~50ms so the test has a race-free window
+    // to land SIGSTOP before the gate-await runs.
+    shell.executeCommand.mockImplementation(async (_cmd, signal) => {
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, 50);
+        signal?.addEventListener('abort', () => {
+          clearTimeout(t);
+          reject(new Error('aborted'));
+        });
+      });
+      return { stdout: 'hello\n', stderr: '', exitCode: 0 };
+    });
+    const host = new TerminalSessionHost({
+      transport: bridgeTransport,
+      createShell: () => shell,
+      processManager: pm,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const stopHost = host.start();
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const events: TerminalEventMsg[] = [];
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+    const client = new TerminalSessionClient({
+      client: panelClient,
+      sid: 'sg',
+      onEvent: (e) => events.push(e),
+    });
+
+    await client.open();
+    const execP = client.exec('echo hello');
+    // Pause early — at t=20ms the shell process exists but
+    // executeCommand hasn't returned yet (50ms delay). The gate
+    // await runs after executeCommand resolves, by which point
+    // the gate is paused.
+    await tick(20);
+    const shellProc = pm.list().find((p) => p.kind === 'shell');
+    expect(shellProc).toBeDefined();
+    pm.signal(shellProc!.pid, 'SIGSTOP');
+
+    // Wait long enough for executeCommand to resolve (50ms) plus
+    // some headroom; output must NOT have been emitted yet because
+    // the gate is paused.
+    await tick(100);
+    expect(events.find((e) => e.type === 'terminal-output')).toBeUndefined();
+
+    // Resume; output should land.
+    pm.signal(shellProc!.pid, 'SIGCONT');
+    const result = await execP;
+    expect(result.stdout).toBe('hello\n');
+    expect(events.some((e) => e.type === 'terminal-output')).toBe(true);
+
+    client.close();
+    stopHost();
+    channel.port1.close();
+    channel.port2.close();
+  });
+
+  it('SIGINT after SIGSTOP releases the gate and exits 130', async () => {
+    const channel = new MessageChannel();
+    const pm = new ProcessManager();
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+    const shell = makeStubShell();
+    shell.executeCommand.mockImplementation(async (_cmd, signal) => {
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, 200);
+        signal?.addEventListener('abort', () => {
+          clearTimeout(t);
+          reject(new Error('aborted'));
+        });
+      });
+      return { stdout: 'late\n', stderr: '', exitCode: 0 };
+    });
+    const host = new TerminalSessionHost({
+      transport: bridgeTransport,
+      createShell: () => shell,
+      processManager: pm,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const stopHost = host.start();
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+    const client = new TerminalSessionClient({ client: panelClient, sid: 'si' });
+
+    await client.open();
+    const execP = client.exec('cmd');
+    await tick(20);
+    const proc = pm.list().find((p) => p.kind === 'shell')!;
+    pm.signal(proc.pid, 'SIGSTOP');
+    await tick(20);
+    pm.signal(proc.pid, 'SIGINT');
+    const result = await execP;
+    expect(result.exitCode).toBe(130);
+    expect(proc.terminatedBy).toBe('SIGINT');
+
+    client.close();
+    stopHost();
+    channel.port1.close();
+    channel.port2.close();
+  });
+
   it('falls back to local AbortController without a ProcessManager', async () => {
     // Existing 7 round-trip tests already cover this path — this
     // test pins the absence-of-pm contract: pm.list() stays empty

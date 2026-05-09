@@ -2,12 +2,12 @@
  * `kill` — send a signal to a process tracked by the kernel
  * `ProcessManager`.
  *
- * Phase 4 supports `SIGINT`, `SIGTERM`, and `SIGKILL`. Default
- * signal (no flag) is `SIGTERM`, mirroring POSIX `kill(1)`.
- * `SIGSTOP` / `SIGCONT` are reserved on the wire for Phase 6's
- * pause/resume gate; the manager accepts them but takes no action
- * today, so this command rejects them explicitly to avoid
- * surprising users.
+ * Phase 6 added SIGSTOP / SIGCONT pause-and-resume support on top
+ * of Phase 4's SIGINT / SIGTERM / SIGKILL. Default signal (no flag)
+ * is `SIGTERM`, mirroring POSIX `kill(1)`. SIGSTOP and SIGCONT only
+ * affect the kernel's cooperative `Gate` — they don't suspend
+ * already-running JavaScript code. The terminal output emitter
+ * (Phase 6.3) is the most-visible consumer.
  *
  * Argument forms:
  *   kill PID [PID …]               default SIGTERM
@@ -38,7 +38,14 @@ export interface KillCommandOptions {
   processManager?: ProcessManager;
 }
 
-const SUPPORTED: Set<Signal> = new Set(['SIGINT', 'SIGTERM', 'SIGKILL']);
+const SUPPORTED: Set<Signal> = new Set([
+  'SIGINT',
+  'SIGTERM',
+  'SIGKILL',
+  // Phase 6 — pause/resume gate.
+  'SIGSTOP',
+  'SIGCONT',
+]);
 
 export function createKillCommand(options: KillCommandOptions = {}): Command {
   return defineCommand('kill', async (args) => {
@@ -96,7 +103,7 @@ export function createKillCommand(options: KillCommandOptions = {}): Command {
     if (!SUPPORTED.has(signal)) {
       return {
         stdout: '',
-        stderr: `kill: signal ${signal} not supported (use SIGINT, SIGTERM, or SIGKILL)\n`,
+        stderr: `kill: signal ${signal} not supported\n`,
         exitCode: 2,
       };
     }
@@ -162,24 +169,26 @@ function parseSignalShort(arg: string): Signal | Error {
 
 function killHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
-    stdout: `Usage: kill [-s SIGNAL | -INT | -TERM | -KILL | -9] PID [PID …]
+    stdout: `Usage: kill [-s SIGNAL | -INT | -TERM | -KILL | -STOP | -CONT | -9] PID [PID …]
 
 Send a signal to one or more processes tracked by the kernel.
 
 Default signal: SIGTERM.
 
-Supported signals (Phase 4):
+Supported signals:
   SIGINT (-INT)    cooperative cancel — exit 130
   SIGTERM (-TERM)  cooperative cancel — exit 143 (default)
   SIGKILL (-KILL)  cooperative cancel today; Phase 7 makes it
                    actually preempt for kind:'preemptive' procs
-
-SIGSTOP / SIGCONT are reserved for Phase 6 (pause/resume gate)
-and are intentionally rejected here.
+  SIGSTOP (-STOP)  pause the process's kernel Gate (Phase 6).
+                   Subsequent IO boundaries (terminal output, …)
+                   block until SIGCONT.
+  SIGCONT (-CONT)  resume the gate.
 
 Examples:
   kill 1024              SIGTERM the process with pid 1024
   kill -INT 1024 1025    SIGINT both
+  kill -STOP 1024        pause; \`kill -CONT 1024\` resumes
   kill -s SIGKILL 1024   explicit signal name
 `,
     stderr: '',
