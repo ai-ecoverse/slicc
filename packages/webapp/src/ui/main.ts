@@ -2522,7 +2522,7 @@ async function main(): Promise<void> {
   lickManager.setEventHandler(routeLickToScoop);
 
   // ── Navigation watcher: emit 'navigate' licks for main-frame responses
-  // that carry an x-slicc header. ──────────────────────────────────────
+  // that advertise a SLICC handoff `Link` rel (RFC 8288). ──────────────
   const navigationWatcher = new NavigationWatcher(browser.getTransport(), (navEvent) => {
     lickManager.emitEvent({
       type: 'navigate',
@@ -2531,7 +2531,9 @@ async function main(): Promise<void> {
       timestamp: new Date().toISOString(),
       body: {
         url: navEvent.url,
-        sliccHeader: navEvent.sliccHeader,
+        verb: navEvent.verb,
+        target: navEvent.target,
+        instruction: navEvent.instruction,
         title: navEvent.title,
       },
     });
@@ -2838,9 +2840,11 @@ async function main(): Promise<void> {
         // sees tabs in the SLICC-controlled Chrome profile, so external
         // tools running elsewhere post here instead.
         if (data.type === 'navigate_event') {
-          const sliccHeader = typeof data.sliccHeader === 'string' ? data.sliccHeader : '';
+          const verb = data.verb === 'handoff' || data.verb === 'upskill' ? data.verb : null;
+          const target =
+            typeof data.target === 'string' && data.target.length > 0 ? data.target : '';
           const navUrl = typeof data.url === 'string' && data.url.length > 0 ? data.url : '';
-          if (sliccHeader && navUrl) {
+          if (verb && target && navUrl) {
             lickManager.emitEvent({
               type: 'navigate',
               navigateUrl: navUrl,
@@ -2849,7 +2853,9 @@ async function main(): Promise<void> {
                 typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString(),
               body: {
                 url: navUrl,
-                sliccHeader,
+                verb,
+                target,
+                instruction: typeof data.instruction === 'string' ? data.instruction : undefined,
                 title: typeof data.title === 'string' ? data.title : undefined,
               },
             });

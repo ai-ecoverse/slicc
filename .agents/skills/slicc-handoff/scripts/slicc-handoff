@@ -8,14 +8,17 @@ const BASE_URL = 'https://www.sliccy.ai/handoff';
 function usage() {
   return `Usage: slicc-handoff [--open] <instruction>
 
-Build a SLICC handoff URL. When visited, the response carries an \`x-slicc\` header
-whose value is the instruction string. SLICC observes that header on main-frame
-navigations and shows the user an approval prompt.
+Build a SLICC handoff URL. When visited, the response advertises a
+RFC 8288 \`Link\` header with a SLICC handoff or upskill rel. SLICC
+observes the header on main-frame navigations and shows the user an
+approval prompt.
 
 Arguments:
-  <instruction>   The verb-prefixed instruction string, e.g.
-                  "handoff:Continue this task", or "upskill:https://github.com/owner/repo".
-                  If the instruction does not start with a known verb, \`handoff:\` is prepended.
+  <instruction>   A verb-prefixed instruction string:
+                    "handoff:<free-text>"            — continue a task
+                    "upskill:https://github.com/o/r" — install a skill
+                  If the instruction does not start with a known verb,
+                  \`handoff:\` is prepended.
 
 Options:
   --open          Open the generated URL in the local browser
@@ -53,15 +56,21 @@ function openUrl(url) {
 
 const KNOWN_VERBS = ['handoff', 'upskill'];
 
-function normalizeInstruction(raw) {
+/**
+ * Parse the instruction into { verb, payload }. Defaults to verb=handoff
+ * and the whole input as payload when no recognised verb prefix is found.
+ */
+function parseInstruction(raw) {
   const trimmed = raw.trim();
   if (!trimmed) fail('Instruction must not be empty.');
   const colonIdx = trimmed.indexOf(':');
   if (colonIdx > 0) {
     const verb = trimmed.slice(0, colonIdx);
-    if (KNOWN_VERBS.includes(verb)) return trimmed;
+    if (KNOWN_VERBS.includes(verb)) {
+      return { verb, payload: trimmed.slice(colonIdx + 1) };
+    }
   }
-  return `handoff:${trimmed}`;
+  return { verb: 'handoff', payload: trimmed };
 }
 
 async function main() {
@@ -83,23 +92,28 @@ async function main() {
   }
 
   if (positional.length === 0) fail(usage());
-  const instruction = normalizeInstruction(positional.join(' '));
-  const url = `${BASE_URL}?msg=${encodeURIComponent(instruction)}`;
+  const { verb, payload } = parseInstruction(positional.join(' '));
 
+  // Build the convenience URL with the dedicated query param so the worker
+  // can synthesise the right `Link` header without inferring the verb.
+  const url = `${BASE_URL}?${verb}=${encodeURIComponent(payload)}`;
   process.stdout.write(`${url}\n`);
 
-  // Always try to notify a local SLICC node-server over localhost. This
-  // works regardless of which browser profile the user is currently
-  // driving — the CDP watcher only sees tabs in the SLICC-launched Chrome
-  // profile, and the extension's webRequest listener only fires in the
-  // profile where it is installed.
+  // Notify a local SLICC node-server. Profile-independent fallback that
+  // works even when the user's default browser profile is not the one
+  // SLICC controls.
   const port = process.env['SLICC_PORT'] ?? '5710';
   try {
     await fetch(`http://localhost:${port}/api/handoff`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sliccHeader: instruction,
+        verb,
+        // For upskill, the target IS the github URL. For handoff, the
+        // page is the target (mirrors the empty `<>` self-anchor used in
+        // the Link header form).
+        target: verb === 'upskill' ? payload : url,
+        instruction: verb === 'handoff' ? payload : undefined,
         url,
         title: 'SLICC handoff',
       }),

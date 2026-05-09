@@ -377,11 +377,13 @@ export function createChatFixture(): ChatMessage[] {
     id: 'fx-lick-navigate',
     role: 'user',
     content:
-      '[Navigate Event: https://www.sliccy.ai/handoff?msg=handoff%3Ademo]\n```json\n' +
+      '[Navigate Event: https://www.sliccy.ai/handoff?handoff=demo]\n```json\n' +
       JSON.stringify(
         {
-          url: 'https://www.sliccy.ai/handoff?msg=handoff%3Ademo',
-          sliccHeader: 'handoff:demo',
+          url: 'https://www.sliccy.ai/handoff?handoff=demo',
+          verb: 'handoff',
+          target: 'https://www.sliccy.ai/handoff?handoff=demo',
+          instruction: 'demo',
           title: 'Handoff',
         },
         null,

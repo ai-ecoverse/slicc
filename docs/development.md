@@ -212,7 +212,7 @@ Use these before relying on CI:
 - `npx wrangler deploy --dry-run --config packages/cloudflare-worker/wrangler.jsonc`
 - `cd packages/cloudflare-worker && WORKER_BASE_URL=<deployed-worker-url> npm test -- tests/deployed.test.ts`
 
-The worker also serves a lightweight handoff page at `GET /handoff` that echoes the `msg` query parameter into an `x-slicc` response header. See `docs/slicc-handoff.md`.
+The worker also serves a lightweight handoff page at `GET /handoff` that echoes the `?upskill=` / `?handoff=` (or legacy `?msg=verb:payload`) query parameter into an RFC 8288 `Link` response header. See `docs/slicc-handoff.md`.
 
 ## Extension Testing Steps
 
@@ -241,7 +241,7 @@ If you want a reusable browser profile instead of re-loading the unpacked extens
    - Interact with side panel
    - Check terminal output
    - Verify file browser works
-   - Open a `https://www.sliccy.ai/handoff?msg=handoff:test` URL and confirm the Chat tab shows the approval card for the `x-slicc` header
+   - Open a `https://www.sliccy.ai/handoff?handoff=test` URL and confirm the Chat tab shows the approval card derived from the response's `Link` header
    - Take screenshots if needed
 
 5. **Iterate**

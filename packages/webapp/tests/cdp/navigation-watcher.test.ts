@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   NavigationWatcher,
-  extractSliccHeader,
-  decodeSliccHeader,
+  extractHandoffFromHeaders,
+  type NavigationEvent,
 } from '../../src/cdp/navigation-watcher.js';
 import type { CDPTransport } from '../../src/cdp/transport.js';
 import type { CDPEventListener, ConnectionState, CDPConnectOptions } from '../../src/cdp/types.js';
+
+const HANDOFF_REL = 'https://www.sliccy.ai/rel/handoff';
+const UPSKILL_REL = 'https://www.sliccy.ai/rel/upskill';
 
 class MockCDPTransport implements CDPTransport {
   state: ConnectionState = 'connected';
@@ -55,48 +58,55 @@ class MockCDPTransport implements CDPTransport {
   }
 }
 
-describe('decodeSliccHeader', () => {
-  it('decodes percent-encoded values', () => {
-    expect(decodeSliccHeader('handoff%3Afoo%20bar')).toBe('handoff:foo bar');
-    expect(decodeSliccHeader('upskill%3Ahttps%3A%2F%2Fgithub.com%2Fx%2Fy')).toBe(
-      'upskill:https://github.com/x/y'
+describe('extractHandoffFromHeaders', () => {
+  it('returns the handoff verb match for a Link header (case-insensitive header name)', () => {
+    const result = extractHandoffFromHeaders(
+      { Link: `<>; rel="${HANDOFF_REL}"; title="do it"` },
+      'https://example.com/page'
     );
+    expect(result.match).toEqual({
+      verb: 'handoff',
+      target: 'https://example.com/page',
+      instruction: 'do it',
+    });
   });
 
-  it('round-trips unicode produced by encodeURIComponent', () => {
-    const original = 'handoff:🚀 你好';
-    expect(decodeSliccHeader(encodeURIComponent(original))).toBe(original);
+  it('returns the upskill verb match with absolute github href', () => {
+    const result = extractHandoffFromHeaders(
+      { link: `<https://github.com/o/r>; rel="${UPSKILL_REL}"` },
+      'https://example.com/page'
+    );
+    expect(result.match).toEqual({
+      verb: 'upskill',
+      target: 'https://github.com/o/r',
+    });
   });
 
-  it('leaves plain ASCII unchanged (idempotent)', () => {
-    expect(decodeSliccHeader('handoff:do-it')).toBe('handoff:do-it');
+  it('returns null when no recognised rel is present', () => {
+    const result = extractHandoffFromHeaders({ link: '</foo>; rel="next"' });
+    expect(result.match).toBeNull();
   });
 
-  it('falls back to the raw value for malformed percent sequences', () => {
-    expect(decodeSliccHeader('handoff:50%')).toBe('handoff:50%');
-  });
-});
-
-describe('extractSliccHeader', () => {
-  it('decodes the value for x-slicc (case-insensitive)', () => {
-    expect(extractSliccHeader({ 'X-Slicc': 'handoff%3Ado%20it' })).toBe('handoff:do it');
-    expect(extractSliccHeader({ 'x-slicc': 'upskill:url' })).toBe('upskill:url');
+  it('returns null for missing or empty headers', () => {
+    expect(extractHandoffFromHeaders({}).match).toBeNull();
+    expect(extractHandoffFromHeaders({ link: '' }).match).toBeNull();
+    expect(extractHandoffFromHeaders(undefined).match).toBeNull();
   });
 
-  it('returns null for missing or empty header', () => {
-    expect(extractSliccHeader({})).toBeNull();
-    expect(extractSliccHeader({ 'x-slicc': '' })).toBeNull();
-    expect(extractSliccHeader(undefined)).toBeNull();
-  });
-
-  it('ignores non-string header values', () => {
-    expect(extractSliccHeader({ 'x-slicc': 123 as unknown as string })).toBeNull();
+  it('decodes RFC 8187 title* (emoji + CJK) into instruction', () => {
+    const result = extractHandoffFromHeaders(
+      {
+        link: `<>; rel="${HANDOFF_REL}"; title*=UTF-8''Continue%20%F0%9F%9A%80%20%E4%BD%A0%E5%A5%BD`,
+      },
+      'https://example.com/'
+    );
+    expect(result.match?.instruction).toBe('Continue 🚀 你好');
   });
 });
 
 describe('NavigationWatcher', () => {
   let transport: MockCDPTransport;
-  let events: Array<{ url: string; sliccHeader: string; title?: string; targetId: string }>;
+  let events: NavigationEvent[];
   let watcher: NavigationWatcher;
 
   beforeEach(() => {
@@ -114,14 +124,13 @@ describe('NavigationWatcher', () => {
     expect(methods).not.toContain('Target.setAutoAttach');
   });
 
-  it('emits an event when a main-frame Document response carries x-slicc', async () => {
+  it('emits an event when a main-frame Document response advertises a handoff Link', async () => {
     await watcher.start();
 
     transport.emit('Target.attachedToTarget', {
       sessionId: 'sess-1',
       targetInfo: { targetId: 'tab-1', type: 'page', title: 'Example', url: 'https://ex.com/' },
     });
-    // Allow attachedToTarget's async handler (Page.enable/Network.enable/getFrameTree) to run.
     await new Promise((r) => setTimeout(r, 0));
 
     transport.emit('Network.responseReceived', {
@@ -130,18 +139,48 @@ describe('NavigationWatcher', () => {
       frameId: 'root-sess-1',
       response: {
         url: 'https://ex.com/',
-        headers: { 'content-type': 'text/html', 'x-slicc': 'handoff:do it' },
+        headers: {
+          'content-type': 'text/html',
+          link: `<>; rel="${HANDOFF_REL}"; title="do it"`,
+        },
       },
     });
 
-    expect(events).toEqual([
-      {
-        url: 'https://ex.com/',
-        sliccHeader: 'handoff:do it',
-        title: 'Example',
-        targetId: 'tab-1',
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      url: 'https://ex.com/',
+      verb: 'handoff',
+      target: 'https://ex.com/',
+      instruction: 'do it',
+      title: 'Example',
+      targetId: 'tab-1',
+    });
+    expect(events[0].links).toHaveLength(1);
+  });
+
+  it('emits an upskill event with absolute github target', async () => {
+    await watcher.start();
+    transport.emit('Target.attachedToTarget', {
+      sessionId: 'sess-1',
+      targetInfo: { targetId: 'tab-1', type: 'page', url: 'https://ex.com/' },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    transport.emit('Network.responseReceived', {
+      sessionId: 'sess-1',
+      type: 'Document',
+      frameId: 'root-sess-1',
+      response: {
+        url: 'https://ex.com/handoff',
+        headers: {
+          link: `<https://github.com/slicc/skills-extra>; rel="${UPSKILL_REL}"`,
+        },
       },
-    ]);
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0].verb).toBe('upskill');
+    expect(events[0].target).toBe('https://github.com/slicc/skills-extra');
   });
 
   it('ignores subframe document responses', async () => {
@@ -156,7 +195,10 @@ describe('NavigationWatcher', () => {
       sessionId: 'sess-1',
       type: 'Document',
       frameId: 'subframe-id', // not root-sess-1
-      response: { url: 'https://ex.com/iframe', headers: { 'x-slicc': 'handoff:ignored' } },
+      response: {
+        url: 'https://ex.com/iframe',
+        headers: { link: `<>; rel="${HANDOFF_REL}"; title="ignored"` },
+      },
     });
 
     expect(events).toHaveLength(0);
@@ -174,13 +216,16 @@ describe('NavigationWatcher', () => {
       sessionId: 'sess-1',
       type: 'Stylesheet',
       frameId: 'root-sess-1',
-      response: { url: 'https://ex.com/a.css', headers: { 'x-slicc': 'handoff:ignored' } },
+      response: {
+        url: 'https://ex.com/a.css',
+        headers: { link: `<>; rel="${HANDOFF_REL}"; title="ignored"` },
+      },
     });
 
     expect(events).toHaveLength(0);
   });
 
-  it('does not emit when x-slicc header is absent', async () => {
+  it('does not emit when no recognised rel is present', async () => {
     await watcher.start();
     transport.emit('Target.attachedToTarget', {
       sessionId: 'sess-1',
@@ -192,7 +237,31 @@ describe('NavigationWatcher', () => {
       sessionId: 'sess-1',
       type: 'Document',
       frameId: 'root-sess-1',
-      response: { url: 'https://ex.com/', headers: { 'content-type': 'text/html' } },
+      response: {
+        url: 'https://ex.com/',
+        headers: { 'content-type': 'text/html', link: '</foo>; rel="next"' },
+      },
+    });
+
+    expect(events).toHaveLength(0);
+  });
+
+  it('does not emit when the legacy x-slicc header is present (clean break)', async () => {
+    await watcher.start();
+    transport.emit('Target.attachedToTarget', {
+      sessionId: 'sess-1',
+      targetInfo: { targetId: 'tab-1', type: 'page', url: 'https://ex.com/' },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    transport.emit('Network.responseReceived', {
+      sessionId: 'sess-1',
+      type: 'Document',
+      frameId: 'root-sess-1',
+      response: {
+        url: 'https://ex.com/',
+        headers: { 'x-slicc': 'handoff:should be ignored' },
+      },
     });
 
     expect(events).toHaveLength(0);
@@ -217,15 +286,17 @@ describe('NavigationWatcher', () => {
       sessionId: 'sess-1',
       type: 'Document',
       frameId: 'new-root',
-      response: { url: 'https://ex.com/next', headers: { 'x-slicc': 'handoff:navigated' } },
+      response: {
+        url: 'https://ex.com/next',
+        headers: { link: `<>; rel="${HANDOFF_REL}"; title="navigated"` },
+      },
     });
 
     expect(events).toHaveLength(1);
-    expect(events[0].sliccHeader).toBe('handoff:navigated');
+    expect(events[0].instruction).toBe('navigated');
   });
 
   it('can be retried after a transient setDiscoverTargets failure', async () => {
-    // First call: make Target.setDiscoverTargets throw.
     let failOnce = true;
     const originalSend = transport.send.bind(transport);
     (transport.send as unknown) = async (
@@ -242,8 +313,7 @@ describe('NavigationWatcher', () => {
 
     await watcher.start();
 
-    // Emitting an event now must NOT produce anything — listeners should
-    // have been torn down on the failure path.
+    // Listeners should have been torn down on the failure path.
     transport.emit('Target.attachedToTarget', {
       sessionId: 'sess-1',
       targetInfo: { targetId: 'tab-1', type: 'page', url: 'https://ex.com/' },
@@ -253,11 +323,13 @@ describe('NavigationWatcher', () => {
       sessionId: 'sess-1',
       type: 'Document',
       frameId: 'root-sess-1',
-      response: { url: 'https://ex.com/', headers: { 'x-slicc': 'handoff:first-try' } },
+      response: {
+        url: 'https://ex.com/',
+        headers: { link: `<>; rel="${HANDOFF_REL}"; title="first-try"` },
+      },
     });
     expect(events).toHaveLength(0);
 
-    // Retry: should succeed.
     await watcher.start();
     transport.emit('Target.attachedToTarget', {
       sessionId: 'sess-2',
@@ -268,16 +340,18 @@ describe('NavigationWatcher', () => {
       sessionId: 'sess-2',
       type: 'Document',
       frameId: 'root-sess-2',
-      response: { url: 'https://ex.com/', headers: { 'x-slicc': 'handoff:second-try' } },
+      response: {
+        url: 'https://ex.com/',
+        headers: { link: `<>; rel="${HANDOFF_REL}"; title="second-try"` },
+      },
     });
-    expect(events.map((e) => e.sliccHeader)).toEqual(['handoff:second-try']);
+    expect(events.map((e) => e.instruction)).toEqual(['second-try']);
   });
 
   it('does not emit when neither response.url nor session url is known', async () => {
     await watcher.start();
     transport.emit('Target.attachedToTarget', {
       sessionId: 'sess-1',
-      // No `url` on the target info — session.url stays undefined.
       targetInfo: { targetId: 'tab-1', type: 'page' },
     });
     await new Promise((r) => setTimeout(r, 0));
@@ -286,14 +360,13 @@ describe('NavigationWatcher', () => {
       sessionId: 'sess-1',
       type: 'Document',
       frameId: 'root-sess-1',
-      // Response has no url field.
-      response: { headers: { 'x-slicc': 'handoff:unreachable' } },
+      response: { headers: { link: `<>; rel="${HANDOFF_REL}"; title="unreachable"` } },
     });
 
     expect(events).toHaveLength(0);
   });
 
-  it('stop() unsubscribes listeners and disables discovery/auto-attach', async () => {
+  it('stop() unsubscribes listeners and disables discovery', async () => {
     await watcher.start();
     transport.emit('Target.attachedToTarget', {
       sessionId: 'sess-1',
@@ -304,19 +377,20 @@ describe('NavigationWatcher', () => {
     transport.sentCommands.length = 0;
     await watcher.stop();
 
-    // Teardown commands dispatched best-effort.
     const methods = transport.sentCommands.map((c) => c.method);
     expect(methods).toContain('Target.setDiscoverTargets');
     expect(methods).not.toContain('Target.setAutoAttach');
     const discover = transport.sentCommands.find((c) => c.method === 'Target.setDiscoverTargets');
     expect(discover?.params).toMatchObject({ discover: false });
 
-    // Listeners are unhooked.
     transport.emit('Network.responseReceived', {
       sessionId: 'sess-1',
       type: 'Document',
       frameId: 'root-sess-1',
-      response: { url: 'https://ex.com/', headers: { 'x-slicc': 'handoff:after-stop' } },
+      response: {
+        url: 'https://ex.com/',
+        headers: { link: `<>; rel="${HANDOFF_REL}"; title="after-stop"` },
+      },
     });
     expect(events).toHaveLength(0);
   });

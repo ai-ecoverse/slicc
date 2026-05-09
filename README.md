@@ -52,7 +52,7 @@ SLICC is for you if:
 
 - **Launch an agent from the CLI and let it work in the browser it controls.** Start one command, open the workspace, and give the agent shell tools, files, and live browser access in one place.
 - **Automate repetitive workflows in authenticated web apps.** Use browser automation, page inspection, screenshots, storage access, and scripted tab control where your logged-in browser session already has the context.
-- **Hand work off from another coding agent into your live browser session.** Open any URL whose response carries an `x-slicc` header (the tray-hub `/handoff?msg=...` endpoint is a convenience) and SLICC prompts you to approve the action inside the Chat tab.
+- **Hand work off from another coding agent into your live browser session.** Open any URL whose response carries an RFC 8288 `Link` header with a SLICC handoff or upskill rel (the tray-hub `/handoff?handoff=...` / `?upskill=...` endpoint is a convenience) and SLICC prompts you to approve the action inside the Chat tab.
 - **Solve technical tasks with practical tools.** Reach for `bash`, `git`, `grep`, `node`, `python`, previews, and browser automation when the job is bigger than text generation.
 - **Add visual and file context directly in chat.** Drop images or files onto the workspace, or use the paperclip button. Dropped `.skill` archives still install into `/workspace/skills`.
 - **Delegate parallel work to scoops.** Split tasks into isolated sub-agents with their own sandboxes and context, then let the main agent coordinate the results.

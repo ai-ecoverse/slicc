@@ -1,23 +1,45 @@
 /**
  * NavigationWatcher — observes main-frame document responses across all tabs
- * and emits an event when an `x-slicc` response header is present.
+ * and emits an event when a recognised SLICC handoff `Link` rel is present.
  *
  * Used in CLI / Electron floats where the webapp owns a WebSocket CDPTransport
  * to the controlled Chrome. The extension float does not use this watcher
  * (see chrome.webRequest observer in the service worker instead), because
  * CDP-level observation requires attaching chrome.debugger to every tab.
+ *
+ * The handoff protocol is RFC 8288 (Web Linking):
+ *
+ *   Link: <https://github.com/o/r>; rel="https://www.sliccy.ai/rel/upskill"
+ *   Link: <>; rel="https://www.sliccy.ai/rel/handoff";
+ *         title*=UTF-8''Continue%20the%20signup%20flow
+ *
+ * The verb is the rel; the page-level target is the link href; the
+ * free-form prose instruction (handoff verb only) rides in the `title`
+ * parameter.
  */
 
 import type { CDPTransport } from './transport.js';
 import { createLogger } from '../core/logger.js';
+import type { ParsedLink } from '../net/link-header.js';
+import {
+  extractHandoffFromCdpHeaders,
+  type HandoffMatch,
+  type HandoffVerb,
+} from '../net/handoff-link.js';
 
 const log = createLogger('navigation-watcher');
 
 export interface NavigationEvent {
-  /** URL of the main-frame document whose response carried the x-slicc header. */
+  /** URL of the main-frame document whose response advertised the handoff. */
   url: string;
-  /** The raw x-slicc header value. */
-  sliccHeader: string;
+  /** Verb identified by the link's rel (`handoff` | `upskill`). */
+  verb: HandoffVerb;
+  /** Resolved absolute URL of the link target. */
+  target: string;
+  /** Free-form instruction prose, when the link carried a `title` parameter. */
+  instruction?: string;
+  /** All parsed `Link` headers from the response, kept for downstream discovery. */
+  links: ParsedLink[];
   /** Page title at the time of the response, if available. */
   title?: string;
   /** CDP target id of the tab that received the response. */
@@ -36,32 +58,16 @@ interface SessionState {
 }
 
 /**
- * Decode an x-slicc header value. Producers (including sliccy.ai's
- * /handoff?msg= endpoint) percent-encode the value so non-Latin1 inputs
- * survive `Headers.set`. If decoding fails (malformed percent sequence),
- * fall back to the raw value — a percent-encoded string is a superset of
- * ASCII, so decoding is idempotent on already-safe values.
+ * Find a SLICC handoff link in a CDP `Network.Response.headers` bag.
+ * Header names are case-insensitive per RFC 7230. Returns the verb match
+ * (or null) along with the full parsed link list so callers can hand the
+ * latter to `discoverLinks` if they want to.
  */
-export function decodeSliccHeader(raw: string): string {
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
-
-/**
- * Find the x-slicc header value in a CDP Network.Response.headers bag.
- * Header names are case-insensitive per RFC 7230. Value is returned decoded.
- */
-export function extractSliccHeader(headers: Record<string, unknown> | undefined): string | null {
-  if (!headers) return null;
-  for (const [name, value] of Object.entries(headers)) {
-    if (name.toLowerCase() === 'x-slicc' && typeof value === 'string' && value.length > 0) {
-      return decodeSliccHeader(value);
-    }
-  }
-  return null;
+export function extractHandoffFromHeaders(
+  headers: Record<string, unknown> | undefined,
+  baseUrl?: string
+): { match: HandoffMatch | null; links: ParsedLink[] } {
+  return extractHandoffFromCdpHeaders(headers, baseUrl);
 }
 
 export class NavigationWatcher {
@@ -117,14 +123,17 @@ export class NavigationWatcher {
       | { url?: string; headers?: Record<string, unknown> }
       | undefined;
     if (!response) return;
-    const sliccHeader = extractSliccHeader(response.headers);
-    if (!sliccHeader) return;
     const url =
       typeof response.url === 'string' && response.url.length > 0 ? response.url : state.url;
     if (!url) return;
+    const { match, links } = extractHandoffFromHeaders(response.headers, url);
+    if (!match) return;
     this.onEvent({
       url,
-      sliccHeader,
+      verb: match.verb,
+      target: match.target,
+      instruction: match.instruction,
+      links,
       title: state.title,
       targetId: state.targetId,
     });

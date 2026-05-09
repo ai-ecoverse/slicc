@@ -307,7 +307,9 @@ async function init(): Promise<void> {
       timestamp: new Date().toISOString(),
       body: {
         url: navMsg.url,
-        sliccHeader: navMsg.sliccHeader,
+        verb: navMsg.verb,
+        target: navMsg.target,
+        instruction: navMsg.instruction,
         title: navMsg.title,
       },
     });
