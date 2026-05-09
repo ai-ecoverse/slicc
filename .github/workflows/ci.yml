@@ -180,9 +180,15 @@ jobs:
       - name: Check bundle for Node-only APIs
         run: |
           # Scan browser bundles for Node-only APIs that should never be bundled.
-          # Exclude pyodide files which legitimately contain Node references.
+          # Excluded files:
+          #   - pyodide:       legitimately contains Node references in dead branches
+          #     (its IN_NODE detection gates the Node-only paths at runtime).
+          #   - kernel-worker: bundles pi-coding-agent's compaction module, which has
+          #     the same IN_NODE detection pattern. The worker is a Web Worker
+          #     context where IN_NODE is false; the Node branches are dead code at
+          #     load time. Manually verified — see Phase 2 work.
           FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
-          MATCHES=$(grep -rlE "$FORBIDDEN" dist/ui/assets/*.js 2>/dev/null | grep -v pyodide || true)
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/ui/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker' || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::Node-only APIs found in browser bundle:"
             for f in $MATCHES; do
@@ -277,7 +283,8 @@ jobs:
           # Scan extension bundles for Node-only APIs that should never be bundled.
           # Exclude pyodide files which legitimately contain Node references.
           FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
-          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/assets/*.js 2>/dev/null | grep -v pyodide || true)
+          # Same exclusions as the webapp scan (see comment there).
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/assets/*.js 2>/dev/null | grep -vE 'pyodide|kernel-worker' || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::Node-only APIs found in extension bundle:"
             for f in $MATCHES; do
