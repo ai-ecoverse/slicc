@@ -347,7 +347,22 @@ export class ScoopContext {
         createBashTool(this.shell),
         ...scoopManagementTools,
       ];
-      const tools = adaptTools(legacyTools);
+      // Phase 3.4: thread the process manager so each tool call
+      // registers a `kind:'tool'` process under the active
+      // scoop-turn (Phase 3.3). `getParentPid` is a closure over
+      // `currentTurnProcess` so the right turn's pid is always
+      // visible — tools fired between turns (e.g. proactive
+      // tool-use; rare) get `ppid: undefined` (defaults to 1).
+      const tools = this.processManager
+        ? adaptTools(legacyTools, {
+            processManager: this.processManager,
+            owner: {
+              kind: this.scoop.isCone ? 'cone' : 'scoop',
+              scoopJid: this.scoop.jid,
+            },
+            getParentPid: () => this.currentTurnProcess?.pid,
+          })
+        : adaptTools(legacyTools);
 
       // Load scoop memory
       const memoryPath = this.scoop.isCone

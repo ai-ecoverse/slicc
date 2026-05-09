@@ -204,3 +204,119 @@ describe('adaptTool', () => {
     expect(blocks[1].data.length).toBe(200000);
   });
 });
+
+describe('adaptTool — process manager wiring (Phase 3.4)', () => {
+  it('registers a kind:"tool" process and exits 0 on clean return', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    const mockTool: ToolDefinition = {
+      name: 'read_file',
+      description: 'read',
+      inputSchema: { type: 'object' },
+      async execute() {
+        return { content: 'ok', isError: false };
+      },
+    };
+    const adapted = adaptTool(mockTool, {
+      processManager: pm,
+      owner: { kind: 'cone' },
+      getParentPid: () => 2000,
+    });
+    await adapted.execute('call-1', {});
+    const procs = pm.list();
+    expect(procs).toHaveLength(1);
+    expect(procs[0].kind).toBe('tool');
+    expect(procs[0].argv[0]).toBe('read_file');
+    expect(procs[0].ppid).toBe(2000);
+    expect(procs[0].exitCode).toBe(0);
+    expect(procs[0].status).toBe('exited');
+  });
+
+  it('exits 1 when the tool returns isError', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    const mockTool: ToolDefinition = {
+      name: 'bash',
+      description: 'bash',
+      inputSchema: { type: 'object' },
+      async execute() {
+        return { content: 'fail', isError: true };
+      },
+    };
+    const adapted = adaptTool(mockTool, {
+      processManager: pm,
+      owner: { kind: 'cone' },
+    });
+    await adapted.execute('call-1', {});
+    expect(pm.list()[0].exitCode).toBe(1);
+  });
+
+  it('mirrors the agent signal onto the process abort', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    let observedSignal: AbortSignal | undefined;
+    const mockTool: ToolDefinition = {
+      name: 'sleep-tool',
+      description: 'sleep',
+      inputSchema: { type: 'object' },
+      async execute(_p, signal) {
+        observedSignal = signal;
+        return { content: 'done', isError: false };
+      },
+    };
+    const adapted = adaptTool(mockTool, {
+      processManager: pm,
+      owner: { kind: 'cone' },
+    });
+    const upstream = new AbortController();
+    await adapted.execute('call-1', {}, upstream.signal);
+    expect(observedSignal).toBeDefined();
+    expect(observedSignal!.aborted).toBe(false);
+    expect(pm.list()[0].exitCode).toBe(0);
+  });
+
+  it('exits 130 when the upstream signal aborts mid-execute', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    const mockTool: ToolDefinition = {
+      name: 'sleep-tool',
+      description: 'sleep',
+      inputSchema: { type: 'object' },
+      async execute(_p, signal) {
+        await new Promise<void>((resolve, reject) => {
+          const t = setTimeout(resolve, 1000);
+          signal?.addEventListener('abort', () => {
+            clearTimeout(t);
+            reject(new Error('aborted'));
+          });
+        });
+        return { content: '', isError: false };
+      },
+    };
+    const adapted = adaptTool(mockTool, {
+      processManager: pm,
+      owner: { kind: 'cone' },
+    });
+    const upstream = new AbortController();
+    const p = adapted.execute('call-1', {}, upstream.signal);
+    setTimeout(() => upstream.abort(), 20);
+    await expect(p).rejects.toThrow('aborted');
+    const proc = pm.list()[0];
+    expect(proc.exitCode).toBe(130);
+    expect(proc.status).toBe('killed');
+  });
+
+  it('does not register processes when no manager is wired (backwards compatible)', async () => {
+    const mockTool: ToolDefinition = {
+      name: 'read_file',
+      description: 'read',
+      inputSchema: { type: 'object' },
+      async execute() {
+        return { content: 'ok', isError: false };
+      },
+    };
+    const adapted = adaptTool(mockTool);
+    const result = await adapted.execute('call-1', {});
+    expect(result.details?.isError).toBe(false);
+  });
+});
