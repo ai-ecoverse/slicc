@@ -33,6 +33,7 @@ import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
 import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
+import type { TerminalEventMsg } from '../shell/terminal-protocol.js';
 
 const log = createLogger('offscreen-client');
 
@@ -372,7 +373,44 @@ export class OffscreenClient implements KernelClientFacade {
         applyTrayRuntimeStatusSnapshot(m.leader, m.follower);
         break;
       }
+
+      // Phase 2b.4: terminal session events route to subscribers
+      // registered via `onTerminalEvent`. Not chat-related, so they
+      // don't go through `emitToUI` / `agent-event` plumbing.
+      case 'terminal-status':
+      case 'terminal-output':
+      case 'terminal-media-preview':
+      case 'terminal-exit':
+      case 'terminal-cleared': {
+        for (const handler of this.terminalEventListeners) {
+          try {
+            handler(msg);
+          } catch (err) {
+            log.error('terminal event listener error', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        break;
+      }
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Terminal event subscribers (Phase 2b.4)
+  // -------------------------------------------------------------------------
+
+  private terminalEventListeners = new Set<(event: TerminalEventMsg) => void>();
+
+  /**
+   * Subscribe to inbound terminal session events. Returns an
+   * unsubscribe function. Used by `TerminalSessionClient` and any
+   * future panel-side terminal-view to receive output / media-
+   * preview / status / exit envelopes routed by session id.
+   */
+  onTerminalEvent(handler: (event: TerminalEventMsg) => void): () => void {
+    this.terminalEventListeners.add(handler);
+    return () => this.terminalEventListeners.delete(handler);
   }
 
   private handleAgentEvent(msg: AgentEventMsg): void {

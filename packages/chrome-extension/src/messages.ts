@@ -7,6 +7,10 @@
 
 import type { ScoopTabState } from './types.js';
 import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
+import type {
+  TerminalControlMsg,
+  TerminalEventMsg,
+} from '../../webapp/src/shell/terminal-protocol.js';
 
 // ---------------------------------------------------------------------------
 // Side Panel → Offscreen (via service worker relay)
@@ -184,7 +188,11 @@ export type PanelToOffscreenMessage =
   | ToolUIActionMsg
   | LocalStorageSetMsg
   | LocalStorageRemoveMsg
-  | LocalStorageClearMsg;
+  | LocalStorageClearMsg
+  // Phase 2b.4: panel-driven terminal session control. Routed by
+  // the worker's `TerminalSessionHost`, ignored by `OffscreenBridge`.
+  // The full envelope shape lives in `terminal-protocol.ts`.
+  | TerminalControlMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)
@@ -420,7 +428,10 @@ export type OffscreenToPanelMessage =
   | ScoopMessagesReplacedMsg
   | PanelCdpResponseMsg
   | OAuthResultMsg
-  | TrayRuntimeStatusMsg;
+  | TrayRuntimeStatusMsg
+  // Phase 2b.4: terminal session events emitted by the worker's
+  // `TerminalSessionHost`. Consumed by the panel's `TerminalSessionClient`.
+  | TerminalEventMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen ↔ Service Worker (CDP proxy)
