@@ -11,7 +11,16 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { createMessageChannelTransport } from '../../src/kernel/transport-message-channel.js';
+import {
+  createMessageChannelTransport,
+  createBridgeMessageChannelTransport,
+  createPanelMessageChannelTransport,
+} from '../../src/kernel/transport-message-channel.js';
+import type {
+  PanelToOffscreenMessage,
+  OffscreenToPanelMessage,
+  ExtensionMessage,
+} from '../../../chrome-extension/src/messages.js';
 
 interface UpMsg {
   type: 'up';
@@ -121,6 +130,89 @@ describe('createMessageChannelTransport', () => {
     expect(seen).toEqual([
       { type: 'up', n: 100 },
       { type: 'up', n: 101 },
+    ]);
+
+    channel.port1.close();
+    channel.port2.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bridge-shaped helpers — wrap payloads in source-tagged envelopes so
+// `OffscreenBridge` and `OffscreenClient` can filter inbound messages
+// by `source` exactly like they do over chrome.runtime.
+// ---------------------------------------------------------------------------
+
+describe('createBridgeMessageChannelTransport / createPanelMessageChannelTransport', () => {
+  it('panel→bridge: panel-side send wraps payload with source: panel', async () => {
+    const channel = new MessageChannel();
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+
+    const inboundOnBridge: ExtensionMessage[] = [];
+    bridgeTransport.onMessage((env) => inboundOnBridge.push(env));
+
+    const payload: PanelToOffscreenMessage = {
+      type: 'request-state',
+    };
+    panelTransport.send(payload);
+    await tick();
+
+    expect(inboundOnBridge).toHaveLength(1);
+    expect(inboundOnBridge[0]).toEqual({ source: 'panel', payload });
+
+    channel.port1.close();
+    channel.port2.close();
+  });
+
+  it('bridge→panel: bridge-side send wraps payload with source: offscreen', async () => {
+    const channel = new MessageChannel();
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+
+    const inboundOnPanel: ExtensionMessage[] = [];
+    panelTransport.onMessage((env) => inboundOnPanel.push(env));
+
+    const payload: OffscreenToPanelMessage = {
+      type: 'state-snapshot',
+      scoops: [],
+      activeScoopJid: null,
+    };
+    bridgeTransport.send(payload);
+    await tick();
+
+    expect(inboundOnPanel).toHaveLength(1);
+    expect(inboundOnPanel[0]).toEqual({ source: 'offscreen', payload });
+
+    channel.port1.close();
+    channel.port2.close();
+  });
+
+  it('bidirectional roundtrip: panel sends request-state, bridge replies state-snapshot', async () => {
+    const channel = new MessageChannel();
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+
+    const inboundOnBridge: ExtensionMessage[] = [];
+    const inboundOnPanel: ExtensionMessage[] = [];
+    bridgeTransport.onMessage((env) => inboundOnBridge.push(env));
+    panelTransport.onMessage((env) => inboundOnPanel.push(env));
+
+    panelTransport.send({ type: 'request-state' });
+    await tick();
+    expect(inboundOnBridge).toEqual([{ source: 'panel', payload: { type: 'request-state' } }]);
+
+    bridgeTransport.send({
+      type: 'state-snapshot',
+      scoops: [],
+      activeScoopJid: null,
+    });
+    await tick();
+    expect(inboundOnPanel).toEqual([
+      {
+        source: 'offscreen',
+        payload: { type: 'state-snapshot', scoops: [], activeScoopJid: null },
+      },
     ]);
 
     channel.port1.close();

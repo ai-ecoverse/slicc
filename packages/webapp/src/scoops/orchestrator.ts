@@ -113,7 +113,7 @@ export class Orchestrator {
   private container: HTMLElement;
   private callbacks: OrchestratorCallbacks;
   private config: AssistantConfig;
-  private pollInterval: number | null = null;
+  private pollInterval: ReturnType<typeof setInterval> | null = null;
   private scheduler: TaskScheduler | null = null;
   private globalMemoryCache: string = '';
   private sharedFs: VirtualFS | null = null;
@@ -1737,7 +1737,10 @@ export class Orchestrator {
   private startMessageLoop(): void {
     if (this.pollInterval) return;
 
-    this.pollInterval = window.setInterval(() => {
+    // `setInterval` (no `window.` prefix) so this works in both page and
+    // DedicatedWorker contexts. Phase 2 standalone runs the orchestrator
+    // in a worker; `window` is undefined there.
+    this.pollInterval = setInterval(() => {
       for (const jid of this.scoops.keys()) {
         const tab = this.tabs.get(jid);
         if (tab?.status === 'ready') {

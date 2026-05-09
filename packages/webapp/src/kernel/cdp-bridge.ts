@@ -99,6 +99,22 @@ export interface CdpBridgeOptions {
   onUnknownResponseId?: (id: number) => void;
 
   /**
+   * Fired when the FIRST listener is added for a given event method.
+   * Used by `WorkerCdpProxy` (Phase 2 step 5) to send a subscribe
+   * message to the page-side forwarder so the page knows which CDP
+   * events to relay over the kernel transport. Optional — the
+   * chrome.runtime proxies don't need this because the service worker
+   * broadcasts every CDP event to every listener.
+   */
+  onSubscribeEvent?: (event: string) => void;
+
+  /**
+   * Fired when the LAST listener is removed for a given event method.
+   * Pair with `onSubscribeEvent` for pre-subscribe protocol.
+   */
+  onUnsubscribeEvent?: (event: string) => void;
+
+  /**
    * Label used in the disconnected-state error. Default
    * `'CDP transport'`.
    */
@@ -202,18 +218,24 @@ export class CdpTransportBridge implements CDPTransport {
 
   on(event: string, listener: CDPEventListener): void {
     let set = this.listeners.get(event);
+    const isFirst = !set;
     if (!set) {
       set = new Set();
       this.listeners.set(event, set);
     }
     set.add(listener);
+    if (isFirst) {
+      this.opts.onSubscribeEvent?.(event);
+    }
   }
 
   off(event: string, listener: CDPEventListener): void {
     const set = this.listeners.get(event);
-    if (set) {
-      set.delete(listener);
-      if (set.size === 0) this.listeners.delete(event);
+    if (!set) return;
+    set.delete(listener);
+    if (set.size === 0) {
+      this.listeners.delete(event);
+      this.opts.onUnsubscribeEvent?.(event);
     }
   }
 

@@ -88,23 +88,40 @@ export class OffscreenBridge implements KernelFacade {
    */
   private followerSync: FollowerSyncManager | null = null;
   /**
-   * KernelTransport over chrome.runtime — constructed eagerly so `emit()`
-   * works the moment the bridge exists, mirroring today's contract where
-   * `chrome.runtime.sendMessage` is a global. The bridge owns no wire
-   * calls directly anymore; `setupMessageListener` and `emit` go through
-   * this transport. The transport delivers raw `ExtensionMessage`
-   * envelopes so the existing source filter and sprinkle-op-response
-   * peek (in `setupMessageListener`) stay intact. Phase 1 keeps
-   * `chrome.runtime`; Phase 2 adds a `MessageChannel` adapter that
-   * satisfies the same interface.
+   * KernelTransport — defaults to the chrome.runtime adapter (lazily
+   * constructed on first `emit()` so a `new OffscreenBridge()` doesn't
+   * throw when imported in a context without `chrome.runtime`, e.g. a
+   * standalone DedicatedWorker). Phase 2 step 5+ allows passing a
+   * `MessageChannel`-backed transport into the constructor so the same
+   * `OffscreenBridge` runs worker-side. The transport delivers raw
+   * `ExtensionMessage` envelopes either way so the existing source
+   * filter and sprinkle-op-response peek (in `setupMessageListener`)
+   * stay intact.
    */
-  private transport: KernelTransport<ExtensionMessage, OffscreenToPanelMessage> =
-    createOffscreenChromeRuntimeTransport<OffscreenToPanelMessage>();
+  private _transport: KernelTransport<ExtensionMessage, OffscreenToPanelMessage> | null;
   /**
    * Unsubscribe handle from `transport.onMessage`. Invoked on rebind so
    * a second `bind()` doesn't double-register the listener.
    */
   private transportUnsubscribe: (() => void) | null = null;
+
+  /**
+   * Phase 2: optional transport injection. If omitted (today's
+   * extension path), the bridge lazily constructs the chrome.runtime
+   * adapter on first emit/bind. If provided (forthcoming standalone
+   * kernel-worker path), the bridge uses the supplied transport and
+   * never touches chrome.runtime.
+   */
+  constructor(transport?: KernelTransport<ExtensionMessage, OffscreenToPanelMessage>) {
+    this._transport = transport ?? null;
+  }
+
+  private get transport(): KernelTransport<ExtensionMessage, OffscreenToPanelMessage> {
+    if (!this._transport) {
+      this._transport = createOffscreenChromeRuntimeTransport<OffscreenToPanelMessage>();
+    }
+    return this._transport;
+  }
 
   /**
    * Bind the orchestrator and start listening for panel messages.

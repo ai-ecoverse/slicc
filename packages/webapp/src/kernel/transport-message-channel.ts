@@ -81,3 +81,63 @@ export interface MessagePortLike {
   /** Optional — only `MessagePort` from `MessageChannel` exposes start(). */
   start?: () => void;
 }
+
+// ---------------------------------------------------------------------------
+// Bridge-shaped MessageChannel helpers (Phase 2 step 5)
+//
+// The standalone kernel-worker uses an `OffscreenBridge` over a
+// `MessageChannel` instead of `chrome.runtime`. The bridge code expects
+// raw `ExtensionMessage` envelopes (because it filters by `source` and
+// peeks for `sprinkle-op-response`). These helpers wrap a `MessagePort`
+// into a transport that:
+//   - Receives raw envelopes (passthrough — the page wraps before
+//     posting; the worker sees what the page sent).
+//   - Sends payloads wrapped in a source-tagged envelope so the
+//     existing source filter on the receiver matches.
+//
+// Same shape as the chrome.runtime adapter — just a different wire.
+// Both endpoints (worker-side bridge, page-side client) must use these
+// helpers so the envelope contract holds.
+// ---------------------------------------------------------------------------
+
+import type {
+  ExtensionMessage,
+  OffscreenToPanelMessage,
+  PanelToOffscreenMessage,
+} from '../../../chrome-extension/src/messages.js';
+
+/**
+ * Worker-side bridge transport. The bridge runs in the kernel worker
+ * (or, for testing, anywhere with a `MessagePort`); it tags its
+ * outbound messages with `source: 'offscreen'` to match the existing
+ * envelope contract.
+ */
+export function createBridgeMessageChannelTransport(
+  port: MessagePortLike
+): KernelTransport<ExtensionMessage, OffscreenToPanelMessage> {
+  const inner = createMessageChannelTransport<ExtensionMessage, ExtensionMessage>(port);
+  return {
+    onMessage: (handler) => inner.onMessage(handler),
+    send: (payload) => {
+      inner.send({ source: 'offscreen', payload } as ExtensionMessage);
+    },
+  };
+}
+
+/**
+ * Page-side panel transport over a `MessagePort`. Mirrors the
+ * chrome.runtime panel adapter — tags outbound messages with
+ * `source: 'panel'` and delivers raw envelopes inbound so the panel
+ * client can filter by `source: 'offscreen'`.
+ */
+export function createPanelMessageChannelTransport(
+  port: MessagePortLike
+): KernelTransport<ExtensionMessage, PanelToOffscreenMessage> {
+  const inner = createMessageChannelTransport<ExtensionMessage, ExtensionMessage>(port);
+  return {
+    onMessage: (handler) => inner.onMessage(handler),
+    send: (payload) => {
+      inner.send({ source: 'panel', payload } as ExtensionMessage);
+    },
+  };
+}
