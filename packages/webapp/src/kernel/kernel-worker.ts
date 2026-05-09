@@ -40,6 +40,7 @@ import { createBridgeMessageChannelTransport } from './transport-message-channel
 import { WorkerCdpProxy } from './cdp-worker-proxy.js';
 import { TerminalSessionHost } from './terminal-session-host.js';
 import { WasmShellHeadless } from '../shell/wasm-shell-headless.js';
+import { ProcessManager } from './process-manager.js';
 
 // Provider registration is async-explicit (not side-effect import).
 // `providers/index.ts` switched to lazy `import.meta.glob` to break a
@@ -225,6 +226,16 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     logger: console,
   });
 
+  // Phase 3.2: process manager threads through the terminal-session
+  // host so every `terminal-exec` registers a `kind:'shell'`
+  // process. Future Phase 4 `ps` / `kill` shell commands will read
+  // from this same instance.
+  const pm = new ProcessManager();
+  // Stash on globalThis as a fallback for shell scripts that need
+  // to enumerate processes without explicit DI (Phase 4 `ps` /
+  // `kill` will prefer the constructor-injected handle).
+  (globalThis as Record<string, unknown>).__slicc_pm = pm;
+
   // Phase 2b step 5a: stand up the terminal-RPC host on the same kernel
   // transport. The factory builds a fresh `WasmShellHeadless` per
   // session over the orchestrator's shared FS so terminal `cd` state
@@ -246,6 +257,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
           env: opts.env,
           browserAPI: browser,
         }),
+      processManager: pm,
       logger: console,
     });
     stopTerminalHost = terminalHost.start();

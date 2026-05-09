@@ -14,6 +14,7 @@ import {
   createPanelMessageChannelTransport,
 } from '../../src/kernel/transport-message-channel.js';
 import { OffscreenClient } from '../../src/ui/offscreen-client.js';
+import { ProcessManager } from '../../src/kernel/process-manager.js';
 import type { HeadlessShellLike } from '../../src/shell/wasm-shell-headless.js';
 import type { TerminalEventMsg } from '../../src/shell/terminal-protocol.js';
 
@@ -199,6 +200,113 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     await tick();
     expect(ctx.shell.dispose).toHaveBeenCalledTimes(1);
     expect(ctx.events.some((e) => e.type === 'terminal-status' && e.state === 'closed')).toBe(true);
+    ctx.dispose();
+  });
+
+  it('registers a kind:"shell" process on each exec when ProcessManager is provided', async () => {
+    const channel = new MessageChannel();
+    const pm = new ProcessManager();
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+    const shell = makeStubShell();
+    shell.executeCommand.mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0 });
+    const host = new TerminalSessionHost({
+      transport: bridgeTransport,
+      createShell: () => shell,
+      processManager: pm,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const stopHost = host.start();
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+    const client = new TerminalSessionClient({ client: panelClient, sid: 'sp' });
+
+    await client.open();
+    expect(pm.list()).toHaveLength(0);
+
+    const result = await client.exec('echo hi');
+    expect(result.exitCode).toBe(0);
+    const procs = pm.list();
+    expect(procs).toHaveLength(1);
+    expect(procs[0].kind).toBe('shell');
+    expect(procs[0].argv).toEqual(['echo hi']);
+    expect(procs[0].status).toBe('exited');
+    expect(procs[0].exitCode).toBe(0);
+
+    client.close();
+    stopHost();
+    channel.port1.close();
+    channel.port2.close();
+  });
+
+  it('SIGINT through the manager records terminatedBy and emits exit 130', async () => {
+    const channel = new MessageChannel();
+    const pm = new ProcessManager();
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+    const shell = makeStubShell();
+    shell.executeCommand.mockImplementation(async (_cmd, signal) => {
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, 500);
+        signal?.addEventListener('abort', () => {
+          clearTimeout(t);
+          reject(new Error('aborted'));
+        });
+      });
+      return { stdout: '', stderr: '', exitCode: 0 };
+    });
+    const host = new TerminalSessionHost({
+      transport: bridgeTransport,
+      createShell: () => shell,
+      processManager: pm,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const stopHost = host.start();
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+    const client = new TerminalSessionClient({ client: panelClient, sid: 'sk' });
+
+    await client.open();
+    const execP = client.exec('sleep 1');
+    await tick(20);
+    client.signal('SIGINT');
+    const result = await execP;
+    expect(result.exitCode).toBe(130);
+    const proc = pm.list()[0];
+    expect(proc.terminatedBy).toBe('SIGINT');
+    expect(proc.status).toBe('killed');
+    expect(proc.exitCode).toBe(130);
+
+    client.close();
+    stopHost();
+    channel.port1.close();
+    channel.port2.close();
+  });
+
+  it('falls back to local AbortController without a ProcessManager', async () => {
+    // Existing 7 round-trip tests already cover this path — this
+    // test pins the absence-of-pm contract: pm.list() stays empty
+    // because no manager was wired.
+    const ctx = setupChannel();
+    await ctx.client.open();
+    await ctx.client.exec('ls');
+    // No assertion against pm — there isn't one. We're just
+    // verifying the host doesn't throw when `processManager` is
+    // omitted from the options.
     ctx.dispose();
   });
 

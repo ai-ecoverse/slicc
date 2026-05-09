@@ -55,6 +55,7 @@ import type {
 } from '../../../chrome-extension/src/messages.js';
 import type { KernelTransport } from './types.js';
 import type { HeadlessShellLike, HeadlessShellOptions } from '../shell/wasm-shell-headless.js';
+import type { ProcessManager, Process, ProcessOwner, Signal } from './process-manager.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -85,6 +86,29 @@ export interface TerminalSessionHostOptions {
   /** Construct a shell for each new session. */
   createShell: TerminalShellFactory;
   /**
+   * Optional process manager (Phase 3.2). When provided, each
+   * `terminal-exec` registers a `kind:'shell'` process whose
+   * `Process.abort` is the controller threaded into the headless
+   * shell's `executeCommand(cmd, signal)` call. Signals route
+   * through `pm.signal(pid, sig)` instead of the host's local
+   * controller, so `ps` (Phase 4) and `/proc` (Phase 5) see the
+   * exec live, and `kill` from another shell stops it.
+   *
+   * Without `pm`, the host falls back to its pre-Phase-3 behavior
+   * (single per-exec `AbortController`). Tests and the offscreen
+   * extension path that haven't been wired to a manager yet stay
+   * untouched.
+   */
+  processManager?: ProcessManager;
+  /**
+   * Default owner for spawned shell processes. Defaults to
+   * `{ kind: 'system' }` — terminal sessions in the current
+   * standalone-worker layout aren't yet associated with a scoop.
+   * Phase 3 follow-up may parameterize per-session (so the cone's
+   * panel terminal carries `{ kind: 'cone', scoopJid }`).
+   */
+  defaultOwner?: ProcessOwner;
+  /**
    * Logger; defaults to `console`. Override in tests to silence
    * expected warnings (e.g. signal-on-unknown-session).
    */
@@ -98,12 +122,21 @@ interface Session {
   shell: HeadlessShellLike & { dispose?: () => void };
   /** AbortController for the currently-running exec, if any. */
   currentExec: AbortController | null;
+  /**
+   * The active shell `Process`, set when `processManager` is
+   * configured and an exec is in flight. Mirrors `currentExec`
+   * (the controller is the same `Process.abort`); kept separately
+   * so `handleSignal` can route through the manager.
+   */
+  currentProcess: Process | null;
 }
 
 export class TerminalSessionHost {
   private readonly transport: KernelTransport<ExtensionMessage, OffscreenToPanelMessage>;
   private readonly createShell: TerminalShellFactory;
   private readonly log: NonNullable<TerminalSessionHostOptions['logger']>;
+  private readonly pm: ProcessManager | null;
+  private readonly defaultOwner: ProcessOwner;
   private readonly sessions = new Map<TerminalSessionId, Session>();
   private unsubscribe: (() => void) | null = null;
 
@@ -111,6 +144,8 @@ export class TerminalSessionHost {
     this.transport = options.transport;
     this.createShell = options.createShell;
     this.log = options.logger ?? console;
+    this.pm = options.processManager ?? null;
+    this.defaultOwner = options.defaultOwner ?? { kind: 'system' };
   }
 
   /**
@@ -137,7 +172,15 @@ export class TerminalSessionHost {
     this.unsubscribe?.();
     this.unsubscribe = null;
     for (const [, session] of this.sessions) {
-      session.currentExec?.abort();
+      if (session.currentProcess && this.pm) {
+        // Reap the in-flight exec as a teardown abort. SIGTERM
+        // matches the conventional "shutdown" semantic; the dispose
+        // path doesn't have a user-visible exit code anyway.
+        this.pm.signal(session.currentProcess.pid, 'SIGTERM');
+        this.pm.exit(session.currentProcess.pid, null);
+      } else {
+        session.currentExec?.abort();
+      }
       session.shell.dispose?.();
     }
     this.sessions.clear();
@@ -173,7 +216,7 @@ export class TerminalSessionHost {
     }
     try {
       const shell = this.createShell(msg.sid, { cwd: msg.cwd, env: msg.env });
-      this.sessions.set(msg.sid, { shell, currentExec: null });
+      this.sessions.set(msg.sid, { shell, currentExec: null, currentProcess: null });
       this.emitStatus(msg.sid, 'opened');
     } catch (err) {
       this.emitStatus(msg.sid, 'error', err instanceof Error ? err.message : String(err));
@@ -183,7 +226,12 @@ export class TerminalSessionHost {
   private async handleClose(msg: TerminalCloseMsg): Promise<void> {
     const session = this.sessions.get(msg.sid);
     if (!session) return; // idempotent
-    session.currentExec?.abort();
+    if (session.currentProcess && this.pm) {
+      this.pm.signal(session.currentProcess.pid, 'SIGTERM');
+      this.pm.exit(session.currentProcess.pid, null);
+    } else {
+      session.currentExec?.abort();
+    }
     session.shell.dispose?.();
     this.sessions.delete(msg.sid);
     this.emitStatus(msg.sid, 'closed');
@@ -217,54 +265,70 @@ export class TerminalSessionHost {
       return;
     }
 
+    // Phase 3.2: when a `ProcessManager` is configured, the per-exec
+    // controller is the `Process.abort` (`adoptAbort` keeps the same
+    // identity so anyone holding a reference still works). Without
+    // a manager, we fall back to a fresh local controller.
     const abort = new AbortController();
     session.currentExec = abort;
+    const proc = this.pm
+      ? this.pm.spawn({
+          kind: 'shell',
+          argv: [msg.command],
+          cwd: session.shell.getCwd?.() ?? undefined,
+          owner: this.defaultOwner,
+          adoptAbort: abort,
+        })
+      : null;
+    session.currentProcess = proc;
     try {
       const result = await session.shell.executeCommand(msg.command, abort.signal);
-      if (abort.signal.aborted) {
-        // Aborted via terminal-signal — emit no output, just an
-        // exit with the standard SIGINT code.
-        this.emit({
-          type: 'terminal-exit',
-          sid: msg.sid,
-          execId: msg.execId,
-          exitCode: 130,
-        } satisfies TerminalExitMsg);
-        return;
-      }
-      if (result.stdout) {
-        this.emit({
-          type: 'terminal-output',
-          sid: msg.sid,
-          stream: 'stdout',
-          data: result.stdout,
-        } satisfies TerminalOutputMsg);
-      }
-      if (result.stderr) {
-        this.emit({
-          type: 'terminal-output',
-          sid: msg.sid,
-          stream: 'stderr',
-          data: result.stderr,
-        } satisfies TerminalOutputMsg);
+      const exitCode = abort.signal.aborted ? 130 : result.exitCode;
+      if (!abort.signal.aborted) {
+        if (result.stdout) {
+          this.emit({
+            type: 'terminal-output',
+            sid: msg.sid,
+            stream: 'stdout',
+            data: result.stdout,
+          } satisfies TerminalOutputMsg);
+        }
+        if (result.stderr) {
+          this.emit({
+            type: 'terminal-output',
+            sid: msg.sid,
+            stream: 'stderr',
+            data: result.stderr,
+          } satisfies TerminalOutputMsg);
+        }
       }
       this.emit({
         type: 'terminal-exit',
         sid: msg.sid,
         execId: msg.execId,
-        exitCode: result.exitCode,
+        exitCode,
       } satisfies TerminalExitMsg);
+      // Process lifetime: the manager records `terminatedBy` from
+      // `signal()`; calling `exit(pid, null)` here lets it derive
+      // the right code (130 SIGINT, 143 SIGTERM, …) when an abort
+      // raced the shell return. Otherwise we pass the real code.
+      if (proc && this.pm) {
+        this.pm.exit(proc.pid, abort.signal.aborted ? null : result.exitCode);
+      }
     } catch (err) {
       // If the abort fired, the shell typically rejects with an
-      // "aborted" error. Treat that as a SIGINT exit (130) instead
-      // of a generic failure (1).
+      // "aborted" error. Treat that as a signal-derived exit (130
+      // for SIGINT, 143/137 for SIGTERM/KILL) instead of a generic
+      // failure (1).
       if (abort.signal.aborted) {
+        const wireExit = signalExitCode(proc?.terminatedBy ?? 'SIGINT');
         this.emit({
           type: 'terminal-exit',
           sid: msg.sid,
           execId: msg.execId,
-          exitCode: 130,
+          exitCode: wireExit,
         } satisfies TerminalExitMsg);
+        if (proc && this.pm) this.pm.exit(proc.pid, null);
       } else {
         const message = err instanceof Error ? err.message : String(err);
         this.emit({
@@ -279,6 +343,7 @@ export class TerminalSessionHost {
           execId: msg.execId,
           exitCode: 1,
         } satisfies TerminalExitMsg);
+        if (proc && this.pm) this.pm.exit(proc.pid, 1);
       }
     } finally {
       // Only clear if we still own the slot — a Phase-3 process
@@ -286,6 +351,7 @@ export class TerminalSessionHost {
       // today there's at most one.
       if (session.currentExec === abort) {
         session.currentExec = null;
+        session.currentProcess = null;
       }
     }
   }
@@ -296,11 +362,16 @@ export class TerminalSessionHost {
       this.log.warn('[terminal-session-host] signal on unknown session', msg.sid);
       return;
     }
-    // Phase 2b honors SIGINT / SIGTERM / SIGKILL by aborting the
-    // in-flight exec. SIGSTOP / SIGCONT are reserved for Phase 6's
-    // gate model and are no-ops here.
+    // Phase 3.2: route through the manager so the recorded
+    // `terminatedBy` and `kind:'shell'` exit code are correct, and
+    // any future `kill -INT <pid>` from another shell hits the same
+    // code path. SIGSTOP / SIGCONT remain Phase 6 reservations.
     if (msg.signal === 'SIGINT' || msg.signal === 'SIGTERM' || msg.signal === 'SIGKILL') {
-      session.currentExec?.abort();
+      if (session.currentProcess && this.pm) {
+        this.pm.signal(session.currentProcess.pid, msg.signal);
+      } else {
+        session.currentExec?.abort();
+      }
     }
   }
 
@@ -326,6 +397,30 @@ export class TerminalSessionHost {
 
 function isExtensionEnvelope(value: unknown): value is ExtensionMessage {
   return typeof value === 'object' && value !== null && 'source' in value && 'payload' in value;
+}
+
+/**
+ * Conventional Unix exit codes for terminating signals. Mirrors the
+ * `SIGNAL_EXIT_CODE` table in `process-manager.ts` but kept local so
+ * the synchronous `terminal-exit` emit doesn't need to round-trip
+ * through `proc.exitCode` (which is set by `pm.exit`, not by
+ * `pm.signal`).
+ */
+function signalExitCode(sig: Signal): number {
+  switch (sig) {
+    case 'SIGINT':
+      return 130;
+    case 'SIGTERM':
+      return 143;
+    case 'SIGKILL':
+      return 137;
+    case 'SIGSTOP':
+    case 'SIGCONT':
+      // Reserved (Phase 6) — execs aren't terminated by these. Fall
+      // through to the SIGINT default since this branch is only
+      // reached on aborted execs.
+      return 130;
+  }
 }
 
 function isTerminalControlMsg(payload: unknown): payload is TerminalControlMsg {
