@@ -4,22 +4,33 @@
  * This runs in a Chrome offscreen document (long-lived extension page)
  * so the agent survives side panel close/reopen cycles.
  *
- * Initializes: Orchestrator, VFS, BrowserAPI (via CDP proxy), OffscreenBridge.
+ * Phase 2 step 4: the moveable boot sequence (Orchestrator construction,
+ * bridge binding, tray-runtime subscriptions, agent-bridge publish,
+ * session-costs provider, LickManager init + lick→cone routing, mount
+ * recovery, cone bootstrap, upgrade detection, BshWatchdog) lives in
+ * `packages/webapp/src/kernel/host.ts`'s `createKernelHost`. This file
+ * is now responsible only for the extension-specific bits:
+ *
+ *   - CDP transport / `BrowserAPI` construction (chrome.debugger via the
+ *     service worker).
+ *   - chrome.runtime listeners for `agent-spawn-request`,
+ *     `get-session-costs`, `navigate-lick`, `refresh-tray-runtime`.
+ *   - BroadcastChannel bridges for the side panel:
+ *     `startLickManagerHost`, `createSprinkleManagerProxy`, the
+ *     `.shtml` watcher relay.
+ *   - Tray-runtime sync (uses `window.localStorage`).
+ *   - Initial `offscreen-ready` + `state-snapshot` emissions over
+ *     `chrome.runtime.sendMessage`.
  */
 
 import { BrowserAPI, OffscreenCdpProxy } from '../../../packages/webapp/src/cdp/index.js';
-import { Orchestrator } from '../../../packages/webapp/src/scoops/index.js';
+import { createKernelHost } from '../../../packages/webapp/src/kernel/host.js';
 import {
   AGENT_SPAWN_REQUEST_TYPE,
-  publishAgentBridge,
   type AgentSpawnOptions,
   type AgentSpawnResult,
 } from '../../../packages/webapp/src/scoops/agent-bridge.js';
-import {
-  LeaderTrayManager,
-  subscribeToLeaderTrayRuntimeStatus,
-} from '../../../packages/webapp/src/scoops/tray-leader.js';
-import { subscribeToFollowerTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-follower-status.js';
+import { LeaderTrayManager } from '../../../packages/webapp/src/scoops/tray-leader.js';
 import {
   DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
   DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
@@ -39,10 +50,6 @@ import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
 import { createLogger } from '../../../packages/webapp/src/core/index.js';
 import type { ExtensionMessage } from './messages.js';
 import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
-import { formatLickEventForCone } from '../../../packages/webapp/src/scoops/lick-formatting.js';
-import { recoverMounts } from '../../../packages/webapp/src/fs/mount-recovery.js';
-import { getAllMountEntries } from '../../../packages/webapp/src/fs/mount-table-store.js';
-import type { LickEvent } from '../../../packages/webapp/src/scoops/lick-manager.js';
 
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: Keep in sync with packages/webapp/src/ui/main.ts — both entry points need all providers.
@@ -69,43 +76,31 @@ async function init(): Promise<void> {
 
   const browser = new BrowserAPI(cdpProxy);
 
-  const container = document.body;
-
   const bridge = new OffscreenBridge();
   const callbacks = OffscreenBridge.createCallbacks(bridge);
 
-  const orchestrator = new Orchestrator(container, {
-    ...callbacks,
-    getBrowserAPI: () => browser,
-  });
-
-  // Bind the orchestrator to the bridge (sets up message listener + session store)
-  // Pass BrowserAPI so the bridge can proxy panel CDP commands through the offscreen transport.
-  await bridge.bind(orchestrator, browser);
-
-  // Mirror tray runtime status into the side panel so its avatar popover
-  // can render the "Enable multi-browser sync" surface. The leader and
-  // follower runtimes both live in this offscreen document; the panel's
-  // module-level singletons would otherwise stay 'inactive' forever.
-  subscribeToLeaderTrayRuntimeStatus(() => bridge.emitTrayRuntimeStatus());
-  subscribeToFollowerTrayRuntimeStatus(() => bridge.emitTrayRuntimeStatus());
-
-  console.log('[slicc-offscreen] Orchestrator created, calling init()...');
-  await orchestrator.init();
-  console.log('[slicc-offscreen] Orchestrator initialized');
-
-  // Publish the real AgentBridge on globalThis.__slicc_agent so the
-  // offscreen WasmShell's `agent` supplemental command can spawn scoops
-  // directly. The side panel's `agent` command talks to this same bridge
-  // via a proxy — see the AGENT_SPAWN_REQUEST_TYPE handler below.
-  {
-    const sharedFs = orchestrator.getSharedFS();
-    if (sharedFs) {
-      publishAgentBridge(orchestrator, sharedFs, orchestrator.getSessionStore());
-    } else {
-      log.warn('AgentBridge not published — orchestrator.getSharedFS() returned null');
-    }
+  // Skip cone auto-create when joining a tray without a configured
+  // provider — a cone with no API key would dead-end. The factory's
+  // `skipConeBootstrap` honors this decision.
+  const allowProviderlessTrayJoin = !getApiKey() && hasStoredTrayJoinUrl(window.localStorage);
+  if (allowProviderlessTrayJoin) {
+    console.log(
+      '[slicc-offscreen] Skipping cone auto-create while joining a tray without a configured provider'
+    );
   }
+
+  const host = await createKernelHost({
+    container: document.body,
+    browser,
+    bridge,
+    callbacks,
+    skipConeBootstrap: allowProviderlessTrayJoin,
+    logger: log,
+  });
+  const { orchestrator, lickManager } = host;
+  console.log('[slicc-offscreen] Kernel host ready, scoops:', orchestrator.getScoops().length);
+
+  // ── Extension-only: chrome.runtime listeners ───────────────────────
 
   // Route agent-spawn requests from the side-panel proxy
   // (see publishAgentBridgeProxy) into this realm's real bridge.
@@ -122,15 +117,15 @@ async function init(): Promise<void> {
         return true;
       }
 
-      const bridge = (globalThis as Record<string, unknown>).__slicc_agent as
+      const agentBridge = (globalThis as Record<string, unknown>).__slicc_agent as
         | { spawn: (opts: AgentSpawnOptions) => Promise<AgentSpawnResult> }
         | undefined;
-      if (!bridge || typeof bridge.spawn !== 'function') {
+      if (!agentBridge || typeof agentBridge.spawn !== 'function') {
         sendResponse({ ok: false, error: 'agent-spawn-request: bridge not published' });
         return true;
       }
 
-      bridge
+      agentBridge
         .spawn(options)
         .then((result) => sendResponse({ ok: true, result }))
         .catch((err: unknown) => {
@@ -140,11 +135,6 @@ async function init(): Promise<void> {
       return true; // keep the message channel open for the async response
     }
   );
-
-  // Register session costs provider for the `cost` shell command (offscreen agent shell)
-  const { registerSessionCostsProvider } =
-    await import('../../../packages/webapp/src/shell/supplemental-commands/cost-command.js');
-  registerSessionCostsProvider(() => orchestrator.getSessionCosts());
 
   // Handle cost data requests from the side panel shell
   chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
@@ -171,127 +161,10 @@ async function init(): Promise<void> {
     return false;
   });
 
-  // Initialize lick manager for cron tasks in extension mode
-  const { getLickManager } = await import('../../../packages/webapp/src/scoops/lick-manager.js');
-  const lickManager = getLickManager();
-  await lickManager.init();
-  orchestrator.setLickManager(lickManager);
-
-  // Route lick events to scoops (mirrors CLI mode logic in main.ts)
-  // Route lick events to scoops. Content rendering is shared with main.ts
-  // (formatLickEventForCone) so CLI and extension produce identical UX —
-  // including session-reload + mount-recovery prompts. Without the shared
-  // formatter, the previous offscreen handler only special-cased upgrade
-  // events and rendered everything else as a malformed JSON dump.
-  lickManager.setEventHandler((event) => {
-    const formatted = formatLickEventForCone(event);
-    if (formatted === null) {
-      console.debug('[slicc-offscreen] dropping lick event with no renderable content', {
-        type: event.type,
-      });
-      return;
-    }
-
-    // Compute eventName + eventId for routing / message id (unchanged).
-    const isWebhook = event.type === 'webhook';
-    const isSprinkle = event.type === 'sprinkle';
-    const isFsWatch = event.type === 'fswatch';
-    const isNavigate = event.type === 'navigate';
-    const isUpgrade = event.type === 'upgrade';
-    const isSessionReload = event.type === 'session-reload';
-    const eventName = isWebhook
-      ? event.webhookName
-      : isSprinkle
-        ? event.sprinkleName
-        : isFsWatch
-          ? event.fswatchName
-          : isNavigate
-            ? event.navigateUrl
-            : isUpgrade
-              ? `${event.upgradeFromVersion ?? 'unknown'}\u2192${event.upgradeToVersion ?? 'unknown'}`
-              : isSessionReload
-                ? 'mount-recovery'
-                : event.cronName;
-    const eventId = isWebhook
-      ? event.webhookId
-      : isSprinkle
-        ? event.sprinkleName
-        : isFsWatch
-          ? event.fswatchId
-          : isNavigate
-            ? event.navigateUrl
-            : isUpgrade
-              ? `upgrade-${event.upgradeToVersion ?? 'unknown'}`
-              : isSessionReload
-                ? `session-reload-${event.timestamp}`
-                : event.cronId;
-    const channel = event.type;
-
-    const scoops = orchestrator.getScoops();
-    let resolvedTarget: (typeof scoops)[number] | undefined;
-    if (!event.targetScoop) {
-      // Untargeted events → cone
-      resolvedTarget = scoops.find((s) => s.isCone);
-    } else {
-      resolvedTarget = scoops.find(
-        (s) =>
-          s.name === event.targetScoop ||
-          s.folder === event.targetScoop ||
-          s.folder === `${event.targetScoop}-scoop`
-      );
-    }
-
-    if (resolvedTarget) {
-      const msgId = `${channel}-${eventId}-${Date.now()}`;
-      const channelMsg: import('../../../packages/webapp/src/scoops/types.js').ChannelMessage = {
-        id: msgId,
-        chatJid: resolvedTarget.jid,
-        senderId: channel,
-        senderName: `${channel}:${eventName}`,
-        content: formatted.content,
-        timestamp: event.timestamp,
-        fromAssistant: false,
-        channel,
-      };
-      orchestrator.handleMessage(channelMsg);
-    } else {
-      console.warn('[slicc-offscreen] Lick target scoop not found', event.targetScoop);
-    }
-  });
-
-  // Expose lickManager for the crontask shell command running in the offscreen document
-  (globalThis as unknown as Record<string, unknown>).__slicc_lickManager = lickManager;
-
   // Start BroadcastChannel host so the side panel terminal can proxy crontask ops
   const { startLickManagerHost } = await import('./lick-manager-proxy.js');
   startLickManagerHost(lickManager);
-  console.log('[slicc-offscreen] LickManager initialized (host + proxy)');
-
-  // Restore persisted mounts. MUST run AFTER setEventHandler is registered
-  // (so the session-reload lick we may emit below routes through the shared
-  // formatter installed above). Mirrors main.ts:1748-1763 for CLI/Electron
-  // — without this branch, persisted s3:// and da:// mounts would not
-  // auto-restore on extension reopen.
-  const sharedFsForRecovery = orchestrator.getSharedFS();
-  if (sharedFsForRecovery) {
-    void getAllMountEntries()
-      .then(async (entries) => {
-        if (entries.length === 0) return;
-        const { needsRecovery } = await recoverMounts(entries, sharedFsForRecovery, console);
-        if (needsRecovery.length === 0) return;
-        const event: LickEvent = {
-          type: 'session-reload',
-          targetScoop: undefined,
-          timestamp: new Date().toISOString(),
-          body: { reason: 'mount-recovery', mounts: needsRecovery },
-        };
-        // routeLickToScoop is a private helper inside main(); offscreen uses
-        // the public emit API. The handler installed via setEventHandler
-        // above formats the event via formatLickEventForCone.
-        lickManager.emitEvent(event);
-      })
-      .catch((err) => console.warn('[slicc-offscreen] mount recovery failed:', err));
-  }
+  console.log('[slicc-offscreen] LickManager BroadcastChannel host started');
 
   // Listen for navigate-lick events forwarded from the service worker's
   // chrome.webRequest observer and emit them as lick events.
@@ -314,59 +187,7 @@ async function init(): Promise<void> {
     return false;
   });
 
-  // Ensure cone exists
-  const allScoops = orchestrator.getScoops();
-  const hasCone = allScoops.some((s) => s.isCone);
-  const allowProviderlessTrayJoin = !getApiKey() && hasStoredTrayJoinUrl(window.localStorage);
-  if (allowProviderlessTrayJoin && !hasCone) {
-    console.log(
-      '[slicc-offscreen] Skipping cone auto-create while joining a tray without a configured provider'
-    );
-  } else if (!hasCone) {
-    await orchestrator.registerScoop({
-      jid: `cone_${Date.now()}`,
-      name: 'Cone',
-      folder: 'cone',
-      isCone: true,
-      type: 'cone',
-      requiresTrigger: false,
-      assistantLabel: 'sliccy',
-      addedAt: new Date().toISOString(),
-    });
-    console.log('[slicc-offscreen] Created cone');
-  }
-
-  // ── Upgrade detection ─────────────────────────────────────────────
-  // Aligned with the boot-time check in packages/webapp/src/ui/main.ts:
-  // both run only after a cone is guaranteed to exist as a routable
-  // target. We also defer advancing the "last seen" marker until the
-  // lick has been routed — otherwise a transient no-cone state would
-  // silently lose the upgrade notification for that version.
-  {
-    const sharedFsForUpgrade = orchestrator.getSharedFS();
-    if (sharedFsForUpgrade) {
-      const { detectUpgrade, recordVersionSeen } =
-        await import('../../../packages/webapp/src/scoops/upgrade-detection.js');
-      detectUpgrade()
-        .then(async (result) => {
-          if (!result.isUpgrade || result.lastSeen === null) return;
-          lickManager.emitEvent({
-            type: 'upgrade',
-            targetScoop: undefined,
-            timestamp: new Date().toISOString(),
-            upgradeFromVersion: result.lastSeen,
-            upgradeToVersion: result.bundled.version,
-            body: {
-              from: result.lastSeen,
-              to: result.bundled.version,
-              releasedAt: result.bundled.releasedAt,
-            },
-          });
-          await recordVersionSeen(result.bundled.version);
-        })
-        .catch((err) => console.warn('[slicc-offscreen] Upgrade detection failed', err));
-    }
-  }
+  // ── Tray-runtime sync (uses window.localStorage; extension-flavored) ──
 
   let stopTrayRuntime: (() => void) | null = null;
   let activeTrayRuntimeKey: string | null = null;
@@ -509,7 +330,6 @@ async function init(): Promise<void> {
   };
 
   await syncTrayRuntime();
-  window.addEventListener('beforeunload', () => stopTrayRuntime?.(), { once: true });
   chrome.runtime.onMessage.addListener((message: unknown) => {
     if (!isExtensionMessage(message) || message.source !== 'panel') {
       return false;
@@ -572,7 +392,7 @@ async function init(): Promise<void> {
   // .shtml, ask the panel to refresh + auto-open. Debounced to
   // coalesce bursty installs.
   {
-    const offscreenWatcher = orchestrator.getSharedFS()?.getWatcher();
+    const offscreenWatcher = host.sharedFs?.getWatcher();
     if (offscreenWatcher) {
       let timer: ReturnType<typeof setTimeout> | null = null;
       offscreenWatcher.watch(
@@ -589,38 +409,15 @@ async function init(): Promise<void> {
     }
   }
 
-  // Start BSH navigation watchdog — auto-executes .bsh scripts on matching navigations
-  // Mirrors the setup in packages/webapp/src/ui/main.ts
-  const sharedFs = orchestrator.getSharedFS();
-  if (sharedFs) {
-    try {
-      const { BshWatchdog } = await import('../../../packages/webapp/src/shell/bsh-watchdog.js');
-      const { ScriptCatalog } =
-        await import('../../../packages/webapp/src/shell/script-catalog.js');
-      const scriptCatalog = new ScriptCatalog({
-        jshFs: sharedFs,
-        bshFs: sharedFs,
-        watcher: sharedFs.getWatcher(),
-      });
-      const bshWatchdog = new BshWatchdog({
-        browserAPI: browser,
-        scriptCatalog,
-        fs: sharedFs,
-      });
-      void bshWatchdog.start();
-      window.addEventListener(
-        'beforeunload',
-        () => {
-          bshWatchdog.stop();
-          scriptCatalog.dispose();
-        },
-        { once: true }
-      );
-      console.log('[slicc-offscreen] BSH navigation watchdog started');
-    } catch (e) {
-      log.warn('Failed to start BSH watchdog in offscreen', e);
-    }
-  }
+  // Tear down host + tray runtime on offscreen unload.
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      stopTrayRuntime?.();
+      void host.dispose();
+    },
+    { once: true }
+  );
 
   console.log('[slicc-offscreen] Agent engine ready, scoops:', orchestrator.getScoops().length);
 }
