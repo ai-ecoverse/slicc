@@ -1798,17 +1798,17 @@ async function main(): Promise<void> {
     return mainExtension(app);
   }
 
-  // Phase 2.6d preview — opt into the kernel-worker path with
-  // `?kernel-worker=1`. The agent engine moves into a DedicatedWorker
-  // so a runaway bash loop can't freeze the UI. The flag is opt-in
-  // because the panel-UI feature parity with the inline path is still
-  // partial (wizard onboarding, panel terminal shell, sprinkle UI,
-  // cost provider, skill-drop install all defer to a follow-up).
-  // Falls through to the existing inline path otherwise.
-  const useKernelWorker =
-    new URLSearchParams(window.location.search).get('kernel-worker') === '1' ||
-    window.localStorage.getItem('slicc.kernel-worker') === '1';
-  if (useKernelWorker) {
+  // Standalone defaults to the kernel-worker path — agent engine
+  // runs in a DedicatedWorker so a runaway bash loop can't freeze
+  // the UI. Phase 7 stabilized parity with the old inline path
+  // for the user-facing flows; an emergency `?inline=1` opt-out
+  // (or `localStorage['slicc.inline']='1'`) keeps the legacy code
+  // path reachable during the kernel-host PR's review window. The
+  // legacy path is slated for removal in a follow-up.
+  const useInline =
+    new URLSearchParams(window.location.search).get('inline') === '1' ||
+    window.localStorage.getItem('slicc.inline') === '1';
+  if (!useInline) {
     return mainStandaloneWorker(app, runtimeMode === 'electron-overlay');
   }
 
