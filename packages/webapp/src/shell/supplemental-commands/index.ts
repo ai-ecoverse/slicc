@@ -40,6 +40,7 @@ import { createNukeCommand } from './nuke-command.js';
 import { createAgentCommand } from './agent-command.js';
 import { createPsCommand } from './ps-command.js';
 import { createKillCommand } from './kill-command.js';
+import { createPreemptiveCommand } from './preemptive-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import type { ProcessManager } from '../../kernel/process-manager.js';
@@ -117,6 +118,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createAgentCommand({ getParentJid: options.getParentJid }),
     createPsCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
+    createPreemptiveCommand({ processManager: options.processManager }),
   ];
 
   // Extension-only commands

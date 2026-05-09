@@ -202,6 +202,16 @@ export type ProcessEvent = 'spawn' | 'exit';
 
 export type ProcessEventListener = (proc: Process) => void;
 
+/**
+ * Signal-delivery listener. Fires every time `pm.signal(pid, sig)`
+ * delivers a signal to a live process — including SIGSTOP / SIGCONT
+ * (which don't fire the abort) and signal escalations (e.g. a
+ * SIGKILL after a previous SIGINT). Phase 7's preemptive runner
+ * subscribes here so it can `worker.terminate()` on every SIGKILL,
+ * not just the first signal that aborts the controller.
+ */
+export type ProcessSignalListener = (proc: Process, sig: Signal) => void;
+
 // ---------------------------------------------------------------------------
 // Manager
 // ---------------------------------------------------------------------------
@@ -230,6 +240,7 @@ export class ProcessManager {
     spawn: new Set(),
     exit: new Set(),
   };
+  private readonly signalListeners = new Set<ProcessSignalListener>();
 
   // -------------------------------------------------------------------------
   // Lifecycle
@@ -317,17 +328,22 @@ export class ProcessManager {
       // (SIGINT after SIGSTOP still kills, because the abort controller
       // is independent of the gate).
       proc.gate.pause();
+      this.fireSignal(proc, sig);
       return true;
     }
     if (sig === 'SIGCONT') {
       // Phase 6 — resume the gate. Any waiters wake at once.
       proc.gate.resume();
+      this.fireSignal(proc, sig);
       return true;
     }
-    // Record the FIRST terminating signal — subsequent SIGKILL after
-    // SIGTERM doesn't change the exit code, mirroring just-bash and
-    // POSIX behavior.
-    if (!proc.terminatedBy) {
+    // Phase 7: SIGKILL escalates — even after a previous SIGINT /
+    // SIGTERM recorded a different `terminatedBy`, SIGKILL takes
+    // precedence. POSIX behavior: SIGKILL is uncatchable. For
+    // SIGINT / SIGTERM, the FIRST terminating signal still wins.
+    if (sig === 'SIGKILL') {
+      proc.terminatedBy = 'SIGKILL';
+    } else if (!proc.terminatedBy) {
       proc.terminatedBy = sig;
     }
     if (!proc.abort.signal.aborted) {
@@ -336,6 +352,7 @@ export class ProcessManager {
     // Phase 6: a terminating signal also releases the gate so
     // any paused waiter wakes (and observes `abort.signal.aborted`).
     proc.gate.release();
+    this.fireSignal(proc, sig);
     return true;
   }
 
@@ -387,6 +404,20 @@ export class ProcessManager {
     };
   }
 
+  /**
+   * Subscribe to signal-delivery events (Phase 7). Fires every
+   * time `signal(pid, sig)` succeeds — useful for hard-kill
+   * runners (preemptive worker) that need to react to SIGKILL
+   * specifically, including escalations after a prior signal.
+   * Returns an unsubscribe fn.
+   */
+  onSignal(listener: ProcessSignalListener): () => void {
+    this.signalListeners.add(listener);
+    return () => {
+      this.signalListeners.delete(listener);
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Internal
   // -------------------------------------------------------------------------
@@ -423,6 +454,17 @@ export class ProcessManager {
         // (e.g. tests pass a bare `new ProcessManager()`).
 
         console.warn('[pm] listener error', err);
+      }
+    }
+  }
+
+  private fireSignal(proc: Process, sig: Signal): void {
+    const listeners = Array.from(this.signalListeners);
+    for (const l of listeners) {
+      try {
+        l(proc, sig);
+      } catch (err) {
+        console.warn('[pm] signal listener error', err);
       }
     }
   }

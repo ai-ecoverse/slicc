@@ -65,7 +65,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Browser & UI', ['serve', 'open', 'imgcat', ...PLAYWRIGHT_COMMAND_NAMES, 'webhook']],
   ['Filesystem', ['mount', 'fswatch']],
   ['Scoops & agents', ['agent']],
-  ['Process', ['ps', 'kill']],
+  ['Process', ['ps', 'kill', 'preemptive']],
 ]);
 
 function formatHelp(commands: string[], jshCommands: string[] = []): string {

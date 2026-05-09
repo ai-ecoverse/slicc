@@ -153,12 +153,25 @@ describe('ProcessManager — signals', () => {
     expect(pm.signal(proc.pid, 'SIGINT')).toBe(false);
   });
 
-  it('only the FIRST terminating signal is recorded', () => {
+  it('SIGINT/SIGTERM are first-wins, but SIGKILL always escalates (Phase 7)', () => {
     const pm = makeManager();
-    const proc = pm.spawn({ kind: 'shell', argv: ['sleep'], owner: { kind: 'cone' } });
-    pm.signal(proc.pid, 'SIGTERM');
-    pm.signal(proc.pid, 'SIGKILL');
-    expect(proc.terminatedBy).toBe('SIGTERM');
+    // SIGINT then SIGTERM: first wins.
+    const a = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
+    pm.signal(a.pid, 'SIGINT');
+    pm.signal(a.pid, 'SIGTERM');
+    expect(a.terminatedBy).toBe('SIGINT');
+
+    // SIGTERM then SIGKILL: SIGKILL escalates (POSIX uncatchable).
+    const b = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
+    pm.signal(b.pid, 'SIGTERM');
+    pm.signal(b.pid, 'SIGKILL');
+    expect(b.terminatedBy).toBe('SIGKILL');
+
+    // SIGINT then SIGKILL: SIGKILL escalates.
+    const c = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
+    pm.signal(c.pid, 'SIGINT');
+    pm.signal(c.pid, 'SIGKILL');
+    expect(c.terminatedBy).toBe('SIGKILL');
   });
 
   it('exit(pid, null) after a signal derives the conventional exit code', () => {
@@ -354,6 +367,34 @@ describe('ProcessManager — events', () => {
     const proc = pm.spawn({ kind: 'shell', argv: ['ls'], owner: { kind: 'cone' } });
     expect(seen).toHaveLength(1);
     expect(seen[0]).toBe(proc);
+  });
+
+  it('onSignal fires for every signal delivery (Phase 7)', () => {
+    const pm = makeManager();
+    const seen: Array<{ pid: number; sig: string }> = [];
+    pm.onSignal((proc, sig) => seen.push({ pid: proc.pid, sig }));
+    const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
+    pm.signal(proc.pid, 'SIGSTOP');
+    pm.signal(proc.pid, 'SIGCONT');
+    pm.signal(proc.pid, 'SIGINT');
+    pm.signal(proc.pid, 'SIGKILL'); // escalation — also fires
+    expect(seen).toEqual([
+      { pid: proc.pid, sig: 'SIGSTOP' },
+      { pid: proc.pid, sig: 'SIGCONT' },
+      { pid: proc.pid, sig: 'SIGINT' },
+      { pid: proc.pid, sig: 'SIGKILL' },
+    ]);
+  });
+
+  it('onSignal returns an unsubscribe fn', () => {
+    const pm = makeManager();
+    const fn = vi.fn();
+    const off = pm.onSignal(fn);
+    const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
+    pm.signal(proc.pid, 'SIGINT');
+    off();
+    pm.signal(proc.pid, 'SIGKILL');
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it("on('exit') fires synchronously inside exit()", () => {
