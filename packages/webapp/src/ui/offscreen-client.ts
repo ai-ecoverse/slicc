@@ -293,6 +293,18 @@ export class OffscreenClient implements KernelClientFacade {
     this.sprinkleOpHandler = handler;
   }
 
+  /**
+   * Phase 2.7 polish hook: send a raw `PanelToOffscreenMessage` over
+   * the wire. Used by `installPageStorageSync` to forward
+   * `local-storage-{set,remove,clear}` events to the worker. Marked
+   * `@internal` because higher-level facade methods cover normal
+   * traffic; this is for cases where the page needs to push a typed
+   * envelope outside the orchestrator-shim API.
+   */
+  sendRaw(message: PanelToOffscreenMessage): void {
+    this.send(message);
+  }
+
   private setupMessageListener(): void {
     this.transport.onMessage((msg) => {
       if (msg.source !== 'offscreen') return;

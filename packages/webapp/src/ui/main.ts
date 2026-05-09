@@ -1418,6 +1418,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   log.info('Phase 2.6d preview: starting standalone with kernel worker (?kernel-worker=1)');
 
   const { spawnKernelWorker } = await import('../kernel/spawn.js');
+  const { installPageStorageSync } = await import('../kernel/page-storage-sync.js');
   const { VirtualFS } = await import('../fs/index.js');
   const { BrowserAPI } = await import('../cdp/index.js');
 
@@ -1583,10 +1584,20 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   }
   client.requestState();
 
+  // Live page→worker localStorage sync. The worker's `localStorage`
+  // is a Map-backed shim seeded at boot from
+  // `KernelWorkerInitMsg.localStorageSeed`; subsequent page writes
+  // (provider config, model selection, tray join URL, …) need to flow
+  // through so the agent sees them without a worker restart.
+  const stopStorageSync = installPageStorageSync({
+    send: (msg) => client.sendRaw(msg),
+  });
+
   // Cleanup on unload.
   window.addEventListener(
     'beforeunload',
     () => {
+      stopStorageSync();
       host.dispose();
     },
     { once: true }

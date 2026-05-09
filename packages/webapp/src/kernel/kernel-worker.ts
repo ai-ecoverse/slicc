@@ -81,6 +81,41 @@ export interface KernelWorkerReadyMsg {
 }
 
 // ---------------------------------------------------------------------------
+// Fetch bypass header (Phase 2.7 polish)
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap `globalThis.fetch` to add `x-bypass-llm-proxy: 1` to every
+ * outgoing request from the worker.
+ *
+ * Why: in standalone, the page registers `/llm-proxy-sw.js` as a
+ * service worker that intercepts cross-origin LLM provider fetches
+ * and reroutes them through `/api/fetch-proxy` to bypass CORS in
+ * dev. The kernel worker is spawned by a SW-controlled page; in
+ * Chromium, module-worker fetches can also be intercepted by the
+ * page's SW. We don't want that — the worker has direct network
+ * access (the LLM-proxy is for the page's `dist/ui` bundle), and
+ * double-rerouting through `/api/fetch-proxy` would change the
+ * origin / break credentials.
+ *
+ * The SW already honors `x-bypass-llm-proxy: 1` (see
+ * `packages/webapp/src/ui/llm-proxy-sw.ts:71`). Installing this
+ * wrapper at worker boot, before any fetcher runs, lets the SW
+ * pass-through every worker-issued request.
+ */
+function installFetchBypass(): void {
+  const orig = globalThis.fetch;
+  if (!orig) return;
+  globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const headers = new Headers(init?.headers);
+    if (!headers.has('x-bypass-llm-proxy')) {
+      headers.set('x-bypass-llm-proxy', '1');
+    }
+    return orig(input, { ...init, headers });
+  };
+}
+
+// ---------------------------------------------------------------------------
 // localStorage shim (Phase 2.6d)
 // ---------------------------------------------------------------------------
 
@@ -143,14 +178,20 @@ self.addEventListener('message', (event: MessageEvent) => {
 });
 
 async function boot(init: KernelWorkerInitMsg): Promise<void> {
+  // Phase 2.7: stamp `x-bypass-llm-proxy: 1` on every worker-issued
+  // fetch so the page-installed LLM-proxy SW doesn't double-intercept
+  // worker requests. Must run before any fetcher does.
+  installFetchBypass();
+
   // Phase 2.6d minimal fix: the worker has no `localStorage` (Web
   // Workers don't get one). `provider-settings.getApiKey()` and
   // `selected-model` reads on the worker side would otherwise crash
   // or return empty, which makes `ScoopContext.init` fail with no
   // provider configured. Seed a Map-backed shim from the page's
   // `localStorage` snapshot the page passed in `kernel-worker-init`.
-  // Phase 2.7 will replace this with proper page↔worker state sync
-  // (live updates when the user changes settings).
+  // Phase 2.7 polish (`OffscreenBridge` `local-storage-*` handlers +
+  // `installPageStorageSync` on the page) keeps the shim in sync
+  // with subsequent page writes.
   installLocalStorageShim(init.localStorageSeed ?? {});
 
   // Register providers first — kernel host construction reads the

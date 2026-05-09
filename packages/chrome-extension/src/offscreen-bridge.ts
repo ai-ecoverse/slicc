@@ -888,6 +888,42 @@ export class OffscreenBridge implements KernelFacade {
         }
         break;
       }
+
+      // Phase 2.7 polish: live localStorage sync from the page to the
+      // worker. In standalone-worker mode, the page intercepts its own
+      // localStorage writes (and listens for storage events from other
+      // tabs) and forwards them through the kernel transport. The
+      // worker's `localStorage` is a Map-backed shim installed during
+      // boot — direct setItem/removeItem here mutates that shim. In
+      // extension mode the panel and offscreen share the extension
+      // origin's localStorage, so the panel never sends these
+      // messages; the case branches stay no-ops on that path.
+      case 'local-storage-set': {
+        try {
+          (globalThis as { localStorage?: Storage }).localStorage?.setItem(msg.key, msg.value);
+        } catch (err) {
+          console.warn('[offscreen-bridge] local-storage-set failed:', err);
+        }
+        break;
+      }
+
+      case 'local-storage-remove': {
+        try {
+          (globalThis as { localStorage?: Storage }).localStorage?.removeItem(msg.key);
+        } catch (err) {
+          console.warn('[offscreen-bridge] local-storage-remove failed:', err);
+        }
+        break;
+      }
+
+      case 'local-storage-clear': {
+        try {
+          (globalThis as { localStorage?: Storage }).localStorage?.clear();
+        } catch (err) {
+          console.warn('[offscreen-bridge] local-storage-clear failed:', err);
+        }
+        break;
+      }
     }
   }
 
