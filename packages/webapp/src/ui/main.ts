@@ -1381,6 +1381,13 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   log.info('Extension UI connected to offscreen agent engine');
 
+  // Page-side handler for nuke-reload broadcasts. The offscreen shell
+  // can't reload the side panel directly; nuke broadcasts a reload
+  // request and the panel listens.
+  const { installNukeReloadListener } =
+    await import('../shell/supplemental-commands/nuke-command.js');
+  installNukeReloadListener();
+
   // `?ui-fixture=1` — same design-time override as the CLI path, but run
   // last so the normal extension boot (state sync, scoop selection) has
   // populated the sidebar before we overwrite the chat view.
@@ -1746,12 +1753,20 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     log.error('Failed to mount remote terminal view', err);
   });
 
+  // Page-side handler for nuke-reload broadcasts. The shell now lives
+  // in the kernel worker where `location.reload()` is a no-op, so the
+  // nuke command broadcasts a reload request and the page listens.
+  const { installNukeReloadListener } =
+    await import('../shell/supplemental-commands/nuke-command.js');
+  const stopNukeListener = installNukeReloadListener();
+
   // Cleanup on unload.
   window.addEventListener(
     'beforeunload',
     () => {
       stopStorageSync();
       stopSprinkleHandler();
+      stopNukeListener();
       remoteTerminal.dispose();
       host.dispose();
     },

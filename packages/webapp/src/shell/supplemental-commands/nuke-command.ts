@@ -1,6 +1,19 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 
+/**
+ * BroadcastChannel name shared with the page-side reload listener
+ * (`installNukeReloadListener`). Worker mode runs the shell in a
+ * DedicatedWorker where `location.reload()` is a no-op, so nuke
+ * broadcasts a reload request that any same-origin window can act on.
+ */
+export const NUKE_CONTROL_CHANNEL = 'slicc-nuke-control';
+
+/** Wire-format event the channel carries. */
+export interface NukeReloadMsg {
+  type: 'nuke-reload';
+}
+
 export function createNukeCommand(): Command {
   return defineCommand('nuke', async (args) => {
     // Help flag
@@ -64,12 +77,8 @@ export function createNukeCommand(): Command {
         } catch {
           /* indexedDB.databases unsupported on some browsers — fall through */
         }
-        try {
-          // Bypass the bf-cache so the new page boots from a clean slate.
-          location.reload();
-        } catch {
-          /* ignore */
-        }
+
+        triggerReload();
       })();
       return { stdout: 'Nuking everything…\n', stderr: '', exitCode: 0 };
     }
@@ -83,4 +92,60 @@ export function createNukeCommand(): Command {
       exitCode: 1,
     };
   });
+}
+
+/**
+ * Trigger a page reload. From a window context this is a direct
+ * `location.reload()`; from a DedicatedWorker (kernel-worker mode) the
+ * worker can't reload the page, so we broadcast a reload request that
+ * `installNukeReloadListener` (running in the page) acts on. Both
+ * paths fire defensively so a missing listener still falls back to
+ * the in-context reload attempt.
+ */
+function triggerReload(): void {
+  try {
+    if (typeof BroadcastChannel === 'function') {
+      const channel = new BroadcastChannel(NUKE_CONTROL_CHANNEL);
+      channel.postMessage({ type: 'nuke-reload' } satisfies NukeReloadMsg);
+      // Close after a short delay so the message has time to flush.
+      setTimeout(() => channel.close(), 100);
+    }
+  } catch {
+    /* environment without BroadcastChannel — fall through */
+  }
+  try {
+    // Bypass the bf-cache so the new page boots from a clean slate.
+    // No-op in DedicatedWorkers where `location.reload` is undefined,
+    // which is fine — the broadcast above handles those contexts.
+    const loc = (globalThis as { location?: { reload?: () => void } }).location;
+    loc?.reload?.();
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Listen for nuke-reload broadcasts in a page context and call
+ * `location.reload()` when one arrives. Returns a disposer.
+ *
+ * Wired by the page bootstrap (`mainStandaloneWorker` / extension panel
+ * bootstrap) so nuke run from any same-origin context — including the
+ * kernel-worker shell — can trigger a page reload. The listener is
+ * intentionally minimal: the broadcast carries no auth, but it's
+ * scoped to the same origin and the only writers are nuke itself.
+ */
+export function installNukeReloadListener(
+  onReload: () => void = () => location.reload()
+): () => void {
+  if (typeof BroadcastChannel !== 'function') return () => {};
+  const channel = new BroadcastChannel(NUKE_CONTROL_CHANNEL);
+  const handler = (event: MessageEvent): void => {
+    const data = event.data as NukeReloadMsg | undefined;
+    if (data?.type === 'nuke-reload') onReload();
+  };
+  channel.addEventListener('message', handler);
+  return () => {
+    channel.removeEventListener('message', handler);
+    channel.close();
+  };
 }
