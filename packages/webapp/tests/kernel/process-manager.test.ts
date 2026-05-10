@@ -38,7 +38,10 @@ describe('ProcessManager — pid allocation', () => {
     // 2^32 steps.
     const pm = makeManager();
     const a = pm.spawn({ kind: 'shell', argv: ['a'], owner: { kind: 'cone' } });
-    const b = pm.spawn({ kind: 'shell', argv: ['b'], owner: { kind: 'cone' } });
+    // The middle process only needs to occupy a pid slot; we don't
+    // read its handle. Spawning bare keeps it out of the unused-var
+    // lint while still forcing the probe to collide.
+    pm.spawn({ kind: 'shell', argv: ['b'], owner: { kind: 'cone' } });
     const c = pm.spawn({ kind: 'shell', argv: ['c'], owner: { kind: 'cone' } });
     // Force `nextPid` back to a's pid so the probe collides 3 times
     // before landing in a hole.
