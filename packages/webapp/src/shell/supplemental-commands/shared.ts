@@ -1,5 +1,3 @@
-import type { PyodideInterface } from 'pyodide';
-import { version as pyodidePackageVersion } from 'pyodide/package.json';
 import { getMimeType } from '../../core/mime-types.js';
 import { normalizePath } from '../../fs/path-utils.js';
 
@@ -29,44 +27,9 @@ export function resolvePinnedPackageVersion(packageName: string, versionSpec: un
   return versionSpec;
 }
 
-export const PYODIDE_VERSION = resolvePinnedPackageVersion('pyodide', pyodidePackageVersion);
-export const PYODIDE_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
-
 export const NODE_VERSION = 'v20.0.0-js-shim';
 
-export const PYTHON_RUNNER = `
-import sys
-import traceback
-
-__slicc_exit_code = 0
-try:
-    sys.argv = __slicc_argv
-    exec(compile(__slicc_code, __slicc_filename, "exec"), {"__name__": "__main__", "__file__": __slicc_filename})
-except SystemExit as exc:
-    code = exc.code
-    if code is None:
-        __slicc_exit_code = 0
-    elif isinstance(code, int):
-        __slicc_exit_code = code
-    else:
-        print(code, file=sys.stderr)
-        __slicc_exit_code = 1
-except BaseException:
-    traceback.print_exc()
-    __slicc_exit_code = 1
-`;
-
 let sqlJsPromise: Promise<SqlJsModule> | null = null;
-let pyodidePromise: Promise<PyodideInterface> | null = null;
-
-export const nodeRuntimeState: Record<string, unknown> = Object.create(null);
-
-export class NodeExitError extends Error {
-  constructor(public readonly code: number) {
-    super(`Process exited with code ${code}`);
-    this.name = 'NodeExitError';
-  }
-}
 
 export function basename(path: string): string {
   const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
@@ -137,16 +100,6 @@ export function resolveServeEntryPath(directory: string, entry: string): string 
   return normalizePath(`${directory}/${entry}`);
 }
 
-export function formatConsoleArg(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (value === null || value === undefined) return String(value);
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
 export function resolveNodePackageBaseUrl(specifier: string, fallbackRelativePath: string): URL {
   const resolver = (import.meta as ImportMeta & { resolve?: (value: string) => string }).resolve;
   if (typeof resolver === 'function') {
@@ -175,27 +128,4 @@ export async function getSqlJs(): Promise<SqlJsModule> {
     })();
   }
   return sqlJsPromise;
-}
-
-const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-
-export async function getPyodide(): Promise<PyodideInterface> {
-  if (!pyodidePromise) {
-    pyodidePromise = (async () => {
-      const { loadPyodide } = await import('pyodide');
-      let indexURL: string;
-      if (typeof window === 'undefined') {
-        indexURL = decodeURIComponent(
-          resolveNodePackageBaseUrl('pyodide/pyodide.mjs', '../../../../../node_modules/pyodide/')
-            .pathname
-        );
-      } else if (isExtension) {
-        indexURL = chrome.runtime.getURL('pyodide/');
-      } else {
-        indexURL = PYODIDE_CDN;
-      }
-      return loadPyodide({ indexURL, fullStdLib: false });
-    })();
-  }
-  return pyodidePromise;
 }

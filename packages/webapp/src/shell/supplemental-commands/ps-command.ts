@@ -309,7 +309,7 @@ Flags:
 
 Columns (default: pid,ppid,stat,start,scoop,command):
   PID/PPID      process / parent pid
-  KIND          scoop-turn | tool | shell | jsh | net | preemptive
+  KIND          scoop-turn | tool | shell | jsh | py | net | preemptive
   STAT          R running, S pending, Z exited, K killed
   START         hh:mm:ss when the process spawned
   SCOOP         cone | system | <scoopJid prefix>

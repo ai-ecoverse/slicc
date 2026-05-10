@@ -50,7 +50,7 @@
 // ---------------------------------------------------------------------------
 
 /** What kind of process this is — drives the `ps` `STAT` column. */
-export type ProcessKind = 'scoop-turn' | 'tool' | 'shell' | 'jsh' | 'net' | 'preemptive';
+export type ProcessKind = 'scoop-turn' | 'tool' | 'shell' | 'jsh' | 'py' | 'net' | 'preemptive';
 
 export type ProcessStatus = 'pending' | 'running' | 'exited' | 'killed';
 

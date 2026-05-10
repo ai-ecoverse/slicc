@@ -16,6 +16,7 @@
  */
 
 import { runJsRealm } from './js-realm-shared.js';
+import { runPyRealm } from './py-realm-shared.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type { Realm, RealmFactory } from './realm-runner.js';
 import type { RealmInitMsg, RealmErrorMsg } from './realm-types.js';
@@ -75,20 +76,12 @@ export function createInProcessJsRealmFactory(): RealmFactory {
       throw new Error('createInProcessJsRealmFactory: only kind:js is supported');
     }
     const { realmSide, hostSide } = makeInProcessPortPair();
-
-    // Listen for realm-init on the realm side and dispatch to
-    // runJsRealm. The runner sends realm-init via the host side
-    // shortly after this factory resolves.
     const initHandler = (event: MessageEvent): void => {
       const data = event.data as { type?: string };
       if (data?.type !== 'realm-init') return;
       realmSide.removeEventListener('message', initHandler);
       const init = event.data as RealmInitMsg;
       if (init.kind !== 'js') return;
-      // Use a stub `loadModule` that fails fast — the in-process
-      // factory doesn't pre-fetch npm modules. Tests that need
-      // require() should pre-populate `globalThis` or override
-      // this factory.
       const failingLoadModule = (id: string): Promise<Record<string, unknown>> =>
         Promise.reject(new Error(`in-process realm: require('${id}') is not pre-loaded`));
       void runJsRealm(init, realmSide, failingLoadModule).catch((err: unknown) => {
@@ -98,16 +91,59 @@ export function createInProcessJsRealmFactory(): RealmFactory {
       });
     };
     realmSide.addEventListener('message', initHandler);
-
-    const realm: Realm = {
+    return {
       controlPort: hostSide,
       terminate(): void {
-        // No hard-kill in process. Drop the init handler so a
-        // late-arriving init can't accidentally start a second
-        // run.
         realmSide.removeEventListener('message', initHandler);
       },
-    };
-    return realm;
+    } satisfies Realm;
   };
+}
+
+/**
+ * In-process Python realm factory. Same pattern as the JS one but
+ * dispatches to `runPyRealm`. Used when no DedicatedWorker is
+ * available (vitest, headless tools that didn't import the
+ * default factory). Cold-start cost is the same ~1-2 s — Pyodide
+ * doesn't care that it's running in the same realm as the
+ * kernel.
+ */
+export function createInProcessPyRealmFactory(): RealmFactory {
+  return async ({ kind }) => {
+    if (kind !== 'py') {
+      throw new Error('createInProcessPyRealmFactory: only kind:py is supported');
+    }
+    const { realmSide, hostSide } = makeInProcessPortPair();
+    const initHandler = (event: MessageEvent): void => {
+      const data = event.data as { type?: string };
+      if (data?.type !== 'realm-init') return;
+      realmSide.removeEventListener('message', initHandler);
+      const init = event.data as RealmInitMsg;
+      if (init.kind !== 'py') return;
+      void runPyRealm(init, realmSide).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        const errMsg: RealmErrorMsg = { type: 'realm-error', message };
+        realmSide.postMessage(errMsg);
+      });
+    };
+    realmSide.addEventListener('message', initHandler);
+    return {
+      controlPort: hostSide,
+      terminate(): void {
+        realmSide.removeEventListener('message', initHandler);
+      },
+    } satisfies Realm;
+  };
+}
+
+/**
+ * Picks the right in-process factory by kind. Useful as a unified
+ * fallback when `Worker` isn't available — e.g. in
+ * `realm-factory.ts`'s default factory when running in node /
+ * vitest.
+ */
+export function createInProcessRealmFactory(): RealmFactory {
+  const js = createInProcessJsRealmFactory();
+  const py = createInProcessPyRealmFactory();
+  return async (args) => (args.kind === 'js' ? js(args) : py(args));
 }

@@ -17,6 +17,7 @@
 
 import type { CommandContext } from 'just-bash';
 import { createIframeRealm } from './realm-iframe.js';
+import { createInProcessJsRealmFactory, createInProcessPyRealmFactory } from './realm-inprocess.js';
 import { resolveNodePackageBaseUrl } from '../../shell/supplemental-commands/shared.js';
 import { PYODIDE_CDN } from './py-realm-shared.js';
 import type { Realm, RealmFactory } from './realm-runner.js';
@@ -27,13 +28,32 @@ import type { RealmPortLike } from './realm-rpc.js';
  * Production realm factory. Inspects runtime + `kind` and returns
  * the matching impl. Pure dispatcher — testable bits live in the
  * impl files (`createIframeRealm`, the worker entries).
+ *
+ * Fallback chain when the preferred impl isn't available:
+ *   - kind:'js' standalone → DedicatedWorker → in-process JS
+ *   - kind:'js' extension → sandbox iframe → in-process JS
+ *   - kind:'py' both → DedicatedWorker → in-process Pyodide
+ *
+ * In-process is the vitest/headless-node path. SIGKILL becomes
+ * cooperative (no `worker.terminate()` to invoke), but the real
+ * floats always have Worker / DOM available so production keeps
+ * the hard-kill guarantee.
  */
+const inProcessJs = createInProcessJsRealmFactory();
+const inProcessPy = createInProcessPyRealmFactory();
+
 export function createDefaultRealmFactory(): RealmFactory {
   return async ({ kind, ctx }) => {
-    if (kind === 'py') return createPyWorkerRealm();
+    if (kind === 'py') {
+      if (typeof Worker !== 'undefined') return createPyWorkerRealm();
+      return inProcessPy({ kind, ctx });
+    }
     // kind === 'js'
-    if (isExtension()) return createIframeRealm(kind, ctx);
-    return createJsWorkerRealm();
+    if (isExtension() && typeof document !== 'undefined') {
+      return createIframeRealm(kind, ctx);
+    }
+    if (typeof Worker !== 'undefined') return createJsWorkerRealm();
+    return inProcessJs({ kind, ctx });
   };
 }
 
