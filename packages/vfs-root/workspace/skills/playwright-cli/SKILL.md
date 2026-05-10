@@ -5,7 +5,7 @@ description: |
   scrape, take a screenshot, or otherwise interact with a web page. SLICC drives
   the browser through the `playwright-cli` shell command (also aliased as
   `playwright` and `puppeteer`). Read this BEFORE running any browser
-  automation: every tab-operating command requires `--tab=<targetId>`, and
+  automation: every tab-operating command requires a `--tab` target id, and
   multi-agent tab handling has rules you must follow.
 allowed-tools: bash
 ---

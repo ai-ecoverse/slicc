@@ -3,11 +3,11 @@ name: sprinkles
 description: |
   Use this when the user wants a persistent UI panel — a dashboard, form,
   editor, report, or visualization that lives alongside the chat. Sprinkles are
-  `.shtml` files in `/shared/sprinkles/<name>/<name>.shtml` rendered in the side
-  rail or as a full-screen tab. For ephemeral inline widgets, use dips instead.
-  Covers creation, modification, layout constraints, the cone↔scoop
-  orchestration rules, the `slicc.*` bridge API, and `sprinkle chat` for
-  blocking inline prompts.
+  `.shtml` files under `/shared/sprinkles/` rendered in the side rail or as a
+  full-screen tab. For ephemeral inline widgets, use dips instead. Covers
+  creation, modification, layout constraints, the cone-to-scoop orchestration
+  rules, the `slicc.*` bridge API, and `sprinkle chat` for blocking inline
+  prompts.
 allowed-tools: bash, read_file, write_file, edit_file
 ---
 

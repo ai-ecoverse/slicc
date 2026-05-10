@@ -1,11 +1,11 @@
 ---
 name: handoff
 description: |
-  Use this when you receive a `[Navigate Event: <url>]` lick — emitted whenever
-  the user opens a tab whose main-frame response carries an `x-slicc` header.
-  This skill renders the yes/no approval card the user must accept before
-  anything happens. Covers the `handoff:<instruction>` and `upskill:<github-url>`
-  verbs and the security rules (never auto-accept, never fetch before approval).
+  Use this when you receive a Navigate Event lick — emitted whenever the user
+  opens a tab whose main-frame response carries an `x-slicc` header. This
+  skill renders the yes/no approval card the user must accept before anything
+  happens. Covers the `handoff:` and `upskill:` verb prefixes and the security
+  rules (never auto-accept, never fetch before approval).
 allowed-tools: bash
 ---
 
