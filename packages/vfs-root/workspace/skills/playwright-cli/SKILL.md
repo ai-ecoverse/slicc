@@ -1,6 +1,12 @@
 ---
 name: playwright-cli
-description: Browse the web, interact with pages, take screenshots, extract data via the playwright-cli shell command.
+description: |
+  Use this whenever the user asks to browse, navigate, click, fill a form,
+  scrape, take a screenshot, or otherwise interact with a web page. SLICC drives
+  the browser through the `playwright-cli` shell command (also aliased as
+  `playwright` and `puppeteer`). Read this BEFORE running any browser
+  automation: every tab-operating command requires `--tab=<targetId>`, and
+  multi-agent tab handling has rules you must follow.
 allowed-tools: bash
 ---
 
@@ -111,7 +117,37 @@ playwright-cli screenshot --tab=<id> e5                    # Screenshot specific
 playwright-cli screenshot --tab=<id> --fullPage            # Full scrollable page
 ```
 
-To view a screenshot yourself, use `open --view <path>` after taking it.
+### Viewing pages and screenshots yourself
+
+The browser displays things to the human; `open --view` is what lets _you_ see them.
+
+**What you CAN see:**
+
+- `open --view <path>` — reads an image from the VFS and returns it. Works with PNG, JPEG, GIF, WebP, SVG.
+- `playwright-cli screenshot --tab=<id>` + `open --view <path>` — screenshot a tab, then view it.
+- `screencapture --view screenshot.png` — capture the user's screen via browser screen sharing.
+- `playwright-cli snapshot --tab=<id>` — accessibility tree (text). Use to verify content without vision.
+
+**What only the human sees:**
+
+- `serve <dir>` — opens an app directory in a browser tab.
+- `open <path>` (no flags) — opens a file in a browser tab.
+- `imgcat <path>` — displays an image in the terminal preview.
+
+**Workflow to verify a page:**
+
+1. `serve /workspace/app` — open the app (the human sees it).
+2. `playwright-cli tab-list` — find the tab by URL, note the targetId.
+3. `playwright-cli snapshot --tab=<id>` — required before screenshot.
+4. `playwright-cli screenshot --tab=<id> --filename=/tmp/shot.png`.
+5. `open --view /tmp/shot.png` — now you can see it.
+
+**Don't:**
+
+- `read_file` on a PNG or base64-encode to view images.
+- `imgcat` or `cat` on screenshots expecting to see them.
+- Open a screenshot then screenshot that tab.
+- Use `eval` to check the active tab — use `tab-list`.
 
 ### Tab Management
 
