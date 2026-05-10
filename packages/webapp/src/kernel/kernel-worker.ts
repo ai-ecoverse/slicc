@@ -66,6 +66,15 @@ export interface KernelWorkerInitMsg {
   kernelPort: MessagePort;
   cdpPort: MessagePort;
   localStorageSeed?: Record<string, string>;
+  /**
+   * Per-instance discriminator used by same-origin RPC channels (e.g.
+   * the sprinkle BroadcastChannel bridge) so two SLICC tabs on the
+   * same origin don't cross-talk. The page generates this once at
+   * boot and the worker reuses it when constructing channel names.
+   * Optional: callers that don't need scoping can omit it and the
+   * bridge falls back to a global channel name.
+   */
+  instanceId?: string;
 }
 
 /** Posted back over the kernel port once `createKernelHost` resolves. */
@@ -219,6 +228,20 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     callbacks,
     logger: console,
   });
+
+  // Publish a sprinkle-manager proxy on the worker's globalThis so the
+  // `sprinkle` / `open` / `upskill` shell commands can reach the real
+  // page-side manager. The bridge uses a same-origin BroadcastChannel
+  // scoped by `instanceId` (page-generated, threaded through
+  // `kernel-worker-init`) so two SLICC tabs on the same origin don't
+  // cross-talk. The page bootstrap (`mainStandaloneWorker`) installs
+  // the matching handler under the same id. Extension offscreen has
+  // its own chrome.runtime-based proxy in `offscreen.ts` and never
+  // goes through this path.
+  const { createSprinkleManagerProxyOverChannel } =
+    await import('../scoops/sprinkle-bridge-channel.js');
+  (globalThis as Record<string, unknown>).__slicc_sprinkleManager =
+    createSprinkleManagerProxyOverChannel({ instanceId: init.instanceId });
 
   // Take the process manager from the kernel host so scoop-turns
   // (registered by `ScoopContext`) and shell execs (registered by

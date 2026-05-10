@@ -67,6 +67,12 @@ export interface KernelWorkerSpawnOptions {
    * Defaults to all `slicc*`-prefixed keys via `collectLocalStorageSeed()`.
    */
   localStorageSeed?: Record<string, string>;
+  /**
+   * Per-instance discriminator forwarded to the worker so same-origin
+   * RPC channels (e.g. the sprinkle BroadcastChannel bridge) stay
+   * scoped to one tab/worker pair. Optional.
+   */
+  instanceId?: string;
 }
 
 export interface KernelWorkerBootstrapOptions {
@@ -75,6 +81,12 @@ export interface KernelWorkerBootstrapOptions {
   callbacks: OffscreenClientCallbacks;
   readyTimeoutMs?: number;
   localStorageSeed?: Record<string, string>;
+  /**
+   * Per-instance discriminator forwarded to the worker so same-origin
+   * RPC channels (e.g. the sprinkle BroadcastChannel bridge) stay
+   * scoped to one tab/worker pair. Optional.
+   */
+  instanceId?: string;
 }
 
 /**
@@ -177,6 +189,7 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
     kernelPort: kernelChannel.port2,
     cdpPort: cdpChannel.port2,
     localStorageSeed,
+    instanceId: options.instanceId,
   };
   worker.postMessage(init, [kernelChannel.port2, cdpChannel.port2]);
 
@@ -242,5 +255,6 @@ export function spawnKernelWorker(options: KernelWorkerSpawnOptions): SpawnedKer
     callbacks: options.callbacks,
     readyTimeoutMs: options.readyTimeoutMs,
     localStorageSeed: options.localStorageSeed ?? collectLocalStorageSeed(),
+    instanceId: options.instanceId,
   });
 }
