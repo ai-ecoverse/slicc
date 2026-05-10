@@ -1690,11 +1690,246 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   const { SprinkleManager } = await import('./sprinkle-manager.js');
   const { installSprinkleManagerHandlerOverChannel } =
     await import('../scoops/sprinkle-bridge-channel.js');
-  const sprinkleManager = new SprinkleManager(
+
+  // ── Welcome / onboarding wiring (mirrors `mainExtension`) ──────────
+  //
+  // The deterministic welcome flow is driven by the on-page
+  // `OnboardingOrchestrator`, NOT by the cone — the cone has no API
+  // key configured at this point and any lick that reaches it would
+  // fatal with "No API key configured for provider …". Both lick
+  // entry points (the `SprinkleManager` panel-sprinkle handler and
+  // chat-panel `onDipLick` for inline dips in chat history) need to
+  // short-circuit welcome-flow actions and hand them to the
+  // orchestrator instead. The lazy `getOnboardingOrchestrator()` is
+  // constructed on first lick so it can capture `sprinkleManager`
+  // (defined just below) by reference.
+  const firedWelcomeActions = loadFiredWelcomeActions();
+  const { OnboardingOrchestrator: OnboardingOrchestratorWorker } =
+    await import('../scoops/onboarding-orchestrator.js');
+  // Dynamic import (matches `mainExtension`) — keeps the static
+  // import surface small and avoids dragging the full
+  // provider-settings module into the early boot graph.
+  const {
+    addAccount,
+    getAccounts,
+    getAvailableProviders,
+    getProviderConfig,
+    getProviderModels,
+    isModelHiddenFromPicker,
+    setSelectedModelId,
+  } = await import('./provider-settings.js');
+  let workerOnboardingOrchestrator: InstanceType<typeof OnboardingOrchestratorWorker> | null = null;
+  // `sprinkleManager` is assigned just below; closures reference the
+  // binding, not the value, so the orchestrator's lazy construction
+  // can safely use it once at-least-one welcome lick fires.
+
+  let sprinkleManager!: InstanceType<typeof SprinkleManager>;
+  const getOnboardingOrchestrator = () => {
+    if (workerOnboardingOrchestrator) return workerOnboardingOrchestrator;
+    workerOnboardingOrchestrator = new OnboardingOrchestratorWorker({
+      fs: localFs,
+      postSystemMessage: (line) => layout.panels.chat.addSystemMessage(line),
+      postDipReference: (md) => layout.panels.chat.addSystemMessage(md),
+      getProviderCatalogue: buildWorkerProviderCatalogue,
+      saveAccount: (id, key, baseUrl, deployment, apiVersion) =>
+        addAccount(id, key, baseUrl, deployment, apiVersion),
+      setSelectedModel: (id) => setSelectedModelId(id),
+      resolveModelLabel: (provider, modelId) => {
+        try {
+          const found = getProviderModels(provider).find((m) => m.id === modelId);
+          return found?.name ?? null;
+        } catch {
+          return null;
+        }
+      },
+      broadcastToDip: (payload) => broadcastToDips(payload),
+      fireFinalLick: (data) => {
+        // Forward through the same relay any sprinkle lick would use,
+        // gated by the persistent ledger so HMR / double-mount can't
+        // double the cone's greeting.
+        const action = String((data as { action?: unknown })?.action ?? '');
+        dispatchWelcomeLickOnce(
+          action,
+          firedWelcomeActions,
+          () => client.sendSprinkleLick('welcome', data),
+          'orchestrator-worker'
+        );
+      },
+      launchOAuth: async (providerId, baseUrl) => {
+        try {
+          const cfg = getProviderConfig(providerId);
+          if (!cfg.isOAuth || !cfg.onOAuthLogin) {
+            return { ok: false, message: 'Provider does not support OAuth.' };
+          }
+          if (cfg.requiresBaseUrl && baseUrl) addAccount(providerId, '', baseUrl);
+          const { createOAuthLauncher } = await import('../providers/oauth-service.js');
+          const launcher = createOAuthLauncher();
+          await cfg.onOAuthLogin(launcher, () => undefined);
+          return { ok: true };
+        } catch (err) {
+          return {
+            ok: false,
+            message: err instanceof Error ? err.message : 'OAuth login failed.',
+          };
+        }
+      },
+    });
+    return workerOnboardingOrchestrator;
+  };
+
+  // Mirrors `interceptWelcomeLickExt` in `mainExtension`. Returns
+  // `true` when the lick was handled locally (do NOT forward to the
+  // cone). Source-of-truth comments on each branch live in the
+  // extension copy — keep these in sync.
+  const interceptWelcomeLick = (event: LickEvent): boolean => {
+    if (event.type !== 'sprinkle') return false;
+    const welcomeAction =
+      event.sprinkleName === 'welcome' || event.sprinkleName === 'inline'
+        ? ((event.body as Record<string, unknown> | null)?.action as string | undefined)
+        : undefined;
+    if (welcomeAction && DEDUPED_WELCOME_ACTIONS.has(welcomeAction)) {
+      if (firedWelcomeActions.has(welcomeAction)) {
+        log.debug('Suppressing duplicate welcome lick (worker)', { action: welcomeAction });
+        return true;
+      }
+      firedWelcomeActions.add(welcomeAction);
+      persistFiredWelcomeActions(firedWelcomeActions);
+    }
+    const isWelcomeFlowAction =
+      welcomeAction === 'first-run' ||
+      welcomeAction === 'onboarding-complete' ||
+      welcomeAction === 'connect-ready' ||
+      welcomeAction === 'connect-attempt' ||
+      welcomeAction === 'oauth-attempt' ||
+      welcomeAction === 'shortcut-migrate';
+    if (!isWelcomeFlowAction) return false;
+
+    const body = event.body as Record<string, unknown> | null;
+    const action = welcomeAction;
+
+    if (action === 'first-run') {
+      getOnboardingOrchestrator().handleFirstRun();
+      return true;
+    }
+    if (action === 'onboarding-complete') {
+      const orch = getOnboardingOrchestrator();
+      const profile = (body?.data as Record<string, unknown> | undefined) ?? {};
+      if ((profile as Record<string, unknown>).mountWorkspace) {
+        applyPendingMount(localFs).catch((err) =>
+          log.warn('Failed to mount workspace from onboarding', err)
+        );
+      }
+      void orch
+        .handleOnboardingComplete(profile as Record<string, unknown>)
+        .catch((err) => log.warn('OnboardingOrchestrator failed', err));
+      return true;
+    }
+    if (action === 'connect-ready') {
+      // Reload short-circuit: if the user already configured a
+      // provider in a previous session, fast-forward the dip.
+      const accounts = getAccounts();
+      if (accounts.length > 0) {
+        const primary = accounts[0];
+        const cfg = (() => {
+          try {
+            return getProviderConfig(primary.providerId);
+          } catch {
+            return null;
+          }
+        })();
+        broadcastToDips({
+          type: 'slicc-already-connected',
+          provider: primary.providerId,
+          note: cfg?.name ? `Already connected to ${cfg.name}.` : 'Already connected.',
+        });
+        void fireFastForwardFinalLick(localFs, primary.providerId, (data) => {
+          const finalAction = String((data as { action?: unknown }).action ?? '');
+          dispatchWelcomeLickOnce(
+            finalAction,
+            firedWelcomeActions,
+            () => client.sendSprinkleLick('welcome', data),
+            'fast-forward-worker'
+          );
+        }).catch((err) => log.warn('Failed to fire fast-forward final lick', err));
+        return true;
+      }
+      getOnboardingOrchestrator().handleConnectReady();
+      return true;
+    }
+    if (action === 'connect-attempt') {
+      const data = body?.data as Record<string, unknown> | undefined;
+      if (data) {
+        void getOnboardingOrchestrator()
+          .handleConnectAttempt({
+            provider: String(data.provider ?? ''),
+            apiKey: String(data.apiKey ?? ''),
+            baseUrl: typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+            deployment:
+              typeof data.deployment === 'string' && data.deployment
+                ? String(data.deployment)
+                : null,
+            apiVersion:
+              typeof data.apiVersion === 'string' && data.apiVersion
+                ? String(data.apiVersion)
+                : null,
+            model: data.model == null ? null : String(data.model),
+          })
+          .catch((err) => log.warn('handleConnectAttempt failed', err));
+      }
+      return true;
+    }
+    if (action === 'oauth-attempt') {
+      const data = body?.data as Record<string, unknown> | undefined;
+      if (data) {
+        void getOnboardingOrchestrator()
+          .handleOAuthAttempt({
+            provider: String(data.provider ?? ''),
+            baseUrl: typeof data.baseUrl === 'string' && data.baseUrl ? String(data.baseUrl) : null,
+          })
+          .catch((err) => log.warn('handleOAuthAttempt failed', err));
+      }
+      return true;
+    }
+    if (action === 'shortcut-migrate') {
+      void localFs
+        .writeFile('/shared/.welcomed', '1')
+        .catch((err) => log.warn('Failed to persist welcome completion marker', err));
+      return true;
+    }
+    return false;
+  };
+
+  // Inline-dip lick callback. The welcome dip mounts as an inline
+  // `<img>`-hydrated dip in chat history, so its licks reach us
+  // through this path rather than the SprinkleManager.
+  layout.panels.chat.onDipLick = (action: string, data: unknown) => {
+    const event: LickEvent = {
+      type: 'sprinkle',
+      sprinkleName: 'inline',
+      targetScoop: undefined,
+      timestamp: new Date().toISOString(),
+      body: { action, data },
+    };
+    if (interceptWelcomeLick(event)) return;
+    client.sendSprinkleLick('inline', { action, data });
+  };
+
+  sprinkleManager = new SprinkleManager(
     localFs,
-    (event: LickEvent) => {
-      if (event.type === 'sprinkle' && event.sprinkleName) {
-        client.sendSprinkleLick(event.sprinkleName, event.body, event.targetScoop);
+    async (event: LickEvent) => {
+      if (event.type === 'sprinkle') {
+        if (interceptWelcomeLick(event)) {
+          // shortcut-migrate may need to close the welcome panel —
+          // the helper marks it intercepted but doesn't have a
+          // sprinkleManager reference. Do the close here.
+          if ((event.body as Record<string, unknown> | null)?.action === 'shortcut-migrate') {
+            sprinkleManager.close('welcome');
+          }
+          return;
+        }
+        if (event.sprinkleName) {
+          client.sendSprinkleLick(event.sprinkleName, event.body, event.targetScoop);
+        }
       }
     },
     {
@@ -1716,6 +1951,70 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   await sprinkleManager.restoreOpenSprinkles().catch((err) => {
     log.warn('Failed to restore open sprinkles', err);
   });
+
+  // First-run detection. Mirrors the extension's logic at the bottom
+  // of `mainExtension`: only fire when `/shared/.welcomed` is absent
+  // AND the cone's persisted chat has no prior welcome lick. Trust
+  // the install state over the persisted ledger so a stale entry
+  // from a previous install doesn't suppress the welcome on a fresh
+  // boot (e.g. after `nuke 1234`, where `slicc:welcome-flow-fired`
+  // is cleared by the page-side reload listener but the in-memory
+  // copy of `firedWelcomeActions` already loaded earlier in this
+  // function might still hold "first-run" from a legacy session).
+  if (!hasStoredTrayJoinUrl(window.localStorage)) {
+    detectWelcomeFirstRun(localFs)
+      .then((result) => {
+        if (!result.isFirstRun) return;
+        if (firedWelcomeActions.has('first-run')) {
+          log.info('Clearing stale welcome dedup entry — install state is fresh');
+          firedWelcomeActions.delete('first-run');
+          persistFiredWelcomeActions(firedWelcomeActions);
+        }
+        firedWelcomeActions.add('first-run');
+        persistFiredWelcomeActions(firedWelcomeActions);
+        getOnboardingOrchestrator().handleFirstRun();
+      })
+      .catch((err) => log.warn('Welcome detection failed', err));
+  }
+
+  // Worker-side provider catalogue (same shape as `buildExtProviderCatalogue`).
+  function buildWorkerProviderCatalogue() {
+    const ids = getAvailableProviders();
+    const providers = ids
+      .map((id) => {
+        const cfg = getProviderConfig(id);
+        return {
+          id: cfg.id,
+          name: cfg.name,
+          description: cfg.description,
+          requiresApiKey: cfg.requiresApiKey ?? true,
+          requiresBaseUrl: cfg.requiresBaseUrl ?? false,
+          requiresDeployment: !!cfg.requiresDeployment,
+          requiresApiVersion: !!cfg.requiresApiVersion,
+          apiKeyPlaceholder: cfg.apiKeyPlaceholder ?? undefined,
+          apiKeyEnvVar: cfg.apiKeyEnvVar ?? undefined,
+          defaultBaseUrl: cfg.baseUrlPlaceholder ?? undefined,
+          baseUrlDescription: cfg.baseUrlDescription ?? undefined,
+          deploymentPlaceholder: cfg.deploymentPlaceholder ?? undefined,
+          deploymentDescription: cfg.deploymentDescription ?? undefined,
+          apiVersionDefault: cfg.apiVersionDefault ?? undefined,
+          apiVersionDescription: cfg.apiVersionDescription ?? undefined,
+          isOAuth: !!cfg.isOAuth,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    const models: Record<string, Array<{ id: string; name?: string }>> = {};
+    for (const id of ids) {
+      try {
+        models[id] = getProviderModels(id)
+          .filter((m) => !isModelHiddenFromPicker(m.id))
+          .map((m) => ({ id: m.id, name: m.name }));
+      } catch {
+        models[id] = [];
+      }
+    }
+    return { providers, models };
+  }
 
   // Live page→worker localStorage sync. The worker's `localStorage`
   // is a Map-backed shim seeded at boot from

@@ -4,6 +4,7 @@ import {
   createNukeCommand,
   installNukeReloadListener,
   NUKE_CONTROL_CHANNEL,
+  NUKE_LOCAL_STORAGE_KEYS,
 } from '../../../src/shell/supplemental-commands/nuke-command.js';
 
 function createMockCtx() {
@@ -126,8 +127,47 @@ describe('nuke command', () => {
     dispose();
   });
 
+  it('forwards localStorage keys to clear in the broadcast (worker→page propagation)', async () => {
+    // The shell side does NOT itself clear localStorage — the worker's
+    // shim wouldn't propagate to the page. Instead it publishes the
+    // keys via the broadcast and the page-side listener applies them.
+    // See the doc comment on `NukeReloadMsg` for the full rationale.
+    const lsRemove = vi.fn();
+    vi.stubGlobal('localStorage', {
+      removeItem: lsRemove,
+      getItem: () => null,
+      setItem: vi.fn(),
+    });
+
+    const onReload = vi.fn();
+    const dispose = installNukeReloadListener(onReload);
+
+    const cmd = createNukeCommand();
+    await cmd.execute(['1234'], createMockCtx());
+    await new Promise((r) => setTimeout(r, 10));
+
+    // The listener should have removed each declared key and then
+    // fired the reload callback exactly once.
+    for (const key of NUKE_LOCAL_STORAGE_KEYS) {
+      expect(lsRemove).toHaveBeenCalledWith(key);
+    }
+    expect(onReload).toHaveBeenCalledTimes(1);
+    dispose();
+  });
+
   it('exposes the channel name as a constant', () => {
     expect(NUKE_CONTROL_CHANNEL).toBe('slicc-nuke-control');
+  });
+
+  it('declares the keys that gate the welcome flow on next boot', () => {
+    // The welcome wiring in `mainStandaloneWorker` /` mainExtension`
+    // skips first-run detection when a tray-join URL is stored
+    // (`if (!hasStoredTrayJoinUrl(...))`). After nuke wipes IDB the
+    // stale URL would point at a peer this tab can no longer follow,
+    // AND would suppress welcome — both keys must be in the list.
+    expect(NUKE_LOCAL_STORAGE_KEYS).toContain('slicc:welcome-flow-fired');
+    expect(NUKE_LOCAL_STORAGE_KEYS).toContain('slicc.trayJoinUrl');
+    expect(NUKE_LOCAL_STORAGE_KEYS).toContain('slicc.trayWorkerBaseUrl');
   });
 });
 
