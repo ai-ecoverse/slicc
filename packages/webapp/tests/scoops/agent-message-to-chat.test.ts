@@ -208,4 +208,55 @@ describe('agentMessagesToChatMessages', () => {
     const out = agentMessagesToChatMessages(input, { idSeed: seedId });
     expect(out[0]).not.toHaveProperty('toolCalls');
   });
+
+  it('drops internal orchestration tools (send_message / list_scoops / list_tasks)', () => {
+    counter = 0;
+    const input: AgentMessage[] = [
+      assistantMsg(
+        [
+          { type: 'text', text: 'thinking…' },
+          { type: 'toolCall', id: 'tc-keep', name: 'bash', arguments: { command: 'ls' } },
+          {
+            type: 'toolCall',
+            id: 'tc-hidden-1',
+            name: 'send_message',
+            arguments: { to: 'cone' },
+          },
+          { type: 'toolCall', id: 'tc-hidden-2', name: 'list_scoops', arguments: {} },
+          { type: 'toolCall', id: 'tc-hidden-3', name: 'list_tasks', arguments: {} },
+        ],
+        2
+      ),
+      toolResultMsg('tc-keep', 'a.txt\n', false, 3),
+      // Results for the hidden tool calls must also be skipped — they
+      // have no visible target to attach to.
+      toolResultMsg('tc-hidden-1', 'sent', false, 4),
+      toolResultMsg('tc-hidden-2', '[]', false, 5),
+    ];
+
+    const out = agentMessagesToChatMessages(input, { idSeed: seedId });
+    expect(out).toHaveLength(1);
+    expect(out[0].toolCalls).toEqual([
+      { id: 'tc-keep', name: 'bash', input: { command: 'ls' }, result: 'a.txt\n', isError: false },
+    ]);
+  });
+
+  it('honors a custom hiddenToolNames override', () => {
+    counter = 0;
+    const input: AgentMessage[] = [
+      assistantMsg(
+        [
+          { type: 'toolCall', id: 'tc-bash', name: 'bash', arguments: { command: 'ls' } },
+          { type: 'toolCall', id: 'tc-x', name: 'experimental_thing', arguments: {} },
+        ],
+        2
+      ),
+    ];
+
+    const out = agentMessagesToChatMessages(input, {
+      idSeed: seedId,
+      hiddenToolNames: new Set(['experimental_thing']),
+    });
+    expect(out[0].toolCalls?.map((t) => t.name)).toEqual(['bash']);
+  });
 });

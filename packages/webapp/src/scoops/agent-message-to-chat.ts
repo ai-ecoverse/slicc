@@ -37,19 +37,36 @@ import type {
   UserMessage,
 } from '@mariozechner/pi-ai';
 import type { ChatMessage, ToolCall as UiToolCall } from '../ui/types.js';
+import { HIDDEN_TOOL_NAMES } from './hidden-tools.js';
 
 /**
  * Pure translator. `idSeed` lets callers inject a deterministic id
  * source for tests; production calls fall through to a timestamp+random
  * default that matches the chat panel's `uid()`.
+ *
+ * Internal orchestration tools (`HIDDEN_TOOL_NAMES`) are filtered out
+ * to match the live-streaming behavior in
+ * `OffscreenBridge.createCallbacks` — without this, a history rebuild
+ * would surface `send_message` / `list_scoops` / `list_tasks` rows
+ * that live agent activity intentionally hides.
  */
 export function agentMessagesToChatMessages(
   agentMessages: readonly AgentMessage[],
-  options: { source?: string; idSeed?: () => string } = {}
+  options: {
+    source?: string;
+    idSeed?: () => string;
+    hiddenToolNames?: ReadonlySet<string>;
+  } = {}
 ): ChatMessage[] {
-  const { source = 'cone', idSeed = defaultUid } = options;
+  const { source = 'cone', idSeed = defaultUid, hiddenToolNames = HIDDEN_TOOL_NAMES } = options;
   const out: ChatMessage[] = [];
   let lastAssistant: ChatMessage | null = null;
+  // Tool-call ids that we dropped from an assistant message because
+  // their tool name was on the hidden list. Their matching
+  // `toolResult` messages must also be skipped — otherwise the
+  // result-patcher below would either find no target (orphan, harmless)
+  // or worse, attach to a same-id call elsewhere if ids ever wrap.
+  const droppedToolCallIds = new Set<string>();
 
   for (const m of agentMessages) {
     if (isUserMessage(m)) {
@@ -67,7 +84,15 @@ export function agentMessagesToChatMessages(
 
     if (isAssistantMessage(m)) {
       const text = textOf(m.content);
-      const toolCalls = collectToolCalls(m);
+      const allToolCalls = collectToolCalls(m);
+      const visibleToolCalls: UiToolCall[] = [];
+      for (const tc of allToolCalls) {
+        if (hiddenToolNames.has(tc.name)) {
+          droppedToolCallIds.add(tc.id);
+        } else {
+          visibleToolCalls.push(tc);
+        }
+      }
       const msg: ChatMessage = {
         id: idSeed(),
         role: 'assistant',
@@ -75,13 +100,18 @@ export function agentMessagesToChatMessages(
         timestamp: m.timestamp,
         source,
       };
-      if (toolCalls.length > 0) msg.toolCalls = toolCalls;
+      if (visibleToolCalls.length > 0) msg.toolCalls = visibleToolCalls;
       out.push(msg);
       lastAssistant = msg;
       continue;
     }
 
     if (isToolResultMessage(m)) {
+      // Skip results for tool calls we filtered out above. Their
+      // assistant counterpart was hidden, so we'd otherwise have no
+      // target to attach to (and a future same-id collision could
+      // cross-attach to an unrelated call).
+      if (droppedToolCallIds.has(m.toolCallId)) continue;
       // Tool results land on the most recent assistant message's
       // matching tool call. If we've drifted past that boundary
       // (e.g. malformed history) we silently skip the result rather

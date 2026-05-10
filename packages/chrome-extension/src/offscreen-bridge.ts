@@ -36,6 +36,7 @@ import type {
 } from './messages.js';
 import { getLeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
 import { getFollowerTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-follower-status.js';
+import { HIDDEN_TOOL_NAMES } from '../../../packages/webapp/src/scoops/hidden-tools.js';
 import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
 import { toolUIRegistry } from '../../../packages/webapp/src/tools/tool-ui.js';
 import type { ChatMessage } from '../../../packages/webapp/src/ui/types.js';
@@ -226,8 +227,7 @@ export class OffscreenBridge implements KernelFacade {
       },
 
       onToolStart: (scoopJid, toolName, toolInput) => {
-        const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
-        if (hiddenTools.has(toolName)) return;
+        if (HIDDEN_TOOL_NAMES.has(toolName)) return;
 
         const msg = bridge.getOrCreateAssistantMsg(scoopJid);
         if (!msg.toolCalls) msg.toolCalls = [];
@@ -243,8 +243,7 @@ export class OffscreenBridge implements KernelFacade {
       },
 
       onToolEnd: (scoopJid, toolName, result, isError) => {
-        const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
-        if (hiddenTools.has(toolName)) return;
+        if (HIDDEN_TOOL_NAMES.has(toolName)) return;
 
         const msgId = bridge.currentMessageId.get(scoopJid);
         if (msgId) {
@@ -586,6 +585,10 @@ export class OffscreenBridge implements KernelFacade {
         // Hydrate the buffer so subsequent agent events extend the
         // restored history instead of starting from empty (which
         // would silently overwrite the UI store via persistScoop).
+        // Clear `currentMessageId` for the same reason: a stale id
+        // pointing at a (now non-existent) buffer entry would have
+        // `getOrCreateAssistantMsg` write into the rehydrated buffer
+        // under an unrelated id.
         const buf: BufferedChatMessage[] = chatMessages.map((m) => ({
           id: m.id,
           role: m.role,
@@ -604,6 +607,12 @@ export class OffscreenBridge implements KernelFacade {
           isStreaming: false,
         }));
         this.messageBuffers.set(scoopJid, buf);
+        this.currentMessageId.delete(scoopJid);
+        // Persist the rebuilt buffer back to the UI session store so
+        // a subsequent panel reload (without further agent activity)
+        // sees the canonical history instead of whatever truncated
+        // snapshot the panel last wrote during the remount race.
+        this.persistScoop(scoopJid);
         this.emit({
           type: 'scoop-messages-replaced',
           scoopJid,
@@ -613,13 +622,20 @@ export class OffscreenBridge implements KernelFacade {
       }
     }
 
-    // Last resort: load from the UI session store.
+    // Last resort: load from the UI session store. Hydrate the buffer
+    // (and clear `currentMessageId`) here too — without this, a later
+    // agent event would call `getOrCreateAssistantMsg` against an
+    // empty buffer and `persistScoop` would overwrite IDB with only
+    // the new entries, reintroducing the truncation race this
+    // handler exists to prevent.
     if (this.sessionStore) {
       const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
       try {
         const session = await this.sessionStore.load(sessionId);
         const messages = session?.messages ?? [];
         if (messages.length > 0) {
+          this.messageBuffers.set(scoopJid, messages as unknown as BufferedChatMessage[]);
+          this.currentMessageId.delete(scoopJid);
           this.emit({
             type: 'scoop-messages-replaced',
             scoopJid,
