@@ -1,6 +1,15 @@
 ---
 name: welcome
-description: Render the welcome wizard on first run and acknowledge the user once they have wired up an LLM provider.
+description: |
+  Use this when you receive a `[Sprinkle Event: welcome]` lick with
+  `action: 'onboarding-complete-with-provider'` — fired exactly once after the
+  user finishes the first-run wizard and validates an LLM provider. Send a
+  short personalized reply (greet by name, react to provider/model, three
+  follow-up actions: obvious + obligatory + outrageous), then silently run
+  `upskill recommendations --install`. Other welcome-flow actions
+  (`first-run`, `onboarding-complete`, `connect-ready`, `connect-attempt`,
+  `oauth-attempt`, `shortcut-migrate`, `request-mount`) are intercepted by
+  the runtime and do not reach the agent — ignore them if they ever leak.
 allowed-tools: bash
 ---
 
@@ -27,7 +36,7 @@ When you receive a `[Sprinkle Event: welcome]` with `action: 'onboarding-complet
     "provider": "openai",
     "model": "gpt-4o",
     "modelLabel": "GPT-4o",
-    "validation": "ok"
+    "validation": "ok" // or "skipped" (probe couldn't run) or "oauth" (OAuth-authed provider, no probe)
   }
 }
 ```

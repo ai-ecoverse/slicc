@@ -1,6 +1,12 @@
 ---
 name: upgrade
-description: React to upgrade lick events with a changelog review and a three-way merge of bundled vfs-root content
+description: |
+  Use this when you receive an `[Upgrade Event: x.y.z→a.b.c]` lick — fired on
+  boot whenever the bundled SLICC version differs from the previous run. This
+  skill renders the approval card, fetches the changelog from GitHub, and
+  performs a three-way merge of bundled `vfs-root` files (skills, sprinkles)
+  against the user's local edits. Never auto-applies; user must explicitly
+  click `Update workspace files`.
 allowed-tools: bash, read_file, write_file, edit_file
 ---
 

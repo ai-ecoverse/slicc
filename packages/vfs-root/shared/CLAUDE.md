@@ -24,7 +24,7 @@ You have 100+ shell commands. When unsure if something is possible:
 
 ## Principles
 
-- **Scoops do the heavy lifting. The cone orchestrates and synthesizes.** See `man delegation` or `/workspace/skills/scoop-management/SKILL.md`.
+- **Scoops do the heavy lifting. The cone orchestrates and synthesizes.** See `man delegation` or `/workspace/skills/delegation/SKILL.md`.
 - When something fails, try another approach. You have many tools.
 - New capabilities = skills (`skill list`, `upskill search`), not hardcoded features. To author one, see `/workspace/skills/skill-authoring/SKILL.md`.
 
