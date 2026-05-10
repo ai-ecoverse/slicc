@@ -640,10 +640,16 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     layout.panels.scoops.setSelectedJid(scoop.jid);
 
     // switchToContext loads messages from the shared browser-coding-agent IndexedDB
-    // (written by the offscreen bridge). No buffer reconciliation needed.
+    // (written by the offscreen bridge). That snapshot can drift if the side panel
+    // re-mounts mid-stream (chrome.runtime reconnect, panel close/open) — its
+    // `persistSession` may overwrite the bridge's writes with a near-empty list.
+    // Match the standalone-worker path and ask the offscreen for the canonical
+    // history; the bridge replies via `scoop-messages-replaced` and the panel's
+    // `onScoopMessagesReplaced` handler swaps it in atomically.
     const contextId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
     const scoopName = scoop.isCone ? undefined : scoop.name;
     await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
+    client.requestScoopMessages(scoop.jid);
 
     if (client.isProcessing(scoop.jid)) {
       layout.panels.chat.setProcessing(true);
@@ -1541,10 +1547,29 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     const scoopName = scoop.isCone ? undefined : scoop.name;
     await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
 
+    // Ask the worker for the canonical chat history. The worker is the
+    // source of truth (it owns the live `AgentMessage[]`); the panel's
+    // own `browser-coding-agent` IDB can drift if the panel re-mounts
+    // mid-conversation (HMR, full reload). The reply lands as a
+    // `scoop-messages-replaced` event handled below and replaces the
+    // panel's view atomically.
+    client.requestScoopMessages(scoop.jid);
+
     if (client.isProcessing(scoop.jid)) {
       layout.panels.chat.setProcessing(true);
     }
   };
+
+  // Per-instance discriminator so same-origin RPC channels (sprinkle
+  // bridge today; future BroadcastChannel users tomorrow) stay scoped
+  // to one tab/worker pair. Generated once per page boot and forwarded
+  // to the worker through `kernel-worker-init`. Two SLICC tabs on the
+  // same origin would otherwise share a global channel name and end up
+  // handling each other's sprinkle ops.
+  const instanceId =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `slicc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
   // Spawn the worker. `spawnKernelWorker` constructs the Worker via
   // Vite's `new URL` pattern, builds an `OffscreenClient` over a
@@ -1556,6 +1581,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   void OffscreenClient; // type import for the `client` variable above
   const host = spawnKernelWorker({
     realCdpTransport,
+    instanceId,
     callbacks: {
       onStatusChange: (scoopJid, status) => {
         layout.panels.scoops.updateScoopStatus(scoopJid, status);
@@ -1594,6 +1620,20 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
             new Date(message.timestamp).getTime()
           );
         }
+      },
+      onScoopMessagesReplaced: (scoopJid, messages) => {
+        if (selectedScoop?.jid !== scoopJid) return;
+        // Replace the panel's view of the scoop with the worker's
+        // canonical history. The worker's
+        // `handleRequestScoopMessages` persists the rebuilt buffer
+        // back to the shared `browser-coding-agent` IDB before
+        // emitting (when it rebuilds from agent messages or hydrates
+        // from the session-store fallback), so the next reload picks
+        // up the same view. The buffered-only path skips the persist
+        // because the buffer's content already came FROM the active
+        // streaming pipeline, which keeps writing through
+        // `persistScoop` on each agent event.
+        layout.panels.chat.loadMessages(messages as unknown as ChatMessage[]);
       },
       onReady: () => {
         log.info('Kernel worker ready, scoop count:', client.getScoops().length);
@@ -1636,6 +1676,40 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   }
   client.requestState();
 
+  // Sprinkle manager — runs on the page (DOM access required), with a
+  // proxy on the worker's `globalThis.__slicc_sprinkleManager` so the
+  // shell can reach it. The shell side of the bridge lives in
+  // `kernel-worker.ts`; this side installs the dispatcher.
+  const { SprinkleManager } = await import('./sprinkle-manager.js');
+  const { installSprinkleManagerHandlerOverChannel } =
+    await import('../scoops/sprinkle-bridge-channel.js');
+  const sprinkleManager = new SprinkleManager(
+    localFs,
+    (event: LickEvent) => {
+      if (event.type === 'sprinkle' && event.sprinkleName) {
+        client.sendSprinkleLick(event.sprinkleName, event.body, event.targetScoop);
+      }
+    },
+    {
+      addSprinkle: (name, title, element, zone, options) =>
+        layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined, options),
+      removeSprinkle: (name) => layout.removeSprinkle(name),
+    },
+    () => {
+      const cone = client.getScoops().find((s) => s.isCone);
+      if (cone) client.stopScoop(cone.jid);
+    }
+  );
+  (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+  const stopSprinkleHandler = installSprinkleManagerHandlerOverChannel(sprinkleManager, {
+    instanceId,
+  });
+  await sprinkleManager.refresh();
+  layout.onSprinkleClose = (name) => sprinkleManager.close(name);
+  await sprinkleManager.restoreOpenSprinkles().catch((err) => {
+    log.warn('Failed to restore open sprinkles', err);
+  });
+
   // Live page→worker localStorage sync. The worker's `localStorage`
   // is a Map-backed shim seeded at boot from
   // `KernelWorkerInitMsg.localStorageSeed`; subsequent page writes
@@ -1677,6 +1751,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     'beforeunload',
     () => {
       stopStorageSync();
+      stopSprinkleHandler();
       remoteTerminal.dispose();
       host.dispose();
     },
