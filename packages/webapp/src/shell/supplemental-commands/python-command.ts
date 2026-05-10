@@ -63,7 +63,13 @@ export function createPython3LikeCommand(
 
     let code = '';
     let filename = '<stdin>';
-    let argv: string[] = ['python3'];
+    // Two argv forms — `procArgv` for the kernel process record
+    // (what `ps` shows) and `sysArgv` for `sys.argv` inside the
+    // Python realm. They differ for `python3 -c CODE` because
+    // POSIX Python sets `sys.argv[0] = '-c'`, but `ps`-style
+    // displays read better with the full `python3 -c CODE…` form.
+    let procArgv: string[] = [name];
+    let sysArgv: string[] = [name];
 
     if (args[0] === '-c') {
       if (!args[1]) {
@@ -75,7 +81,8 @@ export function createPython3LikeCommand(
       }
       code = args[1];
       filename = '-c';
-      argv = ['-c', ...args.slice(2)];
+      sysArgv = ['-c', ...args.slice(2)];
+      procArgv = [name, '-c', code, ...args.slice(2)];
     } else if (args.length > 0 && !args[0].startsWith('-')) {
       const scriptArg = args[0];
       const scriptPath = ctx.fs.resolvePath(ctx.cwd, scriptArg);
@@ -88,11 +95,13 @@ export function createPython3LikeCommand(
       }
       code = await ctx.fs.readFile(scriptPath);
       filename = scriptArg;
-      argv = [scriptArg, ...args.slice(1)];
+      sysArgv = [scriptArg, ...args.slice(1)];
+      procArgv = [name, scriptArg, ...args.slice(1)];
     } else if (ctx.stdin.trim().length > 0) {
       code = ctx.stdin;
       filename = '<stdin>';
-      argv = ['<stdin>'];
+      sysArgv = ['<stdin>'];
+      procArgv = [name];
     } else if (args.length > 0) {
       return {
         stdout: '',
@@ -129,7 +138,8 @@ export function createPython3LikeCommand(
         realmFactory,
         owner,
         code,
-        argv,
+        argv: procArgv,
+        realmArgv: sysArgv,
         env: Object.fromEntries(ctx.env.entries()),
         cwd: ctx.cwd,
         filename,
@@ -146,7 +156,8 @@ export function createPython3LikeCommand(
       owner,
       kind: 'py',
       code,
-      argv,
+      argv: procArgv,
+      realmArgv: sysArgv,
       env: Object.fromEntries(ctx.env.entries()),
       cwd: ctx.cwd,
       filename,
@@ -183,6 +194,7 @@ async function runWithEphemeralPm(args: {
   owner: ProcessOwner;
   code: string;
   argv: string[];
+  realmArgv?: string[];
   env: Record<string, string>;
   cwd: string;
   filename: string;
@@ -202,6 +214,7 @@ async function runWithEphemeralPm(args: {
     kind: 'py',
     code: args.code,
     argv: args.argv,
+    realmArgv: args.realmArgv,
     env: args.env,
     cwd: args.cwd,
     filename: args.filename,

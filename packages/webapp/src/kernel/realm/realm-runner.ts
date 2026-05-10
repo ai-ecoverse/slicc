@@ -82,6 +82,14 @@ export interface RunInRealmOptions {
   filename: string;
   ctx: CommandContext;
   ppid?: number;
+  /**
+   * Override the argv exposed to user code as `process.argv` (JS) or
+   * `sys.argv` (py). When omitted, `argv` is used for both the
+   * `ps` display and the realm init message. Python uses this to
+   * separate the human-friendly process record (`python3 -c CODE …`)
+   * from the POSIX-correct `sys.argv` (`['-c', …userArgs]`).
+   */
+  realmArgv?: string[];
   /** Optional initial stdin exposed to the user code. */
   stdin?: string;
   /** Pyodide indexURL — only consumed when `kind:'py'`. */
@@ -195,7 +203,7 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       type: 'realm-init',
       kind: opts.kind,
       code: opts.code,
-      argv: opts.argv,
+      argv: opts.realmArgv ?? opts.argv,
       env: opts.env,
       cwd: opts.cwd,
       filename: opts.filename,
