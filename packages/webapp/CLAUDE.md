@@ -32,9 +32,9 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 - Path: `packages/webapp/src/kernel/`
 - `host.ts` — `createKernelHost(config)` factory. Single boot sequence shared by the offscreen document (extension), the standalone DedicatedWorker, and tests: orchestrator + lick-manager + agent-bridge + tray subs + cone bootstrap + BshWatchdog + `/proc` mount. Returns `{ orchestrator, browser, bridge, lickManager, sharedFs, processManager, dispose }`.
 - `kernel-worker.ts` — DedicatedWorker entry. The standalone path defaults to this since the inline orchestrator path was removed; `?inline=1` no longer exists.
-- `process-manager.ts` — `ProcessManager` tracks every long-running async unit: scoop turns, tool calls, shell execs, jsh scripts, preemptive runners. Pids are uint32 from 1024+; `signal(pid, sig)` honors SIGINT/SIGTERM/SIGKILL/SIGSTOP/SIGCONT (SIGKILL escalates uncatchably).
+- `process-manager.ts` — `ProcessManager` tracks every long-running async unit: scoop turns, tool calls, shell execs, jsh/python scripts. Pids are uint32 from 1024+; `signal(pid, sig)` honors SIGINT/SIGTERM/SIGKILL/SIGSTOP/SIGCONT (SIGKILL escalates uncatchably).
 - `proc-mount.ts` — read-only `procfs`-shaped view, mounted at `/proc` via `vfs.mountInternal` (scoop-invisible, not persisted). `cat /proc/<pid>/{status,cmdline,cwd,stat}` works from any panel terminal.
-- `preemptive-runner.ts` — per-task DedicatedWorker for hard-killable JS execution. SIGKILL = `worker.terminate()`. Drives the `preemptive` shell command.
+- `realm/` — generalized hard-killable runner for `node` / `.jsh` / `python`. `runInRealm({ kind: 'js' \| 'py', … })` spawns a per-task `DedicatedWorker` (standalone JS + both-mode Python) or sandbox iframe (extension JS); SIGKILL → `worker.terminate()` / `iframe.remove()`, exit 137. Kernel-side `realm-host` proxies `vfs` / `exec` / `fetch` RPC over the realm's port so realm code stays sandboxed.
 - `terminal-session-{host,client}.ts` — terminal RPC over the kernel transport. Each panel-typed command spawns a `kind:'shell'` process; SIGINT routes to `pm.signal`.
 - `remote-terminal-view.ts` — page-side xterm. Pre-intercepts `mount /<path>` so the keystroke gesture can drive `showDirectoryPicker` (the worker has no `window`).
 

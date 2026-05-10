@@ -41,8 +41,10 @@
  *     signal value is recorded in `Process.terminatedBy` so callers
  *     (terminal RPC, ps) can render the right exit code (130 for
  *     SIGINT, 143 for SIGTERM, 137 for SIGKILL). SIGSTOP/SIGCONT
- *     drive the `Gate` instead; `kind:'preemptive'` overrides SIGKILL
- *     with `worker.terminate()`.
+ *     drive the `Gate` instead; the realm runner
+ *     (`kernel/realm/realm-runner.ts`) subscribes to SIGKILL via
+ *     `onSignal` and calls `realm.terminate()` synchronously so
+ *     `node`/`.jsh`/`python` runaways are uncatchable.
  */
 
 // ---------------------------------------------------------------------------
@@ -50,7 +52,7 @@
 // ---------------------------------------------------------------------------
 
 /** What kind of process this is — drives the `ps` `STAT` column. */
-export type ProcessKind = 'scoop-turn' | 'tool' | 'shell' | 'jsh' | 'py' | 'net' | 'preemptive';
+export type ProcessKind = 'scoop-turn' | 'tool' | 'shell' | 'jsh' | 'py' | 'net';
 
 export type ProcessStatus = 'pending' | 'running' | 'exited' | 'killed';
 
@@ -202,9 +204,9 @@ export type ProcessEventListener = (proc: Process) => void;
  * Signal-delivery listener. Fires every time `pm.signal(pid, sig)`
  * delivers a signal to a live process — including SIGSTOP / SIGCONT
  * (which don't fire the abort) and signal escalations (e.g. a
- * SIGKILL after a previous SIGINT). The preemptive runner subscribes
- * here so it can `worker.terminate()` on every SIGKILL, not just the
- * first signal that aborts the controller.
+ * SIGKILL after a previous SIGINT). The realm runner subscribes
+ * here so it can `worker.terminate()` / `iframe.remove()` on every
+ * SIGKILL, not just the first signal that aborts the controller.
  */
 export type ProcessSignalListener = (proc: Process, sig: Signal) => void;
 
@@ -245,9 +247,9 @@ export class ProcessManager {
   /**
    * Allocate a pid + register the process. Listeners fire
    * synchronously before `spawn` returns. Status starts at `running`
-   * — callers that want a two-phase startup (the preemptive worker)
-   * can flip it manually after `worker.postMessage(init)` but before
-   * the first `running` event.
+   * — callers that want a two-phase startup can flip it manually
+   * after `worker.postMessage(init)` but before the first `running`
+   * event.
    */
   spawn(options: SpawnOptions): Process {
     const pid = this.allocatePid();
@@ -311,8 +313,8 @@ export class ProcessManager {
    * Returns `true` when the signal was delivered (process exists +
    * not already terminated), `false` otherwise — matching POSIX
    * `kill(2)` semantics. SIGSTOP / SIGCONT drive the pause/resume
-   * gate; `kind:'preemptive'` overrides SIGKILL with
-   * `worker.terminate()`.
+   * gate; the realm runner subscribes via `onSignal` and overrides
+   * SIGKILL with `realm.terminate()` for `kind:'jsh'`/`'py'` realms.
    */
   signal(pid: number, sig: Signal): boolean {
     const proc = this.processes.get(pid);
@@ -405,7 +407,7 @@ export class ProcessManager {
   /**
    * Subscribe to signal-delivery events. Fires every time
    * `signal(pid, sig)` succeeds — useful for hard-kill runners
-   * (preemptive worker) that need to react to SIGKILL specifically,
+   * (the realm runner) that need to react to SIGKILL specifically,
    * including escalations after a prior signal. Returns an
    * unsubscribe fn.
    */

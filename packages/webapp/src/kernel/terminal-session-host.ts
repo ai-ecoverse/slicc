@@ -23,8 +23,8 @@
  * Output stream caveats: `WasmShellHeadless.executeCommand` returns
  * the full result in one shot — it doesn't stream. The host emits
  * one `terminal-output` per stdout/stderr block, then the `exit`
- * event. A future streaming runtime (or the preemptive worker) can
- * switch to chunked emission without changing the envelope shape.
+ * event. A future streaming runtime can switch to chunked emission
+ * without changing the envelope shape.
  *
  * `terminal-stdin` and `terminal-resize` are intentionally
  * unhandled today: the panel-side line editor accumulates

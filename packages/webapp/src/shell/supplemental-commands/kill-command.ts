@@ -179,7 +179,8 @@ Supported signals:
   SIGINT (-INT)    cooperative cancel — exit 130
   SIGTERM (-TERM)  cooperative cancel — exit 143 (default)
   SIGKILL (-KILL)  cooperative cancel for cooperative procs;
-                   actually preempts kind:'preemptive' procs
+                   hard-kills kind:'jsh' / kind:'py' realms
+                   (worker.terminate() / iframe.remove())
   SIGSTOP (-STOP)  pause the process's kernel Gate.
                    Subsequent IO boundaries (terminal output, …)
                    block until SIGCONT.

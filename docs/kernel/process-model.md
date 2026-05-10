@@ -16,7 +16,7 @@ Every long-running async unit in the kernel registers a `Process` record:
 interface Process {
   readonly pid: number; // monotonic uint32 from 1024+
   readonly ppid: number; // 1 = kernel-host anchor (synthesized)
-  readonly kind: ProcessKind; // 'scoop-turn' | 'tool' | 'shell' | 'jsh' | 'net' | 'preemptive'
+  readonly kind: ProcessKind; // 'scoop-turn' | 'tool' | 'shell' | 'jsh' | 'py' | 'net'
   readonly argv: readonly string[];
   readonly cwd: string;
   readonly env: Record<string, string>;
@@ -40,22 +40,22 @@ Status transitions: `running` → `exited` (clean) or `killed` (any terminating 
 | `scoop-turn` | `ScoopContext.prompt()`                             | `['prompt', <truncated user text>]`     |
 | `tool`       | `tool-adapter.ts adaptTool()`                       | `[tool.name, <principal string param>]` |
 | `shell`      | `TerminalSessionHost.handleExec()` (panel terminal) | `[command-line]`                        |
-| `jsh`        | `executeJshFile` / `executeJsCode`                  | `['node', scriptPath, …args]`           |
-| `preemptive` | `runPreemptiveJs()`                                 | `['preemptive', …userArgs]`             |
+| `jsh`        | `executeJshFile` / `executeJsCode` (via realm)      | `['node', scriptPath, …args]`           |
+| `py`         | `python` / `python3` shell command (via realm)      | `['python3', …]`                        |
 
 The principal-arg extraction for tools (`extractToolArg` in `tool-adapter.ts`) tries an ordered list of known param names — `command` (bash), `file_path` / `path` (file ops), `pattern`, `url`, `key`, `name`, `query`, `message` — then falls back to the first non-empty string value. The `ps` formatter shell-quotes args with whitespace; a typical row reads `bash 'bash -c "date && sleep 8 && date"'`.
 
 ## Signals
 
-| Signal    | What it does                                                                                                                                                                                                                                                                                                                                                                          |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SIGINT`  | Records `terminatedBy='SIGINT'`. Aborts `Process.abort.signal`. Releases the gate so paused waiters wake. Exit 130 by convention.                                                                                                                                                                                                                                                     |
-| `SIGTERM` | Same as SIGINT but exit 143. Default for `kill <pid>` (no flag), matching POSIX.                                                                                                                                                                                                                                                                                                      |
-| `SIGKILL` | **Escalates** — overwrites any prior `terminatedBy`. Exit 137. For `kind:'preemptive'` processes, the runner subscribes to `pm.onSignal` and calls `worker.terminate()` synchronously — the only way to hard-kill a CPU-tight `while(true){}` in the browser. For other kinds, SIGKILL still aborts cooperatively + force-exits the process record (the underlying promise may leak). |
-| `SIGSTOP` | Pauses `Process.gate`. Subsequent IO-boundary `await proc.gate.wait()` calls block until SIGCONT.                                                                                                                                                                                                                                                                                     |
-| `SIGCONT` | Resumes the gate. All waiters wake at once.                                                                                                                                                                                                                                                                                                                                           |
+| Signal    | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SIGINT`  | Records `terminatedBy='SIGINT'`. Aborts `Process.abort.signal`. Releases the gate so paused waiters wake. Exit 130 by convention.                                                                                                                                                                                                                                                                                                                             |
+| `SIGTERM` | Same as SIGINT but exit 143. Default for `kill <pid>` (no flag), matching POSIX.                                                                                                                                                                                                                                                                                                                                                                              |
+| `SIGKILL` | **Escalates** — overwrites any prior `terminatedBy`. Exit 137. For `kind:'jsh'` and `kind:'py'` processes spawned by the realm runner, SIGKILL calls `worker.terminate()` (or `iframe.remove()` for the extension JS path) synchronously — the only way to hard-kill a CPU-tight `while(true){}` / `while True: pass` in the browser. For other kinds, SIGKILL still aborts cooperatively + force-exits the process record (the underlying promise may leak). |
+| `SIGSTOP` | Pauses `Process.gate`. Subsequent IO-boundary `await proc.gate.wait()` calls block until SIGCONT.                                                                                                                                                                                                                                                                                                                                                             |
+| `SIGCONT` | Resumes the gate. All waiters wake at once.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
-First-wins applies only to `SIGINT` / `SIGTERM`. `SIGKILL` is uncatchable: it always overwrites `terminatedBy`, mirroring POSIX. The `kind:'preemptive'` runner is the only kind with a hard-stop guarantee on SIGKILL today.
+First-wins applies only to `SIGINT` / `SIGTERM`. `SIGKILL` is uncatchable: it always overwrites `terminatedBy`, mirroring POSIX. The realm runner (`kind:'jsh'` and `kind:'py'`) is the only path with a hard-stop guarantee on SIGKILL today.
 
 ## Pause / resume
 
@@ -63,7 +63,7 @@ First-wins applies only to `SIGINT` / `SIGTERM`. `SIGKILL` is uncatchable: it al
 
 Today's gate awaits live at one IO boundary: terminal output emission in `TerminalSessionHost.handleExec`. SIGSTOP holds the wire-side `terminal-output` event behind `proc.gate.wait()`; SIGCONT releases it. Other boundaries (`VfsAdapter` methods, stdin reads in jsh, network bridge, just-bash command-boundary callbacks) are follow-up candidates.
 
-The gate is purely cooperative. Pure-CPU `while(true){}` loops don't observe it — the preemptive runner is the answer for hard control.
+The gate is purely cooperative. Pure-CPU `while(true){}` loops don't observe it — the realm runner (`kind:'jsh'`/`'py'`) is the answer for hard control.
 
 ## `/proc` filesystem
 
@@ -93,11 +93,11 @@ Deliberate omissions: no `/proc/self` (would require `currentPid()` tracking whi
 
 `kill` defaults to SIGTERM (POSIX). Short forms: `-INT`, `-TERM`, `-KILL`, `-STOP`, `-CONT`, `-9`. Long form: `-s SIGINT`. Multiple pids in one call. Exit codes: 0 if every signal landed; 1 if any pid was unknown / already terminated; 2 on parse error.
 
-## Preemptive runner
+## Realm runner
 
-`runPreemptiveJs(opts)` spawns a fresh `DedicatedWorker` per task and registers a `kind:'preemptive'` process. The runner subscribes to `pm.onSignal`; on SIGKILL it calls `worker.terminate()` (uncatchable) and exits 137. For SIGINT/SIGTERM, the runner records the state but does NOT terminate — the running JS is opaque from this side; cooperative cancel of an arbitrary tool's awaits isn't possible without threading abort signals through every layer.
+`runInRealm(opts)` spawns a per-task realm — a `DedicatedWorker` (standalone JS, both-mode Python) or a per-task sandbox iframe (extension JS) — and registers a `kind:'jsh'` (for `kind:'js'`) or `kind:'py'` process. The runner subscribes to `pm.onSignal`; on SIGKILL it calls `realm.terminate()` (`worker.terminate()` / `iframe.remove()`, both uncatchable) and exits 137. For SIGINT/SIGTERM, the runner records the state but does NOT terminate — the running script is opaque from this side; cooperative cancel of an arbitrary tool's awaits isn't possible without threading abort signals through every layer.
 
-The shell command is `preemptive 'CODE' [ARGS…]`. The script runs inside an `AsyncFunction` with shimmed `console`, `process.argv`, `process.env`, `process.stdout`/`process.stderr`, `process.exit(N)`. No FS access yet — a `RemoteVfsAdapter` over a MessagePort is a candidate follow-up.
+The user-facing surface is the `node` (`-e`/`script.js`/stdin), `.jsh` discovery, and `python`/`python3` (`-c`/`script.py`/stdin) commands. Realm code runs inside an `AsyncFunction` (JS) or Pyodide (Python) with shimmed `console`, `process.argv`/`sys.argv`, `process.env`, `process.stdout`/`process.stderr`, `process.exit(N)` / Python `SystemExit`. The realm-host on the kernel side proxies `vfs` (read/write/list/etc.), `exec` (just-bash subcommand), and `fetch` (SecureFetch with secret substitution) over the realm's port, so realm scripts get a full Node-like surface without holding kernel-side state.
 
 ## Wiring map
 
