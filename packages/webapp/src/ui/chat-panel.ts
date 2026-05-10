@@ -853,6 +853,28 @@ export class ChatPanel {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         this.sendMessage();
+        return;
+      }
+      // Tab accepts the LLM-suggested placeholder as the textarea value.
+      // Only fires when the textarea is empty AND the placeholder is a
+      // real suggestion (not the static default), so it doesn't steal Tab
+      // from the user's intended focus shift in the empty initial state.
+      if (
+        e.key === 'Tab' &&
+        !e.shiftKey &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        this.textarea.value.length === 0 &&
+        this.textarea.placeholder.length > 0 &&
+        this.textarea.placeholder !== ChatPanel.DEFAULT_PLACEHOLDER
+      ) {
+        e.preventDefault();
+        this.textarea.value = this.textarea.placeholder;
+        this.adjustTextareaHeight();
+        this.updateSendButtonState();
+        const end = this.textarea.value.length;
+        this.textarea.setSelectionRange(end, end);
       }
     });
 
