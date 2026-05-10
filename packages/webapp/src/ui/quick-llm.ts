@@ -15,6 +15,7 @@
 import { completeSimple } from '@mariozechner/pi-ai';
 import type { Api, Model, UserMessage } from '@mariozechner/pi-ai';
 import { createLogger } from '../core/logger.js';
+import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import {
   getApiKey,
   getProviderModels,
@@ -164,37 +165,22 @@ function findModel(providerId: string, modelId: string): Model<Api> | undefined 
 //
 // The Adobe LLM proxy groups requests by `X-Session-Id`. The cone/scoop
 // session ids are scoped to scoop folders; ad-hoc UI labels don't have
-// a scoop, so they get a separate daily-rotated UUID anchored to a
-// fixed key. This keeps label calls visible to the proxy as their own
-// session without leaking anything about the user's scoops.
+// a scoop, so they get their own daily-rotated UUID anchored to a
+// fixed sentinel. This keeps label calls visible to the proxy as their
+// own session without leaking anything about the user's scoops, and
+// shares rotation/storage semantics with `getAdobeSessionId` (the
+// scoop-traffic generator) by going through the same shared helper.
 
-const QUICK_LLM_SESSION_KEY = 'slicc:adobe-daily-uuid:ui-quick-llm';
-let inMemoryQuickLlmSession: { uuid: string; date: string } | undefined;
+const QUICK_LLM_SESSION_ANCHOR = 'ui-quick-llm';
 
 function getQuickLlmAdobeSessionId(): string {
-  const today = new Date().toISOString().slice(0, 10);
-  try {
-    const raw = localStorage.getItem(QUICK_LLM_SESSION_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as { uuid?: string; date?: string };
-      if (parsed.date === today && typeof parsed.uuid === 'string') return parsed.uuid;
-    }
-    const uuid = crypto.randomUUID();
-    localStorage.setItem(QUICK_LLM_SESSION_KEY, JSON.stringify({ uuid, date: today }));
-    return uuid;
-  } catch {
-    if (inMemoryQuickLlmSession?.date === today) return inMemoryQuickLlmSession.uuid;
-    const uuid = crypto.randomUUID();
-    inMemoryQuickLlmSession = { uuid, date: today };
-    return uuid;
-  }
+  return getDailyAdobeUuid(QUICK_LLM_SESSION_ANCHOR);
 }
 
-/** Test-only: drop the in-memory Adobe session cache. */
+/** Test-only hooks. Resetting the Adobe session cache lives in
+ *  `llm-session-id.ts` (`__resetAdobeSessionIdCacheForTests`); tests
+ *  that need a clean slate should call that. */
 export const __test__ = {
-  resetAdobeSession(): void {
-    inMemoryQuickLlmSession = undefined;
-  },
   pickCheapModel,
   familyOf,
 };

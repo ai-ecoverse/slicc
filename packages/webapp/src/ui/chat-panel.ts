@@ -245,12 +245,20 @@ export class ChatPanel {
   private openClusterAnchors = new Set<string>();
   /** Cache of LLM-generated cluster labels keyed by sorted tool-call ids. */
   private clusterLabelCache = new Map<string, string>();
-  /** In-flight cluster-label requests, keyed the same way as the cache. */
-  private clusterLabelInflight = new Set<string>();
+  /** In-flight cluster-label requests, keyed by the same signature. The
+   *  value tracks every preview element awaiting that signature's label,
+   *  so a cluster rebuilt mid-flight (re-render during streaming) still
+   *  picks up the eventual response instead of being stuck on the
+   *  comma-joined fallback. */
+  private clusterLabelInflight = new Map<string, Set<HTMLElement>>();
   /** Default placeholder before any LLM-suggested replacement. */
   private static readonly DEFAULT_PLACEHOLDER = 'What shall we build?';
   /** AbortController for the most recent placeholder-suggestion request. */
   private placeholderAbort: AbortController | null = null;
+  /** Previous `setStreamingState` value. The placeholder refresh fires
+   *  only on the streaming→idle edge — not on every "still idle" call
+   *  (e.g. context switches that pass `false` while already idle). */
+  private wasStreaming = false;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -307,6 +315,7 @@ export class ChatPanel {
   /** Clear the current session and reset messages. */
   async clearSession(): Promise<void> {
     this.messages = [];
+    this.resetEphemeralLlmState();
     this.renderMessages();
     await this.sessionStore.delete(this.sessionId);
   }
@@ -327,6 +336,15 @@ export class ChatPanel {
     this.currentStreamId = null;
     this.cancelPendingDelta();
 
+    // Drop ephemeral LLM-suggestion state from the prior scoop. The
+    // cluster cache is keyed by tool-call ids (which are scoped to the
+    // outgoing scoop) and the placeholder we generated reflects the
+    // outgoing transcript; both would be misleading in the new context.
+    this.resetEphemeralLlmState();
+    // Reset the placeholder back to the static default until the next
+    // streaming→idle transition computes a fresh one for this scoop.
+    if (this.textarea) this.textarea.placeholder = ChatPanel.DEFAULT_PLACEHOLDER;
+
     // Switch
     this.sessionId = contextId;
     this.currentScoopName = scoopName ?? null; // null means cone
@@ -343,6 +361,20 @@ export class ChatPanel {
       this.messages = [];
     }
     this.renderMessages();
+  }
+
+  /** Drop all ephemeral state tied to a scoop's lifetime: cluster
+   *  labels (keyed by tool-call ids that vanish with the scoop) and
+   *  any in-flight placeholder suggestion. Called on every session
+   *  reset (`switchToContext`, `clearSession`, `dispose`) so the
+   *  ChatPanel never carries unbounded label entries across switches
+   *  or applies a label resolved from a previous scoop's signatures. */
+  private resetEphemeralLlmState(): void {
+    this.clusterLabelCache.clear();
+    this.clusterLabelInflight.clear();
+    this.placeholderAbort?.abort();
+    this.placeholderAbort = null;
+    this.wasStreaming = false;
   }
 
   /** Set read-only mode (hide input for non-cone scoops). */
@@ -1297,6 +1329,9 @@ export class ChatPanel {
     this.updateSendButtonState();
     // Textarea stays enabled so the user can queue follow-up messages
     this.textarea.disabled = false;
+    const transitionedToIdle = this.wasStreaming && !streaming;
+    this.wasStreaming = streaming;
+
     // Mic button stays enabled during streaming so user can toggle voice mode off
     if (streaming) {
       if (this.voiceInput?.isListening()) {
@@ -1311,6 +1346,10 @@ export class ChatPanel {
         oldestQueued.queued = false;
         this.updateMessageEl(oldestQueued.id);
       }
+      // Cancel any in-flight placeholder suggestion: its source
+      // transcript is now stale (this turn will append new context).
+      this.placeholderAbort?.abort();
+      this.placeholderAbort = null;
     }
     if (!streaming) {
       if (this.voiceMode) {
@@ -1324,9 +1363,15 @@ export class ChatPanel {
       }
       // Fire-and-forget: regenerate the textarea placeholder from recent
       // turns so the next prompt suggestion reflects the current
-      // conversation. quickLabel returns null on any failure, in which
-      // case we keep whatever placeholder is already set.
-      void this.refreshSuggestedPlaceholder();
+      // conversation. Only fires on the streaming→idle edge — calls
+      // that pass `false` while already idle (e.g. switchToContext
+      // resetting streaming state on a fresh scoop) should NOT refresh
+      // off whatever messages happen to be loaded at that moment.
+      // quickLabel returns null on any failure, in which case we keep
+      // whatever placeholder is already set.
+      if (transitionedToIdle) {
+        void this.refreshSuggestedPlaceholder();
+      }
     }
   }
 
@@ -1343,7 +1388,15 @@ export class ChatPanel {
   /** Replace a cluster's comma-joined preview with an LLM-generated label
    *  describing what the tool calls accomplish together. Uses inputs only
    *  (per-tool args), not return values. Cached by the sorted set of
-   *  tool-call ids so reflow re-renders reuse the prior label. */
+   *  tool-call ids so reflow re-renders reuse the prior label.
+   *
+   *  Mid-flight rebuilds: when reflow rebuilds a cluster while its
+   *  label request is still in flight, the new previewEl joins the
+   *  same signature's pending set so the eventual response writes
+   *  into every still-connected element. Without this, the original
+   *  previewEl was the only one updated — and after reflow it has
+   *  been replaced by a fresh element, so the visible cluster stayed
+   *  on its comma-joined fallback. */
   private scheduleClusterLabel(previewEl: HTMLElement, toolCalls: readonly ToolCall[]): void {
     if (toolCalls.length === 0) return;
     const signature = toolCalls
@@ -1357,8 +1410,13 @@ export class ChatPanel {
       previewEl.textContent = cached;
       return;
     }
-    if (this.clusterLabelInflight.has(signature)) return;
-    this.clusterLabelInflight.add(signature);
+    const inflight = this.clusterLabelInflight.get(signature);
+    if (inflight) {
+      inflight.add(previewEl);
+      return;
+    }
+    const pending = new Set<HTMLElement>([previewEl]);
+    this.clusterLabelInflight.set(signature, pending);
 
     const formatted = toolCalls
       .map((tc, i) => {
@@ -1388,21 +1446,31 @@ export class ChatPanel {
       '1. bash: {"command":"python3 -c \\"print(1+1)\\""}\n' +
       'Example output: Run a Python sanity check';
 
+    const settle = (trimmed: string | null): void => {
+      const elements = this.clusterLabelInflight.get(signature);
+      this.clusterLabelInflight.delete(signature);
+      if (!trimmed || !elements) return;
+      this.clusterLabelCache.set(signature, trimmed);
+      for (const el of elements) {
+        if (el.isConnected) el.textContent = trimmed;
+      }
+    };
+
     void quickLabel({
       system,
       prompt: `Label these tool calls (inputs only):\n${formatted}`,
       maxTokens: 40,
     })
       .then((label) => {
-        this.clusterLabelInflight.delete(signature);
-        if (!label) return;
+        if (!label) {
+          settle(null);
+          return;
+        }
         const trimmed = label.replace(/^["']|["']$|\.$/g, '').trim();
-        if (!isUsefulClusterLabel(trimmed)) return;
-        this.clusterLabelCache.set(signature, trimmed);
-        if (previewEl.isConnected) previewEl.textContent = trimmed;
+        settle(isUsefulClusterLabel(trimmed) ? trimmed : null);
       })
       .catch(() => {
-        this.clusterLabelInflight.delete(signature);
+        settle(null);
       });
   }
 
@@ -2618,6 +2686,7 @@ export class ChatPanel {
   dispose(): void {
     this.cancelPendingDelta();
     this.disposeAllDips();
+    this.resetEphemeralLlmState();
     this.unsubscribe?.();
     this.voiceInput?.destroy();
     if (this.keydownListener) {

@@ -22,6 +22,7 @@ vi.mock('../../src/ui/provider-settings.js', () => ({
 }));
 
 import { quickLabel, __test__ } from '../../src/ui/quick-llm.js';
+import { __resetAdobeSessionIdCacheForTests } from '../../src/scoops/llm-session-id.js';
 
 function makeModel(
   id: string,
@@ -65,7 +66,7 @@ function assistantTextMessage(text: string) {
 
 beforeEach(() => {
   completeSimple.mockReset();
-  __test__.resetAdobeSession();
+  __resetAdobeSessionIdCacheForTests();
   providerSettings.apiKey = 'sk-test';
   providerSettings.providerId = 'anthropic';
   providerSettings.modelId = 'claude-opus-4-7';
@@ -111,7 +112,7 @@ describe('quickLabel', () => {
     expect((model as Model<Api>).id).toBe('claude-haiku-4-5');
   });
 
-  it('prefers gpt-mini over gpt for the GPT family', async () => {
+  it('picks the cheapest mini/nano sibling for the GPT family', async () => {
     providerSettings.providerId = 'openai';
     providerSettings.modelId = 'gpt-5';
     providerSettings.models = [
