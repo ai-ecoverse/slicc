@@ -1,5 +1,6 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { createProxiedFetch } from '../proxied-fetch.js';
 
 function manHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -22,6 +23,14 @@ function stripHtml(html: string): string {
 }
 
 export function createManCommand(): Command {
+  // Route through the same proxied fetch path that `curl` uses so the
+  // request bypasses the CORS wall in CLI / kernel-worker mode (the
+  // bare `fetch()` previously used here only worked in extension mode
+  // where `host_permissions` grants direct cross-origin access). Built
+  // once per command so the `SecureFetch` closure is shared across
+  // invocations.
+  const proxiedFetch = createProxiedFetch();
+
   return defineCommand('man', async (args) => {
     if (args.includes('--help') || args.includes('-h')) {
       return manHelp();
@@ -39,7 +48,7 @@ export function createManCommand(): Command {
     const url = `https://www.sliccy.com/man/${topic}.plain.html`;
 
     try {
-      const response = await fetch(url);
+      const response = await proxiedFetch(url, { method: 'GET' });
 
       if (response.status === 404) {
         return {
@@ -49,7 +58,7 @@ export function createManCommand(): Command {
         };
       }
 
-      if (!response.ok) {
+      if (response.status < 200 || response.status >= 300) {
         return {
           stdout: '',
           stderr: `man: failed to fetch manual page for ${topic}: ${response.status} ${response.statusText}\n`,
@@ -57,7 +66,7 @@ export function createManCommand(): Command {
         };
       }
 
-      const html = await response.text();
+      const html = new TextDecoder('utf-8').decode(response.body);
       const plainText = stripHtml(html);
 
       return {
@@ -65,10 +74,11 @@ export function createManCommand(): Command {
         stderr: '',
         exitCode: 0,
       };
-    } catch (err: any) {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       return {
         stdout: '',
-        stderr: `man: ${err.message || String(err)}\n`,
+        stderr: `man: ${message}\n`,
         exitCode: 1,
       };
     }
