@@ -1541,6 +1541,14 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     const scoopName = scoop.isCone ? undefined : scoop.name;
     await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
 
+    // Ask the worker for the canonical chat history. The worker is the
+    // source of truth (it owns the live `AgentMessage[]`); the panel's
+    // own `browser-coding-agent` IDB can drift if the panel re-mounts
+    // mid-conversation (HMR, full reload). The reply lands as a
+    // `scoop-messages-replaced` event handled below and replaces the
+    // panel's view atomically.
+    client.requestScoopMessages(scoop.jid);
+
     if (client.isProcessing(scoop.jid)) {
       layout.panels.chat.setProcessing(true);
     }
@@ -1594,6 +1602,14 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
             new Date(message.timestamp).getTime()
           );
         }
+      },
+      onScoopMessagesReplaced: (scoopJid, messages) => {
+        if (selectedScoop?.jid !== scoopJid) return;
+        // Replace the panel's view of the scoop with the worker's
+        // canonical history. The worker has already updated the UI
+        // session store as part of its handler (sessionStore is a
+        // shared IDB), so the next reload starts from the same place.
+        layout.panels.chat.loadMessages(messages as unknown as ChatMessage[]);
       },
       onReady: () => {
         log.info('Kernel worker ready, scoop count:', client.getScoops().length);
