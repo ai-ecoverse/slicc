@@ -1636,6 +1636,38 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   }
   client.requestState();
 
+  // Sprinkle manager — runs on the page (DOM access required), with a
+  // proxy on the worker's `globalThis.__slicc_sprinkleManager` so the
+  // shell can reach it. The shell side of the bridge lives in
+  // `kernel-worker.ts`; this side installs the dispatcher.
+  const { SprinkleManager } = await import('./sprinkle-manager.js');
+  const { installSprinkleManagerHandlerOverChannel } =
+    await import('../scoops/sprinkle-bridge-channel.js');
+  const sprinkleManager = new SprinkleManager(
+    localFs,
+    (event: LickEvent) => {
+      if (event.type === 'sprinkle' && event.sprinkleName) {
+        client.sendSprinkleLick(event.sprinkleName, event.body, event.targetScoop);
+      }
+    },
+    {
+      addSprinkle: (name, title, element, zone, options) =>
+        layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined, options),
+      removeSprinkle: (name) => layout.removeSprinkle(name),
+    },
+    () => {
+      const cone = client.getScoops().find((s) => s.isCone);
+      if (cone) client.stopScoop(cone.jid);
+    }
+  );
+  (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+  const stopSprinkleHandler = installSprinkleManagerHandlerOverChannel(sprinkleManager);
+  await sprinkleManager.refresh();
+  layout.onSprinkleClose = (name) => sprinkleManager.close(name);
+  await sprinkleManager.restoreOpenSprinkles().catch((err) => {
+    log.warn('Failed to restore open sprinkles', err);
+  });
+
   // Live page→worker localStorage sync. The worker's `localStorage`
   // is a Map-backed shim seeded at boot from
   // `KernelWorkerInitMsg.localStorageSeed`; subsequent page writes
@@ -1677,6 +1709,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     'beforeunload',
     () => {
       stopStorageSync();
+      stopSprinkleHandler();
       remoteTerminal.dispose();
       host.dispose();
     },

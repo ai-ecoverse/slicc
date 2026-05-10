@@ -63,13 +63,13 @@ export function createOpenCommand(): Command {
 
       // .shtml files → open as sprinkle via sprinkle manager
       if (fullPath.endsWith('.shtml')) {
-        // Access global sprinkle manager if available
-        const mgr =
-          typeof window !== 'undefined'
-            ? ((window as unknown as Record<string, unknown>).__slicc_sprinkleManager as
-                | import('../../ui/sprinkle-manager.js').SprinkleManager
-                | undefined)
-            : undefined;
+        // Read from `globalThis` so the lookup works in both the page
+        // realm (real `SprinkleManager`) and the kernel-worker realm
+        // (BroadcastChannel-backed proxy published in
+        // `kernel-worker.ts`).
+        const mgr = (globalThis as Record<string, unknown>).__slicc_sprinkleManager as
+          | import('../../ui/sprinkle-manager.js').SprinkleManager
+          | undefined;
         if (mgr) {
           const name = (fullPath.split('/').pop() ?? '').replace(/\.shtml$/, '');
           try {

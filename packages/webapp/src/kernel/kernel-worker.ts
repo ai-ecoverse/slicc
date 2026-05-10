@@ -220,6 +220,17 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     logger: console,
   });
 
+  // Publish a sprinkle-manager proxy on the worker's globalThis so the
+  // `sprinkle` / `open` / `upskill` shell commands can reach the real
+  // page-side manager. The bridge uses a same-origin BroadcastChannel;
+  // the page bootstrap (`mainStandaloneWorker`) installs the matching
+  // handler. Extension offscreen has its own chrome.runtime-based
+  // proxy in `offscreen.ts` and never goes through this path.
+  const { createSprinkleManagerProxyOverChannel } =
+    await import('../scoops/sprinkle-bridge-channel.js');
+  (globalThis as Record<string, unknown>).__slicc_sprinkleManager =
+    createSprinkleManagerProxyOverChannel();
+
   // Take the process manager from the kernel host so scoop-turns
   // (registered by `ScoopContext`) and shell execs (registered by
   // `TerminalSessionHost`) land in the same table. `createKernelHost`

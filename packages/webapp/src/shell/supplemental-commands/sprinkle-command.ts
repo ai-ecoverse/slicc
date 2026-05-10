@@ -43,8 +43,12 @@ function sprinkleHelp(): { stdout: string; stderr: string; exitCode: number } {
 }
 
 function getSprinkleManager(): SprinkleManager | null {
-  if (typeof window === 'undefined') return null;
-  const mgr = (window as unknown as Record<string, unknown>).__slicc_sprinkleManager;
+  // Read from `globalThis` rather than `window` so the lookup works in
+  // both the page realm (where the real `SprinkleManager` is published
+  // by the standalone bootstrap) and the kernel-worker realm (where a
+  // BroadcastChannel-backed proxy from `sprinkle-bridge-channel.ts` is
+  // published on `globalThis.__slicc_sprinkleManager`).
+  const mgr = (globalThis as Record<string, unknown>).__slicc_sprinkleManager;
   return (mgr as SprinkleManager) ?? null;
 }
 
