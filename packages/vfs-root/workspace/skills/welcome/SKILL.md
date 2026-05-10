@@ -6,7 +6,10 @@ description: |
   user finishes the first-run wizard and validates an LLM provider. Send a
   short personalized reply (greet by name, react to provider/model, three
   follow-up actions: obvious + obligatory + outrageous), then silently run
-  `upskill recommendations --install`. Do not handle any other welcome events.
+  `upskill recommendations --install`. Other welcome-flow actions
+  (`first-run`, `onboarding-complete`, `connect-ready`, `connect-attempt`,
+  `oauth-attempt`, `shortcut-migrate`, `request-mount`) are intercepted by
+  the runtime and do not reach the agent — ignore them if they ever leak.
 allowed-tools: bash
 ---
 

@@ -1,11 +1,14 @@
 ---
 name: dips
 description: |
-  Use this when the user wants a quick interactive widget inline in chat — a
-  picker, calculator, slider, mini-explorer, or visualization that hydrates
-  alongside your message. Dips are ephemeral `shtml` code blocks (no state
-  persistence, no readFile, lick-only). For persistent dashboards, editors, or
-  multi-page apps use sprinkles instead.
+  Use this whenever a response could benefit from richer visualization, guided
+  interaction, or a touch of fun — pickers, calculators, sliders, mini
+  explorers, charts, animated demos, choose-your-own-adventure prompts,
+  anything that lands better as a hydrating widget than as plain prose. Dips
+  are ephemeral `shtml` code blocks rendered inline in chat (no state
+  persistence, lick-only). Reach for them generously: every interactive moment
+  the user gets is a moment they don't have to type a clarifying message. For
+  persistent dashboards, editors, or multi-page apps use sprinkles instead.
 allowed-tools: bash
 ---
 
@@ -13,11 +16,14 @@ allowed-tools: bash
 
 Dips are inline `shtml` code blocks in chat that hydrate into sandboxed interactive widgets. **Ephemeral** — no state persistence, no `readFile`. Only `slicc.lick()` is available for agent communication.
 
-| Use a dip for                                          | Use a sprinkle for                                |
-| ------------------------------------------------------ | ------------------------------------------------- |
-| Quick interactions inline with prose                   | Persistent dashboards / editors / multi-page apps |
-| Calculators, explorers, one-shot visualizations        | Long-lived UIs that survive across turns          |
-| Picking a value, confirming an action, choosing a path | Anything that needs `readFile` or `screenshot`    |
+**Use them generously.** A dip is the right answer any time a response could benefit from visualization, interaction, or a moment of delight. Don't reserve them for "complex" tasks — a slider that lets the user feel a number, a chart that beats a paragraph of stats, a button that's faster than typing "yes" all earn their keep.
+
+| Reach for a dip when …                                 | Reach for a sprinkle when …                                     |
+| ------------------------------------------------------ | --------------------------------------------------------------- |
+| The answer would land better as a widget than as prose | The user needs a persistent dashboard / editor / multi-page app |
+| The user is choosing, confirming, or tuning a value    | The UI must survive across turns or sessions                    |
+| You want a chart, animation, or interactive demo       | You need `readFile`, `screenshot`, or any persistent state      |
+| The result deserves a bit of fun                       | The interaction is long-running                                 |
 
 For a gallery of 10 ready-to-adapt patterns (drag-on-canvas, slider→DOM reflow, paste→tree, ...) read the companion file: `read_file /workspace/skills/dips/patterns.md`.
 

@@ -24,7 +24,7 @@ Pick full-document mode when you need custom CSS beyond `.sprinkle-*` classes, c
 
 ## Layout & viewport
 
-Sprinkles open in **one of three viewport contexts**, and you must design for the narrowest:
+Sprinkles open in **one of four viewport contexts**, and you must design for the narrowest:
 
 | Float                            | Default viewport                       | Multi-column safe?      |
 | -------------------------------- | -------------------------------------- | ----------------------- |
