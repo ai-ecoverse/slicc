@@ -28,7 +28,7 @@ import {
   getModels,
   getProviders,
   createAssistantMessageEventStream,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import type {
   Api,
   Model,
@@ -36,7 +36,7 @@ import type {
   SimpleStreamOptions,
   AnthropicOptions,
   OpenAICompletionsOptions,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import {
   saveOAuthAccount,
   getAccounts,

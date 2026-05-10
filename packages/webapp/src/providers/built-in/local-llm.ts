@@ -37,11 +37,11 @@
  */
 
 import type { ProviderConfig } from '../types.js';
-import { registerApiProvider, createAssistantMessageEventStream } from '@mariozechner/pi-ai';
+import { registerApiProvider, createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import {
   streamOpenAICompletions,
   streamSimpleOpenAICompletions,
-} from '@mariozechner/pi-ai/openai-completions';
+} from '@earendil-works/pi-ai/openai-completions';
 import type {
   Api,
   Model,
@@ -50,7 +50,7 @@ import type {
   SimpleStreamOptions,
   AssistantMessage,
   AssistantMessageEventStream,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import { getDeploymentForProvider } from '../../ui/provider-settings.js';
 import { createLogger } from '../../core/logger.js';
 

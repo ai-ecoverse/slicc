@@ -6,7 +6,7 @@
 
 **Architecture:** Three-layer merge for model capabilities (pi-ai registry → modelOverrides → getModelIds metadata). Stream function routing based on model `api` field. All changes are backwards compatible — omitted fields preserve current behavior.
 
-**Tech Stack:** TypeScript, pi-ai (`@mariozechner/pi-ai`), Vitest
+**Tech Stack:** TypeScript, pi-ai (`@earendil-works/pi-ai`), Vitest
 
 **Spec:** `docs/superpowers/specs/2026-03-23-openai-provider-support-design.md`
 
@@ -529,7 +529,7 @@ import {
   streamOpenAICompletions,
   streamSimpleOpenAICompletions,
   getModels,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 ```
 
 Update `streamAdobe` (~line 339):

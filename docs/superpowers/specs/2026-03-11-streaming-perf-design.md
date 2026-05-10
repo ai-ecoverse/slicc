@@ -10,7 +10,7 @@ LLM streaming in the slicc chat feels sluggish. Every token delta triggers a ful
 
 ## Prior art
 
-`@mariozechner/pi-web-ui` (the official pi chat UI) solves this with:
+`@earendil-works/pi-web-ui` (the official pi chat UI) solves this with:
 
 - **`requestAnimationFrame` batching** in `StreamingMessageContainer.setMessage()` -- coalesces all tokens within one frame into a single render (~60fps max).
 - **Two-container isolation** -- a frozen `<message-list>` for completed messages + a separate streaming container that is the only element re-rendering.

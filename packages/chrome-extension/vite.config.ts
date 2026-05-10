@@ -41,17 +41,17 @@ export default defineConfig(({ mode }) => ({
       https: resolve(__dirname, '../webapp/src/shims/https.ts'),
       http2: resolve(__dirname, '../webapp/src/shims/http2.ts'),
       // Deep import into pi-coding-agent's compaction submodule (see vite.config.ts)
-      '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js': resolve(
+      '@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js': resolve(
         repoRoot,
-        'node_modules/@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js'
+        'node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js'
       ),
-      '@mariozechner/pi-ai/dist/providers/transform-messages.js': resolve(
+      '@earendil-works/pi-ai/dist/providers/transform-messages.js': resolve(
         repoRoot,
-        'node_modules/@mariozechner/pi-ai/dist/providers/transform-messages.js'
+        'node_modules/@earendil-works/pi-ai/dist/providers/transform-messages.js'
       ),
-      '@mariozechner/pi-ai/dist/providers/simple-options.js': resolve(
+      '@earendil-works/pi-ai/dist/providers/simple-options.js': resolve(
         repoRoot,
-        'node_modules/@mariozechner/pi-ai/dist/providers/simple-options.js'
+        'node_modules/@earendil-works/pi-ai/dist/providers/simple-options.js'
       ),
     },
   },
@@ -59,7 +59,7 @@ export default defineConfig(({ mode }) => ({
     target: 'esnext',
   },
   optimizeDeps: {
-    exclude: ['@mariozechner/pi-coding-agent'],
+    exclude: ['@earendil-works/pi-coding-agent'],
     esbuildOptions: {
       target: 'esnext',
     },
@@ -84,7 +84,7 @@ export default defineConfig(({ mode }) => ({
       enforce: 'pre' as const,
       resolveId(source, importer) {
         const normalizedImporter = importer?.replace(/\\/g, '/');
-        if (normalizedImporter?.includes('@mariozechner/pi-coding-agent')) {
+        if (normalizedImporter?.includes('@earendil-works/pi-coding-agent')) {
           if (source.endsWith('/session-manager.js')) {
             return resolve(__dirname, '../webapp/src/stubs/pi-session-manager-stub.ts');
           }

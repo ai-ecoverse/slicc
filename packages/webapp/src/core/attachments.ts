@@ -1,4 +1,4 @@
-import type { ImageContent } from '@mariozechner/pi-ai';
+import type { ImageContent } from '@earendil-works/pi-ai';
 
 export type MessageAttachmentKind = 'image' | 'text' | 'file';
 

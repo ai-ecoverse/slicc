@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getApiProvider } from '@mariozechner/pi-ai';
+import { getApiProvider } from '@earendil-works/pi-ai';
 
 // The register() call in the built-in module registers 'bedrock-camp-converse'.
 import {

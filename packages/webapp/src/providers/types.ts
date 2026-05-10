@@ -6,7 +6,7 @@ import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 
 /**
  * Opens a browser window/flow for the given authorize URL and returns the

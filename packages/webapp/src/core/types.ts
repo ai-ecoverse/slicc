@@ -1,7 +1,7 @@
 /**
  * Core types for the agent system — pi-mono compatible.
  *
- * These types mirror @mariozechner/pi-ai and @mariozechner/agent
+ * These types mirror @earendil-works/pi-ai and @earendil-works/pi-agent-core
  * but are self-contained for browser use without those packages.
  */
 

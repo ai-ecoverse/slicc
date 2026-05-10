@@ -27,14 +27,14 @@ import {
   streamOpenAICompletions,
   streamSimpleOpenAICompletions,
   createAssistantMessageEventStream,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import type {
   Api,
   Model,
   Context,
   SimpleStreamOptions,
   OpenAICompletionsOptions,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import { saveOAuthAccount, getAccounts } from '../src/ui/provider-settings.js';
 import {
   exchangeOAuthCode,

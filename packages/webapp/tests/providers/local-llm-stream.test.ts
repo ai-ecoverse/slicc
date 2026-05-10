@@ -5,7 +5,7 @@
  * If the rewrite from `local-llm-openai` to `openai-completions` is wrong,
  * dispatching a chat completes silently or throws "Mismatched api".
  *
- * These tests stub @mariozechner/pi-ai/openai-completions so we can observe
+ * These tests stub @earendil-works/pi-ai/openai-completions so we can observe
  * what the local-llm handler passes downstream without making real fetches.
  */
 
@@ -30,14 +30,14 @@ const { mockStreamOpenAICompletions, mockStreamSimple } = vi.hoisted(() => ({
   mockStreamSimple: vi.fn(),
 }));
 
-vi.mock('@mariozechner/pi-ai/openai-completions', () => ({
+vi.mock('@earendil-works/pi-ai/openai-completions', () => ({
   streamOpenAICompletions: mockStreamOpenAICompletions,
   streamSimpleOpenAICompletions: mockStreamSimple,
 }));
 
 import { register } from '../../src/providers/built-in/local-llm.js';
-import { getApiProvider, clearApiProviders } from '@mariozechner/pi-ai';
-import type { Api, Model } from '@mariozechner/pi-ai';
+import { getApiProvider, clearApiProviders } from '@earendil-works/pi-ai';
+import type { Api, Model } from '@earendil-works/pi-ai';
 
 const LOCAL_LLM_API = 'local-llm-openai' as Api;
 

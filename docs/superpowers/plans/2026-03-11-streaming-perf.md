@@ -4,7 +4,7 @@
 
 **Goal:** Make LLM streaming in the slicc chat feel smooth by batching DOM updates to ~60fps and only updating the content node during streaming.
 
-**Architecture:** Two changes in `ChatPanel`: (1) rAF-batched delta accumulation replaces per-token rendering, (2) a targeted content-only DOM update replaces full element rebuild during streaming. Modeled after `@mariozechner/pi-web-ui`'s `StreamingMessageContainer`.
+**Architecture:** Two changes in `ChatPanel`: (1) rAF-batched delta accumulation replaces per-token rendering, (2) a targeted content-only DOM update replaces full element rebuild during streaming. Modeled after `@earendil-works/pi-web-ui`'s `StreamingMessageContainer`.
 
 **Tech Stack:** Vanilla TypeScript, marked + DOMPurify, requestAnimationFrame (browser API)
 

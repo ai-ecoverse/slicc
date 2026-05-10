@@ -27,7 +27,7 @@ import {
   resolveCurrentModel,
   resolveModelById,
 } from './provider-settings.js';
-import { getSupportedThinkingLevels } from '@mariozechner/pi-ai';
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
