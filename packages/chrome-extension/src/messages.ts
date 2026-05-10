@@ -63,6 +63,19 @@ export interface RequestStateMsg {
   type: 'request-state';
 }
 
+/**
+ * Ask the worker for the canonical chat history of a scoop. The
+ * worker translates the `AgentMessage[]` it holds into the panel's
+ * `ChatMessage[]` shape and emits a `scoop-messages-replaced`
+ * response. Used after the panel re-mounts (HMR, full reload) so the
+ * UI rebuilds from the live agent state instead of from its own
+ * potentially-stale `browser-coding-agent` IDB snapshot.
+ */
+export interface RequestScoopMessagesMsg {
+  type: 'request-scoop-messages';
+  scoopJid: string;
+}
+
 export interface ClearChatMsg {
   type: 'clear-chat';
 }
@@ -176,6 +189,7 @@ export type PanelToOffscreenMessage =
   | AbortMsg
   | SetModelMsg
   | RequestStateMsg
+  | RequestScoopMessagesMsg
   | ClearChatMsg
   | ClearFilesystemMsg
   | RefreshModelMsg

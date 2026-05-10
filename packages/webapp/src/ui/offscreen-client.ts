@@ -249,6 +249,17 @@ export class OffscreenClient implements KernelClientFacade {
     this.send({ type: 'clear-filesystem' });
   }
 
+  /**
+   * Ask the worker for the canonical chat history of a scoop. The
+   * worker translates from the live `AgentMessage[]` and replies with
+   * a `scoop-messages-replaced` event the panel handler can swap in.
+   * Fire-and-forget — the worker may also no-op if the scoop is gone
+   * or has no history yet.
+   */
+  requestScoopMessages(scoopJid: string): void {
+    this.send({ type: 'request-scoop-messages', scoopJid } as PanelToOffscreenMessage);
+  }
+
   /** Request full state from offscreen. Retries until state arrives. */
   requestState(): void {
     this.send({ type: 'request-state' });

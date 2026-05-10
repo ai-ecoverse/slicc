@@ -640,10 +640,16 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     layout.panels.scoops.setSelectedJid(scoop.jid);
 
     // switchToContext loads messages from the shared browser-coding-agent IndexedDB
-    // (written by the offscreen bridge). No buffer reconciliation needed.
+    // (written by the offscreen bridge). That snapshot can drift if the side panel
+    // re-mounts mid-stream (chrome.runtime reconnect, panel close/open) — its
+    // `persistSession` may overwrite the bridge's writes with a near-empty list.
+    // Match the standalone-worker path and ask the offscreen for the canonical
+    // history; the bridge replies via `scoop-messages-replaced` and the panel's
+    // `onScoopMessagesReplaced` handler swaps it in atomically.
     const contextId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
     const scoopName = scoop.isCone ? undefined : scoop.name;
     await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
+    client.requestScoopMessages(scoop.jid);
 
     if (client.isProcessing(scoop.jid)) {
       layout.panels.chat.setProcessing(true);
@@ -1541,6 +1547,14 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     const scoopName = scoop.isCone ? undefined : scoop.name;
     await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
 
+    // Ask the worker for the canonical chat history. The worker is the
+    // source of truth (it owns the live `AgentMessage[]`); the panel's
+    // own `browser-coding-agent` IDB can drift if the panel re-mounts
+    // mid-conversation (HMR, full reload). The reply lands as a
+    // `scoop-messages-replaced` event handled below and replaces the
+    // panel's view atomically.
+    client.requestScoopMessages(scoop.jid);
+
     if (client.isProcessing(scoop.jid)) {
       layout.panels.chat.setProcessing(true);
     }
@@ -1606,6 +1620,20 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
             new Date(message.timestamp).getTime()
           );
         }
+      },
+      onScoopMessagesReplaced: (scoopJid, messages) => {
+        if (selectedScoop?.jid !== scoopJid) return;
+        // Replace the panel's view of the scoop with the worker's
+        // canonical history. The worker's
+        // `handleRequestScoopMessages` persists the rebuilt buffer
+        // back to the shared `browser-coding-agent` IDB before
+        // emitting (when it rebuilds from agent messages or hydrates
+        // from the session-store fallback), so the next reload picks
+        // up the same view. The buffered-only path skips the persist
+        // because the buffer's content already came FROM the active
+        // streaming pipeline, which keeps writing through
+        // `persistScoop` on each agent event.
+        layout.panels.chat.loadMessages(messages as unknown as ChatMessage[]);
       },
       onReady: () => {
         log.info('Kernel worker ready, scoop count:', client.getScoops().length);
