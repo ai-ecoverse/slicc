@@ -68,8 +68,9 @@ export function createPython3LikeCommand(
     // Python realm. They differ for `python3 -c CODE` because
     // POSIX Python sets `sys.argv[0] = '-c'`, but `ps`-style
     // displays read better with the full `python3 -c CODE…` form.
-    let procArgv: string[] = [name];
-    let sysArgv: string[] = [name];
+    // Both are assigned in every non-returning branch below.
+    let procArgv: string[];
+    let sysArgv: string[];
 
     if (args[0] === '-c') {
       if (!args[1]) {

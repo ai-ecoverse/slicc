@@ -387,7 +387,11 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       const mod = { exports: {} };
       try {
         // Indirect Function call works inside the sandbox CSP.
-        (0, Function)('module', 'exports', text)(mod, mod.exports);
+        // The call is for its side effects on `mod.exports`; the
+        // return value is discarded — `void` makes that explicit
+        // for static-analysis tools that flag bare side-effecting
+        // calls as "expression has no effect".
+        void (0, Function)('module', 'exports', text)(mod, mod.exports);
       } catch(fnErr) {
         throw new Error('Failed to execute module ' + id + ': ' + (fnErr instanceof Error ? fnErr.message : String(fnErr)));
       }

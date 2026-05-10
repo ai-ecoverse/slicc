@@ -114,7 +114,7 @@ export async function runPyRealm(
   pyodide.globals.set('__slicc_filename', init.filename);
   pyodide.globals.set('__slicc_argv', init.argv);
 
-  let exitCode = 1;
+  let exitCode: number;
   try {
     await pyodide.runPythonAsync(PYTHON_RUNNER);
     const raw = pyodide.globals.get('__slicc_exit_code');
