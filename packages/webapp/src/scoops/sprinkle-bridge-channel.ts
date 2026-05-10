@@ -31,8 +31,19 @@
 import type { SprinkleManager } from '../ui/sprinkle-manager.js';
 import type { Sprinkle } from '../ui/sprinkle-discovery.js';
 
-/** BroadcastChannel name for sprinkle RPC. Same-origin contexts share it. */
+/**
+ * Base BroadcastChannel name. Each tab/worker pair appends an
+ * `instanceId` (a per-page UUID generated at boot and forwarded to
+ * the worker through `kernel-worker-init`) to keep two same-origin
+ * SLICC tabs from cross-talking. The unscoped form is reserved for
+ * tests and as a back-compat fallback when no id is provided.
+ */
 export const SPRINKLE_BRIDGE_CHANNEL = 'slicc-sprinkle-bridge';
+
+/** Build the channel name for a given instance. */
+export function sprinkleBridgeChannelName(instanceId?: string): string {
+  return instanceId ? `${SPRINKLE_BRIDGE_CHANNEL}:${instanceId}` : SPRINKLE_BRIDGE_CHANNEL;
+}
 
 /** Request envelope sent worker→page on the bridge channel. */
 export interface SprinkleBridgeRequestMsg {
@@ -61,19 +72,24 @@ const DEFAULT_TIMEOUT_MS = 8000;
  * caches their last-known values, refreshing on every `refresh()` call.
  */
 export function createSprinkleManagerProxyOverChannel(
-  options: { timeoutMs?: number } = {}
+  options: { timeoutMs?: number; instanceId?: string } = {}
 ): SprinkleManager {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   if (typeof BroadcastChannel !== 'function') {
-    // No-op proxy. Lets the shell command surface the same
-    // "manager not initialized" error as before instead of throwing
-    // an unrelated ReferenceError. Callers detect the proxy as
-    // present-but-empty via `available()` / `opened()` returning [].
+    // No bridge transport in this realm — return a fail-fast proxy.
+    // Every method that exposes a Promise rejects with a clear
+    // "bridge unavailable" error so the shell command surfaces a
+    // useful message instead of returning misleading empty data.
+    // The synchronous `available()` / `opened()` getters can't reject
+    // (they shape the SprinkleManager surface) and return `[]` — this
+    // is intentional: they're cache reads, and a refresh() must run
+    // before they're meaningful, which IS surfaced as an error here.
     return makeNullProxy();
   }
 
-  const channel = new BroadcastChannel(SPRINKLE_BRIDGE_CHANNEL);
+  const channelName = sprinkleBridgeChannelName(options.instanceId);
+  const channel = new BroadcastChannel(channelName);
   const pending = new Map<
     string,
     {
@@ -94,12 +110,16 @@ export function createSprinkleManagerProxyOverChannel(
     else slot.resolve(msg.result);
   });
 
-  let nextId = 0;
   function request(
     op: SprinkleBridgeRequestMsg['op'],
     extras: Partial<SprinkleBridgeRequestMsg> = {}
   ): Promise<unknown> {
-    const id = `sp-${Date.now().toString(36)}-${(nextId++).toString(36)}`;
+    // `crypto.randomUUID()` so two proxies on the same channel can
+    // never collide on a request id (prior `Date.now()` + counter
+    // could when the channel name was global; with per-instance
+    // channels they're already isolated, but UUIDs cost nothing and
+    // keep the wire format robust against future regressions).
+    const id = newRequestId();
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
@@ -121,16 +141,12 @@ export function createSprinkleManagerProxyOverChannel(
   // the ones below.
   return {
     async refresh(): Promise<void> {
-      try {
-        cachedAvailable = ((await request('list')) as Sprinkle[]) ?? [];
-      } catch {
-        cachedAvailable = [];
-      }
-      try {
-        cachedOpened = ((await request('opened')) as string[]) ?? [];
-      } catch {
-        cachedOpened = [];
-      }
+      // Errors propagate so the shell command can surface a real
+      // failure ("bridge not ready", "timed out") instead of
+      // silently reporting an empty list. The cache is left as-is on
+      // failure so a later successful refresh can still recover.
+      cachedAvailable = ((await request('list')) as Sprinkle[]) ?? [];
+      cachedOpened = ((await request('opened')) as string[]) ?? [];
     },
     available(): Sprinkle[] {
       return cachedAvailable;
@@ -154,17 +170,33 @@ export function createSprinkleManagerProxyOverChannel(
 }
 
 function makeNullProxy(): SprinkleManager {
+  const unavailable = (op: string): Error =>
+    new Error(`sprinkle bridge unavailable (no BroadcastChannel) — cannot run '${op}'`);
   return {
-    refresh: async () => {},
+    refresh: async () => {
+      throw unavailable('refresh');
+    },
     available: () => [],
     opened: () => [],
     open: async () => {
-      throw new Error('sprinkle bridge unavailable (no BroadcastChannel)');
+      throw unavailable('open');
     },
     close: () => {},
     sendToSprinkle: () => {},
-    openNewAutoOpenSprinkles: async () => {},
+    openNewAutoOpenSprinkles: async () => {
+      throw unavailable('openNewAutoOpenSprinkles');
+    },
   } as unknown as SprinkleManager;
+}
+
+function newRequestId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `sp-${crypto.randomUUID()}`;
+  }
+  // Test environments without `crypto.randomUUID` — the fallback
+  // includes per-call random entropy plus the current ms so collisions
+  // require both the same tick AND the same Math.random() draw.
+  return `sp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 /**
@@ -177,9 +209,12 @@ function makeNullProxy(): SprinkleManager {
  * a response (the `pending` map drains; the call returns `null`).
  * Errors raised inside the manager are forwarded as `error` strings.
  */
-export function installSprinkleManagerHandlerOverChannel(manager: SprinkleManager): () => void {
+export function installSprinkleManagerHandlerOverChannel(
+  manager: SprinkleManager,
+  options: { instanceId?: string } = {}
+): () => void {
   if (typeof BroadcastChannel !== 'function') return () => {};
-  const channel = new BroadcastChannel(SPRINKLE_BRIDGE_CHANNEL);
+  const channel = new BroadcastChannel(sprinkleBridgeChannelName(options.instanceId));
 
   const respond = (id: string, result?: unknown, error?: string): void => {
     const msg: SprinkleBridgeResponseMsg = { type: 'sprinkle-op-response', id };

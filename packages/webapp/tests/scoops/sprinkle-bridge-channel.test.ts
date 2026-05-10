@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   SPRINKLE_BRIDGE_CHANNEL,
+  sprinkleBridgeChannelName,
   createSprinkleManagerProxyOverChannel,
   installSprinkleManagerHandlerOverChannel,
 } from '../../src/scoops/sprinkle-bridge-channel.js';
@@ -112,6 +113,27 @@ describe('sprinkle bridge channel', () => {
     expect(SPRINKLE_BRIDGE_CHANNEL).toBe('slicc-sprinkle-bridge');
   });
 
+  it('scopes the channel name by instanceId', () => {
+    expect(sprinkleBridgeChannelName('abc-123')).toBe('slicc-sprinkle-bridge:abc-123');
+    expect(sprinkleBridgeChannelName(undefined)).toBe('slicc-sprinkle-bridge');
+  });
+
+  it('keeps two instances on disjoint channels (no cross-talk)', async () => {
+    const managerA = makeFakeManager();
+    const managerB = makeFakeManager();
+    const stopA = installSprinkleManagerHandlerOverChannel(managerA, { instanceId: 'tab-A' });
+    const stopB = installSprinkleManagerHandlerOverChannel(managerB, { instanceId: 'tab-B' });
+
+    const proxyA = createSprinkleManagerProxyOverChannel({ instanceId: 'tab-A' });
+    await proxyA.open('only-on-A');
+
+    expect(managerA.calls).toEqual(expect.arrayContaining([{ op: 'open', args: ['only-on-A'] }]));
+    expect(managerB.calls).toEqual([]); // tab B never sees tab A's request
+
+    stopA();
+    stopB();
+  });
+
   it('refresh() pulls available + opened from the page handler', async () => {
     const manager = makeFakeManager();
     const stop = installSprinkleManagerHandlerOverChannel(manager);
@@ -185,6 +207,12 @@ describe('sprinkle bridge channel', () => {
     await expect(proxy.open('demo')).rejects.toThrow(/timed out/);
   });
 
+  it('refresh() propagates failures so the shell can surface them', async () => {
+    // No handler installed → request times out → refresh rejects.
+    const proxy = createSprinkleManagerProxyOverChannel({ timeoutMs: 50 });
+    await expect(proxy.refresh()).rejects.toThrow(/timed out/);
+  });
+
   it('handler ignores responses (does not echo its own messages)', async () => {
     const manager = makeFakeManager();
     const stop = installSprinkleManagerHandlerOverChannel(manager);
@@ -204,15 +232,21 @@ describe('sprinkle bridge channel', () => {
     stop();
   });
 
-  it('returns a no-op proxy when BroadcastChannel is unavailable', async () => {
+  it('fail-fast proxy when BroadcastChannel is unavailable', async () => {
     bc?.cleanup();
     bc = null;
     vi.stubGlobal('BroadcastChannel', undefined);
 
     const proxy = createSprinkleManagerProxyOverChannel();
+    // Sync getters return [] (cache reads — they have to satisfy the
+    // SprinkleManager surface). Every async method rejects with a
+    // clear "bridge unavailable" error so the shell can surface it
+    // instead of returning misleading empty data.
     expect(proxy.available()).toEqual([]);
     expect(proxy.opened()).toEqual([]);
+    await expect(proxy.refresh()).rejects.toThrow(/sprinkle bridge unavailable/);
     await expect(proxy.open('demo')).rejects.toThrow(/sprinkle bridge unavailable/);
+    await expect(proxy.openNewAutoOpenSprinkles()).rejects.toThrow(/sprinkle bridge unavailable/);
 
     vi.unstubAllGlobals();
   });

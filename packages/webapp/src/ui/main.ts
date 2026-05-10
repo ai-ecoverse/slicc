@@ -1546,6 +1546,17 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     }
   };
 
+  // Per-instance discriminator so same-origin RPC channels (sprinkle
+  // bridge today; future BroadcastChannel users tomorrow) stay scoped
+  // to one tab/worker pair. Generated once per page boot and forwarded
+  // to the worker through `kernel-worker-init`. Two SLICC tabs on the
+  // same origin would otherwise share a global channel name and end up
+  // handling each other's sprinkle ops.
+  const instanceId =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `slicc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
   // Spawn the worker. `spawnKernelWorker` constructs the Worker via
   // Vite's `new URL` pattern, builds an `OffscreenClient` over a
   // `MessageChannel`, and starts the page-side CDP forwarder against
@@ -1556,6 +1567,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   void OffscreenClient; // type import for the `client` variable above
   const host = spawnKernelWorker({
     realCdpTransport,
+    instanceId,
     callbacks: {
       onStatusChange: (scoopJid, status) => {
         layout.panels.scoops.updateScoopStatus(scoopJid, status);
@@ -1661,7 +1673,9 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
-  const stopSprinkleHandler = installSprinkleManagerHandlerOverChannel(sprinkleManager);
+  const stopSprinkleHandler = installSprinkleManagerHandlerOverChannel(sprinkleManager, {
+    instanceId,
+  });
   await sprinkleManager.refresh();
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);
   await sprinkleManager.restoreOpenSprinkles().catch((err) => {
