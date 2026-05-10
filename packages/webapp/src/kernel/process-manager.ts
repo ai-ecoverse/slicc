@@ -1,16 +1,12 @@
 /**
  * `ProcessManager` — every async unit of work the kernel performs has
- * a pid the user can name.
- *
- * Phase 3 step 1. The data structure: a process record with a
- * monotonic uint32 pid, parent/child links, an `AbortController` for
- * cooperative cancellation, and a small lifecycle (`pending` →
- * `running` → `exited` / `killed`). Phase 3 steps 2–5 wire it into
+ * a pid the user can name. A process record carries a monotonic uint32
+ * pid, parent/child links, an `AbortController` for cooperative
+ * cancellation, a `Gate` for SIGSTOP/SIGCONT, and a small lifecycle
+ * (`pending` → `running` → `exited` / `killed`). It's wired into
  * `TerminalSessionHost`, `ScoopContext.prompt`, `tool-adapter`, and
- * `jsh-executor` so every long-running unit shows up here. Phase 4
- * surfaces the table via `ps` / `kill`; Phase 5 mounts `/proc`;
- * Phase 6 adds a pause/resume gate; Phase 7 adds preemption via
- * child workers.
+ * `jsh-executor` so every long-running unit shows up here, and surfaced
+ * via `ps` / `kill` and the `/proc` mount.
  *
  * Design notes:
  *   - **No globals.** The manager is constructed by `createKernelHost`
@@ -37,16 +33,16 @@
  *     pid is still live.
  *   - **Synchronous events.** `on('spawn')` / `on('exit')` listeners
  *     run synchronously inside `spawn()` / `exit()`. This matters for
- *     the `/proc` mount (Phase 5): `ls /proc` must see a process the
- *     instant it's spawned. Async listeners that need to do IO can
- *     queue their own `setTimeout(0)` work.
- *   - **AbortController per process.** A `SIGINT`/`SIGTERM`/`SIGKILL`
- *     all just call `controller.abort()` on the process's controller
- *     today. The signal value is recorded in `Process.terminatedBy`
- *     so callers (terminal RPC, ps) can render the right exit code
- *     (130 for SIGINT, 143 for SIGTERM, 137 for SIGKILL). Phase 6
- *     splits SIGSTOP/SIGCONT off into a separate `Gate`; Phase 7's
- *     `kind:'preemptive'` overrides SIGKILL with `worker.terminate()`.
+ *     the `/proc` mount: `ls /proc` must see a process the instant
+ *     it's spawned. Async listeners that need to do IO can queue their
+ *     own `setTimeout(0)` work.
+ *   - **AbortController per process.** SIGINT/SIGTERM/SIGKILL all
+ *     call `controller.abort()` on the process's controller. The
+ *     signal value is recorded in `Process.terminatedBy` so callers
+ *     (terminal RPC, ps) can render the right exit code (130 for
+ *     SIGINT, 143 for SIGTERM, 137 for SIGKILL). SIGSTOP/SIGCONT
+ *     drive the `Gate` instead; `kind:'preemptive'` overrides SIGKILL
+ *     with `worker.terminate()`.
  */
 
 // ---------------------------------------------------------------------------
@@ -61,8 +57,8 @@ export type ProcessStatus = 'pending' | 'running' | 'exited' | 'killed';
 export type Signal = 'SIGINT' | 'SIGTERM' | 'SIGSTOP' | 'SIGCONT' | 'SIGKILL';
 
 /**
- * Phase 6 — pause/resume primitive. A `Gate` is a re-arming barrier
- * that IO-boundary code awaits before proceeding. Default state is
+ * Pause/resume primitive. A `Gate` is a re-arming barrier that
+ * IO-boundary code awaits before proceeding. Default state is
  * **resumed** — `wait()` returns immediately. SIGSTOP calls
  * `pause()`; subsequent `wait()` calls block on a single internal
  * promise. SIGCONT (`resume()`) resolves that promise so every
@@ -71,9 +67,9 @@ export type Signal = 'SIGINT' | 'SIGTERM' | 'SIGSTOP' | 'SIGCONT' | 'SIGKILL';
  * to exit.
  *
  * The gate is purely cooperative: callers must explicitly `await
- * gate.wait()` at the right points. Phase 6.3 places the awaits
- * at terminal output boundaries; future expansion can add VFS,
- * network, and stdin gates as their own commits.
+ * gate.wait()` at the right points. Today the awaits are placed at
+ * terminal output boundaries; VFS, network, and stdin gates can be
+ * added as needed.
  */
 export class Gate {
   private paused = false;
@@ -146,7 +142,7 @@ export interface SpawnOptions {
   /**
    * Optional parent pid. When omitted, defaults to the kernel-host pid
    * (1) so orphan reads of `/proc/<pid>/stat` always have a real
-   * `ppid`. Phase 4's `ps -T` walks this link.
+   * `ppid`. `ps -T` walks this link.
    */
   ppid?: number;
   /**
@@ -175,13 +171,13 @@ export interface Process {
   readonly owner: ProcessOwner;
   readonly abort: AbortController;
   /**
-   * Phase 6 — pause/resume gate. SIGSTOP → `gate.pause()`; SIGCONT →
-   * `gate.resume()`. IO-boundary code (terminal output emission in
-   * Phase 6.3; future VFS / stdin / network gates) calls
-   * `await proc.gate.wait()` before doing the next chunk of work.
-   * Default state is resumed — `wait()` returns immediately. The
-   * manager `release()`s the gate on `exit()` so a process that
-   * exits while paused doesn't leak waiters.
+   * Pause/resume gate. SIGSTOP → `gate.pause()`; SIGCONT →
+   * `gate.resume()`. IO-boundary code (terminal output emission today;
+   * future VFS / stdin / network gates) calls `await proc.gate.wait()`
+   * before doing the next chunk of work. Default state is resumed —
+   * `wait()` returns immediately. The manager `release()`s the gate
+   * on `exit()` so a process that exits while paused doesn't leak
+   * waiters.
    */
   readonly gate: Gate;
   readonly startedAt: number;
@@ -206,9 +202,9 @@ export type ProcessEventListener = (proc: Process) => void;
  * Signal-delivery listener. Fires every time `pm.signal(pid, sig)`
  * delivers a signal to a live process — including SIGSTOP / SIGCONT
  * (which don't fire the abort) and signal escalations (e.g. a
- * SIGKILL after a previous SIGINT). Phase 7's preemptive runner
- * subscribes here so it can `worker.terminate()` on every SIGKILL,
- * not just the first signal that aborts the controller.
+ * SIGKILL after a previous SIGINT). The preemptive runner subscribes
+ * here so it can `worker.terminate()` on every SIGKILL, not just the
+ * first signal that aborts the controller.
  */
 export type ProcessSignalListener = (proc: Process, sig: Signal) => void;
 
@@ -249,9 +245,9 @@ export class ProcessManager {
   /**
    * Allocate a pid + register the process. Listeners fire
    * synchronously before `spawn` returns. Status starts at `running`
-   * — callers that want a two-phase startup (Phase 7's preemptive
-   * worker) can flip it manually after `worker.postMessage(init)`
-   * but before the first `running` event.
+   * — callers that want a two-phase startup (the preemptive worker)
+   * can flip it manually after `worker.postMessage(init)` but before
+   * the first `running` event.
    */
   spawn(options: SpawnOptions): Process {
     const pid = this.allocatePid();
@@ -297,9 +293,9 @@ export class ProcessManager {
       proc.exitCode = 0;
       proc.status = 'exited';
     }
-    // Phase 6: release the gate so any pending `wait()` resolves
-    // (e.g. a paused stdout chunk that was waiting for SIGCONT
-    // when the process got SIGKILL'd anyway). Callers that observe
+    // Release the gate so any pending `wait()` resolves (e.g. a
+    // paused stdout chunk that was waiting for SIGCONT when the
+    // process got SIGKILL'd anyway). Callers that observe
     // `abort.signal.aborted` after their `wait()` resolves can then
     // bail out cleanly.
     proc.gate.release();
@@ -314,25 +310,25 @@ export class ProcessManager {
    *
    * Returns `true` when the signal was delivered (process exists +
    * not already terminated), `false` otherwise — matching POSIX
-   * `kill(2)` semantics. Phase 6 will widen this to handle the
-   * pause/resume gate; Phase 7's preemptive worker will override
-   * SIGKILL to `worker.terminate()`.
+   * `kill(2)` semantics. SIGSTOP / SIGCONT drive the pause/resume
+   * gate; `kind:'preemptive'` overrides SIGKILL with
+   * `worker.terminate()`.
    */
   signal(pid: number, sig: Signal): boolean {
     const proc = this.processes.get(pid);
     if (!proc) return false;
     if (proc.status === 'exited' || proc.status === 'killed') return false;
     if (sig === 'SIGSTOP') {
-      // Phase 6 — pause the gate. Subsequent `await proc.gate.wait()`
-      // calls block until SIGCONT. Existing aborts are not cleared
-      // (SIGINT after SIGSTOP still kills, because the abort controller
-      // is independent of the gate).
+      // Pause the gate. Subsequent `await proc.gate.wait()` calls
+      // block until SIGCONT. Existing aborts are not cleared (SIGINT
+      // after SIGSTOP still kills, because the abort controller is
+      // independent of the gate).
       proc.gate.pause();
       this.fireSignal(proc, sig);
       return true;
     }
     if (sig === 'SIGCONT') {
-      // Phase 6 — resume the gate. Any waiters wake at once.
+      // Resume the gate. Any waiters wake at once.
       proc.gate.resume();
       this.fireSignal(proc, sig);
       return true;
@@ -352,7 +348,7 @@ export class ProcessManager {
     if (!proc.abort.signal.aborted) {
       proc.abort.abort();
     }
-    // Phase 6: a terminating signal also releases the gate so
+    // A terminating signal also releases the gate so
     // any paused waiter wakes (and observes `abort.signal.aborted`).
     proc.gate.release();
     this.fireSignal(proc, sig);
@@ -365,10 +361,9 @@ export class ProcessManager {
   }
 
   /**
-   * Return `proc` for `pid`, or `null` if the pid was never allocated
-   * or has been reaped (Phase 4's reaping policy: keep terminated
-   * processes for one minute so `ps` after `kill` shows the exit
-   * code; until reaping lands, terminated entries persist).
+   * Return `proc` for `pid`, or `null` if the pid was never allocated.
+   * No reaping today — terminated entries persist so `ps` after `kill`
+   * still shows the exit code.
    */
   get(pid: number): Process | null {
     return this.processes.get(pid) ?? null;
@@ -408,11 +403,11 @@ export class ProcessManager {
   }
 
   /**
-   * Subscribe to signal-delivery events (Phase 7). Fires every
-   * time `signal(pid, sig)` succeeds — useful for hard-kill
-   * runners (preemptive worker) that need to react to SIGKILL
-   * specifically, including escalations after a prior signal.
-   * Returns an unsubscribe fn.
+   * Subscribe to signal-delivery events. Fires every time
+   * `signal(pid, sig)` succeeds — useful for hard-kill runners
+   * (preemptive worker) that need to react to SIGKILL specifically,
+   * including escalations after a prior signal. Returns an
+   * unsubscribe fn.
    */
   onSignal(listener: ProcessSignalListener): () => void {
     this.signalListeners.add(listener);
@@ -427,9 +422,9 @@ export class ProcessManager {
 
   private allocatePid(): number {
     // Linear probe for a free pid. The table size IS the live-process
-    // count (no reaping yet — Phase 4 follow-up), so the probe is
-    // bounded by `processes.size`: starting from `nextPid`, we can hit
-    // at most `size` collisions before finding a hole. Anything beyond
+    // count (no reaping yet), so the probe is bounded by
+    // `processes.size`: starting from `nextPid`, we can hit at most
+    // `size` collisions before finding a hole. Anything beyond
     // that means our bookkeeping is corrupt; fail loudly. Without
     // this bound, a corrupt table could spin a multi-billion-step
     // linear probe across the uint32 space and freeze the kernel

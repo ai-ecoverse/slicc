@@ -90,10 +90,10 @@ let registerPromise: Promise<void> | null = null;
  * during boot before constructing anything that reads from the
  * registry.
  *
- * Phase 2 step 6d note: the kernel worker calls this from
- * `kernel-worker.ts`'s `boot()`. The page calls it from `main()` /
- * `mainExtension()` / `mainStandaloneWorker()`. Multiple awaiters all
- * resolve once the first call completes.
+ * The kernel worker calls this from `kernel-worker.ts`'s `boot()`.
+ * The page calls it from `main()` / `mainExtension()` /
+ * `mainStandaloneWorker()`. Multiple awaiters all resolve once the
+ * first call completes.
  */
 export function registerProviders(): Promise<void> {
   if (registerPromise) return registerPromise;

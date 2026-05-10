@@ -1,6 +1,6 @@
 /**
  * `preemptive-worker.ts` — DedicatedWorker entry for hard-killable
- * JS execution. Phase 7.
+ * JS execution.
  *
  * One worker per `runPreemptiveJs` call. The parent kernel posts an
  * init message with `{ code, argv, env }`; the worker runs the code
@@ -17,20 +17,17 @@
  *     the worker after every kill anyway.
  *   - Each task gets a clean realm — no cross-contamination of
  *     globals, no surviving timers, no leaked listeners.
- *   - The startup cost is ~10ms in Chromium (verified empirically
- *     in the kernel-worker boot path); negligible compared to the
- *     LLM round-trips that own the user's wall-clock budget.
+ *   - The startup cost is ~10ms in Chromium; negligible compared
+ *     to the LLM round-trips that own the user's wall-clock budget.
  *
- * What this worker does NOT have:
- *   - No `RemoteVfsAdapter`. Phase 7 minimum viable runs ephemeral
- *     code with no FS access. Future enhancement: route VFS calls
+ * What this worker does NOT have (vs `node -e` / `.jsh`, which run
+ * in the kernel realm and have these):
+ *   - No `RemoteVfsAdapter`. Future enhancement: route VFS calls
  *     back to the kernel via a MessagePort RPC, similar to
- *     `WorkerCdpProxy` (Phase 2.5).
+ *     `WorkerCdpProxy`.
  *   - No `RemoteBrowserAPI`. Same reasoning — out of scope.
  *   - No `require()` — node-built-in resolution would need the
- *     kernel-worker's own require shim plumbed in. Phase 7 is
- *     about preemption infrastructure; the require path is a
- *     follow-up.
+ *     kernel-worker's own require shim plumbed in.
  *
  * Runtime safety: this worker has its own globalThis, no DOM, no
  * `localStorage` (Web Workers don't get one — the kernel-worker

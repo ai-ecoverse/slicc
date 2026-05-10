@@ -1,5 +1,5 @@
 /**
- * Live page→worker `localStorage` sync (Phase 2.7 polish).
+ * Live page→worker `localStorage` sync.
  *
  * The kernel worker has no real `localStorage` (Web Workers don't get
  * one). Boot-time, the page seeds a Map-backed shim in the worker via
@@ -24,10 +24,10 @@
  * `-remove` / `-clear` by calling the corresponding method on
  * `globalThis.localStorage` — which IS the shim. The shim's
  * `setItem`/etc. just update its internal Map; no echo back to the
- * page (the page is the source of truth in this Phase).
+ * page (the page is the source of truth).
  *
- * Phase 3+ may want a real bidirectional channel (e.g. for the agent
- * persisting state via `localStorage`), but today the agent's
+ * A future bidirectional channel (e.g. for the agent persisting state
+ * via `localStorage`) is a possible follow-up, but today the agent's
  * persistence is IndexedDB-backed (orchestrator state, sessions,
  * mounts) so the read-only-from-worker shape is sufficient.
  *

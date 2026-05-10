@@ -1,8 +1,7 @@
 /**
  * Page-side spawn helper for the kernel worker.
  *
- * Phase 2 step 6c. The standalone `main.ts` (Phase 2 step 6d) calls
- * `spawnKernelWorker(...)` to:
+ * The standalone `main.ts` calls `spawnKernelWorker(...)` to:
  *
  *   1. Construct a `Worker` from `/kernel-worker.js`.
  *   2. Create two `MessageChannel`s (one for the kernel ⇄ panel
@@ -61,10 +60,10 @@ export interface KernelWorkerSpawnOptions {
   readyTimeoutMs?: number;
   /**
    * Optional snapshot of `window.localStorage` for the worker's shim.
-   * Phase 2.6d: workers don't have a real `localStorage`; we seed a
-   * read-only shim from the page's snapshot so
-   * `provider-settings.getApiKey()` etc. work in the worker. Phase 2.7
-   * replaces this with a proper page↔worker state-sync channel.
+   * Workers don't have a real `localStorage`; we seed a read-only
+   * shim from the page's snapshot so `provider-settings.getApiKey()`
+   * etc. work in the worker. A page↔worker state-sync channel keeps
+   * the shim live thereafter.
    * Defaults to all `slicc*`-prefixed keys via `collectLocalStorageSeed()`.
    */
   localStorageSeed?: Record<string, string>;
@@ -85,8 +84,8 @@ export interface KernelWorkerBootstrapOptions {
  *
  * No filtering: the worker's import graph reaches into bedrock-camp,
  * tray-runtime-config, telemetry, primary-rail, etc., each with their
- * own key namespace. Phase 2.7's bidirectional state sync should
- * replace this snapshot mechanism.
+ * own key namespace. The bidirectional state sync layered on top
+ * keeps the shim current after boot.
  */
 export function collectLocalStorageSeed(): Record<string, string> {
   const seed: Record<string, string> = {};
@@ -212,8 +211,7 @@ export function bootstrapKernelWorker(options: KernelWorkerBootstrapOptions): Sp
 
 /**
  * Construct a real `Worker` from the bundled kernel-worker entry and
- * bootstrap it. Standalone `main.ts` is the production caller (Phase 2
- * step 6d).
+ * bootstrap it. Standalone `main.ts` is the production caller.
  *
  * Worker bundling: the `new Worker(new URL('./kernel-worker.ts',
  * import.meta.url), { type: 'module' })` pattern must be **inline**

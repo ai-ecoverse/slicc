@@ -165,12 +165,12 @@ export class Orchestrator {
    */
   private completionWaiters: Map<string, Array<(summary: string | null) => void>> = new Map();
   /**
-   * Phase 3.3 — process manager threaded into each `ScoopContext`
-   * so prompts and tool calls show up as named processes. Set via
+   * Process manager threaded into each `ScoopContext` so prompts
+   * and tool calls show up as named processes. Set via
    * {@link setProcessManager} (mirrors `setLickManager`); the
    * kernel-worker boot path wires it. Inline standalone / extension
    * paths can leave it `null` — `ScoopContext` falls back to its
-   * pre-Phase-3 behavior (untracked prompt + AbortController).
+   * untracked-prompt behavior (plain AbortController).
    */
   private processManager: ProcessManager | null = null;
 
@@ -185,17 +185,17 @@ export class Orchestrator {
   }
 
   /**
-   * Inject the process manager (Phase 3.3). New `ScoopContext`s
-   * created after this point pick it up. Existing contexts are
-   * unaffected — restart the agent to see them in `ps`.
+   * Inject the process manager. New `ScoopContext`s created after
+   * this point pick it up. Existing contexts are unaffected —
+   * restart the agent to see them in `ps`.
    */
   setProcessManager(pm: ProcessManager): void {
     this.processManager = pm;
   }
 
   /**
-   * Read-only accessor — Phase 4 `ps` / `kill` shell commands look
-   * up the manager via this getter (or via the kernel-worker
+   * Read-only accessor — `ps` / `kill` shell commands look up
+   * the manager via this getter (or via the kernel-worker
    * `globalThis.__slicc_pm` fallback for code that can't accept DI).
    */
   getProcessManager(): ProcessManager | null {
@@ -1767,7 +1767,7 @@ export class Orchestrator {
     if (this.pollInterval) return;
 
     // `setInterval` (no `window.` prefix) so this works in both page and
-    // DedicatedWorker contexts. Phase 2 standalone runs the orchestrator
+    // DedicatedWorker contexts. The standalone runtime runs the orchestrator
     // in a worker; `window` is undefined there.
     this.pollInterval = setInterval(() => {
       for (const jid of this.scoops.keys()) {

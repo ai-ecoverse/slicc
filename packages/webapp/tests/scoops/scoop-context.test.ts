@@ -1912,7 +1912,7 @@ describe('resolveThinkingLevel', () => {
   });
 });
 
-describe('ScoopContext — process manager wiring (Phase 3.3)', () => {
+describe('ScoopContext — process manager wiring', () => {
   it('registers a kind:"scoop-turn" process when prompt() runs and exits 0 on success', async () => {
     const { ProcessManager } = await import('../../src/kernel/process-manager.js');
     const pm = new ProcessManager();

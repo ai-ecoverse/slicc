@@ -1,19 +1,18 @@
 /**
  * `createKernelHost` — the kernel boot factory.
  *
- * Phase 2 step 4. Encapsulates the moveable parts of the offscreen-side
- * boot sequence (`packages/chrome-extension/src/offscreen.ts:62–625`) so
- * the same factory can back two floats:
+ * Encapsulates the moveable parts of the offscreen-side boot sequence
+ * so the same factory can back two floats:
  *
- *  - **Extension** today: `offscreen.ts` calls `createKernelHost(...)`
- *    and wraps it with extension-specific bits (CDP proxy construction,
+ *  - **Extension**: `offscreen.ts` calls `createKernelHost(...)` and
+ *    wraps it with extension-specific bits (CDP proxy construction,
  *    sprinkle BroadcastChannel host, tray-runtime sync, chrome.runtime
  *    listeners for `agent-spawn-request` / `get-session-costs` /
  *    `navigate-lick`, startup `offscreen-ready` emission).
  *
- *  - **Standalone** Phase 2 step 6+: a new `kernel-worker.ts` entry will
- *    also call `createKernelHost(...)`, with a `MessageChannel`-backed
- *    bridge instead of `OffscreenBridge`.
+ *  - **Standalone**: `kernel-worker.ts` also calls `createKernelHost(...)`,
+ *    with a `MessageChannel`-backed bridge instead of the chrome.runtime
+ *    one.
  *
  * What the factory wires up (matches offscreen.ts 1:1):
  *
@@ -102,18 +101,16 @@ export interface KernelHostConfig {
 
   /**
    * Bridge that converts orchestrator events into wire emissions.
-   * Today's `OffscreenBridge` instance satisfies `KernelFacade`. The
-   * factory calls `bridge.bind(orchestrator, browser)` after the
-   * orchestrator is constructed.
+   * `OffscreenBridge` satisfies `KernelFacade`. The factory calls
+   * `bridge.bind(orchestrator, browser)` after the orchestrator is
+   * constructed.
    */
   bridge: KernelFacade;
 
   /**
    * Orchestrator callbacks bag. Must omit `getBrowserAPI` — the factory
    * supplies that itself from the `browser` arg. Built by the bridge —
-   * `OffscreenBridge.createCallbacks(bridge)` does the right thing
-   * today. Phase 2 step 6 introduces a standalone bridge whose
-   * equivalent static does the same.
+   * `OffscreenBridge.createCallbacks(bridge)` is the canonical builder.
    */
   callbacks: Omit<OrchestratorCallbacks, 'getBrowserAPI'>;
 
@@ -152,10 +149,10 @@ export interface KernelHost {
   lickManager: LickManager;
   sharedFs: VirtualFS | null;
   /**
-   * Process manager (Phase 3). Tracks every long-running unit the
-   * kernel performs — scoop turns, tool calls, shell execs, jsh
-   * scripts. Surfaced by Phase 4 `ps` / `kill` shell commands and
-   * the Phase 5 `/proc` mount.
+   * Process manager. Tracks every long-running unit the kernel
+   * performs — scoop turns, tool calls, shell execs, jsh scripts.
+   * Surfaced by the `ps` / `kill` shell commands and the `/proc`
+   * mount.
    */
   processManager: ProcessManager;
   /**
@@ -261,12 +258,12 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   const { container, browser, bridge, callbacks, skipConeBootstrap = false } = config;
   const log: KernelHostLogger = config.logger ?? console;
 
-  // 1. Construct orchestrator + process manager (Phase 3.3). The
-  // manager is the single source of truth for live processes —
-  // every scoop turn, tool call, shell exec, jsh script registers
-  // here. Surfaced via `KernelHost.processManager` so callers
-  // (kernel-worker boot wiring it into `TerminalSessionHost`,
-  // future Phase 4 `ps` / `kill` shell commands) share one table.
+  // 1. Construct orchestrator + process manager. The manager is the
+  // single source of truth for live processes — every scoop turn,
+  // tool call, shell exec, jsh script registers here. Surfaced via
+  // `KernelHost.processManager` so callers (kernel-worker boot
+  // wiring it into `TerminalSessionHost`, the `ps` / `kill` shell
+  // commands) share one table.
   const processManager = new ProcessManager();
   const orchestrator = new Orchestrator(container, {
     ...callbacks,
@@ -274,8 +271,8 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   });
   orchestrator.setProcessManager(processManager);
   // Fallback global for shell scripts / `.jsh` callers that can't
-  // accept constructor injection. Phase 4 `ps` will prefer the DI
-  // path when the supplemental command is constructed via
+  // accept constructor injection. `ps` prefers the DI path when the
+  // supplemental command is constructed via
   // `createSupplementalCommands`.
   (globalThis as Record<string, unknown>).__slicc_pm = processManager;
 
@@ -299,12 +296,11 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     log.warn('AgentBridge not published — orchestrator.getSharedFS() returned null');
   }
 
-  // 5b. Phase 5.3 — mount /proc on the shared FS. `mountInternal`
-  // (Phase 5.2) keeps it out of `listMounts()` (so scoops can't see
-  // it), out of `mount list`, and unpersisted (every reload starts
-  // fresh). The backend reads from the same `processManager` the
-  // kernel host uses, so `cat /proc/<pid>/status` always reflects
-  // the live table.
+  // 5b. Mount /proc on the shared FS. `mountInternal` keeps it out
+  // of `listMounts()` (so scoops can't see it), out of `mount list`,
+  // and unpersisted (every reload starts fresh). The backend reads
+  // from the same `processManager` the kernel host uses, so
+  // `cat /proc/<pid>/status` always reflects the live table.
   if (sharedFs) {
     try {
       await sharedFs.mountInternal('/proc', new ProcMountBackend(processManager));
@@ -441,9 +437,9 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
       unsubFollower?.();
       bshWatchdogStop?.();
       scriptCatalogDispose?.();
-      // Phase 5.3 — tear down /proc. Best-effort: a missing entry
-      // (sharedFs unavailable at boot, or mountInternal failed)
-      // throws ENOENT we swallow.
+      // Tear down /proc. Best-effort: a missing entry (sharedFs
+      // unavailable at boot, or mountInternal failed) throws ENOENT
+      // we swallow.
       if (sharedFs) {
         try {
           await sharedFs.unmountInternal('/proc');

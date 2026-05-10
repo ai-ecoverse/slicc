@@ -2,11 +2,10 @@
  * `TerminalSessionHost` — worker-side endpoint for the terminal RPC
  * protocol.
  *
- * Phase 2b step 4. Co-resides with `OffscreenBridge` on the kernel
- * port: both subscribe to the same transport, both filter by the
- * messages they care about. The bridge handles orchestrator
- * traffic; this host handles `terminal-*` envelopes (see
- * `terminal-protocol.ts`).
+ * Co-resides with `OffscreenBridge` on the kernel port: both
+ * subscribe to the same transport, both filter by the messages they
+ * care about. The bridge handles orchestrator traffic; this host
+ * handles `terminal-*` envelopes (see `terminal-protocol.ts`).
  *
  * Per-session lifecycle:
  *   `terminal-open`  → construct a `WasmShellHeadless`,
@@ -16,20 +15,19 @@
  *                      `terminal-exit { exitCode }`.
  *   `terminal-signal { SIGINT | SIGTERM | SIGKILL }` →
  *                      abort the in-flight exec via its
- *                      `AbortController`. Phase 3's process model
- *                      will widen this to STOP/CONT etc.
+ *                      `AbortController`. The process model widens
+ *                      this to STOP/CONT etc.
  *   `terminal-close` → dispose the shell, reply
  *                      `terminal-status: closed`.
  *
  * Output stream caveats: `WasmShellHeadless.executeCommand` returns
  * the full result in one shot — it doesn't stream. The host emits
  * one `terminal-output` per stdout/stderr block, then the `exit`
- * event. A future streaming runtime (or Phase 7's preemptive
- * worker) can switch to chunked emission without changing the
- * envelope shape.
+ * event. A future streaming runtime (or the preemptive worker) can
+ * switch to chunked emission without changing the envelope shape.
  *
  * `terminal-stdin` and `terminal-resize` are intentionally
- * unhandled at this Phase: the panel-side line editor accumulates
+ * unhandled today: the panel-side line editor accumulates
  * keystrokes locally and sends committed lines via `terminal-exec`,
  * so stdin doesn't need a wire round-trip; resize is informational
  * (the worker shell doesn't render). They're reserved on the wire
@@ -86,25 +84,24 @@ export interface TerminalSessionHostOptions {
   /** Construct a shell for each new session. */
   createShell: TerminalShellFactory;
   /**
-   * Optional process manager (Phase 3.2). When provided, each
+   * Optional process manager. When provided, each
    * `terminal-exec` registers a `kind:'shell'` process whose
    * `Process.abort` is the controller threaded into the headless
    * shell's `executeCommand(cmd, signal)` call. Signals route
    * through `pm.signal(pid, sig)` instead of the host's local
-   * controller, so `ps` (Phase 4) and `/proc` (Phase 5) see the
-   * exec live, and `kill` from another shell stops it.
+   * controller, so `ps` and `/proc` see the exec live, and `kill`
+   * from another shell stops it.
    *
-   * Without `pm`, the host falls back to its pre-Phase-3 behavior
-   * (single per-exec `AbortController`). Tests and the offscreen
-   * extension path that haven't been wired to a manager yet stay
-   * untouched.
+   * Without `pm`, the host falls back to a single per-exec
+   * `AbortController`. Tests and the offscreen extension path that
+   * haven't been wired to a manager yet stay untouched.
    */
   processManager?: ProcessManager;
   /**
    * Default owner for spawned shell processes. Defaults to
    * `{ kind: 'system' }` — terminal sessions in the current
    * standalone-worker layout aren't yet associated with a scoop.
-   * Phase 3 follow-up may parameterize per-session (so the cone's
+   * A follow-up may parameterize per-session (so the cone's
    * panel terminal carries `{ kind: 'cone', scoopJid }`).
    */
   defaultOwner?: ProcessOwner;
@@ -265,7 +262,7 @@ export class TerminalSessionHost {
       return;
     }
 
-    // Phase 3.2: when a `ProcessManager` is configured, the per-exec
+    // When a `ProcessManager` is configured, the per-exec
     // controller is the `Process.abort` (`adoptAbort` keeps the same
     // identity so anyone holding a reference still works). Without
     // a manager, we fall back to a fresh local controller.
@@ -285,11 +282,11 @@ export class TerminalSessionHost {
       const result = await session.shell.executeCommand(msg.command, abort.signal);
       const exitCode = abort.signal.aborted ? 130 : result.exitCode;
       if (!abort.signal.aborted) {
-        // Phase 6.3: gate output + exit emission. If the user
-        // (or another shell) sent SIGSTOP between command launch
-        // and now, hold the buffer here until SIGCONT lands. The
-        // gate auto-releases on `pm.exit` / terminating signals
-        // so a SIGINT after SIGSTOP still terminates cleanly.
+        // Gate output + exit emission. If the user (or another
+        // shell) sent SIGSTOP between command launch and now, hold
+        // the buffer here until SIGCONT lands. The gate auto-releases
+        // on `pm.exit` / terminating signals so a SIGINT after
+        // SIGSTOP still terminates cleanly.
         if (proc) await proc.gate.wait();
         if (result.stdout) {
           this.emit({
@@ -355,7 +352,7 @@ export class TerminalSessionHost {
         if (proc && this.pm) this.pm.exit(proc.pid, 1);
       }
     } finally {
-      // Only clear if we still own the slot — a Phase-3 process
+      // Only clear if we still own the slot — a future process
       // model may juggle multiple controllers per session, but
       // today there's at most one.
       if (session.currentExec === abort) {
@@ -371,10 +368,10 @@ export class TerminalSessionHost {
       this.log.warn('[terminal-session-host] signal on unknown session', msg.sid);
       return;
     }
-    // Phase 3.2: route through the manager so the recorded
-    // `terminatedBy` and `kind:'shell'` exit code are correct, and
-    // any future `kill -INT <pid>` from another shell hits the same
-    // code path. SIGSTOP / SIGCONT remain Phase 6 reservations.
+    // Route through the manager so the recorded `terminatedBy`
+    // and `kind:'shell'` exit code are correct, and any future
+    // `kill -INT <pid>` from another shell hits the same code path.
+    // SIGSTOP / SIGCONT remain reserved.
     if (msg.signal === 'SIGINT' || msg.signal === 'SIGTERM' || msg.signal === 'SIGKILL') {
       if (session.currentProcess && this.pm) {
         this.pm.signal(session.currentProcess.pid, msg.signal);
@@ -425,9 +422,9 @@ function signalExitCode(sig: Signal): number {
       return 137;
     case 'SIGSTOP':
     case 'SIGCONT':
-      // Reserved (Phase 6) — execs aren't terminated by these. Fall
-      // through to the SIGINT default since this branch is only
-      // reached on aborted execs.
+      // Reserved — execs aren't terminated by these. Fall through to
+      // the SIGINT default since this branch is only reached on
+      // aborted execs.
       return 130;
   }
 }

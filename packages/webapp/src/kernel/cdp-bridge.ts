@@ -15,8 +15,8 @@
  * The only differences were:
  *  1. The outbound envelope shape (which `source` tag, which payload `type`).
  *  2. The inbound source filter (which envelope `source` to accept).
- *  3. The wire itself (chrome.runtime today; MessagePort once Phase 2's
- *     standalone-kernel-worker path lands).
+ *  3. The wire itself (chrome.runtime in extension; MessagePort in the
+ *     standalone kernel-worker path).
  *  4. Whether listener errors are logged or swallowed.
  *
  * `CdpTransportBridge` factors out (1)–(4) into `CdpBridgeOptions` so the
@@ -100,11 +100,11 @@ export interface CdpBridgeOptions {
 
   /**
    * Fired when the FIRST listener is added for a given event method.
-   * Used by `WorkerCdpProxy` (Phase 2 step 5) to send a subscribe
-   * message to the page-side forwarder so the page knows which CDP
-   * events to relay over the kernel transport. Optional — the
-   * chrome.runtime proxies don't need this because the service worker
-   * broadcasts every CDP event to every listener.
+   * Used by `WorkerCdpProxy` to send a subscribe message to the
+   * page-side forwarder so the page knows which CDP events to relay
+   * over the kernel transport. Optional — the chrome.runtime proxies
+   * don't need this because the service worker broadcasts every CDP
+   * event to every listener.
    */
   onSubscribeEvent?: (event: string) => void;
 

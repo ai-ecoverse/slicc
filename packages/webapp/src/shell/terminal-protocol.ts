@@ -2,10 +2,8 @@
  * `terminal-protocol.ts` — wire envelopes for a panel-side terminal
  * driving a worker-resident `HeadlessShellLike`.
  *
- * Phase 2b step 2. The full implementation (`terminal-view.ts`
- * page-side + a session bridge worker-side) lands in step 3+; this
- * module declares the contract the two sides agree on so the
- * envelopes are stable when the wire-up arrives.
+ * This module declares the contract the two sides agree on so the
+ * envelopes are stable.
  *
  * Direction:
  *
@@ -14,8 +12,8 @@
  *
  * Each pair carries a `sid` (terminal session id) so a single kernel
  * transport can multiplex multiple terminals (e.g. a future
- * "open new tab" feature). For Phase 2b the panel only opens one
- * session at a time.
+ * "open new tab" feature). The panel only opens one session at a
+ * time.
  *
  * Why a custom protocol instead of just streaming raw stdout?
  * Because the existing terminal renders things xterm doesn't speak
@@ -93,9 +91,8 @@ export interface TerminalExecMsg {
 }
 
 /**
- * Send a signal to the foreground process of the session. Phase 3
- * (process model) will widen the signal set; today only `SIGINT`
- * (Ctrl+C) is honored.
+ * Send a signal to the foreground process of the session. Today
+ * only `SIGINT` (Ctrl+C) is honored.
  */
 export interface TerminalSignalMsg {
   type: 'terminal-signal';

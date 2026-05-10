@@ -1,17 +1,15 @@
 /**
  * `WorkerCdpProxy` — `CDPTransport` over a `MessagePort`.
  *
- * Phase 2 step 5. In standalone, the kernel host runs in a
- * DedicatedWorker; CDP commands originate there but the real
- * `CDPClient` (WebSocket → `node-server` `/cdp`) lives on the page.
- * This proxy forwards CDP commands and events between the two over a
- * dedicated `MessagePort` (paired with `startPageCdpForwarder` on the
- * page).
+ * In standalone, the kernel host runs in a DedicatedWorker; CDP
+ * commands originate there but the real `CDPClient` (WebSocket →
+ * `node-server` `/cdp`) lives on the page. This proxy forwards CDP
+ * commands and events between the two over a dedicated `MessagePort`
+ * (paired with `startPageCdpForwarder` on the page).
  *
  * Worker-safe: imports only the bridge, the leaf MessageChannel
  * transport, and CDP types (all pure). Included in
- * `tsconfig.webapp-worker.json` once kernel-worker.ts adds it to its
- * compilation graph.
+ * `tsconfig.webapp-worker.json`.
  *
  * Wire format (worker ⇄ page):
  *

@@ -1,10 +1,10 @@
 /**
- * Tests for `ProcessManager` (Phase 3 step 1).
+ * Tests for `ProcessManager`.
  *
  * Pins the data-structure invariants — pid allocation, lifecycle
  * transitions, signal semantics, event delivery, wait()
- * resolution. Phase 3 steps 2–5 wire the manager into the actual
- * subsystems; those have their own tests.
+ * resolution. The manager is wired into the actual subsystems
+ * elsewhere; those have their own tests.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -58,7 +58,7 @@ describe('ProcessManager — pid allocation', () => {
     const b = pm.spawn({ kind: 'shell', argv: ['b'], owner: { kind: 'cone' } });
     pm.exit(a.pid, 0);
     // Even though a exited, the next pid is still monotonic (we don't
-    // reap until Phase 4). The probe only kicks in if `nextPid` lands
+    // reap exited entries). The probe only kicks in if `nextPid` lands
     // on a still-live entry, which we can't reproduce without
     // exhausting the space — covered structurally by the dedicated
     // wraparound test below.
@@ -175,7 +175,7 @@ describe('ProcessManager — signals', () => {
     expect(pm.signal(proc.pid, 'SIGINT')).toBe(false);
   });
 
-  it('SIGINT/SIGTERM are first-wins, but SIGKILL always escalates (Phase 7)', () => {
+  it('SIGINT/SIGTERM are first-wins, but SIGKILL always escalates', () => {
     const pm = makeManager();
     // SIGINT then SIGTERM: first wins.
     const a = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
@@ -227,7 +227,7 @@ describe('ProcessManager — signals', () => {
     expect(proc.status).toBe('killed');
   });
 
-  it('SIGSTOP and SIGCONT do not abort (Phase 6 — pause/resume only)', () => {
+  it('SIGSTOP and SIGCONT do not abort (pause/resume only)', () => {
     const pm = makeManager();
     const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
     expect(pm.signal(proc.pid, 'SIGSTOP')).toBe(true);
@@ -237,7 +237,7 @@ describe('ProcessManager — signals', () => {
   });
 });
 
-describe('Gate (Phase 6)', () => {
+describe('Gate', () => {
   it('starts resumed — wait() returns immediately', async () => {
     const g = new Gate();
     let resolved = false;
@@ -328,7 +328,7 @@ describe('Gate (Phase 6)', () => {
   });
 });
 
-describe('ProcessManager — Phase 6 gate integration', () => {
+describe('ProcessManager — gate integration', () => {
   it('SIGSTOP pauses the process gate', () => {
     const pm = new ProcessManager();
     const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
@@ -391,7 +391,7 @@ describe('ProcessManager — events', () => {
     expect(seen[0]).toBe(proc);
   });
 
-  it('onSignal fires for every signal delivery (Phase 7)', () => {
+  it('onSignal fires for every signal delivery', () => {
     const pm = makeManager();
     const seen: Array<{ pid: number; sig: string }> = [];
     pm.onSignal((proc, sig) => seen.push({ pid: proc.pid, sig }));

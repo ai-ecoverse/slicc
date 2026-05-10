@@ -12,13 +12,9 @@
  */
 
 /**
- * Phase 1 keeps today's `chrome.runtime` envelope on the wire; Phase 2
- * adds a `MessageChannel` adapter. Both implementations fulfil this
- * interface.
- *
- * `In` / `Out` are the existing message types; they are NOT renamed.
- * That keeps Phase 1 a pure refactor — the bytes on the wire don't
- * change, only the call paths around them.
+ * Two adapter implementations exist: `transport-chrome-runtime.ts`
+ * (extension panel ↔ offscreen) and `transport-message-channel.ts`
+ * (standalone page ↔ DedicatedWorker). Both fulfil this interface.
  */
 export interface KernelTransport<In, Out> {
   /** Subscribe to inbound messages. Returns an unsubscribe function. */

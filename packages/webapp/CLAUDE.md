@@ -38,7 +38,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 - `terminal-session-{host,client}.ts` — terminal RPC over the kernel transport. Each panel-typed command spawns a `kind:'shell'` process; SIGINT routes to `pm.signal`.
 - `remote-terminal-view.ts` — page-side xterm. Pre-intercepts `mount /<path>` so the keystroke gesture can drive `showDirectoryPicker` (the worker has no `window`).
 
-Deep reference: `docs/kernel/process-model.md`. Wire contract: `docs/kernel/compat-contract.md`.
+Deep reference: `docs/kernel/process-model.md`.
 
 ### Orchestrator
 

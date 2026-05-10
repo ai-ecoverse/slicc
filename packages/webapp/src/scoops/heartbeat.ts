@@ -56,7 +56,7 @@ export class Heartbeat {
     if (this.pollInterval) return;
 
     // `setInterval` (no `window.` prefix) so this works in both page
-    // and DedicatedWorker contexts. Phase 2 standalone runs heartbeat
+    // and DedicatedWorker contexts. The standalone runtime runs heartbeat
     // in a worker; `window` is undefined there.
     this.pollInterval = setInterval(() => this.checkAll(), 10000);
     log.info('Heartbeat monitoring started');

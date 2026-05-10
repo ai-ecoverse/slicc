@@ -66,12 +66,13 @@ export class OffscreenClient implements KernelClientFacade {
   private stateRetryTimer: ReturnType<typeof setInterval> | null = null;
   private localFs: VirtualFS | null = null;
   /**
-   * KernelTransport — defaults to the chrome.runtime adapter. Phase 2
-   * step 6b allows passing a `MessageChannel`-backed transport via the
-   * constructor so the standalone panel can drive the same client over
-   * the kernel worker. The transport delivers raw `ExtensionMessage`
-   * envelopes either way so the existing source filter and special-case
-   * routing (`debug-tabs`, `sprinkle-op`) stay intact.
+   * KernelTransport — defaults to the chrome.runtime adapter.
+   * A `MessageChannel`-backed transport can be passed via the
+   * constructor so the standalone panel can drive the same client
+   * over the kernel worker. The transport delivers raw
+   * `ExtensionMessage` envelopes either way so the existing source
+   * filter and special-case routing (`debug-tabs`, `sprinkle-op`)
+   * stay intact.
    */
   private transport: KernelTransport<ExtensionMessage, PanelToOffscreenMessage>;
 
@@ -79,10 +80,10 @@ export class OffscreenClient implements KernelClientFacade {
   selectedScoopJid: string | null = null;
 
   /**
-   * Phase 2: optional transport injection. If omitted (today's
-   * extension panel), the chrome.runtime adapter is constructed.
-   * Standalone passes a `MessageChannel`-backed transport bound to
-   * the kernel worker.
+   * Optional transport injection. If omitted (today's extension
+   * panel), the chrome.runtime adapter is constructed. Standalone
+   * passes a `MessageChannel`-backed transport bound to the kernel
+   * worker.
    */
   constructor(
     callbacks: OffscreenClientCallbacks,
@@ -295,12 +296,11 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   /**
-   * Phase 2.7 polish hook: send a raw `PanelToOffscreenMessage` over
-   * the wire. Used by `installPageStorageSync` to forward
-   * `local-storage-{set,remove,clear}` events to the worker. Marked
-   * `@internal` because higher-level facade methods cover normal
-   * traffic; this is for cases where the page needs to push a typed
-   * envelope outside the orchestrator-shim API.
+   * Send a raw `PanelToOffscreenMessage` over the wire. Used by
+   * `installPageStorageSync` to forward `local-storage-{set,remove,clear}`
+   * events to the worker. Marked `@internal` because higher-level
+   * facade methods cover normal traffic; this is for cases where the
+   * page needs to push a typed envelope outside the orchestrator-shim API.
    */
   sendRaw(message: PanelToOffscreenMessage): void {
     this.send(message);
@@ -374,9 +374,9 @@ export class OffscreenClient implements KernelClientFacade {
         break;
       }
 
-      // Phase 2b.4: terminal session events route to subscribers
-      // registered via `onTerminalEvent`. Not chat-related, so they
-      // don't go through `emitToUI` / `agent-event` plumbing.
+      // Terminal session events route to subscribers registered via
+      // `onTerminalEvent`. Not chat-related, so they don't go through
+      // `emitToUI` / `agent-event` plumbing.
       case 'terminal-status':
       case 'terminal-output':
       case 'terminal-media-preview':
@@ -397,7 +397,7 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   // -------------------------------------------------------------------------
-  // Terminal event subscribers (Phase 2b.4)
+  // Terminal event subscribers
   // -------------------------------------------------------------------------
 
   private terminalEventListeners = new Set<(event: TerminalEventMsg) => void>();

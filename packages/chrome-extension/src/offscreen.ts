@@ -4,12 +4,12 @@
  * This runs in a Chrome offscreen document (long-lived extension page)
  * so the agent survives side panel close/reopen cycles.
  *
- * Phase 2 step 4: the moveable boot sequence (Orchestrator construction,
- * bridge binding, tray-runtime subscriptions, agent-bridge publish,
- * session-costs provider, LickManager init + lick→cone routing, mount
- * recovery, cone bootstrap, upgrade detection, BshWatchdog) lives in
+ * The shared boot sequence (Orchestrator construction, bridge binding,
+ * tray-runtime subscriptions, agent-bridge publish, session-costs
+ * provider, LickManager init + lick→cone routing, mount recovery,
+ * cone bootstrap, upgrade detection, BshWatchdog) lives in
  * `packages/webapp/src/kernel/host.ts`'s `createKernelHost`. This file
- * is now responsible only for the extension-specific bits:
+ * is responsible only for the extension-specific bits:
  *
  *   - CDP transport / `BrowserAPI` construction (chrome.debugger via the
  *     service worker).

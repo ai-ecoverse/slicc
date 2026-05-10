@@ -47,15 +47,15 @@ export interface JshResult {
 }
 
 /**
- * Phase 3.5 — optional process-tracking config. When supplied, each
+ * Optional process-tracking config. When supplied, each
  * `executeJshFile` / `executeJsCode` call registers a `kind:'jsh'`
  * process and exits with the right code (0 on clean run, 130/143/…
  * on signal-derived abort, 1 on thrown error or `process.exit(N)`
- * with N≠0). Phase 4 `ps` will surface running scripts; cooperative
+ * with N≠0). `ps` surfaces running scripts; cooperative
  * cancellation depends on the script's own check of
  * `globalThis.AbortSignal` instances — production .jsh scripts
  * generally don't, so today the abort is recorded but the script
- * keeps running until natural completion. Phase 7's preemptive
+ * keeps running until natural completion. The preemptive
  * worker is the real solution for hard kill.
  */
 export interface JshProcessConfig {

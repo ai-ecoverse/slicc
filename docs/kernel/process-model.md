@@ -2,7 +2,7 @@
 
 The kernel host (worker-resident in standalone, offscreen-resident in the extension) tracks every long-running async unit of work in a single `ProcessManager`. The model is intentionally Unix-flavored — pids, signals, `/proc` — so users and agents can reach for tools they already know (`ps`, `kill`).
 
-This page is the deep reference. The repo navigation hub is `docs/architecture.md`; the wire contract is `docs/kernel/compat-contract.md`.
+This page is the deep reference. The repo navigation hub is `docs/architecture.md`.
 
 ## Where it lives
 
@@ -22,7 +22,7 @@ interface Process {
   readonly env: Record<string, string>;
   readonly owner: ProcessOwner; // { kind: 'cone' | 'scoop' | 'system', scoopJid? }
   readonly abort: AbortController; // cooperative cancel
-  readonly gate: Gate; // pause/resume (Phase 6)
+  readonly gate: Gate; // pause/resume
   readonly startedAt: number;
   status: 'pending' | 'running' | 'exited' | 'killed';
   exitCode: number | null;
@@ -55,15 +55,15 @@ The principal-arg extraction for tools (`extractToolArg` in `tool-adapter.ts`) t
 | `SIGSTOP` | Pauses `Process.gate`. Subsequent IO-boundary `await proc.gate.wait()` calls block until SIGCONT.                                                                                                                                                                                                                                                                                     |
 | `SIGCONT` | Resumes the gate. All waiters wake at once.                                                                                                                                                                                                                                                                                                                                           |
 
-First-wins applies only to `SIGINT` / `SIGTERM`. `SIGKILL` is uncatchable: it always overwrites `terminatedBy`, mirroring POSIX. Phase 7's `kind:'preemptive'` runner is the only kind with a hard-stop guarantee on SIGKILL today.
+First-wins applies only to `SIGINT` / `SIGTERM`. `SIGKILL` is uncatchable: it always overwrites `terminatedBy`, mirroring POSIX. The `kind:'preemptive'` runner is the only kind with a hard-stop guarantee on SIGKILL today.
 
 ## Pause / resume
 
 `Gate` is a re-arming barrier: default-resumed; `pause()` builds a single internal Promise; `resume()` resolves it (waking every waiter); `release()` permanently locks the gate to "always resolved" (called from `pm.exit` so paused waiters don't deadlock at termination).
 
-Today's gate awaits live at one IO boundary: terminal output emission in `TerminalSessionHost.handleExec`. SIGSTOP holds the wire-side `terminal-output` event behind `proc.gate.wait()`; SIGCONT releases it. Other boundaries (`VfsAdapter` methods, stdin reads in jsh, network bridge, just-bash command-boundary callbacks) are documented Phase 6 follow-up candidates.
+Today's gate awaits live at one IO boundary: terminal output emission in `TerminalSessionHost.handleExec`. SIGSTOP holds the wire-side `terminal-output` event behind `proc.gate.wait()`; SIGCONT releases it. Other boundaries (`VfsAdapter` methods, stdin reads in jsh, network bridge, just-bash command-boundary callbacks) are follow-up candidates.
 
-The gate is purely cooperative. Pure-CPU `while(true){}` loops don't observe it — Phase 7's preemptive runner is the answer for hard control.
+The gate is purely cooperative. Pure-CPU `while(true){}` loops don't observe it — the preemptive runner is the answer for hard control.
 
 ## `/proc` filesystem
 
@@ -93,11 +93,11 @@ Deliberate omissions: no `/proc/self` (would require `currentPid()` tracking whi
 
 `kill` defaults to SIGTERM (POSIX). Short forms: `-INT`, `-TERM`, `-KILL`, `-STOP`, `-CONT`, `-9`. Long form: `-s SIGINT`. Multiple pids in one call. Exit codes: 0 if every signal landed; 1 if any pid was unknown / already terminated; 2 on parse error.
 
-## Preemptive runner (Phase 7)
+## Preemptive runner
 
 `runPreemptiveJs(opts)` spawns a fresh `DedicatedWorker` per task and registers a `kind:'preemptive'` process. The runner subscribes to `pm.onSignal`; on SIGKILL it calls `worker.terminate()` (uncatchable) and exits 137. For SIGINT/SIGTERM, the runner records the state but does NOT terminate — the running JS is opaque from this side; cooperative cancel of an arbitrary tool's awaits isn't possible without threading abort signals through every layer.
 
-The shell command is `preemptive 'CODE' [ARGS…]`. The script runs inside an `AsyncFunction` with shimmed `console`, `process.argv`, `process.env`, `process.stdout`/`process.stderr`, `process.exit(N)`. No FS access yet — `RemoteVfsAdapter` over a MessagePort is a Phase 8 candidate.
+The shell command is `preemptive 'CODE' [ARGS…]`. The script runs inside an `AsyncFunction` with shimmed `console`, `process.argv`, `process.env`, `process.stdout`/`process.stderr`, `process.exit(N)`. No FS access yet — a `RemoteVfsAdapter` over a MessagePort is a candidate follow-up.
 
 ## Wiring map
 
@@ -116,6 +116,6 @@ createKernelHost
                     └── jsh-executor (executeJshFile / executeJsCode)
 ```
 
-The `globalThis.__slicc_pm` fallback exists for `.jsh` scripts and any code path that can't accept constructor injection. Phase 4's `ps` and `kill` prefer the DI path through `createSupplementalCommands` but fall through to the global as a backup.
+The `globalThis.__slicc_pm` fallback exists for `.jsh` scripts and any code path that can't accept constructor injection. `ps` and `kill` prefer the DI path through `createSupplementalCommands` but fall through to the global as a backup.
 
 `createPanelTerminalHost` is the single source of truth for the panel-terminal wiring: both the standalone DedicatedWorker (`kernel-worker.ts`) and the extension offscreen document (`packages/chrome-extension/src/offscreen.ts`) call it, so panel-typed `ps` / `kill` / `cat /proc/<pid>/...` work uniformly across floats. Tests live at `tests/kernel/panel-terminal-host.test.ts`.

@@ -1,5 +1,5 @@
 /**
- * Tests for `ProcMountBackend` (Phase 5.1).
+ * Tests for `ProcMountBackend`.
  */
 
 import { describe, it, expect } from 'vitest';

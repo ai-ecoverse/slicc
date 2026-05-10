@@ -1,5 +1,5 @@
 /**
- * Tests for `preemptive` shell command (Phase 7.3).
+ * Tests for `preemptive` shell command.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -106,7 +106,7 @@ describe('preemptive command', () => {
     }
   });
 
-  it('SIGKILL during a long-running script terminates the worker (Phase 7 contract)', async () => {
+  it('SIGKILL during a long-running script terminates the worker', async () => {
     const pm = new ProcessManager();
     const worker = makeMockWorker();
     const cmd = createPreemptiveCommand({ processManager: pm, workerFactory: () => worker });

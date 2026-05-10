@@ -1,5 +1,5 @@
 /**
- * Phase 1 facade parity test.
+ * Facade parity test.
  *
  * Drives the existing `OffscreenBridge` (host side) and `OffscreenClient`
  * (panel side) through their typed `KernelFacade` / `KernelClientFacade`
@@ -173,7 +173,7 @@ async function tick(ms = 10): Promise<void> {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('Kernel facade parity (Phase 1)', () => {
+describe('Kernel facade parity', () => {
   let facade: KernelFacade;
   let client: KernelClientFacade;
   let orchestrator: ReturnType<typeof makeOrchestratorMock>;
@@ -250,7 +250,7 @@ describe('Kernel facade parity (Phase 1)', () => {
       getTransport: () => ({ send }),
     };
 
-    // Re-bind with a BrowserAPI stub. Phase 1 contract: rebind is allowed
+    // Re-bind with a BrowserAPI stub. Contract: rebind is allowed
     // and must not double-listen — the bridge's own `transportUnsubscribe`
     // is what guarantees that.
     type BindFn = (

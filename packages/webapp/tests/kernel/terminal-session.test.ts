@@ -298,7 +298,7 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     channel.port2.close();
   });
 
-  it('SIGSTOP holds output emission; SIGCONT releases it (Phase 6.3)', async () => {
+  it('SIGSTOP holds output emission; SIGCONT releases it', async () => {
     const channel = new MessageChannel();
     const pm = new ProcessManager();
     const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);

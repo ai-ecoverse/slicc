@@ -2,7 +2,7 @@
  * `WasmShell` — xterm.js terminal integration on top of
  * `WasmShellHeadless`.
  *
- * Phase 2b: the headless concerns (just-bash, jsh sync, custom
+ * The headless concerns (just-bash, jsh sync, custom
  * commands, executeCommand/executeScriptFile primitives) live in
  * `wasm-shell-headless.ts`. This file adds the **view layer** —
  * xterm mount, theme sync, refit / resize, line editor, command
@@ -13,7 +13,7 @@
  * `executeScriptFile` on a `WasmShell` instance, but never calls
  * `mount()`. The view fields stay `null`, and the view methods
  * are dead code — xterm itself is dynamically imported inside
- * `mount()` so it never enters the worker bundle. Phase 3 may
+ * `mount()` so it never enters the worker bundle. A follow-up may
  * formally split the public types so the worker constructs
  * `WasmShellHeadless` directly; today the inheritance is enough.
  */

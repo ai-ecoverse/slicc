@@ -1,5 +1,5 @@
 /**
- * Tests for `vfs.mountInternal` / `unmountInternal` (Phase 5.2).
+ * Tests for `vfs.mountInternal` / `unmountInternal`.
  *
  * Verifies:
  *  - regular `mount()` and internal mounts coexist;

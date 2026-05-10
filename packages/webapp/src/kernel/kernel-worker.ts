@@ -1,7 +1,7 @@
 /**
  * `kernel-worker.ts` — DedicatedWorker entry for the standalone kernel host.
  *
- * Phase 2 step 5d. The worker:
+ * The worker:
  *
  *   1. Waits for an init message from the page containing two
  *      `MessagePort`s — one for the kernel ⇄ panel bridge envelope
@@ -16,19 +16,10 @@
  *   5. Posts a `kernel-worker-ready` message back over the kernel port
  *      so the page knows the worker has finished booting.
  *
- * Phase 2 step 6 wires the standalone `main.ts` to spawn this worker;
- * Phase 2 step 7 adds the `LocalVfsClient` page-side mirror; Phase 2b
- * splits the WasmShell so the agent's bash loop can run worker-side
- * without dragging xterm into the worker.
- *
  * Worker safety: this file lives in `tsconfig.webapp-worker.json` and
  * must not reference DOM globals. The orchestrator's `container` arg
  * is unused at runtime today (stored but never read), so we pass a
  * stub typed as `HTMLElement` to satisfy the constructor signature.
- *
- * NOTE: This file is not yet bundled / referenced from a Vite entry —
- * Phase 2 step 6's `main.ts` integration adds the `/kernel-worker.js`
- * Vite IIFE entry that ships this code.
  */
 
 /// <reference lib="webworker" />
@@ -63,9 +54,9 @@ declare const self: DedicatedWorkerGlobalScope;
  * `WorkerCdpProxy` ⇄ `startPageCdpForwarder` use. `localStorageSeed`
  * is a snapshot of the page's `localStorage` keys/values so the
  * worker — which doesn't have its own `localStorage` — can serve
- * `provider-settings.getApiKey()` and friends from a shim. Phase 2.7
- * will replace this with a proper page↔worker state-sync mechanism;
- * the seed is a Phase 2.6d minimal fix to unblock the smoke test.
+ * `provider-settings.getApiKey()` and friends from a shim;
+ * `installPageStorageSync` keeps the shim in sync with subsequent
+ * page writes.
  *
  * Sent via `worker.postMessage(init, [kernelPort, cdpPort])` so the
  * ports are transferred (not copied).
@@ -83,7 +74,7 @@ export interface KernelWorkerReadyMsg {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch bypass header (Phase 2.7 polish)
+// Fetch bypass header
 // ---------------------------------------------------------------------------
 
 /**
@@ -118,20 +109,17 @@ function installFetchBypass(): void {
 }
 
 // ---------------------------------------------------------------------------
-// localStorage shim (Phase 2.6d)
+// localStorage shim
 // ---------------------------------------------------------------------------
 
 /**
  * Install a Storage-shaped shim on `globalThis.localStorage`. Web
  * Workers don't have a real `localStorage`; the page passes a snapshot
- * of its keys/values via `kernel-worker-init.localStorageSeed`. The
- * shim is read-only at this Phase — writes from the worker only stay
- * in the worker's Map and don't propagate back to the page (changes
- * to model/provider come FROM the page, so the worker just needs to
- * read).
- *
- * Phase 2.7 will replace this with a proper bidirectional state-sync
- * channel (e.g. a Storage-event mirror over the kernel transport).
+ * of its keys/values via `kernel-worker-init.localStorageSeed`. Writes
+ * from the worker only stay in the worker's Map and don't propagate
+ * back to the page (changes to model/provider come FROM the page, so
+ * the worker just needs to read). `installPageStorageSync` on the
+ * page mirrors subsequent page writes into the worker's shim.
  */
 function installLocalStorageShim(seed: Record<string, string>): void {
   const store = new Map<string, string>(Object.entries(seed));
@@ -189,20 +177,19 @@ self.addEventListener('message', (event: MessageEvent) => {
 });
 
 async function boot(init: KernelWorkerInitMsg): Promise<void> {
-  // Phase 2.7: stamp `x-bypass-llm-proxy: 1` on every worker-issued
-  // fetch so the page-installed LLM-proxy SW doesn't double-intercept
-  // worker requests. Must run before any fetcher does.
+  // Stamp `x-bypass-llm-proxy: 1` on every worker-issued fetch so the
+  // page-installed LLM-proxy SW doesn't double-intercept worker
+  // requests. Must run before any fetcher does.
   installFetchBypass();
 
-  // Phase 2.6d minimal fix: the worker has no `localStorage` (Web
-  // Workers don't get one). `provider-settings.getApiKey()` and
-  // `selected-model` reads on the worker side would otherwise crash
-  // or return empty, which makes `ScoopContext.init` fail with no
-  // provider configured. Seed a Map-backed shim from the page's
-  // `localStorage` snapshot the page passed in `kernel-worker-init`.
-  // Phase 2.7 polish (`OffscreenBridge` `local-storage-*` handlers +
-  // `installPageStorageSync` on the page) keeps the shim in sync
-  // with subsequent page writes.
+  // The worker has no `localStorage` (Web Workers don't get one).
+  // `provider-settings.getApiKey()` and `selected-model` reads on the
+  // worker side would otherwise crash or return empty, which makes
+  // `ScoopContext.init` fail with no provider configured. Seed a
+  // Map-backed shim from the page's `localStorage` snapshot the page
+  // passed in `kernel-worker-init`. The `OffscreenBridge`
+  // `local-storage-*` handlers + `installPageStorageSync` on the page
+  // keep the shim in sync with subsequent page writes.
   installLocalStorageShim(init.localStorageSeed ?? {});
 
   // Register providers first — kernel host construction reads the
@@ -233,18 +220,18 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     logger: console,
   });
 
-  // Phase 3.2/3.3: take the process manager from the kernel host so
-  // scoop-turns (registered by `ScoopContext`) and shell execs
-  // (registered by `TerminalSessionHost`) land in the same table.
-  // `createKernelHost` also publishes it on `globalThis.__slicc_pm`
-  // for shell-script callers that can't accept constructor injection.
+  // Take the process manager from the kernel host so scoop-turns
+  // (registered by `ScoopContext`) and shell execs (registered by
+  // `TerminalSessionHost`) land in the same table. `createKernelHost`
+  // also publishes it on `globalThis.__slicc_pm` for shell-script
+  // callers that can't accept constructor injection.
   const pm = host.processManager;
 
-  // Phase 2b step 5a: stand up the terminal-RPC host on the same kernel
-  // transport. Shared `createPanelTerminalHost` factory pins parity
-  // with the extension offscreen path — both pass `processManager`
-  // into `TerminalSessionHost` AND the per-session `WasmShellHeadless`
-  // so `ps` / `kill` / `/proc` see the same table.
+  // Stand up the terminal-RPC host on the same kernel transport. The
+  // shared `createPanelTerminalHost` factory pins parity with the
+  // extension offscreen path — both pass `processManager` into
+  // `TerminalSessionHost` AND the per-session `WasmShellHeadless` so
+  // `ps` / `kill` / `/proc` see the same table.
   //
   // Falls back to a no-op if the orchestrator failed to publish a
   // shared FS (logged at host construction); the panel terminal-view

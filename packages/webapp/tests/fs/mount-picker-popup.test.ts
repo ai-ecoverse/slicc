@@ -222,7 +222,7 @@ function extractRequestId(url: string): string {
   return decodeURIComponent(match[1]);
 }
 
-describe('storePendingHandle (Phase 2b.6)', () => {
+describe('storePendingHandle', () => {
   beforeEach(async () => {
     indexedDB.deleteDatabase('slicc-pending-mount');
   });

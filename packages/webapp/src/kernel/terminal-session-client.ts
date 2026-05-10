@@ -2,9 +2,8 @@
  * `TerminalSessionClient` — page-side counterpart to
  * `TerminalSessionHost`.
  *
- * Phase 2b step 4c. The panel-side terminal-view (forthcoming
- * Phase 2b.5+) constructs one of these per terminal tab and uses
- * it to:
+ * The panel-side terminal-view constructs one of these per terminal
+ * tab and uses it to:
  *   - Open a session in the worker.
  *   - Send committed lines for execution (`exec(cmd)`).
  *   - Subscribe to inbound output / media-preview / status events.
@@ -44,8 +43,8 @@ export interface TerminalSessionClientOptions {
    * compatible) used to send `TerminalControlMsg` envelopes and
    * receive `TerminalEventMsg`s. The client uses
    * `client.sendRaw(message)` for outbound traffic — that hook is
-   * intentionally exposed (`Phase 2.7 polish`) so this class
-   * doesn't need to reach into private internals.
+   * intentionally exposed so this class doesn't need to reach into
+   * private internals.
    */
   client: OffscreenClient;
   /** Session id. Caller-provided so panels can stamp meaningful values. */
@@ -124,7 +123,7 @@ export class TerminalSessionClient {
   /**
    * Send a signal to the in-flight exec. Today the worker honors
    * SIGINT/SIGTERM/SIGKILL by aborting the active just-bash
-   * command; SIGSTOP/SIGCONT are reserved for Phase 6.
+   * command; SIGSTOP/SIGCONT are reserved.
    */
   signal(sig: 'SIGINT' | 'SIGTERM' | 'SIGSTOP' | 'SIGCONT' | 'SIGKILL'): void {
     this.send({ type: 'terminal-signal', sid: this.sid, signal: sig });
@@ -180,9 +179,7 @@ export class TerminalSessionClient {
   private subscribeToEvents(): () => void {
     // OffscreenClient doesn't expose a generic onMessage hook today,
     // so we tap into its terminal-event route via `onTerminalEvent`
-    // (added by Phase 2b.4d in `offscreen-client.ts`). Until that
-    // landed, callers wire `onEvent` to a custom dispatcher in
-    // `mainStandaloneWorker`.
+    // in `offscreen-client.ts`.
     const handler = (event: TerminalEventMsg): void => {
       if (event.sid !== this.sid) return;
       this.handleEvent(event);
@@ -209,17 +206,16 @@ export class TerminalSessionClient {
       }
       case 'terminal-output': {
         const out = event as TerminalOutputMsg;
-        // Phase 7+ host always tags output with the originating
+        // The current host always tags output with the originating
         // `execId`. Route the chunk to the matching buffer; if the
         // exec already completed (terminal-exit landed first), the
         // chunk is dropped instead of bleeding into a sibling exec
         // that happens to also be in-flight.
         //
-        // Legacy hosts that don't set `execId` fall back to the
-        // pre-Phase-7 broadcast behavior (accumulate against every
-        // in-flight buffer). The protocol allows only one exec at a
-        // time per session, so the broadcast is unambiguous on
-        // older hosts.
+        // Legacy hosts that don't set `execId` fall back to broadcast
+        // behavior (accumulate against every in-flight buffer). The
+        // protocol allows only one exec at a time per session, so the
+        // broadcast is unambiguous on older hosts.
         if (out.execId !== undefined) {
           const buf = this.buffers.get(out.execId);
           if (!buf) return;

@@ -1,7 +1,7 @@
 /**
  * `WasmShellHeadless` — the worker-safe shell base class.
  *
- * Phase 2b. The agent's `bash` tool calls run here. Owns just-bash,
+ * The agent's `bash` tool calls run here. Owns just-bash,
  * the VFS adapter, custom commands (git, mount, supplemental), the
  * `.jsh` discovery + sync loop, and the `executeCommand` /
  * `executeScriptFile` primitives. Zero DOM — the file lives outside
@@ -20,7 +20,7 @@
  * `renderMediaPreview` is a `protected` extension point: the
  * headless implementation throws "preview unavailable in headless
  * mode" because there's no DOM to draw into; `WasmShell` overrides
- * with the existing image/video preview logic. Phase 2b's terminal
+ * with the existing image/video preview logic. The terminal
  * RPC will replace the throw with a `terminal-media-preview`
  * envelope emit.
  */
@@ -78,11 +78,11 @@ export interface HeadlessShellOptions {
   /** True if owned by a non-interactive scoop (gates the `mount` picker). */
   isScoop?: () => boolean;
   /**
-   * Phase 3.5 — process manager for `kind:'jsh'` registration.
-   * When omitted, the shell falls back to its pre-Phase-3 behavior
-   * (no `.jsh` script visibility in `ps`). When supplied alongside
-   * `processOwner`, every `executeScriptFile` and `node -e` call
-   * registers a process record under the active shell's pid (when
+   * Process manager for `kind:'jsh'` registration. When omitted,
+   * the shell falls back to behavior with no `.jsh` script
+   * visibility in `ps`. When supplied alongside `processOwner`,
+   * every `executeScriptFile` and `node -e` call registers a
+   * process record under the active shell's pid (when
    * `getCurrentShellPid` is also supplied) or as an orphan
    * (`ppid: 1`) otherwise.
    */
@@ -93,7 +93,7 @@ export interface HeadlessShellOptions {
    * Returns the active `kind:'shell'` pid the jsh script runs
    * under (e.g. the bash command the user typed that resolved
    * to `myscript.jsh`). When omitted, jsh processes get
-   * `ppid: 1` (kernel-host anchor) — Phase 4 `ps -T` will still
+   * `ppid: 1` (kernel-host anchor) — `ps -T` will still
    * show them but as orphans.
    */
   getCurrentShellPid?: () => number | undefined;
@@ -234,7 +234,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
       scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
       getParentJid: options.getParentJid,
-      // Phase 4: thread the manager into `ps` / `kill`. When the
+      // Thread the manager into `ps` / `kill`. When the
       // shell is constructed without one (extension offscreen,
       // inline standalone), the commands fall back to
       // `globalThis.__slicc_pm` (published by `createKernelHost`).
@@ -398,7 +398,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
    * Render an inline media preview (e.g. for `imgcat`). Headless
    * default throws because there's no DOM to draw into. The
    * `WasmShell` view subclass overrides with the existing
-   * image/video preview rendering. Phase 2b's terminal RPC will add
+   * image/video preview rendering. The terminal RPC will add
    * a third implementation that emits a `terminal-media-preview`
    * envelope over the kernel transport.
    */

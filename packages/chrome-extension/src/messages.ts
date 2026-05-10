@@ -142,9 +142,9 @@ export interface ToolUIActionMsg {
 }
 
 /**
- * Phase 2.7 polish: live `localStorage` sync. The standalone kernel
- * worker has no real `localStorage`; it runs on a Map-backed shim
- * seeded from the page's `localStorage` snapshot at boot
+ * Live `localStorage` sync. The standalone kernel worker has no
+ * real `localStorage`; it runs on a Map-backed shim seeded from
+ * the page's `localStorage` snapshot at boot
  * (`KernelWorkerInitMsg.localStorageSeed`). After boot, page-side
  * writes need to keep flowing to the worker so changes the user
  * makes (e.g. swapping providers, updating model selection) are
@@ -189,9 +189,9 @@ export type PanelToOffscreenMessage =
   | LocalStorageSetMsg
   | LocalStorageRemoveMsg
   | LocalStorageClearMsg
-  // Phase 2b.4: panel-driven terminal session control. Routed by
-  // the worker's `TerminalSessionHost`, ignored by `OffscreenBridge`.
-  // The full envelope shape lives in `terminal-protocol.ts`.
+  // Panel-driven terminal session control. Routed by the worker's
+  // `TerminalSessionHost`, ignored by `OffscreenBridge`. The full
+  // envelope shape lives in `terminal-protocol.ts`.
   | TerminalControlMsg;
 
 // ---------------------------------------------------------------------------
@@ -429,8 +429,8 @@ export type OffscreenToPanelMessage =
   | PanelCdpResponseMsg
   | OAuthResultMsg
   | TrayRuntimeStatusMsg
-  // Phase 2b.4: terminal session events emitted by the worker's
-  // `TerminalSessionHost`. Consumed by the panel's `TerminalSessionClient`.
+  // Terminal session events emitted by the worker's `TerminalSessionHost`.
+  // Consumed by the panel's `TerminalSessionClient`.
   | TerminalEventMsg;
 
 // ---------------------------------------------------------------------------

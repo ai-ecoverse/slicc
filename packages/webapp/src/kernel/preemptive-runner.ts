@@ -1,7 +1,6 @@
 /**
  * `preemptive-runner.ts` — kernel-side helper that spawns a
  * `kind:'preemptive'` process backed by a per-task DedicatedWorker.
- * Phase 7.
  *
  * The headline guarantee: SIGKILL of a preemptive process really
  * stops the underlying JS — `worker.terminate()` is synchronous and
@@ -24,14 +23,11 @@
  *      On `preemptive-error`: exit 1 with the error message.
  *      On SIGKILL (`proc.terminatedBy === 'SIGKILL'`):
  *         `worker.terminate()` immediately, exit 137, resolve.
- *      On SIGINT/SIGTERM: NO worker.terminate(). The Phase 7
- *      contract is that ONLY SIGKILL is hard; cooperative
- *      signals follow the cooperative-abort discipline of Phase
- *      3 — the running code is opaque to us, so we cannot
- *      cooperatively cancel it. Callers that want to respect
- *      cooperative aborts must call SIGKILL after a grace period
- *      (Phase 4 `kill` already does this conventionally; Phase 7
- *      doesn't change that).
+ *      On SIGINT/SIGTERM: NO worker.terminate(). Only SIGKILL is
+ *      hard; cooperative signals are recorded but the running code
+ *      is opaque to us, so we cannot cooperatively cancel it.
+ *      Callers that want to respect cooperative aborts must call
+ *      SIGKILL after a grace period (`kill` does this conventionally).
  *
  * Why ONE worker per task? A long-lived pool would need to be
  * recreated after every SIGKILL anyway, and per-task workers give
@@ -60,7 +56,7 @@ import type {
  * Structural slice of `Worker` the runner needs. Tests pass a mock
  * with `postMessage`/`terminate`/`addEventListener`/
  * `removeEventListener` — same idea as `WorkerLike` in
- * `kernel/spawn.ts` (Phase 2.6c).
+ * `kernel/spawn.ts`.
  */
 export interface PreemptiveWorkerLike {
   postMessage(message: unknown): void;
@@ -187,14 +183,13 @@ export async function runPreemptiveJs(opts: RunPreemptiveOptions): Promise<Preem
       settle({ stdout: '', stderr: message + '\n', exitCode: 1 }, 1);
     };
 
-    // Phase 7 contract: ONLY SIGKILL hard-terminates the worker.
-    // SIGINT / SIGTERM record `terminatedBy` (and abort the
-    // controller) but don't reach into the running JS — its code
-    // is a black box from this side. Callers that want hard stop
-    // must escalate to SIGKILL after a grace period (Phase 4
-    // `kill` is the conventional escalation).
+    // ONLY SIGKILL hard-terminates the worker. SIGINT / SIGTERM
+    // record `terminatedBy` (and abort the controller) but don't
+    // reach into the running JS — its code is a black box from this
+    // side. Callers that want hard stop must escalate to SIGKILL
+    // after a grace period (`kill` is the conventional escalation).
     //
-    // Subscribing to `pm.onSignal` (Phase 7 addition) instead of
+    // Subscribing to `pm.onSignal` instead of
     // `proc.abort.signal.addEventListener('abort', …)` because:
     //   1. abort fires once on the FIRST aborting signal; SIGKILL
     //      escalating after SIGINT wouldn't re-fire.

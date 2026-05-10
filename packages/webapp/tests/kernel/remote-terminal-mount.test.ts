@@ -1,5 +1,5 @@
 /**
- * Tests for the panel-side mount pre-intercept (Phase 8 follow-up).
+ * Tests for the panel-side mount pre-intercept.
  *
  * Verifies the parser that decides which typed lines are local
  * mount invocations + the IDB-key formatter that the panel and

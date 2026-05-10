@@ -1,10 +1,10 @@
 /**
  * `preemptive` — run JS code in a hard-killable child Worker.
  *
- * Phase 7.3. The user-facing surface for the preemptive runner.
- * Each invocation spawns a `kind:'preemptive'` process backed by
- * a fresh DedicatedWorker; SIGKILL via `kill -KILL <pid>` from
- * any other shell terminates the worker synchronously.
+ * The user-facing surface for the preemptive runner. Each
+ * invocation spawns a `kind:'preemptive'` process backed by a fresh
+ * DedicatedWorker; SIGKILL via `kill -KILL <pid>` from any other
+ * shell terminates the worker synchronously.
  *
  * Usage:
  *   preemptive 'CODE'              run inline code
@@ -12,11 +12,10 @@
  *
  * The script runs inside an `AsyncFunction` with `console` and
  * `process` shims (argv, env, stdout/stderr, exit). It does NOT
- * have FS access (no VFS bridge yet) or DOM globals — Phase 7
- * minimum-viable focuses on demonstrating hard preemption; full
- * runtime parity with `node -e` is a follow-up.
+ * have FS access (no VFS bridge yet) or DOM globals — full runtime
+ * parity with `node -e` is a follow-up.
  *
- * Phase 7's contract on signals:
+ * Signal contract:
  *   - SIGINT / SIGTERM record `terminatedBy` and abort the
  *     `Process.abort` controller, but do NOT terminate the worker
  *     — the running JS is opaque to us and there's no cooperative
@@ -51,7 +50,7 @@ export interface PreemptiveCommandOptions {
    * Default owner for spawned preemptive processes. Defaults to
    * `{ kind: 'system' }` — the panel terminal session in worker
    * mode runs as system; cone-driven invocations should pass
-   * `{ kind: 'cone' }` (Phase 8 follow-up: thread the owner from
+   * `{ kind: 'cone' }` (follow-up: thread the owner from
    * `WasmShellHeadless.processOwner`).
    */
   owner?: ProcessOwner;

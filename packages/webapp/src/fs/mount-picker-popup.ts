@@ -79,10 +79,10 @@ export function openMountPickerPopup(requestId?: string): Promise<Record<string,
 /**
  * Stash a `FileSystemDirectoryHandle` under `idbKey` so the worker-side
  * agent can pick it up via {@link loadAndClearPendingHandle}. Used by
- * the standalone-worker dip path (Phase 2b.6): the picker must fire on
- * the panel's click activation, but the consuming `LocalMountBackend`
- * lives in the kernel worker — IDB is the only structurally-cloneable
- * path that doesn't lose the handle's permission grant.
+ * the standalone-worker dip path: the picker must fire on the panel's
+ * click activation, but the consuming `LocalMountBackend` lives in
+ * the kernel worker — IDB is the only structurally-cloneable path
+ * that doesn't lose the handle's permission grant.
  *
  * Callers must ensure `idbKey` is unique per request (the existing
  * `pendingMount:<requestId>` convention is fine). The entry is

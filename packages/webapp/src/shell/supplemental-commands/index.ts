@@ -67,8 +67,8 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    */
   getParentJid?: () => string | undefined;
   /**
-   * Phase 4 — process manager threaded into `ps` / `kill`. When
-   * omitted, those commands fall back to `globalThis.__slicc_pm`
+   * Process manager threaded into `ps` / `kill`. When omitted,
+   * those commands fall back to `globalThis.__slicc_pm`
    * (published by `createKernelHost`). Tests prefer DI; production
    * works with either.
    */

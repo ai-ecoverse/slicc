@@ -1,5 +1,5 @@
 /**
- * Tests for `ps` (Phase 4).
+ * Tests for `ps`.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -44,7 +44,7 @@ describe('ps command', () => {
     expect(lines[2]).toMatch(/scoop_abc1/); // truncated jid
   });
 
-  it('default hides exited / killed processes (Phase 4 follow-up: --all to see them)', async () => {
+  it('default hides exited / killed processes (--all to see them)', async () => {
     const pm = new ProcessManager();
     const a = pm.spawn({ kind: 'shell', argv: ['a'], owner: { kind: 'cone' } });
     const b = pm.spawn({ kind: 'shell', argv: ['b'], owner: { kind: 'cone' } });

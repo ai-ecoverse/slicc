@@ -1,7 +1,7 @@
 /**
  * `ps` — list processes tracked by the kernel `ProcessManager`.
  *
- * Phase 4. Reads from a manager supplied via DI (the kernel-host
+ * Reads from a manager supplied via DI (the kernel-host
  * boot wires it through `createSupplementalCommands`) or, as a
  * fallback for shell scripts and any code that can't accept
  * constructor injection, from `globalThis.__slicc_pm`.
@@ -23,7 +23,7 @@
  * The `STAT` column maps:
  *   running  → R
  *   pending  → S
- *   exited   → Z (zombie — Phase 4 doesn't reap)
+ *   exited   → Z (zombie — not reaped)
  *   killed   → K
  *
  * `SCOOP` shows `cone` / `<scoopJid prefix>` / `system` derived
@@ -76,7 +76,7 @@ export function createPsCommand(options: PsCommandOptions = {}): Command {
     let columns: Column[] = DEFAULT_COLUMNS;
     let tree = false;
     // By default `ps` shows only live processes (running / pending).
-    // Phase 4 doesn't reap exited/killed entries — they linger so
+    // Exited/killed entries aren't reaped — they linger so
     // post-mortem `ps` after `kill` can still show the exit code —
     // but listing them by default is noisy. `-a`/`-A`/`-e` includes
     // them.

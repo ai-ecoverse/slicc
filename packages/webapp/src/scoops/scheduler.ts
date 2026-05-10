@@ -36,7 +36,7 @@ export class TaskScheduler {
 
     // Poll every minute
     // `setInterval` (no `window.` prefix) so this works in both page
-    // and DedicatedWorker contexts. Phase 2 standalone runs the
+    // and DedicatedWorker contexts. The standalone runtime runs the
     // scheduler in a worker; `window` is undefined there.
     this.pollInterval = setInterval(() => this.checkTasks(), 60000);
 

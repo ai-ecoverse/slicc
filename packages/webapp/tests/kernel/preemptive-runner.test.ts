@@ -1,5 +1,5 @@
 /**
- * Tests for `runPreemptiveJs` (Phase 7.1).
+ * Tests for `runPreemptiveJs`.
  *
  * Uses a mock `PreemptiveWorkerLike` since vitest runs in node and
  * has no DedicatedWorker. The mock lets each test simulate either
@@ -186,7 +186,7 @@ describe('runPreemptiveJs', () => {
     expect(worker.terminate).toHaveBeenCalled();
   });
 
-  it('SIGINT alone does NOT terminate the worker (Phase 7 contract: only SIGKILL is hard)', async () => {
+  it('SIGINT alone does NOT terminate the worker (only SIGKILL is hard)', async () => {
     const pm = new ProcessManager();
     const worker = makeMockWorker();
     runPreemptiveJs({
@@ -198,7 +198,7 @@ describe('runPreemptiveJs', () => {
     const proc = pm.list()[0];
     pm.signal(proc.pid, 'SIGINT');
     await new Promise((r) => setTimeout(r, 10));
-    // Phase 7's contract: only SIGKILL is hard. SIGINT records
+    // Contract: only SIGKILL is hard. SIGINT records
     // terminatedBy + aborts the controller, but the worker keeps
     // running (no `worker.terminate()`).
     expect(worker.terminate).not.toHaveBeenCalled();

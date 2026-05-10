@@ -2,7 +2,7 @@
  * `RemoteTerminalView` — page-side terminal view that drives a
  * worker-resident shell through a `TerminalSessionClient`.
  *
- * Phase 2b step 5b. The standalone-worker path
+ * The standalone-worker path
  * (`?kernel-worker=1`) runs the agent's `WasmShell` inside a
  * DedicatedWorker. The panel terminal can't keep using the inline
  * `WasmShell` view-class — that ships a local `Bash` instance the
@@ -25,10 +25,9 @@
  *   - Multi-line continuation (PS2 / heredoc).
  *   - Tab completion (would need a worker-side `which` / jsh
  *     enumeration round-trip).
- *   - Inline media-preview (`imgcat`). Phase 2b.6 lands the panel
- *     UI capability for this — for now `imgcat` writes its base64
- *     escape into the terminal stream like any other command and
- *     the user-visible result is "the bytes printed inline."
+ *   - Inline media-preview (`imgcat`). For now `imgcat` writes its
+ *     base64 escape into the terminal stream like any other command
+ *     and the user-visible result is "the bytes printed inline."
  *   - Cwd-aware prompt. The worker shell tracks `cd`; the panel
  *     just renders a static `$ ` prompt. A future event can carry
  *     `cwd` updates from the host.
@@ -536,10 +535,10 @@ export class RemoteTerminalView {
         }
         return;
       case 'terminal-media-preview':
-        // Phase 2b.6 will surface this through a panel UI capability
-        // (image/video preview pane). For now ignore — the underlying
-        // command (`imgcat`) writes its escape into stdout in the
-        // CLI shell, which we render above.
+        // A future panel UI capability (image/video preview pane) may
+        // surface this. For now ignore — the underlying command
+        // (`imgcat`) writes its escape into stdout in the CLI shell,
+        // which we render above.
         return;
     }
     event satisfies never;

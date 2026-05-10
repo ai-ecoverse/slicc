@@ -205,7 +205,7 @@ describe('adaptTool', () => {
   });
 });
 
-describe('adaptTool — process manager wiring (Phase 3.4)', () => {
+describe('adaptTool — process manager wiring', () => {
   it('registers a kind:"tool" process and exits 0 on clean return', async () => {
     const { ProcessManager } = await import('../../src/kernel/process-manager.js');
     const pm = new ProcessManager();

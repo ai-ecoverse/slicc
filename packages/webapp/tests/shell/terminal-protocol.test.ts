@@ -2,8 +2,8 @@
  * Tests for the terminal protocol envelope types and guards.
  *
  * The runtime surface is small (two type-guards). The real value of
- * the file is the typed envelopes themselves, which Phase 2b step
- * 3+ uses to wire `terminal-view` (panel) ⇄ session bridge (worker).
+ * the file is the typed envelopes themselves, which wire
+ * `terminal-view` (panel) ⇄ session bridge (worker).
  */
 
 import { describe, it, expect } from 'vitest';

@@ -1,17 +1,11 @@
 /**
- * KernelTransport adapters over chrome.runtime — Phase 1.
- *
- * The bytes on the wire don't change: both sides still send and receive the
- * existing `ExtensionMessage` envelopes (`source: 'panel' | 'offscreen' |
- * 'service-worker'`, `payload`). What changes is the call site — the bridge
- * and client no longer reach for `chrome.runtime.onMessage` / `sendMessage`
- * directly; they go through this transport.
+ * KernelTransport adapters over chrome.runtime.
  *
  * Both adapters deliver the **raw envelope** (`ExtensionMessage`) to their
- * onMessage handler so the bridge / client can keep their existing
- * `msg.source` filter and the bridge can keep its `sprinkle-op-response`
- * peek logic without behavior change. Phase 2's MessageChannel transport
- * will follow the same shape.
+ * onMessage handler so the bridge / client can keep their `msg.source`
+ * filter and the bridge can keep its `sprinkle-op-response` peek logic.
+ * The MessageChannel transport (`transport-message-channel.ts`) follows
+ * the same shape.
  */
 
 import type { ExtensionMessage } from '../../../chrome-extension/src/messages.js';

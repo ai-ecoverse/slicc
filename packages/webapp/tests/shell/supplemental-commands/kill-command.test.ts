@@ -1,5 +1,5 @@
 /**
- * Tests for `kill` (Phase 4).
+ * Tests for `kill`.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -95,7 +95,7 @@ describe('kill command', () => {
     expect(result.stderr).toContain('already terminated');
   });
 
-  it('-STOP pauses the process gate (Phase 6)', async () => {
+  it('-STOP pauses the process gate', async () => {
     const pm = new ProcessManager();
     const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
     const cmd = createKillCommand({ processManager: pm });
@@ -105,7 +105,7 @@ describe('kill command', () => {
     expect(proc.abort.signal.aborted).toBe(false);
   });
 
-  it('-CONT resumes the process gate (Phase 6)', async () => {
+  it('-CONT resumes the process gate', async () => {
     const pm = new ProcessManager();
     const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
     pm.signal(proc.pid, 'SIGSTOP');

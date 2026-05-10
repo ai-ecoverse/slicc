@@ -2,12 +2,12 @@
  * `kill` — send a signal to a process tracked by the kernel
  * `ProcessManager`.
  *
- * Phase 6 added SIGSTOP / SIGCONT pause-and-resume support on top
- * of Phase 4's SIGINT / SIGTERM / SIGKILL. Default signal (no flag)
- * is `SIGTERM`, mirroring POSIX `kill(1)`. SIGSTOP and SIGCONT only
- * affect the kernel's cooperative `Gate` — they don't suspend
- * already-running JavaScript code. The terminal output emitter
- * (Phase 6.3) is the most-visible consumer.
+ * Supports SIGSTOP / SIGCONT pause-and-resume alongside SIGINT /
+ * SIGTERM / SIGKILL. Default signal (no flag) is `SIGTERM`,
+ * mirroring POSIX `kill(1)`. SIGSTOP and SIGCONT only affect the
+ * kernel's cooperative `Gate` — they don't suspend already-running
+ * JavaScript code. The terminal output emitter is the most-visible
+ * consumer.
  *
  * Argument forms:
  *   kill PID [PID …]               default SIGTERM
@@ -42,7 +42,7 @@ const SUPPORTED: Set<Signal> = new Set([
   'SIGINT',
   'SIGTERM',
   'SIGKILL',
-  // Phase 6 — pause/resume gate.
+  // pause/resume gate.
   'SIGSTOP',
   'SIGCONT',
 ]);
@@ -159,8 +159,8 @@ function parseSignal(name: string): Signal | Error {
 }
 
 function parseSignalShort(arg: string): Signal | Error {
-  // `-9` → SIGKILL. Phase 4 doesn't bother with the full POSIX
-  // numeric table — Phase 6 may add SIGSTOP=19 / SIGCONT=18 here.
+  // `-9` → SIGKILL. The full POSIX numeric table isn't supported;
+  // SIGSTOP=19 / SIGCONT=18 could be added here as a follow-up.
   if (arg === '-9') return 'SIGKILL';
   // `-INT`, `-TERM`, `-KILL`, `-SIGINT`, `-SIGTERM`, `-SIGKILL`.
   const tail = arg.slice(1);
@@ -178,9 +178,9 @@ Default signal: SIGTERM.
 Supported signals:
   SIGINT (-INT)    cooperative cancel — exit 130
   SIGTERM (-TERM)  cooperative cancel — exit 143 (default)
-  SIGKILL (-KILL)  cooperative cancel today; Phase 7 makes it
-                   actually preempt for kind:'preemptive' procs
-  SIGSTOP (-STOP)  pause the process's kernel Gate (Phase 6).
+  SIGKILL (-KILL)  cooperative cancel for cooperative procs;
+                   actually preempts kind:'preemptive' procs
+  SIGSTOP (-STOP)  pause the process's kernel Gate.
                    Subsequent IO boundaries (terminal output, …)
                    block until SIGCONT.
   SIGCONT (-CONT)  resume the gate.

@@ -1,9 +1,9 @@
 /**
  * `ProcMountBackend` — read-only `procfs`-shaped view of the kernel
- * `ProcessManager`. Phase 5.
+ * `ProcessManager`.
  *
- * Mounted at `/proc` by `createKernelHost` via the new
- * `mountInternal` API (Phase 5.2): not persisted, not visible in
+ * Mounted at `/proc` by `createKernelHost` via the
+ * `mountInternal` API: not persisted, not visible in
  * `mount list`, not visible to `RestrictedFS` (so scoops can't see
  * each other's processes). Layout:
  *
@@ -18,7 +18,7 @@
  *   - No `/proc/self`: requires `currentPid()` tracking, which
  *     needs `AsyncLocalStorage` or explicit per-call threading the
  *     kernel doesn't have today. Reads of `/proc/self/*` return
- *     ENOENT for now. (Documented; Phase 6+ may add it.)
+ *     ENOENT for now.
  *   - No `environ`, no `fd/`, no `task/`. The full Linux procfs
  *     surface is out of scope; just what `ps` and `kill` need to
  *     drive their views.
@@ -30,8 +30,7 @@
  *   - `pid 1` is synthesized as the kernel-host anchor: the
  *     parent of any orphan process. It has no `Process` record;
  *     reads of `/proc/1/*` return a fixed "kernel-host" payload.
- *     `ps`'s tree mode (Phase 4) treats untracked ppids as
- *     orphans, which Phase 5 keeps consistent.
+ *     `ps`'s tree mode treats untracked ppids as orphans.
  */
 
 import { FsError } from '../fs/types.js';

@@ -227,7 +227,7 @@ export class ScoopContext {
   /** Aborts the in-flight prompt() retry loop and any pending backoff sleep. */
   private promptAbortController: AbortController | null = null;
   /**
-   * Phase 3.3 — process manager. When set, `prompt()` registers a
+   * Process manager. When set, `prompt()` registers a
    * `kind:'scoop-turn'` process whose `Process.abort` is the same
    * controller as `promptAbortController`. `stop()` / `dispose()`
    * route through `pm.signal(pid, 'SIGINT')` so the recorded
@@ -347,12 +347,12 @@ export class ScoopContext {
         createBashTool(this.shell),
         ...scoopManagementTools,
       ];
-      // Phase 3.4: thread the process manager so each tool call
-      // registers a `kind:'tool'` process under the active
-      // scoop-turn (Phase 3.3). `getParentPid` is a closure over
-      // `currentTurnProcess` so the right turn's pid is always
-      // visible — tools fired between turns (e.g. proactive
-      // tool-use; rare) get `ppid: undefined` (defaults to 1).
+      // Thread the process manager so each tool call registers a
+      // `kind:'tool'` process under the active scoop-turn.
+      // `getParentPid` is a closure over `currentTurnProcess` so the
+      // right turn's pid is always visible — tools fired between
+      // turns (e.g. proactive tool-use; rare) get `ppid: undefined`
+      // (defaults to 1).
       const tools = this.processManager
         ? adaptTools(legacyTools, {
             processManager: this.processManager,
@@ -550,14 +550,13 @@ export class ScoopContext {
     this.isProcessing = true;
     this.setStatus('processing');
 
-    // Phase 3.3: register the scoop turn as a process. The
-    // `Process.abort` adopts `abortController` so existing callers
-    // that hold the controller (stop/dispose) keep working;
-    // `pm.signal(pid, …)` is the new path the future `kill` shell
-    // command will take. Truncate the prompt text to a reasonable
-    // length for `argv` (full text would be visible in
-    // `/proc/<pid>/cmdline` in Phase 5 — fine, but hundreds-of-KB
-    // prompts shouldn't blow up that file).
+    // Register the scoop turn as a process. The `Process.abort`
+    // adopts `abortController` so existing callers that hold the
+    // controller (stop/dispose) keep working; `pm.signal(pid, …)`
+    // is the path the `kill` shell command takes. Truncate the
+    // prompt text to a reasonable length for `argv` (full text
+    // would be visible in `/proc/<pid>/cmdline` — fine, but
+    // hundreds-of-KB prompts shouldn't blow up that file).
     const turnArgv = ['prompt', text.length > 200 ? text.slice(0, 197) + '…' : text];
     const turnProcess = this.processManager
       ? this.processManager.spawn({
@@ -719,11 +718,11 @@ export class ScoopContext {
 
   /** Stop the current agent operation and clear any queued prompts */
   stop(): void {
-    // Phase 3.3: route the abort through `pm.signal` first so the
-    // turn process records `terminatedBy: 'SIGINT'` before we abort
-    // the controller (the abort would still fire because `signal()`
-    // calls `controller.abort()` internally — but doing it via the
-    // manager keeps the recorded state consistent).
+    // Route the abort through `pm.signal` first so the turn
+    // process records `terminatedBy: 'SIGINT'` before we abort
+    // the controller (the abort would still fire because
+    // `signal()` calls `controller.abort()` internally — but
+    // doing it via the manager keeps the recorded state consistent).
     if (this.currentTurnProcess && this.processManager) {
       this.processManager.signal(this.currentTurnProcess.pid, 'SIGINT');
     } else {

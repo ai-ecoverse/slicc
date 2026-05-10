@@ -91,12 +91,11 @@ export class OffscreenBridge implements KernelFacade {
    * KernelTransport — defaults to the chrome.runtime adapter (lazily
    * constructed on first `emit()` so a `new OffscreenBridge()` doesn't
    * throw when imported in a context without `chrome.runtime`, e.g. a
-   * standalone DedicatedWorker). Phase 2 step 5+ allows passing a
-   * `MessageChannel`-backed transport into the constructor so the same
-   * `OffscreenBridge` runs worker-side. The transport delivers raw
-   * `ExtensionMessage` envelopes either way so the existing source
-   * filter and sprinkle-op-response peek (in `setupMessageListener`)
-   * stay intact.
+   * standalone DedicatedWorker). A `MessageChannel`-backed transport
+   * can be passed into the constructor so the same `OffscreenBridge`
+   * runs worker-side. The transport delivers raw `ExtensionMessage`
+   * envelopes either way so the existing source filter and
+   * sprinkle-op-response peek (in `setupMessageListener`) stay intact.
    */
   private _transport: KernelTransport<ExtensionMessage, OffscreenToPanelMessage> | null;
   /**
@@ -106,11 +105,11 @@ export class OffscreenBridge implements KernelFacade {
   private transportUnsubscribe: (() => void) | null = null;
 
   /**
-   * Phase 2: optional transport injection. If omitted (today's
-   * extension path), the bridge lazily constructs the chrome.runtime
-   * adapter on first emit/bind. If provided (forthcoming standalone
-   * kernel-worker path), the bridge uses the supplied transport and
-   * never touches chrome.runtime.
+   * Optional transport injection. If omitted (today's extension
+   * path), the bridge lazily constructs the chrome.runtime adapter
+   * on first emit/bind. If provided (standalone kernel-worker path),
+   * the bridge uses the supplied transport and never touches
+   * chrome.runtime.
    */
   constructor(transport?: KernelTransport<ExtensionMessage, OffscreenToPanelMessage>) {
     this._transport = transport ?? null;
@@ -889,8 +888,8 @@ export class OffscreenBridge implements KernelFacade {
         break;
       }
 
-      // Phase 2.7 polish: live localStorage sync from the page to the
-      // worker. In standalone-worker mode, the page intercepts its own
+      // Live localStorage sync from the page to the worker. In
+      // standalone-worker mode, the page intercepts its own
       // localStorage writes (and listens for storage events from other
       // tabs) and forwards them through the kernel transport. The
       // worker's `localStorage` is a Map-backed shim installed during

@@ -98,7 +98,7 @@ export class LocalMountBackend implements MountBackend {
 
     // The picker itself only ever runs on the panel side. Cone-driven
     // mounts route through `showToolUI` → dip click → panel's
-    // `handleDipPickerAction` (Phase 2b.6) → IDB. Standalone direct
+    // `handleDipPickerAction` → IDB. Standalone direct
     // pickers (no toolContext, no extension) need a real `window`,
     // which is checked inline at that branch. Worker contexts (kernel
     // worker) never hit the standalone branch — `toolContext` is

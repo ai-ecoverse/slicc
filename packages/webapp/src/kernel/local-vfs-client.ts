@@ -1,12 +1,11 @@
 /**
  * `LocalVfsClient` — read-only facade over the page's local VFS.
  *
- * Phase 2.7 polish 3. The plan calls for a thin façade so the
- * page-side panels (file-browser, memory) can read from the same
+ * The page-side panels (file-browser, memory) read from the same
  * IndexedDB the kernel worker uses, but **can't write** — writes
  * would diverge from the worker's view of the VFS. The worker
  * remains the canonical writer; future panel-initiated writes route
- * through `kernelClient.fs.*` RPCs (Phase 2.7b).
+ * through `kernelClient.fs.*` RPCs.
  *
  * Today the panels only read (`readDir`, `readFile`, `stat`), so the
  * facade is purely a type-system constraint. It's a structural

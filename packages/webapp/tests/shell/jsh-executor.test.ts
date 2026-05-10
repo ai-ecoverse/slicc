@@ -513,7 +513,7 @@ describe('exec bridge', () => {
   });
 });
 
-describe('jsh-executor — process manager wiring (Phase 3.5)', () => {
+describe('jsh-executor — process manager wiring', () => {
   it('registers a kind:"jsh" process for executeJshFile and exits with the script exit code', async () => {
     const { ProcessManager } = await import('../../src/kernel/process-manager.js');
     const pm = new ProcessManager();

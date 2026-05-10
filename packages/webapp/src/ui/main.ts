@@ -1387,7 +1387,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2.6d — standalone via kernel worker (opt-in, ?kernel-worker=1)
+// Standalone via kernel worker (opt-in, ?kernel-worker=1)
 //
 // The agent engine moves into a DedicatedWorker. The page keeps the UI,
 // the file-browser local VFS, and the WebSocket-backed `CDPClient`; the
@@ -1622,7 +1622,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   // supports it. The orchestrator-shim's `deleteQueuedMessage` is a
   // no-op for now.
   layout.panels.chat.setDeleteQueuedMessageCallback((_messageId) => {
-    log.warn('deleteQueuedMessage is a no-op in kernel-worker mode (Phase 2.6d limitation)');
+    log.warn('deleteQueuedMessage is a no-op in kernel-worker mode');
   });
 
   // Wait for the worker to finish boot. After this, request state so
@@ -1645,7 +1645,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     send: (msg) => client.sendRaw(msg),
   });
 
-  // Phase 2b step 6 — publish a tool-ui dispatch hook so the panel-side
+  // Publish a tool-ui dispatch hook so the panel-side
   // dip's button clicks route to the WORKER's `toolUIRegistry` over the
   // kernel transport, not the panel's empty registry. Without this,
   // every cone-driven dip (mount approval, confirm prompts, …) hangs
@@ -1660,7 +1660,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     client.sendRaw({ type: 'tool-ui-action', requestId, action, data });
   };
 
-  // Phase 2b step 5c — mount the panel terminal as a `RemoteTerminalView`
+  // Mount the panel terminal as a `RemoteTerminalView`
   // backed by the worker's `TerminalSessionHost`. Keystrokes assemble
   // into committed lines locally; Enter dispatches each line via
   // `terminal-exec` to the worker. Mount must run AFTER `host.ready`
@@ -1851,11 +1851,11 @@ async function main(): Promise<void> {
   }
 
   // Standalone — agent engine runs in a DedicatedWorker. The legacy
-  // inline-orchestrator path was removed once Phase 7 stabilized
-  // user-facing parity (panel terminal RPC, cone mount picker,
-  // process model). If we ever need to roll back, restore the
-  // pre-removal commit (see git log for "remove legacy inline-
-  // orchestrator path").
+  // inline-orchestrator path was removed once user-facing parity
+  // stabilized (panel terminal RPC, cone mount picker, process
+  // model). If we ever need to roll back, restore the pre-removal
+  // commit (see git log for "remove legacy inline-orchestrator
+  // path").
   return mainStandaloneWorker(app, runtimeMode === 'electron-overlay');
 }
 

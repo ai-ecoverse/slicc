@@ -19,8 +19,8 @@ type TerminalViewId = 'terminal' | 'preview';
  * on which one it has.
  *
  * The preview hooks are only used by `WasmShell`; a remote view
- * implements them as no-ops (Phase 2b.6 lands the panel-side
- * media-preview UI capability).
+ * implements them as no-ops (the panel-side media-preview UI
+ * capability is a follow-up).
  */
 export interface MountedTerminalShell {
   refit(): void;
@@ -79,7 +79,8 @@ export class TerminalPanel {
   /**
    * Connect a `RemoteTerminalView` (kernel-worker mode) and mount
    * its xterm into this panel. The remote view has no media-preview
-   * surface today — Phase 2b.6 wires that as a panel UI capability.
+   * surface today — wiring that as a panel UI capability is a
+   * follow-up.
    */
   async mountRemoteShell(view: RemoteTerminalView): Promise<void> {
     this.shell?.setPreviewStateListener?.(null);

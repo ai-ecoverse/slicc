@@ -56,8 +56,8 @@ export class VirtualFS {
    */
   private mountPoints = new Map<string, MountBackend>();
   /**
-   * Phase 5.2 — paths that were registered via `mountInternal` instead
-   * of the user-facing `mount()`. Hidden from `listMounts()` (so
+   * Paths that were registered via `mountInternal` instead of the
+   * user-facing `mount()`. Hidden from `listMounts()` (so
    * `RestrictedFS` can't see them, scoops can't browse them, and they
    * don't appear in `mount list` output) but still routed through
    * `mountPoints` for path resolution. Used today only for the
@@ -496,9 +496,7 @@ export class VirtualFS {
 
   /**
    * Reconstruct a `MountBackend` from a persisted descriptor. Used by
-   * BroadcastChannel peer sync. S3 / DA branches throw until Phase 11/12
-   * wire their reconstruction paths — peer instances of remote mounts skip
-   * gracefully.
+   * BroadcastChannel peer sync.
    */
   private async reconstructBackendFromDescriptor(
     descriptor: BackendDescriptor
@@ -551,19 +549,18 @@ export class VirtualFS {
   }
 
   /**
-   * Return internal mount paths (Phase 5.2). For introspection /
-   * debugging only; not exposed to `RestrictedFS` or `mount list`.
+   * Return internal mount paths. For introspection / debugging
+   * only; not exposed to `RestrictedFS` or `mount list`.
    */
   listInternalMounts(): string[] {
     return [...this.internalMounts];
   }
 
   /**
-   * Phase 5.2 — register a backend at `absolutePath` without
-   * persistence or peer-sync. Used by the kernel for `/proc`
-   * (Phase 5.3) and reserved for any future kernel-only mount
-   * (`/dev`, `/sys`, …) that should not be visible to scoops or
-   * survive a reload.
+   * Register a backend at `absolutePath` without persistence or
+   * peer-sync. Used by the kernel for `/proc` and reserved for
+   * any future kernel-only mount (`/dev`, `/sys`, …) that should
+   * not be visible to scoops or survive a reload.
    *
    * Differences from `mount()`:
    *   - skips `saveMountEntry` (no IDB row);

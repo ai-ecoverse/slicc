@@ -78,19 +78,19 @@ export async function parseToolResultContent(
 }
 
 /**
- * Phase 3.4 — optional process-tracking config for `adaptTool` /
- * `adaptTools`. When supplied, every tool execution registers a
- * `kind:'tool'` process whose `Process.abort` is wired to the
- * `signal` passed by the agent loop. The process exits with 0 on
- * clean return, the signal-derived code (130 SIGINT, 143 SIGTERM,
- * …) on abort, and 1 on a thrown error.
+ * Optional process-tracking config for `adaptTool` / `adaptTools`.
+ * When supplied, every tool execution registers a `kind:'tool'`
+ * process whose `Process.abort` is wired to the `signal` passed by
+ * the agent loop. The process exits with 0 on clean return, the
+ * signal-derived code (130 SIGINT, 143 SIGTERM, …) on abort, and
+ * 1 on a thrown error.
  *
  * `getParentPid` returns the parent scoop-turn pid the tool runs
  * under. `ScoopContext` provides a closure that reads the current
  * turn's pid; tests can return any pid. When the closure returns
  * `undefined`, the manager defaults `ppid` to 1 (kernel-host
- * anchor) — Phase 4's `ps -T` would show the tool as an orphan
- * but it'd still be visible.
+ * anchor) — `ps -T` would show the tool as an orphan but it'd
+ * still be visible.
  */
 export interface ToolAdapterProcessConfig {
   processManager: ProcessManager;
@@ -122,11 +122,11 @@ export function adaptTool(
         ctx = pushToolExecutionContext({ onUpdate, toolName: tool.name, toolCallId });
       }
 
-      // Phase 3.4: spawn a `kind:'tool'` process. The agent's
-      // `signal` is the source of truth for cancellation; we mirror
-      // it onto the process via `pm.signal(pid, 'SIGINT')` so the
-      // recorded `terminatedBy` and the conventional 130 exit code
-      // flow back into the table when the tool throws.
+      // Spawn a `kind:'tool'` process. The agent's `signal` is the
+      // source of truth for cancellation; we mirror it onto the
+      // process via `pm.signal(pid, 'SIGINT')` so the recorded
+      // `terminatedBy` and the conventional 130 exit code flow
+      // back into the table when the tool throws.
       //
       // The tool's principal string param (the bash command, the
       // file path, …) is appended to argv so `ps` surfaces a
@@ -156,8 +156,8 @@ export function adaptTool(
         }
       }
       if (proc && pmConfig) {
-        // SIGKILL force-exit (Phase 7+ follow-up). Tools that hang
-        // on UI gestures (mount waiting for a folder picker) or any
+        // SIGKILL force-exit. Tools that hang on UI gestures
+        // (mount waiting for a folder picker) or any
         // non-cooperatively-cancellable async step keep the proc
         // record stuck in `running` until the underlying promise
         // settles — which can be never. Subscribing to
@@ -166,7 +166,7 @@ export function adaptTool(
         // still leaks (we have no way to forcibly cancel an
         // arbitrary tool's awaits), but at least `ps` reflects
         // reality and the agent's tool-call view sees an exit.
-        // Phase 8 candidate: thread the signal through showToolUI
+        // Follow-up candidate: thread the signal through showToolUI
         // so the leak goes away too.
         unsubKill = pmConfig.processManager.onSignal((signaled, sig) => {
           if (signaled.pid !== proc.pid || sig !== 'SIGKILL') return;

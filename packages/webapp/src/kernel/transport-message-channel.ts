@@ -1,5 +1,5 @@
 /**
- * KernelTransport over a MessagePort — Phase 2.
+ * KernelTransport over a MessagePort.
  *
  * In standalone, the kernel host runs in a DedicatedWorker spawned by the
  * page. The page and the worker each hold one end of a `MessageChannel`
@@ -83,7 +83,7 @@ export interface MessagePortLike {
 }
 
 // ---------------------------------------------------------------------------
-// Bridge-shaped MessageChannel helpers (Phase 2 step 5)
+// Bridge-shaped MessageChannel helpers
 //
 // The standalone kernel-worker uses an `OffscreenBridge` over a
 // `MessageChannel` instead of `chrome.runtime`. The bridge code expects
