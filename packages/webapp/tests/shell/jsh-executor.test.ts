@@ -316,25 +316,11 @@ describe('executeJshFile', () => {
     expect(result.stdout).toContain('not pre-loaded');
   });
 
-  it('require returns pre-cached module', async () => {
-    // Pre-populate cache before execution
-    const { nodeRuntimeState } = await import('../../src/shell/supplemental-commands/shared.js');
-    nodeRuntimeState.__requireCache = Object.create(null);
-    (nodeRuntimeState.__requireCache as Record<string, unknown>)['test-sentinel-pkg'] = {
-      hello: 'world',
-    };
-
-    const ctx = createMockCtx({
-      '/workspace/req-cached.jsh':
-        'const mod = require("test-sentinel-pkg"); console.log(JSON.stringify(mod));',
-    });
-    const result = await executeJshFile('/workspace/req-cached.jsh', [], ctx);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('{"hello":"world"}');
-
-    // Clean up
-    delete nodeRuntimeState.__requireCache;
-  });
+  // Phase-8 removed the kernel-side `nodeRuntimeState.__requireCache`.
+  // Each realm task fetches its own modules via esm.sh; there's no
+  // shared cache to pre-populate from outside the realm. The
+  // require-pre-loaded path is covered by the negative test above
+  // (`require throws for non-pre-scanned dynamic specifiers`).
 
   it('require("fs") returns the fs bridge', async () => {
     const ctx = createMockCtx({

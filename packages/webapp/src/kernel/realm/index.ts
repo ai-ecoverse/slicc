@@ -15,6 +15,8 @@ export { attachRealmHost, type RealmHostHandle } from './realm-host.js';
 export { RealmRpcClient, type RealmPortLike } from './realm-rpc.js';
 export { createDefaultRealmFactory, resolvePyodideIndexURL } from './realm-factory.js';
 export { createIframeRealm, type RealmIframeOptions } from './realm-iframe.js';
+export { createInProcessJsRealmFactory } from './realm-inprocess.js';
+export { runJsRealm } from './js-realm-shared.js';
 export type {
   RealmKind,
   RealmInitMsg,
