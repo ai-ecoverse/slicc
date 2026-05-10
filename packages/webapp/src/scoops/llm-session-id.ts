@@ -43,10 +43,28 @@ function safeLocalStorage(): Storage | null {
   }
 }
 
-function getDailyUuid(coneJid: string): string {
+/**
+ * Daily-rotated UUID anchored to a free-form key. Shared across every
+ * Adobe `X-Session-Id` producer in the codebase so rotation cadence
+ * and fallback semantics stay identical:
+ *
+ *  - Keyed on `DAILY_UUID_KEY_PREFIX + anchor` in `localStorage` when
+ *    available.
+ *  - Falls through to an in-memory `Map` when storage is locked or
+ *    unavailable. The in-memory cache rotates on the next call past
+ *    UTC midnight, exactly like the persisted path.
+ *  - Returns a fresh `crypto.randomUUID()` if both reads/writes fail,
+ *    so the caller still gets a usable id (worst case: the id rotates
+ *    every call).
+ *
+ * Anchors are arbitrary identifying strings — a scoop's cone JID for
+ * scoop traffic, a fixed sentinel like `'ui-quick-llm'` for ad-hoc UI
+ * label calls.
+ */
+export function getDailyAdobeUuid(anchor: string): string {
   const today = todayUtc();
   const storage = safeLocalStorage();
-  const key = DAILY_UUID_KEY_PREFIX + coneJid;
+  const key = DAILY_UUID_KEY_PREFIX + anchor;
 
   if (storage) {
     let raw: string | null = null;
@@ -72,10 +90,10 @@ function getDailyUuid(coneJid: string): string {
     return uuid;
   }
 
-  const cached = inMemoryFallback.get(coneJid);
+  const cached = inMemoryFallback.get(anchor);
   if (cached && cached.date === today) return cached.uuid;
   const uuid = crypto.randomUUID();
-  inMemoryFallback.set(coneJid, { uuid, date: today });
+  inMemoryFallback.set(anchor, { uuid, date: today });
   return uuid;
 }
 
@@ -99,7 +117,7 @@ export async function getAdobeSessionId(
   coneJid: string | undefined
 ): Promise<string> {
   const anchor = coneJid ?? scoop.jid;
-  const uuid = getDailyUuid(anchor);
+  const uuid = getDailyAdobeUuid(anchor);
   if (scoop.isCone) return uuid;
   const folderHash = await hashFolder(scoop.folder, uuid);
   return `${uuid}/${folderHash}`;
