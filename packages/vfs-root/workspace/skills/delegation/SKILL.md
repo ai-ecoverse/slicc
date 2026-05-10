@@ -30,6 +30,29 @@ Do it yourself when:
 - Real-time adaptation needed (navigating broken URLs).
 - Overhead of spawning exceeds benefit.
 
+## Brief for authority, not for execution
+
+The most common delegation failure is **the cone doing too much pre-work before delegating**. The cone researches the topic, makes the design decisions, picks the approach, and then hands the scoop a pre-cooked plan to type out. This is bad on three axes:
+
+- **Pollutes the scoop's context.** The brief is bloated with conclusions the scoop now has to re-derive an opinion on, instead of facts it can act on.
+- **Strips the scoop of autonomy.** A scoop that's been told what to think can't push back on a bad call or notice a better path mid-task. You get a typist, not a collaborator.
+- **Wastes the cone's tokens.** The cone's strength is orchestration — picking the right scoops, synthesizing their outputs. Doing the research itself burns the cone's context on work that's parallelizable.
+
+**Heuristic: if the cone reads files, runs commands, or makes decisions before delegating, that should have been part of the scoop's brief.** Hand the scoop the question, the constraints, and the access — let it decide.
+
+| Bad (cone over-prepares)                                                                        | Good (scoop decides)                                                                                                                            |
+| ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cone reads 5 files, picks an approach, tells scoop "implement approach X in file Y."            | Scoop is told "the user wants Z; the relevant code is under `/workspace/src/`. Pick an approach and implement it."                              |
+| Cone scrapes 3 docs, summarizes, then asks scoop to "write a comparison based on this summary." | Scoop is told "compare libraries A, B, C for this use case. Their docs are at <urls>. Decide and write the comparison."                         |
+| Cone debugs a failure, isolates the bug, then asks scoop to "fix the off-by-one in line 42."    | Scoop is told "this command fails with `<output>`. Find and fix the bug." (Even better: a one-shot `agent` for cheap, deterministic bug-fixes.) |
+
+Two carve-outs where pre-work IS the cone's job:
+
+1. **Routing decisions.** Picking which scoop gets which slice of a fan-out is orchestration, not pre-cooking.
+2. **Synthesis after the fact.** Reading scoop outputs to combine them is the cone's whole point.
+
+If a scoop comes back with a wrong call, **drop it and re-spawn with a better brief** — don't feed a correction. Corrections compound the autonomy problem.
+
 ## Scoop lifecycle
 
 Drop scoops when done — but **NEVER drop a scoop that owns a sprinkle**.
@@ -84,6 +107,81 @@ agent . '*' 'Summarize the README in one sentence.' --model claude-haiku-4-5
 ```
 
 For dip and sprinkle interaction patterns built on `agent`, see `/workspace/skills/dips/SKILL.md` and `/workspace/skills/sprinkles/SKILL.md`.
+
+## Shaping the scoop's sandbox: `visiblePaths`, `writablePaths`, `allowedCommands`
+
+`scoop_scoop` accepts three sandbox-shaping parameters. **They are how you give a scoop authority — by widening or narrowing what it can read, write, and run.** A scoop that can't reach the files it needs has no autonomy; pre-cooking the brief is what you do to compensate. Get the sandbox right and the brief gets shorter.
+
+| Param             | What it controls                       | Default                                | Pure replace? |
+| ----------------- | -------------------------------------- | -------------------------------------- | ------------- |
+| `visiblePaths`    | Read-only VFS paths the scoop can SEE  | `["/workspace/"]`                      | Yes           |
+| `writablePaths`   | VFS paths the scoop can READ AND WRITE | `["/scoops/<folder>/", "/shared/"]`    | Yes           |
+| `allowedCommands` | Shell command allow-list               | unrestricted (every built-in + `.jsh`) | Yes           |
+
+"Pure replace" means what you set is what you get — the value isn't merged with the default. Pass `[]` to drop it entirely. Trailing slashes recommended on path entries (e.g. `/shared/data/`).
+
+Subtleties:
+
+- **`writablePaths` are always readable too.** A true read-nothing sandbox needs both `visiblePaths: []` AND `writablePaths: []`.
+- **Mounts remain readable regardless** of `visiblePaths`. `mount` overlays are always visible — that's how scoops can work against a mounted S3 bucket or DA repo without you naming the path explicitly.
+- **`allowedCommands` applies recursively** — pipelines, command substitutions, and network commands are all gated. Pass `["*"]` for explicit unrestricted.
+
+### How to choose
+
+Ask three questions, in order:
+
+1. **What does the scoop need to read?** Files it must consume — source tree, docs, mounted data — go in `visiblePaths`. Default `/workspace/` is fine for most "do something in the project" briefs. Add specific paths (`/shared/data/`, `/mnt/da/`) for narrower scopes.
+2. **What is it allowed to change?** Output dirs, the file it's editing, the sprinkle path it owns. Default writable scratch (`/scoops/<folder>/`) plus `/shared/` is fine for scoops producing artifacts. **Tighten this when the scoop should not modify production code** — e.g. a research scoop with `writablePaths: ["/scoops/<folder>/"]` only.
+3. **What commands does it need?** Default unrestricted is right when the scoop will figure out its own toolchain. Tighten only when narrowing to a known set of tools improves reliability or safety — e.g. a scraper with `["curl","jq"]`, or a refactor scoop with `["rg","sed","node"]`.
+
+### Patterns
+
+```
+# Default sandbox: full project, own scratch dir, all commands.
+# Right for most "do this in the project" briefs.
+scoop_scoop({ name: "fix-bug", prompt: "..." })
+
+# Read-only research scoop. Can read everything, can't change anything,
+# can use whatever commands it needs to investigate.
+scoop_scoop({
+  name: "auth-research",
+  visiblePaths: ["/workspace/", "/shared/"],
+  writablePaths: ["/scoops/auth-research/"],
+  prompt: "Map the auth flow across the codebase and write findings to /scoops/auth-research/notes.md."
+})
+
+# Sprinkle-owning scoop. Needs write access to its sprinkle path.
+scoop_scoop({
+  name: "giro-winners",
+  writablePaths: ["/scoops/giro-winners/", "/shared/sprinkles/giro-winners/"],
+  prompt: "..."
+})
+
+# Tight scraper. Only sees public docs, only runs network/json tools,
+# writes to its own scratch.
+scoop_scoop({
+  name: "scraper",
+  visiblePaths: [],
+  writablePaths: ["/scoops/scraper/"],
+  allowedCommands: ["curl", "jq", "rg"],
+  prompt: "Fetch <urls>, extract the price field from each, write a CSV to /scoops/scraper/out.csv."
+})
+
+# Mount-only scoop. Sees just the DA mount, can write back to it.
+# Mount overlays remain readable regardless of visiblePaths.
+scoop_scoop({
+  name: "da-editor",
+  visiblePaths: [],
+  writablePaths: ["/mnt/da/", "/scoops/da-editor/"],
+  prompt: "Edit /mnt/da/index.html to ..."
+})
+```
+
+### Don't
+
+- Don't widen `writablePaths` "just in case." A scoop with surprise write access can clobber files outside its task — drop and re-spawn with a tighter scope is cheaper than recovering from that.
+- Don't narrow `allowedCommands` to "look secure" if you don't know which commands the scoop will need. The agent will hit a wall mid-task and either lie ("I'll skip that step") or spam tool errors.
+- Don't forget the `writablePaths`-also-readable rule. `visiblePaths: []` alone does not produce a blind sandbox.
 
 ## Parallel orchestration: `scoop_mute` / `scoop_unmute` / `scoop_wait`
 
