@@ -222,6 +222,14 @@ export default defineConfig(({ mode }) => ({
           }
         });
 
+        // Note: `src/kernel/kernel-worker.ts` is loaded via Vite's
+        // native `new Worker(new URL('./kernel-worker.ts',
+        // import.meta.url), { type: 'module' })` pattern in
+        // `kernel/spawn.ts`. Vite handles dev serving and production
+        // bundling through the same Rollup pipeline that resolves
+        // `resolve.alias` and the `stub-pi-node-internals` resolveId
+        // plugin — no dev middleware or closeBundle entry needed.
+
         server.middlewares.use('/lucide-icons.js', async (_req, res) => {
           try {
             const esbuild = await import('esbuild');
@@ -331,6 +339,12 @@ export default defineConfig(({ mode }) => ({
           minify: true,
           define: { __DEV__: 'false', global: 'globalThis' },
         });
+
+        // Note: `kernel-worker.ts` rides the Rollup pipeline via
+        // Vite's native `new Worker(new URL(...), { type: 'module' })`
+        // detection in `kernel/spawn.ts`. The `resolve.alias` map and
+        // the `stub-pi-node-internals` resolveId plugin above apply to
+        // the worker bundle for free. No standalone esbuild call needed.
         copyFileSync(
           resolve(__dirname, '../assets/logos/favicon.png'),
           resolve(uiOutDir, 'favicon.png')

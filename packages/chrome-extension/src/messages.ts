@@ -7,6 +7,10 @@
 
 import type { ScoopTabState } from './types.js';
 import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
+import type {
+  TerminalControlMsg,
+  TerminalEventMsg,
+} from '../../webapp/src/shell/terminal-protocol.js';
 
 // ---------------------------------------------------------------------------
 // Side Panel → Offscreen (via service worker relay)
@@ -137,6 +141,33 @@ export interface ToolUIActionMsg {
   data?: unknown;
 }
 
+/**
+ * Live `localStorage` sync. The standalone kernel worker has no
+ * real `localStorage`; it runs on a Map-backed shim seeded from
+ * the page's `localStorage` snapshot at boot
+ * (`KernelWorkerInitMsg.localStorageSeed`). After boot, page-side
+ * writes need to keep flowing to the worker so changes the user
+ * makes (e.g. swapping providers, updating model selection) are
+ * visible to the agent immediately.
+ *
+ * Extension mode never sends these — the side panel and offscreen
+ * share the extension origin's `localStorage` natively.
+ */
+export interface LocalStorageSetMsg {
+  type: 'local-storage-set';
+  key: string;
+  value: string;
+}
+
+export interface LocalStorageRemoveMsg {
+  type: 'local-storage-remove';
+  key: string;
+}
+
+export interface LocalStorageClearMsg {
+  type: 'local-storage-clear';
+}
+
 export type PanelToOffscreenMessage =
   | UserMessageMsg
   | ConeCreateMsg
@@ -154,7 +185,14 @@ export type PanelToOffscreenMessage =
   | OAuthRequestMsg
   | SprinkleLickMsg
   | ReloadSkillsMsg
-  | ToolUIActionMsg;
+  | ToolUIActionMsg
+  | LocalStorageSetMsg
+  | LocalStorageRemoveMsg
+  | LocalStorageClearMsg
+  // Panel-driven terminal session control. Routed by the worker's
+  // `TerminalSessionHost`, ignored by `OffscreenBridge`. The full
+  // envelope shape lives in `terminal-protocol.ts`.
+  | TerminalControlMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)
@@ -390,7 +428,10 @@ export type OffscreenToPanelMessage =
   | ScoopMessagesReplacedMsg
   | PanelCdpResponseMsg
   | OAuthResultMsg
-  | TrayRuntimeStatusMsg;
+  | TrayRuntimeStatusMsg
+  // Terminal session events emitted by the worker's `TerminalSessionHost`.
+  // Consumed by the panel's `TerminalSessionClient`.
+  | TerminalEventMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen ↔ Service Worker (CDP proxy)

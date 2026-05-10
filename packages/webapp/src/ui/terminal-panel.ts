@@ -6,8 +6,31 @@
  */
 
 import type { WasmShell } from '../shell/index.js';
+import type { RemoteTerminalView } from '../kernel/remote-terminal-view.js';
 
 type TerminalViewId = 'terminal' | 'preview';
+
+/**
+ * Structural superset of `WasmShell` and `RemoteTerminalView` —
+ * the methods this panel actually invokes. Lets the panel host
+ * either an inline `WasmShell` (default standalone / extension)
+ * or a `RemoteTerminalView` driven by a worker-side
+ * `TerminalSessionHost` (`?kernel-worker=1`) without branching
+ * on which one it has.
+ *
+ * The preview hooks are only used by `WasmShell`; a remote view
+ * implements them as no-ops (the panel-side media-preview UI
+ * capability is a follow-up).
+ */
+export interface MountedTerminalShell {
+  refit(): void;
+  clearTerminal(): void;
+  executeCommandInTerminal(
+    command: string
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  dispose(): void;
+  setPreviewStateListener?(listener: ((hasPreview: boolean) => void) | null): void;
+}
 
 export interface TerminalPanelOptions {
   onClearTerminal?: () => void;
@@ -19,7 +42,7 @@ export class TerminalPanel {
   private previewViewEl!: HTMLElement;
   private previewEmptyEl!: HTMLElement;
   private previewBtn!: HTMLButtonElement;
-  private shell: WasmShell | null = null;
+  private shell: MountedTerminalShell | null = null;
   private activeView: TerminalViewId = 'terminal';
   private onClearTerminal: (() => void) | null;
 
@@ -31,7 +54,7 @@ export class TerminalPanel {
 
   /** Connect a WasmShell and mount the terminal into this panel. */
   async mountShell(shell: WasmShell): Promise<void> {
-    this.shell?.setPreviewStateListener(null);
+    this.shell?.setPreviewStateListener?.(null);
     this.shell = shell;
 
     const mountEl = document.createElement('div');
@@ -51,6 +74,32 @@ export class TerminalPanel {
     this.previewViewEl.appendChild(previewHost);
 
     shell.setPreviewStateListener((hasPreview) => this.handlePreviewStateChange(hasPreview));
+  }
+
+  /**
+   * Connect a `RemoteTerminalView` (kernel-worker mode) and mount
+   * its xterm into this panel. The remote view has no media-preview
+   * surface today — wiring that as a panel UI capability is a
+   * follow-up.
+   */
+  async mountRemoteShell(view: RemoteTerminalView): Promise<void> {
+    this.shell?.setPreviewStateListener?.(null);
+    this.shell = view;
+
+    const mountEl = document.createElement('div');
+    mountEl.className = 'terminal-panel__mount';
+    this.terminalViewEl.appendChild(mountEl);
+
+    await view.mount(mountEl);
+
+    const terminalHost = mountEl.querySelector<HTMLElement>('.terminal-panel__terminal-host');
+    if (!terminalHost) {
+      throw new Error('remote terminal mount did not create expected host');
+    }
+    this.terminalViewEl.replaceChildren(terminalHost);
+    // Preview tab disabled — keep the empty-state sentinel.
+    this.previewViewEl.replaceChildren(this.previewEmptyEl);
+    this.handlePreviewStateChange(false);
   }
 
   /** Clear the terminal screen. */
@@ -160,7 +209,7 @@ export class TerminalPanel {
 
   /** Dispose the panel and shell. */
   dispose(): void {
-    this.shell?.setPreviewStateListener(null);
+    this.shell?.setPreviewStateListener?.(null);
     this.shell?.dispose();
     this.container.innerHTML = '';
   }

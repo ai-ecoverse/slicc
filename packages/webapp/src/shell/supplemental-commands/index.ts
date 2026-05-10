@@ -38,8 +38,11 @@ import { createModelsCommand } from './models-command.js';
 import { createCostCommand } from './cost-command.js';
 import { createNukeCommand } from './nuke-command.js';
 import { createAgentCommand } from './agent-command.js';
+import { createPsCommand } from './ps-command.js';
+import { createKillCommand } from './kill-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { ScriptCatalog } from '../script-catalog.js';
+import type { ProcessManager } from '../../kernel/process-manager.js';
 export type {
   ImgcatCommandOptions as SupplementalCommandOptions,
   MediaPreviewItem,
@@ -62,6 +65,13 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    * (the terminal panel's standalone WasmShell).
    */
   getParentJid?: () => string | undefined;
+  /**
+   * Process manager threaded into `ps` / `kill`. When omitted,
+   * those commands fall back to `globalThis.__slicc_pm`
+   * (published by `createKernelHost`). Tests prefer DI; production
+   * works with either.
+   */
+  processManager?: ProcessManager;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -105,6 +115,8 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createCostCommand(),
     createNukeCommand(),
     createAgentCommand({ getParentJid: options.getParentJid }),
+    createPsCommand({ processManager: options.processManager }),
+    createKillCommand({ processManager: options.processManager }),
   ];
 
   // Extension-only commands

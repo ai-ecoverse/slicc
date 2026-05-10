@@ -204,3 +204,232 @@ describe('adaptTool', () => {
     expect(blocks[1].data.length).toBe(200000);
   });
 });
+
+describe('adaptTool — process manager wiring', () => {
+  it('registers a kind:"tool" process and exits 0 on clean return', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    const mockTool: ToolDefinition = {
+      name: 'read_file',
+      description: 'read',
+      inputSchema: { type: 'object' },
+      async execute() {
+        return { content: 'ok', isError: false };
+      },
+    };
+    const adapted = adaptTool(mockTool, {
+      processManager: pm,
+      owner: { kind: 'cone' },
+      getParentPid: () => 2000,
+    });
+    await adapted.execute('call-1', {});
+    const procs = pm.list();
+    expect(procs).toHaveLength(1);
+    expect(procs[0].kind).toBe('tool');
+    expect(procs[0].argv[0]).toBe('read_file');
+    expect(procs[0].ppid).toBe(2000);
+    expect(procs[0].exitCode).toBe(0);
+    expect(procs[0].status).toBe('exited');
+  });
+
+  it('exits 1 when the tool returns isError', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    const mockTool: ToolDefinition = {
+      name: 'bash',
+      description: 'bash',
+      inputSchema: { type: 'object' },
+      async execute() {
+        return { content: 'fail', isError: true };
+      },
+    };
+    const adapted = adaptTool(mockTool, {
+      processManager: pm,
+      owner: { kind: 'cone' },
+    });
+    await adapted.execute('call-1', {});
+    expect(pm.list()[0].exitCode).toBe(1);
+  });
+
+  it('mirrors the agent signal onto the process abort', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    let observedSignal: AbortSignal | undefined;
+    const mockTool: ToolDefinition = {
+      name: 'sleep-tool',
+      description: 'sleep',
+      inputSchema: { type: 'object' },
+      async execute(_p, signal) {
+        observedSignal = signal;
+        return { content: 'done', isError: false };
+      },
+    };
+    const adapted = adaptTool(mockTool, {
+      processManager: pm,
+      owner: { kind: 'cone' },
+    });
+    const upstream = new AbortController();
+    await adapted.execute('call-1', {}, upstream.signal);
+    expect(observedSignal).toBeDefined();
+    expect(observedSignal!.aborted).toBe(false);
+    expect(pm.list()[0].exitCode).toBe(0);
+  });
+
+  it('SIGKILL force-exits a hung tool to status killed/137 even if the promise never settles', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    let releaseHang: (() => void) | null = null;
+    const mockTool: ToolDefinition = {
+      name: 'mount',
+      description: 'mount',
+      inputSchema: { type: 'object' },
+      async execute() {
+        // Hang forever — simulates `mount` waiting on a folder
+        // picker that the user never resolves. Even SIGINT on the
+        // signal doesn't unhang us (the bug we're papering over —
+        // the underlying showToolUI await isn't signal-aware).
+        await new Promise<void>((resolve) => {
+          releaseHang = resolve;
+        });
+        return { content: '', isError: false };
+      },
+    };
+    const adapted = adaptTool(mockTool, {
+      processManager: pm,
+      owner: { kind: 'cone' },
+    });
+    const upstream = new AbortController();
+    void adapted.execute('id', { command: 'mount /mnt/x' }, upstream.signal);
+    // Let the spawn land.
+    await new Promise((r) => setTimeout(r, 5));
+    const proc = pm.list()[0];
+    expect(proc.kind).toBe('tool');
+    expect(proc.status).toBe('running');
+    // Operator escalates to SIGKILL — proc record flips to
+    // killed/137 immediately, even though the underlying promise
+    // is still hanging.
+    pm.signal(proc.pid, 'SIGKILL');
+    expect(proc.status).toBe('killed');
+    expect(proc.exitCode).toBe(137);
+    expect(proc.terminatedBy).toBe('SIGKILL');
+    // Cleanup so the test process exits cleanly.
+    releaseHang?.();
+  });
+
+  it('exits 130 when the upstream signal aborts mid-execute', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    const mockTool: ToolDefinition = {
+      name: 'sleep-tool',
+      description: 'sleep',
+      inputSchema: { type: 'object' },
+      async execute(_p, signal) {
+        await new Promise<void>((resolve, reject) => {
+          const t = setTimeout(resolve, 1000);
+          signal?.addEventListener('abort', () => {
+            clearTimeout(t);
+            reject(new Error('aborted'));
+          });
+        });
+        return { content: '', isError: false };
+      },
+    };
+    const adapted = adaptTool(mockTool, {
+      processManager: pm,
+      owner: { kind: 'cone' },
+    });
+    const upstream = new AbortController();
+    const p = adapted.execute('call-1', {}, upstream.signal);
+    setTimeout(() => upstream.abort(), 20);
+    await expect(p).rejects.toThrow('aborted');
+    const proc = pm.list()[0];
+    expect(proc.exitCode).toBe(130);
+    expect(proc.status).toBe('killed');
+  });
+
+  it('does not register processes when no manager is wired (backwards compatible)', async () => {
+    const mockTool: ToolDefinition = {
+      name: 'read_file',
+      description: 'read',
+      inputSchema: { type: 'object' },
+      async execute() {
+        return { content: 'ok', isError: false };
+      },
+    };
+    const adapted = adaptTool(mockTool);
+    const result = await adapted.execute('call-1', {});
+    expect(result.details?.isError).toBe(false);
+  });
+
+  describe('argv surfaces the tool argument', () => {
+    async function runWithParams(
+      toolName: string,
+      params: Record<string, unknown>
+    ): Promise<readonly string[]> {
+      const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+      const pm = new ProcessManager();
+      const tool: ToolDefinition = {
+        name: toolName,
+        description: '',
+        inputSchema: { type: 'object' },
+        async execute() {
+          return { content: '', isError: false };
+        },
+      };
+      const adapted = adaptTool(tool, {
+        processManager: pm,
+        owner: { kind: 'cone' },
+      });
+      await adapted.execute('id', params);
+      return pm.list()[0].argv;
+    }
+
+    it('appends `command` for the bash tool', async () => {
+      const argv = await runWithParams('bash', { command: 'date && sleep 90 && date' });
+      expect(argv).toEqual(['bash', 'date && sleep 90 && date']);
+    });
+
+    it('appends `path` for read_file', async () => {
+      const argv = await runWithParams('read_file', { path: '/workspace/foo.ts' });
+      expect(argv).toEqual(['read_file', '/workspace/foo.ts']);
+    });
+
+    it('prefers `file_path` over `path` when both exist', async () => {
+      const argv = await runWithParams('edit_file', {
+        file_path: '/a',
+        path: '/b',
+      });
+      expect(argv).toEqual(['edit_file', '/a']);
+    });
+
+    it('falls back to the first non-empty string param when no preferred field matches', async () => {
+      const argv = await runWithParams('exotic', {
+        flag: true,
+        count: 7,
+        whatever: 'pick-me',
+      });
+      expect(argv).toEqual(['exotic', 'pick-me']);
+    });
+
+    it('returns just the tool name when no string params are present', async () => {
+      const argv = await runWithParams('zero', { count: 7 });
+      expect(argv).toEqual(['zero']);
+    });
+
+    it('returns just the tool name when params is null / undefined', async () => {
+      const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+      const pm = new ProcessManager();
+      const tool: ToolDefinition = {
+        name: 'noargs',
+        description: '',
+        inputSchema: { type: 'object' },
+        async execute() {
+          return { content: '', isError: false };
+        },
+      };
+      const adapted = adaptTool(tool, { processManager: pm, owner: { kind: 'cone' } });
+      await adapted.execute('id', null);
+      expect(pm.list()[0].argv).toEqual(['noargs']);
+    });
+  });
+});

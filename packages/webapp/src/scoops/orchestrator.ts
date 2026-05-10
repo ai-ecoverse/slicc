@@ -25,6 +25,7 @@ import { VirtualFS, FsWatcher } from '../fs/index.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
+import type { ProcessManager } from '../kernel/process-manager.js';
 import { buildActiveLicksError, type LickManager } from './lick-manager.js';
 import { SessionStore } from '../core/session.js';
 import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
@@ -113,7 +114,7 @@ export class Orchestrator {
   private container: HTMLElement;
   private callbacks: OrchestratorCallbacks;
   private config: AssistantConfig;
-  private pollInterval: number | null = null;
+  private pollInterval: ReturnType<typeof setInterval> | null = null;
   private scheduler: TaskScheduler | null = null;
   private globalMemoryCache: string = '';
   private sharedFs: VirtualFS | null = null;
@@ -163,6 +164,15 @@ export class Orchestrator {
    * mid-wait.
    */
   private completionWaiters: Map<string, Array<(summary: string | null) => void>> = new Map();
+  /**
+   * Process manager threaded into each `ScoopContext` so prompts
+   * and tool calls show up as named processes. Set via
+   * {@link setProcessManager} (mirrors `setLickManager`); the
+   * kernel-worker boot path wires it. Inline standalone / extension
+   * paths can leave it `null` — `ScoopContext` falls back to its
+   * untracked-prompt behavior (plain AbortController).
+   */
+  private processManager: ProcessManager | null = null;
 
   constructor(
     container: HTMLElement,
@@ -172,6 +182,24 @@ export class Orchestrator {
     this.container = container;
     this.callbacks = callbacks;
     this.config = config;
+  }
+
+  /**
+   * Inject the process manager. New `ScoopContext`s created after
+   * this point pick it up. Existing contexts are unaffected —
+   * restart the agent to see them in `ps`.
+   */
+  setProcessManager(pm: ProcessManager): void {
+    this.processManager = pm;
+  }
+
+  /**
+   * Read-only accessor — `ps` / `kill` shell commands look up
+   * the manager via this getter (or via the kernel-worker
+   * `globalThis.__slicc_pm` fallback for code that can't accept DI).
+   */
+  getProcessManager(): ProcessManager | null {
+    return this.processManager;
   }
 
   /** Initialize orchestrator and load saved scoops */
@@ -1510,7 +1538,8 @@ export class Orchestrator {
       fs,
       this.sessionStore ?? undefined,
       this.sharedFs ?? undefined,
-      coneJid
+      coneJid,
+      this.processManager ?? undefined
     );
 
     this.contexts.set(jid, context);
@@ -1737,7 +1766,10 @@ export class Orchestrator {
   private startMessageLoop(): void {
     if (this.pollInterval) return;
 
-    this.pollInterval = window.setInterval(() => {
+    // `setInterval` (no `window.` prefix) so this works in both page and
+    // DedicatedWorker contexts. The standalone runtime runs the orchestrator
+    // in a worker; `window` is undefined there.
+    this.pollInterval = setInterval(() => {
       for (const jid of this.scoops.keys()) {
         const tab = this.tabs.get(jid);
         if (tab?.status === 'ready') {

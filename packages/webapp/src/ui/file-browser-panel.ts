@@ -5,7 +5,7 @@
  * folders and auto-refresh every 3 seconds.
  */
 
-import type { VirtualFS } from '../fs/index.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import { isTerminalPreviewableMediaPath } from '../core/mime-types.js';
 import { zipSync } from 'fflate';
 
@@ -88,7 +88,7 @@ export interface FileBrowserPanelOptions {
 export class FileBrowserPanel {
   private container: HTMLElement;
   private bodyEl!: HTMLElement;
-  private fs: VirtualFS | null = null;
+  private fs: LocalVfsClient | null = null;
   private expandedDirs = new Set<string>(['/']);
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private onRunCommand: ((command: string) => Promise<void> | void) | null;
@@ -101,8 +101,16 @@ export class FileBrowserPanel {
     this.render();
   }
 
-  /** Wire up the virtual filesystem. Triggers initial refresh. */
-  setFs(fs: VirtualFS): void {
+  /**
+   * Wire up the virtual filesystem. Triggers initial refresh.
+   *
+   * Accepts the structural read-only `LocalVfsClient` facade — passes
+   * a real `VirtualFS` straight through (it satisfies the interface),
+   * but the type-narrowing prevents the panel from accidentally
+   * calling write methods that wouldn't propagate to the worker's
+   * canonical FS in standalone-worker mode.
+   */
+  setFs(fs: LocalVfsClient): void {
     this.fs = fs;
     this.refresh();
     this.refreshTimer = setInterval(() => this.refresh(), 3000);
