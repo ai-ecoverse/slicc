@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Api, Model } from '@mariozechner/pi-ai';
+import type { Api, Model } from '@earendil-works/pi-ai';
 
 const completeSimple = vi.fn();
 
-vi.mock('@mariozechner/pi-ai', () => ({
+vi.mock('@earendil-works/pi-ai', () => ({
   completeSimple: (...args: unknown[]) => completeSimple(...args),
 }));
 

@@ -12,8 +12,8 @@
  * so callers can quietly fall back to a static label without try/catch.
  */
 
-import { completeSimple } from '@mariozechner/pi-ai';
-import type { Api, Model, UserMessage } from '@mariozechner/pi-ai';
+import { completeSimple } from '@earendil-works/pi-ai';
+import type { Api, Model, UserMessage } from '@earendil-works/pi-ai';
 import { createLogger } from '../core/logger.js';
 import { getDailyAdobeUuid } from '../scoops/llm-session-id.js';
 import {
