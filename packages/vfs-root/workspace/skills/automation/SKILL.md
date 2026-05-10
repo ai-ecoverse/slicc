@@ -22,23 +22,37 @@ All three deliver events as licks. If `--scoop <name>` is set, the lick goes to 
 
 ## `webhook`
 
-Receive HTTP callbacks. The event lick carries the request method, path, headers, and body.
+Receive HTTP callbacks. The event lick carries the request method, path, headers, and body. Each `webhook create` allocates a path; the URL is printed on creation.
 
 ```bash
-webhook create --path /github-pr --scoop pr-watcher --name gh-prs
+webhook create --scoop pr-watcher --name gh-prs
+webhook create --scoop bot --name slack --filter 'event.body.includes("deploy")'
 webhook list
 webhook delete wh-1
 ```
+
+Flags:
+
+- `--scoop <name>` — route the event to a specific scoop. Omit to route to the cone.
+- `--name <label>` — human-friendly label shown in `webhook list`.
+- `--filter <js>` — JavaScript expression evaluated per request; falsy result drops the event before it reaches the agent.
 
 ## `crontask`
 
 Run a scoop on a cron schedule. Standard 5-field cron (minute hour day month weekday).
 
 ```bash
-crontask create --schedule "0 * * * *" --scoop hourly-summary --name hourly
+crontask create --cron "0 * * * *" --scoop hourly-summary --name hourly
 crontask list
-crontask delete ct-1
+crontask delete ct-1   # `kill` is an alias for `delete`
 ```
+
+Flags:
+
+- `--cron <expr>` — required; 5-field cron expression.
+- `--scoop <name>` — target scoop. Omit to route to the cone.
+- `--name <label>` — human-friendly label.
+- `--filter <js>` — JavaScript expression evaluated each tick; falsy result skips that fire.
 
 ## `fswatch`
 

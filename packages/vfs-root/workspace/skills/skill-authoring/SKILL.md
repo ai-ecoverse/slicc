@@ -87,7 +87,7 @@ Rules of thumb:
 `.jsh` files are auto-discovered as shell commands anywhere on the VFS:
 
 - **Auto-discovery**: registered as callable commands by filename (without the extension). A skill can ship its own commands by including a `.jsh` next to `SKILL.md`.
-- **Node-like globals**: `process`, `console`, `fs` (VFS bridge with `readFile`, `writeFile`, `readDir`, `exists`).
+- **Node-like globals**: `process`, `console`, `fs` — a VFS bridge with `readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile`.
 - **Dual-mode**: works in both the CLI server and the Chrome extension.
 - **Top-level `await`**: scripts are wrapped in `AsyncFunction`. Always `await` fs methods. Don't use `.then()`.
 

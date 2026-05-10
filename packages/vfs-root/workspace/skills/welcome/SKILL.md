@@ -33,7 +33,7 @@ When you receive a `[Sprinkle Event: welcome]` with `action: 'onboarding-complet
     "provider": "openai",
     "model": "gpt-4o",
     "modelLabel": "GPT-4o",
-    "validation": "ok"
+    "validation": "ok" // or "skipped" (probe couldn't run) or "oauth" (OAuth-authed provider, no probe)
   }
 }
 ```

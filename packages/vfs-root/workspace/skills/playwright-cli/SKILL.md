@@ -59,14 +59,20 @@ All commands below that operate on a tab require `--tab=<targetId>`.
 ### Core
 
 ```bash
-playwright-cli open [url]                              # Open tab, returns targetId
-playwright-cli tab-new [url]                           # Same as open
+playwright-cli open [url] [--foreground]               # Open tab (background by default), returns targetId
+playwright-cli tab-new [url] [--foreground]            # Same as open
 playwright-cli tab-close --tab=<id>                    # Close tab
 playwright-cli goto --tab=<id> <url>                   # Navigate tab
+playwright-cli navigate --tab=<id> <url>               # Alias for goto
 playwright-cli snapshot --tab=<id> [--filename=path]   # Accessibility tree with refs
+playwright-cli snapshot --tab=<id> --no-iframes        # Skip iframe content (faster)
 playwright-cli eval --tab=<id> <expression>            # Evaluate JS in tab
+playwright-cli eval-file --tab=<id> <vfs-path>         # Evaluate JS from a VFS file
+playwright-cli frames --tab=<id>                       # List iframes in the page
 playwright-cli resize --tab=<id> <width> <height>      # Resize viewport
 ```
+
+`--foreground` (or `--fg`) opens the new tab focused instead of in the background.
 
 ### Interaction
 
@@ -102,6 +108,8 @@ playwright-cli reload --tab=<id>      # Reload page
 
 ```bash
 playwright-cli teleport --tab=<id> --start=<regex> --return=<regex> [--timeout=<s>]
+playwright-cli teleport --list                                                    # Show active teleports
+playwright-cli teleport --off --tab=<id>                                          # Cancel a teleport on this tab
 playwright-cli open <url> --teleport-start=<regex> --teleport-return=<regex>
 playwright-cli goto --tab=<id> <url> --teleport-start=<regex> --teleport-return=<regex>
 ```
@@ -115,6 +123,7 @@ playwright-cli screenshot --tab=<id>                       # Save to /tmp/screen
 playwright-cli screenshot --tab=<id> --filename=page.png   # Save to custom path
 playwright-cli screenshot --tab=<id> e5                    # Screenshot specific element
 playwright-cli screenshot --tab=<id> --fullPage            # Full scrollable page
+playwright-cli screenshot --tab=<id> --max-width=800       # Downscale to a max width
 ```
 
 ### Viewing pages and screenshots yourself
