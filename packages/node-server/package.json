@@ -7,6 +7,9 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p ../../tsconfig.cli.json"
   },
+  "dependencies": {
+    "@slicc/shared": "*"
+  },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/ws": "^8.5.14",

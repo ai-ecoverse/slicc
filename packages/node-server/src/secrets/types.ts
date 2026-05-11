@@ -32,3 +32,9 @@ export interface SecretStore {
   /** List all secrets with their domains (never values). */
   list(): SecretEntry[];
 }
+
+/**
+ * Re-export MaskedSecret from @slicc/shared to avoid duplication.
+ * This was previously defined inline in proxy-manager.ts.
+ */
+export type { MaskedSecret } from '@slicc/shared';
