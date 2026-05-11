@@ -168,5 +168,233 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertNotEqual(maskedA, realValue)
         XCTAssertTrue(maskedA.hasPrefix("ghp_"))
     }
+
+    // MARK: - unmaskAuthorizationBasic
+
+    private func base64(_ s: String) -> String {
+        Data(s.utf8).base64EncodedString()
+    }
+
+    func testBasicAuthDecodesUnmasksAndReencodesOnAllowedDomain() {
+        let injector = makeInjector(secrets: [
+            makeSecret(
+                name: "GITHUB_TOKEN",
+                realValue: "ghp_realToken123",
+                maskedValue: "ghp_masked999abc",
+                domains: ["github.com", "*.github.com"]
+            ),
+        ])
+        let header = "Basic \(base64("x-access-token:ghp_masked999abc"))"
+        let result = injector.unmaskAuthorizationBasic(value: header, targetHostname: "github.com")
+        XCTAssertNil(result.forbidden)
+        XCTAssertTrue(result.value.hasPrefix("Basic "))
+        let payload = String(result.value.dropFirst("Basic ".count))
+        guard let decoded = Data(base64Encoded: payload).flatMap({ String(data: $0, encoding: .utf8) }) else {
+            return XCTFail("Re-encoded payload must decode")
+        }
+        XCTAssertEqual(decoded, "x-access-token:ghp_realToken123")
+    }
+
+    func testBasicAuthForbidsWhenDomainNotAllowed() {
+        let injector = makeInjector(secrets: [
+            makeSecret(
+                name: "GITHUB_TOKEN",
+                realValue: "ghp_realToken123",
+                maskedValue: "ghp_masked999abc",
+                domains: ["github.com"]
+            ),
+        ])
+        let header = "Basic \(base64("u:ghp_masked999abc"))"
+        let result = injector.unmaskAuthorizationBasic(value: header, targetHostname: "evil.example.com")
+        XCTAssertNotNil(result.forbidden)
+        XCTAssertEqual(result.forbidden?.secretName, "GITHUB_TOKEN")
+        XCTAssertEqual(result.forbidden?.hostname, "evil.example.com")
+        XCTAssertEqual(result.value, header)
+    }
+
+    func testBasicAuthLeavesUnchangedOnInvalidBase64() {
+        let injector = makeInjector(secrets: [makeSecret()])
+        let header = "Basic %%%not-b64%%%"
+        let result = injector.unmaskAuthorizationBasic(value: header, targetHostname: "github.com")
+        XCTAssertEqual(result.value, header)
+        XCTAssertNil(result.forbidden)
+    }
+
+    func testBasicAuthLeavesUnchangedOnNoColon() {
+        let injector = makeInjector(secrets: [makeSecret()])
+        let header = "Basic \(base64("nocolon"))"
+        let result = injector.unmaskAuthorizationBasic(value: header, targetHostname: "github.com")
+        XCTAssertEqual(result.value, header)
+        XCTAssertNil(result.forbidden)
+    }
+
+    func testBasicAuthLeavesUnchangedOnNoMask() {
+        let injector = makeInjector(secrets: [makeSecret()])
+        let header = "Basic \(base64("u:plain"))"
+        let result = injector.unmaskAuthorizationBasic(value: header, targetHostname: "github.com")
+        XCTAssertEqual(result.value, header)
+        XCTAssertNil(result.forbidden)
+    }
+
+    // MARK: - extractAndUnmaskUrlCredentials
+
+    func testUrlCredsStripsAndSynthesizesAuthHeader() {
+        let injector = makeInjector(secrets: [
+            makeSecret(
+                name: "GITHUB_TOKEN",
+                realValue: "ghp_realToken123",
+                maskedValue: "ghp_masked999abc",
+                domains: ["github.com"]
+            ),
+        ])
+        let url = "https://x-access-token:ghp_masked999abc@github.com/owner/repo.git"
+        let result = injector.extractAndUnmaskUrlCredentials(rawUrl: url)
+        XCTAssertEqual(result.url, "https://github.com/owner/repo.git")
+        XCTAssertNil(result.forbidden)
+        guard let auth = result.syntheticAuthorization else {
+            return XCTFail("Expected synthetic Authorization")
+        }
+        XCTAssertTrue(auth.hasPrefix("Basic "))
+        let payload = String(auth.dropFirst("Basic ".count))
+        guard let decoded = Data(base64Encoded: payload).flatMap({ String(data: $0, encoding: .utf8) }) else {
+            return XCTFail("Re-encoded payload must decode")
+        }
+        XCTAssertEqual(decoded, "x-access-token:ghp_realToken123")
+    }
+
+    func testUrlCredsForbidsWhenHostNotAllowed() {
+        let injector = makeInjector(secrets: [
+            makeSecret(
+                name: "GITHUB_TOKEN",
+                realValue: "ghp_realToken123",
+                maskedValue: "ghp_masked999abc",
+                domains: ["github.com"]
+            ),
+        ])
+        let url = "https://u:ghp_masked999abc@evil.example.com/"
+        let result = injector.extractAndUnmaskUrlCredentials(rawUrl: url)
+        XCTAssertEqual(result.forbidden?.secretName, "GITHUB_TOKEN")
+        XCTAssertEqual(result.forbidden?.hostname, "evil.example.com")
+        XCTAssertEqual(result.url, url)
+        XCTAssertNil(result.syntheticAuthorization)
+    }
+
+    func testUrlCredsStripsUserInfoEvenWithoutMatch() {
+        let injector = makeInjector(secrets: [makeSecret()])
+        let url = "https://u:plain@github.com/"
+        let result = injector.extractAndUnmaskUrlCredentials(rawUrl: url)
+        XCTAssertEqual(result.url, "https://github.com/")
+        XCTAssertNil(result.syntheticAuthorization)
+        XCTAssertNil(result.forbidden)
+    }
+
+    func testUrlCredsLeavesUnchangedWhenNoUserInfo() {
+        let injector = makeInjector(secrets: [makeSecret()])
+        let url = "https://github.com/foo"
+        let result = injector.extractAndUnmaskUrlCredentials(rawUrl: url)
+        XCTAssertEqual(result.url, url)
+        XCTAssertNil(result.syntheticAuthorization)
+        XCTAssertNil(result.forbidden)
+    }
+
+    func testUrlCredsLeavesUnchangedOnMalformedUrl() {
+        let injector = makeInjector(secrets: [makeSecret()])
+        // Foundation's URLComponents is much more permissive than the JS URL
+        // constructor — `"not a url"` parses as a relative path with no
+        // userinfo. The path "no userinfo present" exits early with the URL
+        // unchanged, so the resulting behavior matches the TS catch-all
+        // (input returned verbatim) without needing a forced parse failure.
+        let url = "not a url"
+        let result = injector.extractAndUnmaskUrlCredentials(rawUrl: url)
+        XCTAssertEqual(result.url, url)
+        XCTAssertNil(result.syntheticAuthorization)
+        XCTAssertNil(result.forbidden)
+    }
+
+    // MARK: - unmaskBodyBytes
+
+    func testUnmaskBodyBytesReplacesMaskedInUtf8Body() {
+        let injector = makeInjector(secrets: [
+            makeSecret(
+                name: "GITHUB_TOKEN",
+                realValue: "ghp_realToken123",
+                maskedValue: "ghp_masked999abc",
+                domains: ["github.com"]
+            ),
+        ])
+        let body = Data("hello ghp_masked999abc world".utf8)
+        let out = injector.unmaskBodyBytes(bytes: body, targetHostname: "github.com")
+        XCTAssertEqual(String(data: out, encoding: .utf8), "hello ghp_realToken123 world")
+    }
+
+    func testUnmaskBodyBytesDoesNotCorruptArbitraryBytesWhenNoMatch() {
+        let injector = makeInjector(secrets: [
+            makeSecret(
+                name: "GITHUB_TOKEN",
+                realValue: "ghp_realToken123",
+                maskedValue: "ghp_masked999abc",
+                domains: ["github.com"]
+            ),
+        ])
+        let before = Data([0xff, 0xfe, 0x00, 0x01, 0xc3, 0x28, 0xa0, 0x80])
+        let out = injector.unmaskBodyBytes(bytes: before, targetHostname: "github.com")
+        XCTAssertEqual(out, before)
+    }
+
+    func testUnmaskBodyBytesByteAlignedReplacement() {
+        let injector = makeInjector(secrets: [
+            makeSecret(
+                name: "GITHUB_TOKEN",
+                realValue: "ghp_realToken123",
+                maskedValue: "ghp_masked999abc",
+                domains: ["github.com"]
+            ),
+        ])
+        var input = Data([0xff, 0xfe, 0x00])
+        input.append(Data("ghp_masked999abc".utf8))
+        input.append(Data([0x01, 0xff]))
+        let out = injector.unmaskBodyBytes(bytes: input, targetHostname: "github.com")
+        var expected = Data([0xff, 0xfe, 0x00])
+        expected.append(Data("ghp_realToken123".utf8))
+        expected.append(Data([0x01, 0xff]))
+        XCTAssertEqual(out, expected)
+    }
+
+    func testUnmaskBodyBytesLeavesUntouchedOnDomainMismatch() {
+        let injector = makeInjector(secrets: [
+            makeSecret(
+                name: "GITHUB_TOKEN",
+                realValue: "ghp_realToken123",
+                maskedValue: "ghp_masked999abc",
+                domains: ["github.com"]
+            ),
+        ])
+        let body = Data("hello ghp_masked999abc world".utf8)
+        let out = injector.unmaskBodyBytes(bytes: body, targetHostname: "evil.example.com")
+        XCTAssertEqual(String(data: out, encoding: .utf8), "hello ghp_masked999abc world")
+    }
+
+    // MARK: - scrubResponseBytes
+
+    func testScrubResponseBytesReplacesRealWithMaskedInUtf8() {
+        let injector = makeInjector(secrets: [
+            makeSecret(
+                name: "GITHUB_TOKEN",
+                realValue: "ghp_realToken123",
+                maskedValue: "ghp_masked999abc",
+                domains: ["github.com"]
+            ),
+        ])
+        let body = Data("hello ghp_realToken123 world".utf8)
+        let out = injector.scrubResponseBytes(bytes: body)
+        XCTAssertEqual(String(data: out, encoding: .utf8), "hello ghp_masked999abc world")
+    }
+
+    func testScrubResponseBytesLeavesArbitraryNonUtf8Untouched() {
+        let injector = makeInjector(secrets: [makeSecret()])
+        let before = Data([0xff, 0xfe, 0x00, 0x01, 0xc3, 0x28, 0xa0, 0x80])
+        let out = injector.scrubResponseBytes(bytes: before)
+        XCTAssertEqual(out, before)
+    }
 }
 

@@ -28,6 +28,26 @@ public final class SecretInjector: Sendable {
         case domainBlocked(secretName: String, hostname: String)
     }
 
+    /// Info about a domain-blocked secret, mirrors TS `ForbiddenInfo`.
+    struct ForbiddenInfo: Sendable, Equatable {
+        let secretName: String
+        let hostname: String
+    }
+
+    /// Result of `unmaskAuthorizationBasic` — either an updated header value,
+    /// or a forbidden block. Mirrors TS `BasicResult`.
+    struct BasicResult: Sendable, Equatable {
+        let value: String
+        let forbidden: ForbiddenInfo?
+    }
+
+    /// Result of `extractAndUnmaskUrlCredentials`. Mirrors TS `ExtractedUrlCreds`.
+    struct ExtractedUrlCreds: Sendable, Equatable {
+        let url: String
+        let syntheticAuthorization: String?
+        let forbidden: ForbiddenInfo?
+    }
+
     /// The session ID used for masking. Kept stable across reloads.
     private let sessionId: String?
 
@@ -179,5 +199,207 @@ public final class SecretInjector: Sendable {
     func scrub(text: String) -> String {
         responseScrubber(text)
     }
+
+    // MARK: - Basic-auth / URL-credential / byte-safe helpers (Phase 2 parity)
+
+    /// Mirrors TS `SecretsPipeline.unmaskAuthorizationBasic`.
+    ///
+    /// Matches `^Basic\s+(.+)$`, base64-decodes the payload, then scans the
+    /// `user:pass` halves for known masked values. If any masked value is
+    /// present:
+    /// - and its domain allowlist matches `targetHostname`, the masked half
+    ///   is unmasked and the header is re-encoded as `Basic base64(user:pass)`.
+    /// - and the domain does NOT match, returns a `.forbidden` result.
+    ///
+    /// Notes vs TS:
+    /// - `Data(base64Encoded:)` is stricter than `atob()` about padding /
+    ///   whitespace. The TS `atob` happily accepts unpadded base64; Foundation
+    ///   requires padding. We try the input as-is first, then fall back to
+    ///   appending `=` padding to match `atob` semantics. Whitespace-tolerant
+    ///   decoding is enabled via `.ignoreUnknownCharacters` so values like
+    ///   `Basic   <b64>` (multiple spaces) work the same way as the TS path.
+    /// - `Data.base64EncodedString()` matches `btoa()` for ASCII inputs.
+    func unmaskAuthorizationBasic(value: String, targetHostname: String) -> BasicResult {
+        // ^Basic\s+(.+)$ — same regex shape as TS pipeline.
+        let trimmedHeader = value
+        guard let match = trimmedHeader.range(
+            of: #"^Basic\s+(.+)$"#,
+            options: .regularExpression
+        ), match.lowerBound == trimmedHeader.startIndex else {
+            return BasicResult(value: value, forbidden: nil)
+        }
+        let payload = String(trimmedHeader[match])
+            .dropFirst("Basic".count)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let decoded = decodeBase64ToString(String(payload)) else {
+            return BasicResult(value: value, forbidden: nil)
+        }
+        // Find first `:` — same as TS `decoded.indexOf(':')`.
+        guard let colonIdx = decoded.firstIndex(of: ":") else {
+            return BasicResult(value: value, forbidden: nil)
+        }
+        var user = String(decoded[..<colonIdx])
+        var pass = String(decoded[decoded.index(after: colonIdx)...])
+        var touched = false
+        for secret in secrets {
+            let inUser = user.contains(secret.maskedValue)
+            let inPass = pass.contains(secret.maskedValue)
+            guard inUser || inPass else { continue }
+            guard isAllowedDomain(patterns: secret.domains, hostname: targetHostname) else {
+                return BasicResult(
+                    value: value,
+                    forbidden: ForbiddenInfo(secretName: secret.name, hostname: targetHostname)
+                )
+            }
+            if inUser { user = user.replacingOccurrences(of: secret.maskedValue, with: secret.realValue) }
+            if inPass { pass = pass.replacingOccurrences(of: secret.maskedValue, with: secret.realValue) }
+            touched = true
+        }
+        if !touched { return BasicResult(value: value, forbidden: nil) }
+        let combined = "\(user):\(pass)"
+        let reencoded = Data(combined.utf8).base64EncodedString()
+        return BasicResult(value: "Basic \(reencoded)", forbidden: nil)
+    }
+
+    /// Mirrors TS `SecretsPipeline.extractAndUnmaskUrlCredentials`.
+    ///
+    /// Parses the URL, extracts `username`/`password`, runs the same
+    /// masked→real swap with domain enforcement, and ALWAYS strips userinfo
+    /// from the returned URL (browsers reject userinfo URLs, so we synthesize
+    /// an `Authorization` header instead).
+    ///
+    /// Notes vs TS:
+    /// - Foundation's `URLComponents` is the closest analog to the JS `URL`
+    ///   class, but its `.user` / `.password` getters return the percent-
+    ///   encoded values. The TS path uses `decodeURIComponent` on each half
+    ///   before scanning — we mirror that with `removingPercentEncoding`.
+    /// - Setting `URLComponents.user = nil` and `.password = nil` is the
+    ///   Foundation equivalent of `parsed.username = ''` / `.password = ''`.
+    /// - If `URL(string:)` succeeds but `URLComponents` fails (rare), we
+    ///   return the URL unchanged, same as the TS catch-all.
+    func extractAndUnmaskUrlCredentials(rawUrl: String) -> ExtractedUrlCreds {
+        guard var components = URLComponents(string: rawUrl) else {
+            return ExtractedUrlCreds(url: rawUrl, syntheticAuthorization: nil, forbidden: nil)
+        }
+        let userEncoded = components.user
+        let passEncoded = components.password
+        if (userEncoded ?? "").isEmpty && (passEncoded ?? "").isEmpty {
+            return ExtractedUrlCreds(url: rawUrl, syntheticAuthorization: nil, forbidden: nil)
+        }
+
+        var user = (userEncoded?.removingPercentEncoding) ?? (userEncoded ?? "")
+        var pass = (passEncoded?.removingPercentEncoding) ?? (passEncoded ?? "")
+        let host = components.host ?? ""
+        var touched = false
+        for secret in secrets {
+            let inUser = user.contains(secret.maskedValue)
+            let inPass = pass.contains(secret.maskedValue)
+            guard inUser || inPass else { continue }
+            guard isAllowedDomain(patterns: secret.domains, hostname: host) else {
+                return ExtractedUrlCreds(
+                    url: rawUrl,
+                    syntheticAuthorization: nil,
+                    forbidden: ForbiddenInfo(secretName: secret.name, hostname: host)
+                )
+            }
+            if inUser {
+                user = user.replacingOccurrences(of: secret.maskedValue, with: secret.realValue)
+                touched = true
+            }
+            if inPass {
+                pass = pass.replacingOccurrences(of: secret.maskedValue, with: secret.realValue)
+                touched = true
+            }
+        }
+        let synthetic: String?
+        if touched && !(user.isEmpty && pass.isEmpty) {
+            let combined = "\(user):\(pass)"
+            synthetic = "Basic \(Data(combined.utf8).base64EncodedString())"
+        } else {
+            synthetic = nil
+        }
+        components.user = nil
+        components.password = nil
+        let stripped = components.string ?? rawUrl
+        return ExtractedUrlCreds(url: stripped, syntheticAuthorization: synthetic, forbidden: nil)
+    }
+
+    /// Mirrors TS `SecretsPipeline.unmaskBodyBytes`.
+    ///
+    /// Byte-level masked → real replacement for raw request bodies. Domain
+    /// mismatch leaves the bytes untouched (no forbidden — matches TS).
+    ///
+    /// We never round-trip arbitrary bytes through `String(decoding:)` /
+    /// `String.replacingOccurrences` because that would corrupt arbitrary
+    /// non-UTF-8 bytes (Foundation uses U+FFFD on decode failure, which is a
+    /// silent data-loss bug for e.g. SSE chunks that happen to land mid-CJK
+    /// codepoint). Instead we scan with `Data.range(of:)` and rebuild.
+    func unmaskBodyBytes(bytes: Data, targetHostname: String) -> Data {
+        var out = bytes
+        for secret in secrets {
+            guard isAllowedDomain(patterns: secret.domains, hostname: targetHostname) else { continue }
+            let needle = Data(secret.maskedValue.utf8)
+            let replacement = Data(secret.realValue.utf8)
+            out = replaceAllBytes(in: out, needle: needle, replacement: replacement)
+        }
+        return out
+    }
+
+    /// Mirrors TS `SecretsPipeline.scrubResponseBytes`.
+    ///
+    /// Byte-level real → masked replacement for streaming response bodies.
+    /// Same anti-corruption discipline as `unmaskBodyBytes` — no String
+    /// round-trip on arbitrary bytes.
+    func scrubResponseBytes(bytes: Data) -> Data {
+        var out = bytes
+        for secret in secrets {
+            let needle = Data(secret.realValue.utf8)
+            let replacement = Data(secret.maskedValue.utf8)
+            out = replaceAllBytes(in: out, needle: needle, replacement: replacement)
+        }
+        return out
+    }
+}
+
+// MARK: - Internal helpers
+
+/// Best-effort base64 decode that matches `atob`'s tolerance for missing
+/// padding. Foundation's `Data(base64Encoded:)` rejects unpadded inputs;
+/// `.ignoreUnknownCharacters` is needed for whitespace tolerance.
+private func decodeBase64ToString(_ s: String) -> String? {
+    let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+    let padded: String = {
+        let rem = trimmed.count % 4
+        if rem == 0 { return trimmed }
+        return trimmed + String(repeating: "=", count: 4 - rem)
+    }()
+    if let data = Data(base64Encoded: padded, options: [.ignoreUnknownCharacters]),
+       let text = String(data: data, encoding: .utf8) {
+        return text
+    }
+    return nil
+}
+
+/// Byte-level scan-and-replace. Equivalent of TS `replaceAllBytes`.
+/// Returns `haystack` unchanged when `needle` is empty or absent.
+private func replaceAllBytes(in haystack: Data, needle: Data, replacement: Data) -> Data {
+    guard !needle.isEmpty else { return haystack }
+    if haystack.range(of: needle) == nil { return haystack }
+    var out = Data()
+    var cursor = haystack.startIndex
+    while cursor < haystack.endIndex {
+        let searchRange = cursor..<haystack.endIndex
+        guard let match = haystack.range(of: needle, options: [], in: searchRange) else {
+            out.append(haystack[cursor..<haystack.endIndex])
+            break
+        }
+        if match.lowerBound > cursor {
+            out.append(haystack[cursor..<match.lowerBound])
+        }
+        out.append(replacement)
+        cursor = match.upperBound
+    }
+    return out
 }
 
