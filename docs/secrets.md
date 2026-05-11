@@ -29,6 +29,22 @@ Each secret needs two lines: `NAME=value` and `NAME_DOMAINS=domain1,domain2`. A 
 
 **Note:** The bare `github.com` is required for `git push https://github.com/...` because `*.github.com` does not match the bare host (see `packages/shared/src/secret-masking.ts`).
 
+### Extending OAuth-token allowed domains
+
+Each provider hardcodes a sane default list of domains its OAuth token may be unmasked for (e.g. Adobe defaults to `*.adobelogin.com`, `*.adobe.io`, `firefall.adobe.io`). To use that token against other services — for example, `admin.da.live` for Document Authoring — you can **layer extra domains on top per-provider** without code changes. Provider defaults remain immutable.
+
+Manage with the `oauth-domain` shell command:
+
+```
+oauth-domain add adobe admin.da.live
+oauth-domain add adobe '*.da.live'
+oauth-domain list adobe
+oauth-domain remove adobe admin.da.live
+oauth-domain clear adobe
+```
+
+Extras are stored in `localStorage` under `slicc_oauth_extra_domains` (`{providerId: [domain, ...]}`). The merged list (defaults + extras, deduped case-insensitively) is what gets sent to the fetch-proxy / SW the next time the token is saved. To apply newly-added extras to an existing token immediately, run `oauth-token <providerId>` (re-saves) or reload the page (`oauth-bootstrap` re-pushes).
+
 ### Shell-env naming convention
 
 Only secrets whose names are valid POSIX env identifiers — `[A-Za-z_][A-Za-z0-9_]*` — are exposed as `$NAME` in the agent shell. Names containing dots, hyphens, or starting with a digit (e.g. `s3.r2.access_key_id`, `oauth.adobe.token`, `db.prod.password`) are still loaded into the fetch-proxy for header unmasking, but they do not leak into `printenv` or `$VAR` resolution. Use this to keep subsystem secrets (mount backends, OAuth replicas) out of the agent's environment while still letting the proxy substitute them when an HTTP request happens to carry the masked value.

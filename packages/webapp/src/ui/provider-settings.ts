@@ -43,6 +43,7 @@ function isExtensionRuntime(): boolean {
 // Storage keys
 const ACCOUNTS_KEY = 'slicc_accounts';
 const MODEL_KEY = 'selected-model';
+const OAUTH_EXTRA_DOMAINS_KEY = 'slicc_oauth_extra_domains';
 
 // Legacy keys — deleted on load, no migration
 const LEGACY_KEYS = [
@@ -393,6 +394,64 @@ export function getAccounts(): Account[] {
   }
 }
 
+/**
+ * User-configured extra OAuth-token domains, per-provider.
+ *
+ * The provider's hardcoded `oauthTokenDomains` defines the safe defaults.
+ * Users can extend (not replace) that list per-provider via these helpers
+ * — written to `localStorage` as JSON `{[providerId]: [domain, ...]}`.
+ *
+ * `saveOAuthAccount` merges defaults + extras + dedupes. To activate a
+ * newly-added domain on an existing token, re-trigger save (page reload
+ * triggers `oauth-bootstrap`, which re-pushes the replica with the
+ * fresh merged list).
+ *
+ * Storage shape kept as JSON (not separate keys) so a reset is a single
+ * removeItem, and the SW's localStorage shim (extension worker mode) sees
+ * one envelope instead of many tiny ones.
+ */
+type ExtraDomainsStore = Record<string, string[]>;
+
+function readExtraDomainsStore(): ExtraDomainsStore {
+  try {
+    const raw = localStorage.getItem(OAUTH_EXTRA_DOMAINS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: ExtraDomainsStore = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof k !== 'string' || !Array.isArray(v)) continue;
+      out[k] = v.filter((d): d is string => typeof d === 'string' && d.length > 0);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeExtraDomainsStore(store: ExtraDomainsStore): void {
+  localStorage.setItem(OAUTH_EXTRA_DOMAINS_KEY, JSON.stringify(store));
+}
+
+export function getExtraOAuthDomains(providerId: string): string[] {
+  return readExtraDomainsStore()[providerId] ?? [];
+}
+
+export function setExtraOAuthDomains(providerId: string, domains: string[]): void {
+  const store = readExtraDomainsStore();
+  const cleaned = domains.map((d) => d.trim()).filter((d) => d.length > 0);
+  if (cleaned.length === 0) {
+    delete store[providerId];
+  } else {
+    store[providerId] = cleaned;
+  }
+  writeExtraDomainsStore(store);
+}
+
+export function getAllExtraOAuthDomains(): ExtraDomainsStore {
+  return readExtraDomainsStore();
+}
+
 function saveAccounts(accounts: Account[]): void {
   localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
 }
@@ -481,7 +540,17 @@ export async function saveOAuthAccount(opts: {
 
   // Sync to replica (CLI: node-server /api/secrets/oauth-update; Extension: SW via chrome.storage.local + runtime.sendMessage)
   const cfg = getProviderConfig(opts.providerId);
-  const domains = cfg?.oauthTokenDomains ?? [];
+  const defaults = cfg?.oauthTokenDomains ?? [];
+  const extras = getExtraOAuthDomains(opts.providerId);
+  // Merge + dedupe (case-insensitive, preserve provider-default order).
+  const seen = new Set<string>();
+  const domains: string[] = [];
+  for (const d of [...defaults, ...extras]) {
+    const key = d.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    domains.push(d);
+  }
   if (domains.length === 0) return;
 
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
