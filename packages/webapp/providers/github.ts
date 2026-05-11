@@ -521,7 +521,7 @@ export const config: ProviderConfig = {
     const userProfile = await fetchUserProfile(tokenResult.access_token);
 
     // Save account
-    saveOAuthAccount({
+    await saveOAuthAccount({
       providerId: 'github',
       accessToken: tokenResult.access_token,
       userName: userProfile.name,
@@ -553,7 +553,7 @@ export const config: ProviderConfig = {
     // Clear git token from VFS
     await clearGitToken();
     // Clear account
-    saveOAuthAccount({ providerId: 'github', accessToken: '' });
+    await saveOAuthAccount({ providerId: 'github', accessToken: '' });
   },
 };
 

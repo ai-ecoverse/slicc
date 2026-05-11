@@ -711,8 +711,8 @@ export class Layout {
       const clearAllBtn = document.createElement('button');
       clearAllBtn.className = 'avatar-popover__item avatar-popover__item--danger';
       clearAllBtn.textContent = 'Clear all accounts';
-      clearAllBtn.addEventListener('click', () => {
-        clearAllSettings();
+      clearAllBtn.addEventListener('click', async () => {
+        await clearAllSettings();
         popover.remove();
         this.refreshAvatar();
         this.refreshModels?.();
@@ -746,7 +746,7 @@ export class Layout {
     settingsBtn.textContent = 'Account settings\u2026';
     settingsBtn.addEventListener('click', async () => {
       popover.remove();
-      if (!getApiKey()) clearAllSettings();
+      if (!getApiKey()) await clearAllSettings();
       const changed = await showProviderSettings();
       if (changed) {
         this.refreshAvatar();

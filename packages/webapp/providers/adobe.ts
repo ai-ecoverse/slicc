@@ -360,7 +360,7 @@ export const config: ProviderConfig = {
 
     const userProfile = await fetchUserProfile(tokenInfo.accessToken, imsEnv);
 
-    saveOAuthAccount({
+    await saveOAuthAccount({
       providerId: 'adobe',
       accessToken: tokenInfo.accessToken,
       tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,
@@ -410,7 +410,7 @@ export const config: ProviderConfig = {
         );
       }
     }
-    saveOAuthAccount({ providerId: 'adobe', accessToken: '' });
+    await saveOAuthAccount({ providerId: 'adobe', accessToken: '' });
   },
 };
 
@@ -532,7 +532,7 @@ async function silentRenewToken(): Promise<string | null> {
 
       // Save the renewed token
       const account = getAdobeAccount();
-      saveOAuthAccount({
+      await saveOAuthAccount({
         providerId: 'adobe',
         accessToken: tokenInfo.accessToken,
         tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,

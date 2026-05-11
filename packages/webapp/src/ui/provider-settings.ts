@@ -68,6 +68,7 @@ export interface Account {
   tokenExpiresAt?: number;
   userName?: string;
   userAvatar?: string;
+  maskedValue?: string;
 }
 
 // Delete legacy keys on first access
@@ -410,7 +411,22 @@ export function addAccount(
   saveAccounts(accounts);
 }
 
-export function removeAccount(providerId: string): void {
+export async function removeAccount(providerId: string): Promise<void> {
+  // Clear the replica BEFORE wiping the local Account
+  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  try {
+    if (isExtension) {
+      await chrome.storage.local.remove([
+        `oauth.${providerId}.token`,
+        `oauth.${providerId}.token_DOMAINS`,
+      ]);
+    } else {
+      await fetch(`/api/secrets/oauth/${providerId}`, { method: 'DELETE' });
+    }
+  } catch (err) {
+    console.error('OAuth replica removal failed:', err);
+  }
+
   saveAccounts(getAccounts().filter((a) => a.providerId !== providerId));
   // Clear the stored `selected-model` if it pointed at the deleted
   // account. Without this, header dropdowns and the next message
@@ -427,7 +443,7 @@ export function removeAccount(providerId: string): void {
 }
 
 /** Save an OAuth account (used by external providers after token exchange). */
-export function saveOAuthAccount(opts: {
+export async function saveOAuthAccount(opts: {
   providerId: string;
   accessToken: string;
   refreshToken?: string;
@@ -435,7 +451,7 @@ export function saveOAuthAccount(opts: {
   userName?: string;
   userAvatar?: string;
   baseUrl?: string;
-}): void {
+}): Promise<void> {
   const existing = getAccounts().find((a) => a.providerId === opts.providerId);
   const accounts = getAccounts().filter((a) => a.providerId !== opts.providerId);
   accounts.push({
@@ -449,6 +465,56 @@ export function saveOAuthAccount(opts: {
     baseUrl: opts.baseUrl ?? existing?.baseUrl,
   });
   saveAccounts(accounts);
+
+  // Sync to replica (CLI: node-server /api/secrets/oauth-update; Extension: SW via chrome.storage.local + runtime.sendMessage)
+  const cfg = getProviderConfig(opts.providerId);
+  const domains = cfg?.oauthTokenDomains ?? [];
+  if (domains.length === 0) return;
+
+  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  try {
+    if (isExtension) {
+      await chrome.storage.local.set({
+        [`oauth.${opts.providerId}.token`]: opts.accessToken,
+        [`oauth.${opts.providerId}.token_DOMAINS`]: domains.join(','),
+      });
+      const resp = await new Promise<{ maskedValue?: string }>((resolve) => {
+        chrome.runtime.sendMessage(
+          { type: 'secrets.mask-oauth-token', providerId: opts.providerId },
+          (r: any) => resolve(r ?? {})
+        );
+      });
+      if (resp.maskedValue) {
+        const accounts = getAccounts();
+        const acct = accounts.find((a) => a.providerId === opts.providerId);
+        if (acct) {
+          acct.maskedValue = resp.maskedValue;
+          saveAccounts(accounts);
+        }
+      }
+    } else {
+      const r = await fetch('/api/secrets/oauth-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          providerId: opts.providerId,
+          accessToken: opts.accessToken,
+          domains,
+        }),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        const accounts = getAccounts();
+        const acct = accounts.find((a) => a.providerId === opts.providerId);
+        if (acct && typeof data.maskedValue === 'string') {
+          acct.maskedValue = data.maskedValue;
+          saveAccounts(accounts);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('OAuth replica sync failed:', err);
+  }
 }
 
 /** Fallback returned by getApiKeyForProvider for providers with
@@ -561,9 +627,9 @@ export function setApiKey(key: string): void {
   addAccount(provider, key, baseUrl ?? undefined);
 }
 
-export function clearApiKey(): void {
+export async function clearApiKey(): Promise<void> {
   const provider = getSelectedProvider();
-  removeAccount(provider);
+  await removeAccount(provider);
 }
 
 export function getBaseUrl(): string | null {
@@ -624,7 +690,11 @@ export function downloadProviders(): void {
 }
 
 // Clear all provider settings
-export function clearAllSettings(): void {
+export async function clearAllSettings(): Promise<void> {
+  const accounts = getAccounts();
+  for (const a of accounts) {
+    await removeAccount(a.providerId);
+  }
   localStorage.removeItem(ACCOUNTS_KEY);
   localStorage.removeItem(MODEL_KEY);
   for (const key of LEGACY_KEYS) {
@@ -908,8 +978,8 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
             deleteBtn.style.color = 'var(--s2-content-secondary)';
             deleteBtn.style.borderColor = 'var(--s2-border-subtle)';
           });
-          deleteBtn.addEventListener('click', () => {
-            removeAccount(account.providerId);
+          deleteBtn.addEventListener('click', async () => {
+            await removeAccount(account.providerId);
             renderAccountsList();
           });
           actions.appendChild(deleteBtn);
@@ -1097,7 +1167,7 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           // Clean up pre-login baseUrl placeholder if no account existed before
           if (!hadAccountBefore) {
             try {
-              removeAccount(pid);
+              await removeAccount(pid);
             } catch {
               /* best-effort cleanup */
             }

@@ -230,10 +230,10 @@ describe('multi-account storage', () => {
     expect(accounts).toHaveLength(2);
   });
 
-  it('removeAccount removes the account', () => {
+  it('removeAccount removes the account', async () => {
     addAccount('anthropic', 'ant-key');
     addAccount('openai', 'oai-key');
-    removeAccount('anthropic');
+    await removeAccount('anthropic');
     const accounts = getAccounts();
     expect(accounts).toHaveLength(1);
     expect(accounts[0].providerId).toBe('openai');
@@ -302,10 +302,10 @@ describe('backward-compatible accessors', () => {
     expect(getApiKeyForProvider('anthropic')).toBe('new-key');
   });
 
-  it('clearApiKey removes account for current provider', () => {
+  it('clearApiKey removes account for current provider', async () => {
     addAccount('anthropic', 'ant-key');
     storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
-    clearApiKey();
+    await clearApiKey();
     expect(getApiKeyForProvider('anthropic')).toBeNull();
   });
 
@@ -343,14 +343,14 @@ describe('clearAllSettings', () => {
     vi.clearAllMocks();
   });
 
-  it('removes accounts, model key, and legacy keys', () => {
+  it('removes accounts, model key, and legacy keys', async () => {
     addAccount('anthropic', 'ant-key');
     storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
     // Set some legacy keys manually
     storage.set('slicc_provider', 'anthropic');
     storage.set('anthropic_api_key', 'old');
 
-    clearAllSettings();
+    await clearAllSettings();
 
     expect(getAccounts()).toEqual([]);
     expect(getSelectedModelId()).toBe('');
@@ -453,7 +453,7 @@ describe('getAllAvailableModels', () => {
 });
 
 describe('legacy key cleanup', () => {
-  it('deletes legacy keys via clearAllSettings', () => {
+  it('deletes legacy keys via clearAllSettings', async () => {
     // clearAllSettings removes legacy keys along with accounts and model key.
     const legacyKeys = [
       'slicc_provider',
@@ -467,7 +467,7 @@ describe('legacy key cleanup', () => {
     for (const key of legacyKeys) {
       storage.set(key, 'value');
     }
-    clearAllSettings();
+    await clearAllSettings();
     for (const key of legacyKeys) {
       expect(storage.get(key)).toBeUndefined();
     }
