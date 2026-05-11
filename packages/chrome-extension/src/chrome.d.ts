@@ -101,6 +101,13 @@ interface ChromeAPI {
         ) => void | boolean
       ): void;
     };
+    connect(connectInfo: { name: string }): {
+      name: string;
+      postMessage(message: unknown): void;
+      disconnect(): void;
+      onMessage: { addListener(callback: (message: unknown) => void): void };
+      onDisconnect: { addListener(callback: () => void): void };
+    };
     onConnect: {
       addListener(
         callback: (port: {

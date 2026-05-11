@@ -28,6 +28,8 @@ import {
   headersToRecord as _headersToRecord,
 } from './proxy-headers.js';
 
+const REQUEST_BODY_CAP = 32 * 1024 * 1024;
+
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
 export function isTextContentType(contentType: string): boolean {
   if (!contentType) return true; // Default to text for unknown types
@@ -100,6 +102,97 @@ export const encodeForbiddenRequestHeaders = _encodeForbiddenRequestHeaders;
  */
 export const decodeForbiddenResponseHeaders = _decodeForbiddenResponseHeaders;
 
+async function extensionPortFetch(
+  url: string,
+  options?: Parameters<SecureFetch>[1]
+): ReturnType<SecureFetch> {
+  const port = chrome.runtime.connect({ name: 'fetch-proxy.fetch' });
+  const plainHeaders = headersToRecord(options?.headers);
+  const method = options?.method ?? 'GET';
+  const preparedBody = options?.body ? prepareRequestBody(options.body, plainHeaders) : undefined;
+
+  let bodyBase64: string | undefined;
+  let requestBodyTooLarge = false;
+  if (preparedBody !== undefined) {
+    const bodyBytes =
+      preparedBody instanceof Uint8Array
+        ? preparedBody
+        : new Uint8Array(await new Response(preparedBody as BodyInit).arrayBuffer());
+    if (bodyBytes.byteLength > REQUEST_BODY_CAP) {
+      requestBodyTooLarge = true;
+    } else {
+      let bin = '';
+      for (let i = 0; i < bodyBytes.length; i++) bin += String.fromCharCode(bodyBytes[i]);
+      bodyBase64 = btoa(bin);
+    }
+  }
+
+  return new Promise((resolve, reject) => {
+    let headInfo: { status: number; statusText: string; headers: Record<string, string> } | null =
+      null;
+    const chunks: Uint8Array[] = [];
+
+    port.onMessage.addListener((msg: any) => {
+      if (msg.type === 'response-head') {
+        headInfo = msg;
+      } else if (msg.type === 'response-chunk') {
+        const bin = atob(msg.dataBase64);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        chunks.push(out);
+      } else if (msg.type === 'response-end') {
+        if (!headInfo) {
+          reject(new Error('fetch-proxy: response-end before response-head'));
+          return;
+        }
+        const totalLen = chunks.reduce((n, c) => n + c.length, 0);
+        const merged = new Uint8Array(totalLen);
+        let off = 0;
+        for (const c of chunks) {
+          merged.set(c, off);
+          off += c.length;
+        }
+        // Build a synthetic Response so readResponseBody decides text vs binary
+        // (binary goes to binary-cache; preserves git-http's binary packfile path).
+        const respHeaders = new Headers();
+        for (const [k, v] of Object.entries(headInfo.headers)) respHeaders.set(k, String(v));
+        const synth = new Response(merged, {
+          status: headInfo.status,
+          statusText: headInfo.statusText,
+          headers: respHeaders,
+        });
+        readResponseBody(synth, url)
+          .then((body) => {
+            resolve({
+              status: headInfo!.status,
+              statusText: headInfo!.statusText,
+              headers: headInfo!.headers,
+              body,
+              url,
+            });
+          })
+          .catch(reject);
+        port.disconnect();
+      } else if (msg.type === 'response-error') {
+        reject(new Error(msg.error));
+        port.disconnect();
+      }
+    });
+    port.onDisconnect.addListener(() => {
+      if (!headInfo) reject(new Error('fetch-proxy port disconnected before response'));
+    });
+
+    port.postMessage({
+      type: 'request',
+      url,
+      method,
+      headers: plainHeaders,
+      bodyBase64,
+      requestBodyTooLarge,
+    });
+  });
+}
+
 /**
  * Create a SecureFetch that routes requests through the CLI server's
  * /api/fetch-proxy endpoint, bypassing browser CORS restrictions.
@@ -111,21 +204,7 @@ export function createProxiedFetch(): SecureFetch {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
   if (isExtension) {
-    // Extension mode — host_permissions grant native CORS bypass
-    return async (url, options) => {
-      const plainHeaders = headersToRecord(options?.headers);
-      const resp = await fetch(url, {
-        method: options?.method ?? 'GET',
-        headers: plainHeaders,
-        body: prepareRequestBody(options?.body, plainHeaders),
-      });
-      const body = await readResponseBody(resp, url);
-      const respHeaders: Record<string, string> = {};
-      resp.headers.forEach((v, k) => {
-        respHeaders[k] = v;
-      });
-      return { status: resp.status, statusText: resp.statusText, headers: respHeaders, body, url };
-    };
+    return extensionPortFetch;
   }
 
   // CLI mode — proxy through /api/fetch-proxy
