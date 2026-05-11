@@ -90,6 +90,167 @@ final class SecretAPIRoutesTests: XCTestCase {
         }
     }
 
+    // MARK: - OAuth secret routes
+
+    func testOAuthUpdatePostHappyPath() async throws {
+        let oauthStore = OAuthSecretStore()
+        let injector = SecretInjector(sessionId: "fixed-session-oauth", oauthStore: oauthStore)
+        await injector.reload()
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                secretInjector: injector,
+                oauthStore: oauthStore
+            )
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                let body = #"{"providerId":"github","accessToken":"ghp_real","domains":["github.com"]}"#
+                try await client.execute(
+                    uri: "/api/secrets/oauth-update",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(string: body)
+                ) { response in
+                    XCTAssertEqual(response.status, .ok)
+                    let obj = try self.decodeJSONObject(from: response.body)
+                    XCTAssertEqual(obj["providerId"]?.stringValue, "github")
+                    XCTAssertEqual(obj["name"]?.stringValue, "oauth.github.token")
+                    // maskedValue should be the format-preserving mask of the real token.
+                    if case .string(let masked) = obj["maskedValue"] ?? .null {
+                        XCTAssertTrue(masked.hasPrefix("ghp_"))
+                        XCTAssertEqual(masked.count, "ghp_real".count)
+                    } else {
+                        XCTFail("Expected maskedValue string")
+                    }
+                    if case .array(let domains) = obj["domains"] ?? .null {
+                        XCTAssertEqual(domains, [.string("github.com")])
+                    } else {
+                        XCTFail("Expected domains array")
+                    }
+                }
+            }
+        }
+    }
+
+    func testOAuthUpdatePostRejectsMissingDomains() async throws {
+        let oauthStore = OAuthSecretStore()
+        let injector = SecretInjector(sessionId: "fixed-session-oauth", oauthStore: oauthStore)
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                secretInjector: injector,
+                oauthStore: oauthStore
+            )
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                // Body is missing the `domains` key entirely.
+                let body = #"{"providerId":"github","accessToken":"ghp_real"}"#
+                try await client.execute(
+                    uri: "/api/secrets/oauth-update",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(string: body)
+                ) { response in
+                    XCTAssertEqual(response.status, .badRequest)
+                }
+            }
+        }
+    }
+
+    func testOAuthUpdatePostRejectsMalformedJSON() async throws {
+        let oauthStore = OAuthSecretStore()
+        let injector = SecretInjector(sessionId: "fixed-session-oauth", oauthStore: oauthStore)
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                secretInjector: injector,
+                oauthStore: oauthStore
+            )
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                let body = "{not valid json"
+                try await client.execute(
+                    uri: "/api/secrets/oauth-update",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(string: body)
+                ) { response in
+                    XCTAssertEqual(response.status, .badRequest)
+                }
+            }
+        }
+    }
+
+    func testOAuthDeleteHappyPath() async throws {
+        let oauthStore = OAuthSecretStore()
+        try await oauthStore.set(
+            name: "oauth.github.token",
+            value: "ghp_real",
+            domains: ["github.com"]
+        )
+        let injector = SecretInjector(sessionId: "fixed-session-oauth", oauthStore: oauthStore)
+        await injector.reload()
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                secretInjector: injector,
+                oauthStore: oauthStore
+            )
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(
+                    uri: "/api/secrets/oauth/github",
+                    method: .delete
+                ) { response in
+                    XCTAssertEqual(response.status, .noContent)
+                }
+            }
+        }
+        let remaining = await oauthStore.get(name: "oauth.github.token")
+        XCTAssertNil(remaining)
+    }
+
+    func testOAuthDelete404OnUnknownProvider() async throws {
+        let oauthStore = OAuthSecretStore()
+        let injector = SecretInjector(sessionId: "fixed-session-oauth", oauthStore: oauthStore)
+        try await withHTTPClient { httpClient in
+            let router = Router()
+            registerAPIRoutes(
+                router: router,
+                lickSystem: LickSystem(),
+                config: self.makeConfig(),
+                httpClient: httpClient,
+                secretInjector: injector,
+                oauthStore: oauthStore
+            )
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(
+                    uri: "/api/secrets/oauth/never-registered",
+                    method: .delete
+                ) { response in
+                    XCTAssertEqual(response.status, .notFound)
+                }
+            }
+        }
+    }
+
     // MARK: - Helpers
 
     private func makeConfig() -> ServerConfig {

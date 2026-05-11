@@ -222,6 +222,55 @@ func registerAPIRoutes(
         return try jsonResponse(.array(items))
     }
 
+    // OAuth secret replicas — the webapp pushes provider access tokens here
+    // so the fetch proxy can unmask them on outbound requests. Mirrors
+    // packages/node-server/src/index.ts handlers around `/api/secrets/oauth-update`.
+    // Routes are only registered when an OAuthSecretStore is wired in
+    // (ServerCommand always wires one; tests that don't pass a store get
+    // 404s, matching the “endpoint absent” behavior).
+    if let oauthStore {
+        router.post("/api/secrets/oauth-update") { request, context in
+            let payload: OAuthUpdatePayload
+            do {
+                payload = try await request.decode(as: OAuthUpdatePayload.self, context: context)
+            } catch {
+                return try jsonErrorResponse(status: .badRequest, message: "Invalid JSON payload")
+            }
+            guard !payload.providerId.isEmpty, !payload.accessToken.isEmpty, !payload.domains.isEmpty else {
+                return try jsonErrorResponse(
+                    status: .badRequest,
+                    message: "providerId, accessToken, and non-empty domains are required"
+                )
+            }
+            let name = "oauth.\(payload.providerId).token"
+            do {
+                try await oauthStore.set(name: name, value: payload.accessToken, domains: payload.domains)
+            } catch {
+                return try jsonErrorResponse(status: .badRequest, message: errorMessage(error))
+            }
+            await secretInjector.reload()
+            let masked = secretInjector.maskedValue(for: name)
+            return try jsonResponse(.object([
+                "providerId": .string(payload.providerId),
+                "name": .string(name),
+                "maskedValue": jsonStringOrNull(masked),
+                "domains": .array(payload.domains.map { .string($0) }),
+            ]))
+        }
+
+        router.delete("/api/secrets/oauth/:providerId") { _, context in
+            let providerId = context.parameters.get("providerId") ?? ""
+            let name = "oauth.\(providerId).token"
+            let existing = await oauthStore.get(name: name)
+            if existing == nil {
+                return try jsonErrorResponse(status: .notFound, message: "OAuth entry not found")
+            }
+            await oauthStore.delete(name: name)
+            await secretInjector.reload()
+            return Response(status: .noContent)
+        }
+    }
+
     // Server-side request signing for S3 / DA mounts. Browser-side mount
     // backends post envelopes here; the server resolves credentials from the
     // Keychain (S3) or accepts a transient IMS bearer (DA), signs/forwards
@@ -296,6 +345,14 @@ func registerAPIRoutes(
 private struct OAuthRelayPayload: Decodable {
     let redirectUrl: String?
     let error: String?
+}
+
+/// Body of POST /api/secrets/oauth-update. Mirrors the TS payload shape
+/// pushed by `packages/webapp/src/providers/oauth-account-storage.ts`.
+private struct OAuthUpdatePayload: Decodable {
+    let providerId: String
+    let accessToken: String
+    let domains: [String]
 }
 
 private let oauthCallbackHTML = """
