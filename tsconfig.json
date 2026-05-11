@@ -23,7 +23,7 @@
     }
   },
   "include": [
-    "packages/shared/src/**/*.ts",
+    "packages/shared-ts/src/**/*.ts",
     "packages/webapp/src/**/*.ts",
     "packages/chrome-extension/src/**/*.ts"
   ],

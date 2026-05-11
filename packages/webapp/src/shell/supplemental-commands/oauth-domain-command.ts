@@ -14,10 +14,10 @@ Usage:
 
 Provider hardcoded \`oauthTokenDomains\` are immutable safe defaults; this
 command lets you LAYER additional allow-listed domains on top, per-provider.
-Newly added domains apply on the next page reload (oauth-bootstrap re-pushes
-the merged list to the proxy/SW). To force-apply immediately, re-run
-\`oauth-token <providerId>\` — the login flow re-saves the token with the
-fresh merged domain list.
+Newly added domains apply on the next page reload — \`oauth-bootstrap\`
+re-pushes the merged list to the proxy/SW at page-load time. (Re-running
+\`oauth-token <providerId>\` only re-saves the token if it's actually
+expired; for a fresh-token-but-updated-domains case, reload.)
 
 Wildcards behave as elsewhere in the secret pipeline (\`*.example.com\` matches
 \`api.example.com\` and \`uploads.example.com\`, NOT \`example.com\` itself).
@@ -83,7 +83,7 @@ export function createOAuthDomainCommand(): Command {
           }
           setExtraOAuthDomains(providerId, [...current, domain]);
           return {
-            stdout: `Added ${domain} to ${providerId}. Reload the page or re-run \`oauth-token ${providerId}\` to apply.\n`,
+            stdout: `Added ${domain} to ${providerId}. Reload the page to apply.\n`,
             stderr: '',
             exitCode: 0,
           };
@@ -109,7 +109,7 @@ export function createOAuthDomainCommand(): Command {
           }
           setExtraOAuthDomains(providerId, next);
           return {
-            stdout: `Removed ${domain} from ${providerId}. Reload the page or re-run \`oauth-token ${providerId}\` to apply.\n`,
+            stdout: `Removed ${domain} from ${providerId}. Reload the page to apply.\n`,
             stderr: '',
             exitCode: 0,
           };

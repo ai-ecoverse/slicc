@@ -8,13 +8,36 @@ export interface PortLike {
   postMessage: (msg: unknown) => void;
 }
 
-interface RequestMsg {
+export interface RequestMsg {
   type: 'request';
   url: string;
   method: string;
   headers: Record<string, string>;
   bodyBase64?: string;
   requestBodyTooLarge?: boolean;
+}
+
+/**
+ * Port-streamed response protocol. The SW emits exactly one `response-head`
+ * followed by 0..N `response-chunk`s + a terminating `response-end`, OR a
+ * single `response-error` (terminal). Discriminated union so both the SW
+ * emitters AND the page consumer narrow on `type` exhaustively — typos like
+ * `response-haed` no longer compile, and adding a new variant forces an
+ * update at both ends.
+ */
+export type ResponseMsg =
+  | {
+      type: 'response-head';
+      status: number;
+      statusText: string;
+      headers: Record<string, string>;
+    }
+  | { type: 'response-chunk'; dataBase64: string }
+  | { type: 'response-end' }
+  | { type: 'response-error'; error: string };
+
+function send(port: PortLike, msg: ResponseMsg): void {
+  port.postMessage(msg);
 }
 
 function decodeBase64Bytes(b64: string): Uint8Array {
@@ -54,13 +77,13 @@ export function handleFetchProxyConnectionAsync(
     if (msg.type !== 'request') return;
 
     if (msg.requestBodyTooLarge) {
-      port.postMessage({
+      send(port, {
         type: 'response-head',
         status: 413,
         statusText: 'Payload Too Large',
         headers: {},
       });
-      port.postMessage({ type: 'response-end' });
+      send(port, { type: 'response-end' });
       return;
     }
 
@@ -68,7 +91,7 @@ export function handleFetchProxyConnectionAsync(
     try {
       pipeline = await pipelinePromise;
     } catch (err) {
-      port.postMessage({
+      send(port, {
         type: 'response-error',
         error: `fetch-proxy init failed: ${err instanceof Error ? err.message : String(err)}`,
       });
@@ -78,7 +101,7 @@ export function handleFetchProxyConnectionAsync(
     try {
       const credsResult = pipeline.extractAndUnmaskUrlCredentials(msg.url);
       if (credsResult.forbidden) {
-        port.postMessage({
+        send(port, {
           type: 'response-error',
           error: `forbidden: ${credsResult.forbidden.secretName} on ${credsResult.forbidden.hostname}`,
         });
@@ -90,7 +113,7 @@ export function handleFetchProxyConnectionAsync(
       const headers: Record<string, string> = { ...msg.headers };
       const headersResult = pipeline.unmaskHeaders(headers, host);
       if (headersResult.forbidden) {
-        port.postMessage({
+        send(port, {
           type: 'response-error',
           error: `forbidden: ${headersResult.forbidden.secretName} on ${headersResult.forbidden.hostname}`,
         });
@@ -113,7 +136,7 @@ export function handleFetchProxyConnectionAsync(
         signal: ac.signal,
       });
       const respHeaders = pipeline.scrubHeaders(upstream.headers);
-      port.postMessage({
+      send(port, {
         type: 'response-head',
         status: upstream.status,
         statusText: upstream.statusText,
@@ -126,12 +149,12 @@ export function handleFetchProxyConnectionAsync(
           const { value, done } = await reader.read();
           if (done) break;
           const scrubbed = pipeline.scrubResponseBytes(value);
-          port.postMessage({ type: 'response-chunk', dataBase64: encodeBase64Bytes(scrubbed) });
+          send(port, { type: 'response-chunk', dataBase64: encodeBase64Bytes(scrubbed) });
         }
       }
-      port.postMessage({ type: 'response-end' });
+      send(port, { type: 'response-end' });
     } catch (err) {
-      port.postMessage({
+      send(port, {
         type: 'response-error',
         error: err instanceof Error ? err.message : String(err),
       });
@@ -152,20 +175,20 @@ export function handleFetchProxyConnection(port: PortLike, pipeline: SecretsPipe
     if (msg.type !== 'request') return;
 
     if (msg.requestBodyTooLarge) {
-      port.postMessage({
+      send(port, {
         type: 'response-head',
         status: 413,
         statusText: 'Payload Too Large',
         headers: {},
       });
-      port.postMessage({ type: 'response-end' });
+      send(port, { type: 'response-end' });
       return;
     }
 
     try {
       const credsResult = pipeline.extractAndUnmaskUrlCredentials(msg.url);
       if (credsResult.forbidden) {
-        port.postMessage({
+        send(port, {
           type: 'response-error',
           error: `forbidden: ${credsResult.forbidden.secretName} on ${credsResult.forbidden.hostname}`,
         });
@@ -177,7 +200,7 @@ export function handleFetchProxyConnection(port: PortLike, pipeline: SecretsPipe
       const headers: Record<string, string> = { ...msg.headers };
       const headersResult = pipeline.unmaskHeaders(headers, host);
       if (headersResult.forbidden) {
-        port.postMessage({
+        send(port, {
           type: 'response-error',
           error: `forbidden: ${headersResult.forbidden.secretName} on ${headersResult.forbidden.hostname}`,
         });
@@ -200,7 +223,7 @@ export function handleFetchProxyConnection(port: PortLike, pipeline: SecretsPipe
         signal: ac.signal,
       });
       const respHeaders = pipeline.scrubHeaders(upstream.headers);
-      port.postMessage({
+      send(port, {
         type: 'response-head',
         status: upstream.status,
         statusText: upstream.statusText,
@@ -217,12 +240,12 @@ export function handleFetchProxyConnection(port: PortLike, pipeline: SecretsPipe
           // scrub limitation matches CLI behavior: a coincidental real-value
           // straddling a chunk boundary leaks through. v2: carry-over window.
           const scrubbed = pipeline.scrubResponseBytes(value);
-          port.postMessage({ type: 'response-chunk', dataBase64: encodeBase64Bytes(scrubbed) });
+          send(port, { type: 'response-chunk', dataBase64: encodeBase64Bytes(scrubbed) });
         }
       }
-      port.postMessage({ type: 'response-end' });
+      send(port, { type: 'response-end' });
     } catch (err) {
-      port.postMessage({
+      send(port, {
         type: 'response-error',
         error: err instanceof Error ? err.message : String(err),
       });

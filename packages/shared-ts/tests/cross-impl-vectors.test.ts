@@ -8,7 +8,7 @@ import { mask } from '../src/secret-masking.js';
  * `packages/swift-server/Tests/CrossImplementationTests.swift`.
  *
  * Regenerate with:
- *   npm run build -w @slicc/shared
+ *   npm run build -w @slicc/shared-ts
  *   node packages/dev-tools/tools/gen-mask-vectors.mjs
  *
  * Update BOTH this file and the Swift sibling whenever the masking

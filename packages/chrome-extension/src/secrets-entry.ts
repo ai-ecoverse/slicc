@@ -217,7 +217,7 @@ import {
   clearOAuthExtras,
   readOAuthExtras,
   removeOAuthExtraDomain,
-} from './oauth-extra-domains-storage.js';
+} from '@slicc/shared-ts';
 
 function renderOAuthExtras(): void {
   const container = $('od-list');

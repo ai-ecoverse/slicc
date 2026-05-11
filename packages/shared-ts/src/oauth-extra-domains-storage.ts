@@ -39,7 +39,17 @@ export function readOAuthExtras(storage: LocalStorageLike): OAuthExtraDomainsSto
 }
 
 export function writeOAuthExtras(storage: LocalStorageLike, store: OAuthExtraDomainsStore): void {
-  storage.setItem(OAUTH_EXTRA_DOMAINS_KEY, JSON.stringify(store));
+  // setItem throws synchronously on QuotaExceededError. The options-page
+  // click handlers call this through addOAuthExtraDomain / remove / clear
+  // and rely on the throw being caught by their toast wiring; without an
+  // explicit message the toast says nothing useful.
+  try {
+    storage.setItem(OAUTH_EXTRA_DOMAINS_KEY, JSON.stringify(store));
+  } catch (err) {
+    throw new Error(
+      `Failed to persist OAuth extras (localStorage quota exceeded?): ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 }
 
 export function addOAuthExtraDomain(
@@ -55,7 +65,11 @@ export function addOAuthExtraDomain(
     return { added: false, reason: 'duplicate' };
   }
   store[providerId] = [...current, domain];
-  writeOAuthExtras(storage, store);
+  try {
+    writeOAuthExtras(storage, store);
+  } catch (err) {
+    return { added: false, reason: err instanceof Error ? err.message : String(err) };
+  }
   return { added: true };
 }
 

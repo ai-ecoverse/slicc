@@ -43,8 +43,6 @@ function isExtensionRuntime(): boolean {
 // Storage keys
 const ACCOUNTS_KEY = 'slicc_accounts';
 const MODEL_KEY = 'selected-model';
-const OAUTH_EXTRA_DOMAINS_KEY = 'slicc_oauth_extra_domains';
-
 // Legacy keys — deleted on load, no migration
 const LEGACY_KEYS = [
   'slicc_provider',
@@ -399,57 +397,40 @@ export function getAccounts(): Account[] {
  *
  * The provider's hardcoded `oauthTokenDomains` defines the safe defaults.
  * Users can extend (not replace) that list per-provider via these helpers
- * — written to `localStorage` as JSON `{[providerId]: [domain, ...]}`.
+ * — `saveOAuthAccount` merges defaults + extras + dedupes. To activate a
+ * newly-added domain on an existing token, reload the page so
+ * `oauth-bootstrap` re-pushes the replica with the merged list.
  *
- * `saveOAuthAccount` merges defaults + extras + dedupes. To activate a
- * newly-added domain on an existing token, re-trigger save (page reload
- * triggers `oauth-bootstrap`, which re-pushes the replica with the
- * fresh merged list).
- *
- * Storage shape kept as JSON (not separate keys) so a reset is a single
- * removeItem, and the SW's localStorage shim (extension worker mode) sees
- * one envelope instead of many tiny ones.
+ * Storage impl lives in `@slicc/shared-ts` so the chrome-extension options
+ * page (`secrets-entry.ts`) and the side panel share a single parser. The
+ * shared module accepts a `LocalStorageLike` for DI; we bind it to the
+ * page's `localStorage`. The standalone kernel-worker reads the same key
+ * via its Map-backed shim (`kernel-worker.ts:installLocalStorageShim`),
+ * kept in sync by `installPageStorageSync`.
  */
-type ExtraDomainsStore = Record<string, string[]>;
-
-function readExtraDomainsStore(): ExtraDomainsStore {
-  try {
-    const raw = localStorage.getItem(OAUTH_EXTRA_DOMAINS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const out: ExtraDomainsStore = {};
-    for (const [k, v] of Object.entries(parsed)) {
-      if (typeof k !== 'string' || !Array.isArray(v)) continue;
-      out[k] = v.filter((d): d is string => typeof d === 'string' && d.length > 0);
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-function writeExtraDomainsStore(store: ExtraDomainsStore): void {
-  localStorage.setItem(OAUTH_EXTRA_DOMAINS_KEY, JSON.stringify(store));
-}
+import {
+  readOAuthExtras as sharedReadOAuthExtras,
+  writeOAuthExtras as sharedWriteOAuthExtras,
+  type OAuthExtraDomainsStore,
+} from '@slicc/shared-ts';
 
 export function getExtraOAuthDomains(providerId: string): string[] {
-  return readExtraDomainsStore()[providerId] ?? [];
+  return sharedReadOAuthExtras(localStorage)[providerId] ?? [];
 }
 
 export function setExtraOAuthDomains(providerId: string, domains: string[]): void {
-  const store = readExtraDomainsStore();
+  const store = sharedReadOAuthExtras(localStorage);
   const cleaned = domains.map((d) => d.trim()).filter((d) => d.length > 0);
   if (cleaned.length === 0) {
     delete store[providerId];
   } else {
     store[providerId] = cleaned;
   }
-  writeExtraDomainsStore(store);
+  sharedWriteOAuthExtras(localStorage, store);
 }
 
-export function getAllExtraOAuthDomains(): ExtraDomainsStore {
-  return readExtraDomainsStore();
+export function getAllExtraOAuthDomains(): OAuthExtraDomainsStore {
+  return sharedReadOAuthExtras(localStorage);
 }
 
 function saveAccounts(accounts: Account[]): void {
@@ -560,7 +541,7 @@ export async function saveOAuthAccount(opts: {
         [`oauth.${opts.providerId}.token`]: opts.accessToken,
         [`oauth.${opts.providerId}.token_DOMAINS`]: domains.join(','),
       });
-      const resp = await new Promise<{ maskedValue?: string }>((resolve) => {
+      const resp = await new Promise<{ maskedValue?: string; error?: string }>((resolve) => {
         chrome.runtime.sendMessage(
           { type: 'secrets.mask-oauth-token', providerId: opts.providerId },
           (r: any) => {
@@ -569,7 +550,7 @@ export async function saveOAuthAccount(opts: {
             // listener crashed. Without explicit handling the empty
             // resolve looks identical to "SW returned no maskedValue".
             if (chrome.runtime.lastError) {
-              log.error('SW mask-oauth-token failed', {
+              log.error('SW mask-oauth-token transport failed', {
                 providerId: opts.providerId,
                 error: chrome.runtime.lastError.message,
               });
@@ -578,6 +559,16 @@ export async function saveOAuthAccount(opts: {
           }
         );
       });
+      // The SW handler returns `{ maskedValue: undefined, error: '<msg>' }`
+      // on pipeline-build failure (see service-worker.ts secrets.mask-oauth-token
+      // catch). Surface that — matching the CLI branch's "OAuth replica POST
+      // non-ok" logging — so a failure isn't invisible from the page side.
+      if (resp.error) {
+        log.warn('SW mask-oauth-token returned error', {
+          providerId: opts.providerId,
+          error: resp.error,
+        });
+      }
       if (resp.maskedValue) {
         const accounts = getAccounts();
         const acct = accounts.find((a) => a.providerId === opts.providerId);

@@ -56,7 +56,12 @@ function* walk(dir) {
   }
 }
 
+// `from '...'` covers `import x from`, `export { y } from`, `export * from`,
+// `import type ... from`. `import('...')` covers dynamic imports. Bare
+// side-effect imports (`import '@slicc/shared-ts';`) are caught by the
+// `bareSideEffectRe` companion below.
 const importRe = /(from\s+|import\s*\(\s*)(['"])@slicc\/shared-ts\2/g;
+const bareSideEffectRe = /(^|\n)(\s*import\s+)(['"])@slicc\/shared-ts\3/g;
 let rewrites = 0;
 for (const file of walk(nodeServerDist)) {
   if (!file.endsWith('.js') && !file.endsWith('.d.ts')) continue;
@@ -66,11 +71,33 @@ for (const file of walk(nodeServerDist)) {
     .split('\\')
     .join('/');
   const relSpecifier = relToShared.startsWith('.') ? relToShared : './' + relToShared;
-  const next = text.replace(importRe, (_m, p1, q) => `${p1}${q}${relSpecifier}${q}`);
+  let next = text.replace(importRe, (_m, p1, q) => `${p1}${q}${relSpecifier}${q}`);
+  next = next.replace(bareSideEffectRe, (_m, lead, kw, q) => `${lead}${kw}${q}${relSpecifier}${q}`);
   if (next !== text) {
     writeFileSync(file, next);
     rewrites++;
   }
+}
+
+// Belt + suspenders: if any `@slicc/shared-ts` reference survives the
+// rewrite (outside of JSDoc comments), the published tarball will fail
+// to resolve the module at runtime. Fail the build loudly instead of
+// silently shipping a broken package.
+const leftover = [];
+for (const file of walk(nodeServerDist)) {
+  if (!file.endsWith('.js') && !file.endsWith('.d.ts')) continue;
+  const text = readFileSync(file, 'utf-8');
+  // Skip JSDoc comments (`/** ... @slicc/shared-ts ... */`) — they
+  // don't affect runtime resolution.
+  const stripped = text.replace(/\/\*[\s\S]*?\*\//g, '');
+  if (stripped.includes('@slicc/shared-ts')) leftover.push(file);
+}
+if (leftover.length > 0) {
+  console.error(
+    `[inline-shared] ${leftover.length} file(s) still reference @slicc/shared-ts after rewrite — published package would break:`
+  );
+  for (const f of leftover) console.error(`  - ${f}`);
+  process.exit(1);
 }
 
 console.log(

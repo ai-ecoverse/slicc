@@ -19,6 +19,7 @@
  */
 
 import type { SecureFetch } from 'just-bash';
+import type { ResponseMsg } from '../../../chrome-extension/src/fetch-proxy-shared.js';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { getFetchBodyBytes } from './fetch-body.js';
 import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
@@ -139,7 +140,8 @@ async function extensionPortFetch(
     let ended = false;
     const chunks: Uint8Array[] = [];
 
-    port.onMessage.addListener((msg: any) => {
+    port.onMessage.addListener((raw: unknown) => {
+      const msg = raw as ResponseMsg;
       if (msg.type === 'response-head') {
         headInfo = msg;
       } else if (msg.type === 'response-chunk') {
