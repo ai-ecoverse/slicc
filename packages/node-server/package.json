@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('../../dist/node-server', { recursive: true, force: true });\" && tsc -p ../../tsconfig.cli.json",
+    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('../../dist/node-server', { recursive: true, force: true });\" && tsc -p ../../tsconfig.cli.json && node scripts/inline-shared.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p ../../tsconfig.cli.json"
   },
