@@ -1,5 +1,6 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { isAllowedDomain } from '@slicc/shared';
 
 function helpText(): string {
   return `secret — manage secrets for the fetch proxy and mount backends
@@ -263,7 +264,6 @@ export function createSecretCommand(): Command {
           }
 
           // Client-side domain check using the same logic as the fetch proxy
-          const { isAllowedDomain } = await import('@slicc/shared');
           const allowed = isAllowedDomain(entry.domains, hostname);
 
           if (allowed) {
