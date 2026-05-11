@@ -2223,6 +2223,13 @@ async function main(): Promise<void> {
   // Apply providers.json defaults before checking for API key
   applyProviderDefaults();
 
+  // Bootstrap OAuth replicas — re-pushes OAuth tokens to the proxy/SW replica
+  // on init. Idempotent; tolerates per-entry failure.
+  const { bootstrapOAuthReplicas } = await import('./oauth-bootstrap.js');
+  void bootstrapOAuthReplicas().catch((err) => {
+    log.error('OAuth bootstrap failed', err);
+  });
+
   // First-run no longer auto-opens the legacy "Add Account" dialog.
   // Provider configuration is owned by the deterministic onboarding flow
   // (welcome wizard → connect-llm dip → OnboardingOrchestrator). The user

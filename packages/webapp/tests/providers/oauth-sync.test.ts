@@ -146,3 +146,80 @@ describe('github.ts writes masked token to /workspace/.git/github-token', () => 
     globalThis.fetch = originalFetch;
   });
 });
+
+describe('Bootstrap-on-init re-push', () => {
+  let originalFetch: typeof globalThis.fetch;
+  let originalLocalStorage: Storage;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    originalLocalStorage = globalThis.localStorage;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    (globalThis as any).localStorage = originalLocalStorage;
+  });
+
+  it('bootstrap re-pushes saveOAuthAccount for each non-expired account', async () => {
+    const lsData: Record<string, string> = {};
+    (globalThis as any).localStorage = {
+      getItem: (k: string) => lsData[k] ?? null,
+      setItem: (k: string, v: string) => {
+        lsData[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete lsData[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(lsData)) delete lsData[k];
+      },
+    };
+    delete (globalThis as any).chrome;
+
+    // Seed two non-expired accounts (github already has oauthTokenDomains in the mock at the top)
+    lsData['slicc_accounts'] = JSON.stringify([
+      {
+        providerId: 'github',
+        apiKey: '',
+        accessToken: 'ghp_token1',
+        userName: 'user1',
+      },
+      {
+        providerId: 'expired',
+        apiKey: '',
+        accessToken: 'expired_token',
+        tokenExpiresAt: Date.now() - 60000, // expired
+        userName: 'user3',
+      },
+    ]);
+
+    let postCallCount = 0;
+    globalThis.fetch = vi.fn(async (url: any) => {
+      if (String(url).includes('/api/secrets/oauth-update')) {
+        postCallCount++;
+        return {
+          ok: true,
+          json: async () => ({
+            providerId: 'github',
+            name: 'oauth.github.token',
+            maskedValue: 'masked_test',
+            domains: ['github.com'],
+          }),
+        } as any;
+      }
+      return { ok: false } as any;
+    });
+
+    // Import provider-settings and reset legacy cleanup flag
+    const { __test__ } = await import('../../src/ui/provider-settings.js');
+    __test__._resetLegacyCleanup();
+
+    // Import and run the bootstrap function
+    const { bootstrapOAuthReplicas } = await import('../../src/ui/oauth-bootstrap.js');
+    await bootstrapOAuthReplicas();
+
+    // Should have called saveOAuthAccount for github, but NOT expired
+    expect(postCallCount).toBe(1);
+  });
+});
