@@ -705,10 +705,28 @@ async function buildSecretsPipeline(): Promise<SecretsPipeline> {
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'fetch-proxy.fetch') return;
-  buildSecretsPipeline().then(async (pipeline) => {
-    await pipeline.reload();
-    handleFetchProxyConnection(port as any, pipeline);
-  });
+  buildSecretsPipeline()
+    .then(async (pipeline) => {
+      await pipeline.reload();
+      handleFetchProxyConnection(port as any, pipeline);
+    })
+    .catch((err) => {
+      // Without this .catch, a failure here would leave the port with no
+      // message listener attached — page-side extensionPortFetch would
+      // post its request and hang forever (no response-head, no
+      // response-error, eventual GC-only disconnect). Emit an explicit
+      // error so the caller's promise rejects predictably.
+      console.error('[sw] fetch-proxy init failed', err);
+      try {
+        port.postMessage({
+          type: 'response-error',
+          error: `fetch-proxy init failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
+        port.disconnect();
+      } catch {
+        // port already closed
+      }
+    });
 });
 
 // ---------------------------------------------------------------------------
@@ -724,9 +742,21 @@ chrome.runtime.onMessage.addListener(
       msg.type === 'secrets.list-masked-entries'
     ) {
       (async () => {
-        const pipeline = await buildSecretsPipeline();
-        await pipeline.reload();
-        sendResponse({ entries: pipeline.getMaskedEntries() });
+        try {
+          const pipeline = await buildSecretsPipeline();
+          await pipeline.reload();
+          sendResponse({ entries: pipeline.getMaskedEntries() });
+        } catch (err) {
+          // Without this catch, the unhandled rejection closes the
+          // message port and the caller resolves with `undefined` —
+          // indistinguishable from "no entries", which silently
+          // populates the agent shell with an empty env.
+          console.error('[sw] secrets.list-masked-entries failed', err);
+          sendResponse({
+            entries: [],
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       })();
       return true;
     }
@@ -738,12 +768,21 @@ chrome.runtime.onMessage.addListener(
       'providerId' in msg &&
       typeof msg.providerId === 'string'
     ) {
+      const providerId = msg.providerId;
       (async () => {
-        const pipeline = await buildSecretsPipeline();
-        await pipeline.reload();
-        const name = `oauth.${msg.providerId}.token`;
-        const found = pipeline.getMaskedEntries().find((e) => e.name === name);
-        sendResponse({ maskedValue: found?.maskedValue });
+        try {
+          const pipeline = await buildSecretsPipeline();
+          await pipeline.reload();
+          const name = `oauth.${providerId}.token`;
+          const found = pipeline.getMaskedEntries().find((e) => e.name === name);
+          sendResponse({ maskedValue: found?.maskedValue });
+        } catch (err) {
+          console.error('[sw] secrets.mask-oauth-token failed', err);
+          sendResponse({
+            maskedValue: undefined,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       })();
       return true;
     }

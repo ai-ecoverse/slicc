@@ -136,6 +136,7 @@ async function extensionPortFetch(
   return new Promise((resolve, reject) => {
     let headInfo: { status: number; statusText: string; headers: Record<string, string> } | null =
       null;
+    let ended = false;
     const chunks: Uint8Array[] = [];
 
     port.onMessage.addListener((msg: any) => {
@@ -148,6 +149,7 @@ async function extensionPortFetch(
         chunks.push(out);
       } else if (msg.type === 'response-end') {
         if (!headInfo) {
+          ended = true;
           reject(new Error('fetch-proxy: response-end before response-head'));
           return;
         }
@@ -178,14 +180,29 @@ async function extensionPortFetch(
             });
           })
           .catch(reject);
+        ended = true;
         port.disconnect();
       } else if (msg.type === 'response-error') {
+        ended = true;
         reject(new Error(msg.error));
         port.disconnect();
       }
     });
     port.onDisconnect.addListener(() => {
-      if (!headInfo) reject(new Error('fetch-proxy port disconnected before response'));
+      // Three disconnect scenarios:
+      //   1. Before response-head — caller's promise stays pending forever
+      //      unless we reject explicitly.
+      //   2. After response-head but before response-end — partial response
+      //      received; the chunks accumulated so far would otherwise be
+      //      silently discarded. Reject so the caller sees a clear error.
+      //   3. After response-end — we initiated the disconnect; do nothing
+      //      (the promise has already resolved).
+      if (ended) return;
+      if (!headInfo) {
+        reject(new Error('fetch-proxy port disconnected before response'));
+      } else {
+        reject(new Error('fetch-proxy port disconnected mid-stream'));
+      }
     });
 
     port.postMessage({
