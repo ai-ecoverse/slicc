@@ -89,6 +89,10 @@ export type PanelRpcRequest =
   | {
       op: 'window-open';
       payload: { url: string; target?: string; features?: string };
+    }
+  | {
+      op: 'oauth-popup';
+      payload: { url: string };
     };
 
 export interface PanelRpcResults {
@@ -102,6 +106,7 @@ export interface PanelRpcResults {
   'clipboard-write-text': { done: true };
   'clipboard-write-image': { done: true };
   'window-open': { opened: boolean };
+  'oauth-popup': { redirectUrl: string | null };
 }
 
 export type PanelRpcOp = PanelRpcRequest['op'];

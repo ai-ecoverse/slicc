@@ -13,6 +13,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const mockPopup = { close: vi.fn() };
 const messageListeners = new Set<Function>();
 
+const MOCK_ORIGIN = 'http://localhost';
+
 const mockWindow = {
   open: vi.fn(() => mockPopup),
   addEventListener: vi.fn((type: string, fn: Function) => {
@@ -21,6 +23,7 @@ const mockWindow = {
   removeEventListener: vi.fn((type: string, fn: Function) => {
     if (type === 'message') messageListeners.delete(fn);
   }),
+  location: { origin: MOCK_ORIGIN, pathname: '/', search: '' },
 };
 
 vi.stubGlobal('window', mockWindow);
@@ -34,9 +37,11 @@ vi.stubGlobal(
 // Default location: standalone CLI (no polling)
 vi.stubGlobal('location', { pathname: '/', search: '' });
 
-function fireMessage(data: unknown) {
+function fireMessage(data: unknown, opts: { origin?: string; source?: object | null } = {}) {
+  const origin = opts.origin ?? MOCK_ORIGIN;
+  const source = 'source' in opts ? opts.source : mockPopup;
   for (const handler of messageListeners) {
-    handler({ data } as MessageEvent);
+    handler({ data, origin, source } as unknown as MessageEvent);
   }
 }
 

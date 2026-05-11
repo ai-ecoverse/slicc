@@ -10,12 +10,43 @@
  */
 
 import type { OAuthLauncher } from './types.js';
+import { getPanelRpcClient } from '../kernel/panel-rpc.js';
 
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
 
 /** Create an OAuthLauncher appropriate for the current runtime. */
 export function createOAuthLauncher(): OAuthLauncher {
-  return isExtension ? launchOAuthExtension : launchOAuthCli;
+  if (isExtension) return launchOAuthExtension;
+  // DedicatedWorker (kernel-worker.ts) has no `window`; route the popup
+  // through the panel-RPC bridge so the page can open the real window.
+  if (typeof window === 'undefined') return launchOAuthViaPanel;
+  return launchOAuthCli;
+}
+
+/**
+ * Worker-context OAuth launcher. Delegates to the page via panel-RPC so the
+ * page can open a real popup window (workers have no `window.open`).
+ */
+async function launchOAuthViaPanel(authorizeUrl: string): Promise<string | null> {
+  const rpcClient = getPanelRpcClient();
+  if (!rpcClient) {
+    console.error('[oauth-service] panel-RPC client unavailable in worker');
+    return null;
+  }
+  try {
+    const result = await rpcClient.call(
+      'oauth-popup',
+      { url: authorizeUrl },
+      { timeoutMs: 130_000 }
+    );
+    return result.redirectUrl;
+  } catch (err) {
+    console.error(
+      '[oauth-service] oauth-popup RPC failed:',
+      err instanceof Error ? err.message : String(err)
+    );
+    return null;
+  }
 }
 
 /**
@@ -44,6 +75,8 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
 
     const handler = (event: MessageEvent) => {
       if (event.data?.type !== 'oauth-callback') return;
+      if (event.origin !== window.location.origin) return;
+      if (popup && event.source !== popup) return;
       cleanup();
 
       if (event.data.error) {
@@ -52,7 +85,10 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
         return;
       }
 
-      resolve(event.data.redirectUrl ?? null);
+      const redirectUrl = event.data.redirectUrl;
+      if (typeof redirectUrl !== 'string' && redirectUrl !== null && redirectUrl !== undefined)
+        return;
+      resolve(redirectUrl ?? null);
     };
 
     window.addEventListener('message', handler);
