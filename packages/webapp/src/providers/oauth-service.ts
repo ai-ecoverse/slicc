@@ -75,6 +75,8 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
 
     const handler = (event: MessageEvent) => {
       if (event.data?.type !== 'oauth-callback') return;
+      if (event.origin !== window.location.origin) return;
+      if (popup && event.source !== popup) return;
       cleanup();
 
       if (event.data.error) {
@@ -83,7 +85,10 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
         return;
       }
 
-      resolve(event.data.redirectUrl ?? null);
+      const redirectUrl = event.data.redirectUrl;
+      if (typeof redirectUrl !== 'string' && redirectUrl !== null && redirectUrl !== undefined)
+        return;
+      resolve(redirectUrl ?? null);
     };
 
     window.addEventListener('message', handler);

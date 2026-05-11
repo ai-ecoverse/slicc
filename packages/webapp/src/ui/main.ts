@@ -1737,9 +1737,15 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   const stopStorageSync = installPageStorageSync({
     send: (msg) => client.sendRaw(msg),
   });
+  // Skip keys that are unforwardable:
+  //   - 'setItem'/'removeItem'/'clear' — junk written by a previous broken
+  //     interceptor (Object.defineProperty on Storage instance)
+  //   - keys containing NUL — installPageStorageSync drops them too; sending
+  //     them here would create a diverged view in the worker's shim
+  const STORAGE_SKIP = new Set(['setItem', 'removeItem', 'clear']);
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
-    if (k !== null) {
+    if (k !== null && !STORAGE_SKIP.has(k) && !k.includes('\0')) {
       const v = localStorage.getItem(k);
       if (v !== null) {
         client.sendRaw({ type: 'local-storage-set', key: k, value: v });

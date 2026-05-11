@@ -361,7 +361,11 @@ export const config: ProviderConfig = {
       tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,
       userName: userProfile.name,
       userAvatar: userProfile.avatar,
-      baseUrl: proxyEndpoint,
+      // Only pin baseUrl when there is no bundled adobe-config.json (npm
+      // distribution). When the config is bundled, getProxyEndpoint() can
+      // always read it fresh, so persisting the URL would block deploy-time
+      // proxy endpoint changes from taking effect.
+      baseUrl: adobeConfig.proxyEndpoint ? undefined : proxyEndpoint,
     });
 
     // Fetch the full model list now that we're authenticated.
@@ -528,6 +532,7 @@ async function silentRenewToken(): Promise<string | null> {
 
       // Save the renewed token. Preserve the baseUrl so getProxyEndpoint()
       // continues to resolve after a page reload wipes the in-memory cache.
+      // Only pin when there is no bundled config — same rationale as onOAuthLogin.
       const account = getAdobeAccount();
       saveOAuthAccount({
         providerId: 'adobe',
@@ -535,7 +540,7 @@ async function silentRenewToken(): Promise<string | null> {
         tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,
         userName: account?.userName,
         userAvatar: account?.userAvatar,
-        baseUrl: proxyEndpoint,
+        baseUrl: adobeConfig.proxyEndpoint ? undefined : proxyEndpoint,
       });
 
       console.log('[adobe] Token renewed silently');

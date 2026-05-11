@@ -10,10 +10,18 @@
  * Two write paths are intercepted:
  *
  *   1. **Same-tab writes** — anything calling `localStorage.setItem(k, v)`
- *      / `removeItem(k)` / `clear()` on the page. We override the
- *      methods on the *instance* (`window.localStorage`), not on
- *      `Storage.prototype`, so `sessionStorage` is untouched and we
- *      don't conflict with other libraries.
+ *      / `removeItem(k)` / `clear()` on the page. We use two strategies:
+ *
+ *      - **Real `Storage` instances** (Chrome production): patch
+ *        `Storage.prototype` and filter by `this === ls`. Chrome's
+ *        `Storage` host object has `[LegacyOverrideBuiltIns]` semantics,
+ *        which means `Object.defineProperty` on the *instance* writes the
+ *        function's `.toString()` into the underlying key-value store rather
+ *        than creating a JS own-property that shadows the prototype.
+ *      - **Plain-object fakes** (Node.js / test environments where
+ *        `ls instanceof Storage` is false): use `Object.defineProperty` on
+ *        the instance with `enumerable: false` so method names don't appear
+ *        as phantom storage keys when iterating.
  *
  *   2. **Cross-tab writes** — `storage` events fire on the page when
  *      *another* tab writes to localStorage. Subscribed via
@@ -25,11 +33,6 @@
  * `globalThis.localStorage` — which IS the shim. The shim's
  * `setItem`/etc. just update its internal Map; no echo back to the
  * page (the page is the source of truth).
- *
- * A future bidirectional channel (e.g. for the agent persisting state
- * via `localStorage`) is a possible follow-up, but today the agent's
- * persistence is IndexedDB-backed (orchestrator state, sessions,
- * mounts) so the read-only-from-worker shape is sufficient.
  *
  * Returns a `dispose()` to restore the originals — useful for tests.
  */
@@ -68,47 +71,77 @@ export function installPageStorageSync(sink: PageStorageSyncSink): () => void {
   }
 
   const ls = window.localStorage;
-  const origSetItem = ls.setItem.bind(ls);
-  const origRemoveItem = ls.removeItem.bind(ls);
-  const origClear = ls.clear.bind(ls);
 
-  // Native Storage methods live on `Storage.prototype` and are
-  // non-enumerable. A direct assignment (`ls.setItem = …`) would
-  // create an enumerable own-property, so `Object.keys(localStorage)`
-  // and `for…in` would return phantom keys `"setItem"`/`"removeItem"`/
-  // `"clear"` mixed with the user's actual stored keys. Use
-  // `Object.defineProperty` to install non-enumerable own-properties
-  // that shadow the prototype methods without breaking enumeration.
-  // `dispose()` uses the same shape to restore.
-  const define = (name: 'setItem' | 'removeItem' | 'clear', value: unknown): void => {
-    Object.defineProperty(ls, name, {
-      value,
-      writable: true,
-      configurable: true,
-      enumerable: false,
+  // Real Storage instances in Chrome have [LegacyOverrideBuiltIns]: calling
+  // Object.defineProperty on the instance writes to the underlying key-value
+  // store rather than creating a JS own-property. Patch Storage.prototype
+  // instead, filtered to ls only. For plain-object fakes (test environments
+  // where ls instanceof Storage is false) use Object.defineProperty.
+  const isRealStorage = typeof Storage !== 'undefined' && ls instanceof Storage;
+
+  const origSetItem = isRealStorage ? Storage.prototype.setItem : ls.setItem.bind(ls);
+  const origRemoveItem = isRealStorage ? Storage.prototype.removeItem : ls.removeItem.bind(ls);
+  const origClear = isRealStorage ? Storage.prototype.clear : ls.clear.bind(ls);
+
+  if (isRealStorage) {
+    const proto = Storage.prototype;
+    proto.setItem = function (key: string, value: string): void {
+      (origSetItem as typeof proto.setItem).call(this, key, value);
+      if (this !== ls) return;
+      if (!isForwardableKey(key)) {
+        console.warn('[page-storage-sync] dropping localStorage write with NUL in key', key);
+        return;
+      }
+      sink.send({ type: 'local-storage-set', key, value } satisfies LocalStorageSetMsg);
+    };
+    proto.removeItem = function (key: string): void {
+      (origRemoveItem as typeof proto.removeItem).call(this, key);
+      if (this !== ls) return;
+      if (!isForwardableKey(key)) {
+        console.warn('[page-storage-sync] dropping localStorage remove with NUL in key', key);
+        return;
+      }
+      sink.send({ type: 'local-storage-remove', key } satisfies LocalStorageRemoveMsg);
+    };
+    proto.clear = function (): void {
+      (origClear as typeof proto.clear).call(this);
+      if (this !== ls) return;
+      sink.send({ type: 'local-storage-clear' } satisfies LocalStorageClearMsg);
+    };
+  } else {
+    // Plain-object fake (tests): Object.defineProperty creates a real JS
+    // own-property that shadows the object's own methods. Use enumerable:false
+    // so method names don't appear as phantom keys when iterating.
+    const define = (name: 'setItem' | 'removeItem' | 'clear', value: unknown): void => {
+      Object.defineProperty(ls, name, {
+        value,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+    };
+
+    define('setItem', (key: string, value: string): void => {
+      (origSetItem as Storage['setItem'])(key, value);
+      if (!isForwardableKey(key)) {
+        console.warn('[page-storage-sync] dropping localStorage write with NUL in key', key);
+        return;
+      }
+      sink.send({ type: 'local-storage-set', key, value } satisfies LocalStorageSetMsg);
     });
-  };
-
-  define('setItem', (key: string, value: string): void => {
-    origSetItem(key, value);
-    if (!isForwardableKey(key)) {
-      console.warn('[page-storage-sync] dropping localStorage write with NUL in key', key);
-      return;
-    }
-    sink.send({ type: 'local-storage-set', key, value } satisfies LocalStorageSetMsg);
-  });
-  define('removeItem', (key: string): void => {
-    origRemoveItem(key);
-    if (!isForwardableKey(key)) {
-      console.warn('[page-storage-sync] dropping localStorage remove with NUL in key', key);
-      return;
-    }
-    sink.send({ type: 'local-storage-remove', key } satisfies LocalStorageRemoveMsg);
-  });
-  define('clear', (): void => {
-    origClear();
-    sink.send({ type: 'local-storage-clear' } satisfies LocalStorageClearMsg);
-  });
+    define('removeItem', (key: string): void => {
+      (origRemoveItem as Storage['removeItem'])(key);
+      if (!isForwardableKey(key)) {
+        console.warn('[page-storage-sync] dropping localStorage remove with NUL in key', key);
+        return;
+      }
+      sink.send({ type: 'local-storage-remove', key } satisfies LocalStorageRemoveMsg);
+    });
+    define('clear', (): void => {
+      (origClear as Storage['clear'])();
+      sink.send({ type: 'local-storage-clear' } satisfies LocalStorageClearMsg);
+    });
+  }
 
   // Cross-tab writes: when another tab calls localStorage.setItem(),
   // a `storage` event fires here. The browser already updated this
@@ -137,9 +170,23 @@ export function installPageStorageSync(sink: PageStorageSyncSink): () => void {
   window.addEventListener('storage', onStorage);
 
   return () => {
-    define('setItem', origSetItem);
-    define('removeItem', origRemoveItem);
-    define('clear', origClear);
+    if (isRealStorage) {
+      Storage.prototype.setItem = origSetItem as typeof Storage.prototype.setItem;
+      Storage.prototype.removeItem = origRemoveItem as typeof Storage.prototype.removeItem;
+      Storage.prototype.clear = origClear as typeof Storage.prototype.clear;
+    } else {
+      const define = (name: 'setItem' | 'removeItem' | 'clear', value: unknown): void => {
+        Object.defineProperty(ls, name, {
+          value,
+          writable: true,
+          configurable: true,
+          enumerable: false,
+        });
+      };
+      define('setItem', origSetItem);
+      define('removeItem', origRemoveItem);
+      define('clear', origClear);
+    }
     window.removeEventListener('storage', onStorage);
   };
 }
