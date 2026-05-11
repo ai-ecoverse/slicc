@@ -29,30 +29,39 @@ function pierreDiffsPlugin() {
   };
 }
 
+/**
+ * Vite plugin: replace pi-coding-agent's Node-only modules
+ * (session-manager.js, config.js — which pull in fs/path/url/jiti via Node
+ * imports and top-level fileURLToPath calls) with browser-safe stubs.
+ * resolve.alias can't catch relative imports inside node_modules, so we
+ * hook resolveId. Must be applied to BOTH the main and worker plugin
+ * lists in rolldown-vite — worker bundling does not inherit `plugins`
+ * automatically.
+ */
+function stubPiNodeInternalsPlugin() {
+  return {
+    name: 'stub-pi-node-internals',
+    enforce: 'pre' as const,
+    resolveId(source: string, importer: string | undefined) {
+      const normalizedImporter = importer?.replace(/\\/g, '/');
+      if (normalizedImporter?.includes('@earendil-works/pi-coding-agent')) {
+        if (source.endsWith('/session-manager.js')) {
+          return resolve(__dirname, 'src/stubs/pi-session-manager-stub.ts');
+        }
+        if (source.endsWith('/config.js') || source === '../config.js') {
+          return resolve(__dirname, 'src/stubs/pi-config-stub.ts');
+        }
+      }
+      return undefined;
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => ({
   root: workspaceRoot,
   publicDir: resolve(workspaceRoot, 'packages/assets'),
   plugins: [
-    {
-      name: 'stub-pi-node-internals',
-      enforce: 'pre' as const,
-      // pi-coding-agent's compaction.js uses relative imports that pull in
-      // Node-only code. session-manager.js needs fs/crypto/path/url, and
-      // config.js calls fileURLToPath(import.meta.url) at the top level.
-      // Vite resolve.alias can't intercept relative imports inside
-      // node_modules, so we use a resolveId hook instead.
-      resolveId(source, importer) {
-        const normalizedImporter = importer?.replace(/\\/g, '/');
-        if (normalizedImporter?.includes('@earendil-works/pi-coding-agent')) {
-          if (source.endsWith('/session-manager.js')) {
-            return resolve(__dirname, 'src/stubs/pi-session-manager-stub.ts');
-          }
-          if (source.endsWith('/config.js') || source === '../config.js') {
-            return resolve(__dirname, 'src/stubs/pi-config-stub.ts');
-          }
-        }
-      },
-    },
+    stubPiNodeInternalsPlugin(),
     {
       name: 'build-webapp-runtime-assets',
       configureServer(server) {
@@ -342,9 +351,10 @@ export default defineConfig(({ mode }) => ({
 
         // Note: `kernel-worker.ts` rides the Rollup pipeline via
         // Vite's native `new Worker(new URL(...), { type: 'module' })`
-        // detection in `kernel/spawn.ts`. The `resolve.alias` map and
-        // the `stub-pi-node-internals` resolveId plugin above apply to
-        // the worker bundle for free. No standalone esbuild call needed.
+        // detection in `kernel/spawn.ts`. `resolve.alias` carries over
+        // to the worker bundle, but `plugins` does NOT — see the
+        // `worker.plugins` block below where we re-pass the stub plugin.
+        // No standalone esbuild call needed.
         copyFileSync(
           resolve(__dirname, '../assets/logos/favicon.png'),
           resolve(uiOutDir, 'favicon.png')
@@ -422,6 +432,22 @@ export default defineConfig(({ mode }) => ({
       // .yolo/ worktree (e.g. `PORT=5720 npm run dev` in `.yolo/claude-1`).
       ignored: [resolve(workspaceRoot, '.yolo/**'), resolve(workspaceRoot, '.intent/**')],
     },
+  },
+  // Vite defaults worker.format to 'iife', which collapses dynamic imports
+  // (and any CSS modules they reach) into the worker's top-level IIFE.
+  // The kernel-worker reaches `WasmShell` via the shell barrel; its
+  // `await import('@xterm/xterm/css/xterm.css')` inside `mount()` then
+  // runs at worker boot under iife — `document.createElement` throws and
+  // the worker never posts `kernel-worker-ready`. `es` keeps dynamic
+  // imports split, so the CSS injection only runs if mount() is called.
+  //
+  // worker.plugins is NOT auto-derived from `plugins` in rolldown-vite — we
+  // must re-pass the stub plugin so pi-coding-agent's Node-only modules get
+  // replaced in the worker bundle too (otherwise `provider-settings` resolves
+  // through to config.js at module load, and fileURLToPath() crashes).
+  worker: {
+    format: 'es',
+    plugins: () => [stubPiNodeInternalsPlugin()],
   },
   build: {
     outDir: 'dist/ui',
