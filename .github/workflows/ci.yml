@@ -515,6 +515,12 @@ jobs:
           if-no-files-found: ignore
       - name: Build
         run: npm run build -w @slicc/swift-launcher
+      - name: Upload Sliccstart.app artifact (unsigned, for PR verification)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Sliccstart-${{ github.event.pull_request.number || github.run_id }}-unsigned
+          path: packages/swift-launcher/build/Sliccstart.app
+          if-no-files-found: error
       - name: Install Periphery
         run: brew install peripheryapp/periphery/periphery
       - name: Dead code detection (Periphery)
