@@ -3,7 +3,8 @@ import { createServer } from 'http';
 import { createServer as createNetServer } from 'net';
 import { spawn, type ChildProcess } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, dirname } from 'path';
+import { homedir } from 'os';
 import { Readable, Transform } from 'stream';
 import { StringDecoder } from 'string_decoder';
 import { fileURLToPath } from 'url';
@@ -29,6 +30,7 @@ import { CliLogDedup } from './cli-log-dedup.js';
 import { EnvSecretStore } from './secrets/env-secret-store.js';
 import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
+import { readOrCreateSessionId } from './secrets/session-id-file.js';
 
 import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
 
@@ -593,7 +595,11 @@ async function main() {
   }
 
   // 3. Set up express app with request logging
-  const secretProxy = new SecretProxyManager();
+  const sessionDir = RUNTIME_FLAGS.envFile
+    ? dirname(RUNTIME_FLAGS.envFile)
+    : join(homedir(), '.slicc');
+  const sessionId = readOrCreateSessionId(sessionDir);
+  const secretProxy = new SecretProxyManager(undefined, sessionId);
   try {
     await secretProxy.reload();
     if (secretProxy.hasSecrets()) {
