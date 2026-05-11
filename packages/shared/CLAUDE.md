@@ -16,4 +16,4 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 
 ## Cross-implementation parity
 
-A Swift port of `SecretsPipeline` lives in `packages/swift-server/Sources/Keychain/SecretsPipeline.swift`. Both implementations are pinned to identical mask outputs via `tests/CrossImplementationTests.swift` (Swift) and `tests/cross-impl-vectors.test.ts` (TS).
+The Swift counterpart of `SecretsPipeline` lives in `packages/swift-server/Sources/Keychain/SecretInjector.swift` (the class is named `SecretInjector` for historical reasons; it owns the same Basic-auth / URL-creds / byte-safe helpers and the OAuth replica chain). Both implementations are pinned to identical mask outputs via `packages/swift-server/Tests/CrossImplementationTests.swift` and `packages/shared/tests/cross-impl-vectors.test.ts`.

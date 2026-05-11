@@ -61,7 +61,7 @@ WebSocket routes are installed separately for CDP proxying and the lick system.
 
 ## Secrets Architecture
 
-Swift-server includes `OAuthSecretStore.swift` for OAuth token replicas and corresponding HTTP endpoints mirroring node-server's API surface. The Swift port of `SecretsPipeline` in `Sources/Keychain/SecretsPipeline.swift` matches the TypeScript implementation in `@slicc/shared` byte-for-byte via cross-implementation tests. Note: Phase 7 of the secret-aware fetch proxy plan will add these endpoints; this documentation reflects the intended architecture.
+Swift-server includes `OAuthSecretStore.swift` for OAuth token replicas plus matching `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId` endpoints in `Sources/Server/APIRoutes.swift`. The Swift port of the secrets pipeline lives in `Sources/Keychain/SecretInjector.swift` (Basic-auth-aware unmask, URL-credential extraction, byte-safe body unmask, the OAuth replica chain, and sessionId persistence). Mask outputs match `@slicc/shared`'s TS implementation byte-for-byte via `Tests/CrossImplementationTests.swift` (pinned against `packages/shared/tests/cross-impl-vectors.test.ts`).
 
 ## Related Guides
 
