@@ -97,19 +97,16 @@ describe('unmaskAuthorizationBasic', () => {
   });
 
   it('decodes Basic, unmasks password, re-encodes when domain allowed', async () => {
-    const b64 = Buffer.from(`x-access-token:${masked}`, 'utf-8').toString('base64');
+    const b64 = btoa(`x-access-token:${masked}`);
     const result = pipeline.unmaskAuthorizationBasic(`Basic ${b64}`, 'github.com');
     expect(typeof result).toBe('object');
     expect((result as { value: string }).value).toMatch(/^Basic /);
-    const decoded = Buffer.from(
-      (result as { value: string }).value.replace(/^Basic /, ''),
-      'base64'
-    ).toString('utf-8');
+    const decoded = atob((result as { value: string }).value.replace(/^Basic /, ''));
     expect(decoded).toBe('x-access-token:ghp_realToken123');
   });
 
   it('forbids when domain not allowed', async () => {
-    const b64 = Buffer.from(`u:${masked}`, 'utf-8').toString('base64');
+    const b64 = btoa(`u:${masked}`);
     const result = pipeline.unmaskAuthorizationBasic(`Basic ${b64}`, 'evil.example.com');
     expect((result as { forbidden: ForbiddenInfo }).forbidden).toEqual({
       secretName: 'GITHUB_TOKEN',
@@ -121,18 +118,12 @@ describe('unmaskAuthorizationBasic', () => {
     expect(pipeline.unmaskAuthorizationBasic('Basic %%%not-b64%%%', 'github.com')).toEqual({
       value: 'Basic %%%not-b64%%%',
     });
-    expect(
-      pipeline.unmaskAuthorizationBasic(
-        `Basic ${Buffer.from('nocolon').toString('base64')}`,
-        'github.com'
-      )
-    ).toEqual({ value: `Basic ${Buffer.from('nocolon').toString('base64')}` });
-    expect(
-      pipeline.unmaskAuthorizationBasic(
-        `Basic ${Buffer.from('u:plain').toString('base64')}`,
-        'github.com'
-      )
-    ).toEqual({ value: `Basic ${Buffer.from('u:plain').toString('base64')}` });
+    expect(pipeline.unmaskAuthorizationBasic(`Basic ${btoa('nocolon')}`, 'github.com')).toEqual({
+      value: `Basic ${btoa('nocolon')}`,
+    });
+    expect(pipeline.unmaskAuthorizationBasic(`Basic ${btoa('u:plain')}`, 'github.com')).toEqual({
+      value: `Basic ${btoa('u:plain')}`,
+    });
   });
 });
 
