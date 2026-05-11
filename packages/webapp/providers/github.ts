@@ -431,6 +431,13 @@ export const config: ProviderConfig = {
   requiresBaseUrl: false,
   isOAuth: true,
   defaultModelId: 'gpt-4.1', // substring-matched against openai/gpt-4.1
+  oauthTokenDomains: [
+    'github.com',
+    '*.github.com',
+    'api.github.com',
+    'raw.githubusercontent.com',
+    'models.github.ai',
+  ],
 
   getModelIds: () => GITHUB_MODELS,
 

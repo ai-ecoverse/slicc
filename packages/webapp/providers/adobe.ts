@@ -232,6 +232,13 @@ export const config: ProviderConfig = {
   baseUrlDescription: 'Anthropic-compatible proxy endpoint',
   isOAuth: true,
   defaultModelId: 'sonnet',
+  oauthTokenDomains: [
+    'ims-na1.adobelogin.com',
+    'ims-na1-stg1.adobelogin.com',
+    '*.adobelogin.com',
+    '*.adobe.io',
+    'firefall.adobe.io',
+  ],
 
   getModelIds: () => {
     // Helper to propagate metadata from cache

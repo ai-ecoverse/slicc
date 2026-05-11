@@ -117,6 +117,11 @@ export interface ProviderConfig {
   /** Called when the user clicks logout for this OAuth provider. */
   onOAuthLogout?: () => Promise<void>;
   /**
+   * Domains this OAuth token should be unmasked for in fetch-proxy traffic.
+   * Supports wildcards (e.g. '*.github.com').
+   */
+  oauthTokenDomains?: string[];
+  /**
    * Optional: override model capabilities for specific model IDs.
    * Applied after pi-ai registry defaults, before getModelIds metadata.
    */
