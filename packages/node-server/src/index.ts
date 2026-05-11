@@ -1201,7 +1201,25 @@ async function main() {
         // (safe/meaningless) rather than rejecting. This avoids false 403s when
         // LLM conversation context contains masked secrets sent to non-matching
         // domains like Bedrock.
-        if (secretProxy.hasSecrets()) {
+        //
+        // Skip the unmask for non-text content (git packfiles, octet-stream,
+        // ZIPs, images, …) — `Buffer.toString('utf-8')` on arbitrary bytes
+        // replaces invalid sequences with U+FFFD, silently corrupting the
+        // payload. Masked values are hex strings with known prefixes; they
+        // do not appear in deflated git packfiles or other compressed binary,
+        // so skipping is safe.
+        const reqCt = (headers['content-type'] ?? headers['Content-Type'] ?? '').toLowerCase();
+        const reqIsText =
+          !reqCt ||
+          reqCt.startsWith('text/') ||
+          reqCt.includes('json') ||
+          reqCt.includes('xml') ||
+          reqCt.includes('javascript') ||
+          reqCt.includes('ecmascript') ||
+          reqCt.includes('html') ||
+          reqCt.includes('css') ||
+          reqCt.includes('svg');
+        if (reqIsText && secretProxy.hasSecrets()) {
           const bodyStr = rawBody.toString('utf-8');
           const bodyResult = secretProxy.unmaskBody(bodyStr, targetHostname);
           rawBody = Buffer.from(bodyResult.text, 'utf-8');

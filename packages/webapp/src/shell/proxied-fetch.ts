@@ -74,8 +74,14 @@ export async function readResponseBody(resp: Response, url?: string): Promise<Ui
 export const headersToRecord = _headersToRecord;
 
 /**
- * Multipart form bodies contain latin1-encoded binary file content from curl —
- * convert to raw bytes so fetch() doesn't re-encode as UTF-8.
+ * Bodies that are NOT text-shaped (multipart form payloads, git packfiles,
+ * application/octet-stream, etc.) reach this layer as latin1-encoded strings
+ * (one char per byte) — the convention upstream callers use to thread binary
+ * data through `SecureFetch`'s `body: string` contract. `fetch()` would
+ * UTF-8-re-encode such a string, expanding every byte ≥0x80 to two bytes
+ * and corrupting the payload (git push fails for any repo with deflated
+ * objects). Convert back to raw bytes via `getFetchBodyBytes` and ship as
+ * a Blob so the binary survives intact.
  */
 export function prepareRequestBody(
   body: string | undefined,
@@ -83,7 +89,7 @@ export function prepareRequestBody(
 ): BodyInit | undefined {
   if (!body) return undefined;
   const ct = headers?.['Content-Type'] ?? headers?.['content-type'] ?? '';
-  if (ct.includes('multipart/form-data')) {
+  if (!isTextContentType(ct)) {
     const bytes = getFetchBodyBytes(body) as Uint8Array<ArrayBuffer>;
     return new Blob([bytes]);
   }
