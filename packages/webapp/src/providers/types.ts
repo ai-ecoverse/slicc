@@ -117,6 +117,14 @@ export interface ProviderConfig {
   /** Called when the user clicks logout for this OAuth provider. */
   onOAuthLogout?: () => Promise<void>;
   /**
+   * Optional: refresh an expired/expiring token silently from page context.
+   * Called by oauth-bootstrap at page load so the kernel-worker can stream
+   * with a fresh token without needing window access. Returns the new token
+   * (also persists it via saveOAuthAccount) or null if renewal is impossible
+   * (e.g. user must re-authenticate).
+   */
+  onSilentRenew?: () => Promise<string | null>;
+  /**
    * Domains this OAuth token should be unmasked for in fetch-proxy traffic.
    * Supports wildcards (e.g. '*.github.com').
    */

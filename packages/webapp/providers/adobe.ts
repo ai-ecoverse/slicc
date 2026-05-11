@@ -412,6 +412,12 @@ export const config: ProviderConfig = {
     }
     await saveOAuthAccount({ providerId: 'adobe', accessToken: '' });
   },
+
+  onSilentRenew: async () => {
+    const account = getAdobeAccount();
+    if (!account?.accessToken) return null;
+    return silentRenewToken();
+  },
 };
 
 // ── Token access + silent renewal ────────────────────────────────────

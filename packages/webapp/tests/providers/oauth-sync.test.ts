@@ -330,4 +330,69 @@ describe('Bootstrap-on-init re-push', () => {
     // Should have called saveOAuthAccount for github, but NOT expired
     expect(postCallCount).toBe(1);
   });
+
+  it('bootstrap invokes onSilentRenew for expired account when hook is defined', async () => {
+    const lsData: Record<string, string> = {};
+    (globalThis as any).localStorage = {
+      getItem: (k: string) => lsData[k] ?? null,
+      setItem: (k: string, v: string) => {
+        lsData[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete lsData[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(lsData)) delete lsData[k];
+      },
+    };
+    delete (globalThis as any).chrome;
+
+    // Seed one expired account whose provider config has onSilentRenew
+    lsData['slicc_accounts'] = JSON.stringify([
+      {
+        providerId: 'github',
+        apiKey: '',
+        accessToken: 'ghp_old',
+        tokenExpiresAt: Date.now() - 60000, // expired
+        userName: 'user1',
+      },
+    ]);
+
+    let renewCount = 0;
+    const renewSpy = vi.fn(async () => {
+      renewCount++;
+      return 'ghp_new';
+    });
+
+    // Re-mock provider config to include onSilentRenew for github
+    const providersMod = await import('../../src/providers/index.js');
+    const original = providersMod.getRegisteredProviderConfig;
+    (providersMod as any).getRegisteredProviderConfig = (id: string) => {
+      if (id === 'github') {
+        return {
+          id: 'github',
+          name: 'GitHub',
+          requiresApiKey: false,
+          requiresBaseUrl: false,
+          isOAuth: true,
+          oauthTokenDomains: ['github.com'],
+          onSilentRenew: renewSpy,
+        };
+      }
+      return original(id);
+    };
+
+    globalThis.fetch = vi.fn(async () => ({ ok: false }) as any);
+
+    const { __test__ } = await import('../../src/ui/provider-settings.js');
+    __test__._resetLegacyCleanup();
+
+    const { bootstrapOAuthReplicas } = await import('../../src/ui/oauth-bootstrap.js');
+    await bootstrapOAuthReplicas();
+
+    expect(renewCount).toBe(1);
+
+    // Restore
+    (providersMod as any).getRegisteredProviderConfig = original;
+  });
 });
