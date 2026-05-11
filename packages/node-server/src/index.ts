@@ -29,6 +29,7 @@ import { FileLogger } from './file-logger.js';
 import { CliLogDedup } from './cli-log-dedup.js';
 import { EnvSecretStore } from './secrets/env-secret-store.js';
 import { SecretProxyManager } from './secrets/proxy-manager.js';
+import { OauthSecretStore } from './secrets/oauth-secret-store.js';
 import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 
@@ -597,7 +598,8 @@ async function main() {
     ? dirname(RUNTIME_FLAGS.envFile)
     : join(homedir(), '.slicc');
   const sessionId = readOrCreateSessionId(sessionDir);
-  const secretProxy = new SecretProxyManager(undefined, sessionId);
+  const oauthStore = new OauthSecretStore();
+  const secretProxy = new SecretProxyManager(undefined, sessionId, oauthStore);
   try {
     await secretProxy.reload();
     if (secretProxy.hasSecrets()) {
@@ -1027,6 +1029,35 @@ async function main() {
         .status(500)
         .json({ error: err instanceof Error ? err.message : 'Failed to get masked secrets' });
     }
+  });
+
+  // OAuth secret update — stores access token from OAuth login flow
+  app.post('/api/secrets/oauth-update', express.json(), async (req, res) => {
+    const { providerId, accessToken, domains } = req.body ?? {};
+    if (
+      typeof providerId !== 'string' ||
+      typeof accessToken !== 'string' ||
+      !Array.isArray(domains) ||
+      domains.length === 0
+    ) {
+      return res.status(400).json({ error: 'bad-request' });
+    }
+    const name = `oauth.${providerId}.token`;
+    oauthStore.set(name, accessToken, domains);
+    await secretProxy.reload();
+    const masked = secretProxy.getMaskedEntries().find((e) => e.name === name)?.maskedValue;
+    res.json({ providerId, name, maskedValue: masked, domains });
+  });
+
+  // OAuth secret deletion — removes access token on logout
+  app.delete('/api/secrets/oauth/:providerId', async (req, res) => {
+    const name = `oauth.${req.params.providerId}.token`;
+    if (!oauthStore.list().some((e) => e.name === name)) {
+      return res.status(404).json({ error: 'not-found' });
+    }
+    oauthStore.delete(name);
+    await secretProxy.reload();
+    res.status(204).end();
   });
 
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
