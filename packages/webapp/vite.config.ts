@@ -368,6 +368,12 @@ export default defineConfig(({ mode }) => ({
   },
   resolve: {
     alias: {
+      // Workspace `@slicc/shared` points at source so Vite's worker bundle
+      // (kernel-worker via `new Worker(new URL(...))` in spawn.ts) resolves
+      // without requiring `packages/shared/dist/` to exist at build time.
+      // node-server's runtime still consumes the built dist/ via the
+      // package's exports.default.
+      '@slicc/shared': resolve(workspaceRoot, 'packages/shared/src/index.ts'),
       // Buffer polyfill for isomorphic-git (browser compatibility)
       buffer: 'buffer/',
       // The pinned isomorphic-git package resolves "." to index.cjs, and that
