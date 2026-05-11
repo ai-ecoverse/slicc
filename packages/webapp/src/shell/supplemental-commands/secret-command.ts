@@ -263,7 +263,7 @@ export function createSecretCommand(): Command {
           }
 
           // Client-side domain check using the same logic as the fetch proxy
-          const { isAllowedDomain } = await import('../../core/secret-masking.js');
+          const { isAllowedDomain } = await import('@slicc/shared');
           const allowed = isAllowedDomain(entry.domains, hostname);
 
           if (allowed) {
