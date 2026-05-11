@@ -115,7 +115,9 @@ async function fetchProxyConfig(proxyEndpoint: string): Promise<ProxyConfig> {
   const cached = proxyConfigCache.get(proxyEndpoint);
   if (cached) return cached;
   try {
-    const res = await fetch(`${proxyEndpoint}/v1/config`);
+    const res = await fetch(`${proxyEndpoint}/v1/config`, {
+      headers: { [SLICC_VERSION_HEADER]: __SLICC_VERSION__ },
+    });
     if (res.ok) {
       const config = (await res.json()) as ProxyConfig;
       proxyConfigCache.set(proxyEndpoint, config);
@@ -580,6 +582,37 @@ async function silentRenewToken(): Promise<string | null> {
   return renewalInProgress;
 }
 
+// ── SLICC version header ─────────────────────────────────────────────
+
+/**
+ * Name of the header used to attribute Adobe LLM proxy traffic to a
+ * specific SLICC build. Applied to every fetch the Adobe provider makes
+ * against the proxy (`/v1/config`, `/v1/models`, and all LLM stream
+ * requests) — IMS calls (`adobelogin.com`) intentionally don't get it.
+ */
+const SLICC_VERSION_HEADER = 'X-Slicc-Version';
+
+/**
+ * Merge the SLICC version header into the caller's stream options.
+ * Caller-set headers (e.g. `X-Session-Id` from `scoop-context.ts`) are
+ * preserved; the version header always wins on conflict so callers
+ * cannot accidentally spoof it. HTTP headers are case-insensitive, so
+ * we drop any case-variant of `X-Slicc-Version` from caller headers
+ * before injecting ours — otherwise `fetch` would send both values
+ * joined by `, ` and the proxy would see a spoofed value alongside ours.
+ */
+function withSliccVersionHeader<T extends { headers?: Record<string, string> }>(options: T): T {
+  const merged: Record<string, string> = {};
+  const versionKeyLower = SLICC_VERSION_HEADER.toLowerCase();
+  if (options.headers) {
+    for (const [key, value] of Object.entries(options.headers)) {
+      if (key.toLowerCase() !== versionKeyLower) merged[key] = value;
+    }
+  }
+  merged[SLICC_VERSION_HEADER] = __SLICC_VERSION__;
+  return { ...options, headers: merged };
+}
+
 // ── Stream functions (reuse pi-ai's Anthropic provider) ─────────────
 
 function makeErrorOutput(model: Model<Api>, error: unknown) {
@@ -629,10 +662,11 @@ const streamAdobe = (
           api: 'openai-completions' as Api,
           compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
         };
-        const inner = streamOpenAICompletions(proxyModel as any, context, {
-          ...options,
-          apiKey: accessToken,
-        } as any);
+        const inner = streamOpenAICompletions(
+          proxyModel as any,
+          context,
+          withSliccVersionHeader({ ...options, apiKey: accessToken }) as any
+        );
         for await (const event of inner) stream.push(event as any);
       } else {
         // Route to Anthropic Messages API
@@ -641,10 +675,11 @@ const streamAdobe = (
           baseUrl: getProxyEndpoint(),
           api: 'anthropic-messages' as Api,
         };
-        const inner = streamAnthropic(proxyModel as any, context, {
-          ...options,
-          apiKey: accessToken,
-        });
+        const inner = streamAnthropic(
+          proxyModel as any,
+          context,
+          withSliccVersionHeader({ ...options, apiKey: accessToken })
+        );
         for await (const event of inner) stream.push(event as any);
       }
       stream.end();
@@ -674,10 +709,11 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
           api: 'openai-completions' as Api,
           compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
         };
-        const inner = streamSimpleOpenAICompletions(proxyModel as any, context, {
-          ...options,
-          apiKey: accessToken,
-        } as any);
+        const inner = streamSimpleOpenAICompletions(
+          proxyModel as any,
+          context,
+          withSliccVersionHeader({ ...options, apiKey: accessToken }) as any
+        );
         for await (const event of inner) stream.push(event as any);
       } else {
         // Route to Anthropic Messages API
@@ -686,10 +722,11 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
           baseUrl: getProxyEndpoint(),
           api: 'anthropic-messages' as Api,
         };
-        const inner = streamSimpleAnthropic(proxyModel as any, context, {
-          ...options,
-          apiKey: accessToken,
-        } as any);
+        const inner = streamSimpleAnthropic(
+          proxyModel as any,
+          context,
+          withSliccVersionHeader({ ...options, apiKey: accessToken }) as any
+        );
         for await (const event of inner) stream.push(event as any);
       }
       stream.end();
@@ -712,7 +749,10 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
     const accessToken = await getValidAccessToken();
     const endpoint = getProxyEndpoint();
     const res = await fetch(`${endpoint}/v1/models`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        [SLICC_VERSION_HEADER]: __SLICC_VERSION__,
+      },
     });
     if (res.ok) {
       const data = (await res.json()) as { data?: Array<any> };

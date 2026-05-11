@@ -1,6 +1,6 @@
 {
   "name": "sliccy",
-  "version": "2.41.3",
+  "version": "2.42.0",
   "description": "Browser-based coding agent with thin CLI server",
   "license": "Apache-2.0",
   "type": "module",
@@ -85,7 +85,7 @@
     "semantic-release": "25.0.3",
     "tsx": "4.21.0",
     "typescript": "^6.0.0",
-    "typescript-eslint": "8.59.1",
+    "typescript-eslint": "8.59.2",
     "vite": "8.0.10",
     "vitest": "4.1.5"
   },
