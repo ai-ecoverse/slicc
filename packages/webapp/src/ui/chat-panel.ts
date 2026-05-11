@@ -258,10 +258,19 @@ export class ChatPanel {
   /** Latest pending snapshot per anchor: the signature we'll request a
    *  label for, plus every preview element that should receive the
    *  result (including orphaned ones from intermediate reflows — those
-   *  are filtered with `isConnected` at settle time). */
+   *  are filtered with `isConnected` at settle time). `inFlight` flips
+   *  true once `fireClusterLabelRequest` has actually called the LLM
+   *  for this signature, so identical-signature reschedules (the same
+   *  cluster reflowing during streaming) can enroll their new
+   *  previewEl without starting a duplicate request. */
   private clusterLabelPending = new Map<
     string,
-    { signature: string; toolCalls: readonly ToolCall[]; elements: Set<HTMLElement> }
+    {
+      signature: string;
+      toolCalls: readonly ToolCall[];
+      elements: Set<HTMLElement>;
+      inFlight: boolean;
+    }
   >();
   /** Debounce window before a cluster-label request actually fires.
    *  Short enough that a finished cluster gets its label promptly, long
@@ -1442,19 +1451,35 @@ export class ChatPanel {
     const stickyLabel = this.clusterLabelByAnchor.get(anchor);
     if (stickyLabel) previewEl.textContent = stickyLabel;
 
-    // Enroll this previewEl in the pending entry for `anchor`. If the
-    // signature changed since the last schedule, replace the snapshot
-    // but carry over the element set — orphaned elements get filtered
-    // out by `isConnected` at settle time, and any still-connected one
-    // (a freshly rebuilt cluster body) should also receive the result.
+    // Enroll this previewEl in the pending entry for `anchor`. Three
+    // cases:
+    //
+    //   1. No pending entry — first schedule for this anchor; create one.
+    //   2. Same signature — cluster re-rendered with no new tool calls
+    //      (typical during streaming reflows). Just enroll the new
+    //      element. If a request is already in flight, that's the only
+    //      thing to do; do NOT reset the debounce timer or fire again
+    //      (would duplicate the LLM call for an identical signature).
+    //   3. Signature changed — newer snapshot supersedes the old one.
+    //      Carry over the element set (orphaned ones drop out at
+    //      settle via `isConnected`) and clear `inFlight` so the new
+    //      signature gets its own request once the debounce expires.
+    //      Any still-in-flight call for the old signature will drop
+    //      its result at settle time on the signature mismatch.
     const existing = this.clusterLabelPending.get(anchor);
-    const elements = existing?.elements ?? new Set<HTMLElement>();
-    elements.add(previewEl);
-    this.clusterLabelPending.set(anchor, {
-      signature,
-      toolCalls: [...toolCalls],
-      elements,
-    });
+    if (existing && existing.signature === signature) {
+      existing.elements.add(previewEl);
+      if (existing.inFlight) return;
+    } else {
+      const elements = existing?.elements ?? new Set<HTMLElement>();
+      elements.add(previewEl);
+      this.clusterLabelPending.set(anchor, {
+        signature,
+        toolCalls: [...toolCalls],
+        elements,
+        inFlight: false,
+      });
+    }
 
     // Debounce: reset the timer on every fresh call. A burst of tool
     // calls keeps pushing the firing time out so we only pay for one
@@ -1474,6 +1499,10 @@ export class ChatPanel {
   private fireClusterLabelRequest(anchor: string): void {
     const pending = this.clusterLabelPending.get(anchor);
     if (!pending) return;
+    // Mark in-flight so an identical-signature reschedule (e.g. a
+    // streaming-driven reflow that doesn't actually grow the cluster)
+    // enrolls its new previewEl instead of firing a duplicate request.
+    pending.inFlight = true;
     const { signature, toolCalls } = pending;
 
     const formatted = toolCalls

@@ -203,6 +203,51 @@ describe('ChatPanel cluster-label LLM behavior', () => {
     expect(previewEl()?.textContent).toBe('Inspect repository files and tests');
   });
 
+  it('does not fire a duplicate request when the same signature reschedules while a request is in flight', async () => {
+    // Hold the first quickLabel call open so we can re-trigger
+    // `scheduleClusterLabel` for the same signature while it's still
+    // pending. Without the in-flight guard, the second schedule would
+    // reset the debounce timer and fire a second identical request.
+    let resolveFirst: (v: string) => void = () => {};
+    quickLabelMock.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveFirst = resolve;
+        })
+    );
+
+    const messages: ChatMessage[] = [
+      { id: 'u1', role: 'user', content: 'go', timestamp: 1000 },
+      assistantMsg('a1', [tc({ id: 'tc-1', name: 'bash' })], 2000),
+      assistantMsg('a2', [tc({ id: 'tc-2', name: 'bash' })], 2100),
+      assistantMsg('a3', [tc({ id: 'tc-3', name: 'bash' })], 2200),
+    ];
+    panel.loadMessages(messages);
+
+    // Drive the debounce past expiry — the LLM call is now in flight.
+    vi.advanceTimersByTime(DEBOUNCE_MS);
+    await flushMicrotasks();
+    expect(quickLabelMock).toHaveBeenCalledTimes(1);
+
+    // Streaming-style reflow: same signature, no new tool calls. This
+    // happens whenever `updateMessageEl` rebuilds the cluster while
+    // results trickle in. We must NOT enqueue a second request.
+    panel.loadMessages(messages);
+    panel.loadMessages(messages);
+
+    // Even after another full debounce window, still no duplicate.
+    vi.advanceTimersByTime(DEBOUNCE_MS * 2);
+    await flushMicrotasks();
+    expect(quickLabelMock).toHaveBeenCalledTimes(1);
+
+    // When the original request finally resolves, every still-
+    // connected previewEl (including the freshly rebuilt one) is
+    // updated.
+    resolveFirst('List repository contents');
+    await flushMicrotasks();
+    expect(previewEl()?.textContent).toBe('List repository contents');
+  });
+
   it('reuses the cached label for an identical re-render without firing again', async () => {
     quickLabelMock.mockResolvedValue('Compare drafts against published files');
 
