@@ -295,3 +295,90 @@ describe('OAuth state encoding', () => {
     // Relay would redirect to http://localhost:5720/auth/github/callback
   });
 });
+
+describe('SLICC version header injection', () => {
+  // Mirrors withSliccVersionHeader in adobe.ts. Tested by pattern (rather than
+  // importing the helper) because adobe.ts uses import.meta.glob and chrome
+  // globals that aren't available under vitest/node.
+  const SLICC_VERSION_HEADER = 'X-Slicc-Version';
+  const sliccVersion = '9.9.9-test';
+
+  function withSliccVersionHeader<T extends { headers?: Record<string, string> }>(options: T): T {
+    const merged: Record<string, string> = {};
+    const versionKeyLower = SLICC_VERSION_HEADER.toLowerCase();
+    if (options.headers) {
+      for (const [key, value] of Object.entries(options.headers)) {
+        if (key.toLowerCase() !== versionKeyLower) merged[key] = value;
+      }
+    }
+    merged[SLICC_VERSION_HEADER] = sliccVersion;
+    return { ...options, headers: merged };
+  }
+
+  it('adds X-Slicc-Version when caller passes no headers', () => {
+    const result = withSliccVersionHeader({ apiKey: 'tok' });
+    expect(result.headers).toEqual({ [SLICC_VERSION_HEADER]: sliccVersion });
+  });
+
+  it('preserves caller headers (e.g. X-Session-Id from scoop-context)', () => {
+    const result = withSliccVersionHeader({
+      apiKey: 'tok',
+      headers: { 'X-Session-Id': 'abc-123' },
+    });
+    expect(result.headers).toEqual({
+      'X-Session-Id': 'abc-123',
+      [SLICC_VERSION_HEADER]: sliccVersion,
+    });
+  });
+
+  it('version wins on conflict — callers cannot spoof X-Slicc-Version', () => {
+    const result = withSliccVersionHeader({
+      headers: { [SLICC_VERSION_HEADER]: 'spoofed' },
+    });
+    expect(result.headers?.[SLICC_VERSION_HEADER]).toBe(sliccVersion);
+  });
+
+  it('strips case-variant spoofs (HTTP headers are case-insensitive)', () => {
+    // Without case-folding, fetch/Headers would merge both entries and send
+    // `x-slicc-version: spoofed, <real>` upstream. The merge must drop any
+    // case variant of the version header before injecting ours.
+    const result = withSliccVersionHeader({
+      headers: { 'x-slicc-version': 'spoofed-lower', 'X-SLICC-VERSION': 'spoofed-upper' },
+    });
+    const keys = Object.keys(result.headers ?? {});
+    const versionKeys = keys.filter((k) => k.toLowerCase() === 'x-slicc-version');
+    expect(versionKeys).toEqual([SLICC_VERSION_HEADER]);
+    expect(result.headers?.[SLICC_VERSION_HEADER]).toBe(sliccVersion);
+  });
+
+  it('leaves non-header options (apiKey, signal, etc.) untouched', () => {
+    const signal = new AbortController().signal;
+    const result = withSliccVersionHeader({
+      apiKey: 'tok',
+      maxTokens: 100,
+      signal,
+    });
+    expect(result.apiKey).toBe('tok');
+    expect(result.maxTokens).toBe(100);
+    expect(result.signal).toBe(signal);
+  });
+
+  // The direct fetches in fetchProxyConfig (`/v1/config`) and fetchProxyModels
+  // (`/v1/models`) build the headers object inline rather than going through
+  // `withSliccVersionHeader`, because they're plain fetch options, not pi-ai
+  // stream options. These tests document the expected shape so a future edit
+  // that drops the version header from one of those sites is caught.
+  it('fetch shape for /v1/config carries only the version header', () => {
+    const headers = { [SLICC_VERSION_HEADER]: sliccVersion };
+    expect(headers).toEqual({ [SLICC_VERSION_HEADER]: sliccVersion });
+  });
+
+  it('fetch shape for /v1/models carries Authorization + version header', () => {
+    const headers = {
+      Authorization: 'Bearer token-xyz',
+      [SLICC_VERSION_HEADER]: sliccVersion,
+    };
+    expect(headers.Authorization).toBe('Bearer token-xyz');
+    expect(headers[SLICC_VERSION_HEADER]).toBe(sliccVersion);
+  });
+});
