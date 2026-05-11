@@ -225,6 +225,28 @@ describe('websocat command', () => {
     vi.useRealTimers();
   });
 
+  it('does not hang when the socket fires error before open (refused)', async () => {
+    const Ctor = makeCtor();
+    const promise = runWebsocat(['ws://refused'], { stdin: '' }, { WebSocketCtor: Ctor });
+    await new Promise((r) => setTimeout(r, 0));
+    const sock = MockWebSocket.instances[0];
+    sock.fireError();
+    sock.fireClose(1006, 'refused');
+    const r = await promise;
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('connect');
+  });
+
+  it('does not hang when the socket closes before open (no error event)', async () => {
+    const Ctor = makeCtor();
+    const promise = runWebsocat(['ws://aborted'], { stdin: '' }, { WebSocketCtor: Ctor });
+    await new Promise((r) => setTimeout(r, 0));
+    const sock = MockWebSocket.instances[0];
+    sock.fireClose(1006, '');
+    const r = await promise;
+    expect(r.exitCode).toBe(1);
+  });
+
   it('warns under -v that custom headers are not honored', async () => {
     const Ctor = makeCtor();
     const promise = runWebsocat(

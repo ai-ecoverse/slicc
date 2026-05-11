@@ -420,16 +420,28 @@ export async function runWebsocat(
   ws.binaryType = 'arraybuffer';
 
   let received = 0;
+  // Cap the in-memory output buffer to bound RSS for long-running sessions.
+  // Inbound messages beyond this drop with a single diagnostic warning so the
+  // command can't OOM the host page on a chatty server when neither -1 nor
+  // --max-messages is set.
+  const MAX_OUT_LINES = 10000;
+  let droppedForOverflow = 0;
+  let opened = false;
   let openedResolve!: () => void;
   let openedReject!: (e: Error) => void;
-  const opened = new Promise<void>((res, rej) => {
+  const openedPromise = new Promise<void>((res, rej) => {
     openedResolve = res;
     openedReject = rej;
   });
 
   let doneResolve!: (code: number) => void;
+  let doneSettled = false;
   const done = new Promise<number>((res) => {
-    doneResolve = res;
+    doneResolve = (code: number) => {
+      if (doneSettled) return;
+      doneSettled = true;
+      res(code);
+    };
   });
 
   let exitCode = 0;
@@ -441,11 +453,12 @@ export async function runWebsocat(
     } catch {
       /* noop */
     }
-    openedReject(new Error('connect timeout'));
+    if (!opened) openedReject(new Error('connect timeout'));
   }, parsed.connTimeoutMs);
 
   ws.onopen = () => {
     clearTimeout(connTimer);
+    opened = true;
     openedResolve();
   };
 
@@ -477,7 +490,16 @@ export async function runWebsocat(
       bytes = bytes.slice(0, parsed.bufferSize);
     }
     const line = isBinary && parsed.base64 ? bytesToBase64(bytes) : bytesToTextSafe(bytes);
-    outLines.push(line);
+    if (outLines.length < MAX_OUT_LINES) {
+      outLines.push(line);
+    } else if (droppedForOverflow === 0) {
+      note(
+        `output buffer reached ${MAX_OUT_LINES} messages; dropping further inbound messages — use -1, --max-messages, or pipe to a file with a different tool for long-running streams`
+      );
+      droppedForOverflow += 1;
+    } else {
+      droppedForOverflow += 1;
+    }
     received += 1;
 
     if (parsed.maxMessages !== undefined && received >= parsed.maxMessages) {
@@ -496,6 +518,10 @@ export async function runWebsocat(
     if (timedOut) return;
     note('websocket error');
     exitCode = 1;
+    // If the error fires before onopen, no future open event is coming —
+    // reject the opened promise so the outer await doesn't hang. The follow-up
+    // onclose still drives the final exit code.
+    if (!opened) openedReject(new Error('connect failed'));
   };
 
   ws.onclose = (ev: CloseEvent) => {
@@ -511,6 +537,9 @@ export async function runWebsocat(
       // Non-normal close → non-zero exit
       exitCode = 1;
     }
+    // Same defensive rejection as in onerror: if the socket closes before
+    // open, the outer `await opened` must unblock.
+    if (!opened) openedReject(new Error(`connect closed (code ${ev.code})`));
     doneResolve(exitCode);
   };
 
@@ -524,7 +553,7 @@ export async function runWebsocat(
   }
 
   try {
-    await opened;
+    await openedPromise;
   } catch (err) {
     clearTimeout(connTimer);
     const m = err instanceof Error ? err.message : String(err);
@@ -568,6 +597,9 @@ export async function runWebsocat(
   }
 
   const code = await done;
+  if (droppedForOverflow > 0) {
+    note(`dropped ${droppedForOverflow} inbound message(s) due to output buffer cap`);
+  }
   const stdout = outLines.length ? outLines.join(outSep) + outSep : '';
   const stderr = diagnostics.length ? diagnostics.join('\n') + '\n' : '';
   return { stdout, stderr, exitCode: code };
