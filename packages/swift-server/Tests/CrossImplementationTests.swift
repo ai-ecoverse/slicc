@@ -48,6 +48,16 @@ final class CrossImplementationTests: XCTestCase {
             value: "value with spaces",
             expected: "3a7af4ae08a5ccb55"
         ),
+        // Pin the UTF-16 code-unit length contract. `tok🎉end` is 8 UTF-16
+        // code units (emoji = surrogate pair) but 7 grapheme clusters.
+        // Swift's `mask` uses `.utf16.count` to match JS `String.length`;
+        // this vector catches a regression to `String.count` (graphemes).
+        Vector(
+            sessionId: "session-utf16",
+            name: "EMOJI_VALUE",
+            value: "tok🎉end",
+            expected: "d2317bc7"
+        ),
     ]
 
     func testMaskMatchesPinnedVectors() {

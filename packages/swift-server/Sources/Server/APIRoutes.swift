@@ -279,11 +279,27 @@ func registerAPIRoutes(
 
     for method in fetchProxyMethods {
         router.on("/api/fetch-proxy", method: method) { request, _ in
-            guard let targetURLValue = request.headers[targetURLHeader],
-                  let targetURL = URL(string: targetURLValue) else {
+            guard let initialTargetURLValue = request.headers[targetURLHeader] else {
                 return try proxyErrorResponse(status: .badRequest, message: "Missing X-Target-URL header")
             }
 
+            // Step 1: extract any URL-embedded credentials BEFORE the inject loop.
+            // A target URL like `https://x-access-token:<masked>@github.com/...`
+            // hides the masked value inside the userinfo segment, which plain
+            // substring `inject` would never see. `extractAndUnmaskUrlCredentials`
+            // decodes the userinfo, unmasks against the target host, strips it
+            // from the URL, and returns a synthetic `Authorization: Basic`
+            // header for the unmask path. Domain-block here is terminal.
+            let urlCreds = secretInjector.extractAndUnmaskUrlCredentials(rawUrl: initialTargetURLValue)
+            if let forbidden = urlCreds.forbidden {
+                return try proxyErrorResponse(
+                    status: .forbidden,
+                    message: "Secret \(forbidden.secretName) is not allowed for domain \(forbidden.hostname)"
+                )
+            }
+            guard let targetURL = URL(string: urlCreds.url) else {
+                return try proxyErrorResponse(status: .badRequest, message: "Malformed X-Target-URL")
+            }
             let targetHostname = targetURL.host ?? ""
 
             do {
@@ -291,7 +307,38 @@ func registerAPIRoutes(
 
                 // --- Secret injection: scan headers + body for masked values ---
                 var injectedHeaders = request.headers
+                // Reflect the URL-cred sanitization back into the
+                // outbound X-Target-URL header so the upstream-URL we
+                // compute below matches what makeProxyRequest sees.
+                injectedHeaders[targetURLHeader] = urlCreds.url
+                // If we extracted URL creds AND the caller didn't already
+                // send an Authorization header, attach the synthetic one
+                // built from the unmasked userinfo.
+                if let synthetic = urlCreds.syntheticAuthorization,
+                   injectedHeaders[.authorization] == nil {
+                    injectedHeaders[.authorization] = synthetic
+                }
                 for field in request.headers {
+                    // Detect Basic-auth headers so the masked password
+                    // (hidden inside base64) gets decoded, unmasked, and
+                    // re-encoded — substring `inject` cannot see it.
+                    if field.name == .authorization,
+                       field.value.lowercased().hasPrefix("basic ") {
+                        let basic = secretInjector.unmaskAuthorizationBasic(
+                            value: field.value,
+                            targetHostname: targetHostname
+                        )
+                        if let forbidden = basic.forbidden {
+                            return try proxyErrorResponse(
+                                status: .forbidden,
+                                message: "Secret \(forbidden.secretName) is not allowed for domain \(forbidden.hostname)"
+                            )
+                        }
+                        if basic.value != field.value {
+                            injectedHeaders[field.name] = basic.value
+                        }
+                        continue
+                    }
                     switch secretInjector.inject(text: field.value, hostname: targetHostname) {
                     case .success(let replaced):
                         if replaced != field.value {
@@ -305,14 +352,32 @@ func registerAPIRoutes(
                     }
                 }
 
-                // Inject secrets into request body — uses injectBody which leaves
-                // masked values as-is on domain mismatch (safe/meaningless) rather
-                // than rejecting. Avoids false 403s from LLM conversation context.
-                if rawBody.readableBytes > 0,
-                   let bodyString = rawBody.getString(at: rawBody.readerIndex, length: rawBody.readableBytes) {
-                    let replaced = secretInjector.injectBody(text: bodyString, hostname: targetHostname)
-                    if replaced != bodyString {
-                        rawBody = ByteBuffer(string: replaced)
+                // Inject secrets into request body. Text bodies (json, form, etc.)
+                // go through the string-replace `injectBody` path; binary bodies
+                // (git packfiles, octet-stream, images) go through byte-safe
+                // `unmaskBodyBytes` so non-UTF-8 byte sequences don't get
+                // corrupted by the `String` round-trip. injectBody/unmaskBodyBytes
+                // both leave masked values intact on domain mismatch (safe,
+                // matches TS — avoids false 403s from LLM conversation context).
+                if rawBody.readableBytes > 0 {
+                    let contentType = (injectedHeaders[.contentType] ?? "").lowercased()
+                    let isText = contentType.isEmpty
+                        || contentType.hasPrefix("text/")
+                        || contentType.contains("json")
+                        || contentType.contains("xml")
+                        || contentType.contains("urlencoded")
+                        || contentType.contains("javascript")
+                    if isText,
+                       let bodyString = rawBody.getString(at: rawBody.readerIndex, length: rawBody.readableBytes) {
+                        let replaced = secretInjector.injectBody(text: bodyString, hostname: targetHostname)
+                        if replaced != bodyString {
+                            rawBody = ByteBuffer(string: replaced)
+                        }
+                    } else if let bodyData = rawBody.getData(at: rawBody.readerIndex, length: rawBody.readableBytes) {
+                        let replaced = secretInjector.unmaskBodyBytes(bytes: bodyData, targetHostname: targetHostname)
+                        if replaced != bodyData {
+                            rawBody = ByteBuffer(data: replaced)
+                        }
                     }
                 }
 

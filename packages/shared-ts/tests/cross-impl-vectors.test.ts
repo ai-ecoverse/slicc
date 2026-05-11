@@ -40,6 +40,16 @@ const PINNED = [
     value: 'value with spaces',
     expected: '3a7af4ae08a5ccb55',
   },
+  // Pin the UTF-16 code-unit length contract: an emoji is 2 code units
+  // in JS String.length (`tok🎉end` = 8), 1 grapheme in Swift String.count
+  // (= 7). Swift uses `.utf16.count` for parity; this vector catches a
+  // regression to grapheme-counting in either implementation.
+  {
+    sessionId: 'session-utf16',
+    name: 'EMOJI_VALUE',
+    value: 'tok🎉end',
+    expected: 'd2317bc7',
+  },
 ];
 
 describe('cross-implementation mask vectors', () => {

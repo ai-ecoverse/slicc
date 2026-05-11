@@ -10,7 +10,11 @@ import Foundation
 ///
 /// Call `reload()` after secret mutations (POST/DELETE) to pick up changes
 /// while keeping the same session ID for stable masked values.
-public final class SecretInjector: Sendable {
+// `@unchecked Sendable` because mutable state (`_sessionId`, `_secrets`, `_scrubber`,
+// `_oauthStore`) is `nonisolated(unsafe)` and all access is serialized by `lock`
+// (NSLock). This makes the "trust me, I'm thread-safe" claim explicit and is
+// required under Swift 6 strict-concurrency mode.
+public final class SecretInjector: @unchecked Sendable {
 
     /// A loaded secret with its masked counterpart.
     struct LoadedSecret: Sendable {

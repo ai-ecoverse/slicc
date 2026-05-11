@@ -157,6 +157,12 @@ export default defineConfig(({ mode }) => ({
           target: 'esnext',
           minify: true,
           define: { __DEV__: 'false', global: 'globalThis' },
+          // Same alias as the SW build above — standalone esbuild doesn't
+          // inherit Vite's resolve.alias, so without this the
+          // `@slicc/shared-ts` import in secrets-entry.ts fails to resolve.
+          alias: {
+            '@slicc/shared-ts': resolve(repoRoot, 'packages/shared-ts/src/index.ts'),
+          },
         });
       },
     },
