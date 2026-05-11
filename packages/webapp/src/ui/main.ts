@@ -1948,6 +1948,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   });
   await sprinkleManager.refresh();
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);
+  layout.resolveSprinkleIcon = (spec) => resolveSprinkleIconHtml(spec, localFs);
   await sprinkleManager.restoreOpenSprinkles().catch((err) => {
     log.warn('Failed to restore open sprinkles', err);
   });

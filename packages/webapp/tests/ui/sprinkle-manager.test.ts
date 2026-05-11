@@ -235,4 +235,30 @@ describe('SprinkleManager', () => {
 
     vfs.readFile = originalReadFile;
   });
+
+  it('open forwards the declared icon spec to the addSprinkle callback', async () => {
+    // Custom icon contract: a sprinkle declaring <link rel="icon">
+    // must surface the raw spec in the addSprinkle options so the
+    // layout can resolve it (Lucide / VFS path / inline SVG / data URL)
+    // and swap the rail glyph. Regression guard: if the manager stops
+    // forwarding `icon`, every per-sprinkle rail glyph reverts to the
+    // generic Sparkles default and the breakage is silent.
+    await vfs.writeFile(
+      '/shared/sprinkles/iconic/iconic.shtml',
+      '<title>Iconic</title><link rel="icon" href="music" /><div>hi</div>'
+    );
+    await mgr.refresh();
+    await mgr.open('iconic');
+
+    expect(addSprinkle).toHaveBeenCalledTimes(1);
+    const [name, , , , options] = addSprinkle.mock.calls[0] as [
+      string,
+      string,
+      unknown,
+      unknown,
+      { icon?: string } | undefined,
+    ];
+    expect(name).toBe('iconic');
+    expect(options?.icon).toBe('music');
+  });
 });
