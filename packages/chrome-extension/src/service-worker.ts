@@ -34,7 +34,7 @@ import {
   type SignAndForwardReply,
 } from '../../webapp/src/fs/mount/sign-and-forward-shared.js';
 import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
-import { listSecretsWithValues } from './secrets-storage.js';
+import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './secrets-storage.js';
 import { readOrCreateSwSessionId } from './sw-session-id.js';
 import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared';
 // ---------------------------------------------------------------------------
@@ -755,6 +755,71 @@ chrome.runtime.onMessage.addListener(
             entries: [],
             error: err instanceof Error ? err.message : String(err),
           });
+        }
+      })();
+      return true;
+    }
+    // The panel-terminal `secret` command can't touch chrome.storage directly:
+    // it runs in the offscreen document, which lacks chrome.storage even when
+    // the manifest grants it (MV3 quirk). Route the management ops through
+    // the SW, which DOES have chrome.storage.
+    if (typeof msg === 'object' && msg != null && 'type' in msg && msg.type === 'secrets.list') {
+      (async () => {
+        try {
+          const entries = await listSecrets(chrome.storage.local as any);
+          sendResponse({ entries });
+        } catch (err) {
+          console.error('[sw] secrets.list failed', err);
+          sendResponse({
+            entries: [],
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+      return true;
+    }
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.set' &&
+      'name' in msg &&
+      typeof msg.name === 'string' &&
+      'value' in msg &&
+      typeof msg.value === 'string' &&
+      'domains' in msg &&
+      Array.isArray(msg.domains)
+    ) {
+      const name = msg.name;
+      const value = msg.value;
+      const domains = (msg.domains as unknown[]).filter((d): d is string => typeof d === 'string');
+      (async () => {
+        try {
+          await setSecret(chrome.storage.local as any, name, value, domains);
+          sendResponse({ ok: true });
+        } catch (err) {
+          console.error('[sw] secrets.set failed', err);
+          sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+      })();
+      return true;
+    }
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.delete' &&
+      'name' in msg &&
+      typeof msg.name === 'string'
+    ) {
+      const name = msg.name;
+      (async () => {
+        try {
+          await deleteSecret(chrome.storage.local as any, name);
+          sendResponse({ ok: true });
+        } catch (err) {
+          console.error('[sw] secrets.delete failed', err);
+          sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
         }
       })();
       return true;

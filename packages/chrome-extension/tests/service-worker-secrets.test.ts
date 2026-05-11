@@ -35,6 +35,10 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
             return out;
           }),
           set: vi.fn(async (obj: Record<string, string>) => Object.assign(storageMap, obj)),
+          remove: vi.fn(async (keys: string | string[]) => {
+            const arr = Array.isArray(keys) ? keys : [keys];
+            for (const k of arr) delete storageMap[k];
+          }),
         },
       },
       sidePanel: { setPanelBehavior: vi.fn() },
@@ -126,6 +130,82 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
     expect(github).toBeDefined();
     expect(github.maskedValue).toMatch(/^ghp_[a-f0-9]+$/);
     expect(github.domains).toEqual(['api.github.com']);
+  });
+
+  // Regression: the panel-terminal `secret` command runs in the offscreen
+  // document where chrome.storage is NOT exposed (MV3 quirk). The handlers
+  // below route management ops through the SW, which DOES have storage.
+  it('secrets.list returns {name, domains}[] from chrome.storage.local (no values)', async () => {
+    await import('../src/service-worker.js');
+    let response: any;
+    let kept = false;
+    for (const l of messageListeners) {
+      const result = l({ type: 'secrets.list' }, {}, (r: any) => {
+        response = r;
+      });
+      if (result === true) {
+        kept = true;
+        break;
+      }
+    }
+    expect(kept).toBe(true);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(response).toBeDefined();
+    expect(Array.isArray(response.entries)).toBe(true);
+    const github = response.entries.find((e: any) => e.name === 'GITHUB_TOKEN');
+    expect(github).toBeDefined();
+    expect(github.domains).toEqual(['api.github.com']);
+    // value must NOT be returned
+    expect(github.value).toBeUndefined();
+  });
+
+  it('secrets.set writes {name, name_DOMAINS} to chrome.storage.local', async () => {
+    await import('../src/service-worker.js');
+    let response: any;
+    let kept = false;
+    for (const l of messageListeners) {
+      const result = l(
+        {
+          type: 'secrets.set',
+          name: 'NEW_SECRET',
+          value: 'new-real-value',
+          domains: ['api.new.com', '*.new.com'],
+        },
+        {},
+        (r: any) => {
+          response = r;
+        }
+      );
+      if (result === true) {
+        kept = true;
+        break;
+      }
+    }
+    expect(kept).toBe(true);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(response).toEqual({ ok: true });
+    expect(storageMap.NEW_SECRET).toBe('new-real-value');
+    expect(storageMap.NEW_SECRET_DOMAINS).toBe('api.new.com,*.new.com');
+  });
+
+  it('secrets.delete removes both name and name_DOMAINS', async () => {
+    await import('../src/service-worker.js');
+    let response: any;
+    let kept = false;
+    for (const l of messageListeners) {
+      const result = l({ type: 'secrets.delete', name: 'GITHUB_TOKEN' }, {}, (r: any) => {
+        response = r;
+      });
+      if (result === true) {
+        kept = true;
+        break;
+      }
+    }
+    expect(kept).toBe(true);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(response).toEqual({ ok: true });
+    expect(storageMap.GITHUB_TOKEN).toBeUndefined();
+    expect(storageMap.GITHUB_TOKEN_DOMAINS).toBeUndefined();
   });
 
   it('secrets.mask-oauth-token returns the masked value for an oauth.<id>.token entry', async () => {
