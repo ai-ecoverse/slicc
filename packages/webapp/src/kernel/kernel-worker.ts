@@ -167,6 +167,7 @@ function installLocalStorageShim(seed: Record<string, string>): void {
 
 let host: KernelHost | null = null;
 let stopTerminalHost: (() => void) | null = null;
+let panelRpcClient: { dispose: () => void } | null = null;
 
 /**
  * Wire the init listener using a double-init guard. Exported via
@@ -243,6 +244,17 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   (globalThis as Record<string, unknown>).__slicc_sprinkleManager =
     createSprinkleManagerProxyOverChannel({ instanceId: init.instanceId });
 
+  // Publish the panel-RPC bridge client. DOM-bound shell supplemental
+  // commands (`screencapture`, `say`, `afplay`, `pbcopy`/`pbpaste`,
+  // `open`, plus `playwright`'s appOrigin lookup) detect this global
+  // and route their DOM calls to the page handler installed by
+  // `mainStandaloneWorker`. See `kernel/panel-rpc.ts` for the op
+  // surface. `imgcat` is intentionally NOT bridged — it's terminal-only
+  // and the panel WasmShell renders the preview locally.
+  const { createPanelRpcClient } = await import('./panel-rpc.js');
+  panelRpcClient = createPanelRpcClient({ instanceId: init.instanceId });
+  (globalThis as Record<string, unknown>).__slicc_panelRpc = panelRpcClient;
+
   // Take the process manager from the kernel host so scoop-turns
   // (registered by `ScoopContext`) and shell execs (registered by
   // `TerminalSessionHost`) land in the same table. `createKernelHost`
@@ -285,5 +297,7 @@ self.addEventListener('message', (event: MessageEvent) => {
   if (data?.type !== 'kernel-worker-shutdown') return;
   stopTerminalHost?.();
   stopTerminalHost = null;
+  panelRpcClient?.dispose();
+  panelRpcClient = null;
   void host?.dispose();
 });

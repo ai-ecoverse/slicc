@@ -1,6 +1,7 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 import { basename, detectMimeType, isLikelyUrl, toPreviewUrl } from './shared.js';
+import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 
 const FLAGS = ['--download', '-d', '--view', '-v'] as const;
 
@@ -53,6 +54,34 @@ export function createOpenCommand(): Command {
       | import('../../ui/sprinkle-manager.js').SprinkleManager
       | undefined;
     const hasDom = typeof window !== 'undefined' && typeof document !== 'undefined';
+    const panelRpc = !hasDom ? getPanelRpcClient() : null;
+    const canOpenWindow = hasDom || !!panelRpc;
+    /**
+     * Open a URL in a new tab. Throws an Error with a stable `open:`
+     * prefix on the bridged path so callers can rely on a consistent
+     * error shape (panel-RPC rejections — handler not installed,
+     * timeout — would otherwise bubble as raw `panel-rpc: …` strings).
+     * Callers wrap this in try/catch to map to a `{ stderr, exitCode }`
+     * result.
+     */
+    const openExternal = async (url: string): Promise<void> => {
+      if (hasDom) {
+        // window.open() returns null in extension contexts (offscreen/
+        // side panel) even when the tab opens successfully — don't
+        // treat null as failure.
+        window.open(url, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      try {
+        await panelRpc!.call('window-open', {
+          url,
+          target: '_blank',
+          features: 'noopener,noreferrer',
+        });
+      } catch (err) {
+        throw new Error(`open: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
 
     const results: string[] = [];
 
@@ -76,9 +105,17 @@ export function createOpenCommand(): Command {
               exitCode: 1,
             };
           }
-        } else if (hasDom) {
+        } else if (canOpenWindow) {
           const previewUrl = toPreviewUrl(fullPath);
-          window.open(previewUrl, '_blank', 'noopener,noreferrer');
+          try {
+            await openExternal(previewUrl);
+          } catch (err) {
+            return {
+              stdout: '',
+              stderr: `${err instanceof Error ? err.message : String(err)}\n`,
+              exitCode: 1,
+            };
+          }
           results.push(`opened ${fullPath} → ${previewUrl}`);
         } else {
           return {
@@ -90,9 +127,10 @@ export function createOpenCommand(): Command {
         continue;
       }
 
-      // Every remaining branch needs a DOM (window.open / document.body
-      // / Blob href download). Bail out here for the worker-shell case.
-      if (!hasDom) {
+      // `--view` only needs file I/O + base64 (no DOM); every other
+      // mode needs either a DOM (anchor-click download) or a way to
+      // open a tab (`canOpenWindow`). Bail early when no mode applies.
+      if (!view && !canOpenWindow) {
         return {
           stdout: '',
           stderr: 'open: browser APIs are unavailable in this environment\n',
@@ -101,9 +139,22 @@ export function createOpenCommand(): Command {
       }
 
       if (isLikelyUrl(target)) {
-        // window.open() returns null in extension contexts (offscreen/side panel)
-        // even when the tab opens successfully — don't treat null as failure
-        window.open(target, '_blank', 'noopener,noreferrer');
+        if (!canOpenWindow) {
+          return {
+            stdout: '',
+            stderr: 'open: browser APIs are unavailable in this environment\n',
+            exitCode: 1,
+          };
+        }
+        try {
+          await openExternal(target);
+        } catch (err) {
+          return {
+            stdout: '',
+            stderr: `${err instanceof Error ? err.message : String(err)}\n`,
+            exitCode: 1,
+          };
+        }
         results.push(`opened ${target}`);
         continue;
       }
@@ -145,6 +196,18 @@ export function createOpenCommand(): Command {
           `${path} (${Math.round(bytes.byteLength / 1024)} KB)\n<img:data:${mimeType};base64,${base64}>`
         );
       } else if (download) {
+        if (!hasDom) {
+          // Anchor-click download requires DOM; the bridge can't fake
+          // a browser download trigger from the page without surfacing
+          // the bytes through a transient blob URL on its own, which
+          // would still need the user to be on the page. Surface a
+          // clear error rather than silently failing.
+          return {
+            stdout: '',
+            stderr: 'open: --download requires the in-panel terminal (DOM-only)\n',
+            exitCode: 1,
+          };
+        }
         let stat;
         try {
           stat = await ctx.fs.stat(path);
@@ -187,10 +250,23 @@ export function createOpenCommand(): Command {
         setTimeout(() => URL.revokeObjectURL(url), 0);
         results.push(`downloaded ${path}`);
       } else {
+        if (!canOpenWindow) {
+          return {
+            stdout: '',
+            stderr: 'open: browser APIs are unavailable in this environment\n',
+            exitCode: 1,
+          };
+        }
         const previewUrl = toPreviewUrl(path);
-        // window.open() returns null in extension contexts (offscreen/side panel)
-        // even when the tab opens successfully — don't treat null as failure
-        window.open(previewUrl, '_blank', 'noopener,noreferrer');
+        try {
+          await openExternal(previewUrl);
+        } catch (err) {
+          return {
+            stdout: '',
+            stderr: `${err instanceof Error ? err.message : String(err)}\n`,
+            exitCode: 1,
+          };
+        }
         results.push(`opened ${path} → ${previewUrl}`);
       }
     }

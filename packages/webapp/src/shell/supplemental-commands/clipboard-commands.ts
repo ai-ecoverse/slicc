@@ -1,5 +1,6 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 
 function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -39,7 +40,9 @@ async function copyToClipboard(
   stdin: string,
   cmdName: string
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  if (!globalThis.navigator?.clipboard) {
+  const hasLocal = !!globalThis.navigator?.clipboard;
+  const panelRpc = !hasLocal ? getPanelRpcClient() : null;
+  if (!hasLocal && !panelRpc) {
     return {
       stdout: '',
       stderr: `${cmdName}: clipboard API is unavailable\n`,
@@ -48,7 +51,11 @@ async function copyToClipboard(
   }
 
   try {
-    await navigator.clipboard.writeText(stdin);
+    if (hasLocal) {
+      await navigator.clipboard.writeText(stdin);
+    } else {
+      await panelRpc!.call('clipboard-write-text', { text: stdin });
+    }
     return { stdout: '', stderr: '', exitCode: 0 };
   } catch (err) {
     return {
@@ -62,7 +69,9 @@ async function copyToClipboard(
 async function pasteFromClipboard(
   cmdName: string
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  if (!globalThis.navigator?.clipboard) {
+  const hasLocal = !!globalThis.navigator?.clipboard;
+  const panelRpc = !hasLocal ? getPanelRpcClient() : null;
+  if (!hasLocal && !panelRpc) {
     return {
       stdout: '',
       stderr: `${cmdName}: clipboard API is unavailable\n`,
@@ -71,7 +80,9 @@ async function pasteFromClipboard(
   }
 
   try {
-    const text = await navigator.clipboard.readText();
+    const text = hasLocal
+      ? await navigator.clipboard.readText()
+      : (await panelRpc!.call('clipboard-read-text', undefined)).text;
     // Return verbatim clipboard content without appending newline
     return { stdout: text, stderr: '', exitCode: 0 };
   } catch (err) {

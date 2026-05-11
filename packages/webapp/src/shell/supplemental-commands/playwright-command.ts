@@ -14,6 +14,7 @@ import type { AccessibilityNode } from '../../cdp/types.js';
 import { createLogger } from '../../core/logger.js';
 import { FsError, type VirtualFS } from '../../fs/index.js';
 import type { FloatType } from '../../scoops/tray-leader-sync.js';
+import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 const log = createLogger('playwright-teleport');
 
 // ---------------------------------------------------------------------------
@@ -447,11 +448,36 @@ function renderNode(
 async function resolveAppTabId(browser: BrowserAPI, state: PlaywrightState): Promise<void> {
   if (state.appTabId) return;
   const pages = await browser.listPages();
-  // Use current origin when in browser, fall back to default port for tests/Node
-  const appOrigin =
-    typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5710';
+  const appOrigin = await resolveAppOrigin();
   const appTab = pages.find((p) => p.url.startsWith(appOrigin) && !p.url.includes('/preview/'));
   if (appTab) state.appTabId = appTab.targetId;
+}
+
+/**
+ * Resolve the origin where the SLICC webapp is served.
+ *
+ *   - Page context: use `window.location.origin`.
+ *   - Kernel worker (standalone agent shell): bridge to the page via
+ *     panel-RPC `page-info`. Without this the worker was falling back
+ *     to a hardcoded `http://localhost:5710`, which silently broke
+ *     `playwright-cli` for any user running on a non-default port
+ *     (e.g. parallel instances with `PORT=5720 npm run dev`).
+ *   - Tests / Node fallback: keep the hardcoded default.
+ */
+async function resolveAppOrigin(): Promise<string> {
+  if (typeof window !== 'undefined') return window.location.origin;
+  const rpc = getPanelRpcClient();
+  if (rpc) {
+    try {
+      const info = await rpc.call('page-info', undefined, { timeoutMs: 2000 });
+      if (info.origin) return info.origin;
+    } catch {
+      // Fall through to the hardcoded default rather than failing the
+      // whole command; the agent will still try to locate the app tab
+      // and surface a clearer error if it can't.
+    }
+  }
+  return 'http://localhost:5710';
 }
 
 function isAppTab(state: PlaywrightState, targetId: string): boolean {

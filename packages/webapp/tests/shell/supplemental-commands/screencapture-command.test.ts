@@ -316,6 +316,40 @@ describe('screencapture command', () => {
       expect(result.stderr).toContain('failed to copy to clipboard');
     });
 
+    it('defers the clipboard write until the document regains focus', async () => {
+      // Simulate the OS-picker stealing focus: hasFocus() starts false
+      // and flips to true once we dispatch a window `focus` event.
+      let focused = false;
+      const focusListeners = new Set<() => void>();
+      (globalThis as any).document.hasFocus = () => focused;
+      (globalThis as any).document.addEventListener = vi.fn();
+      (globalThis as any).document.removeEventListener = vi.fn();
+      (globalThis as any).window.addEventListener = vi.fn((type: string, fn: () => void) => {
+        if (type === 'focus') focusListeners.add(fn);
+      });
+      (globalThis as any).window.removeEventListener = vi.fn((type: string, fn: () => void) => {
+        if (type === 'focus') focusListeners.delete(fn);
+      });
+
+      const cmd = createScreencaptureCommand();
+      const ctx = createMockCtx();
+      const promise = cmd.execute(['-c'], ctx as any);
+
+      // Yield so screencapture's capture pipeline reaches the focus wait.
+      await new Promise((r) => setTimeout(r, 10));
+      expect((globalThis as any).navigator.clipboard.write).not.toHaveBeenCalled();
+      expect(focusListeners.size).toBe(1);
+
+      // Refocus and re-fire — the helper checks hasFocus() inside the
+      // handler, so flip it first.
+      focused = true;
+      for (const fn of focusListeners) fn();
+
+      const result = await promise;
+      expect(result.exitCode).toBe(0);
+      expect((globalThis as any).navigator.clipboard.write).toHaveBeenCalled();
+    });
+
     it('uses correct mime type for jpg extension', async () => {
       const cmd = createScreencaptureCommand();
       const ctx = createMockCtx();
