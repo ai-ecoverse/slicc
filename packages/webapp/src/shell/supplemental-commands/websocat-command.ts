@@ -154,6 +154,13 @@ function parseArgs(args: string[]): ParsedArgs {
       out.text = false;
       continue;
     }
+    // Handle combined short flags before the bare single-letter cases so that
+    // e.g. `-1n` and `-n1` are not swallowed by the `-1`/`-n` branches.
+    if (a === '-1n' || a === '-n1') {
+      out.oneMessage = true;
+      out.noClose = true;
+      continue;
+    }
     if (a === '-1' || a === '--one-message') {
       out.oneMessage = true;
       continue;
@@ -207,17 +214,6 @@ function parseArgs(args: string[]): ParsedArgs {
       out.jsonrpc = true;
       continue;
     }
-    if (a === '-1' || a.startsWith('-1')) {
-      out.oneMessage = true;
-      continue;
-    }
-
-    if (a === '-n1' || a === '-1n') {
-      out.noClose = true;
-      out.oneMessage = true;
-      continue;
-    }
-
     if (a === '--close-status-code' || a.startsWith('--close-status-code=')) {
       const r = consumeValue(i, '--close-status-code');
       if (!r) return out;
@@ -305,6 +301,11 @@ function parseArgs(args: string[]): ParsedArgs {
       return out;
     }
     out.url = a;
+  }
+
+  if (out.closeReason !== undefined && out.closeStatus === undefined) {
+    out.error =
+      'websocat: --close-reason requires --close-status-code (the WebSocket close frame cannot carry a reason without a status code)\n';
   }
 
   return out;
@@ -464,52 +465,57 @@ export async function runWebsocat(
 
   let finishing = false;
   ws.onmessage = (ev: MessageEvent) => {
-    if (parsed.unidirectional) return; // -u suppresses receive output
     if (finishing) return;
-    let bytes: Uint8Array;
-    let isBinary = false;
-    if (typeof ev.data === 'string') {
-      bytes = new TextEncoder().encode(ev.data);
-    } else if (ev.data instanceof ArrayBuffer) {
-      bytes = new Uint8Array(ev.data);
-      isBinary = true;
-    } else if (ArrayBuffer.isView(ev.data)) {
-      bytes = new Uint8Array(
-        (ev.data as ArrayBufferView).buffer,
-        (ev.data as ArrayBufferView).byteOffset,
-        (ev.data as ArrayBufferView).byteLength
-      );
-      isBinary = true;
-    } else {
-      bytes = new TextEncoder().encode(String(ev.data));
-    }
-    if (bytes.length > parsed.bufferSize) {
-      note(
-        `inbound message of ${bytes.length} bytes exceeds --buffer-size ${parsed.bufferSize}; truncating`
-      );
-      bytes = bytes.slice(0, parsed.bufferSize);
-    }
-    const line = isBinary && parsed.base64 ? bytesToBase64(bytes) : bytesToTextSafe(bytes);
-    if (outLines.length < MAX_OUT_LINES) {
-      outLines.push(line);
-    } else if (droppedForOverflow === 0) {
-      note(
-        `output buffer reached ${MAX_OUT_LINES} messages; dropping further inbound messages — use -1, --max-messages, or pipe to a file with a different tool for long-running streams`
-      );
-      droppedForOverflow += 1;
-    } else {
-      droppedForOverflow += 1;
+    // `-u/--unidirectional` suppresses *output* of received messages, but we
+    // still count them so `--max-messages` and `-1` can terminate. Skipping
+    // counting here previously caused `-u -1` and `-u --max-messages N` to
+    // hang until the peer closed.
+    if (!parsed.unidirectional) {
+      let bytes: Uint8Array;
+      let isBinary = false;
+      if (typeof ev.data === 'string') {
+        bytes = new TextEncoder().encode(ev.data);
+      } else if (ev.data instanceof ArrayBuffer) {
+        bytes = new Uint8Array(ev.data);
+        isBinary = true;
+      } else if (ArrayBuffer.isView(ev.data)) {
+        bytes = new Uint8Array(
+          (ev.data as ArrayBufferView).buffer,
+          (ev.data as ArrayBufferView).byteOffset,
+          (ev.data as ArrayBufferView).byteLength
+        );
+        isBinary = true;
+      } else {
+        bytes = new TextEncoder().encode(String(ev.data));
+      }
+      if (bytes.length > parsed.bufferSize) {
+        note(
+          `inbound message of ${bytes.length} bytes exceeds --buffer-size ${parsed.bufferSize}; truncating`
+        );
+        bytes = bytes.slice(0, parsed.bufferSize);
+      }
+      const line = isBinary && parsed.base64 ? bytesToBase64(bytes) : bytesToTextSafe(bytes);
+      if (outLines.length < MAX_OUT_LINES) {
+        outLines.push(line);
+      } else if (droppedForOverflow === 0) {
+        note(
+          `output buffer reached ${MAX_OUT_LINES} messages; dropping further inbound messages — use -1, --max-messages, or pipe to a file with a different tool for long-running streams`
+        );
+        droppedForOverflow += 1;
+      } else {
+        droppedForOverflow += 1;
+      }
     }
     received += 1;
 
     if (parsed.maxMessages !== undefined && received >= parsed.maxMessages) {
       finishing = true;
-      closeAndFinish(parsed.closeStatus ?? 1000, parsed.closeReason);
+      terminate();
       return;
     }
     if (parsed.oneMessage) {
       finishing = true;
-      closeAndFinish(parsed.closeStatus ?? 1000, parsed.closeReason);
+      terminate();
     }
   };
 
@@ -552,6 +558,20 @@ export async function runWebsocat(
     }
   }
 
+  /**
+   * Reach the "we're done" state. Honors `-n/--no-close`: when set, resolve the
+   * done promise directly instead of sending a Close frame to the peer.
+   * Otherwise emit a clean Close(1000) (or `--close-status-code`) and let the
+   * resulting onclose drive doneResolve.
+   */
+  function terminate() {
+    if (parsed.noClose) {
+      doneResolve(exitCode);
+      return;
+    }
+    closeAndFinish(parsed.closeStatus ?? 1000, parsed.closeReason);
+  }
+
   try {
     await openedPromise;
   } catch (err) {
@@ -559,7 +579,7 @@ export async function runWebsocat(
     const m = err instanceof Error ? err.message : String(err);
     return {
       stdout: outLines.join(outSep) + (outLines.length ? outSep : ''),
-      stderr: diagnostics.concat([`websocat: ${m}`]).join('\n') + (diagnostics.length ? '\n' : ''),
+      stderr: diagnostics.concat([`websocat: ${m}`]).join('\n') + '\n',
       exitCode: m === 'connect timeout' ? 124 : 1,
     };
   }

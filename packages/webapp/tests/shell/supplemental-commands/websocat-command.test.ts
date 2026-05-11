@@ -247,6 +247,77 @@ describe('websocat command', () => {
     expect(r.exitCode).toBe(1);
   });
 
+  it('parses -1n and -n1 as one-message + no-close (regression for prefix swallow)', async () => {
+    for (const combined of ['-1n', '-n1']) {
+      const Ctor = makeCtor();
+      const promise = runWebsocat([combined, 'ws://x'], { stdin: 'hi\n' }, { WebSocketCtor: Ctor });
+      await new Promise((r) => setTimeout(r, 0));
+      const sock = MockWebSocket.instances[0];
+      sock.fireOpen();
+      await new Promise((r) => setTimeout(r, 0));
+      // -1n sends one message…
+      expect(sock.sent).toHaveLength(1);
+      sock.fireText('ack');
+      const r = await promise;
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).toBe('ack\n');
+      // …and -n means: do not send a Close frame ourselves.
+      expect(sock.closeCalls).toHaveLength(0);
+    }
+  });
+
+  it('terminates -u --max-messages by counting inbound messages without emitting them', async () => {
+    const Ctor = makeCtor();
+    const promise = runWebsocat(
+      ['-u', '--max-messages', '2', 'ws://x'],
+      { stdin: '' },
+      { WebSocketCtor: Ctor }
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    const sock = MockWebSocket.instances[0];
+    sock.fireOpen();
+    sock.fireText('hidden-one');
+    sock.fireText('hidden-two');
+    const r = await promise;
+    expect(r.exitCode).toBe(0);
+    // -u suppresses output but message count drove termination.
+    expect(r.stdout).toBe('');
+    expect(sock.closeCalls).toHaveLength(1);
+  });
+
+  it('terminates -u -1 after one inbound message (counted but not emitted)', async () => {
+    const Ctor = makeCtor();
+    const promise = runWebsocat(['-u', '-1', 'ws://x'], { stdin: 'hi\n' }, { WebSocketCtor: Ctor });
+    await new Promise((r) => setTimeout(r, 0));
+    const sock = MockWebSocket.instances[0];
+    sock.fireOpen();
+    await new Promise((r) => setTimeout(r, 0));
+    sock.fireText('reply-not-printed');
+    const r = await promise;
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(sock.closeCalls).toHaveLength(1);
+  });
+
+  it('rejects --close-reason without --close-status-code', async () => {
+    const r = await runWebsocat(['--close-reason', 'goodbye', 'ws://x'], { stdin: '' });
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain('--close-reason requires --close-status-code');
+  });
+
+  it('always terminates stderr with a newline on connect failure', async () => {
+    const Ctor = makeCtor();
+    const promise = runWebsocat(['ws://refused'], { stdin: '' }, { WebSocketCtor: Ctor });
+    await new Promise((r) => setTimeout(r, 0));
+    const sock = MockWebSocket.instances[0];
+    sock.fireError();
+    sock.fireClose(1006, '');
+    const r = await promise;
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).not.toBe('');
+    expect(r.stderr.endsWith('\n')).toBe(true);
+  });
+
   it('warns under -v that custom headers are not honored', async () => {
     const Ctor = makeCtor();
     const promise = runWebsocat(
