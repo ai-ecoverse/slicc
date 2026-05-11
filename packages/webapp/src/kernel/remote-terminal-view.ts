@@ -15,6 +15,8 @@
  *   - Mount xterm.js + theme sync + refit.
  *   - Minimal line editor: typing, Backspace, Enter, ←/→ arrows,
  *     ↑/↓ history, Home/End, Ctrl+C → SIGINT.
+ *   - Tab completion via a silent `compgen` round-trip to the
+ *     worker shell (commands at line start, files otherwise).
  *   - Streaming output: `terminal-output` events render as they
  *     arrive; `terminal-exit` closes the prompt cycle.
  *   - `executeCommandInTerminal(cmd)` for programmatic dispatch
@@ -23,8 +25,6 @@
  * Deliberate non-features (deferred, none blocking the standalone
  * smoke test):
  *   - Multi-line continuation (PS2 / heredoc).
- *   - Tab completion (would need a worker-side `which` / jsh
- *     enumeration round-trip).
  *   - Inline media-preview (`imgcat`). For now `imgcat` writes its
  *     base64 escape into the terminal stream like any other command
  *     and the user-visible result is "the bytes printed inline."
@@ -119,6 +119,19 @@ export class RemoteTerminalView {
   private isExecuting = false;
   /** Tail of the most recent exec while it's running. */
   private execInFlight: Promise<TerminalExecResult> | null = null;
+  /**
+   * When true, the `handleEvent` route swallows `terminal-output`
+   * events so they don't render in the visible buffer. Used by
+   * `handleTab()` to run `compgen` silently — the `client.exec`
+   * promise still resolves with the captured stdout.
+   */
+  private suppressOutput = false;
+  /**
+   * Prevents re-entrant `handleTab` while a compgen round-trip is in
+   * flight. Multiple Tab presses just no-op until the active one
+   * resolves; without this, holding Tab would queue redundant execs.
+   */
+  private tabBusy = false;
 
   constructor(private readonly options: RemoteTerminalViewOptions) {
     const sid = options.sid ?? `panel-terminal-${Date.now()}`;
@@ -293,6 +306,12 @@ export class RemoteTerminalView {
             this.cursorPos = 0;
             this.showPrompt();
             break;
+          case '\t':
+            // Tab completion via a silent `compgen` round-trip through
+            // the worker shell. Async; ignored while another tab is in
+            // flight so holding the key doesn't pile up execs.
+            void this.handleTab();
+            break;
           default:
             if (ch >= ' ') this.insertChar(ch);
         }
@@ -377,6 +396,121 @@ export class RemoteTerminalView {
     } else {
       this.historyIndex = next;
       this.replaceLine(this.history[next]);
+    }
+  }
+
+  /**
+   * Bash-style tab completion via a silent `compgen` round-trip
+   * through the worker shell.
+   *
+   * Mirrors the local `WasmShell.handleTab` shape (commands at the
+   * start of a line use `compgen -A command`; subsequent words use
+   * file completion) so panel-shell behaviour matches the in-page
+   * shell that this view replaced. Output from the compgen exec is
+   * swallowed by the `suppressOutput` flag — only the matches are
+   * applied to the line buffer (single hit → insert + space, multi
+   * hit → insert common prefix, listing fallback if no shared prefix).
+   */
+  private async handleTab(): Promise<void> {
+    if (!this.terminal) return;
+    if (this.tabBusy) return;
+    this.tabBusy = true;
+    // Share the existing `isExecuting` busy gate so the input handler
+    // swallows Enter (and other keystrokes except Ctrl+C) while the
+    // silent `compgen` round-trip is in flight. Without this, a user
+    // who hits Enter immediately after Tab races a second
+    // `terminal-exec` against the worker session, which only permits
+    // one exec at a time and rejects the second with exit code 130 —
+    // their actual command disappears. The compgen round-trip is
+    // typically <100ms, so the brief block is imperceptible.
+    const previouslyExecuting = this.isExecuting;
+    this.isExecuting = true;
+    try {
+      const beforeCursor = this.currentLine.slice(0, this.cursorPos);
+      const { currentWord, isFirstWord, compgenCmd } = buildCompgenPlan(beforeCursor);
+
+      this.suppressOutput = true;
+      let stdout = '';
+      try {
+        const result = await this.client.exec(compgenCmd);
+        stdout = result.stdout;
+      } finally {
+        this.suppressOutput = false;
+      }
+
+      const matches = stdout.split('\n').filter(Boolean);
+      if (matches.length === 0) return;
+
+      if (matches.length === 1) {
+        const completion = matches[0];
+        const suffix = completion.slice(currentWord.length);
+        if (suffix) {
+          this.insertText(suffix);
+        }
+        // Decide between trailing space (commands / regular files)
+        // and trailing slash (directories). Run a second silent
+        // compgen to ask if the completed prefix is a directory.
+        let trail = ' ';
+        if (!isFirstWord) {
+          this.suppressOutput = true;
+          try {
+            const dirCheck = await this.client.exec(buildCompgenDirCheck(completion));
+            if (dirCheck.stdout.trim() === completion) trail = '/';
+          } finally {
+            this.suppressOutput = false;
+          }
+        }
+        this.insertText(trail);
+        return;
+      }
+
+      // Multi-match: insert the longest common prefix. If there's no
+      // shared extension beyond what the user already typed, list the
+      // candidates instead and redraw the prompt with the original
+      // line so the user can keep typing.
+      const prefix = longestCommonPrefix(matches);
+      const suffix = prefix.slice(currentWord.length);
+      if (suffix) {
+        this.insertText(suffix);
+        return;
+      }
+      this.terminal.writeln('');
+      this.terminal.writeln(matches.map((m) => m.split('/').pop() ?? m).join('  '));
+      this.showPrompt();
+      this.terminal.write(this.currentLine);
+      const back = this.currentLine.length - this.cursorPos;
+      if (back > 0) this.terminal.write(`\x1b[${back}D`);
+    } catch (err) {
+      console.warn(
+        '[RemoteTerminal] Tab completion failed:',
+        err instanceof Error ? err.message : String(err)
+      );
+    } finally {
+      this.tabBusy = false;
+      // Only release the busy gate if the tab didn't piggyback on an
+      // already-executing command (defensive — handleTab is gated on
+      // !isExecuting via the input handler, but the explicit save/
+      // restore makes the contract obvious for future callers).
+      this.isExecuting = previouslyExecuting;
+    }
+  }
+
+  /**
+   * Insert `text` at the current cursor position and redraw the tail
+   * if needed. Shared by `handleTab`'s single-match and prefix-extend
+   * paths; behaves like a multi-char `insertChar` without going
+   * through the per-char loop in `setupInputHandler`.
+   */
+  private insertText(text: string): void {
+    if (!this.terminal || text.length === 0) return;
+    const tail = this.currentLine.slice(this.cursorPos);
+    this.currentLine =
+      this.currentLine.slice(0, this.cursorPos) + text + this.currentLine.slice(this.cursorPos);
+    this.cursorPos += text.length;
+    this.terminal.write(text);
+    if (tail.length > 0) {
+      this.terminal.write(tail);
+      this.terminal.write(`\x1b[${tail.length}D`);
     }
   }
 
@@ -511,6 +645,13 @@ export class RemoteTerminalView {
     if (!this.terminal) return;
     switch (event.type) {
       case 'terminal-output':
+        // While a silent exec is in flight (currently only
+        // `handleTab`'s `compgen` round-trip), swallow output here so
+        // it doesn't bleed into the user's prompt line. The
+        // `TerminalSessionClient` still buffers the bytes against the
+        // active `execId`, so `client.exec(...)` resolves with the
+        // captured stdout/stderr.
+        if (this.suppressOutput) return;
         // Stderr renders red; stdout in default. Terminals usually
         // don't distinguish, but tinting stderr makes errors obvious
         // in the panel.
@@ -594,4 +735,74 @@ function parseLocalMountTarget(line: string): string | null {
  */
 export function localMountIdbKey(target: string): string {
   return `pendingMount:term:${target}`;
+}
+
+// ---------------------------------------------------------------------------
+// Tab completion helpers (pure, exported for tests)
+// ---------------------------------------------------------------------------
+
+/**
+ * Single-quote a string for safe inclusion in a bash command. The
+ * exhaustive form: replace each `'` with `'\''` and wrap the whole
+ * result in `'…'`. Empty input becomes `''` so `compgen -- ''` is a
+ * valid call (lists every candidate).
+ */
+export function bashSingleQuote(value: string): string {
+  if (value.length === 0) return `''`;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Decide what to feed to `compgen` for the prefix at the cursor.
+ *
+ *   - The current word is whatever follows the last run of
+ *     whitespace in `beforeCursor` (may be empty when the user is
+ *     about to start a new word).
+ *   - `isFirstWord` is true when the cursor sits in the leading
+ *     position of the line — that's the "command name" slot, so we
+ *     ask `compgen -A command` for shell-builtin / supplemental /
+ *     PATH executables. Every other word is a file completion via
+ *     `compgen -f`.
+ */
+export function buildCompgenPlan(beforeCursor: string): {
+  currentWord: string;
+  isFirstWord: boolean;
+  compgenCmd: string;
+} {
+  const words = beforeCursor.split(/\s+/);
+  const currentWord = words[words.length - 1] ?? '';
+  const isFirstWord = words.length <= 1 || (words.length === 2 && words[0] === '');
+  const escaped = bashSingleQuote(currentWord);
+  const compgenCmd = isFirstWord ? `compgen -A command -- ${escaped}` : `compgen -f -- ${escaped}`;
+  return { currentWord, isFirstWord, compgenCmd };
+}
+
+/**
+ * Build the second-round `compgen -d` invocation used to decide
+ * whether a single completion candidate is a directory (so the line
+ * editor appends `/` instead of a space).
+ */
+export function buildCompgenDirCheck(completion: string): string {
+  return `compgen -d -- ${bashSingleQuote(completion)}`;
+}
+
+/**
+ * Longest common prefix of a non-empty match list. Drops one
+ * character at a time until every entry shares the prefix. Returns
+ * the empty string when the matches don't share a leading character.
+ *
+ * Exported so the multi-match insertion logic can be unit-tested
+ * without a DOM. Matches the behavior of the local-bash
+ * `WasmShell.handleTab` so the two shells feel identical.
+ */
+export function longestCommonPrefix(matches: readonly string[]): string {
+  if (matches.length === 0) return '';
+  let prefix = matches[0];
+  for (const m of matches) {
+    while (prefix.length > 0 && !m.startsWith(prefix)) {
+      prefix = prefix.slice(0, -1);
+    }
+    if (prefix.length === 0) break;
+  }
+  return prefix;
 }

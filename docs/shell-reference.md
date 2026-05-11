@@ -33,6 +33,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **node**                                    | `node-command.ts`          | Execute JavaScript code                                                                                                                                                                                                                      | `-e "console.log(1+1)"` with fs bridge                                                                                                      |
 | **python3 / python**                        | `python-command.ts`        | Execute Python code                                                                                                                                                                                                                          | `-c "print([i**2 for i in range(5)])"` with Pyodide                                                                                         |
 | **webhook**                                 | `webhook-command.ts`       | Manage webhooks for event-driven licks                                                                                                                                                                                                       | `webhook create <endpoint>`, `webhook list`, `webhook delete <id>`                                                                          |
+| **websocat**                                | `websocat-command.ts`      | Minimal WebSocket client (netcat/curl for ws://). Sends stdin lines as messages, prints received messages. Client-only — server mode and advanced specifiers (`exec:`, `tcp:`, `broadcast:`, `ws-l:`) are not supported.                     | `websocat ws://URL`, `-1` one-shot, `-b` binary, `--jsonrpc`/`--jsonrpc-omit-jsonrpc`, `--base64`, `--protocol`, `--max-messages`           |
 | **crontask**                                | `crontask-command.ts`      | Schedule cron jobs that dispatch licks                                                                                                                                                                                                       | `crontask add <name> "0 9 * * *" scoop-name "instructions..."`                                                                              |
 | **pdftk / pdf**                             | `pdftk-command.ts`         | PDF manipulation                                                                                                                                                                                                                             | `pdf burst input.pdf`, `pdf cat input.pdf output output.pdf`                                                                                |
 | **convert / magick**                        | `convert-command.ts`       | Image conversion (ImageMagick style)                                                                                                                                                                                                         | `convert -resize 800x600 input.jpg output.jpg`                                                                                              |
@@ -643,6 +644,14 @@ rg "TODO" /src --type js
 
 # Process JSON
 curl https://api.example.com/data | jq '.items[] | select(.status == "active")'
+
+# Probe a WebSocket echo server (send one message, receive one, exit)
+echo hello | websocat -1 wss://ws.vi-server.org/mirror
+
+# Drive a Chrome DevTools target via JSON-RPC over WebSocket
+echo 'Page.navigate {"url":"https://example.com"}' \
+  | websocat -1 --jsonrpc --jsonrpc-omit-jsonrpc \
+      ws://127.0.0.1:9222/devtools/page/<id>
 
 # Batch rename
 for file in *.txt; do mv "$file" "${file%.txt}.md"; done

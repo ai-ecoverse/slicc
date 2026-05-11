@@ -1,6 +1,7 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 import { basename } from './shared.js';
+import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
 
 function screencaptureHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -49,60 +50,50 @@ function getMimeTypeForExtension(filename: string): string {
   }
 }
 
-async function captureScreen(mimeType: string, quality: number): Promise<Blob> {
-  const stream = await navigator.mediaDevices.getDisplayMedia({
-    video: true,
-    audio: false,
-  });
-
+/**
+ * Capture pixels via the DOM directly. Only callable from a context
+ * that has `navigator.mediaDevices` and `document` (panel terminal,
+ * extension offscreen). The kernel worker reaches the same code path
+ * by going through the panel-RPC bridge instead.
+ */
+async function captureLocally(
+  mimeType: string,
+  quality: number
+): Promise<{ bytes: Uint8Array; mimeType: string }> {
+  const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
   try {
     const video = document.createElement('video');
     video.srcObject = stream;
     video.muted = true;
     video.playsInline = true;
-
     await new Promise<void>((resolve, reject) => {
-      video.onloadedmetadata = () => {
+      video.onloadedmetadata = () =>
         video
           .play()
           .then(() => resolve())
           .catch(reject);
-      };
       video.onerror = () => reject(new Error('Failed to load video stream'));
     });
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
 
-    // Wait a frame to ensure video is rendered
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-
-    // Use actual video dimensions from the loaded stream
     const width = video.videoWidth;
     const height = video.videoHeight;
-
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      throw new Error('Failed to get canvas context');
-    }
-
+    if (!ctx) throw new Error('Failed to get canvas context');
     ctx.drawImage(video, 0, 0, width, height);
-
-    return new Promise<Blob>((resolve, reject) => {
+    const blob = await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob(
-        (blob) => {
-          if (blob) {
-            resolve(blob);
-          } else {
-            reject(new Error('Failed to create image blob'));
-          }
-        },
+        (b) => (b ? resolve(b) : reject(new Error('Failed to create image blob'))),
         mimeType,
         quality
       );
     });
+    return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType };
   } finally {
-    stream.getTracks().forEach((track) => track.stop());
+    stream.getTracks().forEach((t) => t.stop());
   }
 }
 
@@ -112,19 +103,16 @@ export function createScreencaptureCommand(): Command {
       return screencaptureHelp();
     }
 
-    if (
-      typeof window === 'undefined' ||
-      typeof navigator === 'undefined' ||
-      typeof document === 'undefined'
-    ) {
+    const local = hasLocalDom();
+    const panelRpc = getPanelRpcClient();
+    if (!local && !panelRpc) {
       return {
         stdout: '',
         stderr: 'screencapture: browser APIs are unavailable in this environment\n',
         exitCode: 1,
       };
     }
-
-    if (!navigator.mediaDevices?.getDisplayMedia) {
+    if (local && !navigator.mediaDevices?.getDisplayMedia) {
       return {
         stdout: '',
         stderr: 'screencapture: screen capture is not supported in this browser\n',
@@ -154,9 +142,22 @@ export function createScreencaptureCommand(): Command {
     const mimeType = getMimeTypeForExtension(filename);
     const quality = mimeType === 'image/png' ? 1.0 : 0.92;
 
-    let blob: Blob;
+    let bytes: Uint8Array;
     try {
-      blob = await captureScreen(mimeType, quality);
+      if (local) {
+        const r = await captureLocally(mimeType, quality);
+        bytes = r.bytes;
+      } else {
+        // Worker context: round-trip via the page. The bridge timeout
+        // is generous because the user has to pick a target in the
+        // OS-level capture picker, which may take many seconds.
+        const r = await panelRpc!.call(
+          'screencapture',
+          { mimeType, quality },
+          { timeoutMs: 5 * 60_000 }
+        );
+        bytes = new Uint8Array(r.bytes);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (message.includes('Permission denied') || message.includes('NotAllowedError')) {
@@ -173,51 +174,41 @@ export function createScreencaptureCommand(): Command {
       };
     }
 
-    const arrayBuffer = await blob.arrayBuffer();
-    const bytes = new Uint8Array(arrayBuffer);
-
     if (toClipboard) {
       try {
-        let pngBlob: Blob;
-        if (mimeType === 'image/png') {
-          pngBlob = blob;
-        } else {
-          // Clipboard API requires PNG, convert if necessary
-          const img = new Image();
-          const url = URL.createObjectURL(blob);
-          try {
-            await new Promise<void>((resolve, reject) => {
-              img.onload = () => resolve();
-              img.onerror = () => reject(new Error('Failed to load image for conversion'));
-              img.src = url;
-            });
-          } finally {
-            URL.revokeObjectURL(url);
-          }
-
-          const canvas = document.createElement('canvas');
-          canvas.width = img.width;
-          canvas.height = img.height;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) throw new Error('Failed to get canvas context');
-          ctx.drawImage(img, 0, 0);
-
-          pngBlob = await new Promise<Blob>((resolve, reject) => {
-            canvas.toBlob((b) => {
-              if (b) resolve(b);
-              else reject(new Error('Failed to create PNG blob'));
-            }, 'image/png');
-          });
+        if (local) {
+          // Stay on the page: convert to PNG if needed and write to
+          // navigator.clipboard directly. Wait for the document to
+          // regain focus first — after a full-screen / window capture
+          // through the OS-level `getDisplayMedia` picker the SLICC
+          // tab is no longer focused, and `clipboard.write` rejects
+          // with "Document is not focused".
+          const pngBytes = await ensurePngBytes(bytes, mimeType);
+          const pngBuffer = new ArrayBuffer(pngBytes.byteLength);
+          new Uint8Array(pngBuffer).set(pngBytes);
+          const pngBlob = new Blob([pngBuffer], { type: 'image/png' });
+          await whenDocumentFocused();
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+          const sizeKB = Math.round(pngBlob.size / 1024);
+          return { stdout: `captured ${sizeKB} KB to clipboard\n`, stderr: '', exitCode: 0 };
         }
-
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
-
-        const sizeKB = Math.round(pngBlob.size / 1024);
-        return {
-          stdout: `captured ${sizeKB} KB to clipboard\n`,
-          stderr: '',
-          exitCode: 0,
-        };
+        // Worker: bridge the clipboard write too — navigator.clipboard
+        // doesn't exist on WorkerNavigator. The page-side handler does
+        // its own focus wait, so we just need a generous bridge timeout
+        // in case the user takes a while to refocus the tab.
+        await panelRpc!.call(
+          'clipboard-write-image',
+          {
+            bytes: bytes.buffer.slice(
+              bytes.byteOffset,
+              bytes.byteOffset + bytes.byteLength
+            ) as ArrayBuffer,
+            mimeType,
+          },
+          { timeoutMs: 5 * 60_000 }
+        );
+        const sizeKB = Math.round(bytes.byteLength / 1024);
+        return { stdout: `captured ${sizeKB} KB to clipboard\n`, stderr: '', exitCode: 0 };
       } catch (err) {
         return {
           stdout: '',
@@ -255,5 +246,82 @@ export function createScreencaptureCommand(): Command {
       stderr: '',
       exitCode: 0,
     };
+  });
+}
+
+/**
+ * Convert raw image bytes to PNG bytes when the source isn't already
+ * PNG. Only used on the local DOM path — the bridge path defers PNG
+ * conversion to the page-side `clipboard-write-image` handler.
+ */
+async function ensurePngBytes(bytes: Uint8Array, mimeType: string): Promise<Uint8Array> {
+  if (mimeType === 'image/png') return bytes;
+  const safeBuffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(safeBuffer).set(bytes);
+  const blob = new Blob([safeBuffer], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('Failed to load image for conversion'));
+      img.src = url;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Failed to get canvas context');
+    ctx.drawImage(img, 0, 0);
+    const png = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error('Failed to create PNG blob'))),
+        'image/png'
+      );
+    });
+    return new Uint8Array(await png.arrayBuffer());
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/**
+ * Resolve once `document.hasFocus()` is true so a follow-up
+ * `navigator.clipboard.write` call doesn't reject with "Document is
+ * not focused". Mirrors the helper used on the panel-RPC handler side;
+ * kept local to keep this file callable from worker-importable code
+ * paths without dragging UI deps along (the function is only ever
+ * called on the local-DOM branch).
+ */
+async function whenDocumentFocused(timeoutMs = 5 * 60_000): Promise<void> {
+  if (typeof document === 'undefined') return;
+  // Treat a missing `hasFocus` (lightweight test stubs) as already
+  // focused so we don't wedge tests that don't bother mocking it.
+  if (typeof document.hasFocus !== 'function') return;
+  if (document.hasFocus()) return;
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+      clearTimeout(timer);
+    };
+    const onFocus = () => {
+      if (document.hasFocus()) {
+        cleanup();
+        resolve();
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && document.hasFocus()) {
+        cleanup();
+        resolve();
+      }
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('timed out waiting for window focus'));
+    }, timeoutMs);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
   });
 }

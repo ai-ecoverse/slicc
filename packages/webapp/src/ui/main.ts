@@ -1536,9 +1536,25 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   };
 
   // Real CDP transport. The worker's `BrowserAPI` proxies CDP commands
-  // back here through the kernel transport.
+  // back here through the kernel transport. We must connect the
+  // underlying `CDPClient` proactively: the worker-side `BrowserAPI`
+  // has its own `ensureConnected()` (which flips its `CdpTransportBridge`
+  // state to 'connected' inside the worker, decoupled from the wire),
+  // but every `cdp-cmd` envelope it forwards ultimately lands in
+  // `startPageCdpForwarder` → `realTransport.send(...)`. If this
+  // `CDPClient` is still in `disconnected` state at that moment, the
+  // send throws "CDP client is not connected" and the agent sees
+  // confusing errors for `playwright`, `open`, etc.
   const browser = new BrowserAPI();
   const realCdpTransport = browser.getTransport();
+  try {
+    await browser.connect();
+  } catch (err) {
+    log.warn(
+      'Initial CDP connect failed; worker-forwarded commands will retry on demand',
+      err instanceof Error ? err.message : String(err)
+    );
+  }
 
   let selectedScoop: RegisteredScoop | null = null;
   let client!: InstanceType<typeof OffscreenClient>;
@@ -1946,8 +1962,26 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   const stopSprinkleHandler = installSprinkleManagerHandlerOverChannel(sprinkleManager, {
     instanceId,
   });
+
+  // Install the panel-RPC handler so DOM-bound shell commands run by
+  // the kernel worker (screencapture / say / afplay / clipboard /
+  // open, plus the playwright app-origin lookup) can reach the page.
+  // `imgcat` is intentionally terminal-only and stays out of the
+  // bridge — it's meant for the in-panel terminal, not the agent.
+  const { installPanelRpcHandler } = await import('../kernel/panel-rpc.js');
+  const { createStandalonePanelRpcHandlers } = await import('./panel-rpc-handlers.js');
+  const stopPanelRpcHandler = installPanelRpcHandler({
+    instanceId,
+    handlers: createStandalonePanelRpcHandlers(),
+  });
+  // Tear down on session reload so the handler doesn't outlive its
+  // page (the channel would still receive requests and try to call
+  // into a torn-down DOM).
+  window.addEventListener('beforeunload', () => stopPanelRpcHandler(), { once: true });
+
   await sprinkleManager.refresh();
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);
+  layout.resolveSprinkleIcon = (spec) => resolveSprinkleIconHtml(spec, localFs);
   await sprinkleManager.restoreOpenSprinkles().catch((err) => {
     log.warn('Failed to restore open sprinkles', err);
   });

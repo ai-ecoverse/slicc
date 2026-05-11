@@ -1,6 +1,7 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 import { detectMimeType } from './shared.js';
+import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
 
 type CommandContext = Parameters<Parameters<typeof defineCommand>[1]>[1];
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
@@ -32,7 +33,9 @@ async function playAudioFile(
   rate: number,
   ctx: CommandContext
 ): Promise<CommandResult> {
-  if (typeof window === 'undefined' || typeof AudioContext === 'undefined') {
+  const local = hasLocalDom() && typeof AudioContext !== 'undefined';
+  const panelRpc = getPanelRpcClient();
+  if (!local && !panelRpc) {
     return {
       stdout: '',
       stderr: 'afplay: Web Audio API unavailable in this environment\n',
@@ -60,6 +63,29 @@ async function playAudioFile(
       stderr: `afplay: ${filePath} is not an audio file\n`,
       exitCode: 1,
     };
+  }
+
+  if (!local) {
+    // Worker context: send the bytes to the page via panel-RPC.
+    // `rate` is dropped on this path (the bridge plays at native rate)
+    // — almost no callers use `-r` and supporting it would mean
+    // building the BufferSource graph on the page side too.
+    try {
+      const buf = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(buf).set(bytes);
+      await panelRpc!.call(
+        'play-audio',
+        { bytes: buf, mimeType, volume },
+        { timeoutMs: 5 * 60_000 }
+      );
+      return { stdout: '', stderr: '', exitCode: 0 };
+    } catch (err) {
+      return {
+        stdout: '',
+        stderr: `afplay: failed to play ${filePath}: ${err instanceof Error ? err.message : String(err)}\n`,
+        exitCode: 1,
+      };
+    }
   }
 
   try {

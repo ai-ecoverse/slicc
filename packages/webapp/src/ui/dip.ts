@@ -12,7 +12,8 @@ import FS from '@isomorphic-git/lightning-fs';
 import { collectThemeCSS } from './sprinkle-renderer.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 
-const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
+const isExtension =
+  typeof chrome !== 'undefined' && !!(chrome as { runtime?: { id?: string } })?.runtime?.id;
 
 /**
  * Fallback VFS reader for `.shtml` dips. The preview service worker is
@@ -197,6 +198,152 @@ export interface DipInstance {
 }
 
 /**
+ * Inline draft of a dip whose content streams in over time. The chat
+ * panel mounts one of these as soon as a fenced ```shtml block opens
+ * during an in-flight assistant message, then calls `update()` with the
+ * accumulating partial markup. Disposed before final `hydrateDips()`
+ * runs so the trusted iframe replaces the draft cleanly.
+ */
+export interface DraftDipInstance {
+  /** The iframe element. Caller is responsible for placement. */
+  readonly element: HTMLIFrameElement;
+  /** Push a new partial shtml content string into the draft. */
+  update(content: string): void;
+  /** Tear down the iframe and detach listeners. */
+  dispose(): void;
+}
+
+/**
+ * Pull the body of every fenced ```shtml block out of an in-flight
+ * assistant message. Closed blocks (`...```\n`) and the trailing
+ * unclosed block (still streaming) are both captured, in document
+ * order, so callers can match each entry to its corresponding
+ * placeholder/draft iframe by index.
+ */
+export function extractShtmlBlocks(content: string): string[] {
+  const blocks: string[] = [];
+  const re = /```shtml\n([\s\S]*?)(?:\n```|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    blocks.push(m[1] ?? '');
+    if (m.index === re.lastIndex) re.lastIndex++;
+  }
+  return blocks;
+}
+
+/** A segment of an in-flight assistant message: prose markdown or shtml. */
+export type ContentSegment =
+  | { kind: 'prose'; text: string }
+  | { kind: 'shtml'; body: string; closed: boolean };
+
+/**
+ * Split `content` into ordered segments at every ```shtml fence boundary.
+ * Each shtml block (open or closed) becomes its own segment so the chat
+ * panel can give it a stable container — iframes inside that container
+ * never get re-parented across re-renders, which is what avoids the
+ * iframe-reload-per-frame failure mode that wiping an `innerHTML` parent
+ * triggers in WHATWG-compliant browsers.
+ */
+export function splitContentSegments(content: string): ContentSegment[] {
+  const segments: ContentSegment[] = [];
+  let lastEnd = 0;
+  const re = /```shtml\n([\s\S]*?)(\n```|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    if (m.index > lastEnd) {
+      segments.push({ kind: 'prose', text: content.slice(lastEnd, m.index) });
+    }
+    segments.push({
+      kind: 'shtml',
+      body: m[1] ?? '',
+      closed: m[2] === '\n```',
+    });
+    lastEnd = m.index + m[0].length;
+    if (m.index === re.lastIndex) re.lastIndex++;
+  }
+  if (lastEnd < content.length) {
+    segments.push({ kind: 'prose', text: content.slice(lastEnd) });
+  }
+  return segments;
+}
+
+/** Common styles injected into every dip iframe (final + draft). */
+const DIP_HOST_STYLES = `html,body{margin:0;padding:0;overflow:hidden;background:transparent;box-sizing:border-box}
+*,*::before,*::after{box-sizing:inherit}
+/* Vertical breathing room around dip content. Horizontal padding is owned
+   by the dip's own content (e.g. .sprinkle-action-card__body) so shtml
+   widgets that already pad themselves don't end up double-indented. The
+   ResizeObserver on document.body reports the post-padding scrollHeight
+   correctly, so auto-height continues to work. */
+body{padding:12px 0;font-family:var(--s2-font-family, sans-serif);font-size:13px;color:var(--s2-content-default)}
+.sprinkle-inline{padding:var(--s2-spacing-100) 0}
+.sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px;box-shadow:none}
+.sprinkle-inline .sprinkle-btn:not([class*="sprinkle-btn--"]){background:var(--s2-bg-elevated)}
+.sprinkle-inline .sprinkle-card{box-shadow:none;margin:0}
+.sprinkle-inline .sprinkle-action-card{margin:0;width:100%}
+.sprinkle-inline .sprinkle-action-card .sprinkle-table{width:100%}
+.sprinkle-inline .sprinkle-grid{width:100%}
+input[type="range"]{width:100%;height:4px;-webkit-appearance:none;appearance:none;background:var(--s2-gray-300);border-radius:2px;outline:none;cursor:default}
+input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:var(--s2-accent);cursor:default;border:2px solid var(--s2-bg-base)}
+input[type="range"]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--s2-accent);cursor:default;border:2px solid var(--s2-bg-base)}
+input[type="text"],input[type="number"],textarea{width:100%;padding:7px 12px;font-size:13px;font-family:var(--s2-font-family,sans-serif);color:var(--s2-content-default);background:var(--s2-bg-layer-2);border:1px solid var(--s2-border-subtle,var(--s2-gray-300));border-radius:8px;outline:none;box-sizing:border-box}
+input[type="text"]:focus,input[type="number"]:focus,textarea:focus{border-color:var(--s2-accent);box-shadow:0 0 0 1px var(--s2-accent)}
+input[type="text"]::placeholder,textarea::placeholder{color:var(--s2-content-disabled,var(--s2-gray-400))}
+select{padding:6px 12px;font-size:13px;font-family:var(--s2-font-family,sans-serif);color:var(--s2-content-default);background:var(--s2-bg-layer-2);border:1px solid var(--s2-border-subtle,var(--s2-gray-300));border-radius:8px;outline:none;cursor:default}
+select:focus{border-color:var(--s2-accent);box-shadow:0 0 0 1px var(--s2-accent)}
+button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:28px;padding:4px 12px;border:1px solid var(--s2-border-default,var(--s2-gray-300));border-radius:9999px;background:transparent;color:var(--s2-content-default);font-size:12px;font-weight:700;font-family:var(--s2-font-family,sans-serif);cursor:default;transition:background 130ms ease}
+button:hover{background:color-mix(in srgb,var(--s2-content-default) 6%,transparent)}
+button:disabled{opacity:0.4;pointer-events:none}
+canvas{display:block;width:100%;border-radius:8px}
+mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inherit;border-radius:2px;padding:0 2px}
+.c-purple{background:#3C3489;color:#EEEDFE}.c-teal{background:#085041;color:#E1F5EE}
+.c-coral{background:#712B13;color:#FAECE7}.c-pink{background:#72243E;color:#FBEAF0}
+.c-gray{background:#444441;color:#F1EFE8}.c-blue{background:#0C447C;color:#E6F1FB}
+.c-amber{background:#633806;color:#FAEEDA}.c-red{background:#791F1F;color:#FCEBEB}
+.c-green{background:#27500A;color:#EAF3DE}`;
+
+/**
+ * Listens for `dip-draft-update` messages from the parent and replaces the
+ * iframe body content with the new partial shtml. Lucide icons are re-run
+ * after each update so newly-arrived `<i data-lucide>` markers materialize.
+ * Custom elements (slicc-editor, slicc-diff) are upgraded automatically
+ * by the browser when their tags appear in the DOM.
+ */
+const DRAFT_BRIDGE_EXTENSION = `(function(){
+  window.addEventListener('message', function(e){
+    if (!e.data || e.data.type !== 'dip-draft-update') return;
+    var content = typeof e.data.content === 'string' ? e.data.content : '';
+    document.body.innerHTML = content;
+    if (window.lucide && typeof window.lucide.createIcons === 'function') {
+      try { window.lucide.createIcons(); } catch(ex){}
+    }
+  });
+})();`;
+
+function buildDipSrcdoc(content: string, isDraft: boolean): string {
+  const themeCSS = collectThemeCSS();
+  const htmlClass = isThemeLight() ? ' class="theme-light"' : '';
+  // Drafts can't introspect content (it streams), so always include the
+  // custom element bundles. Final dips only include them when needed to
+  // keep the srcdoc small for short-lived widgets.
+  const includeEditor = isDraft || content.includes('<slicc-editor');
+  const includeDiff = isDraft || content.includes('<slicc-diff');
+  const draftScript = isDraft ? `<script>${DRAFT_BRIDGE_EXTENSION}</script>` : '';
+  return `<!DOCTYPE html>
+<html${htmlClass}><head>
+<meta charset="utf-8">
+<style>${themeCSS}</style>
+<style>${DIP_HOST_STYLES}</style>
+<script>${BRIDGE_SCRIPT}</script>
+${draftScript}
+${includeEditor ? '<script src="/slicc-editor.js"></script>' : ''}
+${includeDiff ? '<script src="/slicc-diff.js"></script>' : ''}
+<script src="/lucide-icons.js"></script>
+</head>
+<body class="sprinkle-inline">${content}</body></html>`;
+}
+
+/**
  * Live dip iframes. Used by `broadcastToDips` so the host UI can post
  * a message to every mounted dip — handy for cases where a workflow
  * spans multiple turns (e.g. the onboarding `connect-llm` dip needs
@@ -238,61 +385,7 @@ export function mountDip(
   onLick: (action: string, data: unknown) => void,
   trusted = false
 ): DipInstance {
-  const themeCSS = collectThemeCSS();
-  const htmlClass = isThemeLight() ? ' class="theme-light"' : '';
-
-  const srcdoc = `<!DOCTYPE html>
-<html${htmlClass}><head>
-<meta charset="utf-8">
-<style>${themeCSS}</style>
-<style>html,body{margin:0;padding:0;overflow:hidden;background:transparent;box-sizing:border-box}
-*,*::before,*::after{box-sizing:inherit}
-/* Vertical breathing room around dip content. Horizontal padding is owned
-   by the dip's own content (e.g. .sprinkle-action-card__body) so shtml
-   widgets that already pad themselves don't end up double-indented. The
-   ResizeObserver on document.body reports the post-padding scrollHeight
-   correctly, so auto-height continues to work. */
-body{padding:12px 0;font-family:var(--s2-font-family, sans-serif);font-size:13px;color:var(--s2-content-default)}</style>
-<style>.sprinkle-inline{padding:var(--s2-spacing-100) 0}
-.sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px;box-shadow:none}
-.sprinkle-inline .sprinkle-btn:not([class*="sprinkle-btn--"]){background:var(--s2-bg-elevated)}
-.sprinkle-inline .sprinkle-card{box-shadow:none;margin:0}
-.sprinkle-inline .sprinkle-action-card{margin:0;width:100%}
-.sprinkle-inline .sprinkle-action-card .sprinkle-table{width:100%}
-.sprinkle-inline .sprinkle-grid{width:100%}
-/* Pre-styled form elements for inline widgets */
-input[type="range"]{width:100%;height:4px;-webkit-appearance:none;appearance:none;background:var(--s2-gray-300);border-radius:2px;outline:none;cursor:default}
-input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:var(--s2-accent);cursor:default;border:2px solid var(--s2-bg-base)}
-input[type="range"]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--s2-accent);cursor:default;border:2px solid var(--s2-bg-base)}
-input[type="text"],input[type="number"],textarea{width:100%;padding:7px 12px;font-size:13px;font-family:var(--s2-font-family,sans-serif);color:var(--s2-content-default);background:var(--s2-bg-layer-2);border:1px solid var(--s2-border-subtle,var(--s2-gray-300));border-radius:8px;outline:none;box-sizing:border-box}
-input[type="text"]:focus,input[type="number"]:focus,textarea:focus{border-color:var(--s2-accent);box-shadow:0 0 0 1px var(--s2-accent)}
-input[type="text"]::placeholder,textarea::placeholder{color:var(--s2-content-disabled,var(--s2-gray-400))}
-select{padding:6px 12px;font-size:13px;font-family:var(--s2-font-family,sans-serif);color:var(--s2-content-default);background:var(--s2-bg-layer-2);border:1px solid var(--s2-border-subtle,var(--s2-gray-300));border-radius:8px;outline:none;cursor:default}
-select:focus{border-color:var(--s2-accent);box-shadow:0 0 0 1px var(--s2-accent)}
-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:28px;padding:4px 12px;border:1px solid var(--s2-border-default,var(--s2-gray-300));border-radius:9999px;background:transparent;color:var(--s2-content-default);font-size:12px;font-weight:700;font-family:var(--s2-font-family,sans-serif);cursor:default;transition:background 130ms ease}
-button:hover{background:color-mix(in srgb,var(--s2-content-default) 6%,transparent)}
-button:disabled{opacity:0.4;pointer-events:none}
-canvas{display:block;width:100%;border-radius:8px}
-mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inherit;border-radius:2px;padding:0 2px}
-/* Categorical color palette for charts/diagrams */
-.c-purple{background:#3C3489;color:#EEEDFE}.c-teal{background:#085041;color:#E1F5EE}
-.c-coral{background:#712B13;color:#FAECE7}.c-pink{background:#72243E;color:#FBEAF0}
-.c-gray{background:#444441;color:#F1EFE8}.c-blue{background:#0C447C;color:#E6F1FB}
-.c-amber{background:#633806;color:#FAEEDA}.c-red{background:#791F1F;color:#FCEBEB}
-.c-green{background:#27500A;color:#EAF3DE}
-</style>
-<script>${BRIDGE_SCRIPT}</script>
-${
-  // Custom element bundles are loaded via src in CLI mode (same-origin).
-  // In extension mode, dips route through sprinkle-sandbox.html
-  // which handles lazy-loading for fragment content. Full custom element
-  // support in extension dips requires the full-doc inlining path.
-  content.includes('<slicc-editor') ? '<script src="/slicc-editor.js"></script>' : ''
-}
-${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : ''}
-<script src="/lucide-icons.js"></script>
-</head>
-<body class="sprinkle-inline">${content}</body></html>`;
+  const srcdoc = buildDipSrcdoc(content, /* isDraft */ false);
 
   if (isExtension) {
     return mountDipExtension(container, srcdoc, onLick, trusted);
@@ -367,6 +460,94 @@ ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '
         liveDipWindows.delete(iframe.contentWindow);
         trustedDipWindows.delete(iframe.contentWindow);
       }
+      iframe.remove();
+    },
+  };
+}
+
+/**
+ * Mount a streaming-draft dip iframe. The caller is responsible for
+ * placement (the returned `element` is detached on construction so it
+ * can be re-parented across re-renders without reloading the iframe —
+ * critical, otherwise every animation-frame flush would tear down the
+ * preview).
+ *
+ * Drafts are NEVER trusted: they're not registered in `trustedDipWindows`
+ * and the bridge does not service VFS requests for them. Lick + auto-
+ * height + link-open all work the same as final dips so partial UI is
+ * still interactive (within the same security model as inline shtml).
+ *
+ * Extension mode routes through `sprinkle-sandbox.html` (CSP-exempt
+ * manifest sandbox) — same shape as the final-dip path, just with a
+ * `dip-draft-render` setup message and `dip-draft-update` relay for
+ * incremental body swaps. The chat panel's segment renderer keeps the
+ * iframe pinned to its container in both runtimes, so re-parenting
+ * isn't an issue here.
+ */
+export function mountDraftDip(onLick: (action: string, data: unknown) => void): DraftDipInstance {
+  const srcdoc = buildDipSrcdoc('', /* isDraft */ true);
+  if (isExtension) return mountDraftDipExtension(srcdoc, onLick);
+
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+  // `pointer-events:none` keeps users from clicking partial UI while the
+  // agent is still writing it — half-typed `slicc.lick()` arguments or
+  // unfinished forms shouldn't be reachable. Final dips replace the draft
+  // on stream end and get the normal interactive iframe styles.
+  iframe.style.cssText =
+    'width:100%;border:none;overflow:hidden;display:block;pointer-events:none;';
+  iframe.srcdoc = srcdoc;
+
+  // Drafts queue updates that arrive before the iframe finishes loading.
+  // The first post-load update flushes the queue.
+  let ready = false;
+  let pendingContent: string | null = null;
+  let lastSent: string | null = null;
+  const sendUpdate = (content: string) => {
+    if (lastSent === content) return;
+    lastSent = content;
+    iframe.contentWindow?.postMessage({ type: 'dip-draft-update', content }, '*');
+  };
+
+  if (iframe.contentWindow) {
+    registerSprinkleWindow(iframe.contentWindow);
+    liveDipWindows.add(iframe.contentWindow);
+  }
+  iframe.addEventListener(
+    'load',
+    () => {
+      registerSprinkleWindow(iframe.contentWindow);
+      if (iframe.contentWindow) liveDipWindows.add(iframe.contentWindow);
+      ready = true;
+      if (pendingContent !== null) {
+        sendUpdate(pendingContent);
+        pendingContent = null;
+      }
+    },
+    { once: true }
+  );
+
+  const messageHandler = (event: MessageEvent) => {
+    if (event.source !== iframe.contentWindow) return;
+    const msg = event.data;
+    if (!msg?.type) return;
+    if (msg.type === 'dip-lick') onLick(msg.action, msg.data);
+    else if (msg.type === 'dip-height') iframe.style.height = msg.height + 'px';
+    else if (msg.type === 'dip-open-link') openDipLink(msg.url);
+    // Drafts never service VFS requests — silently ignore them.
+  };
+  window.addEventListener('message', messageHandler);
+
+  return {
+    element: iframe,
+    update(content: string) {
+      if (ready) sendUpdate(content);
+      else pendingContent = content;
+    },
+    dispose() {
+      window.removeEventListener('message', messageHandler);
+      unregisterSprinkleWindow(iframe.contentWindow);
+      if (iframe.contentWindow) liveDipWindows.delete(iframe.contentWindow);
       iframe.remove();
     },
   };
@@ -725,6 +906,85 @@ function mountDipExtension(
         liveDipWindows.delete(iframe.contentWindow);
         trustedDipWindows.delete(iframe.contentWindow);
       }
+      iframe.remove();
+    },
+  };
+}
+
+/**
+ * Extension-mode draft dip. Mirrors `mountDipExtension` but with
+ * draft-specific wiring:
+ *
+ * - Posts `dip-draft-render { srcdoc }` instead of `dip-render` so the
+ *   sandbox knows to mount the child iframe in non-interactive mode.
+ * - `update(content)` posts `dip-draft-update { content }` to the
+ *   sandbox; the sandbox relays it to the nested child iframe, where
+ *   the `DRAFT_BRIDGE_EXTENSION` listener (already inlined into the
+ *   draft srcdoc by `buildDipSrcdoc`) replaces `document.body.innerHTML`.
+ * - `pointer-events: none` lives on the outer (sandbox) iframe and on
+ *   the inner srcdoc — both layers block clicks until final hydration.
+ *
+ * The element is detached on construction so the caller (the chat
+ * panel's segment renderer) controls placement. Drafts are not
+ * registered in `trustedDipWindows` and never service VFS requests.
+ */
+function mountDraftDipExtension(
+  srcdoc: string,
+  onLick: (action: string, data: unknown) => void
+): DraftDipInstance {
+  const iframe = document.createElement('iframe');
+  iframe.src = chrome.runtime.getURL('sprinkle-sandbox.html');
+  iframe.style.cssText =
+    'width:100%;border:none;overflow:hidden;display:block;pointer-events:none;';
+
+  let ready = false;
+  let pendingContent: string | null = null;
+  let lastSent: string | null = null;
+  const sendUpdate = (content: string) => {
+    if (lastSent === content) return;
+    lastSent = content;
+    iframe.contentWindow?.postMessage({ type: 'dip-draft-update', content }, '*');
+  };
+
+  const messageHandler = (event: MessageEvent) => {
+    if (event.source !== iframe.contentWindow) return;
+    const msg = event.data;
+    if (!msg?.type) return;
+    if (msg.type === 'dip-lick') onLick(msg.action, msg.data);
+    else if (msg.type === 'dip-height') iframe.style.height = msg.height + 'px';
+    else if (msg.type === 'dip-open-link') openDipLink(msg.url);
+    // Drafts never service VFS requests — silently ignore them.
+  };
+  window.addEventListener('message', messageHandler);
+
+  iframe.addEventListener(
+    'load',
+    () => {
+      registerSprinkleWindow(iframe.contentWindow);
+      if (iframe.contentWindow) liveDipWindows.add(iframe.contentWindow);
+      iframe.contentWindow?.postMessage(
+        { type: 'dip-draft-render', srcdoc, isLight: isThemeLight() },
+        '*'
+      );
+      ready = true;
+      if (pendingContent !== null) {
+        sendUpdate(pendingContent);
+        pendingContent = null;
+      }
+    },
+    { once: true }
+  );
+
+  return {
+    element: iframe,
+    update(content: string) {
+      if (ready) sendUpdate(content);
+      else pendingContent = content;
+    },
+    dispose() {
+      window.removeEventListener('message', messageHandler);
+      unregisterSprinkleWindow(iframe.contentWindow);
+      if (iframe.contentWindow) liveDipWindows.delete(iframe.contentWindow);
       iframe.remove();
     },
   };

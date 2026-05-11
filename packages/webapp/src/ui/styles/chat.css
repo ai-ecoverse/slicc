@@ -167,6 +167,56 @@
   background: transparent;
 }
 
+/* Streaming-segment containers built by `renderStreamingSegmented`. The
+   shtml variant holds a non-interactive draft iframe while the agent is
+   still writing markup into the block. The `cursor: progress` hint and
+   slight opacity dimming tell users this is a preview that isn't ready
+   to interact with yet — the iframe itself has `pointer-events: none`,
+   so clicks/hovers can't reach partial UI. Replaced on stream end by
+   the fully-interactive `.msg__dip` from `hydrateDips()`. */
+.msg__seg--shtml {
+  margin: 0.6em 0;
+  cursor: progress;
+  opacity: 0.92;
+}
+
+/* Streaming placeholder — replaces a fenced ```shtml block while the
+   assistant is still emitting it, so users see a loading affordance
+   instead of raw markup typing out. Replaced by the real dip iframe
+   once streaming ends. Visually matches `.tool-call` rows: label on
+   the left, pulsing orange status circle pinned to the right. */
+.msg__dip-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0.6em 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--s2-bg-layer-1);
+  color: var(--s2-content-secondary);
+  font-size: var(--s2-font-size-75);
+  line-height: 1.4;
+}
+.msg__dip-pending-label {
+  font-family: var(--s2-font-family);
+  font-weight: 500;
+  color: var(--s2-content-secondary);
+}
+.msg__dip-pending-status {
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e6a23c;
+  flex-shrink: 0;
+  animation: tool-status-pulse 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg__dip-pending-status {
+    animation: none;
+  }
+}
+
 /* Continuation messages (same sender, no label) */
 .msg-group--continuation .msg {
   padding-left: 0;
