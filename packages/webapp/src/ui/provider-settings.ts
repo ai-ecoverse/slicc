@@ -730,10 +730,14 @@ export function downloadProviders(): void {
 
 // Clear all provider settings
 export async function clearAllSettings(): Promise<void> {
+  // Fan out the per-account replica clears in parallel — sequential `await`
+  // makes a single slow proxy (e.g. node-server unreachable, hitting the
+  // default fetch timeout) block every subsequent removal, so the UI hangs
+  // for N×timeout seconds. allSettled because each remove already swallows
+  // its own errors (fail-open) and a single transient failure shouldn't
+  // gate the rest.
   const accounts = getAccounts();
-  for (const a of accounts) {
-    await removeAccount(a.providerId);
-  }
+  await Promise.allSettled(accounts.map((a) => removeAccount(a.providerId)));
   localStorage.removeItem(ACCOUNTS_KEY);
   localStorage.removeItem(MODEL_KEY);
   for (const key of LEGACY_KEYS) {
