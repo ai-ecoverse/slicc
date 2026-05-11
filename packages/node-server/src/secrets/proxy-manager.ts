@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { SecretsPipeline, type FetchProxySecretSource, type MaskedSecret } from '@slicc/shared';
+import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared';
 import { type EnvSecretStore } from './env-secret-store.js';
 import { type OauthSecretStore } from './oauth-secret-store.js';
 
@@ -105,9 +105,5 @@ export class SecretProxyManager {
 
   scrubHeaders(headers: Headers): Record<string, string> {
     return this.pipeline.scrubHeaders(headers);
-  }
-
-  getByMaskedValue(maskedValue: string): MaskedSecret | undefined {
-    return this.pipeline.getByMaskedValue(maskedValue);
   }
 }

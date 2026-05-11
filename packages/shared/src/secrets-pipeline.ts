@@ -125,10 +125,6 @@ export class SecretsPipeline {
     }));
   }
 
-  getByMaskedValue(maskedValue: string): MaskedSecret | undefined {
-    return this.maskedToSecret.get(maskedValue);
-  }
-
   /**
    * Unmask a single string. Domain mismatch on a matched secret → forbidden.
    * Returns { text } on success, { text: original, forbidden } on block.
