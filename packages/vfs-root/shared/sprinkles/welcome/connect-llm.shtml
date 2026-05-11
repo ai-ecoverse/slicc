@@ -318,8 +318,14 @@
         apiKeyIn.placeholder = p.apiKeyPlaceholder || 'sk-…';
 
         // ── Base URL field ────────────────────────────────────────
+        // `defaultBaseUrl` on the catalogue is the provider's
+        // `baseUrlPlaceholder` — a UI hint like
+        // `https://your-resource.cognitiveservices.azure.com/` or
+        // `https://your-proxy.example.com`. It is NOT a real default
+        // and must not be sent back as the user's value. Mirror the
+        // settings dialog and use it only as the HTML placeholder.
         baseUrlRow.hidden = !p.requiresBaseUrl;
-        baseUrlIn.value = p.defaultBaseUrl || '';
+        baseUrlIn.value = '';
         baseUrlIn.placeholder = p.defaultBaseUrl || 'https://…';
         setHelpText(baseUrlHelpEl, p.requiresBaseUrl ? p.baseUrlDescription || '' : '');
 
