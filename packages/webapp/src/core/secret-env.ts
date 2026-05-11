@@ -27,9 +27,27 @@ export interface MaskedSecretEntry {
 export async function fetchSecretEnvVars(): Promise<Record<string, string>> {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
-  // Extension mode has no server-side proxy — secrets unavailable
+  // Extension mode: fetch masked secrets from the service worker
   if (isExtension) {
-    return {};
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: 'secrets.list-masked-entries' }, (response: unknown) => {
+        const resp = response as { entries?: MaskedSecretEntry[] };
+        const env: Record<string, string> = {};
+        for (const entry of resp?.entries ?? []) {
+          if (entry.name && entry.maskedValue) {
+            env[entry.name] = entry.maskedValue;
+          }
+        }
+
+        if (Object.keys(env).length > 0) {
+          log.info('Loaded masked secrets into shell env from SW', {
+            count: Object.keys(env).length,
+          });
+        }
+
+        resolve(env);
+      });
+    });
   }
 
   try {
