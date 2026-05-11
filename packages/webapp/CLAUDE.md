@@ -156,9 +156,14 @@ Deep reference: `docs/kernel/process-model.md`.
 - Optional `// @match` directives in the first 10 lines narrow matching further.
 - `BshWatchdog` uses `ScriptCatalog` for matching and reads script content from VFS before evaluating it in the target page via CDP.
 
+## Secret-Aware Fetch Proxy
+
+The webapp consumes `@slicc/shared` for secret masking primitives. `createProxiedFetch()` in `packages/webapp/src/shell/proxied-fetch.ts` routes agent-initiated HTTP through the fetch proxy. In extension mode, the extension branch is now Port-based (`chrome.runtime.connect({ name: 'fetch-proxy.fetch' })`) instead of direct fetch, providing full secret-injection coverage equivalent to CLI mode.
+
 ## Related Guides
 
 - `packages/chrome-extension/CLAUDE.md` for extension runtime constraints
 - `packages/node-server/CLAUDE.md` for the CLI/Electron float
+- `packages/shared/CLAUDE.md` for secret masking primitives
 - `docs/architecture.md` for repo-wide file maps and deeper subsystem inventories
 - `docs/shell-reference.md` for command-by-command shell behavior

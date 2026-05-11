@@ -168,8 +168,13 @@ pkill -f "Google Chrome.*slicc-ext-profile"
 The same `EXT` and `PROFILE` paths can be reused on the next run, but
 re-running step 1 + step 3 is the safest way to pick up code changes.
 
+## Secret-Aware Fetch Proxy
+
+The service worker now handles `fetch-proxy.fetch` Port connections for secret-aware HTTP proxying, plus `secrets.list-masked-entries` and `secrets.mask-oauth-token` message handlers. The webapp's `createProxiedFetch()` extension branch uses the Port handler instead of direct fetch, providing full secret injection equivalent to CLI mode.
+
 ## Related Guides
 
 - `packages/webapp/CLAUDE.md` for shared browser architecture
+- `packages/shared/CLAUDE.md` for secret masking primitives
 - `docs/architecture.md` for the detailed extension message flow and persistence model
 - `docs/pitfalls.md` for extension-specific gotchas

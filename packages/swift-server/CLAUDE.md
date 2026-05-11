@@ -59,7 +59,12 @@ WebSocket routes are installed separately for CDP proxying and the lick system.
 - `LickWebSocketRoute` exposes the `/licks-ws` endpoint.
 - Browser-originated messages resolve pending requests or broadcast events back into the runtime.
 
+## Secrets Architecture
+
+Swift-server includes `OAuthSecretStore.swift` for OAuth token replicas and corresponding HTTP endpoints mirroring node-server's API surface. The Swift port of `SecretsPipeline` in `Sources/Keychain/SecretsPipeline.swift` matches the TypeScript implementation in `@slicc/shared` byte-for-byte via cross-implementation tests. Note: Phase 7 of the secret-aware fetch proxy plan will add these endpoints; this documentation reflects the intended architecture.
+
 ## Related Guides
 
 - `packages/node-server/CLAUDE.md` for the parallel Node runtime
+- `packages/shared/CLAUDE.md` for secret masking primitives
 - `docs/development.md` for broader run/debug workflow guidance
