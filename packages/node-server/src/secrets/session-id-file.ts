@@ -19,8 +19,18 @@ export function readOrCreateSessionId(dir: string): string {
   writeFileSync(path, fresh + '\n', { encoding: 'utf-8' });
   try {
     chmodSync(path, 0o600);
-  } catch {
-    // best effort on Windows
+  } catch (err) {
+    // Windows ignores POSIX modes — silent failure is fine.
+    // On POSIX, this means the session-id file is world-readable. The
+    // session-id is the HMAC key that prevents lookup-table attacks on
+    // leaked masks (see docs/architecture.md), so EPERM/EACCES here is
+    // a real degradation — surface it.
+    if (process.platform !== 'win32') {
+      console.error(
+        `[session-id] chmod 0600 failed at ${path}; session-id may be world-readable`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
   }
   return fresh;
 }
