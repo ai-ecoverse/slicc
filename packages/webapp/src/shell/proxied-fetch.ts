@@ -19,6 +19,7 @@
  */
 
 import type { SecureFetch } from 'just-bash';
+import type { ResponseMsg } from '../../../chrome-extension/src/fetch-proxy-shared.js';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { getFetchBodyBytes } from './fetch-body.js';
 import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
@@ -27,6 +28,8 @@ import {
   decodeForbiddenResponseHeaders as _decodeForbiddenResponseHeaders,
   headersToRecord as _headersToRecord,
 } from './proxy-headers.js';
+
+const REQUEST_BODY_CAP = 32 * 1024 * 1024;
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
 export function isTextContentType(contentType: string): boolean {
@@ -72,8 +75,14 @@ export async function readResponseBody(resp: Response, url?: string): Promise<Ui
 export const headersToRecord = _headersToRecord;
 
 /**
- * Multipart form bodies contain latin1-encoded binary file content from curl —
- * convert to raw bytes so fetch() doesn't re-encode as UTF-8.
+ * Bodies that are NOT text-shaped (multipart form payloads, git packfiles,
+ * application/octet-stream, etc.) reach this layer as latin1-encoded strings
+ * (one char per byte) — the convention upstream callers use to thread binary
+ * data through `SecureFetch`'s `body: string` contract. `fetch()` would
+ * UTF-8-re-encode such a string, expanding every byte ≥0x80 to two bytes
+ * and corrupting the payload (git push fails for any repo with deflated
+ * objects). Convert back to raw bytes via `getFetchBodyBytes` and ship as
+ * a Blob so the binary survives intact.
  */
 export function prepareRequestBody(
   body: string | undefined,
@@ -81,7 +90,7 @@ export function prepareRequestBody(
 ): BodyInit | undefined {
   if (!body) return undefined;
   const ct = headers?.['Content-Type'] ?? headers?.['content-type'] ?? '';
-  if (ct.includes('multipart/form-data')) {
+  if (!isTextContentType(ct)) {
     const bytes = getFetchBodyBytes(body) as Uint8Array<ArrayBuffer>;
     return new Blob([bytes]);
   }
@@ -100,6 +109,115 @@ export const encodeForbiddenRequestHeaders = _encodeForbiddenRequestHeaders;
  */
 export const decodeForbiddenResponseHeaders = _decodeForbiddenResponseHeaders;
 
+async function extensionPortFetch(
+  url: string,
+  options?: Parameters<SecureFetch>[1]
+): ReturnType<SecureFetch> {
+  const port = chrome.runtime.connect({ name: 'fetch-proxy.fetch' });
+  const plainHeaders = headersToRecord(options?.headers);
+  const method = options?.method ?? 'GET';
+  const preparedBody = options?.body ? prepareRequestBody(options.body, plainHeaders) : undefined;
+
+  let bodyBase64: string | undefined;
+  let requestBodyTooLarge = false;
+  if (preparedBody !== undefined) {
+    const bodyBytes =
+      preparedBody instanceof Uint8Array
+        ? preparedBody
+        : new Uint8Array(await new Response(preparedBody as BodyInit).arrayBuffer());
+    if (bodyBytes.byteLength > REQUEST_BODY_CAP) {
+      requestBodyTooLarge = true;
+    } else {
+      let bin = '';
+      for (let i = 0; i < bodyBytes.length; i++) bin += String.fromCharCode(bodyBytes[i]);
+      bodyBase64 = btoa(bin);
+    }
+  }
+
+  return new Promise((resolve, reject) => {
+    let headInfo: { status: number; statusText: string; headers: Record<string, string> } | null =
+      null;
+    let ended = false;
+    const chunks: Uint8Array[] = [];
+
+    port.onMessage.addListener((raw: unknown) => {
+      const msg = raw as ResponseMsg;
+      if (msg.type === 'response-head') {
+        headInfo = msg;
+      } else if (msg.type === 'response-chunk') {
+        const bin = atob(msg.dataBase64);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        chunks.push(out);
+      } else if (msg.type === 'response-end') {
+        if (!headInfo) {
+          ended = true;
+          reject(new Error('fetch-proxy: response-end before response-head'));
+          return;
+        }
+        const totalLen = chunks.reduce((n, c) => n + c.length, 0);
+        const merged = new Uint8Array(totalLen);
+        let off = 0;
+        for (const c of chunks) {
+          merged.set(c, off);
+          off += c.length;
+        }
+        // Build a synthetic Response so readResponseBody decides text vs binary
+        // (binary goes to binary-cache; preserves git-http's binary packfile path).
+        const respHeaders = new Headers();
+        for (const [k, v] of Object.entries(headInfo.headers)) respHeaders.set(k, String(v));
+        const synth = new Response(merged, {
+          status: headInfo.status,
+          statusText: headInfo.statusText,
+          headers: respHeaders,
+        });
+        readResponseBody(synth, url)
+          .then((body) => {
+            resolve({
+              status: headInfo!.status,
+              statusText: headInfo!.statusText,
+              headers: headInfo!.headers,
+              body,
+              url,
+            });
+          })
+          .catch(reject);
+        ended = true;
+        port.disconnect();
+      } else if (msg.type === 'response-error') {
+        ended = true;
+        reject(new Error(msg.error));
+        port.disconnect();
+      }
+    });
+    port.onDisconnect.addListener(() => {
+      // Three disconnect scenarios:
+      //   1. Before response-head — caller's promise stays pending forever
+      //      unless we reject explicitly.
+      //   2. After response-head but before response-end — partial response
+      //      received; the chunks accumulated so far would otherwise be
+      //      silently discarded. Reject so the caller sees a clear error.
+      //   3. After response-end — we initiated the disconnect; do nothing
+      //      (the promise has already resolved).
+      if (ended) return;
+      if (!headInfo) {
+        reject(new Error('fetch-proxy port disconnected before response'));
+      } else {
+        reject(new Error('fetch-proxy port disconnected mid-stream'));
+      }
+    });
+
+    port.postMessage({
+      type: 'request',
+      url,
+      method,
+      headers: plainHeaders,
+      bodyBase64,
+      requestBodyTooLarge,
+    });
+  });
+}
+
 /**
  * Create a SecureFetch that routes requests through the CLI server's
  * /api/fetch-proxy endpoint, bypassing browser CORS restrictions.
@@ -111,21 +229,7 @@ export function createProxiedFetch(): SecureFetch {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
   if (isExtension) {
-    // Extension mode — host_permissions grant native CORS bypass
-    return async (url, options) => {
-      const plainHeaders = headersToRecord(options?.headers);
-      const resp = await fetch(url, {
-        method: options?.method ?? 'GET',
-        headers: plainHeaders,
-        body: prepareRequestBody(options?.body, plainHeaders),
-      });
-      const body = await readResponseBody(resp, url);
-      const respHeaders: Record<string, string> = {};
-      resp.headers.forEach((v, k) => {
-        respHeaders[k] = v;
-      });
-      return { status: resp.status, statusText: resp.statusText, headers: respHeaders, body, url };
-    };
+    return extensionPortFetch;
   }
 
   // CLI mode — proxy through /api/fetch-proxy

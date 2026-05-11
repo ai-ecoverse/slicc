@@ -191,3 +191,33 @@ export async function saveCustomSecret(
   await setSecret(storage, input.name, input.value, input.domains);
   return v;
 }
+
+export interface SecretEntryWithValue {
+  name: string;
+  value: string;
+  domains: string[];
+}
+
+/**
+ * Returns all secrets with their values included.
+ * Same walk as `listSecrets`, but returns `{name, value, domains}[]` for
+ * the SW's fetch-proxy unmask map.
+ */
+export async function listSecretsWithValues(storage: StorageArea): Promise<SecretEntryWithValue[]> {
+  const all = await storage.get(null);
+  const entries: SecretEntryWithValue[] = [];
+  for (const key of Object.keys(all)) {
+    if (key.endsWith(DOMAINS_SUFFIX)) continue;
+    if (typeof all[key] !== 'string') continue;
+    const domainsKey = key + DOMAINS_SUFFIX;
+    const raw = all[domainsKey];
+    if (typeof raw !== 'string') continue;
+    const domains = raw
+      .split(',')
+      .map((d) => d.trim())
+      .filter(Boolean);
+    if (domains.length === 0) continue;
+    entries.push({ name: key, value: all[key] as string, domains });
+  }
+  return entries;
+}

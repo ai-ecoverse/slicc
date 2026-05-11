@@ -84,7 +84,7 @@ Use the ice cream terms in code review comments and docs when they match the dom
 - Do not hand-edit generated output in `dist/`.
 - Webapp git behavior is implemented with `isomorphic-git` over LightningFS.
 - Auth uses `git config github.token <PAT>`.
-- Network behavior differs by runtime: CLI routes git/fetch traffic through `/api/fetch-proxy`; the extension uses direct fetch.
+- Both modes now route agent-initiated HTTP through `createProxiedFetch()`. CLI uses `/api/fetch-proxy` over Express; extension uses `chrome.runtime.connect({ name: 'fetch-proxy.fetch' })` over a SW Port with response streaming. Webapp git uses `isomorphic-git` over LightningFS; auth uses `git config github.token <PAT>` or GitHub OAuth login (auto-writes masked token to `/workspace/.git/github-token`).
 
 **Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP). Vite HMR shares the UI server via `/__vite_hmr`.
 

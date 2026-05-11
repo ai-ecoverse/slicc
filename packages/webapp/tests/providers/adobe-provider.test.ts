@@ -296,6 +296,54 @@ describe('OAuth state encoding', () => {
   });
 });
 
+// Regression: the standalone-CLI panel terminal is hosted in a
+// DedicatedWorker (kernel-worker). When a scoop streams via the Adobe
+// provider, getValidAccessToken → silentRenewToken runs in that worker
+// context. silentRenewToken originally referenced `window.location.href`
+// to build the OAuth state — undefined in a Worker, which caused the
+// caught noisy log line `[adobe] Silent renewal error: window is not
+// defined` on every expired-token stream attempt.
+//
+// adobe.ts now short-circuits: `if (typeof window === 'undefined') return null;`.
+// getValidAccessToken still surfaces a clean "session expired" error;
+// page-side oauth-bootstrap (with the `onSilentRenew` hook) is responsible
+// for pre-renewing the token before the worker reads it. This describe
+// block pins the pattern without importing adobe.ts (which has
+// `import.meta.glob` + chrome globals that don't work in node tests).
+describe('silentRenewToken worker-safety guard (pattern)', () => {
+  const silentRenewMimic = async (): Promise<string | null> => {
+    // The exact line from packages/webapp/providers/adobe.ts:478.
+    if (typeof window === 'undefined') return null;
+    // In the page path we'd do `new URL(window.location.href)` and run
+    // the OAuth launcher. The point of this test is the early-return.
+    return 'page-side-token';
+  };
+
+  it('returns null when window is undefined (worker context)', async () => {
+    const originalWindow = (globalThis as any).window;
+    delete (globalThis as any).window;
+    try {
+      expect(typeof (globalThis as any).window).toBe('undefined');
+      const result = await silentRenewMimic();
+      expect(result).toBeNull();
+    } finally {
+      (globalThis as any).window = originalWindow;
+    }
+  });
+
+  it('does NOT throw a ReferenceError in worker context', async () => {
+    const originalWindow = (globalThis as any).window;
+    delete (globalThis as any).window;
+    try {
+      // The pre-fix code dereferenced `window.location.href` and threw.
+      // Post-fix it returns null cleanly without exceptions.
+      await expect(silentRenewMimic()).resolves.toBeNull();
+    } finally {
+      (globalThis as any).window = originalWindow;
+    }
+  });
+});
+
 describe('SLICC version header injection', () => {
   // Mirrors withSliccVersionHeader in adobe.ts. Tested by pattern (rather than
   // importing the helper) because adobe.ts uses import.meta.glob and chrome

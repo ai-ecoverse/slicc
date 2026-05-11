@@ -23,6 +23,7 @@ import { createSprinkleCommand } from './sprinkle-command.js';
 import { createOAuthTokenCommand } from './oauth-token-command.js';
 import { createLocalLlmCommand } from './local-llm-command.js';
 import { createSecretCommand } from './secret-command.js';
+import { createOAuthDomainCommand } from './oauth-domain-command.js';
 import { createRsyncCommand } from './rsync-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
@@ -102,6 +103,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createUnameCommand(),
     createManCommand(),
     createOAuthTokenCommand(),
+    createOAuthDomainCommand(),
     createLocalLlmCommand(),
     createSecretCommand(),
     createRsyncCommand({ fs: options.fs }),

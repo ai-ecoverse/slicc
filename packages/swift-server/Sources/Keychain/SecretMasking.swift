@@ -59,16 +59,28 @@ private func toHex(_ bytes: [UInt8]) -> String {
 ///
 /// `masked = prefix + hex(HMAC-SHA256(sessionId+secretName, realValue))`
 /// truncated or repeated to match the original value length.
+///
+/// Length math operates on UTF-16 code units (`String.utf16.count`) rather
+/// than grapheme clusters (`String.count`) to match the TypeScript reference
+/// (`packages/shared-ts/src/secret-masking.ts`, which uses `.length`). For
+/// ASCII inputs the two agree; for inputs containing emoji or surrogate
+/// pairs they diverge and the cross-implementation mask vector contract
+/// would break.
 public func mask(sessionId: String, secretName: String, realValue: String) -> String {
     let prefix = detectPrefix(realValue)
-    let remainder = String(realValue.dropFirst(prefix.count))
+    // UTF-16 code-unit length matches JS `String.length` semantics. Grapheme-
+    // cluster `.count` would diverge from the TS reference for inputs
+    // containing emoji or surrogate pairs and break the cross-implementation
+    // mask vector contract. hex is pure ASCII so `.count` ≡ `.utf16.count`.
+    let prefixUTF16Length = prefix.utf16.count
+    let remainderUTF16Length = realValue.utf16.count - prefixUTF16Length
 
     let hmac = hmacSHA256(key: sessionId + secretName, message: realValue)
     var hex = toHex(hmac)
 
     // Repeat hex if remainder is longer than 64 hex chars
-    while hex.count < remainder.count { hex += hex }
-    let maskedRemainder = String(hex.prefix(remainder.count))
+    while hex.count < remainderUTF16Length { hex += hex }
+    let maskedRemainder = String(hex.prefix(remainderUTF16Length))
 
     return prefix + maskedRemainder
 }

@@ -22,6 +22,10 @@
       ]
     }
   },
-  "include": ["packages/webapp/src/**/*.ts", "packages/chrome-extension/src/**/*.ts"],
+  "include": [
+    "packages/shared-ts/src/**/*.ts",
+    "packages/webapp/src/**/*.ts",
+    "packages/chrome-extension/src/**/*.ts"
+  ],
   "exclude": ["packages/node-server/src/**/*.ts"]
 }

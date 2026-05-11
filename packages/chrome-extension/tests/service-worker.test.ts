@@ -78,6 +78,9 @@ function createChromeMock() {
           runtimeMessageListeners.push(listener);
         }),
       },
+      onConnect: {
+        addListener: vi.fn(),
+      },
       onInstalled: {
         addListener: vi.fn(),
       },

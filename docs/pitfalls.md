@@ -238,12 +238,85 @@ Host the real leader tray `WebSocket` in `packages/chrome-extension/src/service-
 
 ## Fetch Proxy: CORS & CSP
 
-| Mode          | Fetch Strategy | CORS Handling                                                   |
-| ------------- | -------------- | --------------------------------------------------------------- |
-| **CLI**       | Direct fetch   | Cross-origin requests proxy through `/api/fetch-proxy` endpoint |
-| **Extension** | Direct fetch   | Uses `host_permissions` in manifest; no server proxy needed     |
+| Mode          | Fetch Strategy                                       | CORS Handling                                                                                |
+| ------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| **CLI**       | `createProxiedFetch()` → `/api/fetch-proxy`          | Cross-origin requests proxy through Express endpoint with secret unmask/scrub                |
+| **Extension** | `createProxiedFetch()` → `fetch-proxy.fetch` SW Port | Routes through service worker Port handler with secret unmask/scrub; uses `host_permissions` |
 
-**Git CORS**: Same rules apply to isomorphic-git HTTP requests (clone, push, pull).
+**Git CORS**: Same rules apply to isomorphic-git HTTP requests (clone, push, pull). Both modes now route through `createProxiedFetch()`.
+
+## Response Status Code Constraints
+
+**The Problem**
+
+`new Response('', { status: 0 })` throws `RangeError: Failed to construct 'Response': Invalid status code (0)`. The Fetch API requires status codes in range 200-599.
+
+**The Solution**
+
+Use `413 Payload Too Large` for oversized requests instead of `status: 0`. The SW `fetch-proxy.fetch` handler uses a 32MB request-body cap and returns 413 when exceeded.
+
+```typescript
+// WRONG
+return new Response('', { status: 0 });
+
+// RIGHT
+return new Response('Request body exceeds 32MB limit', { status: 413 });
+```
+
+## Chrome Port: onMessage Listener Must Attach Synchronously
+
+**The Problem**
+
+When an MV3 service worker handles a `chrome.runtime.onConnect` event, page-side callers will routinely call `port.postMessage(...)` immediately after `chrome.runtime.connect({name})` resolves. Chrome **drops port messages that arrive before any `port.onMessage` listener is attached**. If the SW's `onConnect` callback awaits anything (e.g. an async pipeline build) before attaching the listener, the page's first message is silently lost — the caller's promise hangs forever waiting for a response that never comes.
+
+This is exactly what bit the secret-aware fetch proxy: the SW's original handler did `buildSecretsPipeline()` (involving `chrome.storage.local` reads) inside `.then(...)` and attached the listener afterward. `curl` from the extension panel terminal hung with no error and no disconnect.
+
+**The Solution**
+
+Attach `port.onMessage.addListener(...)` **synchronously** inside the `onConnect` callback, and `await` any async setup INSIDE that listener:
+
+```typescript
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'my-channel') return;
+  const pipelinePromise = buildPipeline(); // kick off async work
+  port.onMessage.addListener(async (msg) => {
+    // <-- ATTACHED SYNC
+    const pipeline = await pipelinePromise; // <-- AWAIT INSIDE
+    // ... handle msg using pipeline
+  });
+});
+```
+
+See `packages/chrome-extension/src/fetch-proxy-shared.ts:handleFetchProxyConnectionAsync` for the production pattern. Regression test: `packages/chrome-extension/tests/fetch-proxy-shared.test.ts` — "handleFetchProxyConnectionAsync — synchronous listener attach".
+
+## Offscreen Documents: Smaller chrome.\* Surface than the SW
+
+**The Problem**
+
+MV3 offscreen documents inherit only a subset of the manifest's `permissions`. Notably, **`chrome.storage` is NOT exposed in offscreen documents** — even when the manifest grants `"storage"` and the SW has it. Code paths that work in the SW (where `chrome.storage.local.get(null)` returns instantly) throw `Cannot read properties of undefined (reading 'local')` when they end up running in offscreen.
+
+This was hit by the `secret list` shell command: the panel-terminal `WasmShellHeadless` is hosted in the offscreen document (via `createPanelTerminalHost`), and `chrome.storage.local.get(...)` from inside the supplemental command callback throws.
+
+**The Solution**
+
+For management operations that must touch `chrome.storage.local`, **route through the SW via `chrome.runtime.sendMessage`**. The SW has full storage access. Add a handler in `service-worker.ts:onMessage` that performs the storage call and replies via `sendResponse`. See the `secrets.list` / `secrets.set` / `secrets.delete` handlers there for the canonical pattern. Always `return true` from the listener for async work, and always include `chrome.runtime.lastError` handling on the caller side.
+
+## SecretsPipeline Mutation Pitfall
+
+**The Problem**
+
+`SecretsPipeline.unmaskHeaders(headers, hostname)` mutates its input parameter in place. This matches the legacy `SecretProxyManager` semantics but is easy to miss.
+
+**The Solution**
+
+Expect the mutation. If you need the original headers preserved, clone them first:
+
+```typescript
+const originalHeaders = { ...headers };
+pipeline.unmaskHeaders(headers, hostname); // headers is now mutated
+```
+
+This design choice preserves compatibility with existing node-server callers that rely on in-place mutation.
 
 ## Two TypeScript Targets
 
@@ -513,7 +586,7 @@ When adding a feature that touches:
 
 - [ ] New pure-logic code has unit tests (run in Node)
 - [ ] Code has three-branch detection if behavior differs (Node/Extension/Browser)
-- [ ] Fetch uses `/api/fetch-proxy` in CLI, direct fetch in extension
+- [ ] Both modes proxy via `createProxiedFetch` (CLI to `/api/fetch-proxy`, extension to `fetch-proxy.fetch` Port)
 - [ ] WASM loading uses `chrome.runtime.getURL()` in extension mode
 - [ ] No dynamic code construction on extension pages
 

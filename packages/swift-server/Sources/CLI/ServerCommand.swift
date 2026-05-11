@@ -97,7 +97,38 @@ struct ServerCommand: AsyncParsableCommand {
         // pops on the first slicc-server run after Sliccstart wrote the
         // blob, and SecretStore.all() is what triggers it.
         let envFileSecrets: [Secret] = config.envFileURL.flatMap { Self.parseEnvFileSecrets(at: $0) } ?? []
-        let secretInjector = SecretInjector(sessionId: UUID().uuidString, envFileSecrets: envFileSecrets)
+        // Session-id persistence: when --env-file is given, co-locate the
+        // session-id file with the env-file (so per-project envs get
+        // per-project masking namespaces). Otherwise default to
+        // ~/.slicc/session-id, matching packages/node-server/src/index.ts.
+        let sessionDir: URL = {
+            if let envFileURL = config.envFileURL {
+                return envFileURL.deletingLastPathComponent()
+            }
+            let home = URL(fileURLWithPath: NSHomeDirectory())
+            return home.appendingPathComponent(".slicc")
+        }()
+        let sessionId: String
+        do {
+            sessionId = try SecretInjector.readOrCreateSessionId(in: sessionDir)
+        } catch {
+            // Fall back to an ephemeral UUID rather than crashing; the
+            // node-server path also degrades gracefully on filesystem errors.
+            logger.warning(
+                "session-id persistence failed; falling back to ephemeral session",
+                metadata: ["error": .string(String(describing: error))]
+            )
+            sessionId = UUID().uuidString
+        }
+        let oauthStore = OAuthSecretStore()
+        let secretInjector = SecretInjector(
+            sessionId: sessionId,
+            envFileSecrets: envFileSecrets,
+            oauthStore: oauthStore
+        )
+        // Pick up any OAuth replicas that may exist (none at startup, but
+        // future tests / re-entry paths might pre-populate the store).
+        await secretInjector.reload()
 
         if config.electron, !config.serveOnly {
             guard let electronApp = config.electronApp else {
@@ -157,7 +188,14 @@ struct ServerCommand: AsyncParsableCommand {
                 logger: Logger(label: "slicc.static-files")
             )
         )
-        registerAPIRoutes(router: router, lickSystem: lickSystem, config: config, httpClient: httpClient, secretInjector: secretInjector)
+        registerAPIRoutes(
+            router: router,
+            lickSystem: lickSystem,
+            config: config,
+            httpClient: httpClient,
+            secretInjector: secretInjector,
+            oauthStore: oauthStore
+        )
 
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
         await cdpProxy.install(on: wsRouter, cdpPort: cdpPort)

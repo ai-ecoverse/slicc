@@ -10,7 +10,11 @@ import Foundation
 ///
 /// Call `reload()` after secret mutations (POST/DELETE) to pick up changes
 /// while keeping the same session ID for stable masked values.
-public final class SecretInjector: Sendable {
+// `@unchecked Sendable` because mutable state (`_sessionId`, `_secrets`, `_scrubber`,
+// `_oauthStore`) is `nonisolated(unsafe)` and all access is serialized by `lock`
+// (NSLock). This makes the "trust me, I'm thread-safe" claim explicit and is
+// required under Swift 6 strict-concurrency mode.
+public final class SecretInjector: @unchecked Sendable {
 
     /// A loaded secret with its masked counterpart.
     struct LoadedSecret: Sendable {
@@ -28,6 +32,26 @@ public final class SecretInjector: Sendable {
         case domainBlocked(secretName: String, hostname: String)
     }
 
+    /// Info about a domain-blocked secret, mirrors TS `ForbiddenInfo`.
+    struct ForbiddenInfo: Sendable, Equatable {
+        let secretName: String
+        let hostname: String
+    }
+
+    /// Result of `unmaskAuthorizationBasic` — either an updated header value,
+    /// or a forbidden block. Mirrors TS `BasicResult`.
+    struct BasicResult: Sendable, Equatable {
+        let value: String
+        let forbidden: ForbiddenInfo?
+    }
+
+    /// Result of `extractAndUnmaskUrlCredentials`. Mirrors TS `ExtractedUrlCreds`.
+    struct ExtractedUrlCreds: Sendable, Equatable {
+        let url: String
+        let syntheticAuthorization: String?
+        let forbidden: ForbiddenInfo?
+    }
+
     /// The session ID used for masking. Kept stable across reloads.
     private let sessionId: String?
 
@@ -37,6 +61,7 @@ public final class SecretInjector: Sendable {
     private let lock = NSLock()
     private nonisolated(unsafe) var _secrets: [LoadedSecret]
     private nonisolated(unsafe) var _responseScrubber: @Sendable (String) -> String
+    private nonisolated(unsafe) var _oauthStore: OAuthSecretStore?
 
     private var secrets: [LoadedSecret] {
         lock.lock()
@@ -48,6 +73,12 @@ public final class SecretInjector: Sendable {
         lock.lock()
         defer { lock.unlock() }
         return _responseScrubber
+    }
+
+    private var oauthStore: OAuthSecretStore? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _oauthStore
     }
 
     private func setSecretsAndScrubber(secrets: [LoadedSecret], scrubber: @Sendable @escaping (String) -> String) {
@@ -64,28 +95,84 @@ public final class SecretInjector: Sendable {
         self._secrets = secrets
         let pairs = secrets.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
         self._responseScrubber = buildScrubber(secrets: pairs)
+        self._oauthStore = nil
     }
 
     /// Initialize by loading all secrets from the Keychain and masking them
     /// with the given session ID. Optional `envFileSecrets` are merged in
     /// and override Keychain entries with the same name.
-    init(sessionId: String, envFileSecrets: [Secret] = []) {
+    ///
+    /// If `oauthStore` is provided, OAuth replicas are merged in and override
+    /// Keychain / env-file entries on name collision (reserved-namespace
+    /// policy — see node-server's `SecretProxyManager`). The store reference
+    /// is held weakly through the actor — the initial load completes the
+    /// Keychain + env-file portion synchronously; call `reload()` (async)
+    /// once the runtime is in an async context to fold in OAuth entries.
+    init(sessionId: String, envFileSecrets: [Secret] = [], oauthStore: OAuthSecretStore? = nil) {
         self.sessionId = sessionId
         self._envFileSecrets = envFileSecrets
         self._secrets = []
         self._responseScrubber = { $0 }
-        loadSecrets()
+        self._oauthStore = oauthStore
+        // Initial sync load: Keychain + env-file only. OAuth entries are
+        // empty at startup (the webapp re-pushes them after bootstrap), so
+        // skipping them here is harmless. The first `reload()` after the
+        // first OAuth update will fold them in.
+        loadSecretsKeychainAndEnv()
     }
 
-    /// Reload secrets from the Keychain (and env file overrides), keeping
-    /// the same session ID. Call this after secret mutations (POST/DELETE)
-    /// so the injector picks up added/removed secrets.
-    func reload() {
-        loadSecrets()
+    /// Bind (or rebind) the OAuth store after construction. Matches
+    /// `SecretProxyManager.setOauthStore` — no reload happens implicitly;
+    /// callers run `reload()` once they're in an async context.
+    func setOAuthStore(_ store: OAuthSecretStore) {
+        lock.lock()
+        defer { lock.unlock() }
+        _oauthStore = store
     }
 
-    private func loadSecrets() {
+    /// Reload secrets from the Keychain, env file, and (if configured) the
+    /// OAuth store. Async because reading from the `OAuthSecretStore` actor
+    /// is async. Call this after secret mutations (POST/DELETE) so the
+    /// injector picks up added/removed secrets.
+    func reload() async {
         guard let sessionId else { return }
+        var loaded = self.loadSecretsKeychainAndEnvSnapshot()
+
+        // OAuth entries override Keychain + env-file entries on name
+        // collision (reserved-namespace policy — see node-server's
+        // SecretProxyManager.buildSource).
+        if let store = oauthStore {
+            for entry in await store.list() {
+                let masked = mask(sessionId: sessionId, secretName: entry.name, realValue: entry.value)
+                let loadedEntry = LoadedSecret(
+                    name: entry.name,
+                    realValue: entry.value,
+                    maskedValue: masked,
+                    domains: entry.domains
+                )
+                if let idx = loaded.firstIndex(where: { $0.name == entry.name }) {
+                    loaded[idx] = loadedEntry
+                } else {
+                    loaded.append(loadedEntry)
+                }
+            }
+        }
+
+        let pairs = loaded.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
+        setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
+    }
+
+    /// Synchronous Keychain + env-file load. Used by `init` for the initial
+    /// load before any async context exists, and by `reload()` as the first
+    /// step before folding in OAuth entries.
+    private func loadSecretsKeychainAndEnv() {
+        let loaded = loadSecretsKeychainAndEnvSnapshot()
+        let pairs = loaded.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
+        setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
+    }
+
+    private func loadSecretsKeychainAndEnvSnapshot() -> [LoadedSecret] {
+        guard let sessionId else { return [] }
         // Single Keychain read + parse for every secret. Previously this did
         // SecretStore.list() followed by per-name SecretStore.get(...), which
         // re-parsed the same blob N+1 times.
@@ -115,9 +202,55 @@ public final class SecretInjector: Sendable {
                 loaded.append(entry)
             }
         }
+        return loaded
+    }
 
-        let pairs = loaded.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
-        setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
+    /// Look up the masked value for a secret name. Returns nil if absent.
+    /// Used by `/api/secrets/oauth-update` to echo back the mask for the
+    /// just-stored OAuth replica.
+    func maskedValue(for name: String) -> String? {
+        secrets.first(where: { $0.name == name })?.maskedValue
+    }
+
+    // MARK: - session-id persistence
+
+    /// Read or create a stable per-runtime session-id file at `<dir>/session-id`.
+    ///
+    /// Mirrors `packages/node-server/src/secrets/session-id-file.ts`. The
+    /// file holds a single UUID used as the HMAC key prefix when masking
+    /// secrets — keeping it stable across restarts means the masked values
+    /// in chat history, cached payloads, and on-disk artifacts continue to
+    /// round-trip cleanly after a server restart.
+    ///
+    /// - Reuses the existing UUID if the file contains a syntactically valid
+    ///   one (`UUID(uuidString:)` matches the Node `randomUUID()` output).
+    /// - Generates a fresh UUID and writes it atomically with file
+    ///   permissions 0600 otherwise. Best-effort on filesystems that don't
+    ///   support POSIX permissions; matches node-server's `chmodSync` try /
+    ///   catch.
+    /// - Creates intermediate directories if missing.
+    static func readOrCreateSessionId(in dir: URL) throws -> String {
+        let fm = FileManager.default
+        let path = dir.appendingPathComponent("session-id")
+        if fm.fileExists(atPath: path.path),
+           let data = try? Data(contentsOf: path),
+           let raw = String(data: data, encoding: .utf8)?
+               .trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty,
+           UUID(uuidString: raw) != nil {
+            return raw
+        }
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fresh = UUID().uuidString
+        // node-server writes "<uuid>\n"; match for parity so a Swift-written
+        // file is byte-identical to a Node-written one (and vice-versa).
+        try (fresh + "\n").data(using: .utf8)!.write(to: path, options: .atomic)
+        // Best-effort 0600 — matches node-server's try { chmodSync } catch.
+        try? fm.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o600))],
+            ofItemAtPath: path.path
+        )
+        return fresh
     }
 
     /// Returns true if there are no secrets loaded.
@@ -179,5 +312,207 @@ public final class SecretInjector: Sendable {
     func scrub(text: String) -> String {
         responseScrubber(text)
     }
+
+    // MARK: - Basic-auth / URL-credential / byte-safe helpers (Phase 2 parity)
+
+    /// Mirrors TS `SecretsPipeline.unmaskAuthorizationBasic`.
+    ///
+    /// Matches `^Basic\s+(.+)$`, base64-decodes the payload, then scans the
+    /// `user:pass` halves for known masked values. If any masked value is
+    /// present:
+    /// - and its domain allowlist matches `targetHostname`, the masked half
+    ///   is unmasked and the header is re-encoded as `Basic base64(user:pass)`.
+    /// - and the domain does NOT match, returns a `.forbidden` result.
+    ///
+    /// Notes vs TS:
+    /// - `Data(base64Encoded:)` is stricter than `atob()` about padding /
+    ///   whitespace. The TS `atob` happily accepts unpadded base64; Foundation
+    ///   requires padding. We try the input as-is first, then fall back to
+    ///   appending `=` padding to match `atob` semantics. Whitespace-tolerant
+    ///   decoding is enabled via `.ignoreUnknownCharacters` so values like
+    ///   `Basic   <b64>` (multiple spaces) work the same way as the TS path.
+    /// - `Data.base64EncodedString()` matches `btoa()` for ASCII inputs.
+    func unmaskAuthorizationBasic(value: String, targetHostname: String) -> BasicResult {
+        // ^Basic\s+(.+)$ — same regex shape as TS pipeline.
+        let trimmedHeader = value
+        guard let match = trimmedHeader.range(
+            of: #"^Basic\s+(.+)$"#,
+            options: .regularExpression
+        ), match.lowerBound == trimmedHeader.startIndex else {
+            return BasicResult(value: value, forbidden: nil)
+        }
+        let payload = String(trimmedHeader[match])
+            .dropFirst("Basic".count)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let decoded = decodeBase64ToString(String(payload)) else {
+            return BasicResult(value: value, forbidden: nil)
+        }
+        // Find first `:` — same as TS `decoded.indexOf(':')`.
+        guard let colonIdx = decoded.firstIndex(of: ":") else {
+            return BasicResult(value: value, forbidden: nil)
+        }
+        var user = String(decoded[..<colonIdx])
+        var pass = String(decoded[decoded.index(after: colonIdx)...])
+        var touched = false
+        for secret in secrets {
+            let inUser = user.contains(secret.maskedValue)
+            let inPass = pass.contains(secret.maskedValue)
+            guard inUser || inPass else { continue }
+            guard isAllowedDomain(patterns: secret.domains, hostname: targetHostname) else {
+                return BasicResult(
+                    value: value,
+                    forbidden: ForbiddenInfo(secretName: secret.name, hostname: targetHostname)
+                )
+            }
+            if inUser { user = user.replacingOccurrences(of: secret.maskedValue, with: secret.realValue) }
+            if inPass { pass = pass.replacingOccurrences(of: secret.maskedValue, with: secret.realValue) }
+            touched = true
+        }
+        if !touched { return BasicResult(value: value, forbidden: nil) }
+        let combined = "\(user):\(pass)"
+        let reencoded = Data(combined.utf8).base64EncodedString()
+        return BasicResult(value: "Basic \(reencoded)", forbidden: nil)
+    }
+
+    /// Mirrors TS `SecretsPipeline.extractAndUnmaskUrlCredentials`.
+    ///
+    /// Parses the URL, extracts `username`/`password`, runs the same
+    /// masked→real swap with domain enforcement, and ALWAYS strips userinfo
+    /// from the returned URL (browsers reject userinfo URLs, so we synthesize
+    /// an `Authorization` header instead).
+    ///
+    /// Notes vs TS:
+    /// - Foundation's `URLComponents` is the closest analog to the JS `URL`
+    ///   class, but its `.user` / `.password` getters return the percent-
+    ///   encoded values. The TS path uses `decodeURIComponent` on each half
+    ///   before scanning — we mirror that with `removingPercentEncoding`.
+    /// - Setting `URLComponents.user = nil` and `.password = nil` is the
+    ///   Foundation equivalent of `parsed.username = ''` / `.password = ''`.
+    /// - If `URL(string:)` succeeds but `URLComponents` fails (rare), we
+    ///   return the URL unchanged, same as the TS catch-all.
+    func extractAndUnmaskUrlCredentials(rawUrl: String) -> ExtractedUrlCreds {
+        guard var components = URLComponents(string: rawUrl) else {
+            return ExtractedUrlCreds(url: rawUrl, syntheticAuthorization: nil, forbidden: nil)
+        }
+        let userEncoded = components.user
+        let passEncoded = components.password
+        if (userEncoded ?? "").isEmpty && (passEncoded ?? "").isEmpty {
+            return ExtractedUrlCreds(url: rawUrl, syntheticAuthorization: nil, forbidden: nil)
+        }
+
+        var user = (userEncoded?.removingPercentEncoding) ?? (userEncoded ?? "")
+        var pass = (passEncoded?.removingPercentEncoding) ?? (passEncoded ?? "")
+        let host = components.host ?? ""
+        var touched = false
+        for secret in secrets {
+            let inUser = user.contains(secret.maskedValue)
+            let inPass = pass.contains(secret.maskedValue)
+            guard inUser || inPass else { continue }
+            guard isAllowedDomain(patterns: secret.domains, hostname: host) else {
+                return ExtractedUrlCreds(
+                    url: rawUrl,
+                    syntheticAuthorization: nil,
+                    forbidden: ForbiddenInfo(secretName: secret.name, hostname: host)
+                )
+            }
+            if inUser {
+                user = user.replacingOccurrences(of: secret.maskedValue, with: secret.realValue)
+                touched = true
+            }
+            if inPass {
+                pass = pass.replacingOccurrences(of: secret.maskedValue, with: secret.realValue)
+                touched = true
+            }
+        }
+        let synthetic: String?
+        if touched && !(user.isEmpty && pass.isEmpty) {
+            let combined = "\(user):\(pass)"
+            synthetic = "Basic \(Data(combined.utf8).base64EncodedString())"
+        } else {
+            synthetic = nil
+        }
+        components.user = nil
+        components.password = nil
+        let stripped = components.string ?? rawUrl
+        return ExtractedUrlCreds(url: stripped, syntheticAuthorization: synthetic, forbidden: nil)
+    }
+
+    /// Mirrors TS `SecretsPipeline.unmaskBodyBytes`.
+    ///
+    /// Byte-level masked → real replacement for raw request bodies. Domain
+    /// mismatch leaves the bytes untouched (no forbidden — matches TS).
+    ///
+    /// We never round-trip arbitrary bytes through `String(decoding:)` /
+    /// `String.replacingOccurrences` because that would corrupt arbitrary
+    /// non-UTF-8 bytes (Foundation uses U+FFFD on decode failure, which is a
+    /// silent data-loss bug for e.g. SSE chunks that happen to land mid-CJK
+    /// codepoint). Instead we scan with `Data.range(of:)` and rebuild.
+    func unmaskBodyBytes(bytes: Data, targetHostname: String) -> Data {
+        var out = bytes
+        for secret in secrets {
+            guard isAllowedDomain(patterns: secret.domains, hostname: targetHostname) else { continue }
+            let needle = Data(secret.maskedValue.utf8)
+            let replacement = Data(secret.realValue.utf8)
+            out = replaceAllBytes(in: out, needle: needle, replacement: replacement)
+        }
+        return out
+    }
+
+    /// Mirrors TS `SecretsPipeline.scrubResponseBytes`.
+    ///
+    /// Byte-level real → masked replacement for streaming response bodies.
+    /// Same anti-corruption discipline as `unmaskBodyBytes` — no String
+    /// round-trip on arbitrary bytes.
+    func scrubResponseBytes(bytes: Data) -> Data {
+        var out = bytes
+        for secret in secrets {
+            let needle = Data(secret.realValue.utf8)
+            let replacement = Data(secret.maskedValue.utf8)
+            out = replaceAllBytes(in: out, needle: needle, replacement: replacement)
+        }
+        return out
+    }
+}
+
+// MARK: - Internal helpers
+
+/// Best-effort base64 decode that matches `atob`'s tolerance for missing
+/// padding. Foundation's `Data(base64Encoded:)` rejects unpadded inputs;
+/// `.ignoreUnknownCharacters` is needed for whitespace tolerance.
+private func decodeBase64ToString(_ s: String) -> String? {
+    let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+    let padded: String = {
+        let rem = trimmed.count % 4
+        if rem == 0 { return trimmed }
+        return trimmed + String(repeating: "=", count: 4 - rem)
+    }()
+    if let data = Data(base64Encoded: padded, options: [.ignoreUnknownCharacters]),
+       let text = String(data: data, encoding: .utf8) {
+        return text
+    }
+    return nil
+}
+
+/// Byte-level scan-and-replace. Equivalent of TS `replaceAllBytes`.
+/// Returns `haystack` unchanged when `needle` is empty or absent.
+private func replaceAllBytes(in haystack: Data, needle: Data, replacement: Data) -> Data {
+    guard !needle.isEmpty else { return haystack }
+    if haystack.range(of: needle) == nil { return haystack }
+    var out = Data()
+    var cursor = haystack.startIndex
+    while cursor < haystack.endIndex {
+        let searchRange = cursor..<haystack.endIndex
+        guard let match = haystack.range(of: needle, options: [], in: searchRange) else {
+            out.append(haystack[cursor..<haystack.endIndex])
+            break
+        }
+        if match.lowerBound > cursor {
+            out.append(haystack[cursor..<match.lowerBound])
+        }
+        out.append(replacement)
+        cursor = match.upperBound
+    }
+    return out
 }
 

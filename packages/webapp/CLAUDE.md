@@ -156,9 +156,32 @@ Deep reference: `docs/kernel/process-model.md`.
 - Optional `// @match` directives in the first 10 lines narrow matching further.
 - `BshWatchdog` uses `ScriptCatalog` for matching and reads script content from VFS before evaluating it in the target page via CDP.
 
+## Secret-Aware Fetch Proxy
+
+The webapp consumes `@slicc/shared-ts` for secret masking primitives. `createProxiedFetch()` in `packages/webapp/src/shell/proxied-fetch.ts` routes agent-initiated HTTP through the fetch proxy. In extension mode, the extension branch is Port-based (`chrome.runtime.connect({ name: 'fetch-proxy.fetch' })`) instead of direct fetch, providing full secret-injection coverage equivalent to CLI mode.
+
+### OAuth flow + page-side bootstrap
+
+- `packages/webapp/src/ui/oauth-bootstrap.ts` is awaited in `main()` before the kernel-worker scoops start. For each non-expired account it re-pushes the masked replica; for each expiring/expired one it invokes the provider's optional `onSilentRenew` hook (page context has `window`, so the IMS popup/iframe flow works there). Bounded by a 10s soft timeout to avoid deadlocking the UI on a hung IMS popup. The worker reads the freshly-renewed token from its `localStorage` shim once it boots.
+- `provider.onSilentRenew` is the new hook on `ProviderConfig` — providers that support silent renewal implement it (Adobe does via `silentRenewToken`). The worker-side `silentRenewToken` short-circuits with `if (typeof window === 'undefined') return null;` so a stale-token stream attempt from the worker surfaces a clean "session expired" error instead of `window is not defined`.
+
+### Per-provider extra allowed domains
+
+Provider `oauthTokenDomains` is an immutable safe default; users can layer additional allowed domains per-provider:
+
+- Storage: `localStorage["slicc_oauth_extra_domains"]` → `{[providerId]: [domain, ...]}`
+- Helpers: `getExtraOAuthDomains(id)` / `setExtraOAuthDomains(id, domains)` / `getAllExtraOAuthDomains()` in `provider-settings.ts`
+- Surfaces: panel terminal `oauth-domain` command, extension options page "OAuth domains" tab
+- Merge: `saveOAuthAccount` concatenates defaults + extras, dedupes case-insensitively (defaults-first order), then pushes the merged list to the fetch-proxy / SW.
+
+### Shell-env masked secret population
+
+`scoop-context.ts` (agent shell) and `main.ts` (panel terminal `RemoteTerminalView`) both call `fetchSecretEnvVars()` from `packages/webapp/src/core/secret-env.ts` and pass the result as `env`. The function filters secret names to POSIX-valid identifiers (`/^[A-Za-z_][A-Za-z0-9_]*$/`) so dot-namespaced internal secrets (`s3.<profile>.*`, `oauth.<id>.token`) stay out of `$ENV` / `printenv`.
+
 ## Related Guides
 
 - `packages/chrome-extension/CLAUDE.md` for extension runtime constraints
 - `packages/node-server/CLAUDE.md` for the CLI/Electron float
+- `packages/shared-ts/CLAUDE.md` for secret masking primitives
 - `docs/architecture.md` for repo-wide file maps and deeper subsystem inventories
 - `docs/shell-reference.md` for command-by-command shell behavior

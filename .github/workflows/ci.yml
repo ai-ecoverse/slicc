@@ -219,6 +219,8 @@ jobs:
             exit 1
           fi
           echo "✓ No Node-only APIs found in dev-optimized deps"
+      - name: Build @slicc/shared-ts (node-server runtime dependency)
+        run: npm run build -w @slicc/shared-ts
       - name: Build node-server (E2E dependency)
         run: npm run build -w @slicc/node-server
       - name: E2E tests
@@ -250,6 +252,8 @@ jobs:
           name: coverage-node-server
           path: coverage/
           if-no-files-found: ignore
+      - name: Build @slicc/shared-ts (runtime dependency)
+        run: npm run build -w @slicc/shared-ts
       - name: Build
         run: npm run build -w @slicc/node-server
 

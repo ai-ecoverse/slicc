@@ -234,6 +234,13 @@ export const config: ProviderConfig = {
   baseUrlDescription: 'Anthropic-compatible proxy endpoint',
   isOAuth: true,
   defaultModelId: 'sonnet',
+  oauthTokenDomains: [
+    'ims-na1.adobelogin.com',
+    'ims-na1-stg1.adobelogin.com',
+    '*.adobelogin.com',
+    '*.adobe.io',
+    'firefall.adobe.io',
+  ],
 
   getModelIds: () => {
     // Helper to propagate metadata from cache
@@ -355,7 +362,7 @@ export const config: ProviderConfig = {
 
     const userProfile = await fetchUserProfile(tokenInfo.accessToken, imsEnv);
 
-    saveOAuthAccount({
+    await saveOAuthAccount({
       providerId: 'adobe',
       accessToken: tokenInfo.accessToken,
       tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,
@@ -410,7 +417,13 @@ export const config: ProviderConfig = {
         );
       }
     }
-    saveOAuthAccount({ providerId: 'adobe', accessToken: '' });
+    await saveOAuthAccount({ providerId: 'adobe', accessToken: '' });
+  },
+
+  onSilentRenew: async () => {
+    const account = getAdobeAccount();
+    if (!account?.accessToken) return null;
+    return silentRenewToken();
   },
 };
 
@@ -464,6 +477,13 @@ function isTokenExpired(): boolean {
  * Returns the new access token on success, or null if renewal failed.
  */
 async function silentRenewToken(): Promise<string | null> {
+  // Silent renewal needs a DOM (popup/iframe) to drive the IMS authorize
+  // flow. The kernel-worker has no `window`, so bail out cleanly here and
+  // let getValidAccessToken surface "session expired — please log in again"
+  // back to the page. The page-side oauth-bootstrap is responsible for
+  // pre-renewing tokens before the worker streams.
+  if (typeof window === 'undefined') return null;
+
   // Deduplicate concurrent renewal attempts
   if (renewalInProgress) return renewalInProgress;
 
@@ -534,7 +554,7 @@ async function silentRenewToken(): Promise<string | null> {
       // continues to resolve after a page reload wipes the in-memory cache.
       // Only pin when there is no bundled config — same rationale as onOAuthLogin.
       const account = getAdobeAccount();
-      saveOAuthAccount({
+      await saveOAuthAccount({
         providerId: 'adobe',
         accessToken: tokenInfo.accessToken,
         tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,

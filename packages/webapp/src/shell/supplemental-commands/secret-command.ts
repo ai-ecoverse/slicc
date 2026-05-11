@@ -1,5 +1,6 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { isAllowedDomain } from '@slicc/shared-ts';
 
 function helpText(): string {
   return `secret — manage secrets for the fetch proxy and mount backends
@@ -41,40 +42,51 @@ function isExtensionContext(): boolean {
   return typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 }
 
-const DOMAINS_SUFFIX = '_DOMAINS';
+// ---------------- Extension-mode (SW-mediated) backend ----------------
+//
+// In extension mode the panel-terminal shell runs in the offscreen
+// document, where `chrome.storage` is not exposed (MV3 quirk). We
+// route every secret-management op through the SW, which has full
+// chrome.storage access. Same `_DOMAINS`-companion shape as the
+// chrome.storage layout, just behind a sendMessage.
 
-// ---------------- Extension-mode chrome.storage.local backend ----------------
-
-async function listFromStorage(): Promise<SecretEntry[]> {
-  const all = (await chrome.storage.local.get(null)) as Record<string, unknown>;
-  const entries: SecretEntry[] = [];
-  for (const key of Object.keys(all)) {
-    if (key.endsWith(DOMAINS_SUFFIX)) continue;
-    if (typeof all[key] !== 'string') continue;
-    const domainsKey = key + DOMAINS_SUFFIX;
-    const raw = all[domainsKey];
-    if (typeof raw !== 'string') continue;
-    const domains = raw
-      .split(',')
-      .map((d) => d.trim())
-      .filter((d) => d.length > 0);
-    if (domains.length === 0) continue;
-    entries.push({ name: key, domains });
-  }
-  // Stable display order.
-  entries.sort((a, b) => a.name.localeCompare(b.name));
-  return entries;
-}
-
-async function setInStorage(name: string, value: string, domains: string[]): Promise<void> {
-  await chrome.storage.local.set({
-    [name]: value,
-    [name + DOMAINS_SUFFIX]: domains.join(','),
+function swSendMessage<T>(msg: Record<string, unknown>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(msg, (response: unknown) => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        reject(new Error(err.message ?? 'chrome.runtime.lastError'));
+        return;
+      }
+      resolve(response as T);
+    });
   });
 }
 
+async function listFromStorage(): Promise<SecretEntry[]> {
+  const resp = await swSendMessage<{ entries?: SecretEntry[]; error?: string }>({
+    type: 'secrets.list',
+  });
+  if (resp?.error) throw new Error(resp.error);
+  return resp?.entries ?? [];
+}
+
+async function setInStorage(name: string, value: string, domains: string[]): Promise<void> {
+  const resp = await swSendMessage<{ ok?: boolean; error?: string }>({
+    type: 'secrets.set',
+    name,
+    value,
+    domains,
+  });
+  if (!resp?.ok) throw new Error(resp?.error ?? 'secrets.set failed');
+}
+
 async function deleteFromStorage(name: string): Promise<void> {
-  await chrome.storage.local.remove([name, name + DOMAINS_SUFFIX]);
+  const resp = await swSendMessage<{ ok?: boolean; error?: string }>({
+    type: 'secrets.delete',
+    name,
+  });
+  if (!resp?.ok) throw new Error(resp?.error ?? 'secrets.delete failed');
 }
 
 async function listViaApi(): Promise<SecretEntry[] | null> {
@@ -263,7 +275,6 @@ export function createSecretCommand(): Command {
           }
 
           // Client-side domain check using the same logic as the fetch proxy
-          const { isAllowedDomain } = await import('../../core/secret-masking.js');
           const allowed = isAllowedDomain(entry.domains, hostname);
 
           if (allowed) {

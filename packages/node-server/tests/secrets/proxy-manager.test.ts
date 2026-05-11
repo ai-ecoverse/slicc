@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
 import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
+import { OauthSecretStore } from '../../src/secrets/oauth-secret-store.js';
 
 function createTempSecretsFile(content: string): string {
   const dir = join(tmpdir(), `slicc-test-${randomUUID()}`);
@@ -187,5 +188,60 @@ describe('SecretProxyManager', () => {
       const e2 = entries2.find((e) => e.name === e1.name)!;
       expect(e1.maskedValue).toBe(e2.maskedValue);
     }
+  });
+});
+
+describe('SecretProxyManager — OauthSecretStore chaining', () => {
+  it('unmasks a token sourced from OauthSecretStore', async () => {
+    const oauthStore = new OauthSecretStore();
+    oauthStore.set('oauth.github.token', 'ghp_real', ['api.github.com']);
+    const proxy = new SecretProxyManager(undefined, 'fixed-session', oauthStore);
+    await proxy.reload();
+    const entry = proxy.getMaskedEntries().find((e) => e.name === 'oauth.github.token')!;
+    expect(entry).toBeDefined();
+    const headers: Record<string, string> = { authorization: `Bearer ${entry.maskedValue}` };
+    const r = proxy.unmaskHeaders(headers, 'api.github.com');
+    expect(r.forbidden).toBeUndefined();
+    expect(headers.authorization).toBe('Bearer ghp_real');
+  });
+
+  it('setOauthStore allows late binding', async () => {
+    const proxy = new SecretProxyManager(undefined, 'fixed-session');
+    const store = new OauthSecretStore();
+    store.set('oauth.x.token', 'real_x', ['api.x.com']);
+    proxy.setOauthStore(store);
+    await proxy.reload();
+    expect(proxy.getMaskedEntries().some((e) => e.name === 'oauth.x.token')).toBe(true);
+  });
+
+  // Regression: index.ts used to construct SecretProxyManager with
+  // `undefined` envStore even though a separate EnvSecretStore was
+  // created later for /api/secrets — so env-file secrets reached the
+  // management API but NEVER reached the masking pipeline. `echo
+  // $MY_SECRET` returned empty because /api/secrets/masked didn't
+  // include env-file entries. This test pins the wiring: with BOTH
+  // an env-store AND an oauth-store, both kinds of secrets must
+  // appear in getMaskedEntries.
+  it('chains env-store + oauth-store: both kinds appear in masked entries', async () => {
+    const envPath = join(tmpdir(), `proxy-manager-env-oauth-${Date.now()}-${Math.random()}.env`);
+    writeFileSync(
+      envPath,
+      [
+        'GITHUB_TEST=github_pat_real_value_for_chain_test',
+        'GITHUB_TEST_DOMAINS=api.github.com',
+      ].join('\n')
+    );
+    const envStore = new EnvSecretStore(envPath);
+    const oauthStore = new OauthSecretStore();
+    oauthStore.set('oauth.adobe.token', 'eyJ_real_adobe_jwt', ['*.adobe.io']);
+
+    const proxy = new SecretProxyManager(envStore, 'fixed-session', oauthStore);
+    await proxy.reload();
+
+    const names = proxy.getMaskedEntries().map((e) => e.name);
+    expect(names).toContain('GITHUB_TEST');
+    expect(names).toContain('oauth.adobe.token');
+
+    rmSync(envPath, { force: true });
   });
 });

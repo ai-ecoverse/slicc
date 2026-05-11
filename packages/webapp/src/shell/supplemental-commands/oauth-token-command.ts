@@ -112,7 +112,15 @@ export function createOAuthTokenCommand(): Command {
     if (!scopeOverride) {
       const info = getOAuthAccountInfo(providerId);
       if (info && !info.expired) {
-        return { stdout: `${info.token}\n`, stderr: '', exitCode: 0 };
+        const masked = info.maskedValue;
+        if (!masked) {
+          return {
+            stdout: '',
+            stderr: `oauth-token: no masked value for ${providerId} (try logging in again)\n`,
+            exitCode: 1,
+          };
+        }
+        return { stdout: `${masked}\n`, stderr: '', exitCode: 0 };
       }
     }
 
@@ -131,7 +139,15 @@ export function createOAuthTokenCommand(): Command {
       // Read the newly saved token
       const newInfo = getOAuthAccountInfo(providerId);
       if (newInfo && newInfo.token) {
-        return { stdout: `${newInfo.token}\n`, stderr: '', exitCode: 0 };
+        const masked = newInfo.maskedValue;
+        if (!masked) {
+          return {
+            stdout: '',
+            stderr: `oauth-token: no masked value for ${providerId} (try logging in again)\n`,
+            exitCode: 1,
+          };
+        }
+        return { stdout: `${masked}\n`, stderr: '', exitCode: 0 };
       }
 
       console.error(`[oauth-token] Provider ${providerId}: login completed but no token was saved`);

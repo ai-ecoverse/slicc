@@ -33,6 +33,10 @@ import {
   type SecretGetter,
   type SignAndForwardReply,
 } from '../../webapp/src/fs/mount/sign-and-forward-shared.js';
+import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
+import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './secrets-storage.js';
+import { readOrCreateSwSessionId } from './sw-session-id.js';
+import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared-ts';
 // ---------------------------------------------------------------------------
 // Side panel behavior
 // ---------------------------------------------------------------------------
@@ -682,3 +686,169 @@ chrome.debugger.onDetach.addListener((source: { tabId: number }, _reason: string
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// Secrets-aware fetch-proxy connection handler
+// ---------------------------------------------------------------------------
+
+async function buildSecretsPipeline(): Promise<SecretsPipeline> {
+  const sessionId = await readOrCreateSwSessionId();
+  const source: FetchProxySecretSource = {
+    get: async (name) => {
+      const got = (await chrome.storage.local.get(name)) as Record<string, string | undefined>;
+      return got[name];
+    },
+    listAll: () => listSecretsWithValues(chrome.storage.local as any),
+  };
+  return new SecretsPipeline({ sessionId, source });
+}
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'fetch-proxy.fetch') return;
+  // Chrome drops port messages that arrive before any onMessage listener
+  // is attached. The page-side caller posts its `request` message right
+  // after `chrome.runtime.connect(...)` resolves, which is BEFORE this
+  // async buildSecretsPipeline finishes. Attaching the listener inside
+  // the .then() is too late — the message has already been dropped and
+  // the caller hangs forever.
+  //
+  // Solution: hand the pipeline-build promise to a variant that attaches
+  // the listener SYNCHRONOUSLY and awaits the pipeline INSIDE the handler.
+  // The catch path on the promise just propagates into the handler's
+  // try/catch, which posts response-error back to the page.
+  const pipelinePromise = buildSecretsPipeline().then(async (p) => {
+    await p.reload();
+    return p;
+  });
+  pipelinePromise.catch((err) => {
+    console.error('[sw] fetch-proxy init failed', err);
+    // The handler's await pipelinePromise will throw and post response-error,
+    // so we just log here. Don't disconnect — the handler needs the port.
+  });
+  handleFetchProxyConnectionAsync(port as any, pipelinePromise);
+});
+
+// ---------------------------------------------------------------------------
+// Secrets message handlers
+// ---------------------------------------------------------------------------
+
+chrome.runtime.onMessage.addListener(
+  (msg: unknown, _sender: ChromeMessageSender, sendResponse: (response?: unknown) => void) => {
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.list-masked-entries'
+    ) {
+      (async () => {
+        try {
+          const pipeline = await buildSecretsPipeline();
+          await pipeline.reload();
+          sendResponse({ entries: pipeline.getMaskedEntries() });
+        } catch (err) {
+          // Without this catch, the unhandled rejection closes the
+          // message port and the caller resolves with `undefined` —
+          // indistinguishable from "no entries", which silently
+          // populates the agent shell with an empty env.
+          console.error('[sw] secrets.list-masked-entries failed', err);
+          sendResponse({
+            entries: [],
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+      return true;
+    }
+    // The panel-terminal `secret` command can't touch chrome.storage directly:
+    // it runs in the offscreen document, which lacks chrome.storage even when
+    // the manifest grants it (MV3 quirk). Route the management ops through
+    // the SW, which DOES have chrome.storage.
+    if (typeof msg === 'object' && msg != null && 'type' in msg && msg.type === 'secrets.list') {
+      (async () => {
+        try {
+          const entries = await listSecrets(chrome.storage.local as any);
+          sendResponse({ entries });
+        } catch (err) {
+          console.error('[sw] secrets.list failed', err);
+          sendResponse({
+            entries: [],
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+      return true;
+    }
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.set' &&
+      'name' in msg &&
+      typeof msg.name === 'string' &&
+      'value' in msg &&
+      typeof msg.value === 'string' &&
+      'domains' in msg &&
+      Array.isArray(msg.domains)
+    ) {
+      const name = msg.name;
+      const value = msg.value;
+      const domains = (msg.domains as unknown[]).filter((d): d is string => typeof d === 'string');
+      (async () => {
+        try {
+          await setSecret(chrome.storage.local as any, name, value, domains);
+          sendResponse({ ok: true });
+        } catch (err) {
+          console.error('[sw] secrets.set failed', err);
+          sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+      })();
+      return true;
+    }
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.delete' &&
+      'name' in msg &&
+      typeof msg.name === 'string'
+    ) {
+      const name = msg.name;
+      (async () => {
+        try {
+          await deleteSecret(chrome.storage.local as any, name);
+          sendResponse({ ok: true });
+        } catch (err) {
+          console.error('[sw] secrets.delete failed', err);
+          sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
+      })();
+      return true;
+    }
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.mask-oauth-token' &&
+      'providerId' in msg &&
+      typeof msg.providerId === 'string'
+    ) {
+      const providerId = msg.providerId;
+      (async () => {
+        try {
+          const pipeline = await buildSecretsPipeline();
+          await pipeline.reload();
+          const name = `oauth.${providerId}.token`;
+          const found = pipeline.getMaskedEntries().find((e) => e.name === name);
+          sendResponse({ maskedValue: found?.maskedValue });
+        } catch (err) {
+          console.error('[sw] secrets.mask-oauth-token failed', err);
+          sendResponse({
+            maskedValue: undefined,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+      return true;
+    }
+  }
+);

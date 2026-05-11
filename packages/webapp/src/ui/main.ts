@@ -794,7 +794,13 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   void (async () => {
     try {
       const { RemoteTerminalView } = await import('../kernel/remote-terminal-view.js');
-      const remoteTerminal = new RemoteTerminalView({ client, cwd: '/' });
+      const { fetchSecretEnvVars } = await import('../core/secret-env.js');
+      const secretEnv = await fetchSecretEnvVars();
+      const remoteTerminal = new RemoteTerminalView({
+        client,
+        cwd: '/',
+        env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
+      });
       await layout.panels.terminal.mountRemoteShell(remoteTerminal);
       window.addEventListener('beforeunload', () => remoteTerminal.dispose(), { once: true });
       log.info('Panel terminal mounted as RemoteTerminalView (offscreen TerminalSessionHost)');
@@ -2126,7 +2132,13 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   // (the worker's `TerminalSessionHost` is instantiated at the tail
   // of `boot()`).
   const { RemoteTerminalView } = await import('../kernel/remote-terminal-view.js');
-  const remoteTerminal = new RemoteTerminalView({ client, cwd: '/' });
+  const { fetchSecretEnvVars: fetchSecretEnvVarsForPanel } = await import('../core/secret-env.js');
+  const panelSecretEnv = await fetchSecretEnvVarsForPanel();
+  const remoteTerminal = new RemoteTerminalView({
+    client,
+    cwd: '/',
+    env: Object.keys(panelSecretEnv).length > 0 ? panelSecretEnv : undefined,
+  });
   void layout.panels.terminal.mountRemoteShell(remoteTerminal).catch((err) => {
     log.error('Failed to mount remote terminal view', err);
   });
@@ -2301,6 +2313,20 @@ async function main(): Promise<void> {
 
   // Apply providers.json defaults before checking for API key
   applyProviderDefaults();
+
+  // Bootstrap OAuth replicas — re-pushes OAuth tokens to the proxy/SW
+  // replica on init AND silently renews any expired token via the provider's
+  // onSilentRenew hook (page context: window available for IMS iframe).
+  // Awaited so the kernel-worker starts with fresh tokens — otherwise scoops
+  // race the renewal and hit "session expired". Bounded by a soft timeout
+  // so a hung IMS popup doesn't deadlock the UI.
+  const { bootstrapOAuthReplicas } = await import('./oauth-bootstrap.js');
+  await Promise.race([
+    bootstrapOAuthReplicas().catch((err) => {
+      log.error('OAuth bootstrap failed', err);
+    }),
+    new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
+  ]);
 
   // First-run no longer auto-opens the legacy "Add Account" dialog.
   // Provider configuration is owned by the deterministic onboarding flow

@@ -13,6 +13,7 @@ import {
   deleteSecret,
   deriveS3Domains,
   listSecrets,
+  listSecretsWithValues,
   saveCustomSecret,
   saveS3Profile,
   setSecret,
@@ -370,5 +371,48 @@ describe('saveCustomSecret', () => {
   it('does not write when validation fails', async () => {
     await saveCustomSecret(storage, { name: '', value: 'v', domains: ['x'] });
     expect(await listSecrets(storage)).toEqual([]);
+  });
+});
+
+// ----------------- listSecretsWithValues -----------------
+
+describe('listSecretsWithValues', () => {
+  let storage: MemStorage;
+  beforeEach(async () => {
+    storage = new MemStorage();
+    await saveCustomSecret(storage, {
+      name: 'GITHUB_TOKEN',
+      value: 'ghp_real',
+      domains: ['github.com', '*.github.com'],
+    });
+    await saveS3Profile(storage, {
+      profile: 'r2',
+      accessKey: 'AKIAEXAMPLE',
+      secretKey: 'sak',
+      region: 'auto',
+      endpoint: 'https://account.r2.cloudflarestorage.com',
+    });
+    // Add unrelated key that shouldn't surface.
+    storage.raw().set('unrelated', 'noise');
+  });
+
+  it('returns {name, value, domains}[] for every <key>+<key>_DOMAINS pair', async () => {
+    const entries = await listSecretsWithValues(storage);
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        { name: 'GITHUB_TOKEN', value: 'ghp_real', domains: ['github.com', '*.github.com'] },
+        {
+          name: 's3.r2.access_key_id',
+          value: 'AKIAEXAMPLE',
+          domains: ['*.r2.cloudflarestorage.com'],
+        },
+        {
+          name: 's3.r2.secret_access_key',
+          value: 'sak',
+          domains: ['*.r2.cloudflarestorage.com'],
+        },
+      ])
+    );
+    expect(entries.find((e) => e.name === 'unrelated')).toBeUndefined();
   });
 });

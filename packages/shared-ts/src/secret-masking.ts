@@ -146,3 +146,11 @@ export function domainMatches(pattern: string, hostname: string): boolean {
 export function isAllowedDomain(patterns: string[], hostname: string): boolean {
   return patterns.some((p) => domainMatches(p, hostname));
 }
+
+/**
+ * Compatibility alias for node-server's historical name + arg order.
+ * Prefer `isAllowedDomain(patterns, hostname)` in new code.
+ */
+export function matchesDomains(hostname: string, patterns: string[]): boolean {
+  return isAllowedDomain(patterns, hostname);
+}

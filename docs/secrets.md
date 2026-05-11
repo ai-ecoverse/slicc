@@ -19,13 +19,35 @@ Create `~/.slicc/secrets.env`:
 
 ```env
 GITHUB_TOKEN=ghp_abc123...
-GITHUB_TOKEN_DOMAINS=api.github.com,*.github.com
+GITHUB_TOKEN_DOMAINS=github.com,*.github.com,api.github.com,raw.githubusercontent.com
 
 OPENAI_KEY=sk-xyz...
 OPENAI_KEY_DOMAINS=api.openai.com
 ```
 
 Each secret needs two lines: `NAME=value` and `NAME_DOMAINS=domain1,domain2`. A secret without a `_DOMAINS` entry is rejected — every secret must be domain-scoped.
+
+**Note:** The bare `github.com` is required for `git push https://github.com/...` because `*.github.com` does not match the bare host (see `packages/shared-ts/src/secret-masking.ts`).
+
+### Extending OAuth-token allowed domains
+
+Each provider hardcodes a sane default list of domains its OAuth token may be unmasked for (e.g. Adobe defaults to `*.adobelogin.com`, `*.adobe.io`, `firefall.adobe.io`). To use that token against other services — for example, `admin.da.live` for Document Authoring — you can **layer extra domains on top per-provider** without code changes. Provider defaults remain immutable.
+
+Manage with the `oauth-domain` shell command:
+
+```
+oauth-domain add adobe admin.da.live
+oauth-domain add adobe '*.da.live'
+oauth-domain list adobe
+oauth-domain remove adobe admin.da.live
+oauth-domain clear adobe
+```
+
+Extras are stored in `localStorage` under `slicc_oauth_extra_domains` (`{providerId: [domain, ...]}`). The merged list (defaults + extras, deduped case-insensitively) is what gets sent to the fetch-proxy / SW the next time the token is saved. To apply newly-added extras to an existing token immediately, run `oauth-token <providerId>` (re-saves) or reload the page (`oauth-bootstrap` re-pushes).
+
+### Shell-env naming convention
+
+Only secrets whose names are valid POSIX env identifiers — `[A-Za-z_][A-Za-z0-9_]*` — are exposed as `$NAME` in the agent shell. Names containing dots, hyphens, or starting with a digit (e.g. `s3.r2.access_key_id`, `oauth.adobe.token`, `db.prod.password`) are still loaded into the fetch-proxy for header unmasking, but they do not leak into `printenv` or `$VAR` resolution. Use this to keep subsystem secrets (mount backends, OAuth replicas) out of the agent's environment while still letting the proxy substitute them when an HTTP request happens to carry the masked value.
 
 Set file permissions: `chmod 600 ~/.slicc/secrets.env`.
 
@@ -133,6 +155,24 @@ All HTTP requests from the agent route through a server-side fetch proxy (`/api/
 
 - Scans response headers and body for real secret values and replaces them with masked equivalents before forwarding to the agent.
 
+### Request-shape decision table
+
+Different types of HTTP traffic route through different code paths:
+
+| Request shape                              | Goes through                                                                                                                                                                                       |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read/write to /mnt/r2/foo.txt` (VFS API)  | mount backend → `s3-sign-and-forward` (CLI) or `mount.s3-sign-and-forward` (SW); SigV4-signed                                                                                                      |
+| `mount --source da://...` ops              | mount backend → `da-sign-and-forward`; IMS bearer attached server/SW-side                                                                                                                          |
+| `git push` / `git clone` over HTTPS        | isomorphic-git → `createProxiedFetch` → `/api/fetch-proxy` (CLI) or `fetch-proxy.fetch` (SW); Basic-auth unmask                                                                                    |
+| `curl`, `wget`, `node fetch(...)`          | shell → `createProxiedFetch` → fetch proxy (CLI/SW); header-substring + Basic + URL-creds unmask                                                                                                   |
+| `upskill <github-url>`                     | `createProxiedFetch` → fetch proxy; `Authorization: Bearer <masked>` unmasked at boundary                                                                                                          |
+| LLM provider streaming (Anthropic, etc.)   | direct `fetch()` from page; routed via `llm-proxy-sw.ts` to `/api/fetch-proxy` (CLI) or extension `host_permissions` (CORS bypass; no secret injection — provider holds real key in webapp memory) |
+| `aws s3 cp` from agent shell (raw S3 HTTP) | shell → `createProxiedFetch` → upstream. NOT signed. **Use `mount` instead.**                                                                                                                      |
+
+### Migration note for file-PAT users
+
+The file-on-disk PAT workaround (writing the real PAT to a file in the VFS so the agent could `cat` it) is no longer needed. Put PATs in `~/.slicc/secrets.env` (CLI) or the extension options page (extension); the agent sees only the masked value. The fetch proxy unmasks at the network boundary when the request domain matches the secret's allowlist.
+
 ## Covered extraction vectors
 
 The secrets system defends against multiple exfiltration paths:
@@ -148,9 +188,42 @@ The secrets system defends against multiple exfiltration paths:
 | Browser automation (CDP `evaluate`)         | Agent only has masked values; can't construct real requests  |
 | Redirect URLs (secret in query params)      | Fetch proxy follows redirects server-side; URL never exposed |
 
+### Threat model addendum
+
+Shell commands implemented in kernel-realms (`.jsh` files, `node -e`, `python3 -c`) run in isolated contexts (DedicatedWorker threads or CSP-locked sandbox iframes) and do not have direct access to `localStorage` or the primary secret store. The masking defense relies on code-review discipline: new shell commands must not echo `localStorage` values directly to agent output. The masking layer assumes that the only path from real secrets to agent context is through tool output scrubbing and fetch-proxy unmask/scrub.
+
+## OAuth tokens as secrets
+
+Provider OAuth tokens (Google, Adobe, GitHub, etc.) obtained via `oauth-token <provider>` are now masked before being shown to the agent. The command returns a masked Bearer token in both CLI and extension modes. The real token is unmasked only at the network boundary (`/api/fetch-proxy` in CLI or the `fetch-proxy.fetch` SW Port handler in extension).
+
+### Dual-storage model
+
+OAuth tokens have a dual-storage architecture:
+
+1. **Primary**: `localStorage.slicc_accounts` in the webapp (survives page reload)
+2. **Replica**: In-memory store on the proxy side (node-server `OauthSecretStore`, swift-server `OAuthSecretStore`, or extension SW `chrome.storage.local`)
+
+The webapp pushes masked entries to the replica on login/logout. The replica is used for unmasking at the network boundary. On extension/CLI initialization, the webapp re-pushes all OAuth entries to ensure the proxy has up-to-date replicas after a page reload.
+
+### Reserved namespace
+
+Secret names starting with `oauth.` are reserved for OAuth replicas (e.g., `oauth.google`, `oauth.adobe`). User-defined secrets with this prefix are rejected at load time.
+
+### Known v1 limitation
+
+In CLI mode, if a user opens SLICC in a new browser tab while node-server is already running (without restarting the server), the OAuth replicas remain empty until the next page reload. This means OAuth-bearing requests will fail with 403 until the page is reloaded. The extension is unaffected because `chrome.storage.local` persists across SW restarts.
+
+### Provider credentials and `nuke`
+
+Provider credentials (OAuth tokens, API keys stored in `slicc_accounts` localStorage) survive the `nuke` command by design. Explicit logout via the provider settings UI is the user-controlled erasure mechanism.
+
+### OAuth approval gate
+
+The OAuth login popup flow is the user-approval gate. Once a token is cached, subsequent `oauth-token <provider>` calls return the masked token immediately (no additional approval required, but the masked value is benign — the agent never sees the real token).
+
 ## Extension mode
 
-In Chrome extension mode, there is no server-side fetch proxy and no shell `secret` injection into request headers — that flow needs node-server or swift-server.
+In Chrome extension mode, agent-initiated HTTP requests now route through the `fetch-proxy.fetch` SW Port handler, providing full secret-injection coverage equivalent to CLI mode.
 
 For **mount backends specifically** (`mount --source s3://...` and `mount --source da://...`), the extension is self-contained. Secrets live in `chrome.storage.local`, the service worker holds them, signs requests with SigV4 (S3) or attaches the IMS Bearer (DA), and forwards via `fetch()` (extension `host_permissions: <all_urls>` covers any S3/da.live host). The agent's tools (`bash` WASM, `node -e` and `javascript` in CSP-locked sandbox iframes) have no `chrome.*` API access, so they cannot read `chrome.storage` directly — the same isolation property that keeps `~/.slicc/secrets.env` out of the agent in CLI mode.
 
@@ -180,8 +253,8 @@ For the full mount setup guide (intent → backend mapping, lifecycle, error pat
 
 ## Platform support
 
-| Runtime      | macOS                      | Windows                    | Linux                      |
-| ------------ | -------------------------- | -------------------------- | -------------------------- |
-| swift-server | ✅ Keychain + `.env`       | —                          | —                          |
-| node-server  | ✅ `.env`                  | ✅ `.env`                  | ✅ `.env`                  |
-| extension    | ⚠️ Requires server backend | ⚠️ Requires server backend | ⚠️ Requires server backend |
+| Runtime      | macOS                                                    | Windows                                                  | Linux                                                    |
+| ------------ | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
+| swift-server | ✅ Keychain + `.env`                                     | —                                                        | —                                                        |
+| node-server  | ✅ `.env`                                                | ✅ `.env`                                                | ✅ `.env`                                                |
+| extension    | ✅ via SW fetch proxy (`fetch-proxy.fetch` Port handler) | ✅ via SW fetch proxy (`fetch-proxy.fetch` Port handler) | ✅ via SW fetch proxy (`fetch-proxy.fetch` Port handler) |

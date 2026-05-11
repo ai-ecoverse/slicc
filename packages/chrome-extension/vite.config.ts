@@ -30,6 +30,10 @@ export default defineConfig(({ mode }) => ({
   },
   resolve: {
     alias: {
+      // Workspace `@slicc/shared-ts` points at source so esbuild/Rolldown for the
+      // SW IIFE and the extension's worker entries resolve without requiring
+      // `packages/shared-ts/dist/` to exist at build time.
+      '@slicc/shared-ts': resolve(repoRoot, 'packages/shared-ts/src/index.ts'),
       // The pinned isomorphic-git package resolves "." to index.cjs, and that
       // CJS entry imports Node crypto. Force the browser-safe ESM entry
       // instead.
@@ -108,6 +112,11 @@ export default defineConfig(({ mode }) => ({
           format: 'iife',
           target: 'esnext',
           minify: true,
+          alias: {
+            // Workspace package — resolve to source so the IIFE bundle does
+            // not require `packages/shared-ts/dist/` to exist at build time.
+            '@slicc/shared-ts': resolve(repoRoot, 'packages/shared-ts/src/index.ts'),
+          },
           define: {
             __DEV__: JSON.stringify(mode !== 'production'),
             global: 'globalThis',
@@ -148,6 +157,12 @@ export default defineConfig(({ mode }) => ({
           target: 'esnext',
           minify: true,
           define: { __DEV__: 'false', global: 'globalThis' },
+          // Same alias as the SW build above — standalone esbuild doesn't
+          // inherit Vite's resolve.alias, so without this the
+          // `@slicc/shared-ts` import in secrets-entry.ts fails to resolve.
+          alias: {
+            '@slicc/shared-ts': resolve(repoRoot, 'packages/shared-ts/src/index.ts'),
+          },
         });
       },
     },

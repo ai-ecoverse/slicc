@@ -1,6 +1,7 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
+import { createProxiedFetch } from '../proxied-fetch.js';
 
 const AA_CACHE_PATH = '/.cache/artificial-analysis.json';
 const AA_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -45,22 +46,24 @@ async function fetchAAData(vfs?: VirtualFS, forceRefresh = false): Promise<AAMod
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (apiKey) headers['x-api-key'] = apiKey;
 
-  let resp: Response;
+  const proxiedFetch = createProxiedFetch();
+  let result;
   try {
-    resp = await fetch(AA_API_URL, { headers });
+    result = await proxiedFetch(AA_API_URL, { method: 'GET', headers });
   } catch {
     return []; // Network error — silently degrade
   }
 
-  if (resp.status === 401) {
+  if (result.status === 401) {
     // Needs API key
     return [];
   }
-  if (!resp.ok) return [];
+  if (result.status < 200 || result.status >= 300) return [];
 
   let body: any;
   try {
-    body = await resp.json();
+    const bodyText = new TextDecoder().decode(result.body);
+    body = JSON.parse(bodyText);
   } catch {
     return [];
   }

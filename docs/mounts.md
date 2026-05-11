@@ -101,7 +101,7 @@ Profiles coexist — `s3.aws.*`, `s3.r2.*`, `s3.minio-prod.*` all live in the sa
 
 ### DA: no DA-specific secrets
 
-DA mounts reuse the IMS bearer token from the existing Adobe LLM provider. If you've configured Adobe as your LLM provider, DA mounts work automatically. If not, the first mount fails with `EACCES` — log in via Settings → Providers → Adobe (or run `oauth-token adobe`) first.
+DA mounts reuse the IMS bearer token from the existing Adobe LLM provider. If you've configured Adobe as your LLM provider, DA mounts work automatically. If not, the first mount fails with `EACCES` — log in via Settings → Providers → Adobe (or run `oauth-token adobe`) first. Note: `oauth-token adobe` now returns the **masked** Bearer token; mount backends consume the real IMS bearer via the existing mount-side handlers (`da-sign-and-forward` endpoints or SW `chrome.storage.local` in extension mode).
 
 ## Mount syntax
 

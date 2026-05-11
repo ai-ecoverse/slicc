@@ -3,7 +3,8 @@ import { createServer } from 'http';
 import { createServer as createNetServer } from 'net';
 import { spawn, type ChildProcess } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, dirname } from 'path';
+import { homedir } from 'os';
 import { Readable, Transform } from 'stream';
 import { StringDecoder } from 'string_decoder';
 import { fileURLToPath } from 'url';
@@ -28,7 +29,9 @@ import { FileLogger } from './file-logger.js';
 import { CliLogDedup } from './cli-log-dedup.js';
 import { EnvSecretStore } from './secrets/env-secret-store.js';
 import { SecretProxyManager } from './secrets/proxy-manager.js';
+import { OauthSecretStore } from './secrets/oauth-secret-store.js';
 import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
+import { readOrCreateSessionId } from './secrets/session-id-file.js';
 
 import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
 
@@ -532,8 +535,6 @@ async function main() {
         console.error(error instanceof Error ? error.message : String(error));
         process.exit(1);
       }
-
-      throw new Error('unreachable');
     })();
 
     const chromePath = findChromeExecutable({
@@ -593,7 +594,16 @@ async function main() {
   }
 
   // 3. Set up express app with request logging
-  const secretProxy = new SecretProxyManager();
+  const sessionDir = RUNTIME_FLAGS.envFile
+    ? dirname(RUNTIME_FLAGS.envFile)
+    : join(homedir(), '.slicc');
+  const sessionId = readOrCreateSessionId(sessionDir);
+  const oauthStore = new OauthSecretStore();
+  // Env-file secrets (~/.slicc/secrets.env) feed the fetch-proxy mask
+  // pipeline alongside OAuth tokens. The same instance is reused below
+  // for /api/secrets and handleS3SignAndForward.
+  const secretStore = new EnvSecretStore(RUNTIME_FLAGS.envFile ?? undefined);
+  const secretProxy = new SecretProxyManager(secretStore, sessionId, oauthStore);
   try {
     await secretProxy.reload();
     if (secretProxy.hasSecrets()) {
@@ -939,8 +949,9 @@ async function main() {
     res.json({ ok: true });
   });
 
-  // Secret management API — direct .env file access (no browser needed)
-  const secretStore = new EnvSecretStore(RUNTIME_FLAGS.envFile ?? undefined);
+  // Secret management API — direct .env file access (no browser needed).
+  // `secretStore` was created above and wired into `secretProxy` so the
+  // fetch-proxy and the management API share one source of truth.
 
   app.get('/api/secrets', (_req, res) => {
     try {
@@ -1023,6 +1034,35 @@ async function main() {
         .status(500)
         .json({ error: err instanceof Error ? err.message : 'Failed to get masked secrets' });
     }
+  });
+
+  // OAuth secret update — stores access token from OAuth login flow
+  app.post('/api/secrets/oauth-update', express.json(), async (req, res) => {
+    const { providerId, accessToken, domains } = req.body ?? {};
+    if (
+      typeof providerId !== 'string' ||
+      typeof accessToken !== 'string' ||
+      !Array.isArray(domains) ||
+      domains.length === 0
+    ) {
+      return res.status(400).json({ error: 'bad-request' });
+    }
+    const name = `oauth.${providerId}.token`;
+    oauthStore.set(name, accessToken, domains);
+    await secretProxy.reload();
+    const masked = secretProxy.getMaskedEntries().find((e) => e.name === name)?.maskedValue;
+    res.json({ providerId, name, maskedValue: masked, domains });
+  });
+
+  // OAuth secret deletion — removes access token on logout
+  app.delete('/api/secrets/oauth/:providerId', async (req, res) => {
+    const name = `oauth.${req.params.providerId}.token`;
+    if (!oauthStore.list().some((e) => e.name === name)) {
+      return res.status(404).json({ error: 'not-found' });
+    }
+    oauthStore.delete(name);
+    await secretProxy.reload();
+    res.status(204).end();
   });
 
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
@@ -1141,6 +1181,24 @@ async function main() {
         }
       }
 
+      // --- Secret injection: unmask URL-embedded credentials ---
+      let cleanedUrl = targetUrl;
+      if (secretProxy.hasSecrets()) {
+        const credsResult = secretProxy.extractAndUnmaskUrlCredentials(targetUrl);
+        if (credsResult.forbidden) {
+          res.setHeader('X-Proxy-Error', '1');
+          res.status(403).json({
+            error: `Secret "${credsResult.forbidden.secretName}" is not allowed for domain "${credsResult.forbidden.hostname}"`,
+          });
+          return;
+        }
+        cleanedUrl = credsResult.url;
+        // Attach synthetic Authorization if the URL had credentials and the header isn't already set
+        if (credsResult.syntheticAuthorization && !('authorization' in headers)) {
+          headers.authorization = credsResult.syntheticAuthorization;
+        }
+      }
+
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
       if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
         // --- Secret injection: unmask request body ---
@@ -1148,7 +1206,25 @@ async function main() {
         // (safe/meaningless) rather than rejecting. This avoids false 403s when
         // LLM conversation context contains masked secrets sent to non-matching
         // domains like Bedrock.
-        if (secretProxy.hasSecrets()) {
+        //
+        // Skip the unmask for non-text content (git packfiles, octet-stream,
+        // ZIPs, images, …) — `Buffer.toString('utf-8')` on arbitrary bytes
+        // replaces invalid sequences with U+FFFD, silently corrupting the
+        // payload. Masked values are hex strings with known prefixes; they
+        // do not appear in deflated git packfiles or other compressed binary,
+        // so skipping is safe.
+        const reqCt = (headers['content-type'] ?? headers['Content-Type'] ?? '').toLowerCase();
+        const reqIsText =
+          !reqCt ||
+          reqCt.startsWith('text/') ||
+          reqCt.includes('json') ||
+          reqCt.includes('xml') ||
+          reqCt.includes('javascript') ||
+          reqCt.includes('ecmascript') ||
+          reqCt.includes('html') ||
+          reqCt.includes('css') ||
+          reqCt.includes('svg');
+        if (reqIsText && secretProxy.hasSecrets()) {
           const bodyStr = rawBody.toString('utf-8');
           const bodyResult = secretProxy.unmaskBody(bodyStr, targetHostname);
           rawBody = Buffer.from(bodyResult.text, 'utf-8');
@@ -1175,7 +1251,7 @@ async function main() {
       res.on('close', onClientClose);
       fetchInit.signal = abortController.signal;
 
-      const upstream = await fetch(targetUrl, fetchInit);
+      const upstream = await fetch(cleanedUrl, fetchInit);
 
       // Forward status, prevent browser caching of proxy responses
       res.status(upstream.status);
