@@ -80,7 +80,7 @@ The package keeps the flat `dist/node-server/index.js` layout intact by being se
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./src/*": "./src/*"
