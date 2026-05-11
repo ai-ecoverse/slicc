@@ -205,12 +205,139 @@ function clearCustomForm(): void {
   });
 }
 
+// ---------------------------------------------------------------------------
+// OAuth-domain extras — shared with the side panel via the page-origin
+// localStorage (both pages live at chrome-extension://<id>/). Provider
+// defaults stay immutable; entries here LAYER on top.
+// ---------------------------------------------------------------------------
+
+const OAUTH_EXTRA_DOMAINS_KEY = 'slicc_oauth_extra_domains';
+
+function readOAuthExtras(): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(OAUTH_EXTRA_DOMAINS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof k !== 'string' || !Array.isArray(v)) continue;
+      const cleaned = v.filter((d): d is string => typeof d === 'string' && d.length > 0);
+      if (cleaned.length > 0) out[k] = cleaned;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeOAuthExtras(store: Record<string, string[]>): void {
+  localStorage.setItem(OAUTH_EXTRA_DOMAINS_KEY, JSON.stringify(store));
+}
+
+function renderOAuthExtras(): void {
+  const container = $('od-list');
+  container.replaceChildren();
+  const store = readOAuthExtras();
+  const providers = Object.keys(store).sort();
+  if (providers.length === 0) {
+    container.appendChild(el('div', { class: 'empty', text: 'No extras configured.' }));
+    return;
+  }
+  for (const providerId of providers) {
+    const domains = store[providerId] ?? [];
+    if (domains.length === 0) continue;
+    const row = el(
+      'div',
+      { class: 'secret-row', dataset: { provider: providerId } },
+      el(
+        'div',
+        { class: 'secret-meta' },
+        el('div', { class: 'secret-name', text: providerId }),
+        el('div', { class: 'secret-domains', text: domains.join(', ') })
+      ),
+      el('button', {
+        class: 'btn-danger',
+        text: 'Clear',
+        on: {
+          click: () => {
+            if (!confirm(`Clear all extras for "${providerId}"?`)) return;
+            const next = readOAuthExtras();
+            delete next[providerId];
+            writeOAuthExtras(next);
+            showToast(`Cleared extras for ${providerId}`);
+            renderOAuthExtras();
+          },
+        },
+      })
+    );
+    container.appendChild(row);
+    // Per-domain remove buttons under the row
+    for (const d of domains) {
+      const domainRow = el(
+        'div',
+        { class: 'secret-row', 'style:padding-left': '24px' },
+        el('div', { class: 'secret-meta' }, el('div', { class: 'secret-domains', text: d })),
+        el('button', {
+          class: 'btn-secondary btn',
+          text: 'Remove',
+          'style:font-size': '11px',
+          'style:padding': '4px 8px',
+          on: {
+            click: () => {
+              const next = readOAuthExtras();
+              const lower = d.toLowerCase();
+              const filtered = (next[providerId] ?? []).filter((x) => x.toLowerCase() !== lower);
+              if (filtered.length === 0) delete next[providerId];
+              else next[providerId] = filtered;
+              writeOAuthExtras(next);
+              showToast(`Removed ${d} from ${providerId}`);
+              renderOAuthExtras();
+            },
+          },
+        })
+      );
+      container.appendChild(domainRow);
+    }
+  }
+}
+
+function onAddOAuthExtra(): void {
+  const provider = ($('od-provider') as HTMLInputElement).value.trim();
+  const domain = ($('od-domain') as HTMLInputElement).value.trim();
+  if (!provider) {
+    showToast('Provider is required', true);
+    return;
+  }
+  if (!domain) {
+    showToast('Domain is required', true);
+    return;
+  }
+  const store = readOAuthExtras();
+  const current = store[provider] ?? [];
+  const lower = domain.toLowerCase();
+  if (current.some((d) => d.toLowerCase() === lower)) {
+    showToast(`Already in ${provider} extras`, true);
+    return;
+  }
+  store[provider] = [...current, domain];
+  writeOAuthExtras(store);
+  showToast(`Added ${domain} to ${provider}`);
+  ($('od-domain') as HTMLInputElement).value = '';
+  renderOAuthExtras();
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   setupTabs();
   renderList();
-  $('refreshBtn').addEventListener('click', renderList);
+  renderOAuthExtras();
+  $('refreshBtn').addEventListener('click', () => {
+    renderList();
+    renderOAuthExtras();
+  });
   $('s3-save').addEventListener('click', onSaveS3);
   $('s3-clear').addEventListener('click', clearS3Form);
   $('c-save').addEventListener('click', onSaveCustom);
   $('c-clear').addEventListener('click', clearCustomForm);
+  $('od-add').addEventListener('click', onAddOAuthExtra);
 });
