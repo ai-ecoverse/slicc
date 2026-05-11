@@ -126,9 +126,14 @@ struct ServerCommand: AsyncParsableCommand {
             envFileSecrets: envFileSecrets,
             oauthStore: oauthStore
         )
-        // Pick up any OAuth replicas that may exist (none at startup, but
-        // future tests / re-entry paths might pre-populate the store).
-        await secretInjector.reload()
+        // Do NOT call `await secretInjector.reload()` here: at startup the
+        // OAuth store is empty, so reload() is a state no-op — but the
+        // redundant Keychain re-read + async actor hop + second
+        // setSecretsAndScrubber cycle on a just-init'd injector has been
+        // observed to corrupt the libsystem_malloc nano zone, crashing the
+        // process shortly after Hummingbird binds with "freed pointer was
+        // not the last allocation". reload() is fine to call once OAuth
+        // replicas actually arrive (see /api/secrets/oauth-update).
 
         if config.electron, !config.serveOnly {
             guard let electronApp = config.electronApp else {
