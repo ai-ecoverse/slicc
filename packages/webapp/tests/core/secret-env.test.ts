@@ -90,6 +90,34 @@ describe('fetchSecretEnvVars', () => {
       const result = await fetchSecretEnvVars();
       expect(result).toEqual({});
     });
+
+    // Internal subsystem secrets (s3.*, oauth.*, db.*) must NOT be exposed
+    // as shell env vars. Only valid POSIX identifiers are emitted.
+    it('filters out dotted / non-POSIX names from the shell env', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => [
+          { name: 'GITHUB_TOKEN', maskedValue: 'ghp_masked', domains: ['github.com'] },
+          { name: 's3.r2.access_key_id', maskedValue: 'AKIAmasked', domains: ['*.r2.com'] },
+          { name: 's3.r2.secret_access_key', maskedValue: 'secretmasked', domains: ['*.r2.com'] },
+          { name: 'oauth.adobe.token', maskedValue: 'eyJmasked', domains: ['*.adobe.io'] },
+          { name: 'NPM_TOKEN', maskedValue: 'npm_masked', domains: ['npmjs.org'] },
+          { name: '0LEADING_DIGIT', maskedValue: 'should-skip', domains: ['x.com'] },
+          { name: 'WITH-HYPHEN', maskedValue: 'should-skip', domains: ['x.com'] },
+        ],
+      } as Response);
+
+      const result = await fetchSecretEnvVars();
+      expect(result).toEqual({
+        GITHUB_TOKEN: 'ghp_masked',
+        NPM_TOKEN: 'npm_masked',
+      });
+      // Negative assertions — none of these may appear
+      expect(result['s3.r2.access_key_id']).toBeUndefined();
+      expect(result['oauth.adobe.token']).toBeUndefined();
+      expect(result['0LEADING_DIGIT']).toBeUndefined();
+      expect(result['WITH-HYPHEN']).toBeUndefined();
+    });
   });
 
   describe('Extension mode', () => {
@@ -162,6 +190,26 @@ describe('fetchSecretEnvVars', () => {
         { type: 'secrets.list-masked-entries' },
         expect.any(Function)
       );
+    });
+
+    it('filters out dotted / non-POSIX names in extension mode too', async () => {
+      vi.mocked((globalThis as any).chrome.runtime.sendMessage).mockImplementation(
+        (_msg: any, callback?: (resp: any) => void) => {
+          if (callback) {
+            callback({
+              entries: [
+                { name: 'GITHUB_TOKEN', maskedValue: 'ghp_masked', domains: ['github.com'] },
+                { name: 's3.r2.access_key_id', maskedValue: 'AKIAmasked', domains: ['*.r2.com'] },
+                { name: 'oauth.adobe.token', maskedValue: 'eyJmasked', domains: ['*.adobe.io'] },
+              ],
+            });
+          }
+          return Promise.resolve();
+        }
+      );
+
+      const result = await fetchSecretEnvVars();
+      expect(result).toEqual({ GITHUB_TOKEN: 'ghp_masked' });
     });
   });
 });

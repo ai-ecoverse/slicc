@@ -29,6 +29,10 @@ Each secret needs two lines: `NAME=value` and `NAME_DOMAINS=domain1,domain2`. A 
 
 **Note:** The bare `github.com` is required for `git push https://github.com/...` because `*.github.com` does not match the bare host (see `packages/shared/src/secret-masking.ts`).
 
+### Shell-env naming convention
+
+Only secrets whose names are valid POSIX env identifiers — `[A-Za-z_][A-Za-z0-9_]*` — are exposed as `$NAME` in the agent shell. Names containing dots, hyphens, or starting with a digit (e.g. `s3.r2.access_key_id`, `oauth.adobe.token`, `db.prod.password`) are still loaded into the fetch-proxy for header unmasking, but they do not leak into `printenv` or `$VAR` resolution. Use this to keep subsystem secrets (mount backends, OAuth replicas) out of the agent's environment while still letting the proxy substitute them when an HTTP request happens to carry the masked value.
+
 Set file permissions: `chmod 600 ~/.slicc/secrets.env`.
 
 To use a different file path, pass `--env-file <path>` when starting SLICC, or set `SLICC_SECRETS_FILE` in your environment.

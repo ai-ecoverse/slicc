@@ -24,6 +24,24 @@ export interface MaskedSecretEntry {
  * Fails silently (returns empty object) if the server is unavailable or
  * returns an error — secrets are optional and shouldn't block shell init.
  */
+/**
+ * Whether a secret name should be exposed as a shell env var.
+ *
+ * Only names that are valid POSIX env identifiers are exposed:
+ *   [A-Za-z_][A-Za-z0-9_]*
+ *
+ * Dotted / hyphenated names (`s3.r2.access_key_id`, `oauth.adobe.token`,
+ * `db.prod.password`) are internal subsystem secrets — they're still
+ * loaded into the fetch-proxy for unmasking, but they don't leak into
+ * the agent shell as `$s3` (which wouldn't even resolve in POSIX shells)
+ * or into `printenv` output where they'd be visible to anything the
+ * agent runs. Without this filter every dotted credential — including
+ * AWS-shaped access keys — would be shell-visible.
+ */
+function isValidShellEnvName(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+}
+
 export async function fetchSecretEnvVars(): Promise<Record<string, string>> {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
@@ -34,7 +52,7 @@ export async function fetchSecretEnvVars(): Promise<Record<string, string>> {
         const resp = response as { entries?: MaskedSecretEntry[] };
         const env: Record<string, string> = {};
         for (const entry of resp?.entries ?? []) {
-          if (entry.name && entry.maskedValue) {
+          if (entry.name && entry.maskedValue && isValidShellEnvName(entry.name)) {
             env[entry.name] = entry.maskedValue;
           }
         }
@@ -64,7 +82,7 @@ export async function fetchSecretEnvVars(): Promise<Record<string, string>> {
 
     const env: Record<string, string> = {};
     for (const entry of entries) {
-      if (entry.name && entry.maskedValue) {
+      if (entry.name && entry.maskedValue && isValidShellEnvName(entry.name)) {
         env[entry.name] = entry.maskedValue;
       }
     }
