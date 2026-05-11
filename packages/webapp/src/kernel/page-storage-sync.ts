@@ -72,26 +72,43 @@ export function installPageStorageSync(sink: PageStorageSyncSink): () => void {
   const origRemoveItem = ls.removeItem.bind(ls);
   const origClear = ls.clear.bind(ls);
 
-  ls.setItem = (key: string, value: string): void => {
+  // Native Storage methods live on `Storage.prototype` and are
+  // non-enumerable. A direct assignment (`ls.setItem = …`) would
+  // create an enumerable own-property, so `Object.keys(localStorage)`
+  // and `for…in` would return phantom keys `"setItem"`/`"removeItem"`/
+  // `"clear"` mixed with the user's actual stored keys. Use
+  // `Object.defineProperty` to install non-enumerable own-properties
+  // that shadow the prototype methods without breaking enumeration.
+  // `dispose()` uses the same shape to restore.
+  const define = (name: 'setItem' | 'removeItem' | 'clear', value: unknown): void => {
+    Object.defineProperty(ls, name, {
+      value,
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
+  };
+
+  define('setItem', (key: string, value: string): void => {
     origSetItem(key, value);
     if (!isForwardableKey(key)) {
       console.warn('[page-storage-sync] dropping localStorage write with NUL in key', key);
       return;
     }
     sink.send({ type: 'local-storage-set', key, value } satisfies LocalStorageSetMsg);
-  };
-  ls.removeItem = (key: string): void => {
+  });
+  define('removeItem', (key: string): void => {
     origRemoveItem(key);
     if (!isForwardableKey(key)) {
       console.warn('[page-storage-sync] dropping localStorage remove with NUL in key', key);
       return;
     }
     sink.send({ type: 'local-storage-remove', key } satisfies LocalStorageRemoveMsg);
-  };
-  ls.clear = (): void => {
+  });
+  define('clear', (): void => {
     origClear();
     sink.send({ type: 'local-storage-clear' } satisfies LocalStorageClearMsg);
-  };
+  });
 
   // Cross-tab writes: when another tab calls localStorage.setItem(),
   // a `storage` event fires here. The browser already updated this
@@ -120,9 +137,9 @@ export function installPageStorageSync(sink: PageStorageSyncSink): () => void {
   window.addEventListener('storage', onStorage);
 
   return () => {
-    ls.setItem = origSetItem;
-    ls.removeItem = origRemoveItem;
-    ls.clear = origClear;
+    define('setItem', origSetItem);
+    define('removeItem', origRemoveItem);
+    define('clear', origClear);
     window.removeEventListener('storage', onStorage);
   };
 }

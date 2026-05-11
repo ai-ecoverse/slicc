@@ -208,6 +208,34 @@ describe('installPageStorageSync', () => {
     dispose();
   });
 
+  it('installs the override methods as non-enumerable own-properties', () => {
+    // Regression for #619: assigning `ls.setItem = …` directly on the
+    // Storage instance creates an enumerable own-property, so
+    // `Object.keys(localStorage)` returns phantom keys `"setItem"`,
+    // `"removeItem"`, `"clear"` mixed with the user's stored keys.
+    // The fake storage in this test is a plain object literal (its
+    // methods are own-enumerable from the start), so we can't compare
+    // `Object.keys` directly — assert the property descriptors instead.
+    const sent: PanelToOffscreenMessage[] = [];
+    const dispose = installPageStorageSync({ send: (m) => sent.push(m) });
+
+    for (const name of ['setItem', 'removeItem', 'clear'] as const) {
+      const desc = Object.getOwnPropertyDescriptor(fakeWindow.localStorage, name);
+      expect(desc, `expected ${name} descriptor`).toBeDefined();
+      expect(desc!.enumerable, `${name} should be non-enumerable`).toBe(false);
+      expect(desc!.writable, `${name} should remain writable`).toBe(true);
+      expect(desc!.configurable, `${name} should remain configurable`).toBe(true);
+    }
+
+    // dispose() restores originals via the same defineProperty shape,
+    // so the property stays non-enumerable.
+    dispose();
+    for (const name of ['setItem', 'removeItem', 'clear'] as const) {
+      const desc = Object.getOwnPropertyDescriptor(fakeWindow.localStorage, name);
+      expect(desc!.enumerable, `${name} should remain non-enumerable after dispose`).toBe(false);
+    }
+  });
+
   it('drops cross-tab storage events with NUL in the key', () => {
     const sent: PanelToOffscreenMessage[] = [];
     const dispose = installPageStorageSync({ send: (m) => sent.push(m) });
