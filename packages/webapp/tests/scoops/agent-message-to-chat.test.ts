@@ -326,6 +326,60 @@ describe('agentMessagesToChatMessages', () => {
     expect(out[0].content).toBe('[opens here\nbut keeps going] User: bogus');
   });
 
+  it('parses a sender containing ": " by anchoring on the known channel prefix', () => {
+    counter = 0;
+    // Webhook with a user-defined name that contains ": " — this was
+    // the Codex P1 / Copilot finding on PR #625: a naive
+    // `indexOf(": ")` would split at the first colon-space inside the
+    // eventName and corrupt the body.
+    const raw =
+      '[May 11, 10:00 AM] webhook:deploy: prod: [Webhook Event: deploy: prod]\n```json\n{"ok":true}\n```';
+    const out = agentMessagesToChatMessages([userMsg(raw, 1000)], { idSeed: seedId });
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('webhook');
+    expect(out[0].content.startsWith('[Webhook Event: deploy: prod]')).toBe(true);
+  });
+
+  it('splits a batched user message with multiple envelopes into separate ChatMessages', () => {
+    counter = 0;
+    // `processScoopQueue` joins queued ChannelMessages with `\n` before
+    // calling sendPrompt, so two licks arriving between agent turns
+    // end up in one AgentMessage. The chat panel must replay each
+    // lick as its own widget.
+    const raw =
+      '[May 11, 8:15 AM] sprinkle:welcome: [Sprinkle Event: welcome]\n' +
+      '```json\n{"x":1}\n```\n' +
+      '[May 11, 8:16 AM] User: typed input\n' +
+      '[May 11, 8:17 AM] cron:daily: [Cron Event: daily]\n' +
+      '```json\n{"y":2}\n```';
+    const out = agentMessagesToChatMessages([userMsg(raw, 8000)], { idSeed: seedId });
+    expect(out).toHaveLength(3);
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('sprinkle');
+    expect(out[0].content.startsWith('[Sprinkle Event: welcome]')).toBe(true);
+    expect(out[1].source).toBeUndefined();
+    expect(out[1].content).toBe('typed input');
+    expect(out[2].source).toBe('lick');
+    expect(out[2].channel).toBe('cron');
+    expect(out[2].content.startsWith('[Cron Event: daily]')).toBe(true);
+    // All split parts inherit the AgentMessage's timestamp.
+    expect(out.every((m) => m.timestamp === 8000)).toBe(true);
+  });
+
+  it('does not start a new envelope on an inner [Sprinkle Event: x] body line', () => {
+    counter = 0;
+    // The line `[Sprinkle Event: welcome]` looks bracket-shaped but is
+    // not an envelope opener (it doesn't match `[…] <sender>: …`). It
+    // must stay part of the previous segment's body.
+    const raw = '[May 11, 8:15 AM] sprinkle:welcome: header\n[Sprinkle Event: welcome]\nmore body';
+    const out = agentMessagesToChatMessages([userMsg(raw, 1)], { idSeed: seedId });
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('sprinkle');
+    expect(out[0].content).toBe('header\n[Sprinkle Event: welcome]\nmore body');
+  });
+
   it('honors a custom hiddenToolNames override', () => {
     counter = 0;
     const input: AgentMessage[] = [
