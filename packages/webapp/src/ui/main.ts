@@ -794,7 +794,13 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   void (async () => {
     try {
       const { RemoteTerminalView } = await import('../kernel/remote-terminal-view.js');
-      const remoteTerminal = new RemoteTerminalView({ client, cwd: '/' });
+      const { fetchSecretEnvVars } = await import('../core/secret-env.js');
+      const secretEnv = await fetchSecretEnvVars();
+      const remoteTerminal = new RemoteTerminalView({
+        client,
+        cwd: '/',
+        env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
+      });
       await layout.panels.terminal.mountRemoteShell(remoteTerminal);
       window.addEventListener('beforeunload', () => remoteTerminal.dispose(), { once: true });
       log.info('Panel terminal mounted as RemoteTerminalView (offscreen TerminalSessionHost)');
@@ -2081,7 +2087,13 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   // (the worker's `TerminalSessionHost` is instantiated at the tail
   // of `boot()`).
   const { RemoteTerminalView } = await import('../kernel/remote-terminal-view.js');
-  const remoteTerminal = new RemoteTerminalView({ client, cwd: '/' });
+  const { fetchSecretEnvVars: fetchSecretEnvVarsForPanel } = await import('../core/secret-env.js');
+  const panelSecretEnv = await fetchSecretEnvVarsForPanel();
+  const remoteTerminal = new RemoteTerminalView({
+    client,
+    cwd: '/',
+    env: Object.keys(panelSecretEnv).length > 0 ? panelSecretEnv : undefined,
+  });
   void layout.panels.terminal.mountRemoteShell(remoteTerminal).catch((err) => {
     log.error('Failed to mount remote terminal view', err);
   });

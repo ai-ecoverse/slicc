@@ -599,7 +599,11 @@ async function main() {
     : join(homedir(), '.slicc');
   const sessionId = readOrCreateSessionId(sessionDir);
   const oauthStore = new OauthSecretStore();
-  const secretProxy = new SecretProxyManager(undefined, sessionId, oauthStore);
+  // Env-file secrets (~/.slicc/secrets.env) feed the fetch-proxy mask
+  // pipeline alongside OAuth tokens. The same instance is reused below
+  // for /api/secrets and handleS3SignAndForward.
+  const secretStore = new EnvSecretStore(RUNTIME_FLAGS.envFile ?? undefined);
+  const secretProxy = new SecretProxyManager(secretStore, sessionId, oauthStore);
   try {
     await secretProxy.reload();
     if (secretProxy.hasSecrets()) {
@@ -945,8 +949,9 @@ async function main() {
     res.json({ ok: true });
   });
 
-  // Secret management API — direct .env file access (no browser needed)
-  const secretStore = new EnvSecretStore(RUNTIME_FLAGS.envFile ?? undefined);
+  // Secret management API — direct .env file access (no browser needed).
+  // `secretStore` was created above and wired into `secretProxy` so the
+  // fetch-proxy and the management API share one source of truth.
 
   app.get('/api/secrets', (_req, res) => {
     try {
