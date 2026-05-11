@@ -78,6 +78,30 @@ export interface SecretsPipelineOpts {
   source: FetchProxySecretSource;
 }
 
+/**
+ * Stateful unmask/scrub pipeline shared between node-server's /api/fetch-proxy
+ * and the chrome-extension SW's fetch-proxy.fetch Port handler.
+ *
+ * Public surface has four method families:
+ *
+ *   ┌────────────┬────────────────────────────────┬─────────────────────────┐
+ *   │            │ Text-safe (string in / out)    │ Byte-safe (Uint8Array)  │
+ *   ├────────────┼────────────────────────────────┼─────────────────────────┤
+ *   │ Unmask     │ unmask, unmaskBody,            │ unmaskBodyBytes         │
+ *   │ (mask→real)│ unmaskHeaders, …Basic, …Url    │                         │
+ *   ├────────────┼────────────────────────────────┼─────────────────────────┤
+ *   │ Scrub      │ scrubResponse, scrubHeaders    │ scrubResponseBytes      │
+ *   │ (real→mask)│                                │                         │
+ *   └────────────┴────────────────────────────────┴─────────────────────────┘
+ *
+ * Use the byte-safe variants for request/response bodies that may be binary
+ * (git packfiles, ZIPs, images, application/octet-stream). The text variants
+ * UTF-8-decode their input, which corrupts non-UTF-8 byte sequences
+ * (`Buffer.toString('utf-8')` replaces invalid bytes with U+FFFD).
+ *
+ * Note: unmaskHeaders MUTATES its input in place (matching SecretProxyManager's
+ * legacy semantics). The other methods return new strings/byte arrays.
+ */
 export class SecretsPipeline {
   public readonly sessionId: string;
   private readonly source: FetchProxySecretSource;
