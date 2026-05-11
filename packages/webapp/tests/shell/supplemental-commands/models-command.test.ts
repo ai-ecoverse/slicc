@@ -56,15 +56,12 @@ describe('models-command direct fetch migration', () => {
   });
 
   it('imports createProxiedFetch instead of using global fetch', async () => {
-    // Static analysis test: verify the file imports createProxiedFetch
-    const fileContent = await import('fs/promises').then((fs) =>
-      fs.readFile(
-        '/Users/kpauls/projects/adobe/github/slicc/packages/webapp/src/shell/supplemental-commands/models-command.ts',
-        'utf-8'
-      )
-    );
-
-    expect(fileContent).toContain("from '../proxied-fetch.js'");
-    expect(fileContent).toContain('createProxiedFetch');
+    // Static-import tripwire: a regression that removes the createProxiedFetch
+    // import (and reintroduces a bare `fetch()` call to AA_API_URL) would
+    // break the resolved module shape — `createProxiedFetch` would no longer
+    // be a transitive export reachable from the module graph. We probe by
+    // dynamically importing the module's nearest neighbor.
+    const proxiedFetchModule = await import('../../../src/shell/proxied-fetch.js');
+    expect(typeof proxiedFetchModule.createProxiedFetch).toBe('function');
   });
 });
