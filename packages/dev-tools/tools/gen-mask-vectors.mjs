@@ -5,7 +5,7 @@
  * Runs the canonical TS `mask` over a handful of (sessionId, name, value)
  * tuples and prints one JSON line per vector. The pinned `expected` values
  * land in:
- *   - packages/shared/tests/cross-impl-vectors.test.ts (TS)
+ *   - packages/shared-ts/tests/cross-impl-vectors.test.ts (TS)
  *   - packages/swift-server/Tests/CrossImplementationTests.swift (Swift)
  *
  * Regenerate after intentional masking changes; both test files must be

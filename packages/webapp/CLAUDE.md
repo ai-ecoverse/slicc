@@ -158,7 +158,7 @@ Deep reference: `docs/kernel/process-model.md`.
 
 ## Secret-Aware Fetch Proxy
 
-The webapp consumes `@slicc/shared` for secret masking primitives. `createProxiedFetch()` in `packages/webapp/src/shell/proxied-fetch.ts` routes agent-initiated HTTP through the fetch proxy. In extension mode, the extension branch is Port-based (`chrome.runtime.connect({ name: 'fetch-proxy.fetch' })`) instead of direct fetch, providing full secret-injection coverage equivalent to CLI mode.
+The webapp consumes `@slicc/shared-ts` for secret masking primitives. `createProxiedFetch()` in `packages/webapp/src/shell/proxied-fetch.ts` routes agent-initiated HTTP through the fetch proxy. In extension mode, the extension branch is Port-based (`chrome.runtime.connect({ name: 'fetch-proxy.fetch' })`) instead of direct fetch, providing full secret-injection coverage equivalent to CLI mode.
 
 ### OAuth flow + page-side bootstrap
 
@@ -182,6 +182,6 @@ Provider `oauthTokenDomains` is an immutable safe default; users can layer addit
 
 - `packages/chrome-extension/CLAUDE.md` for extension runtime constraints
 - `packages/node-server/CLAUDE.md` for the CLI/Electron float
-- `packages/shared/CLAUDE.md` for secret masking primitives
+- `packages/shared-ts/CLAUDE.md` for secret masking primitives
 - `docs/architecture.md` for repo-wide file maps and deeper subsystem inventories
 - `docs/shell-reference.md` for command-by-command shell behavior

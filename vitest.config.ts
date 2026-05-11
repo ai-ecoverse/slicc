@@ -23,11 +23,11 @@ const baseCoverageExclude = [
 export default defineConfig({
   resolve: {
     alias: {
-      // Workspace `@slicc/shared` — resolve to source so tests do not require
-      // `packages/shared/dist/` to exist. All four vitest projects inherit
+      // Workspace `@slicc/shared-ts` — resolve to source so tests do not require
+      // `packages/shared-ts/dist/` to exist. All four vitest projects inherit
       // this via `extends: true`. The package's exports.types already
       // points at src; this matches the runtime side under vitest.
-      '@slicc/shared': resolve(workspaceRoot, 'packages/shared/src/index.ts'),
+      '@slicc/shared-ts': resolve(workspaceRoot, 'packages/shared-ts/src/index.ts'),
     },
   },
   test: {
@@ -108,7 +108,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'shared',
-          include: ['packages/shared/tests/**/*.test.ts'],
+          include: ['packages/shared-ts/tests/**/*.test.ts'],
         },
       },
       {

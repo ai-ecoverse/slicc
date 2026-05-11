@@ -30,10 +30,10 @@ export default defineConfig(({ mode }) => ({
   },
   resolve: {
     alias: {
-      // Workspace `@slicc/shared` points at source so esbuild/Rolldown for the
+      // Workspace `@slicc/shared-ts` points at source so esbuild/Rolldown for the
       // SW IIFE and the extension's worker entries resolve without requiring
-      // `packages/shared/dist/` to exist at build time.
-      '@slicc/shared': resolve(repoRoot, 'packages/shared/src/index.ts'),
+      // `packages/shared-ts/dist/` to exist at build time.
+      '@slicc/shared-ts': resolve(repoRoot, 'packages/shared-ts/src/index.ts'),
       // The pinned isomorphic-git package resolves "." to index.cjs, and that
       // CJS entry imports Node crypto. Force the browser-safe ESM entry
       // instead.
@@ -114,8 +114,8 @@ export default defineConfig(({ mode }) => ({
           minify: true,
           alias: {
             // Workspace package — resolve to source so the IIFE bundle does
-            // not require `packages/shared/dist/` to exist at build time.
-            '@slicc/shared': resolve(repoRoot, 'packages/shared/src/index.ts'),
+            // not require `packages/shared-ts/dist/` to exist at build time.
+            '@slicc/shared-ts': resolve(repoRoot, 'packages/shared-ts/src/index.ts'),
           },
           define: {
             __DEV__: JSON.stringify(mode !== 'production'),

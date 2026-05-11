@@ -1,6 +1,6 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-import { isAllowedDomain } from '@slicc/shared';
+import { isAllowedDomain } from '@slicc/shared-ts';
 
 function helpText(): string {
   return `secret — manage secrets for the fetch proxy and mount backends

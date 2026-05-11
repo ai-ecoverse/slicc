@@ -4,7 +4,7 @@ import {
   handleFetchProxyConnectionAsync,
   type PortLike,
 } from '../src/fetch-proxy-shared.js';
-import { SecretsPipeline } from '@slicc/shared';
+import { SecretsPipeline } from '@slicc/shared-ts';
 
 function makePort(
   onPost: (msg: unknown) => void

@@ -4,9 +4,9 @@
 
 **Goal:** Close three gaps in the secret-aware fetch proxy — HTTP Basic auth, extension-mode coverage, and the `oauth-token` real-token leak — so the public security claim ("API keys, OAuth tokens, and other sensitive values… are not placed into the LLM's context window") becomes uniformly true.
 
-**Architecture:** Introduce a new `@slicc/shared` workspace package containing platform-agnostic secret primitives. Move `secret-masking.ts` into it; add a new `secrets-pipeline.ts` (stateful unmask/scrub class). Both `node-server` (via `SecretProxyManager`) and the chrome-extension SW (via a new Port-based `fetch-proxy.fetch` handler) delegate to `SecretsPipeline`. Add Basic-auth-aware + URL-credential-aware unmask; make body unmask byte-safe. Replicate OAuth tokens into a writable in-memory store on node-server / swift-server (and `chrome.storage.local` in extension) so the proxy can unmask masked OAuth Bearers. Page-side `createProxiedFetch()` (the existing `SecureFetch` factory) gets a Port-backed extension branch and replaces direct fetch in `git-http.ts`. Persist sessionId per-runtime so cached masks survive restart.
+**Architecture:** Introduce a new `@slicc/shared-ts` workspace package containing platform-agnostic secret primitives. Move `secret-masking.ts` into it; add a new `secrets-pipeline.ts` (stateful unmask/scrub class). Both `node-server` (via `SecretProxyManager`) and the chrome-extension SW (via a new Port-based `fetch-proxy.fetch` handler) delegate to `SecretsPipeline`. Add Basic-auth-aware + URL-credential-aware unmask; make body unmask byte-safe. Replicate OAuth tokens into a writable in-memory store on node-server / swift-server (and `chrome.storage.local` in extension) so the proxy can unmask masked OAuth Bearers. Page-side `createProxiedFetch()` (the existing `SecureFetch` factory) gets a Port-backed extension branch and replaces direct fetch in `git-http.ts`. Persist sessionId per-runtime so cached masks survive restart.
 
-**Tech Stack:** TypeScript (webapp, node-server, chrome-extension, new `@slicc/shared`) + Vitest. Swift (swift-server) + XCTest. Web Crypto (`crypto.subtle`, `TextEncoder`) for HMAC-SHA256 masking. `chrome.runtime.connect` Ports for SW streaming. Hummingbird for swift-server HTTP. `isomorphic-git` consumer of the response stream.
+**Tech Stack:** TypeScript (webapp, node-server, chrome-extension, new `@slicc/shared-ts`) + Vitest. Swift (swift-server) + XCTest. Web Crypto (`crypto.subtle`, `TextEncoder`) for HMAC-SHA256 masking. `chrome.runtime.connect` Ports for SW streaming. Hummingbird for swift-server HTTP. `isomorphic-git` consumer of the response stream.
 
 **Spec:** `docs/superpowers/specs/2026-05-08-secret-aware-fetch-proxy-design.md` — refer to it for full context on each phase. Section names below match the spec.
 
@@ -45,34 +45,34 @@ The new `SecretsPipeline` mirrors these signatures so `SecretProxyManager` becom
 
 ---
 
-## Phase 1: Extract `secrets-pipeline` into `@slicc/shared`
+## Phase 1: Extract `secrets-pipeline` into `@slicc/shared-ts`
 
 Spec: §"Phase 1: Extract `secrets-pipeline` (shared core)" and §"Mask consistency".
 
-Goal: a new `@slicc/shared` workspace package holding `secret-masking.ts` (moved from webapp) and `secrets-pipeline.ts` (new). `SecretProxyManager` becomes a thin wrapper around `SecretsPipeline`. The chrome-extension SW (Phase 3) and swift-server (Phase 7 — Swift-only, separate code path) will reuse the same primitive contracts. SessionId persists across node-server restart.
+Goal: a new `@slicc/shared-ts` workspace package holding `secret-masking.ts` (moved from webapp) and `secrets-pipeline.ts` (new). `SecretProxyManager` becomes a thin wrapper around `SecretsPipeline`. The chrome-extension SW (Phase 3) and swift-server (Phase 7 — Swift-only, separate code path) will reuse the same primitive contracts. SessionId persists across node-server restart.
 
 ---
 
-### Task 1.1: Scaffold the `@slicc/shared` workspace package
+### Task 1.1: Scaffold the `@slicc/shared-ts` workspace package
 
 **Files:**
 
-- Create: `packages/shared/package.json`
-- Create: `packages/shared/tsconfig.json`
-- Create: `packages/shared/src/index.ts` (empty placeholder for now)
+- Create: `packages/shared-ts/package.json`
+- Create: `packages/shared-ts/tsconfig.json`
+- Create: `packages/shared-ts/src/index.ts` (empty placeholder for now)
 - Modify: root `package.json` `workspaces` array
-- Modify: root `package.json` `build` script (add `@slicc/shared` first in the chain)
+- Modify: root `package.json` `build` script (add `@slicc/shared-ts` first in the chain)
 - Modify: root `tsconfig.json` `include` (so the webapp typecheck sees the new package)
 
 The package keeps the flat `dist/node-server/index.js` layout intact by being self-contained (its own `dist/`). `dist/node-server/` paths in `main` / `bin` / `start` / `package:release` / `publish:chrome` are unchanged.
 
 - [ ] **Step 1: Create the package skeleton**
 
-`packages/shared/package.json`:
+`packages/shared-ts/package.json`:
 
 ```json
 {
-  "name": "@slicc/shared",
+  "name": "@slicc/shared-ts",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -94,7 +94,7 @@ The package keeps the flat `dist/node-server/index.js` layout intact by being se
 }
 ```
 
-`packages/shared/tsconfig.json`:
+`packages/shared-ts/tsconfig.json`:
 
 ```json
 {
@@ -118,7 +118,7 @@ The package keeps the flat `dist/node-server/index.js` layout intact by being se
 }
 ```
 
-`packages/shared/src/index.ts`:
+`packages/shared-ts/src/index.ts`:
 
 ```ts
 // Re-exports added in Task 1.2 (secret-masking) and Task 1.3 (secrets-pipeline).
@@ -129,18 +129,18 @@ export {};
 
 - [ ] **Step 2: Register the workspace**
 
-Edit root `package.json`. Add `"packages/shared"` to the `workspaces` array (place it first so npm install resolves it before consumers). Update the root `build` script so `@slicc/shared` builds before `@slicc/node-server` (since node-server's runtime code consumes the compiled `dist/`):
+Edit root `package.json`. Add `"packages/shared-ts"` to the `workspaces` array (place it first so npm install resolves it before consumers). Update the root `build` script so `@slicc/shared-ts` builds before `@slicc/node-server` (since node-server's runtime code consumes the compiled `dist/`):
 
 ```diff
    "workspaces": [
-+    "packages/shared",
++    "packages/shared-ts",
      "packages/webapp",
      "packages/node-server",
      ...
    ],
    ...
 -    "build": "npm run build -w @slicc/webapp && npm run build -w @slicc/node-server && ..."
-+    "build": "npm run build -w @slicc/shared && npm run build -w @slicc/webapp && npm run build -w @slicc/node-server && ..."
++    "build": "npm run build -w @slicc/shared-ts && npm run build -w @slicc/webapp && npm run build -w @slicc/node-server && ..."
 ```
 
 - [ ] **Step 3: Update root tsconfig.json include**
@@ -149,7 +149,7 @@ Edit root `tsconfig.json`:
 
 ```diff
 -  "include": ["packages/webapp/src/**/*.ts", "packages/chrome-extension/src/**/*.ts"],
-+  "include": ["packages/shared/src/**/*.ts", "packages/webapp/src/**/*.ts", "packages/chrome-extension/src/**/*.ts"],
++  "include": ["packages/shared-ts/src/**/*.ts", "packages/webapp/src/**/*.ts", "packages/chrome-extension/src/**/*.ts"],
    "exclude": ["packages/node-server/src/**/*.ts"]
 ```
 
@@ -157,10 +157,10 @@ Edit root `tsconfig.json`:
 
 ```bash
 npm install
-npm run build -w @slicc/shared
+npm run build -w @slicc/shared-ts
 ```
 
-Expected: `packages/shared/dist/index.js` and `packages/shared/dist/index.d.ts` exist. Empty exports are OK.
+Expected: `packages/shared-ts/dist/index.js` and `packages/shared-ts/dist/index.d.ts` exist. Empty exports are OK.
 
 - [ ] **Step 5: Verify root build still works** (catches a misordered `workspaces` field or build chain)
 
@@ -173,20 +173,20 @@ Expected: clean. `dist/node-server/index.js` (etc.) still at the same paths as b
 - [ ] **Step 6: Commit**
 
 ```bash
-npx prettier --write packages/shared/package.json packages/shared/tsconfig.json packages/shared/src/index.ts package.json tsconfig.json
-git add packages/shared/ package.json tsconfig.json package-lock.json
-git commit -m "chore(shared): scaffold @slicc/shared workspace package"
+npx prettier --write packages/shared-ts/package.json packages/shared-ts/tsconfig.json packages/shared-ts/src/index.ts package.json tsconfig.json
+git add packages/shared-ts/ package.json tsconfig.json package-lock.json
+git commit -m "chore(shared): scaffold @slicc/shared-ts workspace package"
 ```
 
 ---
 
-### Task 1.2: Move `secret-masking.ts` into `@slicc/shared`
+### Task 1.2: Move `secret-masking.ts` into `@slicc/shared-ts`
 
 **Files:**
 
-- Move: `packages/webapp/src/core/secret-masking.ts` → `packages/shared/src/secret-masking.ts`
-- Move: `packages/webapp/tests/core/secret-masking.test.ts` → `packages/shared/tests/secret-masking.test.ts`
-- Modify: `packages/shared/src/index.ts` to re-export
+- Move: `packages/webapp/src/core/secret-masking.ts` → `packages/shared-ts/src/secret-masking.ts`
+- Move: `packages/webapp/tests/core/secret-masking.test.ts` → `packages/shared-ts/tests/secret-masking.test.ts`
+- Modify: `packages/shared-ts/src/index.ts` to re-export
 - Modify: every importer of `secret-masking.ts`
 
 - [ ] **Step 1: Identify all importers** (static AND dynamic)
@@ -201,24 +201,24 @@ grep -rn "await import.*secret-masking\|import('.*secret-masking" packages/ --in
 Confirmed importers today (verified):
 
 - `packages/webapp/tests/core/secret-masking.test.ts` — the test file itself, moved alongside the source.
-- `packages/webapp/src/shell/supplemental-commands/secret-command.ts:266` — **dynamic import** `await import('../../core/secret-masking.js')` for `isAllowedDomain`. The relative path breaks after `git mv`; this importer MUST be updated to `@slicc/shared` (no shim) before the move can land green.
+- `packages/webapp/src/shell/supplemental-commands/secret-command.ts:266` — **dynamic import** `await import('../../core/secret-masking.js')` for `isAllowedDomain`. The relative path breaks after `git mv`; this importer MUST be updated to `@slicc/shared-ts` (no shim) before the move can land green.
 - `packages/node-server/src/secrets/masking.ts` — only a comment reference (deleted in Task 1.6).
 
-Phase 2/3/4 work adds more importers; they all point at `@slicc/shared` directly.
+Phase 2/3/4 work adds more importers; they all point at `@slicc/shared-ts` directly.
 
-- [ ] **Step 2: Add `@slicc/shared` to `@slicc/webapp` dependencies**
+- [ ] **Step 2: Add `@slicc/shared-ts` to `@slicc/webapp` dependencies**
 
-Edit `packages/webapp/package.json` — append `@slicc/shared` to `dependencies`:
+Edit `packages/webapp/package.json` — append `@slicc/shared-ts` to `dependencies`:
 
 ```diff
    "dependencies": {
      "@adobe/helix-rum-js": "^2.14.2",
      ...
-+    "@slicc/shared": "*"
++    "@slicc/shared-ts": "*"
    },
 ```
 
-Run `npm install` to refresh the `node_modules/@slicc/shared` symlink for the webapp workspace. (Vite + vitest will resolve `@slicc/shared` from the symlink; for production webapp builds, Vite bundles the shared source directly via the workspace `exports.types` mapping to `./src/index.ts`.)
+Run `npm install` to refresh the `node_modules/@slicc/shared-ts` symlink for the webapp workspace. (Vite + vitest will resolve `@slicc/shared-ts` from the symlink; for production webapp builds, Vite bundles the shared source directly via the workspace `exports.types` mapping to `./src/index.ts`.)
 
 - [ ] **Step 3: Update the dynamic importer in `secret-command.ts`**
 
@@ -226,22 +226,22 @@ Edit `packages/webapp/src/shell/supplemental-commands/secret-command.ts` line 26
 
 ```diff
 -          const { isAllowedDomain } = await import('../../core/secret-masking.js');
-+          const { isAllowedDomain } = await import('@slicc/shared');
++          const { isAllowedDomain } = await import('@slicc/shared-ts');
 ```
 
 - [ ] **Step 4: Move the source file**
 
 ```bash
-mkdir -p packages/shared/tests
-git mv packages/webapp/src/core/secret-masking.ts packages/shared/src/secret-masking.ts
-git mv packages/webapp/tests/core/secret-masking.test.ts packages/shared/tests/secret-masking.test.ts
+mkdir -p packages/shared-ts/tests
+git mv packages/webapp/src/core/secret-masking.ts packages/shared-ts/src/secret-masking.ts
+git mv packages/webapp/tests/core/secret-masking.test.ts packages/shared-ts/tests/secret-masking.test.ts
 ```
 
 If `packages/webapp/src/core/` is now empty, leave it in place — other files (`proxy-error.ts`, `tool-adapter.ts`, etc.) live there.
 
 - [ ] **Step 5: Update the test's import path**
 
-Edit `packages/shared/tests/secret-masking.test.ts` line ~7:
+Edit `packages/shared-ts/tests/secret-masking.test.ts` line ~7:
 
 ```diff
 -} from '../../src/core/secret-masking.js';
@@ -250,13 +250,13 @@ Edit `packages/shared/tests/secret-masking.test.ts` line ~7:
 
 - [ ] **Step 6: Re-export from the package barrel + add `matchesDomains` alias**
 
-Edit `packages/shared/src/index.ts`:
+Edit `packages/shared-ts/src/index.ts`:
 
 ```ts
 export * from './secret-masking.js';
 ```
 
-The existing `secret-masking.ts` exports `domainMatches(pattern, hostname)` (single pattern) and `isAllowedDomain(patterns, hostname)`. Node-server callers use a third name `matchesDomains(hostname, patterns)` — different argument order. To keep node-server call sites compiling after Task 1.6's consolidation, append an alias **at the bottom of `packages/shared/src/secret-masking.ts`**:
+The existing `secret-masking.ts` exports `domainMatches(pattern, hostname)` (single pattern) and `isAllowedDomain(patterns, hostname)`. Node-server callers use a third name `matchesDomains(hostname, patterns)` — different argument order. To keep node-server call sites compiling after Task 1.6's consolidation, append an alias **at the bottom of `packages/shared-ts/src/secret-masking.ts`**:
 
 ```ts
 /**
@@ -270,42 +270,42 @@ export function matchesDomains(hostname: string, patterns: string[]): boolean {
 
 - [ ] **Step 7: Run the moved test**
 
-Run: `npx vitest run packages/shared/tests/secret-masking.test.ts`
+Run: `npx vitest run packages/shared-ts/tests/secret-masking.test.ts`
 Expected: PASS — same tests, new location.
 
 - [ ] **Step 8: Build the package**
 
-Run: `npm run build -w @slicc/shared`
-Expected: `packages/shared/dist/secret-masking.js`, `.d.ts` produced.
+Run: `npm run build -w @slicc/shared-ts`
+Expected: `packages/shared-ts/dist/secret-masking.js`, `.d.ts` produced.
 
 - [ ] **Step 9: Verify nothing else broke**
 
 Run: `npm run typecheck && npm run test`
-Expected: clean. Two webapp-side concerns for the move are handled: the test relocated into `packages/shared/tests/` with a relative import (Step 5), and `secret-command.ts:266` rewritten to `await import('@slicc/shared')` (Step 3). If a typecheck error mentions `'@slicc/shared'` resolution, the webapp dep from Step 2 didn't take — re-run `npm install`.
+Expected: clean. Two webapp-side concerns for the move are handled: the test relocated into `packages/shared-ts/tests/` with a relative import (Step 5), and `secret-command.ts:266` rewritten to `await import('@slicc/shared-ts')` (Step 3). If a typecheck error mentions `'@slicc/shared-ts'` resolution, the webapp dep from Step 2 didn't take — re-run `npm install`.
 
 - [ ] **Step 10: Commit**
 
 ```bash
-npx prettier --write packages/shared/src/secret-masking.ts packages/shared/tests/secret-masking.test.ts packages/shared/src/index.ts packages/webapp/package.json packages/webapp/src/shell/supplemental-commands/secret-command.ts
-git add packages/shared/ packages/webapp/src/core packages/webapp/tests/core packages/webapp/package.json packages/webapp/src/shell/supplemental-commands/secret-command.ts package-lock.json
-git commit -m "refactor(shared): move secret-masking.ts into @slicc/shared"
+npx prettier --write packages/shared-ts/src/secret-masking.ts packages/shared-ts/tests/secret-masking.test.ts packages/shared-ts/src/index.ts packages/webapp/package.json packages/webapp/src/shell/supplemental-commands/secret-command.ts
+git add packages/shared-ts/ packages/webapp/src/core packages/webapp/tests/core packages/webapp/package.json packages/webapp/src/shell/supplemental-commands/secret-command.ts package-lock.json
+git commit -m "refactor(shared): move secret-masking.ts into @slicc/shared-ts"
 ```
 
 ---
 
-### Task 1.3: Create `secrets-pipeline.ts` in `@slicc/shared`
+### Task 1.3: Create `secrets-pipeline.ts` in `@slicc/shared-ts`
 
 **Files:**
 
-- Create: `packages/shared/src/secrets-pipeline.ts`
-- Modify: `packages/shared/src/index.ts` (export it)
-- Test: `packages/shared/tests/secrets-pipeline.test.ts`
+- Create: `packages/shared-ts/src/secrets-pipeline.ts`
+- Modify: `packages/shared-ts/src/index.ts` (export it)
+- Test: `packages/shared-ts/tests/secrets-pipeline.test.ts`
 
 **Contract**: `SecretsPipeline` mirrors `SecretProxyManager`'s existing surface exactly — in-place header mutation, `string`-only body unmask, `{ secretName, hostname }` forbidden shape, `{ name, maskedValue, domains }` masked-entries shape.
 
 - [ ] **Step 1: Write the failing test**
 
-`packages/shared/tests/secrets-pipeline.test.ts`:
+`packages/shared-ts/tests/secrets-pipeline.test.ts`:
 
 ```ts
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -386,12 +386,12 @@ describe('SecretsPipeline (skeleton)', () => {
 
 - [ ] **Step 2: Run — verify it fails**
 
-Run: `npx vitest run packages/shared/tests/secrets-pipeline.test.ts`
+Run: `npx vitest run packages/shared-ts/tests/secrets-pipeline.test.ts`
 Expected: FAIL — module missing.
 
 - [ ] **Step 3: Implement**
 
-`packages/shared/src/secrets-pipeline.ts`:
+`packages/shared-ts/src/secrets-pipeline.ts`:
 
 ```ts
 import {
@@ -544,7 +544,7 @@ The webapp/SW Basic-auth and URL-creds helpers come in Phase 2 — this task lan
 
 - [ ] **Step 4: Update the package barrel**
 
-Edit `packages/shared/src/index.ts`:
+Edit `packages/shared-ts/src/index.ts`:
 
 ```ts
 export * from './secret-masking.js';
@@ -553,19 +553,19 @@ export * from './secrets-pipeline.js';
 
 - [ ] **Step 5: Run — verify it passes**
 
-Run: `npx vitest run packages/shared/tests/secrets-pipeline.test.ts`
+Run: `npx vitest run packages/shared-ts/tests/secrets-pipeline.test.ts`
 Expected: PASS, 7 tests green.
 
 - [ ] **Step 6: Build the package**
 
-Run: `npm run build -w @slicc/shared`
+Run: `npm run build -w @slicc/shared-ts`
 Expected: clean emit.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-npx prettier --write packages/shared/src/secrets-pipeline.ts packages/shared/tests/secrets-pipeline.test.ts packages/shared/src/index.ts
-git add packages/shared/src/secrets-pipeline.ts packages/shared/tests/secrets-pipeline.test.ts packages/shared/src/index.ts
+npx prettier --write packages/shared-ts/src/secrets-pipeline.ts packages/shared-ts/tests/secrets-pipeline.test.ts packages/shared-ts/src/index.ts
+git add packages/shared-ts/src/secrets-pipeline.ts packages/shared-ts/tests/secrets-pipeline.test.ts packages/shared-ts/src/index.ts
 git commit -m "feat(shared): SecretsPipeline mirrors SecretProxyManager surface"
 ```
 
@@ -591,7 +591,7 @@ Replace the contents of `packages/node-server/src/secrets/proxy-manager.ts`. Kee
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { SecretsPipeline, type FetchProxySecretSource, type MaskedSecret } from '@slicc/shared';
+import { SecretsPipeline, type FetchProxySecretSource, type MaskedSecret } from '@slicc/shared-ts';
 import { EnvSecretStore } from './env-secret-store.js';
 
 function envStoreAsSource(store: EnvSecretStore | undefined): FetchProxySecretSource {
@@ -657,27 +657,27 @@ export class SecretProxyManager {
 }
 ```
 
-If the existing class had a private `MaskedSecret` interface declared inline, delete that — use the one re-exported from `@slicc/shared`.
+If the existing class had a private `MaskedSecret` interface declared inline, delete that — use the one re-exported from `@slicc/shared-ts`.
 
-If `packages/node-server/src/secrets/types.ts` re-exports anything that overlaps (e.g. `MaskedSecret`, `SecretGetter`), make those re-exports point at `@slicc/shared` to avoid double-definitions.
+If `packages/node-server/src/secrets/types.ts` re-exports anything that overlaps (e.g. `MaskedSecret`, `SecretGetter`), make those re-exports point at `@slicc/shared-ts` to avoid double-definitions.
 
 - [ ] **Step 3: Update `@slicc/node-server`'s `package.json`** (workspace dep)
 
-Add `@slicc/shared` to `dependencies`:
+Add `@slicc/shared-ts` to `dependencies`:
 
 ```diff
    "devDependencies": { ... },
 +  "dependencies": {
-+    "@slicc/shared": "*"
++    "@slicc/shared-ts": "*"
 +  }
 ```
 
-(`*` resolves via npm workspaces to `packages/shared`.)
+(`*` resolves via npm workspaces to `packages/shared-ts`.)
 
 - [ ] **Step 4: `npm install`**
 
 Run: `npm install`
-Expected: `node_modules/@slicc/shared` symlink to `packages/shared`.
+Expected: `node_modules/@slicc/shared-ts` symlink to `packages/shared-ts`.
 
 - [ ] **Step 5: Run the existing tests**
 
@@ -874,8 +874,8 @@ git commit -m "feat(node-server/secrets): persist sessionId across restart"
 
 - Delete: `packages/node-server/src/secrets/masking.ts`
 - Delete: `packages/node-server/src/secrets/domain-match.ts`
-- Delete: `packages/node-server/tests/secrets/domain-match.test.ts` (port unique cases into `packages/shared/tests/secret-masking.test.ts` if any)
-- Modify: every node-server file that imports the two deleted modules — re-point at `@slicc/shared`.
+- Delete: `packages/node-server/tests/secrets/domain-match.test.ts` (port unique cases into `packages/shared-ts/tests/secret-masking.test.ts` if any)
+- Modify: every node-server file that imports the two deleted modules — re-point at `@slicc/shared-ts`.
 
 - [ ] **Step 1: Identify importers**
 
@@ -884,18 +884,18 @@ Note the list.
 
 - [ ] **Step 2: Migrate any unique domain-match test cases**
 
-Diff `packages/node-server/tests/secrets/domain-match.test.ts` against `packages/shared/tests/secret-masking.test.ts`. Port any unique test vector into the shared test file. If everything is already duplicated, just delete the node-server test.
+Diff `packages/node-server/tests/secrets/domain-match.test.ts` against `packages/shared-ts/tests/secret-masking.test.ts`. Port any unique test vector into the shared test file. If everything is already duplicated, just delete the node-server test.
 
 - [ ] **Step 3: Re-point each importer**
 
 For each file in Step 1's list, replace:
 
-- `from './masking.js'` (or any relative path to it) → `from '@slicc/shared'`
-- `from './domain-match.js'` → `from '@slicc/shared'`
+- `from './masking.js'` (or any relative path to it) → `from '@slicc/shared-ts'`
+- `from './domain-match.js'` → `from '@slicc/shared-ts'`
 
 Renames you must make at call sites:
 
-- The shared module now exports `domainMatches(pattern, hostname)`, `isAllowedDomain(patterns, hostname)`, AND the new `matchesDomains(hostname, patterns)` alias added in Task 1.2 Step 4. Node-server's existing call sites of `matchesDomains` therefore compile unchanged once the import points at `@slicc/shared`. No rename needed.
+- The shared module now exports `domainMatches(pattern, hostname)`, `isAllowedDomain(patterns, hostname)`, AND the new `matchesDomains(hostname, patterns)` alias added in Task 1.2 Step 4. Node-server's existing call sites of `matchesDomains` therefore compile unchanged once the import points at `@slicc/shared-ts`. No rename needed.
 
 - [ ] **Step 4: Delete the duplicates**
 
@@ -915,9 +915,9 @@ Expected: green. If something explodes on an import path, that's a Step 3 miss.
 - [ ] **Step 6: Commit**
 
 ```bash
-npx prettier --write $(git diff --name-only --cached packages/node-server packages/shared)
-git add -A packages/node-server/src/secrets packages/node-server/tests/secrets packages/shared
-git commit -m "refactor(node-server/secrets): consolidate to @slicc/shared"
+npx prettier --write $(git diff --name-only --cached packages/node-server packages/shared-ts)
+git add -A packages/node-server/src/secrets packages/node-server/tests/secrets packages/shared-ts
+git commit -m "refactor(node-server/secrets): consolidate to @slicc/shared-ts"
 ```
 
 ---
@@ -958,8 +958,8 @@ Adds three new methods to `SecretsPipeline` and wires them into `/api/fetch-prox
 
 **Files:**
 
-- Modify: `packages/shared/src/secrets-pipeline.ts`
-- Test: `packages/shared/tests/secrets-pipeline.test.ts`
+- Modify: `packages/shared-ts/src/secrets-pipeline.ts`
+- Test: `packages/shared-ts/tests/secrets-pipeline.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1030,7 +1030,7 @@ The shape `{ value }` vs `{ forbidden }` matches the existing `unmask()` return 
 
 - [ ] **Step 2: Run — verify it fails**
 
-Run: `npx vitest run packages/shared/tests/secrets-pipeline.test.ts -t 'unmaskAuthorizationBasic'`
+Run: `npx vitest run packages/shared-ts/tests/secrets-pipeline.test.ts -t 'unmaskAuthorizationBasic'`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement**
@@ -1093,14 +1093,14 @@ unmaskHeaders(headers: Record<string, string>, hostname: string): UnmaskHeadersR
 
 - [ ] **Step 4: Run — verify it passes**
 
-Run: `npx vitest run packages/shared/tests/secrets-pipeline.test.ts`
+Run: `npx vitest run packages/shared-ts/tests/secrets-pipeline.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-npx prettier --write packages/shared/src/secrets-pipeline.ts packages/shared/tests/secrets-pipeline.test.ts
-git add packages/shared/src/secrets-pipeline.ts packages/shared/tests/secrets-pipeline.test.ts
+npx prettier --write packages/shared-ts/src/secrets-pipeline.ts packages/shared-ts/tests/secrets-pipeline.test.ts
+git add packages/shared-ts/src/secrets-pipeline.ts packages/shared-ts/tests/secrets-pipeline.test.ts
 git commit -m "feat(shared): Basic-auth-aware unmask in SecretsPipeline"
 ```
 
@@ -1110,8 +1110,8 @@ git commit -m "feat(shared): Basic-auth-aware unmask in SecretsPipeline"
 
 **Files:**
 
-- Modify: `packages/shared/src/secrets-pipeline.ts`
-- Test: `packages/shared/tests/secrets-pipeline.test.ts`
+- Modify: `packages/shared-ts/src/secrets-pipeline.ts`
+- Test: `packages/shared-ts/tests/secrets-pipeline.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1166,7 +1166,7 @@ describe('extractAndUnmaskUrlCredentials', () => {
 
 - [ ] **Step 2: Run — verify it fails**
 
-Run: `npx vitest run packages/shared/tests/secrets-pipeline.test.ts -t 'extractAndUnmaskUrlCredentials'`
+Run: `npx vitest run packages/shared-ts/tests/secrets-pipeline.test.ts -t 'extractAndUnmaskUrlCredentials'`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement**
@@ -1214,8 +1214,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-npx prettier --write packages/shared/src/secrets-pipeline.ts packages/shared/tests/secrets-pipeline.test.ts
-git add packages/shared/src/secrets-pipeline.ts packages/shared/tests/secrets-pipeline.test.ts
+npx prettier --write packages/shared-ts/src/secrets-pipeline.ts packages/shared-ts/tests/secrets-pipeline.test.ts
+git add packages/shared-ts/src/secrets-pipeline.ts packages/shared-ts/tests/secrets-pipeline.test.ts
 git commit -m "feat(shared): URL-embedded credential unmask + userinfo strip"
 ```
 
@@ -1225,8 +1225,8 @@ git commit -m "feat(shared): URL-embedded credential unmask + userinfo strip"
 
 **Files:**
 
-- Modify: `packages/shared/src/secrets-pipeline.ts`
-- Test: `packages/shared/tests/secrets-pipeline.test.ts`
+- Modify: `packages/shared-ts/src/secrets-pipeline.ts`
+- Test: `packages/shared-ts/tests/secrets-pipeline.test.ts`
 
 Adds a **new** `unmaskBodyBytes(bytes: Uint8Array, hostname): { bytes: Uint8Array }` method. The existing `unmaskBody(text: string, hostname)` is left unchanged — string consumers (node-server's `/api/fetch-proxy` body unmask for text payloads) keep working. The SW handler (Phase 3) will call the bytes variant for binary request bodies.
 
@@ -1401,8 +1401,8 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-npx prettier --write packages/shared/src/secrets-pipeline.ts packages/shared/tests/secrets-pipeline.test.ts
-git add packages/shared/src/secrets-pipeline.ts packages/shared/tests/secrets-pipeline.test.ts
+npx prettier --write packages/shared-ts/src/secrets-pipeline.ts packages/shared-ts/tests/secrets-pipeline.test.ts
+git add packages/shared-ts/src/secrets-pipeline.ts packages/shared-ts/tests/secrets-pipeline.test.ts
 git commit -m "feat(shared): byte-safe unmaskBodyBytes + scrubResponseBytes"
 ```
 
@@ -1715,15 +1715,15 @@ git commit -m "feat(chrome-extension): persist SW sessionId in chrome.storage.lo
 **Files:**
 
 - Create: `packages/chrome-extension/src/fetch-proxy-shared.ts`
-- Modify: `packages/chrome-extension/package.json` (add `@slicc/shared` dependency)
+- Modify: `packages/chrome-extension/package.json` (add `@slicc/shared-ts` dependency)
 - Test: `packages/chrome-extension/tests/fetch-proxy-shared.test.ts`
 
-- [ ] **Step 1: Add `@slicc/shared` to chrome-extension deps**
+- [ ] **Step 1: Add `@slicc/shared-ts` to chrome-extension deps**
 
 ```diff
    "devDependencies": { ... },
 +  "dependencies": {
-+    "@slicc/shared": "*"
++    "@slicc/shared-ts": "*"
 +  }
 ```
 
@@ -1738,7 +1738,7 @@ import {
   type PortLike,
   REQUEST_BODY_CAP,
 } from '../src/fetch-proxy-shared.js';
-import { SecretsPipeline } from '@slicc/shared';
+import { SecretsPipeline } from '@slicc/shared-ts';
 
 function makePort(
   onPost: (msg: unknown) => void
@@ -1889,7 +1889,7 @@ Expected: FAIL.
 `packages/chrome-extension/src/fetch-proxy-shared.ts`:
 
 ```ts
-import { SecretsPipeline } from '@slicc/shared';
+import { SecretsPipeline } from '@slicc/shared-ts';
 
 export const REQUEST_BODY_CAP = 32 * 1024 * 1024;
 
@@ -2085,7 +2085,7 @@ In `packages/chrome-extension/src/service-worker.ts`, near the existing mount ha
 import { handleFetchProxyConnection } from './fetch-proxy-shared.js';
 import { listSecretsWithValues } from './secrets-storage.js';
 import { readOrCreateSwSessionId } from './sw-session-id.js';
-import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared';
+import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared-ts';
 
 async function buildPipeline(): Promise<SecretsPipeline> {
   const sessionId = await readOrCreateSwSessionId();
@@ -2135,10 +2135,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 Expected: PASS.
 
-- [ ] **Step 5: Build the extension** (catches IIFE bundling issues with `@slicc/shared`)
+- [ ] **Step 5: Build the extension** (catches IIFE bundling issues with `@slicc/shared-ts`)
 
 Run: `npm run build -w @slicc/chrome-extension`
-Expected: clean build. If the SW IIFE can't resolve `@slicc/shared`, the vite/esbuild SW config in `packages/chrome-extension/vite.config.ts` may need to inline the dep. Verify the bundled SW contains the masking + pipeline code (grep the output for `maskedToSecret` or similar internal symbols).
+Expected: clean build. If the SW IIFE can't resolve `@slicc/shared-ts`, the vite/esbuild SW config in `packages/chrome-extension/vite.config.ts` may need to inline the dep. Verify the bundled SW contains the masking + pipeline code (grep the output for `maskedToSecret` or similar internal symbols).
 
 - [ ] **Step 6: Commit**
 
@@ -3158,7 +3158,7 @@ Spec: §"Phase 6: Documentation". No tests; docs only. Commit-per-file for clean
 
 - [ ] **Step 1: Fix the `GITHUB_TOKEN_DOMAINS` example at line 22**
 
-Change `GITHUB_TOKEN_DOMAINS=api.github.com,*.github.com` to `GITHUB_TOKEN_DOMAINS=github.com,*.github.com,api.github.com,raw.githubusercontent.com`. Add a sentence: bare `github.com` is required because `*.github.com` does not match the bare host (per `packages/shared/src/secret-masking.ts` comment).
+Change `GITHUB_TOKEN_DOMAINS=api.github.com,*.github.com` to `GITHUB_TOKEN_DOMAINS=github.com,*.github.com,api.github.com,raw.githubusercontent.com`. Add a sentence: bare `github.com` is required because `*.github.com` does not match the bare host (per `packages/shared-ts/src/secret-masking.ts` comment).
 
 - [ ] **Step 2: Flip the platform-support matrix**
 
@@ -3236,16 +3236,16 @@ git commit -m "docs(root): network behavior — both modes now proxy"
 
 - [ ] **Step 1: One-paragraph addendum in each**
 
-- `packages/webapp/CLAUDE.md` — new `@slicc/shared` dep, `createProxiedFetch` extension branch
+- `packages/webapp/CLAUDE.md` — new `@slicc/shared-ts` dep, `createProxiedFetch` extension branch
 - `packages/chrome-extension/CLAUDE.md` — new `fetch-proxy.fetch` SW handler + `secrets.list-masked-entries` + `secrets.mask-oauth-token`
 - `packages/node-server/CLAUDE.md` — `OauthSecretStore`, `POST /api/secrets/oauth-update`, sessionId persistence, deleted `masking.ts`/`domain-match.ts`
-- `packages/shared/CLAUDE.md` — **new file** documenting the workspace package
+- `packages/shared-ts/CLAUDE.md` — **new file** documenting the workspace package
 - `packages/swift-server/CLAUDE.md` — `OAuthSecretStore.swift` + endpoints (pending Phase 7)
 
-`packages/shared/CLAUDE.md`:
+`packages/shared-ts/CLAUDE.md`:
 
 ```markdown
-# @slicc/shared
+# @slicc/shared-ts
 
 Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`, and `@slicc/chrome-extension`.
 
@@ -3258,15 +3258,15 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 
 - Pure functions only (no DOM / Node specifics). Uses `crypto.subtle`, `TextEncoder`, `Headers` (globals in both targets).
 - `SecretsPipeline.unmaskHeaders` mutates its input parameter in place — match `SecretProxyManager`'s legacy semantics.
-- Build: `npm run build -w @slicc/shared` (must run before `@slicc/node-server` build in the chain).
+- Build: `npm run build -w @slicc/shared-ts` (must run before `@slicc/node-server` build in the chain).
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
 npx prettier --write packages/*/CLAUDE.md
-git add packages/shared/CLAUDE.md packages/webapp/CLAUDE.md packages/chrome-extension/CLAUDE.md packages/node-server/CLAUDE.md packages/swift-server/CLAUDE.md
-git commit -m "docs(packages): navigation pointers + @slicc/shared CLAUDE.md"
+git add packages/shared-ts/CLAUDE.md packages/webapp/CLAUDE.md packages/chrome-extension/CLAUDE.md packages/node-server/CLAUDE.md packages/swift-server/CLAUDE.md
+git commit -m "docs(packages): navigation pointers + @slicc/shared-ts CLAUDE.md"
 ```
 
 ---
@@ -3276,7 +3276,7 @@ git commit -m "docs(packages): navigation pointers + @slicc/shared CLAUDE.md"
 - [ ] **Step 1: `docs/architecture.md`**
   - Update the `git-http.ts` row: "extension mode: direct fetch" → "extension mode: createProxiedFetch → SW Port `fetch-proxy.fetch`".
   - Add `fetch-proxy.fetch`, `secrets.list-masked-entries`, `secrets.mask-oauth-token` to the SW handler list.
-  - Repoint any references to deleted `node-server/src/secrets/masking.ts` / `domain-match.ts` → `packages/shared/src/secret-masking.ts`.
+  - Repoint any references to deleted `node-server/src/secrets/masking.ts` / `domain-match.ts` → `packages/shared-ts/src/secret-masking.ts`.
 
 - [ ] **Step 2: `docs/pitfalls.md`**
   - "Fetch uses `/api/fetch-proxy` in CLI, direct fetch in extension" → both modes proxy via `createProxiedFetch`.
@@ -3337,7 +3337,7 @@ Mirror the TS file step-by-step. Use Foundation `CryptoKit` for HMAC-SHA256. Use
 
 - [ ] **Step 1: Write the test file**
 
-`packages/swift-server/Tests/SecretsPipelineTests.swift` mirrors `packages/shared/tests/secrets-pipeline.test.ts`. Every TS test case has an XCTest counterpart with the same input/output expectation. Use `actor` testing patterns.
+`packages/swift-server/Tests/SecretsPipelineTests.swift` mirrors `packages/shared-ts/tests/secrets-pipeline.test.ts`. Every TS test case has an XCTest counterpart with the same input/output expectation. Use `actor` testing patterns.
 
 - [ ] **Step 2: Implement `SecretsPipeline.swift`**
 
@@ -3604,7 +3604,7 @@ git commit -m "feat(swift-server/api): POST /api/secrets/oauth-update + DELETE"
 
 - Create: `packages/dev-tools/tools/gen-mask-vectors.mjs`
 - Create: `packages/swift-server/Tests/CrossImplementationTests.swift`
-- Create: `packages/shared/tests/cross-impl-vectors.test.ts`
+- Create: `packages/shared-ts/tests/cross-impl-vectors.test.ts`
 
 - [ ] **Step 1: Write the vector generator**
 
@@ -3630,7 +3630,7 @@ Run: `node packages/dev-tools/tools/gen-mask-vectors.mjs`. Capture the output.
 
 - [ ] **Step 2: TS-side pinned vector test**
 
-`packages/shared/tests/cross-impl-vectors.test.ts`:
+`packages/shared-ts/tests/cross-impl-vectors.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -3684,14 +3684,14 @@ final class CrossImplementationTests: XCTestCase {
 
 - [ ] **Step 4: Run TS vector test locally**
 
-Run: `npx vitest run packages/shared/tests/cross-impl-vectors.test.ts`
+Run: `npx vitest run packages/shared-ts/tests/cross-impl-vectors.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-npx prettier --write packages/shared/tests/cross-impl-vectors.test.ts packages/dev-tools/tools/gen-mask-vectors.mjs
-git add packages/swift-server/Tests/CrossImplementationTests.swift packages/shared/tests/cross-impl-vectors.test.ts packages/dev-tools/tools/gen-mask-vectors.mjs
+npx prettier --write packages/shared-ts/tests/cross-impl-vectors.test.ts packages/dev-tools/tools/gen-mask-vectors.mjs
+git add packages/swift-server/Tests/CrossImplementationTests.swift packages/shared-ts/tests/cross-impl-vectors.test.ts packages/dev-tools/tools/gen-mask-vectors.mjs
 git commit -m "test(secrets): cross-implementation mask vector pinning"
 ```
 
@@ -3745,13 +3745,13 @@ Closes the three documented gaps in the secret-aware fetch proxy:
 2. Extension parity — new `fetch-proxy.fetch` SW handler with Port-based response streaming and a 32 MB request-body cap.
 3. `oauth-token` returns masked Bearer; real OAuth tokens never enter the agent's context window. Dual-storage replica syncs on every `saveOAuthAccount` lifecycle event (login, silent refresh, logout).
 
-Also: introduces `@slicc/shared` workspace package (single source of truth for `secret-masking.ts` + new `secrets-pipeline.ts`).
+Also: introduces `@slicc/shared-ts` workspace package (single source of truth for `secret-masking.ts` + new `secrets-pipeline.ts`).
 
 Spec: `docs/superpowers/specs/2026-05-08-secret-aware-fetch-proxy-design.md`
 
 ## PR shape
 
-Seven phase-end commits + the @slicc/shared scaffolding.
+Seven phase-end commits + the @slicc/shared-ts scaffolding.
 
 ## Test plan
 

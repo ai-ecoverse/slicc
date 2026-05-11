@@ -36,7 +36,7 @@ import {
 import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
 import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './secrets-storage.js';
 import { readOrCreateSwSessionId } from './sw-session-id.js';
-import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared';
+import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared-ts';
 // ---------------------------------------------------------------------------
 // Side panel behavior
 // ---------------------------------------------------------------------------

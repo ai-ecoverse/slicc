@@ -1,5 +1,5 @@
 {
-  "name": "@slicc/shared",
+  "name": "@slicc/shared-ts",
   "version": "0.0.0",
   "private": true,
   "type": "module",

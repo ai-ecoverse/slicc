@@ -72,11 +72,11 @@ Each instance gets its own browser profile and CDP port. HMR shares the UI serve
 
 ## Secrets Architecture
 
-Node-server includes `OauthSecretStore` (in-memory writable store for OAuth token replicas), `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId` endpoints. The sessionId is persisted to `~/.slicc/session-id` (or `<env-file-dir>/session-id` if `--env-file` is specified). The secret masking primitives (`masking.ts`, `domain-match.ts`) were moved to `@slicc/shared`; node-server now imports from the shared package.
+Node-server includes `OauthSecretStore` (in-memory writable store for OAuth token replicas), `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId` endpoints. The sessionId is persisted to `~/.slicc/session-id` (or `<env-file-dir>/session-id` if `--env-file` is specified). The secret masking primitives (`masking.ts`, `domain-match.ts`) were moved to `@slicc/shared-ts`; node-server now imports from the shared package.
 
 ## Related Guides
 
 - `packages/webapp/CLAUDE.md` for the browser code being served
 - `packages/chrome-extension/CLAUDE.md` for the extension float
-- `packages/shared/CLAUDE.md` for secret masking primitives
+- `packages/shared-ts/CLAUDE.md` for secret masking primitives
 - `docs/development.md` and `docs/electron.md` for longer-form workflows

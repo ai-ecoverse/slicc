@@ -4,12 +4,12 @@ import XCTest
 /// Pinned cross-implementation mask vectors.
 ///
 /// The same vectors are pinned in
-/// `packages/shared/tests/cross-impl-vectors.test.ts`. The hex strings
+/// `packages/shared-ts/tests/cross-impl-vectors.test.ts`. The hex strings
 /// here come from `node packages/dev-tools/tools/gen-mask-vectors.mjs`
-/// (the canonical TS implementation in @slicc/shared).
+/// (the canonical TS implementation in @slicc/shared-ts).
 ///
 /// Regenerate with:
-///   npm run build -w @slicc/shared
+///   npm run build -w @slicc/shared-ts
 ///   node packages/dev-tools/tools/gen-mask-vectors.mjs
 ///
 /// Update BOTH this file and the TS sibling whenever the masking

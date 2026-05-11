@@ -193,6 +193,6 @@ The extras are read by `saveOAuthAccount` in `provider-settings.ts` and merged w
 ## Related Guides
 
 - `packages/webapp/CLAUDE.md` for shared browser architecture
-- `packages/shared/CLAUDE.md` for secret masking primitives
+- `packages/shared-ts/CLAUDE.md` for secret masking primitives
 - `docs/architecture.md` for the detailed extension message flow and persistence model
 - `docs/pitfalls.md` for extension-specific gotchas

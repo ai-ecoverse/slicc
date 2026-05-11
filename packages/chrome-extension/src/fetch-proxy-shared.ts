@@ -1,4 +1,4 @@
-import { type SecretsPipeline } from '@slicc/shared';
+import { type SecretsPipeline } from '@slicc/shared-ts';
 
 export const REQUEST_BODY_CAP = 32 * 1024 * 1024;
 

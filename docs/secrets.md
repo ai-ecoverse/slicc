@@ -27,7 +27,7 @@ OPENAI_KEY_DOMAINS=api.openai.com
 
 Each secret needs two lines: `NAME=value` and `NAME_DOMAINS=domain1,domain2`. A secret without a `_DOMAINS` entry is rejected — every secret must be domain-scoped.
 
-**Note:** The bare `github.com` is required for `git push https://github.com/...` because `*.github.com` does not match the bare host (see `packages/shared/src/secret-masking.ts`).
+**Note:** The bare `github.com` is required for `git push https://github.com/...` because `*.github.com` does not match the bare host (see `packages/shared-ts/src/secret-masking.ts`).
 
 ### Extending OAuth-token allowed domains
 

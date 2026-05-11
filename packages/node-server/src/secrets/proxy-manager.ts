@@ -5,11 +5,11 @@
  * On init: loads all secrets, generates session-scoped masked values,
  * and builds lookup tables for fast replacement.
  *
- * As of Task 1.4, this is a thin wrapper around SecretsPipeline from @slicc/shared.
+ * As of Task 1.4, this is a thin wrapper around SecretsPipeline from @slicc/shared-ts.
  */
 
 import { randomUUID } from 'node:crypto';
-import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared';
+import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared-ts';
 import { type EnvSecretStore } from './env-secret-store.js';
 import { type OauthSecretStore } from './oauth-secret-store.js';
 

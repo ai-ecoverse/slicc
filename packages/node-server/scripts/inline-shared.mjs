@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// Post-build step: copy @slicc/shared compiled output into dist/node-server/_shared/
-// and rewrite `from '@slicc/shared'` imports in dist/node-server/**/*.{js,d.ts}
+// Post-build step: copy @slicc/shared-ts compiled output into dist/node-server/_shared/
+// and rewrite `from '@slicc/shared-ts'` imports in dist/node-server/**/*.{js,d.ts}
 // to relative paths.
 //
 // Why: the published `sliccy` npm tarball ships dist/node-server/ but does NOT
-// include @slicc/shared (it's a private workspace package, not a real npm
+// include @slicc/shared-ts (it's a private workspace package, not a real npm
 // dependency). Inlining it makes the published output self-contained.
 
 import {
@@ -21,13 +21,13 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const repoRoot = resolve(__dirname, '../../..');
-const sharedDist = resolve(repoRoot, 'packages/shared/dist');
+const sharedDist = resolve(repoRoot, 'packages/shared-ts/dist');
 const nodeServerDist = resolve(repoRoot, 'dist/node-server');
 const inlinedSharedDir = resolve(nodeServerDist, '_shared');
 
 if (!existsSync(sharedDist)) {
   console.error(
-    `[inline-shared] @slicc/shared dist not found at ${sharedDist}. Build @slicc/shared first.`
+    `[inline-shared] @slicc/shared-ts dist not found at ${sharedDist}. Build @slicc/shared-ts first.`
   );
   process.exit(1);
 }
@@ -56,12 +56,12 @@ function* walk(dir) {
   }
 }
 
-const importRe = /(from\s+|import\s*\(\s*)(['"])@slicc\/shared\2/g;
+const importRe = /(from\s+|import\s*\(\s*)(['"])@slicc\/shared-ts\2/g;
 let rewrites = 0;
 for (const file of walk(nodeServerDist)) {
   if (!file.endsWith('.js') && !file.endsWith('.d.ts')) continue;
   const text = readFileSync(file, 'utf-8');
-  if (!text.includes('@slicc/shared')) continue;
+  if (!text.includes('@slicc/shared-ts')) continue;
   const relToShared = relative(dirname(file), join(inlinedSharedDir, 'index.js'))
     .split('\\')
     .join('/');
@@ -74,5 +74,5 @@ for (const file of walk(nodeServerDist)) {
 }
 
 console.log(
-  `[inline-shared] inlined @slicc/shared into ${inlinedSharedDir}; rewrote imports in ${rewrites} file(s)`
+  `[inline-shared] inlined @slicc/shared-ts into ${inlinedSharedDir}; rewrote imports in ${rewrites} file(s)`
 );

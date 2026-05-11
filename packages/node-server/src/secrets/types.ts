@@ -34,7 +34,7 @@ export interface SecretStore {
 }
 
 /**
- * Re-export MaskedSecret from @slicc/shared to avoid duplication.
+ * Re-export MaskedSecret from @slicc/shared-ts to avoid duplication.
  * This was previously defined inline in proxy-manager.ts.
  */
-export type { MaskedSecret } from '@slicc/shared';
+export type { MaskedSecret } from '@slicc/shared-ts';
