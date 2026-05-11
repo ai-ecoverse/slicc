@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import {
-  handleFetchProxyConnection,
-  type PortLike,
-  REQUEST_BODY_CAP,
-} from '../src/fetch-proxy-shared.js';
+import { handleFetchProxyConnection, type PortLike } from '../src/fetch-proxy-shared.js';
 import { SecretsPipeline } from '@slicc/shared';
 
 function makePort(
@@ -15,7 +11,7 @@ function makePort(
     onMessage: { addListener: (fn: (msg: unknown) => void) => listeners.push(fn) },
     onDisconnect: { addListener: (fn: () => void) => disconnectListeners.push(fn) },
     postMessage: onPost,
-    fireMessage: (m) => listeners.forEach((l) => l(m)),
+    fireMessage: (m: unknown) => listeners.forEach((l) => l(m)),
     fireDisconnect: () => disconnectListeners.forEach((l) => l()),
   };
 }
