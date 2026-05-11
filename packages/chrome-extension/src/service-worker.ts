@@ -33,6 +33,10 @@ import {
   type SecretGetter,
   type SignAndForwardReply,
 } from '../../webapp/src/fs/mount/sign-and-forward-shared.js';
+import { handleFetchProxyConnection } from './fetch-proxy-shared.js';
+import { listSecretsWithValues } from './secrets-storage.js';
+import { readOrCreateSwSessionId } from './sw-session-id.js';
+import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared';
 // ---------------------------------------------------------------------------
 // Side panel behavior
 // ---------------------------------------------------------------------------
@@ -682,3 +686,66 @@ chrome.debugger.onDetach.addListener((source: { tabId: number }, _reason: string
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// Secrets-aware fetch-proxy connection handler
+// ---------------------------------------------------------------------------
+
+async function buildSecretsPipeline(): Promise<SecretsPipeline> {
+  const sessionId = await readOrCreateSwSessionId();
+  const source: FetchProxySecretSource = {
+    get: async (name) => {
+      const got = (await chrome.storage.local.get(name)) as Record<string, string | undefined>;
+      return got[name];
+    },
+    listAll: () => listSecretsWithValues(chrome.storage.local as any),
+  };
+  return new SecretsPipeline({ sessionId, source });
+}
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'fetch-proxy.fetch') return;
+  buildSecretsPipeline().then(async (pipeline) => {
+    await pipeline.reload();
+    handleFetchProxyConnection(port as any, pipeline);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Secrets message handlers
+// ---------------------------------------------------------------------------
+
+chrome.runtime.onMessage.addListener(
+  (msg: unknown, _sender: ChromeMessageSender, sendResponse: (response?: unknown) => void) => {
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.list-masked-entries'
+    ) {
+      (async () => {
+        const pipeline = await buildSecretsPipeline();
+        await pipeline.reload();
+        sendResponse({ entries: pipeline.getMaskedEntries() });
+      })();
+      return true;
+    }
+    if (
+      typeof msg === 'object' &&
+      msg != null &&
+      'type' in msg &&
+      msg.type === 'secrets.mask-oauth-token' &&
+      'providerId' in msg &&
+      typeof msg.providerId === 'string'
+    ) {
+      (async () => {
+        const pipeline = await buildSecretsPipeline();
+        await pipeline.reload();
+        const name = `oauth.${msg.providerId}.token`;
+        const found = pipeline.getMaskedEntries().find((e) => e.name === name);
+        sendResponse({ maskedValue: found?.maskedValue });
+      })();
+      return true;
+    }
+  }
+);
