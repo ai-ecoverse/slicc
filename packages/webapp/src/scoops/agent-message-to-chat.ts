@@ -38,6 +38,7 @@ import type {
 } from '@earendil-works/pi-ai';
 import type { ChatMessage, ToolCall as UiToolCall } from '../ui/types.js';
 import { HIDDEN_TOOL_NAMES } from './hidden-tools.js';
+import { isLickChannel, type LickChannel } from '../ui/lick-channels.js';
 
 /**
  * Pure translator. `idSeed` lets callers inject a deterministic id
@@ -70,14 +71,30 @@ export function agentMessagesToChatMessages(
 
   for (const m of agentMessages) {
     if (isUserMessage(m)) {
-      const text = textOf(m.content);
-      if (text.length === 0) continue;
-      out.push({
+      const rawText = textOf(m.content);
+      if (rawText.length === 0) continue;
+      // The orchestrator wraps every queued channel message in a
+      // `[<time>] <senderName>: <body>` envelope before handing it to
+      // the agent (see `orchestrator.processScoopQueue`). When we
+      // rebuild the chat from the agent's persisted history we have to
+      // unwrap that envelope — otherwise plain user input renders with
+      // a leading `[May 11, 6:50 AM] User:` and lick events render as
+      // doubly-prefixed user messages instead of as lick widgets.
+      const envelope = unwrapMessageEnvelope(rawText);
+      const text = envelope ? envelope.body : rawText;
+      const lickChannel = envelope ? lickChannelFromSenderName(envelope.sender) : null;
+
+      const msg: ChatMessage = {
         id: idSeed(),
         role: 'user',
         content: text,
         timestamp: m.timestamp,
-      });
+      };
+      if (lickChannel) {
+        msg.source = 'lick';
+        msg.channel = lickChannel;
+      }
+      out.push(msg);
       lastAssistant = null;
       continue;
     }
@@ -179,4 +196,51 @@ function collectToolCalls(m: AssistantMessage): UiToolCall[] {
 
 function defaultUid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+/**
+ * Parse the `[<time>] <senderName>: <body>` envelope that
+ * `orchestrator.processScoopQueue` prepends to every queued
+ * `ChannelMessage` before sending it to the agent. The envelope is
+ * applied uniformly to user-typed input (senderName `User`), lick
+ * events (senderName `<channel>:<event-name>`), and scoop-lifecycle
+ * notifications (senderName `<channel>:<event-name>` or assistant
+ * label). Returns null if the text doesn't match the envelope shape so
+ * pre-envelope history and forward-quoted content fall through
+ * unchanged.
+ *
+ * The shape is intentionally not pinned to a specific date format: we
+ * accept any `[...]` opener as long as it's followed by ` <sender>: `
+ * where `<sender>` lives on a single line and contains no `]`. This
+ * keeps the parser stable if the orchestrator ever switches locale or
+ * adds seconds.
+ */
+export function unwrapMessageEnvelope(text: string): { sender: string; body: string } | null {
+  if (!text.startsWith('[')) return null;
+  const closeBracket = text.indexOf('] ');
+  if (closeBracket <= 0) return null;
+  // The bracketed prefix must not span newlines — otherwise we'd
+  // happily strip a leading `[foo`-style label off a multi-line body.
+  if (text.lastIndexOf('\n', closeBracket) !== -1) return null;
+  const afterBracket = text.slice(closeBracket + 2);
+  const senderEnd = afterBracket.indexOf(': ');
+  if (senderEnd <= 0) return null;
+  const sender = afterBracket.slice(0, senderEnd);
+  if (sender.includes('\n')) return null;
+  const body = afterBracket.slice(senderEnd + 2);
+  return { sender, body };
+}
+
+/**
+ * Map an envelope sender name back to its `LickChannel`. Lick senders
+ * are formatted by `host.ts` as `<channel>:<eventName>`; the channel
+ * portion is the segment before the first colon and must be one of
+ * the registered `LICK_CHANNELS`. Plain user input (`User`) and other
+ * non-lick senders return null.
+ */
+export function lickChannelFromSenderName(sender: string): LickChannel | null {
+  const colon = sender.indexOf(':');
+  if (colon <= 0) return null;
+  const channel = sender.slice(0, colon);
+  return isLickChannel(channel) ? channel : null;
 }

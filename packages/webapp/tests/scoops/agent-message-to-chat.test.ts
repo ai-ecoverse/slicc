@@ -241,6 +241,91 @@ describe('agentMessagesToChatMessages', () => {
     ]);
   });
 
+  it('strips the orchestrator envelope from plain user messages', () => {
+    counter = 0;
+    const out = agentMessagesToChatMessages([userMsg('[May 11, 6:50 AM] User: hi', 100)], {
+      idSeed: seedId,
+    });
+    expect(out).toEqual([
+      {
+        id: 'id-1',
+        role: 'user',
+        content: 'hi',
+        timestamp: 100,
+      },
+    ]);
+  });
+
+  it('tags sprinkle lick messages with source=lick and channel=sprinkle', () => {
+    counter = 0;
+    const raw =
+      '[May 11, 8:15 AM] sprinkle:welcome: [Sprinkle Event: welcome]\n```json\n{"foo":1}\n```';
+    const out = agentMessagesToChatMessages([userMsg(raw, 200)], { idSeed: seedId });
+    expect(out).toHaveLength(1);
+    expect(out[0].role).toBe('user');
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('sprinkle');
+    // The inner lick body (the [Sprinkle Event: …] framing) is what
+    // the chat panel feeds to the lick widget — preserve it intact.
+    expect(out[0].content.startsWith('[Sprinkle Event: welcome]')).toBe(true);
+  });
+
+  it('handles upgrade lick senders with arrow-containing event names', () => {
+    counter = 0;
+    const raw =
+      '[May 11, 9:12 AM] upgrade:2.37.0→2.38.1: [Upgrade Event: 2.37.0→2.38.1]\n\nSLICC was upgraded.';
+    const out = agentMessagesToChatMessages([userMsg(raw, 300)], { idSeed: seedId });
+    expect(out[0].source).toBe('lick');
+    expect(out[0].channel).toBe('upgrade');
+    expect(out[0].content).toBe('[Upgrade Event: 2.37.0→2.38.1]\n\nSLICC was upgraded.');
+  });
+
+  it('recognizes scoop-lifecycle channels (scoop-notify / scoop-wait)', () => {
+    counter = 0;
+    const out = agentMessagesToChatMessages(
+      [
+        userMsg('[May 11, 10:00 AM] scoop-notify:done: [@scout completed]', 400),
+        userMsg('[May 11, 10:00 AM] scoop-wait:settle: [scoop_wait completed]', 401),
+      ],
+      { idSeed: seedId }
+    );
+    expect(out[0].channel).toBe('scoop-notify');
+    expect(out[0].source).toBe('lick');
+    expect(out[1].channel).toBe('scoop-wait');
+    expect(out[1].source).toBe('lick');
+  });
+
+  it('leaves pre-envelope or unbracketed content unchanged', () => {
+    counter = 0;
+    const out = agentMessagesToChatMessages([userMsg('just text, no envelope', 500)], {
+      idSeed: seedId,
+    });
+    expect(out[0].content).toBe('just text, no envelope');
+    expect(out[0].source).toBeUndefined();
+    expect(out[0].channel).toBeUndefined();
+  });
+
+  it('leaves an unknown sender as a plain user message (no lick tagging)', () => {
+    counter = 0;
+    // Bracketed envelope shape but sender is not a known lick channel.
+    const out = agentMessagesToChatMessages(
+      [userMsg('[May 11, 7:00 AM] cone: forwarded note', 600)],
+      { idSeed: seedId }
+    );
+    expect(out[0].content).toBe('forwarded note');
+    expect(out[0].source).toBeUndefined();
+    expect(out[0].channel).toBeUndefined();
+  });
+
+  it('does not unwrap when the bracket spans a newline', () => {
+    counter = 0;
+    const out = agentMessagesToChatMessages(
+      [userMsg('[opens here\nbut keeps going] User: bogus', 700)],
+      { idSeed: seedId }
+    );
+    expect(out[0].content).toBe('[opens here\nbut keeps going] User: bogus');
+  });
+
   it('honors a custom hiddenToolNames override', () => {
     counter = 0;
     const input: AgentMessage[] = [
