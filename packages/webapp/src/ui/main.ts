@@ -1438,6 +1438,29 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   const { VirtualFS } = await import('../fs/index.js');
   const { BrowserAPI } = await import('../cdp/index.js');
 
+  // Resolve the tray worker base URL from /api/runtime-config so consumers
+  // like oauth-code-exchange's `getWorkerBaseUrl` read a value that matches
+  // the float the user actually launched (staging under `--dev`, production
+  // otherwise). Without this, a stale localStorage value from an older
+  // session keeps surfacing — the prior inline standalone path did this
+  // before it was removed in 07cdce16.
+  const runtimeConfig = await fetchRuntimeConfig();
+  const runtimeDefaultWorkerBaseUrl = shouldUseRuntimeModeTrayDefaults(
+    isElectronOverlay ? 'electron-overlay' : 'standalone',
+    runtimeConfig !== null
+  )
+    ? __DEV__
+      ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
+      : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL
+    : null;
+  await resolveTrayRuntimeConfig({
+    locationHref: window.location.href,
+    storage: window.localStorage,
+    envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+    defaultWorkerBaseUrl: runtimeDefaultWorkerBaseUrl,
+    runtimeConfigFetcher: async () => runtimeConfig,
+  });
+
   const layout = new Layout(app, isElectronOverlay);
   if (isElectronOverlay) {
     // Electron-overlay specifics: hide the tab-bar (Electron's chrome
