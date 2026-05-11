@@ -1,5 +1,6 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 
 function sayHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -53,7 +54,14 @@ export function createSayCommand(): Command {
       return sayHelp();
     }
 
-    if (typeof window === 'undefined' || typeof speechSynthesis === 'undefined') {
+    // `say` only needs Web Speech, not the full DOM — using a finer
+    // gate than `hasLocalDom()` here keeps existing tests (which stub
+    // `window` + `speechSynthesis` only) working under jsdom-free
+    // environments while still bridging to the page in the kernel
+    // worker where neither global exists.
+    const local = typeof window !== 'undefined' && typeof speechSynthesis !== 'undefined';
+    const panelRpc = getPanelRpcClient();
+    if (!local && !panelRpc) {
       return {
         stdout: '',
         stderr: 'say: Web Speech API unavailable in this environment\n',
@@ -63,13 +71,22 @@ export function createSayCommand(): Command {
 
     // Handle --list early (needs voices)
     if (args.includes('--list')) {
-      const voices = await getVoices();
-      const lines = voices.map((v) => `${v.name} (${v.lang})${v.default ? ' [default]' : ''}`);
-      return {
-        stdout: lines.join('\n') + '\n',
-        stderr: '',
-        exitCode: 0,
-      };
+      if (local) {
+        const voices = await getVoices();
+        const lines = voices.map((v) => `${v.name} (${v.lang})${v.default ? ' [default]' : ''}`);
+        return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+      }
+      try {
+        const r = await panelRpc!.call('list-voices', undefined);
+        const lines = r.voices.map((v) => `${v.name} (${v.lang})${v.default ? ' [default]' : ''}`);
+        return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+      } catch (err) {
+        return {
+          stdout: '',
+          stderr: `say: ${err instanceof Error ? err.message : String(err)}\n`,
+          exitCode: 1,
+        };
+      }
     }
 
     // Parse args (no voice loading needed)
@@ -115,38 +132,63 @@ export function createSayCommand(): Command {
       return { stdout: '', stderr: 'say: -l language tag is required\n', exitCode: 1 };
     }
 
-    // Create utterance
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = rate;
-    utterance.lang = lang;
-
-    // Voice matching (only loads voices if -v was specified)
+    // Voice matching for worker context: the page-side handler does the
+    // exact-name match on `voice`, so we pre-resolve the partial here.
+    let resolvedVoice: string | undefined = undefined;
     if (voiceName) {
-      const voices = await getVoices();
+      const voices = local
+        ? await getVoices().then((vs) =>
+            vs.map((v) => ({ name: v.name, lang: v.lang, default: v.default }))
+          )
+        : (await panelRpc!.call('list-voices', undefined)).voices;
       const match = voices.find((v) => v.name.toLowerCase().includes(voiceName!.toLowerCase()));
-      if (match) {
-        utterance.voice = match;
-      } else {
+      if (!match) {
         return {
           stdout: '',
           stderr: `say: voice "${voiceName}" not found. Use --list to see available voices.\n`,
           exitCode: 1,
         };
       }
+      resolvedVoice = match.name;
     }
 
-    return new Promise((resolve) => {
-      utterance.onend = () => {
-        resolve({ stdout: '', stderr: '', exitCode: 0 });
+    if (local) {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = rate;
+      utterance.lang = lang;
+      if (resolvedVoice) {
+        const all = await getVoices();
+        const match = all.find((v) => v.name === resolvedVoice);
+        if (match) utterance.voice = match;
+      }
+      return new Promise((resolve) => {
+        utterance.onend = () => resolve({ stdout: '', stderr: '', exitCode: 0 });
+        utterance.onerror = (event) =>
+          resolve({
+            stdout: '',
+            stderr: `say: speech synthesis error: ${event.error}\n`,
+            exitCode: 1,
+          });
+        speechSynthesis.speak(utterance);
+      });
+    }
+
+    // Worker context: bridge via panel-RPC. We pass `lang` through too
+    // even though the bridge currently ignores it — surface as a TODO
+    // when we extend the speak-text payload.
+    try {
+      await panelRpc!.call('speak-text', {
+        text,
+        voice: resolvedVoice,
+        rate,
+      });
+      return { stdout: '', stderr: '', exitCode: 0 };
+    } catch (err) {
+      return {
+        stdout: '',
+        stderr: `say: ${err instanceof Error ? err.message : String(err)}\n`,
+        exitCode: 1,
       };
-      utterance.onerror = (event) => {
-        resolve({
-          stdout: '',
-          stderr: `say: speech synthesis error: ${event.error}\n`,
-          exitCode: 1,
-        });
-      };
-      speechSynthesis.speak(utterance);
-    });
+    }
   });
 }

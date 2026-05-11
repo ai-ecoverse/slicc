@@ -243,6 +243,16 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   (globalThis as Record<string, unknown>).__slicc_sprinkleManager =
     createSprinkleManagerProxyOverChannel({ instanceId: init.instanceId });
 
+  // Publish the panel-RPC bridge client. DOM-bound shell supplemental
+  // commands (`screencapture`, `say`, `afplay`, `pbcopy`/`pbpaste`,
+  // `imgcat`, `open`, plus `playwright`'s appOrigin lookup) detect this
+  // global and route their DOM calls to the page handler installed by
+  // `mainStandaloneWorker`. See `kernel/panel-rpc.ts` for the op surface.
+  const { createPanelRpcClient } = await import('./panel-rpc.js');
+  (globalThis as Record<string, unknown>).__slicc_panelRpc = createPanelRpcClient({
+    instanceId: init.instanceId,
+  });
+
   // Take the process manager from the kernel host so scoop-turns
   // (registered by `ScoopContext`) and shell execs (registered by
   // `TerminalSessionHost`) land in the same table. `createKernelHost`

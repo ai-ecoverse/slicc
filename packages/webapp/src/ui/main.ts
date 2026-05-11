@@ -1946,6 +1946,23 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   const stopSprinkleHandler = installSprinkleManagerHandlerOverChannel(sprinkleManager, {
     instanceId,
   });
+
+  // Install the panel-RPC handler so DOM-bound shell commands run by
+  // the kernel worker (screencapture / say / afplay / clipboard /
+  // open, plus the playwright app-origin lookup) can reach the page.
+  // `imgcat` is intentionally terminal-only and stays out of the
+  // bridge — it's meant for the in-panel terminal, not the agent.
+  const { installPanelRpcHandler } = await import('../kernel/panel-rpc.js');
+  const { createStandalonePanelRpcHandlers } = await import('./panel-rpc-handlers.js');
+  const stopPanelRpcHandler = installPanelRpcHandler({
+    instanceId,
+    handlers: createStandalonePanelRpcHandlers(),
+  });
+  // Tear down on session reload so the handler doesn't outlive its
+  // page (the channel would still receive requests and try to call
+  // into a torn-down DOM).
+  window.addEventListener('beforeunload', () => stopPanelRpcHandler(), { once: true });
+
   await sprinkleManager.refresh();
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);
   await sprinkleManager.restoreOpenSprinkles().catch((err) => {
