@@ -30,7 +30,10 @@
  *   hanging the worker.
  *
  * Mirrors `sprinkle-bridge-channel.ts` (instance-scoped channel name,
- * UUID request ids, default 8s timeout). Extension mode does not use
+ * UUID request ids). Default timeout is 15s — long enough that the
+ * page handler has plenty of room to do real DOM work (capture
+ * pipelines, audio decode) without spurious timeouts, but short enough
+ * that a hung handler still surfaces. Extension mode does not use
  * this bridge — the offscreen document already has a DOM, so DOM-bound
  * commands run directly there.
  */
@@ -56,7 +59,14 @@ export type PanelRpcRequest =
     }
   | {
       op: 'speak-text';
-      payload: { text: string; voice?: string; rate?: number; pitch?: number; volume?: number };
+      payload: {
+        text: string;
+        lang?: string;
+        voice?: string;
+        rate?: number;
+        pitch?: number;
+        volume?: number;
+      };
     }
   | {
       op: 'list-voices';
@@ -238,7 +248,6 @@ export function installPanelRpcHandler(options: {
       // Posting can fail if the channel was closed while we were
       // resolving — there's no useful recovery beyond logging.
       const reason = err instanceof Error ? err.message : String(err);
-
       console.warn(`panel-rpc: failed to post response for id=${id}: ${reason}`);
     }
   };

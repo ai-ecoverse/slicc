@@ -173,12 +173,13 @@ export function createSayCommand(): Command {
       });
     }
 
-    // Worker context: bridge via panel-RPC. We pass `lang` through too
-    // even though the bridge currently ignores it — surface as a TODO
-    // when we extend the speak-text payload.
+    // Worker context: bridge via panel-RPC. `lang` is required for the
+    // command contract and must reach the page so the utterance uses
+    // the correct locale (regression flagged on PR #626 review).
     try {
       await panelRpc!.call('speak-text', {
         text,
+        lang,
         voice: resolvedVoice,
         rate,
       });

@@ -56,6 +56,14 @@ export function createOpenCommand(): Command {
     const hasDom = typeof window !== 'undefined' && typeof document !== 'undefined';
     const panelRpc = !hasDom ? getPanelRpcClient() : null;
     const canOpenWindow = hasDom || !!panelRpc;
+    /**
+     * Open a URL in a new tab. Throws an Error with a stable `open:`
+     * prefix on the bridged path so callers can rely on a consistent
+     * error shape (panel-RPC rejections — handler not installed,
+     * timeout — would otherwise bubble as raw `panel-rpc: …` strings).
+     * Callers wrap this in try/catch to map to a `{ stderr, exitCode }`
+     * result.
+     */
     const openExternal = async (url: string): Promise<void> => {
       if (hasDom) {
         // window.open() returns null in extension contexts (offscreen/
@@ -64,11 +72,15 @@ export function createOpenCommand(): Command {
         window.open(url, '_blank', 'noopener,noreferrer');
         return;
       }
-      await panelRpc!.call('window-open', {
-        url,
-        target: '_blank',
-        features: 'noopener,noreferrer',
-      });
+      try {
+        await panelRpc!.call('window-open', {
+          url,
+          target: '_blank',
+          features: 'noopener,noreferrer',
+        });
+      } catch (err) {
+        throw new Error(`open: ${err instanceof Error ? err.message : String(err)}`);
+      }
     };
 
     const results: string[] = [];
@@ -95,7 +107,15 @@ export function createOpenCommand(): Command {
           }
         } else if (canOpenWindow) {
           const previewUrl = toPreviewUrl(fullPath);
-          await openExternal(previewUrl);
+          try {
+            await openExternal(previewUrl);
+          } catch (err) {
+            return {
+              stdout: '',
+              stderr: `${err instanceof Error ? err.message : String(err)}\n`,
+              exitCode: 1,
+            };
+          }
           results.push(`opened ${fullPath} → ${previewUrl}`);
         } else {
           return {
@@ -126,7 +146,15 @@ export function createOpenCommand(): Command {
             exitCode: 1,
           };
         }
-        await openExternal(target);
+        try {
+          await openExternal(target);
+        } catch (err) {
+          return {
+            stdout: '',
+            stderr: `${err instanceof Error ? err.message : String(err)}\n`,
+            exitCode: 1,
+          };
+        }
         results.push(`opened ${target}`);
         continue;
       }
@@ -230,7 +258,15 @@ export function createOpenCommand(): Command {
           };
         }
         const previewUrl = toPreviewUrl(path);
-        await openExternal(previewUrl);
+        try {
+          await openExternal(previewUrl);
+        } catch (err) {
+          return {
+            stdout: '',
+            stderr: `${err instanceof Error ? err.message : String(err)}\n`,
+            exitCode: 1,
+          };
+        }
         results.push(`opened ${path} → ${previewUrl}`);
       }
     }

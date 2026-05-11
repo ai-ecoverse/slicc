@@ -39,12 +39,13 @@ export function createStandalonePanelRpcHandlers(): PanelRpcHandlers {
       };
     },
 
-    'speak-text': async ({ text, voice, rate, pitch, volume }) => {
+    'speak-text': async ({ text, lang, voice, rate, pitch, volume }) => {
       if (typeof speechSynthesis === 'undefined') {
         throw new Error('speechSynthesis is unavailable in this page');
       }
       await new Promise<void>((resolve, reject) => {
         const u = new SpeechSynthesisUtterance(text);
+        if (lang !== undefined) u.lang = lang;
         if (rate !== undefined) u.rate = rate;
         if (pitch !== undefined) u.pitch = pitch;
         if (volume !== undefined) u.volume = volume;
@@ -86,6 +87,9 @@ export function createStandalonePanelRpcHandlers(): PanelRpcHandlers {
     },
 
     'play-audio': async ({ bytes, volume }) => {
+      if (typeof AudioContext === 'undefined') {
+        throw new Error('Web Audio API is unavailable in this page');
+      }
       const ctx = new AudioContext();
       try {
         const buffer = await ctx.decodeAudioData(bytes.slice(0));
@@ -122,6 +126,9 @@ export function createStandalonePanelRpcHandlers(): PanelRpcHandlers {
         notify: [660, 660],
       };
       const [f1, f2] = freqs[tone ?? 'notify'] ?? freqs.notify;
+      if (typeof AudioContext === 'undefined') {
+        throw new Error('Web Audio API is unavailable in this page');
+      }
       const ctx = new AudioContext();
       try {
         const start = ctx.currentTime;
@@ -206,6 +213,9 @@ function toVoiceInfo(v: SpeechSynthesisVoice): { name: string; lang: string; def
 }
 
 async function captureScreen(mimeType: string, quality: number): Promise<Blob> {
+  if (!navigator.mediaDevices?.getDisplayMedia) {
+    throw new Error('screen capture is not supported in this browser');
+  }
   const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
   try {
     const video = document.createElement('video');
