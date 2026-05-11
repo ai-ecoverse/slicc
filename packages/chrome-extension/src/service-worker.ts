@@ -33,7 +33,7 @@ import {
   type SecretGetter,
   type SignAndForwardReply,
 } from '../../webapp/src/fs/mount/sign-and-forward-shared.js';
-import { handleFetchProxyConnection } from './fetch-proxy-shared.js';
+import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
 import { listSecretsWithValues } from './secrets-storage.js';
 import { readOrCreateSwSessionId } from './sw-session-id.js';
 import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared';
@@ -705,28 +705,27 @@ async function buildSecretsPipeline(): Promise<SecretsPipeline> {
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'fetch-proxy.fetch') return;
-  buildSecretsPipeline()
-    .then(async (pipeline) => {
-      await pipeline.reload();
-      handleFetchProxyConnection(port as any, pipeline);
-    })
-    .catch((err) => {
-      // Without this .catch, a failure here would leave the port with no
-      // message listener attached — page-side extensionPortFetch would
-      // post its request and hang forever (no response-head, no
-      // response-error, eventual GC-only disconnect). Emit an explicit
-      // error so the caller's promise rejects predictably.
-      console.error('[sw] fetch-proxy init failed', err);
-      try {
-        port.postMessage({
-          type: 'response-error',
-          error: `fetch-proxy init failed: ${err instanceof Error ? err.message : String(err)}`,
-        });
-        port.disconnect();
-      } catch {
-        // port already closed
-      }
-    });
+  // Chrome drops port messages that arrive before any onMessage listener
+  // is attached. The page-side caller posts its `request` message right
+  // after `chrome.runtime.connect(...)` resolves, which is BEFORE this
+  // async buildSecretsPipeline finishes. Attaching the listener inside
+  // the .then() is too late — the message has already been dropped and
+  // the caller hangs forever.
+  //
+  // Solution: hand the pipeline-build promise to a variant that attaches
+  // the listener SYNCHRONOUSLY and awaits the pipeline INSIDE the handler.
+  // The catch path on the promise just propagates into the handler's
+  // try/catch, which posts response-error back to the page.
+  const pipelinePromise = buildSecretsPipeline().then(async (p) => {
+    await p.reload();
+    return p;
+  });
+  pipelinePromise.catch((err) => {
+    console.error('[sw] fetch-proxy init failed', err);
+    // The handler's await pipelinePromise will throw and post response-error,
+    // so we just log here. Don't disconnect — the handler needs the port.
+  });
+  handleFetchProxyConnectionAsync(port as any, pipelinePromise);
 });
 
 // ---------------------------------------------------------------------------

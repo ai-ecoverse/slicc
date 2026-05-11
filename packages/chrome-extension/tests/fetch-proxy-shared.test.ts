@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { handleFetchProxyConnection, type PortLike } from '../src/fetch-proxy-shared.js';
+import {
+  handleFetchProxyConnection,
+  handleFetchProxyConnectionAsync,
+  type PortLike,
+} from '../src/fetch-proxy-shared.js';
 import { SecretsPipeline } from '@slicc/shared';
 
 function makePort(
@@ -216,5 +220,81 @@ describe('handleFetchProxyConnection', () => {
 
     expect(fetchHeaders?.authorization).toBe('Bearer existing-token');
     expect(posts[0]).toMatchObject({ type: 'response-head', status: 200 });
+  });
+});
+
+// Regression: chrome.runtime.Port drops messages that arrive before any
+// onMessage listener is attached. The SW originally awaited an async
+// buildSecretsPipeline() in the onConnect callback and only THEN attached
+// the listener — too late for the page's immediate `request` postMessage,
+// and curl-from-the-extension hung forever waiting for a response that
+// would never come.
+//
+// `handleFetchProxyConnectionAsync` attaches the listener synchronously
+// and awaits the pipeline INSIDE the handler. This test pins that contract.
+describe('handleFetchProxyConnectionAsync — synchronous listener attach', () => {
+  it('queues a request that arrives before the pipeline resolves', async () => {
+    let resolvePipeline: ((p: SecretsPipeline) => void) | null = null;
+    const pipelinePromise = new Promise<SecretsPipeline>((res) => {
+      resolvePipeline = res;
+    });
+
+    const posts: any[] = [];
+    const port = makePort((m) => posts.push(m));
+
+    // The SW attaches the listener synchronously.
+    handleFetchProxyConnectionAsync(port, pipelinePromise);
+
+    // Page-side immediately posts a request — same race that broke prod.
+    port.fireMessage({
+      type: 'request',
+      url: 'https://api.github.com/test',
+      method: 'GET',
+      headers: {},
+    });
+
+    // No response yet — pipeline hasn't resolved.
+    expect(posts).toHaveLength(0);
+
+    // Now resolve the pipeline.
+    const pipeline = new SecretsPipeline({
+      sessionId: 'late-init',
+      source: { get: async () => undefined, listAll: async () => [] },
+    });
+    await pipeline.reload();
+    (globalThis as any).fetch = vi.fn(
+      async () => new Response('ok', { status: 200, statusText: 'OK' })
+    );
+    resolvePipeline!(pipeline);
+
+    // The buffered request now processes.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(posts.some((p) => p.type === 'response-head' && p.status === 200)).toBe(true);
+    expect(posts.some((p) => p.type === 'response-end')).toBe(true);
+  });
+
+  it('posts response-error when the pipeline-build promise rejects', async () => {
+    const pipelinePromise = Promise.reject(new Error('storage unavailable'));
+    // Suppress the unhandled-rejection warning for this test.
+    pipelinePromise.catch(() => {});
+
+    const posts: any[] = [];
+    const port = makePort((m) => posts.push(m));
+    handleFetchProxyConnectionAsync(port, pipelinePromise);
+
+    port.fireMessage({
+      type: 'request',
+      url: 'https://api.github.com/test',
+      method: 'GET',
+      headers: {},
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(posts).toEqual([
+      {
+        type: 'response-error',
+        error: expect.stringContaining('fetch-proxy init failed: storage unavailable'),
+      },
+    ]);
   });
 });
