@@ -245,12 +245,37 @@ export class ChatPanel {
   private openClusterAnchors = new Set<string>();
   /** Cache of LLM-generated cluster labels keyed by sorted tool-call ids. */
   private clusterLabelCache = new Map<string, string>();
-  /** In-flight cluster-label requests, keyed by the same signature. The
-   *  value tracks every preview element awaiting that signature's label,
-   *  so a cluster rebuilt mid-flight (re-render during streaming) still
-   *  picks up the eventual response instead of being stuck on the
-   *  comma-joined fallback. */
-  private clusterLabelInflight = new Map<string, Set<HTMLElement>>();
+  /** Sticky label keyed by the cluster's *anchor* (first tool-call id).
+   *  The anchor stays the same as the cluster grows, so once an LLM label
+   *  has been shown we can re-display it on every subsequent rebuild —
+   *  instead of flickering back to the comma-joined fallback while the
+   *  new signature's label is being fetched. */
+  private clusterLabelByAnchor = new Map<string, string>();
+  /** Debounce timers keyed by anchor. A fresh tool call arriving inside
+   *  the debounce window resets the timer, so a fast burst fires one
+   *  LLM call for the whole cluster instead of one per call. */
+  private clusterLabelTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Latest pending snapshot per anchor: the signature we'll request a
+   *  label for, plus every preview element that should receive the
+   *  result (including orphaned ones from intermediate reflows — those
+   *  are filtered with `isConnected` at settle time). `inFlight` flips
+   *  true once `fireClusterLabelRequest` has actually called the LLM
+   *  for this signature, so identical-signature reschedules (the same
+   *  cluster reflowing during streaming) can enroll their new
+   *  previewEl without starting a duplicate request. */
+  private clusterLabelPending = new Map<
+    string,
+    {
+      signature: string;
+      toolCalls: readonly ToolCall[];
+      elements: Set<HTMLElement>;
+      inFlight: boolean;
+    }
+  >();
+  /** Debounce window before a cluster-label request actually fires.
+   *  Short enough that a finished cluster gets its label promptly, long
+   *  enough to coalesce a fast burst of tool calls into one request. */
+  private static readonly CLUSTER_LABEL_DEBOUNCE_MS = 600;
   /** Default placeholder before any LLM-suggested replacement. */
   private static readonly DEFAULT_PLACEHOLDER = 'What shall we build?';
   /** AbortController for the most recent placeholder-suggestion request. */
@@ -371,7 +396,10 @@ export class ChatPanel {
    *  or applies a label resolved from a previous scoop's signatures. */
   private resetEphemeralLlmState(): void {
     this.clusterLabelCache.clear();
-    this.clusterLabelInflight.clear();
+    this.clusterLabelByAnchor.clear();
+    for (const t of this.clusterLabelTimers.values()) clearTimeout(t);
+    this.clusterLabelTimers.clear();
+    this.clusterLabelPending.clear();
     this.placeholderAbort?.abort();
     this.placeholderAbort = null;
     this.wasStreaming = false;
@@ -1387,36 +1415,95 @@ export class ChatPanel {
 
   /** Replace a cluster's comma-joined preview with an LLM-generated label
    *  describing what the tool calls accomplish together. Uses inputs only
-   *  (per-tool args), not return values. Cached by the sorted set of
-   *  tool-call ids so reflow re-renders reuse the prior label.
+   *  (per-tool args), not return values.
    *
-   *  Mid-flight rebuilds: when reflow rebuilds a cluster while its
-   *  label request is still in flight, the new previewEl joins the
-   *  same signature's pending set so the eventual response writes
-   *  into every still-connected element. Without this, the original
-   *  previewEl was the only one updated — and after reflow it has
-   *  been replaced by a fresh element, so the visible cluster stayed
-   *  on its comma-joined fallback. */
+   *  Two layers of caching keep the label visually stable as a cluster
+   *  grows: an exact-signature cache (sorted tool-call ids → label) for
+   *  re-renders of an unchanged cluster, and an anchor cache (first
+   *  tool-call id → most recent label) so a cluster that has grown by
+   *  one tool call keeps displaying its previous LLM label instead of
+   *  flickering back to the comma-joined "bash, bash, bash" fallback.
+   *
+   *  Requests are debounced per anchor so a fast burst of tool calls
+   *  fires a single LLM call once the burst settles rather than one
+   *  per call. Late-arriving previewEls from intermediate reflows
+   *  enroll in the pending entry and pick up the eventual response. */
   private scheduleClusterLabel(previewEl: HTMLElement, toolCalls: readonly ToolCall[]): void {
     if (toolCalls.length === 0) return;
+    const anchor = toolCalls[0].id;
     const signature = toolCalls
       .map((tc) => tc.id)
       .slice()
       .sort()
       .join('|');
 
+    // Exact-signature cache hit: this cluster has been labeled before.
     const cached = this.clusterLabelCache.get(signature);
     if (cached) {
       previewEl.textContent = cached;
+      this.clusterLabelByAnchor.set(anchor, cached);
       return;
     }
-    const inflight = this.clusterLabelInflight.get(signature);
-    if (inflight) {
-      inflight.add(previewEl);
-      return;
+
+    // The cluster has changed (or this is the first render). If we have
+    // ANY prior label for this anchor, paint it immediately so the user
+    // doesn't see the comma-joined fallback flash while we refresh.
+    const stickyLabel = this.clusterLabelByAnchor.get(anchor);
+    if (stickyLabel) previewEl.textContent = stickyLabel;
+
+    // Enroll this previewEl in the pending entry for `anchor`. Three
+    // cases:
+    //
+    //   1. No pending entry — first schedule for this anchor; create one.
+    //   2. Same signature — cluster re-rendered with no new tool calls
+    //      (typical during streaming reflows). Just enroll the new
+    //      element. If a request is already in flight, that's the only
+    //      thing to do; do NOT reset the debounce timer or fire again
+    //      (would duplicate the LLM call for an identical signature).
+    //   3. Signature changed — newer snapshot supersedes the old one.
+    //      Carry over the element set (orphaned ones drop out at
+    //      settle via `isConnected`) and clear `inFlight` so the new
+    //      signature gets its own request once the debounce expires.
+    //      Any still-in-flight call for the old signature will drop
+    //      its result at settle time on the signature mismatch.
+    const existing = this.clusterLabelPending.get(anchor);
+    if (existing && existing.signature === signature) {
+      existing.elements.add(previewEl);
+      if (existing.inFlight) return;
+    } else {
+      const elements = existing?.elements ?? new Set<HTMLElement>();
+      elements.add(previewEl);
+      this.clusterLabelPending.set(anchor, {
+        signature,
+        toolCalls: [...toolCalls],
+        elements,
+        inFlight: false,
+      });
     }
-    const pending = new Set<HTMLElement>([previewEl]);
-    this.clusterLabelInflight.set(signature, pending);
+
+    // Debounce: reset the timer on every fresh call. A burst of tool
+    // calls keeps pushing the firing time out so we only pay for one
+    // label once the burst settles.
+    const existingTimer = this.clusterLabelTimers.get(anchor);
+    if (existingTimer) clearTimeout(existingTimer);
+    const timer = setTimeout(() => {
+      this.clusterLabelTimers.delete(anchor);
+      this.fireClusterLabelRequest(anchor);
+    }, ChatPanel.CLUSTER_LABEL_DEBOUNCE_MS);
+    this.clusterLabelTimers.set(anchor, timer);
+  }
+
+  /** Fire the actual LLM request for the anchor's latest pending
+   *  snapshot. Kept separate so `scheduleClusterLabel` only handles
+   *  caching/debounce bookkeeping. */
+  private fireClusterLabelRequest(anchor: string): void {
+    const pending = this.clusterLabelPending.get(anchor);
+    if (!pending) return;
+    // Mark in-flight so an identical-signature reschedule (e.g. a
+    // streaming-driven reflow that doesn't actually grow the cluster)
+    // enrolls its new previewEl instead of firing a duplicate request.
+    pending.inFlight = true;
+    const { signature, toolCalls } = pending;
 
     const formatted = toolCalls
       .map((tc, i) => {
@@ -1447,11 +1534,16 @@ export class ChatPanel {
       'Example output: Run a Python sanity check';
 
     const settle = (trimmed: string | null): void => {
-      const elements = this.clusterLabelInflight.get(signature);
-      this.clusterLabelInflight.delete(signature);
-      if (!trimmed || !elements) return;
+      // If a newer signature was scheduled while this request was in
+      // flight, drop our result — the newer timer will fire its own
+      // request and that one's response is the one that should land.
+      const latest = this.clusterLabelPending.get(anchor);
+      if (!latest || latest.signature !== signature) return;
+      this.clusterLabelPending.delete(anchor);
+      if (!trimmed) return;
       this.clusterLabelCache.set(signature, trimmed);
-      for (const el of elements) {
+      this.clusterLabelByAnchor.set(anchor, trimmed);
+      for (const el of latest.elements) {
         if (el.isConnected) el.textContent = trimmed;
       }
     };
