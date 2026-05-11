@@ -97,6 +97,13 @@ export default defineConfig({
       },
       {
         extends: true,
+        test: {
+          name: 'shared',
+          include: ['packages/shared/tests/**/*.test.ts'],
+        },
+      },
+      {
+        extends: true,
         define: {
           // Extension code transitively imports webapp modules (e.g.
           // offscreen-bridge → tray-leader → core/logger), which read
