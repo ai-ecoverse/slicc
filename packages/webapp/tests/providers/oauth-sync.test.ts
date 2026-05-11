@@ -95,6 +95,114 @@ describe('saveOAuthAccount — CLI sync to /api/secrets/oauth-update', () => {
   });
 });
 
+describe('saveOAuthAccount — extension sync via chrome.storage.local + SW message', () => {
+  let originalChrome: unknown;
+  let originalLocalStorage: Storage;
+
+  beforeEach(() => {
+    originalChrome = (globalThis as any).chrome;
+    originalLocalStorage = globalThis.localStorage;
+    const lsData: Record<string, string> = {};
+    (globalThis as any).localStorage = {
+      getItem: (k: string) => lsData[k] ?? null,
+      setItem: (k: string, v: string) => {
+        lsData[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete lsData[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(lsData)) delete lsData[k];
+      },
+    };
+  });
+
+  afterEach(() => {
+    if (originalChrome === undefined) {
+      delete (globalThis as any).chrome;
+    } else {
+      (globalThis as any).chrome = originalChrome;
+    }
+    (globalThis as any).localStorage = originalLocalStorage;
+  });
+
+  it('writes to chrome.storage.local + dispatches secrets.mask-oauth-token and caches maskedValue', async () => {
+    const storageWrites: Record<string, unknown> = {};
+    const sentMessages: { msg: unknown }[] = [];
+    (globalThis as any).chrome = {
+      runtime: {
+        id: 'test-ext-id',
+        lastError: undefined,
+        sendMessage: vi.fn((msg: any, cb: (r: any) => void) => {
+          sentMessages.push({ msg });
+          if (msg?.type === 'secrets.mask-oauth-token' && msg.providerId === 'github') {
+            cb({ maskedValue: 'ghp_masked_extension' });
+          } else {
+            cb({});
+          }
+        }),
+      },
+      storage: {
+        local: {
+          set: vi.fn(async (obj: Record<string, unknown>) => {
+            Object.assign(storageWrites, obj);
+          }),
+          remove: vi.fn(async () => {}),
+        },
+      },
+    };
+
+    const { saveOAuthAccount, getAccounts } = await import('../../src/ui/provider-settings.js');
+    await saveOAuthAccount({
+      providerId: 'github',
+      accessToken: 'ghp_real_extension',
+    });
+
+    // chrome.storage.local got the OAuth replica + DOMAINS pair
+    expect(storageWrites['oauth.github.token']).toBe('ghp_real_extension');
+    expect(storageWrites['oauth.github.token_DOMAINS']).toBe('github.com');
+
+    // SW received the mask-oauth-token round-trip
+    const askMask = sentMessages.find(
+      (m) =>
+        typeof m.msg === 'object' &&
+        m.msg != null &&
+        (m.msg as any).type === 'secrets.mask-oauth-token'
+    );
+    expect(askMask).toBeDefined();
+
+    // maskedValue from the SW reply was cached in the Account
+    const acct = getAccounts().find((a) => a.providerId === 'github');
+    expect(acct?.maskedValue).toBe('ghp_masked_extension');
+  });
+
+  it('still resolves when chrome.runtime.lastError is set (SW unreachable)', async () => {
+    (globalThis as any).chrome = {
+      runtime: {
+        id: 'test-ext-id',
+        lastError: { message: 'message port closed' },
+        sendMessage: vi.fn((_msg: any, cb: (r: any) => void) => {
+          cb(undefined);
+        }),
+      },
+      storage: {
+        local: {
+          set: vi.fn(async () => {}),
+          remove: vi.fn(async () => {}),
+        },
+      },
+    };
+
+    const { saveOAuthAccount } = await import('../../src/ui/provider-settings.js');
+    await expect(
+      saveOAuthAccount({
+        providerId: 'github',
+        accessToken: 'ghp_x',
+      })
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe('github.ts writes masked token to /workspace/.git/github-token', () => {
   // This test documents the POLICY that github.ts must follow after Task 4.7:
   // After saveOAuthAccount, use getOAuthAccountInfo to retrieve maskedValue
