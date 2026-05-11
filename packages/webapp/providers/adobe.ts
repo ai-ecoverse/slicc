@@ -361,6 +361,7 @@ export const config: ProviderConfig = {
       tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,
       userName: userProfile.name,
       userAvatar: userProfile.avatar,
+      baseUrl: proxyEndpoint,
     });
 
     // Fetch the full model list now that we're authenticated.
@@ -525,7 +526,8 @@ async function silentRenewToken(): Promise<string | null> {
       const tokenInfo = extractTokenFromUrl(redirectUrl);
       if (!tokenInfo) return null;
 
-      // Save the renewed token
+      // Save the renewed token. Preserve the baseUrl so getProxyEndpoint()
+      // continues to resolve after a page reload wipes the in-memory cache.
       const account = getAdobeAccount();
       saveOAuthAccount({
         providerId: 'adobe',
@@ -533,6 +535,7 @@ async function silentRenewToken(): Promise<string | null> {
         tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,
         userName: account?.userName,
         userAvatar: account?.userAvatar,
+        baseUrl: proxyEndpoint,
       });
 
       console.log('[adobe] Token renewed silently');

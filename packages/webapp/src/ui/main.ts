@@ -1722,6 +1722,31 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   }
   client.requestState();
 
+  // Install localStorage sync interceptor immediately — before any
+  // onboarding or provider-settings writes can happen. Placing this
+  // after `await host.ready` ensures the worker's bridge is ready to
+  // receive messages; placing it here (not 300+ lines later) closes
+  // the window where writes between the seed snapshot and the
+  // interceptor install would be silently dropped.
+  //
+  // Also push a full snapshot of the current localStorage so any
+  // writes that occurred after `collectLocalStorageSeed()` (called
+  // inside `spawnKernelWorker`) but before this point are not lost.
+  // This is idempotent: the worker's shim just overwrites each key
+  // with the same or newer value.
+  const stopStorageSync = installPageStorageSync({
+    send: (msg) => client.sendRaw(msg),
+  });
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k !== null) {
+      const v = localStorage.getItem(k);
+      if (v !== null) {
+        client.sendRaw({ type: 'local-storage-set', key: k, value: v });
+      }
+    }
+  }
+
   // Sprinkle manager — runs on the page (DOM access required), with a
   // proxy on the worker's `globalThis.__slicc_sprinkleManager` so the
   // shell can reach it. The shell side of the bridge lives in
@@ -2072,15 +2097,6 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     }
     return { providers, models };
   }
-
-  // Live page→worker localStorage sync. The worker's `localStorage`
-  // is a Map-backed shim seeded at boot from
-  // `KernelWorkerInitMsg.localStorageSeed`; subsequent page writes
-  // (provider config, model selection, tray join URL, …) need to flow
-  // through so the agent sees them without a worker restart.
-  const stopStorageSync = installPageStorageSync({
-    send: (msg) => client.sendRaw(msg),
-  });
 
   // Publish a tool-ui dispatch hook so the panel-side
   // dip's button clicks route to the WORKER's `toolUIRegistry` over the

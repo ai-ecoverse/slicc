@@ -203,7 +203,89 @@ export function createStandalonePanelRpcHandlers(): PanelRpcHandlers {
       const win = window.open(url, target ?? '_blank', features ?? 'noopener,noreferrer');
       return { opened: win !== null };
     },
+
+    'oauth-popup': async ({ url }) => {
+      const redirectUrl = await openOAuthPopup(url);
+      return { redirectUrl };
+    },
   };
+}
+
+// ── OAuth popup (page-side) ─────────────────────────────────────────
+
+/**
+ * Open an OAuth popup and wait for the /auth/callback page to
+ * postMessage the redirect URL back. Mirrors `launchOAuthCli` from
+ * `oauth-service.ts` but runs inside a panel-RPC handler so worker-
+ * side commands (e.g. `oauth-token adobe`, `silentRenewToken`) can
+ * reach `window.open` through the bridge.
+ *
+ * Electron-overlay mode: window.opener is null (system browser opens),
+ * so postMessage doesn't work. The callback POSTs to /api/oauth-result
+ * and we poll until we get a result.
+ */
+function openOAuthPopup(authorizeUrl: string): Promise<string | null> {
+  return new Promise<string | null>((resolve) => {
+    const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
+
+    let resolved = false;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    const cleanup = () => {
+      if (resolved) return;
+      resolved = true;
+      window.removeEventListener('message', handler);
+      clearTimeout(timer);
+      if (pollTimer) clearInterval(pollTimer);
+    };
+
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type !== 'oauth-callback') return;
+      cleanup();
+      if (event.data.error) {
+        console.error('[panel-rpc:oauth-popup] OAuth error:', event.data.error);
+        resolve(null);
+        return;
+      }
+      resolve(event.data.redirectUrl ?? null);
+    };
+
+    window.addEventListener('message', handler);
+
+    const isElectronOverlay =
+      location.pathname.startsWith('/electron') ||
+      new URLSearchParams(location.search).get('runtime') === 'electron-overlay';
+    if (isElectronOverlay) {
+      pollTimer = setInterval(async () => {
+        if (resolved) return;
+        try {
+          const res = await fetch('/api/oauth-result');
+          if (res.status === 204) return;
+          const data = (await res.json()) as { redirectUrl?: string; error?: string };
+          if (resolved) return;
+          cleanup();
+          if (data.error) {
+            console.error('[panel-rpc:oauth-popup] Server relay OAuth error:', data.error);
+            resolve(null);
+            return;
+          }
+          resolve(data.redirectUrl ?? null);
+        } catch {
+          /* keep polling */
+        }
+      }, 1000);
+    }
+
+    const timer = setTimeout(() => {
+      cleanup();
+      try {
+        popup?.close();
+      } catch {
+        /* best-effort */
+      }
+      resolve(null);
+    }, 120_000);
+  });
 }
 
 // ── Internal helpers ────────────────────────────────────────────────
