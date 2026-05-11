@@ -198,7 +198,7 @@ describe('handleFetchProxyConnection', () => {
 
   it('URL with masked cred AND existing authorization header → synthetic does not clobber', async () => {
     let fetchHeaders: Record<string, string> | undefined;
-    (globalThis as any).fetch = vi.fn(async (url: string, init: any) => {
+    (globalThis as any).fetch = vi.fn(async (_url: string, init: any) => {
       fetchHeaders = init.headers;
       return new Response('ok', { status: 200, statusText: 'OK' });
     });

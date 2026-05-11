@@ -144,7 +144,7 @@ describe('github.ts onOAuthLogin writes masked token to VFS', () => {
 
     // Read the token from VFS
     const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
-    const tokenContent = await fs.readFile('/workspace/.git/github-token', 'utf-8');
+    const tokenContent = await fs.readFile('/workspace/.git/github-token', { encoding: 'utf-8' });
 
     // Assert the masked value was written, NOT the real token
     expect(tokenContent).toBe('ghp_masked_safe');
@@ -220,7 +220,7 @@ describe('github.ts onOAuthLogin writes masked token to VFS', () => {
 
     // Check VFS has the masked token
     const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
-    const vfsToken = await fs.readFile('/workspace/.git/github-token', 'utf-8');
+    const vfsToken = await fs.readFile('/workspace/.git/github-token', { encoding: 'utf-8' });
     expect(vfsToken).toBe('ghp_masked_xyz');
     expect(vfsToken).not.toContain('ghp_REAL_token_123');
   });
