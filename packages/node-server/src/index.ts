@@ -1147,6 +1147,24 @@ async function main() {
         }
       }
 
+      // --- Secret injection: unmask URL-embedded credentials ---
+      let cleanedUrl = targetUrl;
+      if (secretProxy.hasSecrets()) {
+        const credsResult = secretProxy.extractAndUnmaskUrlCredentials(targetUrl);
+        if (credsResult.forbidden) {
+          res.setHeader('X-Proxy-Error', '1');
+          res.status(403).json({
+            error: `Secret "${credsResult.forbidden.secretName}" is not allowed for domain "${credsResult.forbidden.hostname}"`,
+          });
+          return;
+        }
+        cleanedUrl = credsResult.url;
+        // Attach synthetic Authorization if the URL had credentials and the header isn't already set
+        if (credsResult.syntheticAuthorization && !('authorization' in headers)) {
+          headers.authorization = credsResult.syntheticAuthorization;
+        }
+      }
+
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
       if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
         // --- Secret injection: unmask request body ---
@@ -1181,7 +1199,7 @@ async function main() {
       res.on('close', onClientClose);
       fetchInit.signal = abortController.signal;
 
-      const upstream = await fetch(targetUrl, fetchInit);
+      const upstream = await fetch(cleanedUrl, fetchInit);
 
       // Forward status, prevent browser caching of proxy responses
       res.status(upstream.status);

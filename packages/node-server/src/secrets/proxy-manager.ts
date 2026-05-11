@@ -78,6 +78,10 @@ export class SecretProxyManager {
     return this.pipeline.unmaskHeaders(headers, targetHostname);
   }
 
+  extractAndUnmaskUrlCredentials(rawUrl: string) {
+    return this.pipeline.extractAndUnmaskUrlCredentials(rawUrl);
+  }
+
   scrubResponse(text: string): string {
     return this.pipeline.scrubResponse(text);
   }
