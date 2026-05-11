@@ -208,37 +208,21 @@ function clearCustomForm(): void {
 // ---------------------------------------------------------------------------
 // OAuth-domain extras — shared with the side panel via the page-origin
 // localStorage (both pages live at chrome-extension://<id>/). Provider
-// defaults stay immutable; entries here LAYER on top.
+// defaults stay immutable; entries here LAYER on top. Storage logic lives
+// in ./oauth-extra-domains-storage.ts (testable, framework-free).
 // ---------------------------------------------------------------------------
 
-const OAUTH_EXTRA_DOMAINS_KEY = 'slicc_oauth_extra_domains';
-
-function readOAuthExtras(): Record<string, string[]> {
-  try {
-    const raw = localStorage.getItem(OAUTH_EXTRA_DOMAINS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const out: Record<string, string[]> = {};
-    for (const [k, v] of Object.entries(parsed)) {
-      if (typeof k !== 'string' || !Array.isArray(v)) continue;
-      const cleaned = v.filter((d): d is string => typeof d === 'string' && d.length > 0);
-      if (cleaned.length > 0) out[k] = cleaned;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-function writeOAuthExtras(store: Record<string, string[]>): void {
-  localStorage.setItem(OAUTH_EXTRA_DOMAINS_KEY, JSON.stringify(store));
-}
+import {
+  addOAuthExtraDomain,
+  clearOAuthExtras,
+  readOAuthExtras,
+  removeOAuthExtraDomain,
+} from './oauth-extra-domains-storage.js';
 
 function renderOAuthExtras(): void {
   const container = $('od-list');
   container.replaceChildren();
-  const store = readOAuthExtras();
+  const store = readOAuthExtras(localStorage);
   const providers = Object.keys(store).sort();
   if (providers.length === 0) {
     container.appendChild(el('div', { class: 'empty', text: 'No extras configured.' }));
@@ -262,9 +246,7 @@ function renderOAuthExtras(): void {
         on: {
           click: () => {
             if (!confirm(`Clear all extras for "${providerId}"?`)) return;
-            const next = readOAuthExtras();
-            delete next[providerId];
-            writeOAuthExtras(next);
+            clearOAuthExtras(localStorage, providerId);
             showToast(`Cleared extras for ${providerId}`);
             renderOAuthExtras();
           },
@@ -285,13 +267,8 @@ function renderOAuthExtras(): void {
           'style:padding': '4px 8px',
           on: {
             click: () => {
-              const next = readOAuthExtras();
-              const lower = d.toLowerCase();
-              const filtered = (next[providerId] ?? []).filter((x) => x.toLowerCase() !== lower);
-              if (filtered.length === 0) delete next[providerId];
-              else next[providerId] = filtered;
-              writeOAuthExtras(next);
-              showToast(`Removed ${d} from ${providerId}`);
+              const r = removeOAuthExtraDomain(localStorage, providerId, d);
+              if (r.removed) showToast(`Removed ${d} from ${providerId}`);
               renderOAuthExtras();
             },
           },
@@ -313,15 +290,14 @@ function onAddOAuthExtra(): void {
     showToast('Domain is required', true);
     return;
   }
-  const store = readOAuthExtras();
-  const current = store[provider] ?? [];
-  const lower = domain.toLowerCase();
-  if (current.some((d) => d.toLowerCase() === lower)) {
-    showToast(`Already in ${provider} extras`, true);
+  const r = addOAuthExtraDomain(localStorage, provider, domain);
+  if (!r.added) {
+    showToast(
+      r.reason === 'duplicate' ? `Already in ${provider} extras` : (r.reason ?? 'Failed'),
+      true
+    );
     return;
   }
-  store[provider] = [...current, domain];
-  writeOAuthExtras(store);
   showToast(`Added ${domain} to ${provider}`);
   ($('od-domain') as HTMLInputElement).value = '';
   renderOAuthExtras();

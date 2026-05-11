@@ -133,6 +133,26 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     ctx.dispose();
   });
 
+  // Regression: the panel terminal used to be created without an `env`
+  // field, so masked secrets injected via `fetchSecretEnvVars()` only
+  // reached the agent's scoop shell (in scoop-context.ts), not the
+  // user-facing panel terminal. `echo $GITHUB_TOKEN` returned empty
+  // even when /api/secrets/masked was correctly populated. Fix in
+  // main.ts now plumbs `env` from fetchSecretEnvVars → RemoteTerminalView
+  // → terminal-open → shellFactory. This test pins the protocol path.
+  it('open with env forwards env through to the shell factory', async () => {
+    const ctx = setupChannel();
+    await ctx.client.open({
+      cwd: '/workspace',
+      env: { GITHUB_TOKEN: 'ghp_masked_xyz', NPM_TOKEN: 'npm_masked_abc' },
+    });
+    expect(ctx.shellFactory).toHaveBeenCalledWith('s1', {
+      cwd: '/workspace',
+      env: { GITHUB_TOKEN: 'ghp_masked_xyz', NPM_TOKEN: 'npm_masked_abc' },
+    });
+    ctx.dispose();
+  });
+
   it('exec round-trips stdout + stderr + exit code', async () => {
     const ctx = setupChannel();
     ctx.shell.executeCommand.mockResolvedValue({

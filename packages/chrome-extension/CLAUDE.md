@@ -170,7 +170,25 @@ re-running step 1 + step 3 is the safest way to pick up code changes.
 
 ## Secret-Aware Fetch Proxy
 
-The service worker now handles `fetch-proxy.fetch` Port connections for secret-aware HTTP proxying, plus `secrets.list-masked-entries` and `secrets.mask-oauth-token` message handlers. The webapp's `createProxiedFetch()` extension branch uses the Port handler instead of direct fetch, providing full secret injection equivalent to CLI mode.
+The service worker handles `fetch-proxy.fetch` Port connections for secret-aware HTTP proxying. The Port `onMessage` listener attaches **synchronously** in `onConnect` (via `handleFetchProxyConnectionAsync` — the pipeline is awaited INSIDE the listener); the previous "await build → then add listener" pattern silently dropped the page's immediate `request` message, which made `curl` hang. See `docs/pitfalls.md` "Chrome Port: onMessage Listener Must Attach Synchronously".
+
+The SW also exposes message handlers:
+
+- `secrets.list-masked-entries` — used by the page's `fetchSecretEnvVars()` to populate the agent shell env with masked values
+- `secrets.mask-oauth-token` — round-trip mask for an OAuth provider after `saveOAuthAccount`
+- `secrets.list` / `secrets.set` / `secrets.delete` — management ops for the panel-terminal `secret` shell command. Offscreen documents don't expose `chrome.storage` (MV3 quirk), so these proxy the storage call through the SW. See `docs/pitfalls.md` "Offscreen Documents: Smaller chrome.\* Surface than the SW".
+
+The webapp's `createProxiedFetch()` extension branch uses the Port handler instead of direct fetch, providing full secret injection equivalent to CLI mode.
+
+### OAuth-token extra allowed domains
+
+Each provider's hardcoded `oauthTokenDomains` is the immutable default safelist. Users can layer additional allowed domains per-provider via:
+
+- the panel-terminal `oauth-domain` shell command
+- the **OAuth domains** tab on the options page (`secrets.html`)
+- direct `localStorage` edit of `slicc_oauth_extra_domains` at the extension origin
+
+The extras are read by `saveOAuthAccount` in `provider-settings.ts` and merged with provider defaults (deduped case-insensitively) before being pushed to `chrome.storage.local`'s `oauth.<id>.token_DOMAINS`. Page-side `oauth-bootstrap` re-pushes the merged list on every page load, so newly-added extras apply on next side-panel reload.
 
 ## Related Guides
 

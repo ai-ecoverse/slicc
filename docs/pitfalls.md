@@ -263,6 +263,44 @@ return new Response('', { status: 0 });
 return new Response('Request body exceeds 32MB limit', { status: 413 });
 ```
 
+## Chrome Port: onMessage Listener Must Attach Synchronously
+
+**The Problem**
+
+When an MV3 service worker handles a `chrome.runtime.onConnect` event, page-side callers will routinely call `port.postMessage(...)` immediately after `chrome.runtime.connect({name})` resolves. Chrome **drops port messages that arrive before any `port.onMessage` listener is attached**. If the SW's `onConnect` callback awaits anything (e.g. an async pipeline build) before attaching the listener, the page's first message is silently lost — the caller's promise hangs forever waiting for a response that never comes.
+
+This is exactly what bit the secret-aware fetch proxy: the SW's original handler did `buildSecretsPipeline()` (involving `chrome.storage.local` reads) inside `.then(...)` and attached the listener afterward. `curl` from the extension panel terminal hung with no error and no disconnect.
+
+**The Solution**
+
+Attach `port.onMessage.addListener(...)` **synchronously** inside the `onConnect` callback, and `await` any async setup INSIDE that listener:
+
+```typescript
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'my-channel') return;
+  const pipelinePromise = buildPipeline(); // kick off async work
+  port.onMessage.addListener(async (msg) => {
+    // <-- ATTACHED SYNC
+    const pipeline = await pipelinePromise; // <-- AWAIT INSIDE
+    // ... handle msg using pipeline
+  });
+});
+```
+
+See `packages/chrome-extension/src/fetch-proxy-shared.ts:handleFetchProxyConnectionAsync` for the production pattern. Regression test: `packages/chrome-extension/tests/fetch-proxy-shared.test.ts` — "handleFetchProxyConnectionAsync — synchronous listener attach".
+
+## Offscreen Documents: Smaller chrome.\* Surface than the SW
+
+**The Problem**
+
+MV3 offscreen documents inherit only a subset of the manifest's `permissions`. Notably, **`chrome.storage` is NOT exposed in offscreen documents** — even when the manifest grants `"storage"` and the SW has it. Code paths that work in the SW (where `chrome.storage.local.get(null)` returns instantly) throw `Cannot read properties of undefined (reading 'local')` when they end up running in offscreen.
+
+This was hit by the `secret list` shell command: the panel-terminal `WasmShellHeadless` is hosted in the offscreen document (via `createPanelTerminalHost`), and `chrome.storage.local.get(...)` from inside the supplemental command callback throws.
+
+**The Solution**
+
+For management operations that must touch `chrome.storage.local`, **route through the SW via `chrome.runtime.sendMessage`**. The SW has full storage access. Add a handler in `service-worker.ts:onMessage` that performs the storage call and replies via `sendResponse`. See the `secrets.list` / `secrets.set` / `secrets.delete` handlers there for the canonical pattern. Always `return true` from the listener for async work, and always include `chrome.runtime.lastError` handling on the caller side.
+
 ## SecretsPipeline Mutation Pitfall
 
 **The Problem**
