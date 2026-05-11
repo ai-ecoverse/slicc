@@ -31,6 +31,11 @@ export interface UnmaskHeadersResult {
   forbidden?: ForbiddenInfo;
 }
 
+export interface BasicResult {
+  value: string;
+  forbidden?: ForbiddenInfo;
+}
+
 export interface SecretsPipelineOpts {
   sessionId: string;
   source: FetchProxySecretSource;
@@ -117,12 +122,47 @@ export class SecretsPipeline {
     return { text: result };
   }
 
+  unmaskAuthorizationBasic(headerValue: string, hostname: string): BasicResult {
+    const pattern = /^Basic\s+(.+)$/;
+    const match = pattern.exec(headerValue);
+    if (!match) return { value: headerValue };
+    let decoded: string;
+    try {
+      decoded = atob(match[1].trim());
+    } catch {
+      return { value: headerValue };
+    }
+    const colon = decoded.indexOf(':');
+    if (colon < 0) return { value: headerValue };
+    let user = decoded.slice(0, colon);
+    let pass = decoded.slice(colon + 1);
+    let touched = false;
+    for (const [maskedValue, ms] of this.maskedToSecret) {
+      if (user.includes(maskedValue) || pass.includes(maskedValue)) {
+        if (!matchesDomains(hostname, ms.domains)) {
+          return { value: headerValue, forbidden: { secretName: ms.name, hostname } };
+        }
+        if (user.includes(maskedValue)) user = user.split(maskedValue).join(ms.realValue);
+        if (pass.includes(maskedValue)) pass = pass.split(maskedValue).join(ms.realValue);
+        touched = true;
+      }
+    }
+    if (!touched) return { value: headerValue };
+    return { value: `Basic ${btoa(`${user}:${pass}`)}` };
+  }
+
   /**
    * Unmask headers IN PLACE. Mutates the headers parameter; returns only { forbidden? }.
    * Match SecretProxyManager's existing semantics so call sites compile unchanged.
    */
   unmaskHeaders(headers: Record<string, string>, hostname: string): UnmaskHeadersResult {
     for (const [key, val] of Object.entries(headers)) {
+      if (key.toLowerCase() === 'authorization' && /^Basic\s/i.test(val)) {
+        const basic = this.unmaskAuthorizationBasic(val, hostname);
+        if (basic.forbidden) return { forbidden: basic.forbidden };
+        headers[key] = basic.value;
+        continue;
+      }
       const { text, forbidden } = this.unmask(val, hostname);
       if (forbidden) return { forbidden };
       headers[key] = text;

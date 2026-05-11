@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { SecretsPipeline, type FetchProxySecretSource } from '../src/secrets-pipeline.js';
+import {
+  SecretsPipeline,
+  type FetchProxySecretSource,
+  type ForbiddenInfo,
+} from '../src/secrets-pipeline.js';
 
 function source(
   entries: { name: string; value: string; domains: string[] }[]
@@ -70,5 +74,64 @@ describe('SecretsPipeline (skeleton)', () => {
     const masked = await pipeline.maskOne('GITHUB_TOKEN', 'ghp_realToken123');
     const out = pipeline.scrubResponse('hello ghp_realToken123 world');
     expect(out).toBe(`hello ${masked} world`);
+  });
+});
+
+describe('unmaskAuthorizationBasic', () => {
+  let pipeline: SecretsPipeline;
+  let masked: string;
+
+  beforeEach(async () => {
+    pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        {
+          name: 'GITHUB_TOKEN',
+          value: 'ghp_realToken123',
+          domains: ['github.com', '*.github.com'],
+        },
+      ]),
+    });
+    await pipeline.reload();
+    masked = await pipeline.maskOne('GITHUB_TOKEN', 'ghp_realToken123');
+  });
+
+  it('decodes Basic, unmasks password, re-encodes when domain allowed', async () => {
+    const b64 = Buffer.from(`x-access-token:${masked}`, 'utf-8').toString('base64');
+    const result = pipeline.unmaskAuthorizationBasic(`Basic ${b64}`, 'github.com');
+    expect(typeof result).toBe('object');
+    expect((result as { value: string }).value).toMatch(/^Basic /);
+    const decoded = Buffer.from(
+      (result as { value: string }).value.replace(/^Basic /, ''),
+      'base64'
+    ).toString('utf-8');
+    expect(decoded).toBe('x-access-token:ghp_realToken123');
+  });
+
+  it('forbids when domain not allowed', async () => {
+    const b64 = Buffer.from(`u:${masked}`, 'utf-8').toString('base64');
+    const result = pipeline.unmaskAuthorizationBasic(`Basic ${b64}`, 'evil.example.com');
+    expect((result as { forbidden: ForbiddenInfo }).forbidden).toEqual({
+      secretName: 'GITHUB_TOKEN',
+      hostname: 'evil.example.com',
+    });
+  });
+
+  it('leaves unchanged on invalid base64 / no colon / no mask', async () => {
+    expect(pipeline.unmaskAuthorizationBasic('Basic %%%not-b64%%%', 'github.com')).toEqual({
+      value: 'Basic %%%not-b64%%%',
+    });
+    expect(
+      pipeline.unmaskAuthorizationBasic(
+        `Basic ${Buffer.from('nocolon').toString('base64')}`,
+        'github.com'
+      )
+    ).toEqual({ value: `Basic ${Buffer.from('nocolon').toString('base64')}` });
+    expect(
+      pipeline.unmaskAuthorizationBasic(
+        `Basic ${Buffer.from('u:plain').toString('base64')}`,
+        'github.com'
+      )
+    ).toEqual({ value: `Basic ${Buffer.from('u:plain').toString('base64')}` });
   });
 });
