@@ -464,6 +464,13 @@ function isTokenExpired(): boolean {
  * Returns the new access token on success, or null if renewal failed.
  */
 async function silentRenewToken(): Promise<string | null> {
+  // Silent renewal needs a DOM (popup/iframe) to drive the IMS authorize
+  // flow. The kernel-worker has no `window`, so bail out cleanly here and
+  // let getValidAccessToken surface "session expired — please log in again"
+  // back to the page. The page-side oauth-bootstrap is responsible for
+  // pre-renewing tokens before the worker streams.
+  if (typeof window === 'undefined') return null;
+
   // Deduplicate concurrent renewal attempts
   if (renewalInProgress) return renewalInProgress;
 
