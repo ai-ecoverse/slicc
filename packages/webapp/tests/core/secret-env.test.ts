@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { fetchSecretEnvVars } from '../../src/core/secret-env.js';
 
 describe('fetchSecretEnvVars', () => {
-  let originalChrome: typeof globalThis.chrome | undefined;
+  let originalChrome: unknown;
 
   beforeEach(() => {
-    originalChrome = globalThis.chrome;
+    originalChrome = (globalThis as any).chrome;
   });
 
   afterEach(() => {
@@ -103,8 +103,8 @@ describe('fetchSecretEnvVars', () => {
     });
 
     it('returns empty object when SW returns no entries', async () => {
-      vi.mocked(globalThis.chrome.runtime.sendMessage).mockImplementation(
-        (msg: any, callback?: (resp: any) => void) => {
+      vi.mocked((globalThis as any).chrome.runtime.sendMessage).mockImplementation(
+        (_msg: any, callback?: (resp: any) => void) => {
           if (callback) callback({ entries: [] });
           return Promise.resolve();
         }
@@ -115,8 +115,8 @@ describe('fetchSecretEnvVars', () => {
     });
 
     it('returns empty object when SW returns undefined entries', async () => {
-      vi.mocked(globalThis.chrome.runtime.sendMessage).mockImplementation(
-        (msg: any, callback?: (resp: any) => void) => {
+      vi.mocked((globalThis as any).chrome.runtime.sendMessage).mockImplementation(
+        (_msg: any, callback?: (resp: any) => void) => {
           if (callback) callback({});
           return Promise.resolve();
         }
@@ -127,7 +127,7 @@ describe('fetchSecretEnvVars', () => {
     });
 
     it('populates env from SW message in extension mode', async () => {
-      vi.mocked(globalThis.chrome.runtime.sendMessage).mockImplementation(
+      vi.mocked((globalThis as any).chrome.runtime.sendMessage).mockImplementation(
         (msg: any, callback?: (resp: any) => void) => {
           if (callback && msg?.type === 'secrets.list-masked-entries') {
             callback({
@@ -150,8 +150,8 @@ describe('fetchSecretEnvVars', () => {
 
     it('sends correct message type to SW', async () => {
       const sendMessageMock = vi
-        .mocked(globalThis.chrome.runtime.sendMessage)
-        .mockImplementation((msg: any, callback?: (resp: any) => void) => {
+        .mocked((globalThis as any).chrome.runtime.sendMessage)
+        .mockImplementation((_msg: any, callback?: (resp: any) => void) => {
           if (callback) callback({ entries: [] });
           return Promise.resolve();
         });
