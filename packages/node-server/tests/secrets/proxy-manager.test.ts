@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
 import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
+import { OauthSecretStore } from '../../src/secrets/oauth-secret-store.js';
 
 function createTempSecretsFile(content: string): string {
   const dir = join(tmpdir(), `slicc-test-${randomUUID()}`);
@@ -187,5 +188,29 @@ describe('SecretProxyManager', () => {
       const e2 = entries2.find((e) => e.name === e1.name)!;
       expect(e1.maskedValue).toBe(e2.maskedValue);
     }
+  });
+});
+
+describe('SecretProxyManager — OauthSecretStore chaining', () => {
+  it('unmasks a token sourced from OauthSecretStore', async () => {
+    const oauthStore = new OauthSecretStore();
+    oauthStore.set('oauth.github.token', 'ghp_real', ['api.github.com']);
+    const proxy = new SecretProxyManager(undefined, 'fixed-session', oauthStore);
+    await proxy.reload();
+    const entry = proxy.getMaskedEntries().find((e) => e.name === 'oauth.github.token')!;
+    expect(entry).toBeDefined();
+    const headers: Record<string, string> = { authorization: `Bearer ${entry.maskedValue}` };
+    const r = proxy.unmaskHeaders(headers, 'api.github.com');
+    expect(r.forbidden).toBeUndefined();
+    expect(headers.authorization).toBe('Bearer ghp_real');
+  });
+
+  it('setOauthStore allows late binding', async () => {
+    const proxy = new SecretProxyManager(undefined, 'fixed-session');
+    const store = new OauthSecretStore();
+    store.set('oauth.x.token', 'real_x', ['api.x.com']);
+    proxy.setOauthStore(store);
+    await proxy.reload();
+    expect(proxy.getMaskedEntries().some((e) => e.name === 'oauth.x.token')).toBe(true);
   });
 });
