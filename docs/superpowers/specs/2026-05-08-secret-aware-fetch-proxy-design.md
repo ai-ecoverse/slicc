@@ -4,6 +4,8 @@
 **Date:** 2026-05-08  
 **Branch:** `feat/git-auth-secrets-bridge`
 
+> **Implementation note (post-spec):** the plan at `docs/superpowers/plans/2026-05-08-secret-aware-fetch-proxy.md` introduces a new `@slicc/shared` workspace package (`packages/shared/`) as the cross-package home for `secret-masking.ts` and the new `secrets-pipeline.ts`. Wherever this spec references `packages/webapp/src/core/secret-masking.ts` as the canonical location, the plan moves it to `packages/shared/src/secret-masking.ts` exported via `@slicc/shared`. Reason: the original spec assumed direct cross-package import was feasible, but the existing `tsconfig.cli.json` `rootDir` constraint and the `dist/node-server/` flat-layout commitments in root `package.json` (`main`, `bin`, `start`, `package:release`, `publish:chrome`) made that infeasible without packaging changes. The shared workspace preserves the flat layout and resolves the cross-package boundary cleanly. All other architectural decisions in this spec are unchanged.
+
 ## Context
 
 slicc has a secret-management story (`docs/secrets.md`) that lets users put API keys and tokens in `~/.slicc/secrets.env` (CLI) or `chrome.storage.local` (extension), with the agent only ever seeing deterministic masked values. The fetch proxy on the CLI unmasks at the network boundary if the destination domain is in the secret's allowlist. The model works for `Authorization: Bearer …`, `X-API-Key: …`, JSON body fields, query params — anything where the masked value sits as a literal substring of the outgoing request.
@@ -518,7 +520,7 @@ SW side (fetch-proxy-shared):
 - The same `secrets.list-masked-entries` handler covers both `.env`-style secrets and OAuth replicas in `chrome.storage.local`. The earlier `secrets.mask-oauth-token` (single-secret) is a thin specialization of this general handler used by the OAuth sync hook on login/refresh; both can be implemented as the same code path.
 - **Storage enumeration includes mount keys.** `secrets-storage.listSecretsWithValues()` returns every `<key>+<key>_DOMAINS` pair in `chrome.storage.local`, which includes `s3.<profile>.*` mount credentials. They flow into the fetch-proxy unmask map. This is harmless because mount keys have mount-host `_DOMAINS` (e.g. `*.r2.cloudflarestorage.com`) so they only unmask for S3-host requests — and agent calls to S3 hosts go through mount-side `s3-sign-and-forward` (not the fetch-proxy unmask). The few extra entries in the map are not a correctness or perf concern. Document the choice explicitly so a future reviewer doesn't try to filter.
 - Tests under `packages/chrome-extension/tests/fetch-proxy-shared.test.ts` and `service-worker.test.ts` (extended). Cases:
-  - request-body-cap rejection (request payload > 32 MB → response-head with status 0, statusText 'payload-too-large', no upstream call).
+  - request-body-cap rejection (request payload > 32 MB → response-head with status 413, statusText 'Payload Too Large', no upstream call — matches line 510; `Response` constructor rejects `status: 0`).
   - forbidden-header round-trip (X-Proxy-Cookie, X-Proxy-Set-Cookie).
   - statusText parity with CLI SecureFetch.
   - **streaming**: receive multiple response-chunk messages in order; ReadableStream reassembles to identical bytes; large-response (≥10 MB) round-trip without OOM.
