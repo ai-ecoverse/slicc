@@ -35,7 +35,7 @@ import type {
   SimpleStreamOptions,
   OpenAICompletionsOptions,
 } from '@earendil-works/pi-ai';
-import { saveOAuthAccount, getAccounts } from '../src/ui/provider-settings.js';
+import { saveOAuthAccount, getAccounts, getOAuthAccountInfo } from '../src/ui/provider-settings.js';
 import {
   exchangeOAuthCode,
   revokeOAuthToken,
@@ -528,8 +528,14 @@ export const config: ProviderConfig = {
       userAvatar: userProfile.avatar,
     });
 
-    // Bridge token to isomorphic-git
-    await writeGitToken(tokenResult.access_token);
+    // Bridge token to isomorphic-git — use the masked value, not the real token
+    const info = getOAuthAccountInfo('github');
+    const masked = info?.maskedValue;
+    if (masked) {
+      await writeGitToken(masked);
+    } else {
+      await clearGitToken();
+    }
 
     // Seed git user.name / user.email so commits are attributed to the
     // authenticated GitHub identity instead of the placeholder
