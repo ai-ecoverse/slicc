@@ -534,8 +534,6 @@ async function main() {
         console.error(error instanceof Error ? error.message : String(error));
         process.exit(1);
       }
-
-      throw new Error('unreachable');
     })();
 
     const chromePath = findChromeExecutable({
