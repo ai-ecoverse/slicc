@@ -255,6 +255,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
 
 export function getOAuthAccountInfo(providerId: string): {
   token: string;
+  maskedValue?: string;
   expiresAt?: number;
   userName?: string;
   userAvatar?: string;
@@ -265,6 +266,7 @@ export function getOAuthAccountInfo(providerId: string): {
   const expired = !!account.tokenExpiresAt && Date.now() > account.tokenExpiresAt - 60000;
   return {
     token: account.accessToken,
+    maskedValue: account.maskedValue,
     expiresAt: account.tokenExpiresAt,
     userName: account.userName,
     userAvatar: account.userAvatar,

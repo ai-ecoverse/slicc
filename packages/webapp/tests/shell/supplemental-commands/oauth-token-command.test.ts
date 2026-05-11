@@ -78,6 +78,7 @@ describe('oauth-token command', () => {
     });
     mockGetOAuthAccountInfo.mockReturnValue({
       token: 'valid-access-token',
+      maskedValue: 'masked-valid-access-token',
       expiresAt: Date.now() + 3600000,
       userName: 'karl',
       expired: false,
@@ -86,7 +87,7 @@ describe('oauth-token command', () => {
     const cmd = createOAuthTokenCommand();
     const result = await cmd.execute(['adobe'], createMockCtx());
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('valid-access-token\n');
+    expect(result.stdout).toBe('masked-valid-access-token\n');
   });
 
   it('triggers login when no token exists, returns new token', async () => {
@@ -94,6 +95,7 @@ describe('oauth-token command', () => {
       // Simulate login saving a token
       mockGetOAuthAccountInfo.mockReturnValue({
         token: 'new-token-after-login',
+        maskedValue: 'masked-new-token-after-login',
         expired: false,
       });
     });
@@ -113,7 +115,7 @@ describe('oauth-token command', () => {
     const cmd = createOAuthTokenCommand();
     const result = await cmd.execute(['adobe'], createMockCtx());
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('new-token-after-login\n');
+    expect(result.stdout).toBe('masked-new-token-after-login\n');
     expect(mockOnOAuthLogin).toHaveBeenCalled();
   });
 
@@ -121,6 +123,7 @@ describe('oauth-token command', () => {
     const mockOnOAuthLogin = vi.fn(async () => {
       mockGetOAuthAccountInfo.mockReturnValue({
         token: 'refreshed-token',
+        maskedValue: 'masked-refreshed-token',
         expired: false,
       });
     });
@@ -144,7 +147,7 @@ describe('oauth-token command', () => {
     const cmd = createOAuthTokenCommand();
     const result = await cmd.execute(['adobe'], createMockCtx());
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('refreshed-token\n');
+    expect(result.stdout).toBe('masked-refreshed-token\n');
     expect(mockOnOAuthLogin).toHaveBeenCalled();
   });
 
@@ -275,13 +278,14 @@ describe('oauth-token command', () => {
     });
     mockGetOAuthAccountInfo.mockReturnValue({
       token: 'flag-token',
+      maskedValue: 'masked-flag-token',
       expired: false,
     });
 
     const cmd = createOAuthTokenCommand();
     const result = await cmd.execute(['--provider', 'adobe'], createMockCtx());
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('flag-token\n');
+    expect(result.stdout).toBe('masked-flag-token\n');
   });
 
   it('--provider without value returns error', async () => {
@@ -304,13 +308,14 @@ describe('oauth-token command', () => {
     });
     mockGetOAuthAccountInfo.mockReturnValue({
       token: 'selected-provider-token',
+      maskedValue: 'masked-selected-provider-token',
       expired: false,
     });
 
     const cmd = createOAuthTokenCommand();
     const result = await cmd.execute([], createMockCtx());
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('selected-provider-token\n');
+    expect(result.stdout).toBe('masked-selected-provider-token\n');
     expect(mockGetSelectedProvider).toHaveBeenCalled();
   });
 
@@ -338,12 +343,16 @@ describe('oauth-token command', () => {
       return undefined;
     });
     mockGetRegisteredProviderIds.mockReturnValue(['azure-ai-foundry', 'adobe']);
-    mockGetOAuthAccountInfo.mockReturnValue({ token: 'fallback-token', expired: false });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'fallback-token',
+      maskedValue: 'masked-fallback-token',
+      expired: false,
+    });
 
     const cmd = createOAuthTokenCommand();
     const result = await cmd.execute([], createMockCtx());
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('fallback-token\n');
+    expect(result.stdout).toBe('masked-fallback-token\n');
     // Should have called getOAuthAccountInfo with 'adobe', not 'azure-ai-foundry'
     expect(mockGetOAuthAccountInfo).toHaveBeenCalledWith('adobe');
   });
@@ -385,6 +394,7 @@ describe('oauth-token command', () => {
     const mockOnOAuthLogin = vi.fn(async (_launcher, _onSuccess, _options) => {
       mockGetOAuthAccountInfo.mockReturnValue({
         token: 'scoped-token',
+        maskedValue: 'masked-scoped-token',
         expired: false,
       });
     });
@@ -408,7 +418,7 @@ describe('oauth-token command', () => {
     const cmd = createOAuthTokenCommand();
     const result = await cmd.execute(['github', '--scope', 'repo,models:read'], createMockCtx());
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('scoped-token\n');
+    expect(result.stdout).toBe('masked-scoped-token\n');
     // Login was triggered despite valid token
     expect(mockOnOAuthLogin).toHaveBeenCalled();
     // Scopes were passed through as the third argument
@@ -435,6 +445,7 @@ describe('oauth-token command', () => {
     const mockOnOAuthLogin = vi.fn(async (_launcher, _onSuccess, _options) => {
       mockGetOAuthAccountInfo.mockReturnValue({
         token: 'default-token',
+        maskedValue: 'masked-default-token',
         expired: false,
       });
     });
@@ -458,5 +469,51 @@ describe('oauth-token command', () => {
       expect.any(Function),
       undefined
     );
+  });
+
+  it('prints the masked value, never the real token', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: vi.fn(),
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'ghp_REAL_must_not_leak',
+      maskedValue: 'ghp_masked_safe',
+      expired: false,
+    });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['github'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('ghp_masked_safe');
+    expect(result.stdout).not.toContain('ghp_REAL_must_not_leak');
+  });
+
+  it('returns error when maskedValue is missing', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: vi.fn(),
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'ghp_real_token',
+      expired: false,
+      // maskedValue is missing
+    });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['github'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no masked value');
+    expect(result.stderr).toContain('github');
   });
 });
