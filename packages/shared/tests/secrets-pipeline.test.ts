@@ -135,3 +135,50 @@ describe('unmaskAuthorizationBasic', () => {
     ).toEqual({ value: `Basic ${Buffer.from('u:plain').toString('base64')}` });
   });
 });
+
+describe('extractAndUnmaskUrlCredentials', () => {
+  let pipeline: SecretsPipeline;
+  let masked: string;
+
+  beforeEach(async () => {
+    pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        { name: 'GITHUB_TOKEN', value: 'ghp_realToken123', domains: ['github.com'] },
+      ]),
+    });
+    await pipeline.reload();
+    masked = await pipeline.maskOne('GITHUB_TOKEN', 'ghp_realToken123');
+  });
+
+  it('strips userinfo and synthesizes Authorization when password is masked', () => {
+    const url = `https://x-access-token:${masked}@github.com/owner/repo.git`;
+    const result = pipeline.extractAndUnmaskUrlCredentials(url);
+    expect(result.url).toBe('https://github.com/owner/repo.git');
+    expect(result.syntheticAuthorization).toBeDefined();
+    const decoded = atob(result.syntheticAuthorization!.replace(/^Basic /, ''));
+    expect(decoded).toBe('x-access-token:ghp_realToken123');
+  });
+
+  it('forbids when URL host is not allowed for the secret', () => {
+    const result = pipeline.extractAndUnmaskUrlCredentials(`https://u:${masked}@evil.example.com/`);
+    expect(result.forbidden).toEqual({ secretName: 'GITHUB_TOKEN', hostname: 'evil.example.com' });
+  });
+
+  it('strips userinfo even when no mask matches (browsers reject userinfo URLs)', () => {
+    const result = pipeline.extractAndUnmaskUrlCredentials('https://u:plain@github.com/');
+    expect(result.url).toBe('https://github.com/');
+    expect(result.syntheticAuthorization).toBeUndefined();
+  });
+
+  it('returns url unchanged when no userinfo present', () => {
+    const result = pipeline.extractAndUnmaskUrlCredentials('https://github.com/foo');
+    expect(result.url).toBe('https://github.com/foo');
+    expect(result.syntheticAuthorization).toBeUndefined();
+  });
+
+  it('returns url unchanged on malformed URL', () => {
+    const result = pipeline.extractAndUnmaskUrlCredentials('not a url');
+    expect(result.url).toBe('not a url');
+  });
+});

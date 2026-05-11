@@ -36,6 +36,12 @@ export interface BasicResult {
   forbidden?: ForbiddenInfo;
 }
 
+export interface ExtractedUrlCreds {
+  url: string;
+  syntheticAuthorization?: string;
+  forbidden?: ForbiddenInfo;
+}
+
 export interface SecretsPipelineOpts {
   sessionId: string;
   source: FetchProxySecretSource;
@@ -149,6 +155,40 @@ export class SecretsPipeline {
     }
     if (!touched) return { value: headerValue };
     return { value: `Basic ${btoa(`${user}:${pass}`)}` };
+  }
+
+  extractAndUnmaskUrlCredentials(rawUrl: string): ExtractedUrlCreds {
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      return { url: rawUrl };
+    }
+    if (!parsed.username && !parsed.password) return { url: rawUrl };
+
+    let user = decodeURIComponent(parsed.username);
+    let pass = decodeURIComponent(parsed.password);
+    const host = parsed.host;
+    let touched = false;
+    for (const [maskedValue, ms] of this.maskedToSecret) {
+      if (user.includes(maskedValue) || pass.includes(maskedValue)) {
+        if (!matchesDomains(host, ms.domains)) {
+          return { url: rawUrl, forbidden: { secretName: ms.name, hostname: host } };
+        }
+        if (user.includes(maskedValue)) {
+          user = user.split(maskedValue).join(ms.realValue);
+          touched = true;
+        }
+        if (pass.includes(maskedValue)) {
+          pass = pass.split(maskedValue).join(ms.realValue);
+          touched = true;
+        }
+      }
+    }
+    const synthetic = touched && (user || pass) ? `Basic ${btoa(`${user}:${pass}`)}` : undefined;
+    parsed.username = '';
+    parsed.password = '';
+    return { url: parsed.toString(), syntheticAuthorization: synthetic };
   }
 
   /**
