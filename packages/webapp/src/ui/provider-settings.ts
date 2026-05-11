@@ -423,10 +423,21 @@ export async function removeAccount(providerId: string): Promise<void> {
         `oauth.${providerId}.token_DOMAINS`,
       ]);
     } else {
-      await fetch(`/api/secrets/oauth/${providerId}`, { method: 'DELETE' });
+      const r = await fetch(`/api/secrets/oauth/${providerId}`, { method: 'DELETE' });
+      // 404 is benign (already deleted). Anything else non-2xx means the
+      // server still has the OAuth token in its OauthSecretStore — surface
+      // for operational visibility so the user knows local clear ≠ server
+      // clear in that path.
+      if (!r.ok && r.status !== 404) {
+        log.warn('OAuth replica DELETE non-ok', { providerId, status: r.status });
+      }
     }
   } catch (err) {
-    console.error('OAuth replica removal failed:', err);
+    log.error('OAuth replica removal failed', {
+      providerId,
+      isExtension,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   saveAccounts(getAccounts().filter((a) => a.providerId !== providerId));
@@ -483,7 +494,19 @@ export async function saveOAuthAccount(opts: {
       const resp = await new Promise<{ maskedValue?: string }>((resolve) => {
         chrome.runtime.sendMessage(
           { type: 'secrets.mask-oauth-token', providerId: opts.providerId },
-          (r: any) => resolve(r ?? {})
+          (r: any) => {
+            // Chrome sets `lastError` AND invokes the callback with
+            // `undefined` when the SW is unreachable / message port closed /
+            // listener crashed. Without explicit handling the empty
+            // resolve looks identical to "SW returned no maskedValue".
+            if (chrome.runtime.lastError) {
+              log.error('SW mask-oauth-token failed', {
+                providerId: opts.providerId,
+                error: chrome.runtime.lastError.message,
+              });
+            }
+            resolve(r ?? {});
+          }
         );
       });
       if (resp.maskedValue) {
@@ -512,10 +535,24 @@ export async function saveOAuthAccount(opts: {
           acct.maskedValue = data.maskedValue;
           saveAccounts(accounts);
         }
+      } else {
+        // Server reachable but rejected the push (auth, validation, 5xx).
+        // The local Account is saved either way (fail-open per spec), but
+        // without surfacing this the user gets a confusing "no masked
+        // value" error from oauth-token / git-token-write later with no
+        // breadcrumb. Bootstrap-on-init retries on the next page load.
+        log.warn('OAuth replica POST non-ok', {
+          providerId: opts.providerId,
+          status: r.status,
+        });
       }
     }
   } catch (err) {
-    console.error('OAuth replica sync failed:', err);
+    log.error('OAuth replica sync failed', {
+      providerId: opts.providerId,
+      isExtension,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
