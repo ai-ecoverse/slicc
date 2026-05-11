@@ -1,22 +1,44 @@
 /**
  * Custom HTTP client for isomorphic-git that uses the fetch proxy.
  *
- * In CLI mode, routes requests through /api/fetch-proxy to bypass CORS.
- * In extension mode, uses direct fetch (host_permissions grant CORS bypass).
+ * Routes through createProxiedFetch which handles dual-mode routing:
+ * - CLI mode: /api/fetch-proxy
+ * - Extension mode: Port-based chrome.runtime.connect({name: 'fetch-proxy.fetch'})
  */
 
 import type { HttpClient, GitHttpRequest, GitHttpResponse } from 'isomorphic-git';
-import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
+import { createProxiedFetch } from '../shell/proxied-fetch.js';
 
-/**
- * Detect if running as a Chrome extension.
- */
-function isExtension(): boolean {
-  return typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+let proxiedFetch: ReturnType<typeof createProxiedFetch> | null = null;
+
+function getProxiedFetch() {
+  if (!proxiedFetch) {
+    proxiedFetch = createProxiedFetch();
+  }
+  return proxiedFetch;
 }
 
 /**
- * Create an HTTP client for isomorphic-git that handles CORS.
+ * Convert a Uint8Array body to an AsyncIterableIterator for isomorphic-git.
+ * Yields a single chunk containing the entire response.
+ */
+async function* singleChunkIterator(
+  data: Uint8Array,
+  onProgress?: GitHttpRequest['onProgress'],
+  contentLength?: number
+): AsyncIterableIterator<Uint8Array> {
+  if (onProgress) {
+    onProgress({
+      phase: 'Receiving',
+      loaded: data.length,
+      total: contentLength ?? data.length,
+    });
+  }
+  yield data;
+}
+
+/**
+ * Create an HTTP client for isomorphic-git that routes through createProxiedFetch.
  */
 export function createGitHttpClient(): HttpClient {
   return {
@@ -24,7 +46,7 @@ export function createGitHttpClient(): HttpClient {
       const { url, method = 'GET', headers = {}, body, onProgress } = req;
 
       // Collect body if it's an async iterator
-      let bodyData: Uint8Array | undefined;
+      let bodyData: string | undefined;
       if (body) {
         const chunks: Uint8Array[] = [];
         for await (const chunk of body) {
@@ -32,94 +54,35 @@ export function createGitHttpClient(): HttpClient {
         }
         // Concatenate chunks
         const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
-        bodyData = new Uint8Array(totalLength);
+        const merged = new Uint8Array(totalLength);
         let offset = 0;
         for (const chunk of chunks) {
-          bodyData.set(chunk, offset);
+          merged.set(chunk, offset);
           offset += chunk.length;
         }
+        // Convert to latin1 string for proxiedFetch
+        let latin1 = '';
+        for (let i = 0; i < merged.length; i += 0x8000) {
+          latin1 += String.fromCharCode(...merged.subarray(i, i + 0x8000));
+        }
+        bodyData = latin1;
       }
 
-      let response: Response;
-
-      // Convert Uint8Array to Blob for fetch body (TypeScript compatibility)
-      const contentType = headers['content-type'] ?? 'application/octet-stream';
-      const fetchBody = bodyData
-        ? new Blob([bodyData.buffer as ArrayBuffer], { type: contentType })
-        : undefined;
-
-      if (isExtension()) {
-        // Extension mode — direct fetch with host_permissions
-        response = await fetch(url, {
-          method,
-          headers,
-          body: fetchBody,
-        });
-      } else {
-        // CLI mode — proxy through /api/fetch-proxy
-        const proxyHeaders: Record<string, string> = {
-          ...headers,
-          'X-Target-URL': url,
-        };
-
-        // Git protocol uses specific content types
-        if (headers['content-type']) {
-          proxyHeaders['Content-Type'] = headers['content-type'];
-        }
-
-        response = await fetch('/api/fetch-proxy', {
-          method,
-          headers: proxyHeaders,
-          body: fetchBody,
-        });
-
-        // Only treat as proxy failure when the proxy itself tagged it.
-        // Upstream 4xx/5xx (incl. git's own 401/404) must flow through.
-        if (isProxyError(response)) {
-          throw new Error(await readProxyErrorMessage(response));
-        }
-      }
-
-      // Convert response headers
-      const responseHeaders: Record<string, string> = {};
-      response.headers.forEach((value, key) => {
-        responseHeaders[key] = value;
+      // Call proxiedFetch (routes correctly in both CLI and extension modes)
+      const response = await getProxiedFetch()(url, {
+        method,
+        headers,
+        body: bodyData,
       });
 
-      // Create async iterator for response body
-      const responseBody = response.body;
-      let bodyIterator: AsyncIterableIterator<Uint8Array> | undefined;
-
-      if (responseBody) {
-        const reader = responseBody.getReader();
-        let totalLoaded = 0;
-
-        bodyIterator = {
-          [Symbol.asyncIterator]() {
-            return this;
-          },
-          async next(): Promise<IteratorResult<Uint8Array>> {
-            const { done, value } = await reader.read();
-            if (done) {
-              return { done: true, value: undefined };
-            }
-            totalLoaded += value.length;
-            if (onProgress) {
-              onProgress({
-                phase: 'Receiving',
-                loaded: totalLoaded,
-                total: parseInt(responseHeaders['content-length'] ?? '0', 10) || totalLoaded,
-              });
-            }
-            return { done: false, value };
-          },
-        };
-      }
+      // Convert body Uint8Array to AsyncIterableIterator for isomorphic-git
+      const contentLength = parseInt(response.headers['content-length'] ?? '0', 10) || undefined;
+      const bodyIterator = singleChunkIterator(response.body, onProgress, contentLength);
 
       return {
-        url: response.url || url,
+        url: response.url,
         method,
-        headers: responseHeaders,
+        headers: response.headers,
         body: bodyIterator,
         statusCode: response.status,
         statusMessage: response.statusText,
