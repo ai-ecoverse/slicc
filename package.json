@@ -24,6 +24,7 @@
     "node": ">=22.13.0"
   },
   "workspaces": [
+    "packages/shared",
     "packages/webapp",
     "packages/node-server",
     "packages/chrome-extension",
@@ -34,7 +35,7 @@
   "scripts": {
     "dev": "tsx packages/node-server/src/index.ts --dev",
     "dev:electron": "tsx packages/node-server/src/index.ts --dev --electron",
-    "build": "npm run build -w @slicc/webapp && npm run build -w @slicc/node-server && npm run build -w @slicc/chrome-extension && npm run build -w @slicc/cloudflare-worker && npm run build -w @slicc/swift-server && npm run build -w @slicc/swift-launcher",
+    "build": "npm run build -w @slicc/shared && npm run build -w @slicc/webapp && npm run build -w @slicc/node-server && npm run build -w @slicc/chrome-extension && npm run build -w @slicc/cloudflare-worker && npm run build -w @slicc/swift-server && npm run build -w @slicc/swift-launcher",
     "start": "node dist/node-server/index.js",
     "start:electron": "node dist/node-server/index.js --electron",
     "preflight": "node packages/dev-tools/tools/preflight-deps.mjs",
