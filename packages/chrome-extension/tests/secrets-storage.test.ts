@@ -13,6 +13,7 @@ import {
   deleteSecret,
   deriveS3Domains,
   listSecrets,
+  listSecretsWithValues,
   saveCustomSecret,
   saveS3Profile,
   setSecret,
@@ -396,7 +397,6 @@ describe('listSecretsWithValues', () => {
   });
 
   it('returns {name, value, domains}[] for every <key>+<key>_DOMAINS pair', async () => {
-    const { listSecretsWithValues } = await import('../src/secrets-storage.js');
     const entries = await listSecretsWithValues(storage);
     expect(entries).toEqual(
       expect.arrayContaining([
