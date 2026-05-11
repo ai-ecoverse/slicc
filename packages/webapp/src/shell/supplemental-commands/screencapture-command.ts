@@ -178,24 +178,35 @@ export function createScreencaptureCommand(): Command {
       try {
         if (local) {
           // Stay on the page: convert to PNG if needed and write to
-          // navigator.clipboard directly.
+          // navigator.clipboard directly. Wait for the document to
+          // regain focus first — after a full-screen / window capture
+          // through the OS-level `getDisplayMedia` picker the SLICC
+          // tab is no longer focused, and `clipboard.write` rejects
+          // with "Document is not focused".
           const pngBytes = await ensurePngBytes(bytes, mimeType);
           const pngBuffer = new ArrayBuffer(pngBytes.byteLength);
           new Uint8Array(pngBuffer).set(pngBytes);
           const pngBlob = new Blob([pngBuffer], { type: 'image/png' });
+          await whenDocumentFocused();
           await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
           const sizeKB = Math.round(pngBlob.size / 1024);
           return { stdout: `captured ${sizeKB} KB to clipboard\n`, stderr: '', exitCode: 0 };
         }
         // Worker: bridge the clipboard write too — navigator.clipboard
-        // doesn't exist on WorkerNavigator.
-        await panelRpc!.call('clipboard-write-image', {
-          bytes: bytes.buffer.slice(
-            bytes.byteOffset,
-            bytes.byteOffset + bytes.byteLength
-          ) as ArrayBuffer,
-          mimeType,
-        });
+        // doesn't exist on WorkerNavigator. The page-side handler does
+        // its own focus wait, so we just need a generous bridge timeout
+        // in case the user takes a while to refocus the tab.
+        await panelRpc!.call(
+          'clipboard-write-image',
+          {
+            bytes: bytes.buffer.slice(
+              bytes.byteOffset,
+              bytes.byteOffset + bytes.byteLength
+            ) as ArrayBuffer,
+            mimeType,
+          },
+          { timeoutMs: 5 * 60_000 }
+        );
         const sizeKB = Math.round(bytes.byteLength / 1024);
         return { stdout: `captured ${sizeKB} KB to clipboard\n`, stderr: '', exitCode: 0 };
       } catch (err) {
@@ -272,4 +283,45 @@ async function ensurePngBytes(bytes: Uint8Array, mimeType: string): Promise<Uint
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/**
+ * Resolve once `document.hasFocus()` is true so a follow-up
+ * `navigator.clipboard.write` call doesn't reject with "Document is
+ * not focused". Mirrors the helper used on the panel-RPC handler side;
+ * kept local to keep this file callable from worker-importable code
+ * paths without dragging UI deps along (the function is only ever
+ * called on the local-DOM branch).
+ */
+async function whenDocumentFocused(timeoutMs = 5 * 60_000): Promise<void> {
+  if (typeof document === 'undefined') return;
+  // Treat a missing `hasFocus` (lightweight test stubs) as already
+  // focused so we don't wedge tests that don't bother mocking it.
+  if (typeof document.hasFocus !== 'function') return;
+  if (document.hasFocus()) return;
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+      clearTimeout(timer);
+    };
+    const onFocus = () => {
+      if (document.hasFocus()) {
+        cleanup();
+        resolve();
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && document.hasFocus()) {
+        cleanup();
+        resolve();
+      }
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('timed out waiting for window focus'));
+    }, timeoutMs);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+  });
 }

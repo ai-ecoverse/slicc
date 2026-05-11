@@ -160,6 +160,7 @@ export function createStandalonePanelRpcHandlers(): PanelRpcHandlers {
       if (!navigator.clipboard?.writeText) {
         throw new Error('clipboard API unavailable');
       }
+      await whenDocumentFocused();
       await navigator.clipboard.writeText(text);
       return { done: true };
     },
@@ -175,6 +176,14 @@ export function createStandalonePanelRpcHandlers(): PanelRpcHandlers {
       } else {
         pngBlob = await reencodeAsPng(src);
       }
+      // The browser rejects `clipboard.write` with "Document is not
+      // focused" when invoked while the page is in the background —
+      // which is exactly what happens after the user picks a target
+      // in the OS-level `getDisplayMedia` picker (focus stays on the
+      // target window / screen). Defer the write until the page
+      // regains focus so `screencapture -c` finishes silently when
+      // the user comes back instead of failing right at the finish line.
+      await whenDocumentFocused();
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
       return { done: true };
     },
@@ -271,4 +280,53 @@ async function reencodeAsPng(blob: Blob): Promise<Blob> {
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/**
+ * Resolve when the document is focused so a follow-up `navigator.clipboard.*`
+ * call doesn't reject with "Document is not focused". Common trigger: the
+ * `getDisplayMedia` OS picker hands focus to the selected target window /
+ * screen, leaving the SLICC tab in the background while the agent tries to
+ * finish the capture pipeline.
+ *
+ * - Resolves immediately when the page is already focused.
+ * - Otherwise listens for the next `focus` event on `window` and resolves
+ *   then. A `visibilitychange` listener covers the case where the tab is
+ *   reactivated without firing a window focus event (e.g. switching back
+ *   from another tab via Cmd-Tab).
+ * - Bails out after `timeoutMs` so a forgotten capture doesn't hang the
+ *   command forever; the caller surfaces the timeout as a clipboard error
+ *   the user can act on.
+ */
+async function whenDocumentFocused(timeoutMs = 5 * 60_000): Promise<void> {
+  if (typeof document === 'undefined') return;
+  // Treat a missing `hasFocus` (lightweight test stubs) as already
+  // focused so we don't wedge tests that don't bother mocking it.
+  if (typeof document.hasFocus !== 'function') return;
+  if (document.hasFocus()) return;
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+      clearTimeout(timer);
+    };
+    const onFocus = () => {
+      if (document.hasFocus()) {
+        cleanup();
+        resolve();
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && document.hasFocus()) {
+        cleanup();
+        resolve();
+      }
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('timed out waiting for window focus'));
+    }, timeoutMs);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+  });
 }
