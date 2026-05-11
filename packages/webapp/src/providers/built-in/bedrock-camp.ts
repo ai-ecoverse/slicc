@@ -13,14 +13,14 @@ import {
   registerApiProvider,
   calculateCost,
   createAssistantMessageEventStream,
-} from '@mariozechner/pi-ai';
-import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
-import { transformMessages } from '@mariozechner/pi-ai/dist/providers/transform-messages.js';
+} from '@earendil-works/pi-ai';
+import type { AssistantMessageEventStream } from '@earendil-works/pi-ai';
+import { transformMessages } from '@earendil-works/pi-ai/dist/providers/transform-messages.js';
 import {
   buildBaseOptions,
   adjustMaxTokensForThinking,
   clampReasoning,
-} from '@mariozechner/pi-ai/dist/providers/simple-options.js';
+} from '@earendil-works/pi-ai/dist/providers/simple-options.js';
 import type {
   Api,
   Model,
@@ -30,7 +30,7 @@ import type {
   AssistantMessage,
   ThinkingLevel,
   ThinkingBudgets,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 
 export const config: ProviderConfig = {
   id: 'bedrock-camp',

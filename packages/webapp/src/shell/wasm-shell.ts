@@ -1,42 +1,44 @@
 /**
- * WasmShell — xterm.js terminal integration with just-bash.
+ * `WasmShell` — xterm.js terminal integration on top of
+ * `WasmShellHeadless`.
  *
- * Provides a terminal UI that connects to just-bash's Bash interpreter
- * for command execution. Uses our VirtualFS via the VfsAdapter so that
- * all file operations persist to the browser's OPFS/IndexedDB storage.
+ * The headless concerns (just-bash, jsh sync, custom
+ * commands, executeCommand/executeScriptFile primitives) live in
+ * `wasm-shell-headless.ts`. This file adds the **view layer** —
+ * xterm mount, theme sync, refit / resize, line editor, command
+ * history, tab completion, Ctrl+C, multi-line continuation, and
+ * inline media-preview rendering for `imgcat`.
+ *
+ * Worker context: the agent's `bash` tool calls `executeCommand` /
+ * `executeScriptFile` on a `WasmShell` instance, but never calls
+ * `mount()`. The view fields stay `null`, and the view methods
+ * are dead code — xterm itself is dynamically imported inside
+ * `mount()` so it never enters the worker bundle. A follow-up may
+ * formally split the public types so the worker constructs
+ * `WasmShellHeadless` directly; today the inheritance is enough.
  */
 
 import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
-import type { FsWatcher, VirtualFS } from '../fs/index.js';
-import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
-import type { BashExecResult, Command, CommandName } from 'just-bash';
-import { VfsAdapter } from './vfs-adapter.js';
-import { GitCommands } from '../git/git-commands.js';
-import { createSupplementalCommands } from './supplemental-commands.js';
+import type { BashExecResult } from 'just-bash';
 import type { MediaPreviewItem } from './supplemental-commands.js';
-import type { BrowserAPI } from '../cdp/index.js';
 import {
-  createSkillCommand,
-  createUpskillCommand,
-} from './supplemental-commands/upskill-command.js';
-import { MountCommands } from '../fs/mount-commands.js';
-import type { BshDiscoveryFS } from './bsh-discovery.js';
-import type { JshDiscoveryFS } from './jsh-discovery.js';
-import { executeJshFile, executeJsCode } from './jsh-executor.js';
-import { parseShellArgs } from './parse-shell-args.js';
-import { ScriptCatalog } from './script-catalog.js';
-import { trackShellCommand } from '../ui/telemetry.js';
+  WasmShellHeadless,
+  type HeadlessShellOptions,
+  type HeadlessShellLike,
+} from './wasm-shell-headless.js';
 import {
-  createProxiedFetch,
   encodeForbiddenRequestHeaders,
   decodeForbiddenResponseHeaders,
   isTextContentType,
 } from './proxied-fetch.js';
 
-// Re-export for backwards compatibility — existing tests import these
-// from `wasm-shell.ts`.
+// Re-exports for backwards compatibility — existing tests import
+// these from `wasm-shell.ts`. New callers should import from the
+// origin modules directly.
 export { encodeForbiddenRequestHeaders, decodeForbiddenResponseHeaders, isTextContentType };
+export type { HeadlessShellLike };
+export { WasmShellHeadless } from './wasm-shell-headless.js';
 
 function basename(path: string): string {
   const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
@@ -44,78 +46,17 @@ function basename(path: string): string {
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
 }
 
-interface WatcherAwareFs {
-  getWatcher?(): FsWatcher | null;
-}
-
-interface UnderlyingFsProvider {
-  getUnderlyingFS?(): unknown;
-}
-
-function getFsWatcher(fs: unknown): FsWatcher | null {
-  if (fs && typeof (fs as WatcherAwareFs).getWatcher === 'function') {
-    return (fs as WatcherAwareFs).getWatcher?.() ?? null;
-  }
-
-  if (fs && typeof (fs as UnderlyingFsProvider).getUnderlyingFS === 'function') {
-    return getFsWatcher((fs as UnderlyingFsProvider).getUnderlyingFS?.());
-  }
-
-  return null;
-}
-
-export interface WasmShellOptions {
-  fs: VirtualFS;
+export interface WasmShellOptions extends HeadlessShellOptions {
   /** Container element for the terminal. */
   container?: HTMLElement;
-  /** Initial working directory. Default: / */
-  cwd?: string;
-  /** Initial environment variables. */
-  env?: Record<string, string>;
-  /** BrowserAPI for playwright-cli command. */
-  browserAPI?: BrowserAPI;
-  /** Optional: FS to use for .jsh discovery (defaults to fs). Useful for scoops where skill loading uses unrestricted VFS but the shell uses RestrictedFS. */
-  jshDiscoveryFs?: JshDiscoveryFS;
-  /** Optional: FS to use for .bsh discovery (defaults to fs). */
-  bshDiscoveryFs?: BshDiscoveryFS;
-  /** Optional shared script catalog. When omitted, WasmShell creates and owns one. */
-  scriptCatalog?: ScriptCatalog;
-  /**
-   * Optional command allow-list. When omitted (or when the list contains `'*'`),
-   * every built-in, custom, and `.jsh` command is available — the default. When
-   * provided, only command heads whose names appear in the list are registered
-   * on the underlying Bash instance; anything else fails at dispatch with
-   * "command not found" (exit code 127), including inside pipelines, subshells,
-   * and command substitution, because just-bash resolves every simple command
-   * through the same registry.
-   */
-  allowedCommands?: readonly string[];
-  /**
-   * Returns the JID of the scoop whose shell this is, when running inside
-   * a scoop context. Forwarded to the `agent` supplemental command so it
-   * can tell the AgentBridge which scoop is the parent (for model
-   * inheritance). Returns `undefined` for standalone / terminal-panel
-   * shells that have no scoop owner.
-   */
-  getParentJid?: () => string | undefined;
-  /**
-   * Returns true when this shell is owned by a non-interactive scoop. Used by
-   * commands like `mount` that need a human at the keyboard to approve a
-   * picker — in scoop context they should fail fast instead of hanging on a
-   * tool UI nobody will see. Defaults to undefined (interactive).
-   */
-  isScoop?: () => boolean;
 }
 
-type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
-  signal?: AbortSignal;
-};
-
-export class WasmShell {
-  private bash: Bash;
-  private vfsAdapter: VfsAdapter;
-  private gitCommands: GitCommands;
-  private mountCommands: MountCommands;
+/**
+ * `WasmShell` — view-extending shell. Inherits everything headless
+ * from `WasmShellHeadless`; adds xterm mount + line editor + media
+ * preview.
+ */
+export class WasmShell extends WasmShellHeadless {
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
   private terminalHost: HTMLElement | null = null;
@@ -132,419 +73,36 @@ export class WasmShell {
   private isExecuting = false;
   private execAbort: AbortController | null = null;
   private continuationBuffer = '';
-  /** Accumulated env state from successive exec() calls. */
-  private lastEnv: Record<string, string>;
-  private cwd: string;
-  /** Set of all built-in + custom command names (for shadowing protection). */
-  private builtinCommandNames: Set<string>;
-  /**
-   * Allow-list of command names. `null` means unrestricted — every command is
-   * permitted. Otherwise only names in the set may be registered or executed.
-   */
-  private readonly allowedCommands: ReadonlySet<string> | null;
-  private readonly scriptCatalog: ScriptCatalog;
-  private readonly ownsScriptCatalog: boolean;
-  /** Maps .jsh command names to their registered script paths (for staleness detection). */
-  private registeredJshCommands = new Map<string, string>();
-  /** Promise for the currently in-flight jsh sync, so callers can await it. */
-  private jshSyncInflight: Promise<void> | null = null;
-  /** Set when a sync is requested while one is already in-flight. */
-  private jshSyncDirty = false;
 
-  constructor(private options: WasmShellOptions) {
-    this.vfsAdapter = new VfsAdapter(options.fs);
-    this.allowedCommands =
-      options.allowedCommands && !options.allowedCommands.includes('*')
-        ? new Set(options.allowedCommands)
-        : null;
-    const initialCwd = options.cwd ?? '/';
-    const initialEnv: Record<string, string> = {
-      HOME: '/',
-      PATH: '/usr/bin',
-      USER: 'user',
-      SHELL: '/bin/bash',
-      PWD: initialCwd,
-      ...options.env,
-    };
-
-    // Initialize git commands with VirtualFS
-    this.gitCommands = new GitCommands({
-      fs: options.fs,
-      authorName: initialEnv.GIT_AUTHOR_NAME ?? 'User',
-      authorEmail: initialEnv.GIT_AUTHOR_EMAIL ?? 'user@example.com',
-    });
-
-    // Initialize mount commands with VirtualFS
-    this.mountCommands = new MountCommands({ fs: options.fs, isScoop: options.isScoop });
-
-    const scriptDiscoveryFs = options.jshDiscoveryFs ?? options.fs;
-    const bshDiscoveryFs = options.bshDiscoveryFs ?? options.fs;
-    const scriptWatcher = getFsWatcher(scriptDiscoveryFs) ?? getFsWatcher(bshDiscoveryFs);
-    this.scriptCatalog =
-      options.scriptCatalog ??
-      new ScriptCatalog({
-        jshFs: scriptDiscoveryFs,
-        bshFs: bshDiscoveryFs,
-        watcher: scriptWatcher,
-      });
-    this.ownsScriptCatalog = !options.scriptCatalog;
-
-    // When .jsh files change on disk, re-sync registered commands
-    if (scriptWatcher) {
-      scriptWatcher.watch(
-        '/',
-        (path) => path.endsWith('.jsh'),
-        () => {
-          void this.syncJshCommands().catch(() => undefined);
-        }
-      );
-    }
-
-    // Create custom commands for just-bash
-    const gitCommand = this.createGitCustomCommand();
-    const supplementalCommands = createSupplementalCommands({
-      onMediaPreview: async (items) => this.renderMediaPreview(items),
-      getJshCommands: () => this.getJshCommandNames(),
-      fs: options.fs,
-      scriptCatalog: this.scriptCatalog,
-      browserAPI: options.browserAPI,
-      getParentJid: options.getParentJid,
-    });
-    const mountCommand = this.createMountCustomCommand();
-    const fetchFn = createProxiedFetch();
-
-    const allCustomCommands = [
-      gitCommand,
-      mountCommand,
-      createSkillCommand(options.fs),
-      createUpskillCommand(options.fs, fetchFn),
-      ...supplementalCommands,
-    ];
-    const customCommands = allCustomCommands.filter((c) => this.isCommandAllowed(c.name));
-
-    // When restricted, pass `commands:` so just-bash only registers allow-listed
-    // built-ins. When unrestricted, leave it undefined to get the full default set.
-    const allBuiltinNames = [
-      ...getCommandNames(),
-      ...getNetworkCommandNames(),
-    ] as readonly CommandName[];
-    const allowedBuiltinNames: CommandName[] | undefined = this.allowedCommands
-      ? allBuiltinNames.filter((n) => this.isCommandAllowed(n))
-      : undefined;
-
-    this.bash = new Bash({
-      fs: this.vfsAdapter,
-      cwd: initialCwd,
-      env: initialEnv,
-      fetch: fetchFn,
-      commands: allowedBuiltinNames,
-      customCommands,
-    });
-
-    // Network-command post-registration cleanup (Codex P1 on #433).
-    //
-    // just-bash's `BashOptions.commands` filter controls only the non-network
-    // built-ins. When `fetch` (or `network`) is set, just-bash unconditionally
-    // registers EVERY name from `getNetworkCommandNames()` regardless of
-    // `commands` — see `Bash` constructor in just-bash's bundle:
-    //   `if (t.fetch || t.network) for (let i of U0()) this.registerCommand(i);`
-    // We always pass `fetch` (via `createProxiedFetch()`), so without this
-    // cleanup a scoop with `allowedCommands: ['echo']` could still execute
-    // `curl`, `wget`, etc. — defeating the per-scoop isolation guarantee.
-    //
-    // Delete the disallowed network commands from the already-populated
-    // registry. Reaches into `Bash`'s private `commands: Map` via cast; the
-    // property name is stable across versions and tests below guard the
-    // behavior, but the upstream ergonomics here are what warrants the
-    // comment.
-    if (this.allowedCommands !== null) {
-      const bashInternals = this.bash as unknown as { commands: Map<string, unknown> };
-      for (const name of getNetworkCommandNames()) {
-        if (!this.isCommandAllowed(name)) {
-          bashInternals.commands.delete(name);
-        }
-      }
-    }
-
-    // Wire up /usr/bin virtual directory with all registered command names
-    const customCommandNames = customCommands.map((c) => c.name);
-    const registeredBuiltinNames = allowedBuiltinNames ?? [
-      ...getCommandNames(),
-      ...getNetworkCommandNames(),
-    ];
-    this.builtinCommandNames = new Set([...registeredBuiltinNames, ...customCommandNames]);
-    this.vfsAdapter.setRegisteredCommandsFn(() => [...this.builtinCommandNames]);
-
-    this.lastEnv = { ...initialEnv };
-    this.cwd = initialCwd;
-
-    // Kick off initial .jsh registration (async, non-blocking)
-    void this.syncJshCommands().catch(() => undefined);
-  }
-
-  /** True when `name` is registrable/executable under the current allow-list. */
-  private isCommandAllowed(name: string): boolean {
-    return this.allowedCommands === null || this.allowedCommands.has(name);
+  constructor(options: WasmShellOptions) {
+    super(options);
   }
 
   /**
-   * Discover .jsh commands and register any new ones as just-bash custom commands.
-   * This makes .jsh scripts work inside pipelines, subshells, and command substitution —
-   * not just as top-level commands caught by the exit-code-127 fallback.
+   * View override: thread the active terminal `AbortController` into
+   * `runCommand` so terminal Ctrl+C cancels the running just-bash
+   * command. Headless-only callers pass `signal` explicitly; view
+   * callers (`executeCommandInTerminal`, `handleEnter`) leave it
+   * `undefined` and rely on `this.execAbort` being current.
    */
-  async syncJshCommands(): Promise<void> {
-    if (this.jshSyncInflight) {
-      // Another sync is running — mark dirty so it re-runs when done.
-      this.jshSyncDirty = true;
-      return this.jshSyncInflight;
-    }
-    this.jshSyncInflight = this.doSyncJshCommands();
-    return this.jshSyncInflight;
+  protected override async runCommand(
+    command: string,
+    signal?: AbortSignal
+  ): Promise<BashExecResult> {
+    return super.runCommand(command, signal ?? this.execAbort?.signal);
   }
 
-  private async doSyncJshCommands(): Promise<void> {
-    try {
-      const jshMap = await this.scriptCatalog.getJshCommands();
-      const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
-
-      for (const [name, scriptPath] of jshMap) {
-        // Skip commands blocked by the allow-list.
-        if (!this.isCommandAllowed(name)) continue;
-
-        // Never shadow built-in or custom commands
-        if (this.builtinCommandNames.has(name) && !this.registeredJshCommands.has(name)) {
-          continue;
-        }
-
-        // Skip if already registered with the same path (no change)
-        if (this.registeredJshCommands.get(name) === scriptPath) continue;
-
-        // Register (or re-register if the path changed) as a just-bash custom
-        // command. The execute closure resolves the script path at call-time via
-        // the catalog so it stays current even if a later sync hasn't fired yet.
-        const catalog = this.scriptCatalog;
-        const shell = this;
-        const cmdName = name;
-
-        const command: Command = {
-          name,
-          async execute(args: string[], ctx) {
-            // Resolve the current script path from the catalog at call-time
-            // so we always read the latest version, even if the file moved.
-            const currentMap = await catalog.getJshCommands();
-            const currentPath = currentMap.get(cmdName);
-            if (!currentPath) {
-              return {
-                stdout: '',
-                stderr: `jsh: command '${cmdName}' no longer exists\n`,
-                exitCode: 127,
-              };
-            }
-
-            let code: string;
-            try {
-              const raw = await discoveryFs.readFile(currentPath, { encoding: 'utf-8' });
-              code = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-            } catch {
-              return {
-                stdout: '',
-                stderr: `jsh: cannot read script '${currentPath}'\n`,
-                exitCode: 127,
-              };
-            }
-
-            const argv = ['node', currentPath, ...args];
-            // When running as a custom command inside just-bash, ctx.exec is always
-            // provided by the interpreter. Fall back to bash.exec for safety.
-            const execFn: typeof ctx.exec =
-              ctx.exec ??
-              ((cmd, opts) =>
-                shell.bash.exec(cmd, {
-                  env: Object.fromEntries(ctx.env),
-                  cwd: opts?.cwd ?? ctx.cwd,
-                }));
-            return executeJsCode(code, argv, {
-              fs: ctx.fs,
-              cwd: ctx.cwd,
-              env: ctx.env,
-              stdin: ctx.stdin,
-              exec: execFn,
-            });
-          },
-        };
-
-        this.bash.registerCommand(command);
-        this.registeredJshCommands.set(name, scriptPath);
-        this.builtinCommandNames.add(name);
-      }
-    } finally {
-      this.jshSyncInflight = null;
-      // If another sync was requested while we were running, re-run.
-      if (this.jshSyncDirty) {
-        this.jshSyncDirty = false;
-        void this.syncJshCommands().catch(() => undefined);
-      }
-    }
-  }
-
-  /** Create a custom git command for just-bash. */
-  private createGitCustomCommand(): Command {
-    const gitCommands = this.gitCommands;
-    return defineCommand('git', async (args, ctx) => {
-      const cwd = ctx.cwd;
-      const result = await gitCommands.execute(args, cwd);
-      return {
-        stdout: result.stdout,
-        stderr: result.stderr,
-        exitCode: result.exitCode,
-      };
-    });
-  }
-
-  /** Create a custom mount command for just-bash. */
-  private createMountCustomCommand(): Command {
-    const mountCommands = this.mountCommands;
-    return defineCommand('mount', async (args, ctx) => {
-      const cwd = ctx.cwd;
-      const result = await mountCommands.execute(args, cwd);
-      return {
-        stdout: result.stdout,
-        stderr: result.stderr,
-        exitCode: result.exitCode,
-      };
-    });
-  }
-
-  /** Get the underlying Bash instance for programmatic access. */
-  getBash(): Bash {
-    return this.bash;
-  }
-
-  /** Get current working directory. */
-  getCwd(): string {
-    return this.cwd;
-  }
-
-  /** Get the shared script catalog used for `.jsh`/`.bsh` discovery. */
-  getScriptCatalog(): ScriptCatalog {
-    return this.scriptCatalog;
-  }
-
-  /** Get a copy of the environment. */
-  getEnv(): Record<string, string> {
-    return { ...this.lastEnv };
-  }
-
-  /** Get discovered .jsh commands from the shared script catalog, filtering out built-in names. */
-  private async getFilteredJshCommands(): Promise<Map<string, string>> {
-    const all = await this.scriptCatalog.getJshCommands();
-    const filtered = new Map<string, string>();
-    for (const [name, path] of all) {
-      if (this.builtinCommandNames.has(name)) continue;
-      if (!this.isCommandAllowed(name)) continue;
-      filtered.set(name, path);
-    }
-    return filtered;
-  }
-
-  /** Get currently discovered .jsh command names. */
-  async getJshCommandNames(): Promise<string[]> {
-    return [...(await this.getFilteredJshCommands()).keys()];
-  }
-
-  /**
-   * Try to run a command as a .jsh script if bash returned 127 (command not found).
-   * Returns null if the command is not a .jsh file.
-   */
-  private async tryJshFallback(command: string): Promise<BashExecResult | null> {
-    // Parse the first word as the command name
-    const trimmed = command.trim();
-    const firstSpace = trimmed.indexOf(' ');
-    const cmdName = firstSpace >= 0 ? trimmed.slice(0, firstSpace) : trimmed;
-    const argsStr = firstSpace >= 0 ? trimmed.slice(firstSpace + 1).trim() : '';
-
-    const jshMap = await this.getFilteredJshCommands();
-    const scriptPath = jshMap.get(cmdName);
-    if (!scriptPath) return null;
-
-    const args = argsStr ? parseShellArgs(argsStr) : [];
-
-    // Read the script source using the discovery FS (which can see paths outside the sandbox)
-    const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
-    let code: string;
-    try {
-      const raw = await discoveryFs.readFile(scriptPath, { encoding: 'utf-8' });
-      code = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    } catch {
-      return {
-        stdout: '',
-        stderr: `jsh: cannot read script '${scriptPath}'\n`,
-        exitCode: 127,
-        env: this.lastEnv,
-      };
-    }
-
-    // Execute with the SANDBOXED fs (this.vfsAdapter) — not the discovery FS
-    const argv = ['node', scriptPath, ...args];
-    const result = await executeJsCode(code, argv, {
-      fs: this.vfsAdapter,
-      cwd: this.cwd,
-      env: new Map(Object.entries(this.lastEnv)),
-      stdin: '',
-      exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
-    });
-
-    return {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-      env: this.lastEnv,
-    };
-  }
-
-  /** Run a command through just-bash, carrying forward env/cwd state. */
-  private async runCommand(command: string, signal?: AbortSignal): Promise<BashExecResult> {
-    // Track shell command for telemetry (extract first word as command name)
-    const commandName = command.trim().split(/\s+/)[0] || 'unknown';
-    trackShellCommand(commandName);
-
-    // just-bash's published ExecOptions type does not yet expose AbortSignal,
-    // but WasmShell still forwards it so external callers and terminal Ctrl+C
-    // keep a consistent cancellation path as the shell runtime evolves.
-    const execOptions: BashExecOptionsWithSignal = {
-      env: this.lastEnv,
-      cwd: this.cwd,
-      signal: signal ?? this.execAbort?.signal,
-    };
-    const result = await this.bash.exec(command, execOptions);
-    // Persist state for next call
-    if (result.env) {
-      this.lastEnv = { ...result.env };
-    }
-    if (result.env?.PWD) {
-      this.cwd = result.env.PWD;
-    }
-
-    // If bash returned 127 (command not found), try .jsh fallback
-    if (result.exitCode === 127) {
-      const jshResult = await this.tryJshFallback(command);
-      if (jshResult) {
-        // A .jsh command was found but wasn't registered — re-sync so it's
-        // available as a first-class bash command for future pipelines/subshells.
-        void this.syncJshCommands().catch(() => undefined);
-        return jshResult;
-      }
-    }
-
-    return result;
-  }
+  // -------------------------------------------------------------------------
+  // Mount lifecycle
+  // -------------------------------------------------------------------------
 
   /** Mount the terminal in a DOM container. */
   async mount(container?: HTMLElement): Promise<void> {
-    const target = container ?? this.options.container;
+    const target = container ?? (this.options as WasmShellOptions).container;
     if (!target) throw new Error('No container element provided');
 
-    // Dynamic imports so this module can be loaded in Node.js (tests) without xterm
+    // Dynamic imports so this module can be loaded in Node.js (tests)
+    // and the kernel worker without xterm.
     const { Terminal } = await import('@xterm/xterm');
     const { FitAddon } = await import('@xterm/addon-fit');
     await import('@xterm/xterm/css/xterm.css');
@@ -607,7 +165,6 @@ export class WasmShell {
       convertEol: true,
     });
 
-    // Sync xterm theme when .theme-light class changes on <html>
     this.themeObserver?.disconnect();
     this.themeObserver = new MutationObserver(() => {
       if (!this.terminal) return;
@@ -634,47 +191,15 @@ export class WasmShell {
     this.terminal.open(this.terminalHost);
     this.fitAddon.fit();
 
-    // Handle resize
     this.resizeObserver?.disconnect();
     this.resizeObserver = new ResizeObserver(() => this.refit());
     this.resizeObserver.observe(this.terminalHost);
 
-    // Write welcome message
     this.terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (powered by just-bash)\x1b[0m');
     this.terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m\n');
 
     this.showPrompt();
     this.setupInputHandler();
-  }
-
-  /** Execute a command programmatically (useful for agent integration). */
-  async executeCommand(
-    command: string,
-    signal?: AbortSignal
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    const result = await this.runCommand(command, signal);
-    return {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-    };
-  }
-
-  /**
-   * Execute a .jsh/.bsh script file by VFS path.
-   * Uses the same execution engine as JSH commands (JavaScript, not bash).
-   */
-  async executeScriptFile(
-    scriptPath: string,
-    args: string[] = []
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    return executeJshFile(scriptPath, args, {
-      fs: this.vfsAdapter,
-      cwd: this.cwd,
-      env: new Map(Object.entries(this.lastEnv)),
-      stdin: '',
-      exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
-    });
   }
 
   /** Re-fit the terminal to its host container. */
@@ -761,8 +286,8 @@ export class WasmShell {
     this.clearMediaPreview();
   }
 
-  /** Dispose the terminal. */
-  dispose(): void {
+  /** Dispose the terminal + headless tear-down. */
+  override dispose(): void {
     this.themeObserver?.disconnect();
     this.themeObserver = null;
     this.resizeObserver?.disconnect();
@@ -773,10 +298,12 @@ export class WasmShell {
     this.fitAddon = null;
     this.terminalHost = null;
     this.previewHost = null;
-    if (this.ownsScriptCatalog) {
-      this.scriptCatalog.dispose();
-    }
+    super.dispose();
   }
+
+  // -------------------------------------------------------------------------
+  // Line editor
+  // -------------------------------------------------------------------------
 
   private showPrompt(): void {
     if (!this.terminal) return;
@@ -950,7 +477,6 @@ export class WasmShell {
     if (this.cursorPos <= 0) return;
     this.cursorPos--;
     if (this.currentLine[this.cursorPos] === '\n') {
-      // Cross to end of previous line
       const before = this.currentLine.slice(0, this.cursorPos);
       const prevLineStart = before.lastIndexOf('\n') + 1;
       const prevLineLen = this.cursorPos - prevLineStart;
@@ -965,7 +491,6 @@ export class WasmShell {
   private handleArrowRight(): void {
     if (this.cursorPos >= this.currentLine.length) return;
     if (this.currentLine[this.cursorPos] === '\n') {
-      // Cross to start of next line
       this.cursorPos++;
       this.terminal?.write('\x1b[B\r');
     } else {
@@ -975,7 +500,6 @@ export class WasmShell {
   }
 
   private handleHome(): void {
-    // Go to start of current text line
     const before = this.currentLine.slice(0, this.cursorPos);
     const lineStart = before.lastIndexOf('\n') + 1;
     if (this.cursorPos === lineStart) return;
@@ -986,7 +510,6 @@ export class WasmShell {
   }
 
   private handleEnd(): void {
-    // Go to end of current text line
     let lineEnd = this.currentLine.indexOf('\n', this.cursorPos);
     if (lineEnd === -1) lineEnd = this.currentLine.length;
     if (this.cursorPos === lineEnd) return;
@@ -1032,7 +555,6 @@ export class WasmShell {
     const currentWord = words[words.length - 1] || '';
     const isFirstWord = words.length <= 1 || (words.length === 2 && words[0] === '');
 
-    // Use just-bash's compgen builtin for completions (not child_process — this is WASM)
     const escaped = currentWord ? "'" + currentWord.replace(/'/g, "'\\''") + "'" : "''";
     const compgenCmd = isFirstWord
       ? `compgen -A command -- ${escaped}`
@@ -1054,7 +576,6 @@ export class WasmShell {
           this.cursorPos += suffix.length;
           this.terminal.write(suffix);
         }
-        // Add trailing slash for dirs, space for everything else
         let trail = ' ';
         if (!isFirstWord) {
           const dirCheck = await this.bash.exec(`compgen -d -- ${escaped.slice(0, -1)}${suffix}'`, {
@@ -1070,7 +591,6 @@ export class WasmShell {
         this.cursorPos += 1;
         this.terminal.write(trail);
       } else {
-        // Multiple matches — complete common prefix, or show options
         let prefix = matches[0];
         for (const m of matches) {
           while (!m.startsWith(prefix)) prefix = prefix.slice(0, -1);
@@ -1084,7 +604,6 @@ export class WasmShell {
           this.cursorPos += suffix.length;
           this.terminal.write(suffix);
         } else {
-          // Show all matches
           this.terminal.writeln('');
           this.terminal.writeln(matches.map((m) => m.split('/').pop() ?? m).join('  '));
           this.showPrompt();
@@ -1139,7 +658,6 @@ export class WasmShell {
   }
 
   private async handleEnter(): Promise<void> {
-    // Move cursor to end of displayed content so output appears below all lines
     const lines = this.currentLine.split('\n');
     if (lines.length > 1) {
       const curLine = this.getCursorVisualLine();
@@ -1154,7 +672,6 @@ export class WasmShell {
     this.currentLine = '';
     this.cursorPos = 0;
 
-    // Accumulate continuation lines
     const combined = this.continuationBuffer ? this.continuationBuffer + '\n' + line : line;
 
     if (this.isIncomplete(combined)) {
@@ -1172,12 +689,10 @@ export class WasmShell {
       return;
     }
 
-    // Add to history
     if (this.history[this.history.length - 1] !== trimmed) {
       this.history.push(trimmed);
     }
 
-    // Handle "clear"
     if (trimmed === 'clear') {
       this.clearTerminal();
       this.showPrompt();
@@ -1232,7 +747,12 @@ export class WasmShell {
     this.previewStateListener?.(false);
   }
 
-  private async renderMediaPreview(items: MediaPreviewItem[]): Promise<void> {
+  /**
+   * View override: render the inline media preview inside the
+   * terminal panel. Headless base throws; this overrides with the
+   * existing image/video rendering logic.
+   */
+  protected override async renderMediaPreview(items: MediaPreviewItem[]): Promise<void> {
     if (!this.previewHost || typeof document === 'undefined') {
       throw new Error('terminal preview is unavailable');
     }

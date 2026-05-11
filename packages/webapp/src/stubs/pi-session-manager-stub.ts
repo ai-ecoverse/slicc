@@ -1,5 +1,5 @@
 /**
- * Browser-safe stub for @mariozechner/pi-coding-agent/dist/core/session-manager.js
+ * Browser-safe stub for @earendil-works/pi-coding-agent/dist/core/session-manager.js
  *
  * The compaction submodule imports buildSessionContext at module scope, but the
  * webapp only uses pure functions (estimateTokens, shouldCompact, generateSummary,

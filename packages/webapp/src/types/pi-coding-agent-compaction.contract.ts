@@ -1,6 +1,6 @@
 /**
  * Compile-time positional contract for `generateSummary` from
- * `@mariozechner/pi-coding-agent`.
+ * `@earendil-works/pi-coding-agent`.
  *
  * pi-coding-agent 0.63.0 (renovate bump 637c4f17, 2026-03-27) inserted
  * `headers?: Record<string, string>` at slot 4 of `generateSummary`,
@@ -37,7 +37,7 @@
  * tsc has something to fail on if the contract breaks.
  */
 
-import type { generateSummary } from '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js';
+import type { generateSummary } from '@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js';
 
 type Params = Parameters<typeof generateSummary>;
 

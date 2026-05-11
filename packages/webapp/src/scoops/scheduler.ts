@@ -22,7 +22,7 @@ export interface SchedulerCallbacks {
 
 export class TaskScheduler {
   private callbacks: SchedulerCallbacks;
-  private pollInterval: number | null = null;
+  private pollInterval: ReturnType<typeof setInterval> | null = null;
   private running = false;
 
   constructor(callbacks: SchedulerCallbacks) {
@@ -35,7 +35,10 @@ export class TaskScheduler {
     this.running = true;
 
     // Poll every minute
-    this.pollInterval = window.setInterval(() => this.checkTasks(), 60000);
+    // `setInterval` (no `window.` prefix) so this works in both page
+    // and DedicatedWorker contexts. The standalone runtime runs the
+    // scheduler in a worker; `window` is undefined there.
+    this.pollInterval = setInterval(() => this.checkTasks(), 60000);
 
     // Also check immediately
     this.checkTasks();

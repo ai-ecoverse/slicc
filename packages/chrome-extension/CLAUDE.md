@@ -45,7 +45,7 @@ Offscreen Document
 - `tool-ui-sandbox.html` and related HTML shells exist for specialized extension UI surfaces.
 - When loading bundled assets, prefer `chrome.runtime.getURL(...)`.
 - **External CDN scripts in sprinkles** are fetch-and-inlined by `sprinkle-renderer.ts` (full-doc) or via `sprinkle-fetch-script` parent relay (partial-content). Never use `<script src="https://...">` directly in sandbox HTML.
-- **npm packages in `node -e`** use esm.sh `?bundle` + indirect Function constructor. Never use `import()` with external URLs in sandbox context.
+- **npm packages in `node -e`** are pre-fetched by the per-task realm iframe via `cdn.jsdelivr.net/npm/<id>` + indirect `Function` constructor (the sandbox CSP allows `Function` but not cross-origin `import()`). The realm runtime owns this path now (see `kernel/realm/`), not the legacy inline node-command code.
 - **Extension-relative scripts** must load statically in `<head>`, not via dynamic `createElement('script').src` (opaque origin blocks runtime loads).
 - See `docs/pitfalls.md` "Extension Sandbox: External Scripts & Opaque Origin" for the full reference.
 

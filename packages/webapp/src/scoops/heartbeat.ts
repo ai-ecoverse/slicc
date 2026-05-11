@@ -43,7 +43,7 @@ export class Heartbeat {
     }
   >();
   private callbacks: HeartbeatCallbacks;
-  private pollInterval: number | null = null;
+  private pollInterval: ReturnType<typeof setInterval> | null = null;
   private idleThresholdMs = 5 * 60 * 1000; // 5 minutes
   private deadThresholdMs = 30 * 60 * 1000; // 30 minutes
 
@@ -55,7 +55,10 @@ export class Heartbeat {
   start(): void {
     if (this.pollInterval) return;
 
-    this.pollInterval = window.setInterval(() => this.checkAll(), 10000);
+    // `setInterval` (no `window.` prefix) so this works in both page
+    // and DedicatedWorker contexts. The standalone runtime runs heartbeat
+    // in a worker; `window` is undefined there.
+    this.pollInterval = setInterval(() => this.checkAll(), 10000);
     log.info('Heartbeat monitoring started');
   }
 

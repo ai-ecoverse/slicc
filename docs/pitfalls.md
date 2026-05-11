@@ -559,7 +559,7 @@ receive no header.
 **Adding a New LLM Call Site**
 
 If you add code that calls `pi-ai`'s `streamSimple` / `completeSimple`
-directly — or any helper from `@mariozechner/pi-coding-agent` that
+directly — or any helper from `@earendil-works/pi-coding-agent` that
 routes there (compaction, branch summarization, etc.) — you MUST
 attach `X-Session-Id` for the Adobe provider. The cleanest pattern is
 to take a `headers: Record<string, string>` parameter and let the

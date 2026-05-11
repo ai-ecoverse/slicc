@@ -22,13 +22,16 @@ describe('sprinkle command', () => {
       close: vi.fn(),
       sendToSprinkle: vi.fn(),
     };
-    // Set the global that the command reads from
-    (globalThis as any).window = { __slicc_sprinkleManager: mockMgr };
+    // Publish on `globalThis` — the command looks there directly so the
+    // same lookup works in both the page realm (where the real manager
+    // lives on `window`) and the kernel-worker realm (where the proxy
+    // is published on `globalThis`).
+    (globalThis as any).__slicc_sprinkleManager = mockMgr;
     command = createSprinkleCommand();
   });
 
   afterEach(() => {
-    delete (globalThis as any).window;
+    delete (globalThis as any).__slicc_sprinkleManager;
   });
 
   const run = (args: string[]) => {
@@ -117,7 +120,7 @@ describe('sprinkle command', () => {
   });
 
   it('returns error when sprinkle manager not initialized', async () => {
-    (globalThis as any).window = {}; // no __slicc_sprinkleManager
+    delete (globalThis as any).__slicc_sprinkleManager; // clear the publish
     const cmd = createSprinkleCommand();
     const result = await (cmd as any).execute(['list'], { cwd: '/', env: {}, fs: {} });
     expect(result.exitCode).toBe(1);

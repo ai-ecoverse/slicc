@@ -2210,8 +2210,8 @@ describe('playwright-cli teleport trigger and capture', () => {
   });
 
   it('captures cookies + storage when follower return pattern matches', async () => {
-    // Phase 1: leader poll triggers (matching start pattern immediately)
-    // Phase 2: follower starts on the intercepted auth URL, then returns to the app
+    // Step 1: leader poll triggers (matching start pattern immediately)
+    // Step 2: follower starts on the intercepted auth URL, then returns to the app
     let leaderCallCount = 0;
     let followerCallCount = 0;
     let storageCaptureCount = 0;

@@ -6,7 +6,7 @@
 
 import { getProviders, getModels, getModel, createLogger } from '../core/index.js';
 import type { Model } from '../core/index.js';
-import type { Api } from '@mariozechner/pi-ai';
+import type { Api } from '@earendil-works/pi-ai';
 import { storeTrayJoinUrl, hasStoredTrayJoinUrl } from '../scoops/tray-runtime-config.js';
 import { describeInvalidJoinUrl } from './tray-join-url.js';
 

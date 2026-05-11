@@ -5,9 +5,9 @@ description: |
   buckets, S3-compatible services (Cloudflare R2, MinIO), or Adobe da.live
   / AEM Document Authoring repos. Read this skill BEFORE deciding which
   backend to use; do NOT default to a local file picker when the user
-  names a remote service. Covers credential setup
-  (`secret set s3.<profile>.*` or extension Options page), the right
-  `mount --source` invocation per intent, and common errors
+  names a remote service. Covers credential setup with profile-namespaced
+  `secret set` keys (e.g. `s3.aws.access_key_id`) or the extension Options
+  page, the right `mount --source` invocation per intent, and common errors
   (EACCES on missing credentials, EBUSY on concurrent edits, EFBIG on
   oversized files).
 allowed-tools: bash, read_file, write_file, edit_file

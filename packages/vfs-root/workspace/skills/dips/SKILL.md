@@ -1,46 +1,31 @@
 ---
 name: dips
-description: Patterns for authoring dips — interactive shtml widgets that hydrate inline in chat messages
+description: |
+  Use this whenever a response could benefit from richer visualization, guided
+  interaction, or a touch of fun — pickers, calculators, sliders, mini
+  explorers, charts, animated demos, choose-your-own-adventure prompts,
+  anything that lands better as a hydrating widget than as plain prose. Dips
+  are ephemeral `shtml` code blocks rendered inline in chat (no state
+  persistence, lick-only). Reach for them generously: every interactive moment
+  the user gets is a moment they don't have to type a clarifying message. For
+  persistent dashboards, editors, or multi-page apps use sprinkles instead.
 allowed-tools: bash
 ---
 
 # Dips
 
-Dips are inline `shtml` code blocks in chat that hydrate into sandboxed interactive widgets. Ephemeral — no state persistence, no `readFile`. Only `slicc.lick()` is available for agent communication.
+Dips are inline `shtml` code blocks in chat that hydrate into sandboxed interactive widgets. **Ephemeral** — no state persistence, no `readFile`. Only `slicc.lick()` is available for agent communication.
 
-**Use dips for**: quick interactions, calculators, explorers, visualizations embedded in conversation.
-**Use sprinkles for**: persistent dashboards, editors, multi-page apps.
+**Use them generously.** A dip is the right answer any time a response could benefit from visualization, interaction, or a moment of delight. Don't reserve them for "complex" tasks — a slider that lets the user feel a number, a chart that beats a paragraph of stats, a button that's faster than typing "yes" all earn their keep.
 
-## Pre-styled elements
+| Reach for a dip when …                                 | Reach for a sprinkle when …                                     |
+| ------------------------------------------------------ | --------------------------------------------------------------- |
+| The answer would land better as a widget than as prose | The user needs a persistent dashboard / editor / multi-page app |
+| The user is choosing, confirming, or tuning a value    | The UI must survive across turns or sessions                    |
+| You want a chart, animation, or interactive demo       | You need `readFile`, `screenshot`, or any persistent state      |
+| The result deserves a bit of fun                       | The interaction is long-running                                 |
 
-Inside dips, bare HTML form elements are pre-styled to match S2:
-
-- `<input type="range">` — 4px track, 18px accent-colored thumb
-- `<input type="text">`, `<textarea>` — S2 layer-2 background, accent focus ring
-- `<select>` — S2 styled with focus ring
-- `<button>` — pill-rounded, 28px height, hover state (use `.sprinkle-btn--primary` class for accent fill)
-- `<canvas>` — full-width, rounded corners
-- `<mark>` — accent-tinted highlight
-
-No custom CSS needed for basic widgets. Just write bare HTML.
-
-## Color palette for charts
-
-Use these classes on chart elements, diagram nodes, or badges:
-
-| Class       | Use for                 |
-| ----------- | ----------------------- |
-| `.c-purple` | Primary category, AI/ML |
-| `.c-teal`   | Success, growth         |
-| `.c-coral`  | Secondary category      |
-| `.c-pink`   | Tertiary category       |
-| `.c-gray`   | Neutral, structural     |
-| `.c-blue`   | Informational           |
-| `.c-amber`  | Warning, in-progress    |
-| `.c-red`    | Error, critical         |
-| `.c-green`  | Success, complete       |
-
-Use 2–3 colors per visualization, not 6+. Assign by meaning, not by sequence.
+For a gallery of 10 ready-to-adapt patterns (drag-on-canvas, slider→DOM reflow, paste→tree, ...) read the companion file: `read_file /workspace/skills/dips/patterns.md`.
 
 ## Card structure
 
@@ -57,213 +42,100 @@ Always wrap interactive content in `.sprinkle-action-card` for visual containmen
 </div>
 ```
 
+When the user clicks a button, you receive the lick as a message. Respond conversationally, with another dip, or by spawning a scoop.
+
 ### Use existing components inside cards
 
-- **Progress**: Use `.sprinkle-progress-bar` with `--progress` CSS variable, not raw colored divs
-- **Status indicators**: Use `.sprinkle-status-light` with `--positive`/`--negative`/`--notice` variants, not raw colored dots
-- **Stats**: Use `.sprinkle-stat-card` grid, not raw styled divs
-- **Tables**: Use `.sprinkle-table` with `.sprinkle-badge` for severity, not raw tables
-- **Badges**: Use `.sprinkle-badge` variants (`--positive`, `--negative`, `--notice`, `--informative`), not raw colored spans
+- **Progress** → `.sprinkle-progress-bar` with `--progress` CSS variable. Not raw colored divs.
+- **Status indicators** → `.sprinkle-status-light` with `--positive` / `--negative` / `--notice` variants.
+- **Stats** → `.sprinkle-stat-card` grid.
+- **Tables** → `.sprinkle-table` with `.sprinkle-badge` for severity.
+- **Badges** → `.sprinkle-badge` variants (`--positive`, `--negative`, `--notice`, `--informative`).
 
-### Multiple cards in one message
+Multiple cards in one message: each is a separate `.sprinkle-action-card`. The iframe padding handles spacing. Don't wrap multiple cards in a single container.
 
-When showing multiple cards, each should be a separate `.sprinkle-action-card`. The iframe padding provides spacing between them. Don't wrap multiple cards in a single container.
+## Pre-styled form elements
 
-### Don't
+Inside dips, bare HTML form elements are pre-styled to match S2:
 
-- Don't hardcode hex colors — use S2 CSS variables
-- Don't build custom progress bars — use `.sprinkle-progress-bar`
-- Don't build custom status dots — use `.sprinkle-status-light`
-- Don't use numbered headings (1. File Operations) inside cards — the `__header` IS the heading
-- Don't put prose/markdown headings between cards — let cards stand alone
+- `<input type="range">` — 4px track, 18px accent thumb.
+- `<input type="text">`, `<textarea>` — S2 layer-2 background, accent focus ring.
+- `<select>` — S2 styled with focus ring.
+- `<button>` — pill-rounded, 28px height, hover state. Use `.sprinkle-btn--primary` class for the accent fill.
+- `<canvas>` — full-width, rounded corners.
+- `<mark>` — accent-tinted highlight.
+
+No custom CSS needed for basic widgets. Just write bare HTML.
+
+## Color palette for charts
+
+Use these classes on chart elements, diagram nodes, or badges. Two or three colors per visualization, not six. Assign by meaning, not by sequence.
+
+| Class       | Use for                 |
+| ----------- | ----------------------- |
+| `.c-purple` | Primary category, AI/ML |
+| `.c-teal`   | Success, growth         |
+| `.c-coral`  | Secondary category      |
+| `.c-pink`   | Tertiary category       |
+| `.c-gray`   | Neutral, structural     |
+| `.c-blue`   | Informational           |
+| `.c-amber`  | Warning, in-progress    |
+| `.c-red`    | Error, critical         |
+| `.c-green`  | Success, complete       |
+
+## Layout & viewport
+
+Dips render in the chat column. They are **single-column by design** — don't author multi-column or sidebar+main layouts. The chat column is narrow on iOS / Sliccstart and on the extension side panel; multi-column dips break visually in those floats. If you need multi-column, use a sprinkle and let the user pop it to full-screen.
+
+## Cheap interactions via `agent`
+
+When a dip's lick handler needs to do real work (lookup, transformation, generation) but the cone or owning scoop should NOT be woken up, route the lick to a one-shot `agent` call.
+
+The flow:
+
+1. Dip emits a lick: `slicc.lick({action: 'compute', input: ...})`.
+2. The lick reaches the cone (or scoop) as a message.
+3. Instead of replying conversationally, the receiver shells out to `agent` with a tight allow-list and a self-contained prompt.
+4. `agent` returns the answer on stdout. The receiver writes the result back to the dip via a follow-up dip or via `sprinkle send` (if the dip was the entry point to a sprinkle flow).
+
+```bash
+# Inside a feed_scoop reply to a dip lick:
+result=$(agent /tmp "curl,jq" "Fetch <url>, return field 'price' as a number.")
+# Render a fresh dip with `result` inline.
+```
+
+`agent` is the right tool here because it has **no handoff**: ephemeral scoops don't notify the cone on completion, so a busy cone or sprinkle-owning scoop isn't pre-empted by every dip click. See `/workspace/skills/delegation/SKILL.md` for the full `agent` reference.
 
 ## Design rules
 
-- Use S2 CSS variables for all colors (`var(--s2-content-default)`, `var(--s2-bg-layer-2)`, etc.)
-- Round all displayed numbers: `Math.round()`, `.toFixed(2)`, `.toLocaleString()`
-- Set `step` on range sliders for clean values
-- Show errors inline (not `alert()`)
-- Sentence case always — never Title Case or ALL CAPS
-- One root `render()`/`calc()` function triggered by all inputs
-- Call `render()` on load with defaults so the widget is immediately interactive
+- Use S2 CSS variables for all colors (`var(--s2-content-default)`, `var(--s2-bg-layer-2)`, ...).
+- Round all displayed numbers: `Math.round()`, `.toFixed(2)`, `.toLocaleString()`.
+- Set `step` on range sliders for clean values.
+- Show errors inline (not `alert()`).
+- Sentence case always — never Title Case or ALL CAPS.
+- One root `render()` / `calc()` function triggered by all inputs.
+- Call `render()` on load with defaults so the widget is immediately interactive.
 
-## The 10 patterns
+## Don't
 
-### 1. Drag-on-canvas
-
-Drag control points on `<canvas>` — live computed output.
-
-```shtml
-<canvas id="c"></canvas>
-<div id="output" style="font-family:var(--s2-font-mono);font-size:12px;margin-top:8px"></div>
-<button class="sprinkle-btn sprinkle-btn--primary" onclick="slicc.lick({action:'use-value',value:currentValue})">Use this value</button>
-<script>
-  const cv = document.getElementById('c');
-  const ctx = cv.getContext('2d');
-  const dpr = window.devicePixelRatio || 1;
-  const W = 640, H = 260;
-  cv.width = W * dpr; cv.height = H * dpr;
-  cv.style.height = H + 'px';
-  ctx.scale(dpr, dpr);
-  // ... hit detection, drag handling, draw loop
-</script>
-```
-
-**Use for**: easing curves, color gradients, graph layouts, image crop, timeline scrubbing.
-
-### 2. Animated step loop
-
-Async loop with speed slider — algorithm visualization.
-
-```shtml
-<div id="bars" style="display:flex;align-items:flex-end;gap:3px;height:160px"></div>
-<div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-  <button onclick="run()">Run</button>
-  <input type="range" id="speed" min="10" max="200" value="80">
-  <span id="status" style="font-size:12px;color:var(--s2-content-secondary)">ready</span>
-</div>
-<script>
-  let running = false;
-  const delay = () => new Promise(r => setTimeout(r, 210 - speed.value));
-  async function run() {
-    if (running) return; running = true;
-    // algorithm loop with await delay()
-    running = false;
-  }
-</script>
-```
-
-**Use for**: sorting algorithms, data pipeline steps, simulation, process walkthroughs.
-
-### 3. Keystroke → live output
-
-`oninput` on text fields — instant transformation/matching.
-
-```shtml
-<input type="text" id="pattern" oninput="run()" placeholder="regex pattern">
-<textarea id="target" rows="4" oninput="run()">sample text to match</textarea>
-<div id="err" style="color:var(--s2-negative);font-size:11px"></div>
-<div id="out" style="font-family:var(--s2-font-mono);font-size:12px;padding:10px;background:var(--s2-bg-layer-2);border-radius:8px;margin-top:8px"></div>
-<script>
-  function run() {
-    try {
-      const rx = new RegExp(pattern.value, 'gi');
-      out.innerHTML = target.value
-        .replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))
-        .replace(rx, m => '<mark>' + m + '</mark>');
-      err.textContent = '';
-    } catch(e) { err.textContent = e.message; }
-  }
-</script>
-```
-
-**Use for**: regex testers, format validation, search preview, JSON path, CSS selector testers.
-
-### 4. Slider → DOM reflow
-
-Range slider drives visual output (rendered elements, not charts).
-
-```shtml
-<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-  <span style="font-size:12px;color:var(--s2-content-secondary);min-width:60px">Base size</span>
-  <input type="range" id="base" min="12" max="24" value="16" step="1" oninput="render()">
-  <span id="baseVal" style="font-family:var(--s2-font-mono);font-size:12px;min-width:30px">16</span>
-</div>
-<div id="scale"></div>
-<script>
-  function render() {
-    const b = +base.value;
-    baseVal.textContent = b;
-    scale.innerHTML = [3,2,1,0,-1].map(exp => {
-      const sz = (b * Math.pow(1.25, exp)).toFixed(1);
-      return '<div style="font-size:' + sz + 'px;margin-bottom:4px">Sample — ' + sz + 'px</div>';
-    }).join('');
-  }
-  render();
-</script>
-```
-
-**Use for**: design token explorers, spacing visualizers, animation timing, grid configurators.
-
-### 5. Multi-slider → computed summary
-
-Multiple sliders feed a formula → metric cards.
-
-```shtml
-<div id="controls"></div>
-<div id="results" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:12px"></div>
-<script>
-  function calc() {
-    const v1 = +s1.value, v2 = +s2.value;
-    s1out.textContent = v1.toLocaleString();
-    s2out.textContent = v2.toLocaleString();
-    const result = v1 * v2;
-    results.innerHTML = '<div style="background:var(--s2-bg-layer-2);border-radius:8px;padding:12px;text-align:center">' +
-      '<div style="font-size:11px;color:var(--s2-content-secondary)">Result</div>' +
-      '<div style="font-size:22px;font-weight:700">' + result.toLocaleString() + '</div></div>';
-  }
-  calc();
-</script>
-```
-
-**Use for**: pricing calculators, ROI estimators, capacity models, compound growth.
-
-### 6. Cascading sliders
-
-Each stage feeds the next — funnel visualization.
-
-**Use for**: sales funnels, user journey drop-off, referral chains, pipeline modeling.
-
-### 7. Mode picker → visual palette
-
-Select + slider → generated set of visual elements (swatches, variants).
-
-**Use for**: color pickers, design token generators, layout variant pickers.
-
-### 8. Any-field → all-fields sync
-
-Multiple inputs share a single source-of-truth value. Editing any field updates all others.
-
-Use an `updating` flag to prevent `oninput` re-entrancy:
-
-```javascript
-let n = 255,
-  updating = false;
-function setAll() {
-  if (updating) return;
-  updating = true;
-  dec.value = n;
-  hex.value = n.toString(16).toUpperCase();
-  updating = false;
-}
-```
-
-**Use for**: unit converters (px/rem, kg/lb, °C/°F), base converters, encoding/decoding pairs.
-
-### 9. Stacked bar + threshold
-
-N sliders → proportional stacked bar → over/under budget indicator.
-
-**Use for**: latency budgets, build timing, resource allocation, sprint capacity, page weight budgets.
-
-### 10. Paste → structured tree
-
-Textarea input → parsed recursive DOM tree with collapse/expand.
-
-**Use for**: JSON explorers, config viewers, log parsers, schema inspectors, AST browsers.
+- Don't hardcode hex colors — use S2 CSS variables.
+- Don't build custom progress bars — use `.sprinkle-progress-bar`.
+- Don't build custom status dots — use `.sprinkle-status-light`.
+- Don't use numbered headings (1. File Operations) inside cards — the `__header` IS the heading.
+- Don't put prose / markdown headings between cards — let cards stand alone.
 
 ## Lick patterns
 
 ```javascript
-// Explicit "send to agent" button
+// Explicit "send to agent" button.
 slicc.lick({ action: 'use-config', config: getCurrentConfig() });
 
-// Lick on threshold crossing
+// Lick on threshold crossing.
 if (total > budget) {
   slicc.lick({ action: 'over-budget', total, budget, breakdown });
 }
 
-// Lick on completion
+// Lick on completion.
 slicc.lick({ action: 'sort-complete', algorithm: algo, comparisons: n });
 ```
 

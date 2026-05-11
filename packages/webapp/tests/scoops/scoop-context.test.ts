@@ -1911,3 +1911,168 @@ describe('resolveThinkingLevel', () => {
     expect(resolveThinkingLevel('minimal', model)).toBe('minimal');
   });
 });
+
+describe('ScoopContext — process manager wiring', () => {
+  it('registers a kind:"scoop-turn" process when prompt() runs and exits 0 on success', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(
+      testScoop,
+      callbacks,
+      {} as any,
+      undefined,
+      undefined,
+      undefined,
+      pm
+    );
+    injectMockAgent(ctx, async () => undefined);
+    expect(pm.list()).toHaveLength(0);
+
+    await ctx.prompt('hello');
+
+    const procs = pm.list();
+    expect(procs).toHaveLength(1);
+    expect(procs[0].kind).toBe('scoop-turn');
+    expect(procs[0].argv[0]).toBe('prompt');
+    expect(procs[0].argv[1]).toBe('hello');
+    expect(procs[0].owner).toEqual({ kind: 'scoop', scoopJid: testScoop.jid });
+    expect(procs[0].status).toBe('exited');
+    expect(procs[0].exitCode).toBe(0);
+  });
+
+  it('records terminatedBy="SIGINT" and exit 130 when stop() is called mid-prompt', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(
+      testScoop,
+      callbacks,
+      {} as any,
+      undefined,
+      undefined,
+      undefined,
+      pm
+    );
+
+    // Long-running mock agent: yields to the event loop in a way the
+    // prompt's abortSignal can interrupt. ScoopContext's prompt loop
+    // checks `abortSignal.aborted` after every await, so making the
+    // mock agent reject on abort is enough.
+    const stuck = new Promise<void>((_, reject) => {
+      const handler = (): void => reject(new Error('aborted'));
+      // Wire the rejection to the next tick — prompt() will set up
+      // its abortController and we'll signal it from outside.
+      setTimeout(() => {
+        const abortController = (ctx as any).promptAbortController as AbortController | null;
+        abortController?.signal.addEventListener('abort', handler, { once: true });
+      }, 0);
+    });
+    injectMockAgent(ctx, async () => {
+      await stuck;
+    });
+
+    const promptP = ctx.prompt('long-running');
+    // Let prompt() install its abort controller + spawn the process.
+    await new Promise((r) => setTimeout(r, 5));
+    expect(pm.list()).toHaveLength(1);
+    expect(pm.list()[0].status).toBe('running');
+
+    ctx.stop();
+    await promptP;
+
+    const proc = pm.list()[0];
+    expect(proc.terminatedBy).toBe('SIGINT');
+    expect(proc.status).toBe('killed');
+    expect(proc.exitCode).toBe(130);
+  });
+
+  it('truncates long prompt text in argv[1] for /proc/<pid>/cmdline ergonomics', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    const pm = new ProcessManager();
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(
+      testScoop,
+      callbacks,
+      {} as any,
+      undefined,
+      undefined,
+      undefined,
+      pm
+    );
+    const longText = 'x'.repeat(500);
+    injectMockAgent(ctx, async () => undefined);
+    await ctx.prompt(longText);
+    const proc = pm.list()[0];
+    expect(proc.argv[1].length).toBeLessThanOrEqual(200);
+    expect(proc.argv[1].endsWith('…')).toBe(true);
+  });
+
+  it('does not register processes when no manager is wired (backwards compatible)', async () => {
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    injectMockAgent(ctx, async () => undefined);
+    await ctx.prompt('untracked');
+    // No manager → no list to inspect; this just verifies the
+    // prompt() path doesn't throw without a pm.
+    expect((ctx as any).processManager).toBeNull();
+  });
+});
+
+describe('ScoopContext — spinner cleanup on early-return paths (regression fix)', () => {
+  it("flips status from 'processing' to 'ready' in finally even when prompt is aborted", async () => {
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
+
+    // Mock agent whose prompt() rejects with an abort-shaped error.
+    // ScoopContext's catch block sees `abortSignal.aborted === true`
+    // and returns early — the bug-before-fix was that this skipped
+    // the setStatus('ready') line at the bottom of the try block,
+    // leaving the panel's "processing" spinner stuck on.
+    injectMockAgent(ctx, async () => {
+      // Trigger the abort BEFORE throwing so the catch's
+      // `abortSignal.aborted` check passes.
+      const abortController = (ctx as any).promptAbortController as AbortController | null;
+      abortController?.abort();
+      throw new Error('aborted');
+    });
+
+    // Status starts at 'ready' (after init); prompt() flips it to
+    // 'processing' synchronously, then the abort path hits.
+    await ctx.prompt('test');
+
+    // Backstop in the finally block must have flipped status back
+    // to 'ready' so the panel sees a wire signal to clear its
+    // spinner.
+    expect((ctx as any).status).toBe('ready');
+    // onStatusChange was called with 'processing' AND 'ready' at minimum.
+    const calls = (callbacks.onStatusChange as any).mock.calls.map((c: any[]) => c[0]);
+    expect(calls).toContain('processing');
+    expect(calls).toContain('ready');
+  });
+
+  it("preserves 'error' status when set by a non-retryable error (backstop is a no-op)", async () => {
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
+
+    // Reject with a non-retryable shape so the catch hits the
+    // setStatus('error') branch.
+    injectMockAgent(ctx, async () => {
+      throw new Error('400 Bad Request: invalid api key');
+    });
+
+    await ctx.prompt('test');
+
+    // Status should be 'error' — backstop in finally must not
+    // override.
+    expect((ctx as any).status).toBe('error');
+  });
+
+  it("flips status to 'ready' on successful prompt (existing happy path stays correct)", async () => {
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    injectMockAgent(ctx, async () => undefined);
+    await ctx.prompt('test');
+    expect((ctx as any).status).toBe('ready');
+  });
+});

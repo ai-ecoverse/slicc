@@ -7,7 +7,7 @@
  */
 
 import type { MessageAttachment } from '../core/attachments.js';
-import type { ThinkingLevel } from '@mariozechner/pi-agent-core';
+import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
 
 export type { ThinkingLevel };
 
@@ -17,7 +17,7 @@ export type { ThinkingLevel };
  * remains valid for programmatic / shell-flag callers; the UI only steps
  * through this 4-bucket subset for clarity. `xhigh` is silently skipped to
  * `off` when the active model doesn't support it (see
- * `getSupportedThinkingLevels()` in `@mariozechner/pi-ai`).
+ * `getSupportedThinkingLevels()` in `@earendil-works/pi-ai`).
  */
 export const THINKING_LEVEL_CYCLE: readonly ThinkingLevel[] = [
   'off',
@@ -112,13 +112,13 @@ export interface ScoopConfig {
   modelId?: string;
   /**
    * Reasoning / thinking level forwarded to `pi-agent-core`'s
-   * {@link import('@mariozechner/pi-agent-core').AgentState.thinkingLevel}.
+   * {@link import('@earendil-works/pi-agent-core').AgentState.thinkingLevel}.
    * One of `off | minimal | low | medium | high | xhigh`. When unset, the
    * scoop inherits its parent's level (or `off` for non-reasoning models).
    *
    * `xhigh` is silently clamped to `high` when the active model doesn't
    * advertise xhigh support — see `getSupportedThinkingLevels()` from
-   * `@mariozechner/pi-ai`.
+   * `@earendil-works/pi-ai`.
    * For non-reasoning models the value is ignored entirely.
    */
   thinkingLevel?: ThinkingLevel;

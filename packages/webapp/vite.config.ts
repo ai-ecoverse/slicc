@@ -43,7 +43,7 @@ export default defineConfig(({ mode }) => ({
       // node_modules, so we use a resolveId hook instead.
       resolveId(source, importer) {
         const normalizedImporter = importer?.replace(/\\/g, '/');
-        if (normalizedImporter?.includes('@mariozechner/pi-coding-agent')) {
+        if (normalizedImporter?.includes('@earendil-works/pi-coding-agent')) {
           if (source.endsWith('/session-manager.js')) {
             return resolve(__dirname, 'src/stubs/pi-session-manager-stub.ts');
           }
@@ -222,6 +222,14 @@ export default defineConfig(({ mode }) => ({
           }
         });
 
+        // Note: `src/kernel/kernel-worker.ts` is loaded via Vite's
+        // native `new Worker(new URL('./kernel-worker.ts',
+        // import.meta.url), { type: 'module' })` pattern in
+        // `kernel/spawn.ts`. Vite handles dev serving and production
+        // bundling through the same Rollup pipeline that resolves
+        // `resolve.alias` and the `stub-pi-node-internals` resolveId
+        // plugin — no dev middleware or closeBundle entry needed.
+
         server.middlewares.use('/lucide-icons.js', async (_req, res) => {
           try {
             const esbuild = await import('esbuild');
@@ -331,6 +339,12 @@ export default defineConfig(({ mode }) => ({
           minify: true,
           define: { __DEV__: 'false', global: 'globalThis' },
         });
+
+        // Note: `kernel-worker.ts` rides the Rollup pipeline via
+        // Vite's native `new Worker(new URL(...), { type: 'module' })`
+        // detection in `kernel/spawn.ts`. The `resolve.alias` map and
+        // the `stub-pi-node-internals` resolveId plugin above apply to
+        // the worker bundle for free. No standalone esbuild call needed.
         copyFileSync(
           resolve(__dirname, '../assets/logos/favicon.png'),
           resolve(uiOutDir, 'favicon.png')
@@ -374,27 +388,27 @@ export default defineConfig(({ mode }) => ({
       http2: resolve(__dirname, 'src/shims/http2.ts'),
       // Deep import into pi-coding-agent's compaction submodule — the main entry
       // re-exports 113 Node-only modules that break Vite's browser bundle.
-      // The compaction submodule only depends on @mariozechner/pi-ai (browser-safe).
-      '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js': resolve(
+      // The compaction submodule only depends on @earendil-works/pi-ai (browser-safe).
+      '@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js': resolve(
         workspaceRoot,
-        'node_modules/@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js'
+        'node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js'
       ),
-      '@mariozechner/pi-ai/dist/providers/transform-messages.js': resolve(
+      '@earendil-works/pi-ai/dist/providers/transform-messages.js': resolve(
         workspaceRoot,
-        'node_modules/@mariozechner/pi-ai/dist/providers/transform-messages.js'
+        'node_modules/@earendil-works/pi-ai/dist/providers/transform-messages.js'
       ),
-      '@mariozechner/pi-ai/dist/providers/simple-options.js': resolve(
+      '@earendil-works/pi-ai/dist/providers/simple-options.js': resolve(
         workspaceRoot,
-        'node_modules/@mariozechner/pi-ai/dist/providers/simple-options.js'
+        'node_modules/@earendil-works/pi-ai/dist/providers/simple-options.js'
       ),
     },
-    dedupe: ['@mariozechner/pi-ai'],
+    dedupe: ['@earendil-works/pi-ai'],
   },
   esbuild: {
     target: 'esnext',
   },
   optimizeDeps: {
-    exclude: ['@mariozechner/pi-coding-agent'],
+    exclude: ['@earendil-works/pi-coding-agent'],
     esbuildOptions: {
       target: 'esnext',
     },

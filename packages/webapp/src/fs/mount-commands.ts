@@ -23,6 +23,7 @@ import { RemoteMountCache } from './mount/remote-cache.js';
 import { makeSignedFetchS3, makeSignedFetchDa } from './mount/signed-fetch.js';
 import { newMountId } from './mount/mount-id.js';
 import { getToolExecutionContext } from '../tools/tool-ui.js';
+import { loadAndClearPendingHandle, reactivateHandle } from './mount-picker-popup.js';
 
 export interface MountCommandResult {
   stdout: string;
@@ -142,6 +143,31 @@ export class MountCommands {
     try {
       const isScoop = this.options.isScoop ?? (() => false);
       const ctx = getToolExecutionContext();
+      // Panel-terminal pre-intercept fast path. When the user types
+      // `mount <target>` in the panel terminal in worker mode,
+      // `RemoteTerminalView` runs `showDirectoryPicker` on the
+      // keystroke gesture (which the worker doesn't have) and
+      // stashes the granted handle under
+      // `pendingMount:term:<target>`. We adopt that here and skip
+      // the picker dance entirely. The IDB lookup only fires when
+      // there's NO `toolContext` — the cone always goes through
+      // `showToolUI` (its picker has separate user-gesture
+      // plumbing in the dip), so we don't perturb its timing.
+      if (!ctx) {
+        const preBackend = await tryAdoptPrePickedHandle(targetPath);
+        if (preBackend) {
+          await this.options.fs.mount(targetPath, preBackend);
+          const desc = preBackend.describe();
+          return {
+            stdout:
+              `Mounted '${desc.displayName}' → ${targetPath}\n` +
+              `Indexing in background for fast file discovery.\n` +
+              `Note: External changes are not auto-detected — use 'mount refresh ${targetPath}' after modifying files outside the browser.\n`,
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+      }
       const backend = await LocalMountBackend.create({
         mountId: newMountId(),
         isScoop,
@@ -419,4 +445,37 @@ export class MountCommands {
       exitCode: 0,
     };
   }
+}
+
+/**
+ * Look up a pre-picked directory handle stashed by the panel
+ * terminal under `pendingMount:term:<targetPath>`. The panel ran
+ * `showDirectoryPicker` on the user's Enter keystroke gesture
+ * (which the worker can't do — no `window`), so this side just
+ * adopts the handle.
+ *
+ * Returns `null` when no pending handle exists; caller falls back
+ * to the standard `LocalMountBackend.create` flow. Errors during
+ * adoption (permission revoked, handle stale) also return `null`
+ * so the standard flow can produce a uniform error message — the
+ * pre-pick is a fast path, not a hard requirement.
+ *
+ * Key format MUST stay aligned with `localMountIdbKey` in
+ * `kernel/remote-terminal-view.ts`. Both must change together.
+ */
+async function tryAdoptPrePickedHandle(targetPath: string): Promise<LocalMountBackend | null> {
+  const idbKey = `pendingMount:term:${targetPath}`;
+  let handle: FileSystemDirectoryHandle | null;
+  try {
+    handle = await loadAndClearPendingHandle(idbKey);
+  } catch {
+    return null;
+  }
+  if (!handle) return null;
+  try {
+    await reactivateHandle(handle);
+  } catch {
+    return null;
+  }
+  return LocalMountBackend.fromHandle(handle, { mountId: newMountId() });
 }

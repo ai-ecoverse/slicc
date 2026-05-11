@@ -1,7 +1,7 @@
 // Re-export from pi-mono packages
-export { Agent } from '@mariozechner/pi-agent-core';
-export type { AgentOptions } from '@mariozechner/pi-agent-core';
-export { agentLoop, agentLoopContinue } from '@mariozechner/pi-agent-core';
+export { Agent } from '@earendil-works/pi-agent-core';
+export type { AgentOptions } from '@earendil-works/pi-agent-core';
+export { agentLoop, agentLoopContinue } from '@earendil-works/pi-agent-core';
 export type {
   AgentTool,
   AgentToolResult,
@@ -13,7 +13,7 @@ export type {
   AgentMessage,
   StreamFn,
   ThinkingLevel,
-} from '@mariozechner/pi-agent-core';
+} from '@earendil-works/pi-agent-core';
 
 export {
   EventStream,
@@ -23,7 +23,7 @@ export {
   getModels,
   getProviders,
   registerApiProvider,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 export type {
   TextContent,
   ThinkingContent,
@@ -42,7 +42,7 @@ export type {
   Model,
   StreamOptions,
   SimpleStreamOptions,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 
 // Local utilities
 export { SessionStore } from './session.js';

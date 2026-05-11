@@ -1165,7 +1165,7 @@ async function triggerTeleport(
         }
 
         if (watcher.phase === 'waitingForAuth') {
-          // Phase 1: waiting for follower to redirect to auth (e.g. Okta)
+          // Waiting for follower to redirect to auth (e.g. Okta)
           if (watcher.startPattern.test(href)) {
             watcher.phase = 'waitingForReturn';
             log.info('Follower reached auth provider; waiting for return pattern');
@@ -1182,7 +1182,7 @@ async function triggerTeleport(
           return; // Don't check return pattern yet
         }
 
-        // Phase 2: waiting for return from auth
+        // Waiting for return from auth
         log.debug('Polling follower tab URL for return', {
           href,
           returnPattern: watcher.returnPattern.source,

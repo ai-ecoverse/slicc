@@ -12,10 +12,10 @@ import {
   registerApiProvider,
   calculateCost,
   createAssistantMessageEventStream,
-} from '@mariozechner/pi-ai';
-import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
-import { transformMessages } from '@mariozechner/pi-ai/dist/providers/transform-messages.js';
-import { buildBaseOptions } from '@mariozechner/pi-ai/dist/providers/simple-options.js';
+} from '@earendil-works/pi-ai';
+import type { AssistantMessageEventStream } from '@earendil-works/pi-ai';
+import { transformMessages } from '@earendil-works/pi-ai/dist/providers/transform-messages.js';
+import { buildBaseOptions } from '@earendil-works/pi-ai/dist/providers/simple-options.js';
 import type {
   Api,
   Model,
@@ -24,7 +24,7 @@ import type {
   AssistantMessage,
   TextContent,
   ToolCall,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import { AzureOpenAI } from 'openai';
 import type {
   ChatCompletionChunk,

@@ -32,13 +32,6 @@ export function createOpenCommand(): Command {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
       return openHelp();
     }
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
-      return {
-        stdout: '',
-        stderr: 'open: browser APIs are unavailable in this environment\n',
-        exitCode: 1,
-      };
-    }
 
     const download = args.includes('--download') || args.includes('-d');
     const view = args.includes('--view') || args.includes('-v');
@@ -48,32 +41,33 @@ export function createOpenCommand(): Command {
       return openHelp();
     }
 
+    // `.shtml` opens go through the sprinkle manager, which is published
+    // on `globalThis.__slicc_sprinkleManager` in BOTH realms — the
+    // kernel-worker (where it's a BroadcastChannel-backed proxy) and the
+    // page (where it's the real `SprinkleManager`). The shell command
+    // runs in the worker, which has no `window` / `document`; gating
+    // every code path behind that DOM check would block this branch
+    // even though it doesn't need a DOM. Detect a sprinkle target up
+    // front and run it before the DOM guard kicks in.
+    const sprinkleManager = (globalThis as Record<string, unknown>).__slicc_sprinkleManager as
+      | import('../../ui/sprinkle-manager.js').SprinkleManager
+      | undefined;
+    const hasDom = typeof window !== 'undefined' && typeof document !== 'undefined';
+
     const results: string[] = [];
 
     for (const target of targets) {
-      if (isLikelyUrl(target)) {
-        // window.open() returns null in extension contexts (offscreen/side panel)
-        // even when the tab opens successfully — don't treat null as failure
-        window.open(target, '_blank', 'noopener,noreferrer');
-        results.push(`opened ${target}`);
-        continue;
-      }
-
-      const fullPath = ctx.fs.resolvePath(ctx.cwd, target);
-
-      // .shtml files → open as sprinkle via sprinkle manager
-      if (fullPath.endsWith('.shtml')) {
-        // Access global sprinkle manager if available
-        const mgr =
-          typeof window !== 'undefined'
-            ? ((window as unknown as Record<string, unknown>).__slicc_sprinkleManager as
-                | import('../../ui/sprinkle-manager.js').SprinkleManager
-                | undefined)
-            : undefined;
-        if (mgr) {
+      // .shtml targets go through the sprinkle manager (which is a
+      // BroadcastChannel proxy in the worker realm and the real
+      // SprinkleManager in the page realm). This branch must run
+      // BEFORE the DOM availability check because the worker has no
+      // `window` / `document` but can still RPC the page's manager.
+      if (!isLikelyUrl(target) && target.endsWith('.shtml') && ctx.fs) {
+        const fullPath = ctx.fs.resolvePath(ctx.cwd, target);
+        if (sprinkleManager) {
           const name = (fullPath.split('/').pop() ?? '').replace(/\.shtml$/, '');
           try {
-            await mgr.open(name);
+            await sprinkleManager.open(name);
             results.push(`opened sprinkle ${name} from ${fullPath}`);
           } catch (err) {
             return {
@@ -82,20 +76,45 @@ export function createOpenCommand(): Command {
               exitCode: 1,
             };
           }
-        } else {
-          // Fallback: open in browser tab if no sprinkle manager
+        } else if (hasDom) {
           const previewUrl = toPreviewUrl(fullPath);
           window.open(previewUrl, '_blank', 'noopener,noreferrer');
           results.push(`opened ${fullPath} → ${previewUrl}`);
+        } else {
+          return {
+            stdout: '',
+            stderr: 'open: sprinkle manager not initialized\n',
+            exitCode: 1,
+          };
         }
         continue;
       }
+
+      // Every remaining branch needs a DOM (window.open / document.body
+      // / Blob href download). Bail out here for the worker-shell case.
+      if (!hasDom) {
+        return {
+          stdout: '',
+          stderr: 'open: browser APIs are unavailable in this environment\n',
+          exitCode: 1,
+        };
+      }
+
+      if (isLikelyUrl(target)) {
+        // window.open() returns null in extension contexts (offscreen/side panel)
+        // even when the tab opens successfully — don't treat null as failure
+        window.open(target, '_blank', 'noopener,noreferrer');
+        results.push(`opened ${target}`);
+        continue;
+      }
+
+      const path = ctx.fs.resolvePath(ctx.cwd, target);
 
       if (view) {
         // --view: read file and return as <img:> tag for agent vision
         let stat;
         try {
-          stat = await ctx.fs.stat(fullPath);
+          stat = await ctx.fs.stat(path);
         } catch {
           return {
             stdout: '',
@@ -112,7 +131,7 @@ export function createOpenCommand(): Command {
         }
         let bytes;
         try {
-          bytes = await ctx.fs.readFileBuffer(fullPath);
+          bytes = await ctx.fs.readFileBuffer(path);
         } catch {
           return {
             stdout: '',
@@ -120,15 +139,15 @@ export function createOpenCommand(): Command {
             exitCode: 1,
           };
         }
-        const mimeType = detectMimeType(fullPath);
+        const mimeType = detectMimeType(path);
         const base64 = toBase64(new Uint8Array(bytes));
         results.push(
-          `${fullPath} (${Math.round(bytes.byteLength / 1024)} KB)\n<img:data:${mimeType};base64,${base64}>`
+          `${path} (${Math.round(bytes.byteLength / 1024)} KB)\n<img:data:${mimeType};base64,${base64}>`
         );
       } else if (download) {
         let stat;
         try {
-          stat = await ctx.fs.stat(fullPath);
+          stat = await ctx.fs.stat(path);
         } catch {
           return {
             stdout: '',
@@ -146,7 +165,7 @@ export function createOpenCommand(): Command {
 
         let bytes;
         try {
-          bytes = await ctx.fs.readFileBuffer(fullPath);
+          bytes = await ctx.fs.readFileBuffer(path);
         } catch {
           return {
             stdout: '',
@@ -156,23 +175,23 @@ export function createOpenCommand(): Command {
         }
         const safeBytes = new Uint8Array(bytes.byteLength);
         safeBytes.set(bytes);
-        const blob = new Blob([safeBytes.buffer], { type: detectMimeType(fullPath) });
+        const blob = new Blob([safeBytes.buffer], { type: detectMimeType(path) });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = basename(fullPath) || 'download';
+        a.download = basename(path) || 'download';
         a.style.display = 'none';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 0);
-        results.push(`downloaded ${fullPath}`);
+        results.push(`downloaded ${path}`);
       } else {
-        const previewUrl = toPreviewUrl(fullPath);
+        const previewUrl = toPreviewUrl(path);
         // window.open() returns null in extension contexts (offscreen/side panel)
         // even when the tab opens successfully — don't treat null as failure
         window.open(previewUrl, '_blank', 'noopener,noreferrer');
-        results.push(`opened ${fullPath} → ${previewUrl}`);
+        results.push(`opened ${path} → ${previewUrl}`);
       }
     }
 

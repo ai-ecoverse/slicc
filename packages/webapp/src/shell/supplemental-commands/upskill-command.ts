@@ -1313,8 +1313,10 @@ function parseGitHubRef(ref: string): { owner: string; repo: string; branch?: st
 /** After a successful install, refresh sprinkle manager and auto-open new sprinkles. */
 async function refreshSprinklesAfterInstall(): Promise<void> {
   try {
-    if (typeof window === 'undefined') return;
-    const mgr = (window as unknown as Record<string, unknown>).__slicc_sprinkleManager;
+    // Read from `globalThis` so the lookup works in both the page
+    // realm (real `SprinkleManager`) and the kernel-worker realm
+    // (BroadcastChannel-backed proxy).
+    const mgr = (globalThis as Record<string, unknown>).__slicc_sprinkleManager;
     if (mgr && typeof (mgr as Record<string, unknown>).openNewAutoOpenSprinkles === 'function') {
       await (mgr as { openNewAutoOpenSprinkles: () => Promise<void> }).openNewAutoOpenSprinkles();
     }

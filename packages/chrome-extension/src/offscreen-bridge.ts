@@ -32,15 +32,23 @@ import type {
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
+  OffscreenToPanelMessage,
 } from './messages.js';
 import { getLeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
 import { getFollowerTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-follower-status.js';
+import { HIDDEN_TOOL_NAMES } from '../../../packages/webapp/src/scoops/hidden-tools.js';
 import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
 import { toolUIRegistry } from '../../../packages/webapp/src/tools/tool-ui.js';
 import type { ChatMessage } from '../../../packages/webapp/src/ui/types.js';
 import type { MessageAttachment } from '../../../packages/webapp/src/core/attachments.js';
 import type { BrowserAPI } from '../../../packages/webapp/src/cdp/index.js';
 import type { FollowerSyncManager } from '../../../packages/webapp/src/scoops/tray-follower-sync.js';
+import type {
+  KernelFacade,
+  KernelTransport,
+  FollowerAgentEvent,
+} from '../../../packages/webapp/src/kernel/types.js';
+import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
 
 /** Buffered message for state sync */
 interface BufferedChatMessage {
@@ -61,7 +69,7 @@ interface BufferedChatMessage {
   isStreaming?: boolean;
 }
 
-export class OffscreenBridge {
+export class OffscreenBridge implements KernelFacade {
   private orchestrator: Orchestrator | null = null;
   private browserAPI: BrowserAPI | null = null;
   /** Per-scoop message buffers (mirrors main.ts pattern) */
@@ -80,6 +88,40 @@ export class OffscreenBridge {
    * messages the local orchestrator would emit.
    */
   private followerSync: FollowerSyncManager | null = null;
+  /**
+   * KernelTransport — defaults to the chrome.runtime adapter (lazily
+   * constructed on first `emit()` so a `new OffscreenBridge()` doesn't
+   * throw when imported in a context without `chrome.runtime`, e.g. a
+   * standalone DedicatedWorker). A `MessageChannel`-backed transport
+   * can be passed into the constructor so the same `OffscreenBridge`
+   * runs worker-side. The transport delivers raw `ExtensionMessage`
+   * envelopes either way so the existing source filter and
+   * sprinkle-op-response peek (in `setupMessageListener`) stay intact.
+   */
+  private _transport: KernelTransport<ExtensionMessage, OffscreenToPanelMessage> | null;
+  /**
+   * Unsubscribe handle from `transport.onMessage`. Invoked on rebind so
+   * a second `bind()` doesn't double-register the listener.
+   */
+  private transportUnsubscribe: (() => void) | null = null;
+
+  /**
+   * Optional transport injection. If omitted (today's extension
+   * path), the bridge lazily constructs the chrome.runtime adapter
+   * on first emit/bind. If provided (standalone kernel-worker path),
+   * the bridge uses the supplied transport and never touches
+   * chrome.runtime.
+   */
+  constructor(transport?: KernelTransport<ExtensionMessage, OffscreenToPanelMessage>) {
+    this._transport = transport ?? null;
+  }
+
+  private get transport(): KernelTransport<ExtensionMessage, OffscreenToPanelMessage> {
+    if (!this._transport) {
+      this._transport = createOffscreenChromeRuntimeTransport<OffscreenToPanelMessage>();
+    }
+    return this._transport;
+  }
 
   /**
    * Bind the orchestrator and start listening for panel messages.
@@ -88,7 +130,8 @@ export class OffscreenBridge {
   async bind(orchestrator: Orchestrator, browserAPI?: BrowserAPI): Promise<void> {
     this.orchestrator = orchestrator;
     this.browserAPI = browserAPI ?? null;
-    this.setupMessageListener();
+    this.transportUnsubscribe?.();
+    this.transportUnsubscribe = this.setupMessageListener();
     const store = new SessionStore();
     await store.init();
     this.sessionStore = store;
@@ -184,8 +227,7 @@ export class OffscreenBridge {
       },
 
       onToolStart: (scoopJid, toolName, toolInput) => {
-        const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
-        if (hiddenTools.has(toolName)) return;
+        if (HIDDEN_TOOL_NAMES.has(toolName)) return;
 
         const msg = bridge.getOrCreateAssistantMsg(scoopJid);
         if (!msg.toolCalls) msg.toolCalls = [];
@@ -201,8 +243,7 @@ export class OffscreenBridge {
       },
 
       onToolEnd: (scoopJid, toolName, result, isError) => {
-        const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
-        if (hiddenTools.has(toolName)) return;
+        if (HIDDEN_TOOL_NAMES.has(toolName)) return;
 
         const msgId = bridge.currentMessageId.get(scoopJid);
         if (msgId) {
@@ -502,6 +543,112 @@ export class OffscreenBridge {
   }
 
   /**
+   * Rebuild the panel's chat history for a scoop from the live agent
+   * state. Replies via `scoop-messages-replaced`. Used after a panel
+   * remount (HMR or full reload) to override the panel's own
+   * `browser-coding-agent` IDB snapshot, which may have been
+   * truncated by save races during the remount.
+   *
+   * Resolution order:
+   *   1. In-flight `messageBuffers` (current session, possibly with
+   *      a streaming tail).
+   *   2. Translate the scoop's `AgentMessage[]` into the chat shape.
+   *   3. Fall back to whatever the UI `sessionStore` has on disk.
+   */
+  private async handleRequestScoopMessages(scoopJid: string): Promise<void> {
+    if (!this.orchestrator) return;
+    const scoop = this.orchestrator.getScoops().find((s) => s.jid === scoopJid);
+    if (!scoop) return;
+
+    const buffered = this.messageBuffers.get(scoopJid);
+    if (buffered && buffered.length > 0) {
+      this.emit({
+        type: 'scoop-messages-replaced',
+        scoopJid,
+        messages: buffered,
+      });
+      return;
+    }
+
+    // Translate from the agent's canonical conversation. Lazy-import the
+    // translator so it doesn't pull pi-ai types into the bridge's hot
+    // path until needed.
+    const context = this.orchestrator.getScoopContext(scoopJid);
+    if (context) {
+      const { agentMessagesToChatMessages } =
+        await import('../../../packages/webapp/src/scoops/agent-message-to-chat.js');
+      const agentMessages = context.getAgentMessages();
+      if (agentMessages.length > 0) {
+        const chatMessages = agentMessagesToChatMessages(agentMessages, {
+          source: scoop.isCone ? 'cone' : (scoop.name ?? scoop.folder),
+        });
+        // Hydrate the buffer so subsequent agent events extend the
+        // restored history instead of starting from empty (which
+        // would silently overwrite the UI store via persistScoop).
+        // Clear `currentMessageId` for the same reason: a stale id
+        // pointing at a (now non-existent) buffer entry would have
+        // `getOrCreateAssistantMsg` write into the rehydrated buffer
+        // under an unrelated id.
+        const buf: BufferedChatMessage[] = chatMessages.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          attachments: m.attachments,
+          timestamp: m.timestamp,
+          source: m.source,
+          channel: m.channel,
+          toolCalls: m.toolCalls?.map((tc) => ({
+            id: tc.id,
+            name: tc.name,
+            input: tc.input,
+            result: tc.result,
+            isError: tc.isError,
+          })),
+          isStreaming: false,
+        }));
+        this.messageBuffers.set(scoopJid, buf);
+        this.currentMessageId.delete(scoopJid);
+        // Persist the rebuilt buffer back to the UI session store so
+        // a subsequent panel reload (without further agent activity)
+        // sees the canonical history instead of whatever truncated
+        // snapshot the panel last wrote during the remount race.
+        this.persistScoop(scoopJid);
+        this.emit({
+          type: 'scoop-messages-replaced',
+          scoopJid,
+          messages: buf,
+        });
+        return;
+      }
+    }
+
+    // Last resort: load from the UI session store. Hydrate the buffer
+    // (and clear `currentMessageId`) here too — without this, a later
+    // agent event would call `getOrCreateAssistantMsg` against an
+    // empty buffer and `persistScoop` would overwrite IDB with only
+    // the new entries, reintroducing the truncation race this
+    // handler exists to prevent.
+    if (this.sessionStore) {
+      const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+      try {
+        const session = await this.sessionStore.load(sessionId);
+        const messages = session?.messages ?? [];
+        if (messages.length > 0) {
+          this.messageBuffers.set(scoopJid, messages as unknown as BufferedChatMessage[]);
+          this.currentMessageId.delete(scoopJid);
+          this.emit({
+            type: 'scoop-messages-replaced',
+            scoopJid,
+            messages: messages as unknown as BufferedChatMessage[],
+          });
+        }
+      } catch (err) {
+        console.warn('[offscreen-bridge] sessionStore load failed:', sessionId, err);
+      }
+    }
+  }
+
+  /**
    * Persist a scoop's message buffer to the shared UI session store.
    * Fire-and-forget — errors are swallowed to avoid blocking agent processing.
    */
@@ -562,42 +709,37 @@ export class OffscreenBridge {
   // Private
   // -------------------------------------------------------------------------
 
-  private setupMessageListener(): void {
-    chrome.runtime.onMessage.addListener(
-      (
-        message: unknown,
-        _sender: ChromeMessageSender,
-        _sendResponse: (response?: unknown) => void
-      ) => {
-        if (!isExtMsg(message)) return false;
-        const msg = message as ExtensionMessage;
+  private setupMessageListener(): () => void {
+    return this.transport.onMessage((msg) => {
+      // Only handle messages from the panel (relayed by service worker)
+      if (msg.source !== 'panel') return;
 
-        // Only handle messages from the panel (relayed by service worker)
-        if (msg.source !== 'panel') return false;
-
-        // Route sprinkle-op-response to the proxy's pending request map
-        if ((msg.payload as any)?.type === 'sprinkle-op-response') {
-          import('./sprinkle-proxy.js').then(({ handleSprinkleOpResponse }) => {
-            handleSprinkleOpResponse(msg.payload as any);
-          });
-          return false;
-        }
-
-        this.handlePanelMessage(msg.payload as PanelToOffscreenMessage).catch((err) => {
-          console.error('[offscreen-bridge] handlePanelMessage error:', err);
-          // Surface error to the panel so the user sees something instead of a silent hang
-          const scoopJid = (msg.payload as { scoopJid?: string }).scoopJid;
-          if (scoopJid) {
-            this.emit({
-              type: 'error',
-              scoopJid,
-              error: err instanceof Error ? err.message : String(err),
-            } as import('./messages.js').ErrorMsg);
-          }
+      // Route sprinkle-op-response to the proxy's pending request map.
+      // The sprinkle-op-response shape isn't part of `PanelToOffscreenMessage`
+      // (it's a panel→offscreen reply to a sprinkle-op the offscreen sent),
+      // so we reach for the proxy's typed handler via `unknown`.
+      if ((msg.payload as { type?: string })?.type === 'sprinkle-op-response') {
+        import('./sprinkle-proxy.js').then(({ handleSprinkleOpResponse }) => {
+          handleSprinkleOpResponse(
+            msg.payload as unknown as Parameters<typeof handleSprinkleOpResponse>[0]
+          );
         });
-        return false;
+        return;
       }
-    );
+
+      this.handlePanelMessage(msg.payload as PanelToOffscreenMessage).catch((err) => {
+        console.error('[offscreen-bridge] handlePanelMessage error:', err);
+        // Surface error to the panel so the user sees something instead of a silent hang
+        const scoopJid = (msg.payload as { scoopJid?: string }).scoopJid;
+        if (scoopJid) {
+          this.emit({
+            type: 'error',
+            scoopJid,
+            error: err instanceof Error ? err.message : String(err),
+          } satisfies ErrorMsg);
+        }
+      });
+    });
   }
 
   private async handlePanelMessage(msg: PanelToOffscreenMessage): Promise<void> {
@@ -710,6 +852,11 @@ export class OffscreenBridge {
 
       case 'request-state': {
         this.emit(this.buildStateSnapshot());
+        break;
+      }
+
+      case 'request-scoop-messages': {
+        await this.handleRequestScoopMessages(msg.scoopJid);
         break;
       }
 
@@ -850,6 +997,42 @@ export class OffscreenBridge {
         }
         break;
       }
+
+      // Live localStorage sync from the page to the worker. In
+      // standalone-worker mode, the page intercepts its own
+      // localStorage writes (and listens for storage events from other
+      // tabs) and forwards them through the kernel transport. The
+      // worker's `localStorage` is a Map-backed shim installed during
+      // boot — direct setItem/removeItem here mutates that shim. In
+      // extension mode the panel and offscreen share the extension
+      // origin's localStorage, so the panel never sends these
+      // messages; the case branches stay no-ops on that path.
+      case 'local-storage-set': {
+        try {
+          (globalThis as { localStorage?: Storage }).localStorage?.setItem(msg.key, msg.value);
+        } catch (err) {
+          console.warn('[offscreen-bridge] local-storage-set failed:', err);
+        }
+        break;
+      }
+
+      case 'local-storage-remove': {
+        try {
+          (globalThis as { localStorage?: Storage }).localStorage?.removeItem(msg.key);
+        } catch (err) {
+          console.warn('[offscreen-bridge] local-storage-remove failed:', err);
+        }
+        break;
+      }
+
+      case 'local-storage-clear': {
+        try {
+          (globalThis as { localStorage?: Storage }).localStorage?.clear();
+        } catch (err) {
+          console.warn('[offscreen-bridge] local-storage-clear failed:', err);
+        }
+        break;
+      }
     }
   }
 
@@ -858,23 +1041,12 @@ export class OffscreenBridge {
     this.emit({ type: 'scoop-list', scoops } satisfies ScoopListMsg);
   }
 
-  /** Send a message to all panels via the service worker relay. */
-  private emit(payload: import('./messages.js').OffscreenToPanelMessage | StateSnapshotMsg): void {
-    chrome.runtime
-      .sendMessage({
-        source: 'offscreen' as const,
-        payload,
-      })
-      .catch(() => {
-        // No panel open — that's expected
-      });
+  /** Send a message to all panels via the kernel transport. */
+  private emit(payload: OffscreenToPanelMessage): void {
+    this.transport.send(payload);
   }
 }
 
 function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-function isExtMsg(msg: unknown): boolean {
-  return typeof msg === 'object' && msg !== null && 'source' in msg && 'payload' in msg;
 }
