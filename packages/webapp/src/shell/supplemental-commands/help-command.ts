@@ -58,7 +58,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
     ],
   ],
   ['Data processing', ['xargs', 'jq', 'base64', 'date']],
-  ['Network', ['curl', 'wget', 'html-to-markdown']],
+  ['Network', ['curl', 'wget', 'websocat', 'html-to-markdown']],
   ['Version control', ['git']],
   ['Languages', ['node', 'python', 'python3', 'sqlite3']],
   ['Skills', ['skill', 'upskill']],

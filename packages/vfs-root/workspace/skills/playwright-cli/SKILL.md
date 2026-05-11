@@ -238,3 +238,18 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
 - The SLICC app tab and Chrome internal UI tabs are automatically excluded from `tab-list`.
 - `fill` clears and types into regular inputs, textareas, and `contenteditable` elements.
 - Screenshots default to `/tmp/screenshot-<timestamp>.png`. Use `--filename=path` to save elsewhere.
+
+## Low-level CDP escape hatch
+
+For raw Chrome DevTools Protocol calls that `playwright-cli` doesn't wrap, send JSON-RPC directly over WebSocket with `websocat`:
+
+```bash
+# Discover the page's debug socket URL via the CDP HTTP endpoint
+curl -s http://127.0.0.1:9222/json | jq -r '.[0].webSocketDebuggerUrl'
+
+# Send a single CDP method, receive the response, exit
+echo 'Page.navigate {"url":"https://example.com"}' \
+  | websocat -1 --jsonrpc --jsonrpc-omit-jsonrpc ws://127.0.0.1:9222/devtools/page/<id>
+```
+
+Run `websocat --help` for the full flag list. Use this only when `playwright-cli` has no wrapper for the CDP method you need.

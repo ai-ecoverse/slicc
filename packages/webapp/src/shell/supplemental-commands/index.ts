@@ -16,6 +16,7 @@ import { createUnameCommand } from './uname-command.js';
 import { createManCommand } from './man-command.js';
 import { createUnzipCommand } from './unzip-command.js';
 import { createWebhookCommand } from './webhook-command.js';
+import { createWebsocatCommand } from './websocat-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
@@ -89,6 +90,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPython3LikeCommand('python3'),
     createPython3LikeCommand('python'),
     createWebhookCommand(),
+    createWebsocatCommand(),
     createCrontaskCommand(),
     createFsWatchCommand(),
     createSprinkleCommand(),
