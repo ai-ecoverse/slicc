@@ -5,6 +5,37 @@ import {
   type SecretPair,
 } from './secret-masking.js';
 
+function indexOfBytes(haystack: Uint8Array, needle: Uint8Array, from = 0): number {
+  outer: for (let i = from; i <= haystack.length - needle.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
+}
+
+function replaceAllBytes(
+  haystack: Uint8Array,
+  needle: Uint8Array,
+  replacement: Uint8Array
+): Uint8Array {
+  if (indexOfBytes(haystack, needle) < 0) return haystack;
+  const out: number[] = [];
+  let i = 0;
+  while (i < haystack.length) {
+    const idx = indexOfBytes(haystack, needle, i);
+    if (idx < 0) {
+      for (let k = i; k < haystack.length; k++) out.push(haystack[k]);
+      break;
+    }
+    for (let k = i; k < idx; k++) out.push(haystack[k]);
+    for (let k = 0; k < replacement.length; k++) out.push(replacement[k]);
+    i = idx + needle.length;
+  }
+  return new Uint8Array(out);
+}
+
 export interface FetchProxySecretSource {
   get(name: string): Promise<string | undefined>;
   listAll(): Promise<{ name: string; value: string; domains: string[] }[]>;
@@ -210,8 +241,31 @@ export class SecretsPipeline {
     return {};
   }
 
+  unmaskBodyBytes(body: Uint8Array, hostname: string): { bytes: Uint8Array } {
+    let out = body;
+    const enc = new TextEncoder();
+    for (const [maskedValue, ms] of this.maskedToSecret) {
+      if (!matchesDomains(hostname, ms.domains)) continue;
+      const needle = enc.encode(maskedValue);
+      const replacement = enc.encode(ms.realValue);
+      out = replaceAllBytes(out, needle, replacement);
+    }
+    return { bytes: out };
+  }
+
   scrubResponse(text: string): string {
     return this.scrubber(text);
+  }
+
+  scrubResponseBytes(bytes: Uint8Array): Uint8Array {
+    let out = bytes;
+    const enc = new TextEncoder();
+    for (const [maskedValue, ms] of this.maskedToSecret) {
+      const needle = enc.encode(ms.realValue);
+      const replacement = enc.encode(maskedValue);
+      out = replaceAllBytes(out, needle, replacement);
+    }
+    return out;
   }
 
   scrubHeaders(headers: Headers): Record<string, string> {

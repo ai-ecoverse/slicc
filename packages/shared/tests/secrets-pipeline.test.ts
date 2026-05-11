@@ -182,3 +182,81 @@ describe('extractAndUnmaskUrlCredentials', () => {
     expect(result.url).toBe('not a url');
   });
 });
+
+describe('unmaskBodyBytes — byte-safe', () => {
+  let pipeline: SecretsPipeline;
+  let masked: string;
+
+  beforeEach(async () => {
+    pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        { name: 'GITHUB_TOKEN', value: 'ghp_realToken123', domains: ['github.com'] },
+      ]),
+    });
+    await pipeline.reload();
+    masked = await pipeline.maskOne('GITHUB_TOKEN', 'ghp_realToken123');
+  });
+
+  it('replaces masked → real in a UTF-8 body', () => {
+    const body = new TextEncoder().encode(`hello ${masked} world`);
+    const { bytes } = pipeline.unmaskBodyBytes(body, 'github.com');
+    expect(new TextDecoder().decode(bytes)).toBe('hello ghp_realToken123 world');
+  });
+
+  it('does not corrupt surrounding bytes when no match', () => {
+    const before = new Uint8Array([0xff, 0xfe, 0x00, 0x01, 0xc3, 0x28, 0xa0, 0x80]);
+    const { bytes } = pipeline.unmaskBodyBytes(before, 'github.com');
+    expect(Array.from(bytes)).toEqual(Array.from(before));
+  });
+
+  it('replaces only at byte-aligned masked-value occurrences', () => {
+    const maskedBytes = new TextEncoder().encode(masked);
+    const prefix = new Uint8Array([0xff, 0xfe, 0x00]);
+    const suffix = new Uint8Array([0x01, 0xff]);
+    const input = new Uint8Array(prefix.length + maskedBytes.length + suffix.length);
+    input.set(prefix, 0);
+    input.set(maskedBytes, prefix.length);
+    input.set(suffix, prefix.length + maskedBytes.length);
+    const { bytes } = pipeline.unmaskBodyBytes(input, 'github.com');
+    const realBytes = new TextEncoder().encode('ghp_realToken123');
+    const expected = new Uint8Array(prefix.length + realBytes.length + suffix.length);
+    expected.set(prefix, 0);
+    expected.set(realBytes, prefix.length);
+    expected.set(suffix, prefix.length + realBytes.length);
+    expect(Array.from(bytes)).toEqual(Array.from(expected));
+  });
+
+  it('leaves bytes untouched on domain mismatch', () => {
+    const body = new TextEncoder().encode(`hello ${masked} world`);
+    const { bytes } = pipeline.unmaskBodyBytes(body, 'evil.example.com');
+    expect(new TextDecoder().decode(bytes)).toBe(`hello ${masked} world`);
+  });
+});
+
+describe('scrubResponseBytes', () => {
+  let pipeline: SecretsPipeline;
+
+  beforeEach(async () => {
+    pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: source([
+        { name: 'GITHUB_TOKEN', value: 'ghp_realToken123', domains: ['github.com'] },
+      ]),
+    });
+    await pipeline.reload();
+  });
+
+  it('replaces real → masked at byte boundaries in a UTF-8 chunk', async () => {
+    const masked = await pipeline.maskOne('GITHUB_TOKEN', 'ghp_realToken123');
+    const input = new TextEncoder().encode('hello ghp_realToken123 world');
+    const out = pipeline.scrubResponseBytes(input);
+    expect(new TextDecoder().decode(out)).toBe(`hello ${masked} world`);
+  });
+
+  it('leaves arbitrary non-UTF-8 bytes untouched', () => {
+    const before = new Uint8Array([0xff, 0xfe, 0x00, 0x01, 0xc3, 0x28, 0xa0, 0x80]);
+    const out = pipeline.scrubResponseBytes(before);
+    expect(Array.from(out)).toEqual(Array.from(before));
+  });
+});
