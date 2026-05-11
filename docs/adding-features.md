@@ -800,8 +800,8 @@ External providers in `packages/webapp/providers/` are always included (never fi
 ```typescript
 // packages/webapp/providers/my-corp.ts
 import type { ProviderConfig, OAuthLauncher } from '../src/providers/types.js';
-import { registerApiProvider, streamAnthropic } from '@mariozechner/pi-ai';
-import type { Api, Model, Context } from '@mariozechner/pi-ai';
+import { registerApiProvider, streamAnthropic } from '@earendil-works/pi-ai';
+import type { Api, Model, Context } from '@earendil-works/pi-ai';
 import { saveOAuthAccount, getAccounts } from '../src/ui/provider-settings.js';
 
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
@@ -1146,7 +1146,7 @@ Both modes handle `data-action` clicks and form submissions identically.
 
 ## Resources
 
-- **pi-mono architecture**: https://github.com/badlogic/pi-mono
+- **pi-mono architecture**: https://github.com/earendil-works/pi-mono
 - **just-bash**: https://github.com/jotaen/just-bash
 - **Isomorphic-git**: https://isomorphic-git.org/
 - **LightningFS**: https://github.com/steverice/lightning-fs

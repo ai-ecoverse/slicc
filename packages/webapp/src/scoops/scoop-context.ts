@@ -25,9 +25,9 @@ import type {
   ImageContent,
   Model,
 } from '../core/index.js';
-import { isContextOverflow, streamSimple, getSupportedThinkingLevels } from '@mariozechner/pi-ai';
-import type { Api, AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
-import type { ThinkingLevel } from '@mariozechner/pi-agent-core';
+import { isContextOverflow, streamSimple, getSupportedThinkingLevels } from '@earendil-works/pi-ai';
+import type { Api, AssistantMessage as PiAssistantMessage } from '@earendil-works/pi-ai';
+import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
 import type { SessionStore } from '../core/session.js';
 import { createFileTools, createBashTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';

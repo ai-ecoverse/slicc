@@ -64,17 +64,17 @@ export default defineConfig({
             http: resolve(webappDir, 'src/shims/http.ts'),
             https: resolve(webappDir, 'src/shims/https.ts'),
             http2: resolve(webappDir, 'src/shims/http2.ts'),
-            '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js': resolve(
+            '@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js': resolve(
               workspaceRoot,
-              'node_modules/@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js'
+              'node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js'
             ),
-            '@mariozechner/pi-ai/dist/providers/transform-messages.js': resolve(
+            '@earendil-works/pi-ai/dist/providers/transform-messages.js': resolve(
               workspaceRoot,
-              'node_modules/@mariozechner/pi-ai/dist/providers/transform-messages.js'
+              'node_modules/@earendil-works/pi-ai/dist/providers/transform-messages.js'
             ),
-            '@mariozechner/pi-ai/dist/providers/simple-options.js': resolve(
+            '@earendil-works/pi-ai/dist/providers/simple-options.js': resolve(
               workspaceRoot,
-              'node_modules/@mariozechner/pi-ai/dist/providers/simple-options.js'
+              'node_modules/@earendil-works/pi-ai/dist/providers/simple-options.js'
             ),
           },
         },

@@ -27,7 +27,7 @@
  * is not rendered in the chat history view.
  */
 
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
+import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type {
   AssistantMessage,
   Message,
@@ -35,7 +35,7 @@ import type {
   ToolCall as AgentToolCall,
   ToolResultMessage,
   UserMessage,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 import type { ChatMessage, ToolCall as UiToolCall } from '../ui/types.js';
 import { HIDDEN_TOOL_NAMES } from './hidden-tools.js';
 

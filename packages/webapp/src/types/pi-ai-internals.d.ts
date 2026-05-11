@@ -7,8 +7,8 @@
  *
  * Follow the same pattern as pi-coding-agent-compaction.d.ts.
  */
-declare module '@mariozechner/pi-ai/dist/providers/transform-messages.js' {
-  import type { Api, Model, Message, AssistantMessage } from '@mariozechner/pi-ai';
+declare module '@earendil-works/pi-ai/dist/providers/transform-messages.js' {
+  import type { Api, Model, Message, AssistantMessage } from '@earendil-works/pi-ai';
   export function transformMessages<TApi extends Api>(
     messages: Message[],
     model: Model<TApi>,
@@ -16,7 +16,7 @@ declare module '@mariozechner/pi-ai/dist/providers/transform-messages.js' {
   ): Message[];
 }
 
-declare module '@mariozechner/pi-ai/dist/providers/simple-options.js' {
+declare module '@earendil-works/pi-ai/dist/providers/simple-options.js' {
   import type {
     Api,
     Model,
@@ -24,7 +24,7 @@ declare module '@mariozechner/pi-ai/dist/providers/simple-options.js' {
     SimpleStreamOptions,
     ThinkingLevel,
     ThinkingBudgets,
-  } from '@mariozechner/pi-ai';
+  } from '@earendil-works/pi-ai';
   export function buildBaseOptions(
     model: Model<Api>,
     options?: SimpleStreamOptions,

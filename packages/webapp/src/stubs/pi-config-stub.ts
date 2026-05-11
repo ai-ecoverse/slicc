@@ -1,5 +1,5 @@
 /**
- * Browser-safe stub for @mariozechner/pi-coding-agent/dist/config.js
+ * Browser-safe stub for @earendil-works/pi-coding-agent/dist/config.js
  *
  * config.js uses fileURLToPath(import.meta.url) at the top level which
  * crashes in the browser. The webapp never calls any of these functions;

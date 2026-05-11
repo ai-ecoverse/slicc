@@ -61,8 +61,8 @@
       "ignore": ["src/chrome.d.ts"],
       "ignoreDependencies": [
         "@imagemagick/magick-wasm",
-        "@mariozechner/pi-ai",
-        "@mariozechner/pi-coding-agent"
+        "@earendil-works/pi-ai",
+        "@earendil-works/pi-coding-agent"
       ]
     },
     "packages/node-server": {

@@ -7,21 +7,21 @@
  * and keeps recent messages intact.
  *
  * Uses generateSummary(), estimateTokens(), shouldCompact(), and DEFAULT_COMPACTION_SETTINGS
- * from @mariozechner/pi-coding-agent.
+ * from @earendil-works/pi-coding-agent.
  */
 
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
-import type { Api, Model, UserMessage } from '@mariozechner/pi-ai';
+import type { AgentMessage } from '@earendil-works/pi-agent-core';
+import type { Api, Model, UserMessage } from '@earendil-works/pi-ai';
 // Deep import to the compaction submodule — the main entry re-exports 113 Node-only
 // modules that would break Vite's browser bundle. The compaction submodule itself
-// only depends on @mariozechner/pi-ai (already a browser-safe dependency).
+// only depends on @earendil-works/pi-ai (already a browser-safe dependency).
 // Types are declared in packages/webapp/src/types/pi-coding-agent-compaction.d.ts.
 import {
   generateSummary,
   estimateTokens,
   shouldCompact,
   DEFAULT_COMPACTION_SETTINGS,
-} from '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js';
+} from '@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('context-compaction');

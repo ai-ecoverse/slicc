@@ -22,8 +22,8 @@
       "groupSlug": "non-major"
     },
     {
-      "matchPackagePrefixes": ["@mariozechner/"],
-      "groupName": "mariozechner packages"
+      "matchPackagePrefixes": ["@earendil-works/"],
+      "groupName": "earendil-works packages"
     },
     {
       "matchPackagePrefixes": ["@semantic-release/"],

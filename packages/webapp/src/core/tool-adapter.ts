@@ -7,7 +7,7 @@
  *   execute(toolCallId, params, signal?, onUpdate?) → AgentToolResult
  */
 
-import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
 import type { ToolDefinition, ImageContent, TextContent } from './types.js';
 import { processImageContent } from './image-processor.js';
 import { createLogger } from './logger.js';

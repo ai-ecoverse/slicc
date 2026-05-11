@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
-import type { Api, Model } from '@mariozechner/pi-ai';
+import type { AgentMessage } from '@earendil-works/pi-agent-core';
+import type { Api, Model } from '@earendil-works/pi-ai';
 
 /** Structural views used in test helpers and assertions to avoid `any`. */
 type TestContentBlock = {
@@ -20,7 +20,7 @@ type CompactionSettingsArg = { enabled: boolean; reserveTokens: number; keepRece
 const mockGenerateSummary = vi.fn().mockResolvedValue('## Summary\nGoal: testing\nProgress: done');
 
 // Mock the pi-coding-agent compaction submodule (deep import path used in context-compaction.ts)
-vi.mock('@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js', () => ({
+vi.mock('@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js', () => ({
   estimateTokens: (msg: TestMessage) => {
     // Simple chars/4 heuristic matching the real implementation
     let chars = 0;
