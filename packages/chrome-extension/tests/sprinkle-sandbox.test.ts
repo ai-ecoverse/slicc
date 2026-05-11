@@ -130,3 +130,27 @@ describe('sprinkle-sandbox.html extension sandbox fixes', () => {
     expect(mainScript).toContain('unsupported src');
   });
 });
+
+describe('sprinkle-sandbox.html streaming-draft dip support', () => {
+  it('handles dip-draft-render by mounting a non-interactive child iframe', () => {
+    const scripts = extractScriptBlocks(sandboxHtml);
+    const mainScript = scripts.find((s) => s.includes("msg.type === 'dip-draft-render'"));
+    expect(mainScript, 'no dip-draft-render handler found').toBeTruthy();
+    // The child iframe must be non-interactive while the agent streams
+    // partial markup — same security/UX guarantee as the standalone path.
+    expect(mainScript).toContain('pointer-events: none');
+    // It must use srcdoc + sandbox just like the final dip-render path.
+    expect(mainScript).toContain('msg.srcdoc');
+    expect(mainScript).toContain("'allow-scripts'");
+  });
+
+  it('relays dip-draft-update from parent to nested child iframe', () => {
+    const scripts = extractScriptBlocks(sandboxHtml);
+    const relayScript = scripts.find((s) => s.includes("msg.type === 'dip-draft-update'"));
+    expect(relayScript, 'no dip-draft-update relay found').toBeTruthy();
+    // The relay must forward to __slicc_childIframe — that's where
+    // DRAFT_BRIDGE_EXTENSION listens and replaces document.body.innerHTML.
+    expect(relayScript).toContain('__slicc_childIframe');
+    expect(relayScript).toContain('postMessage');
+  });
+});

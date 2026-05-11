@@ -375,6 +375,17 @@ addEventListener('message', function(e) {
     return;
   }
 
+  // Streaming-draft body updates: the parent posts incremental shtml
+  // content while the agent is still writing the block. The nested
+  // iframe's DRAFT_BRIDGE_EXTENSION listener swaps document.body.innerHTML
+  // on each message. We just relay — the child does the actual work.
+  if (e.source === parent && msg.type === 'dip-draft-update') {
+    if (window.__slicc_childIframe && window.__slicc_childIframe.contentWindow) {
+      window.__slicc_childIframe.contentWindow.postMessage(msg, '*');
+    }
+    return;
+  }
+
   if (msg.type === 'sprinkle-render') {
     // Apply initial theme class so CSS variables resolve correctly on first paint.
     if (typeof msg.isLight === 'boolean') {
@@ -526,6 +537,25 @@ addEventListener('message', function(e) {
     inlineIframe.srcdoc = msg.srcdoc;
     document.body.appendChild(inlineIframe);
     window.__slicc_childIframe = inlineIframe;
+  }
+
+  // ── Streaming-draft dip rendering (extension mode) ─────
+  // Same shape as `dip-render`, but the inner iframe is non-interactive
+  // (`pointer-events: none`) until stream end — a final `dip-render`
+  // replaces this draft once the cone finishes the block. The srcdoc
+  // already includes the DRAFT_BRIDGE_EXTENSION listener, so subsequent
+  // `dip-draft-update` messages relayed from the parent can swap the
+  // body content without touching the iframe wrapper.
+  if (msg.type === 'dip-draft-render') {
+    while (document.body.firstChild) document.body.removeChild(document.body.firstChild);
+    var draftIframe = document.createElement('iframe');
+    draftIframe.setAttribute('sandbox', 'allow-scripts');
+    draftIframe.style.cssText =
+      'width: 100%; height: 100%; border: none; overflow: hidden; pointer-events: none;';
+    document.body.style.overflow = 'hidden';
+    draftIframe.srcdoc = msg.srcdoc;
+    document.body.appendChild(draftIframe);
+    window.__slicc_childIframe = draftIframe;
   }
 
   // Relay bridge messages FROM the nested child iframe TO the extension page.
