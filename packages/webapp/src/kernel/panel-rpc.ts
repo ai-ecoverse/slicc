@@ -238,7 +238,7 @@ export function installPanelRpcHandler(options: {
       // Posting can fail if the channel was closed while we were
       // resolving — there's no useful recovery beyond logging.
       const reason = err instanceof Error ? err.message : String(err);
-       
+
       console.warn(`panel-rpc: failed to post response for id=${id}: ${reason}`);
     }
   };
