@@ -2257,12 +2257,19 @@ async function main(): Promise<void> {
   // Apply providers.json defaults before checking for API key
   applyProviderDefaults();
 
-  // Bootstrap OAuth replicas — re-pushes OAuth tokens to the proxy/SW replica
-  // on init. Idempotent; tolerates per-entry failure.
+  // Bootstrap OAuth replicas — re-pushes OAuth tokens to the proxy/SW
+  // replica on init AND silently renews any expired token via the provider's
+  // onSilentRenew hook (page context: window available for IMS iframe).
+  // Awaited so the kernel-worker starts with fresh tokens — otherwise scoops
+  // race the renewal and hit "session expired". Bounded by a soft timeout
+  // so a hung IMS popup doesn't deadlock the UI.
   const { bootstrapOAuthReplicas } = await import('./oauth-bootstrap.js');
-  void bootstrapOAuthReplicas().catch((err) => {
-    log.error('OAuth bootstrap failed', err);
-  });
+  await Promise.race([
+    bootstrapOAuthReplicas().catch((err) => {
+      log.error('OAuth bootstrap failed', err);
+    }),
+    new Promise<void>((resolve) => setTimeout(resolve, 10_000)),
+  ]);
 
   // First-run no longer auto-opens the legacy "Add Account" dialog.
   // Provider configuration is owned by the deterministic onboarding flow

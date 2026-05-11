@@ -19,7 +19,7 @@ const RENEW_BUFFER_MS = 60_000;
 
 export async function bootstrapOAuthReplicas(): Promise<void> {
   const accounts = getAccounts();
-  log.debug('Bootstrap OAuth replicas', { count: accounts.length });
+  log.info('Bootstrap OAuth replicas', { count: accounts.length });
 
   for (const a of accounts) {
     // Skip accounts without tokens
@@ -39,10 +39,10 @@ export async function bootstrapOAuthReplicas(): Promise<void> {
           if (renewed) {
             // onSilentRenew already calls saveOAuthAccount internally — no
             // need to re-push the replica here.
-            log.debug('Silently renewed OAuth token', { providerId: a.providerId });
+            log.info('Silently renewed OAuth token', { providerId: a.providerId });
             continue;
           }
-          log.debug('Silent renewal yielded no token; user must re-authenticate', {
+          log.warn('Silent renewal yielded no token; user must re-authenticate', {
             providerId: a.providerId,
           });
           continue;
