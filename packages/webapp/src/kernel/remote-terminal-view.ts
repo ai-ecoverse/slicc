@@ -415,6 +415,16 @@ export class RemoteTerminalView {
     if (!this.terminal) return;
     if (this.tabBusy) return;
     this.tabBusy = true;
+    // Share the existing `isExecuting` busy gate so the input handler
+    // swallows Enter (and other keystrokes except Ctrl+C) while the
+    // silent `compgen` round-trip is in flight. Without this, a user
+    // who hits Enter immediately after Tab races a second
+    // `terminal-exec` against the worker session, which only permits
+    // one exec at a time and rejects the second with exit code 130 —
+    // their actual command disappears. The compgen round-trip is
+    // typically <100ms, so the brief block is imperceptible.
+    const previouslyExecuting = this.isExecuting;
+    this.isExecuting = true;
     try {
       const beforeCursor = this.currentLine.slice(0, this.cursorPos);
       const { currentWord, isFirstWord, compgenCmd } = buildCompgenPlan(beforeCursor);
@@ -477,6 +487,11 @@ export class RemoteTerminalView {
       );
     } finally {
       this.tabBusy = false;
+      // Only release the busy gate if the tab didn't piggyback on an
+      // already-executing command (defensive — handleTab is gated on
+      // !isExecuting via the input handler, but the explicit save/
+      // restore makes the contract obvious for future callers).
+      this.isExecuting = previouslyExecuting;
     }
   }
 
