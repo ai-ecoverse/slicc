@@ -139,4 +139,82 @@ describe('handleFetchProxyConnection', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(JSON.stringify(posts)).not.toContain('ghp_real');
   });
+
+  it('URL with masked cred for allowed domain → synthetic Authorization header', async () => {
+    let fetchUrl: string | undefined;
+    let fetchHeaders: Record<string, string> | undefined;
+    (globalThis as any).fetch = vi.fn(async (url: string, init: any) => {
+      fetchUrl = url;
+      fetchHeaders = init.headers;
+      return new Response('ok', { status: 200, statusText: 'OK' });
+    });
+
+    const posts: any[] = [];
+    const port = makePort((m) => posts.push(m));
+    handleFetchProxyConnection(port, pipeline);
+    port.fireMessage({
+      type: 'request',
+      url: `https://x-access-token:${masked}@api.github.com/repos/foo/bar`,
+      method: 'GET',
+      headers: {},
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(fetchUrl).toBe('https://api.github.com/repos/foo/bar');
+    expect(fetchHeaders?.authorization).toBeDefined();
+    expect(fetchHeaders?.authorization).toMatch(/^Basic /);
+
+    const basicMatch = /^Basic (.+)$/.exec(fetchHeaders?.authorization || '');
+    expect(basicMatch).toBeDefined();
+    const decoded = atob(basicMatch![1]);
+    expect(decoded).toBe('x-access-token:ghp_real');
+
+    expect(posts[0]).toMatchObject({ type: 'response-head', status: 200 });
+  });
+
+  it('URL with masked cred for forbidden domain → response-error', async () => {
+    const fetchSpy = vi.fn();
+    (globalThis as any).fetch = fetchSpy;
+
+    const posts: any[] = [];
+    const port = makePort((m) => posts.push(m));
+    handleFetchProxyConnection(port, pipeline);
+    port.fireMessage({
+      type: 'request',
+      url: `https://x-access-token:${masked}@evil.example.com/repos/foo`,
+      method: 'GET',
+      headers: {},
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const errorPost = posts.find((p) => p.type === 'response-error');
+    expect(errorPost).toBeDefined();
+    expect(errorPost.error).toContain('forbidden');
+    expect(errorPost.error).toContain('GITHUB_TOKEN');
+    expect(errorPost.error).toContain('evil.example.com');
+  });
+
+  it('URL with masked cred AND existing authorization header → synthetic does not clobber', async () => {
+    let fetchHeaders: Record<string, string> | undefined;
+    (globalThis as any).fetch = vi.fn(async (url: string, init: any) => {
+      fetchHeaders = init.headers;
+      return new Response('ok', { status: 200, statusText: 'OK' });
+    });
+
+    const posts: any[] = [];
+    const port = makePort((m) => posts.push(m));
+    handleFetchProxyConnection(port, pipeline);
+    port.fireMessage({
+      type: 'request',
+      url: `https://x-access-token:${masked}@api.github.com/foo`,
+      method: 'GET',
+      headers: { authorization: 'Bearer existing-token' },
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(fetchHeaders?.authorization).toBe('Bearer existing-token');
+    expect(posts[0]).toMatchObject({ type: 'response-head', status: 200 });
+  });
 });
