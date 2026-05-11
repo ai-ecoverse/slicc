@@ -22,7 +22,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **which**                                   | `which-command.ts`         | Resolve a command path                                                                                                                                                                                                                       | `<command>` — returns `/usr/bin/<name>` or VFS path                                                                                         |
 | **uname**                                   | `uname-command.ts`         | Print the current browser user agent                                                                                                                                                                                                         | None                                                                                                                                        |
 | **host**                                    | `host-command.ts`          | Print the current leader tray status plus `launch_url` and `join_url` (`launch_url` is `https://.../tray/<id>` when this runtime is leader)                                                                                                  | None                                                                                                                                        |
-| **oauth-token**                             | `oauth-token-command.ts`   | Get an OAuth access token for a provider                                                                                                                                                                                                     | `<providerId>`, `--provider <id>`, `--list`, no args = selected provider; auto-triggers login if needed                                     |
+| **oauth-token**                             | `oauth-token-command.ts`   | Get an OAuth access token for a provider. Returns the **masked** Bearer token (in both CLI and extension modes). The proxy/SW unmasks at the network boundary.                                                                               | `<providerId>`, `--provider <id>`, `--list`, no args = selected provider; auto-triggers login if needed                                     |
 | **local-llm**                               | `local-llm-command.ts`     | Inspect / configure the Local LLM provider (Ollama, LM Studio, llama.cpp, vLLM, mlx, Jan, LocalAI)                                                                                                                                           | `local-llm` or `local-llm status` — verify connection; `local-llm discover` — probe `/v1/models` and save the list to Settings              |
 | **serve**                                   | `serve-command.ts`         | Open a VFS app directory in a browser tab                                                                                                                                                                                                    | `[--entry <relative-path>] <directory>` — defaults to `index.html`; rejects absolute/traversal entry paths                                  |
 | **open**                                    | `open-command.ts`          | Open URL or VFS file in browser tab                                                                                                                                                                                                          | `<url\|path>` — serves VFS files via preview SW; `--download` / `-d` forces download; `--view` / `-v` returns image inline for agent vision |
@@ -487,11 +487,11 @@ curl -X POST /api/fetch-proxy \
   -d '{"key": "value"}'
 ```
 
-All `fetch()` and `curl` calls route through proxy.
+All `fetch()` and `curl` calls route through proxy (CLI: `/api/fetch-proxy`, extension: `fetch-proxy.fetch` SW Port handler). Both modes now provide full secret-injection coverage.
 
 ### Extension Mode
 
-Host permissions configured in `manifest.json`:
+Extension mode routes through the service worker `fetch-proxy.fetch` Port handler. The handler unmasks secrets at the network boundary and uses `host_permissions` for CORS bypass:
 
 ```json
 "host_permissions": [
@@ -499,8 +499,6 @@ Host permissions configured in `manifest.json`:
   "http://*/*"
 ]
 ```
-
-Cross-origin fetch from extension pages allowed directly. Sandbox iframe proxies through parent page via postMessage.
 
 ### Behavior
 

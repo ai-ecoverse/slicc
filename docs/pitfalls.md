@@ -238,12 +238,47 @@ Host the real leader tray `WebSocket` in `packages/chrome-extension/src/service-
 
 ## Fetch Proxy: CORS & CSP
 
-| Mode          | Fetch Strategy | CORS Handling                                                   |
-| ------------- | -------------- | --------------------------------------------------------------- |
-| **CLI**       | Direct fetch   | Cross-origin requests proxy through `/api/fetch-proxy` endpoint |
-| **Extension** | Direct fetch   | Uses `host_permissions` in manifest; no server proxy needed     |
+| Mode          | Fetch Strategy                                       | CORS Handling                                                                                |
+| ------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| **CLI**       | `createProxiedFetch()` → `/api/fetch-proxy`          | Cross-origin requests proxy through Express endpoint with secret unmask/scrub                |
+| **Extension** | `createProxiedFetch()` → `fetch-proxy.fetch` SW Port | Routes through service worker Port handler with secret unmask/scrub; uses `host_permissions` |
 
-**Git CORS**: Same rules apply to isomorphic-git HTTP requests (clone, push, pull).
+**Git CORS**: Same rules apply to isomorphic-git HTTP requests (clone, push, pull). Both modes now route through `createProxiedFetch()`.
+
+## Response Status Code Constraints
+
+**The Problem**
+
+`new Response('', { status: 0 })` throws `RangeError: Failed to construct 'Response': Invalid status code (0)`. The Fetch API requires status codes in range 200-599.
+
+**The Solution**
+
+Use `413 Payload Too Large` for oversized requests instead of `status: 0`. The SW `fetch-proxy.fetch` handler uses a 32MB request-body cap and returns 413 when exceeded.
+
+```typescript
+// WRONG
+return new Response('', { status: 0 });
+
+// RIGHT
+return new Response('Request body exceeds 32MB limit', { status: 413 });
+```
+
+## SecretsPipeline Mutation Pitfall
+
+**The Problem**
+
+`SecretsPipeline.unmaskHeaders(headers, hostname)` mutates its input parameter in place. This matches the legacy `SecretProxyManager` semantics but is easy to miss.
+
+**The Solution**
+
+Expect the mutation. If you need the original headers preserved, clone them first:
+
+```typescript
+const originalHeaders = { ...headers };
+pipeline.unmaskHeaders(headers, hostname); // headers is now mutated
+```
+
+This design choice preserves compatibility with existing node-server callers that rely on in-place mutation.
 
 ## Two TypeScript Targets
 
@@ -513,7 +548,7 @@ When adding a feature that touches:
 
 - [ ] New pure-logic code has unit tests (run in Node)
 - [ ] Code has three-branch detection if behavior differs (Node/Extension/Browser)
-- [ ] Fetch uses `/api/fetch-proxy` in CLI, direct fetch in extension
+- [ ] Both modes proxy via `createProxiedFetch` (CLI to `/api/fetch-proxy`, extension to `fetch-proxy.fetch` Port)
 - [ ] WASM loading uses `chrome.runtime.getURL()` in extension mode
 - [ ] No dynamic code construction on extension pages
 

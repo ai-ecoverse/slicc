@@ -518,15 +518,15 @@ The agent can inspect `isError` to determine if a tool call succeeded or needs r
 - Tools run in Node.js
 - Browser operations via Chrome DevTools Protocol (WebSocket)
 - `node -e` uses `AsyncFunction` constructor
-- Fetch requests routed through `/api/fetch-proxy` (Express server)
+- Fetch requests routed through `/api/fetch-proxy` (Express server) with secret unmask/scrub
 
 ### Extension Mode
 
 - VirtualFS backed by IndexedDB (LightningFS)
-- Tools run in browser (side panel)
+- Tools run in browser (side panel and offscreen document)
 - Browser operations via `chrome.debugger` API
 - `node -e` and `.jsh` scripts run in sandbox iframe (CSP-exempt)
-- Cross-origin fetch from sandbox proxied via postMessage
+- Fetch requests routed through `fetch-proxy.fetch` SW Port handler with secret unmask/scrub
 
 Both modes share the same unified VirtualFS and tool interfaces.
 
