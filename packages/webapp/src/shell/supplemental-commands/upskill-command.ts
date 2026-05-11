@@ -1,3 +1,12 @@
+/**
+ * upskill — skill package manager for SLICC
+ *
+ * All direct fetch() calls in this file are intentionally shadowed by the
+ * `fetch: SecureFetch` parameter passed from createProxiedFetch() in the
+ * outer caller. This ensures network requests route through the fetch proxy
+ * in CLI mode (forbidden-header bridging) and direct fetch in extension mode
+ * (CORS bypass via host_permissions).
+ */
 import { defineCommand } from 'just-bash';
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
