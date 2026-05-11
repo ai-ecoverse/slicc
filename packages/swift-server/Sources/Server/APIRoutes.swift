@@ -47,7 +47,8 @@ func registerAPIRoutes(
     lickSystem: LickSystem,
     config: ServerConfig,
     httpClient: HTTPClient,
-    secretInjector: SecretInjector = SecretInjector(secrets: [])
+    secretInjector: SecretInjector = SecretInjector(secrets: []),
+    oauthStore: OAuthSecretStore? = nil
 ) {
     router.get("/api/runtime-config") { _, _ in
         let envWorkerBaseUrl: String? = {

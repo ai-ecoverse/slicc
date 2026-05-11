@@ -57,6 +57,7 @@ public final class SecretInjector: Sendable {
     private let lock = NSLock()
     private nonisolated(unsafe) var _secrets: [LoadedSecret]
     private nonisolated(unsafe) var _responseScrubber: @Sendable (String) -> String
+    private nonisolated(unsafe) var _oauthStore: OAuthSecretStore?
 
     private var secrets: [LoadedSecret] {
         lock.lock()
@@ -68,6 +69,12 @@ public final class SecretInjector: Sendable {
         lock.lock()
         defer { lock.unlock() }
         return _responseScrubber
+    }
+
+    private var oauthStore: OAuthSecretStore? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _oauthStore
     }
 
     private func setSecretsAndScrubber(secrets: [LoadedSecret], scrubber: @Sendable @escaping (String) -> String) {
@@ -84,28 +91,84 @@ public final class SecretInjector: Sendable {
         self._secrets = secrets
         let pairs = secrets.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
         self._responseScrubber = buildScrubber(secrets: pairs)
+        self._oauthStore = nil
     }
 
     /// Initialize by loading all secrets from the Keychain and masking them
     /// with the given session ID. Optional `envFileSecrets` are merged in
     /// and override Keychain entries with the same name.
-    init(sessionId: String, envFileSecrets: [Secret] = []) {
+    ///
+    /// If `oauthStore` is provided, OAuth replicas are merged in and override
+    /// Keychain / env-file entries on name collision (reserved-namespace
+    /// policy — see node-server's `SecretProxyManager`). The store reference
+    /// is held weakly through the actor — the initial load completes the
+    /// Keychain + env-file portion synchronously; call `reload()` (async)
+    /// once the runtime is in an async context to fold in OAuth entries.
+    init(sessionId: String, envFileSecrets: [Secret] = [], oauthStore: OAuthSecretStore? = nil) {
         self.sessionId = sessionId
         self._envFileSecrets = envFileSecrets
         self._secrets = []
         self._responseScrubber = { $0 }
-        loadSecrets()
+        self._oauthStore = oauthStore
+        // Initial sync load: Keychain + env-file only. OAuth entries are
+        // empty at startup (the webapp re-pushes them after bootstrap), so
+        // skipping them here is harmless. The first `reload()` after the
+        // first OAuth update will fold them in.
+        loadSecretsKeychainAndEnv()
     }
 
-    /// Reload secrets from the Keychain (and env file overrides), keeping
-    /// the same session ID. Call this after secret mutations (POST/DELETE)
-    /// so the injector picks up added/removed secrets.
-    func reload() {
-        loadSecrets()
+    /// Bind (or rebind) the OAuth store after construction. Matches
+    /// `SecretProxyManager.setOauthStore` — no reload happens implicitly;
+    /// callers run `reload()` once they're in an async context.
+    func setOAuthStore(_ store: OAuthSecretStore) {
+        lock.lock()
+        defer { lock.unlock() }
+        _oauthStore = store
     }
 
-    private func loadSecrets() {
+    /// Reload secrets from the Keychain, env file, and (if configured) the
+    /// OAuth store. Async because reading from the `OAuthSecretStore` actor
+    /// is async. Call this after secret mutations (POST/DELETE) so the
+    /// injector picks up added/removed secrets.
+    func reload() async {
         guard let sessionId else { return }
+        var loaded = self.loadSecretsKeychainAndEnvSnapshot()
+
+        // OAuth entries override Keychain + env-file entries on name
+        // collision (reserved-namespace policy — see node-server's
+        // SecretProxyManager.buildSource).
+        if let store = oauthStore {
+            for entry in await store.list() {
+                let masked = mask(sessionId: sessionId, secretName: entry.name, realValue: entry.value)
+                let loadedEntry = LoadedSecret(
+                    name: entry.name,
+                    realValue: entry.value,
+                    maskedValue: masked,
+                    domains: entry.domains
+                )
+                if let idx = loaded.firstIndex(where: { $0.name == entry.name }) {
+                    loaded[idx] = loadedEntry
+                } else {
+                    loaded.append(loadedEntry)
+                }
+            }
+        }
+
+        let pairs = loaded.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
+        setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
+    }
+
+    /// Synchronous Keychain + env-file load. Used by `init` for the initial
+    /// load before any async context exists, and by `reload()` as the first
+    /// step before folding in OAuth entries.
+    private func loadSecretsKeychainAndEnv() {
+        let loaded = loadSecretsKeychainAndEnvSnapshot()
+        let pairs = loaded.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
+        setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
+    }
+
+    private func loadSecretsKeychainAndEnvSnapshot() -> [LoadedSecret] {
+        guard let sessionId else { return [] }
         // Single Keychain read + parse for every secret. Previously this did
         // SecretStore.list() followed by per-name SecretStore.get(...), which
         // re-parsed the same blob N+1 times.
@@ -135,9 +198,55 @@ public final class SecretInjector: Sendable {
                 loaded.append(entry)
             }
         }
+        return loaded
+    }
 
-        let pairs = loaded.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
-        setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
+    /// Look up the masked value for a secret name. Returns nil if absent.
+    /// Used by `/api/secrets/oauth-update` to echo back the mask for the
+    /// just-stored OAuth replica.
+    func maskedValue(for name: String) -> String? {
+        secrets.first(where: { $0.name == name })?.maskedValue
+    }
+
+    // MARK: - session-id persistence
+
+    /// Read or create a stable per-runtime session-id file at `<dir>/session-id`.
+    ///
+    /// Mirrors `packages/node-server/src/secrets/session-id-file.ts`. The
+    /// file holds a single UUID used as the HMAC key prefix when masking
+    /// secrets — keeping it stable across restarts means the masked values
+    /// in chat history, cached payloads, and on-disk artifacts continue to
+    /// round-trip cleanly after a server restart.
+    ///
+    /// - Reuses the existing UUID if the file contains a syntactically valid
+    ///   one (`UUID(uuidString:)` matches the Node `randomUUID()` output).
+    /// - Generates a fresh UUID and writes it atomically with file
+    ///   permissions 0600 otherwise. Best-effort on filesystems that don't
+    ///   support POSIX permissions; matches node-server's `chmodSync` try /
+    ///   catch.
+    /// - Creates intermediate directories if missing.
+    static func readOrCreateSessionId(in dir: URL) throws -> String {
+        let fm = FileManager.default
+        let path = dir.appendingPathComponent("session-id")
+        if fm.fileExists(atPath: path.path),
+           let data = try? Data(contentsOf: path),
+           let raw = String(data: data, encoding: .utf8)?
+               .trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty,
+           UUID(uuidString: raw) != nil {
+            return raw
+        }
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fresh = UUID().uuidString
+        // node-server writes "<uuid>\n"; match for parity so a Swift-written
+        // file is byte-identical to a Node-written one (and vice-versa).
+        try (fresh + "\n").data(using: .utf8)!.write(to: path, options: .atomic)
+        // Best-effort 0600 — matches node-server's try { chmodSync } catch.
+        try? fm.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o600))],
+            ofItemAtPath: path.path
+        )
+        return fresh
     }
 
     /// Returns true if there are no secrets loaded.

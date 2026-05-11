@@ -396,5 +396,58 @@ final class SecretInjectorTests: XCTestCase {
         let out = injector.scrubResponseBytes(bytes: before)
         XCTAssertEqual(out, before)
     }
+
+    // MARK: - OAuth store chaining
+
+    /// Uniquely-named secrets keep the assertion independent of any ambient
+    /// Keychain entries that `SecretStore.all()` may surface during init.
+    private func uniqueName(_ base: String) -> String {
+        "OAUTHTEST_\(UUID().uuidString.prefix(8))_\(base)"
+    }
+
+    func testOAuthSecretUnmasksViaBearerHeaderForAllowedDomain() async throws {
+        let name = uniqueName("PROVIDER_TOKEN")
+        let oauth = OAuthSecretStore()
+        try await oauth.set(name: name, value: "ghp_oauth_real", domains: ["api.github.com"])
+
+        let injector = SecretInjector(
+            sessionId: "test-session-oauth-1",
+            envFileSecrets: [],
+            oauthStore: oauth
+        )
+        await injector.reload()
+
+        guard let masked = injector.maskedValue(for: name) else {
+            return XCTFail("OAuth entry should be present after reload")
+        }
+        let header = "Bearer \(masked)"
+        let result = injector.inject(text: header, hostname: "api.github.com")
+        guard case .success(let text) = result else { return XCTFail("Expected success") }
+        XCTAssertEqual(text, "Bearer ghp_oauth_real")
+    }
+
+    func testOAuthEntryOverridesEnvFileEntryWithSameName() async throws {
+        let name = uniqueName("RESERVED_TOKEN")
+        let envSecret = Secret(name: name, value: "env-file-real", domains: ["api.example.com"])
+        let oauth = OAuthSecretStore()
+        try await oauth.set(name: name, value: "oauth-real", domains: ["api.example.com"])
+
+        let injector = SecretInjector(
+            sessionId: "test-session-oauth-2",
+            envFileSecrets: [envSecret],
+            oauthStore: oauth
+        )
+        await injector.reload()
+
+        // After reload, masked value should mask the OAuth real value, not the env one.
+        guard let masked = injector.maskedValue(for: name) else {
+            return XCTFail("Entry should exist")
+        }
+        // Inject masked → real should yield the OAuth real value, not env.
+        let result = injector.inject(text: masked, hostname: "api.example.com")
+        guard case .success(let text) = result else { return XCTFail("Expected success") }
+        XCTAssertEqual(text, "oauth-real")
+        XCTAssertNotEqual(text, "env-file-real")
+    }
 }
 
