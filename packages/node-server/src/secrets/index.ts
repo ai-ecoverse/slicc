@@ -1,5 +1,5 @@
 export type { Secret, SecretEntry, SecretStore, MaskedSecret } from './types.js';
 export { EnvSecretStore } from './env-secret-store.js';
-export { matchDomain, matchesDomains } from './domain-match.js';
+export { domainMatches as matchDomain, matchesDomains } from '@slicc/shared';
 export { parseEnvFile, serializeEnvFile } from './env-file.js';
 export { SecretProxyManager } from './proxy-manager.js';
