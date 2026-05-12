@@ -46,6 +46,7 @@ import { createAttachmentTmpWriter } from './attachment-vfs.js';
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
+import { flushCredentialsToWorker, resolveDefaultModel } from './onboarding-helpers.js';
 import { BrowserAPI, NavigationWatcher } from '../cdp/index.js';
 import { type Orchestrator } from '../scoops/index.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
@@ -959,11 +960,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       },
       broadcastToDip: (payload) => broadcastToDipsExt(payload),
       fireFinalLick: (data) => {
-        // Forward the synthetic completion event through the same
-        // relay any other sprinkle lick would use, so the offscreen
-        // cone receives it as a regular `[Sprinkle Event: welcome]`.
-        // Dedup-gated so a stray re-fire (HMR, double-mount) can't
-        // double the cone's greeting.
+        flushCredentialsToWorker(client);
         const action = String((data as { action?: unknown })?.action ?? '');
         dispatchWelcomeLickOnce(
           action,
@@ -982,7 +979,15 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           const { createOAuthLauncher } = await import('../providers/oauth-service.js');
           const launcher = createOAuthLauncher();
           await cfg.onOAuthLogin(launcher, () => undefined);
-          return { ok: true };
+          return {
+            ok: true,
+            model: resolveDefaultModel(
+              providerId,
+              cfg,
+              getProviderModelsExt,
+              isModelHiddenFromPickerExt
+            ),
+          };
         } catch (err) {
           return {
             ok: false,
@@ -1820,9 +1825,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
       },
       broadcastToDip: (payload) => broadcastToDips(payload),
       fireFinalLick: (data) => {
-        // Forward through the same relay any sprinkle lick would use,
-        // gated by the persistent ledger so HMR / double-mount can't
-        // double the cone's greeting.
+        flushCredentialsToWorker(client);
         const action = String((data as { action?: unknown })?.action ?? '');
         dispatchWelcomeLickOnce(
           action,
@@ -1841,7 +1844,10 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
           const { createOAuthLauncher } = await import('../providers/oauth-service.js');
           const launcher = createOAuthLauncher();
           await cfg.onOAuthLogin(launcher, () => undefined);
-          return { ok: true };
+          return {
+            ok: true,
+            model: resolveDefaultModel(providerId, cfg, getProviderModels, isModelHiddenFromPicker),
+          };
         } catch (err) {
           return {
             ok: false,
