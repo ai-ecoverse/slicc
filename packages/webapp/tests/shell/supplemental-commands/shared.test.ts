@@ -10,7 +10,11 @@ import {
   resolveServeEntryPath,
   resolveNodePackageBaseUrl,
   resolvePinnedPackageVersion,
+  isNodeRuntime,
+  isExtensionRuntime,
 } from '../../../src/shell/supplemental-commands/shared.js';
+import { resolvePyodideIndexURL } from '../../../src/kernel/realm/realm-factory.js';
+import { PYODIDE_CDN } from '../../../src/kernel/realm/py-realm-shared.js';
 
 describe('toPreviewUrl', () => {
   it('returns localhost preview URL in non-extension environment', () => {
@@ -209,5 +213,64 @@ describe('resolvePinnedPackageVersion', () => {
     expect(() => resolvePinnedPackageVersion('pyodide', '^0.29.3')).toThrow(
       'pyodide must use an exact semver version in package.json'
     );
+  });
+});
+
+describe('isNodeRuntime', () => {
+  it('detects the vitest runner as Node', () => {
+    expect(isNodeRuntime()).toBe(true);
+  });
+});
+
+describe('isExtensionRuntime', () => {
+  it('returns false in plain Node (no chrome global)', () => {
+    expect(isExtensionRuntime()).toBe(false);
+  });
+
+  it('returns true when chrome.runtime.id is present', () => {
+    const savedChrome = (globalThis as { chrome?: unknown }).chrome;
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { id: 'test-ext-id' } };
+    try {
+      expect(isExtensionRuntime()).toBe(true);
+    } finally {
+      (globalThis as { chrome?: unknown }).chrome = savedChrome;
+    }
+  });
+});
+
+describe('resolvePyodideIndexURL', () => {
+  it('returns a node_modules pathname in the vitest Node runner', () => {
+    expect(resolvePyodideIndexURL()).toContain('/node_modules/pyodide/');
+  });
+
+  it('uses chrome.runtime.getURL when running in an extension', () => {
+    const savedChrome = (globalThis as { chrome?: unknown }).chrome;
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-ext-id',
+        getURL: (path: string) => `chrome-extension://test-ext-id/${path}`,
+      },
+    };
+    try {
+      expect(resolvePyodideIndexURL()).toBe('chrome-extension://test-ext-id/pyodide/');
+    } finally {
+      (globalThis as { chrome?: unknown }).chrome = savedChrome;
+    }
+  });
+
+  it('falls back to the CDN for browser/worker runtimes (no chrome, no process)', () => {
+    // Simulate a DedicatedWorker: no `chrome`, no `process`. We have
+    // to fake both because vitest itself is Node — these branches are
+    // exactly what the CLI standalone kernel-worker hits at runtime.
+    const savedChrome = (globalThis as { chrome?: unknown }).chrome;
+    const savedProcess = (globalThis as { process?: unknown }).process;
+    (globalThis as { chrome?: unknown }).chrome = undefined;
+    (globalThis as { process?: unknown }).process = undefined;
+    try {
+      expect(resolvePyodideIndexURL()).toBe(PYODIDE_CDN);
+    } finally {
+      (globalThis as { chrome?: unknown }).chrome = savedChrome;
+      (globalThis as { process?: unknown }).process = savedProcess;
+    }
   });
 });

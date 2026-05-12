@@ -112,18 +112,41 @@ export function resolveNodePackageBaseUrl(specifier: string, fallbackRelativePat
   return new URL(fallbackRelativePath, import.meta.url);
 }
 
+/**
+ * True when running under Node.js (vitest, build tooling). Use this
+ * instead of `typeof window === 'undefined'` to decide whether to
+ * resolve WASM assets via local `node_modules` — a DedicatedWorker
+ * has no `window` either, and that branch breaks browser/CLI mode.
+ */
+export function isNodeRuntime(): boolean {
+  return (
+    typeof process !== 'undefined' && !!(process as { versions?: { node?: string } }).versions?.node
+  );
+}
+
+/**
+ * True when running inside a Chrome extension (page, offscreen, SW,
+ * or extension-spawned DedicatedWorker — `chrome.runtime.id` is
+ * present everywhere in the extension origin).
+ */
+export function isExtensionRuntime(): boolean {
+  return (
+    typeof chrome !== 'undefined' &&
+    !!(chrome as { runtime?: { id?: string } } | undefined)?.runtime?.id
+  );
+}
+
 export async function getSqlJs(): Promise<SqlJsModule> {
   if (!sqlJsPromise) {
     sqlJsPromise = (async () => {
       const sqlModule = await import('sql.js/dist/sql-wasm.js');
       const initSqlJs = (sqlModule as { default: InitSqlJs }).default;
-      const wasmBase =
-        typeof window === 'undefined'
-          ? resolveNodePackageBaseUrl(
-              'sql.js/dist/sql-wasm.js',
-              '../../../../../node_modules/sql.js/dist/'
-            ).toString()
-          : SQLJS_WASM_CDN;
+      const wasmBase = isNodeRuntime()
+        ? resolveNodePackageBaseUrl(
+            'sql.js/dist/sql-wasm.js',
+            '../../../../../node_modules/sql.js/dist/'
+          ).toString()
+        : SQLJS_WASM_CDN;
       return initSqlJs({ locateFile: (file) => `${wasmBase}${file}` });
     })();
   }

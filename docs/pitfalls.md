@@ -113,6 +113,46 @@ File: `packages/chrome-extension/vite.config.ts` `closeBundle` hook must:
 2. Bundle ImageMagick WASM to `dist/extension/magick.wasm`
 3. Ensure manifest `web_accessible_resources` includes all assets
 
+## Runtime Detection: Workers Have No `window` Either
+
+**The Problem**
+
+`typeof window === 'undefined'` looks like a Node-vs-browser check but is actually a
+"no DOM" check — and a DedicatedWorker has no `window` either. The CLI standalone
+kernel runs in a DedicatedWorker (`packages/webapp/src/kernel/kernel-worker.ts`),
+the realm runners run in DedicatedWorkers in both floats, and the offscreen
+document does have a `window`. So `typeof window === 'undefined'` does NOT
+distinguish "Node" from "browser worker."
+
+The historical pattern in three resolvers — Pyodide indexURL, ImageMagick
+`magick.wasm`, `sql.js` — used this check to switch between local `node_modules`
+and the CDN. In CLI standalone, the agent shell runs in the kernel-worker (no
+`window`), so the check resolved to `/node_modules/<pkg>/`, which Vite's dev
+server doesn't serve — it returns the SPA fallback (`<!DOCTYPE …>`), and the
+worker then tries to load the HTML as a WASM/JS module with the obvious error:
+
+```
+WebAssembly.instantiate(): expected magic word 00 61 73 6d, found 3c 21 44 4f
+Failed to fetch dynamically imported module: …/pyodide.asm.js (MIME text/html)
+```
+
+**The Fix**
+
+Use the helpers in `packages/webapp/src/shell/supplemental-commands/shared.ts`:
+
+| Helper                 | True when…                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| `isNodeRuntime()`      | `typeof process !== 'undefined' && process.versions?.node` — vitest, node-server tooling      |
+| `isExtensionRuntime()` | `typeof chrome !== 'undefined' && chrome?.runtime?.id` — extension origin (incl. its workers) |
+
+Branch order must be **extension → node → browser CDN**: extension wins because
+extension workers also have `process`-less, `window`-less contexts where the CDN
+branch would be wrong (extension CSP blocks CDN), and Node wins over the
+browser-CDN fallback because vitest must not hit jsdelivr for unit tests.
+
+See `resolvePyodideIndexURL()` in `kernel/realm/realm-factory.ts` and
+`getMagick()` / `getSqlJs()` for the canonical pattern.
+
 ## Node Command: Three-Branch Path
 
 **File**: `packages/webapp/src/shell/supplemental-commands/node-command.ts`
