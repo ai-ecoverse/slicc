@@ -16,16 +16,25 @@ import type { PyodideInterface } from 'pyodide';
 import type { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 import { syncVfsToPyodide, syncPyodideToVfs } from '../../../src/kernel/realm/py-realm-shared.js';
 
-interface WalkEntry {
-  path: string;
-  isDir: boolean;
-  size?: number;
-  content?: string;
-}
+type WalkEntry =
+  | { path: string; isDir: true }
+  | { path: string; isDir: false; size: number; content?: Uint8Array };
 
 interface WriteBatchPayload {
   mkdirs?: string[];
-  files?: Array<{ path: string; content: string }>;
+  files?: Array<{ path: string; content: Uint8Array }>;
+}
+
+interface WriteBatchResult {
+  ok: true;
+  failedMkdirs: Array<{ path: string; error: string }>;
+  failedFiles: Array<{ path: string; error: string }>;
+}
+
+const OK_BATCH: WriteBatchResult = { ok: true, failedMkdirs: [], failedFiles: [] };
+
+function decode(bytes: Uint8Array): string {
+  return new TextDecoder().decode(bytes);
 }
 
 interface RpcInvocation {
@@ -65,6 +74,11 @@ function makeFakePyodide(): {
   files: Map<string, string>;
   dirs: Set<string>;
 } {
+  // Internally store bytes (Pyodide's FS is byte-oriented). `files`
+  // is exposed as a string view for convenience in text-only tests;
+  // the byte view is reachable via `pyodide.FS.readFile(path)` for
+  // tests that need binary fidelity.
+  const bytes = new Map<string, Uint8Array>();
   const files = new Map<string, string>();
   const dirs = new Set<string>(['/']);
   const DIR_MODE = 0o40000;
@@ -72,7 +86,7 @@ function makeFakePyodide(): {
   const FS = {
     stat: (path: string): { mode: number; size: number } => {
       if (dirs.has(path)) return { mode: DIR_MODE, size: 0 };
-      if (files.has(path)) return { mode: FILE_MODE, size: files.get(path)!.length };
+      if (bytes.has(path)) return { mode: FILE_MODE, size: bytes.get(path)!.length };
       throw Object.assign(new Error(`ENOENT: ${path}`), { errno: 44 });
     },
     mkdirTree: (path: string): void => {
@@ -84,15 +98,17 @@ function makeFakePyodide(): {
       dirs.add('/');
     },
     writeFile: (path: string, content: string | Uint8Array): void => {
-      const str = typeof content === 'string' ? content : new TextDecoder().decode(content);
-      files.set(path, str);
+      const raw =
+        typeof content === 'string' ? new TextEncoder().encode(content) : new Uint8Array(content);
+      bytes.set(path, raw);
+      files.set(path, new TextDecoder().decode(raw));
       const slash = path.lastIndexOf('/');
       if (slash > 0) FS.mkdirTree(path.slice(0, slash));
     },
     readFile: (path: string): Uint8Array => {
-      const content = files.get(path);
-      if (content === undefined) throw new Error(`ENOENT: ${path}`);
-      return new TextEncoder().encode(content);
+      const raw = bytes.get(path);
+      if (raw === undefined) throw new Error(`ENOENT: ${path}`);
+      return raw;
     },
     readdir: (path: string): string[] => {
       if (!dirs.has(path)) throw new Error(`ENOENT: ${path}`);
@@ -125,13 +141,14 @@ function makeFakePyodide(): {
 
 describe('syncVfsToPyodide (bulk walkTree)', () => {
   it('issues exactly one walkTree RPC per syncDir — not per file', async () => {
+    const enc = new TextEncoder();
     const walkResults = new Map<string, WalkEntry[]>([
       [
         '/workspace',
         [
-          { path: '/workspace/a.txt', isDir: false, size: 1, content: 'A' },
+          { path: '/workspace/a.txt', isDir: false, size: 1, content: enc.encode('A') },
           { path: '/workspace/sub', isDir: true },
-          { path: '/workspace/sub/b.txt', isDir: false, size: 2, content: 'BB' },
+          { path: '/workspace/sub/b.txt', isDir: false, size: 2, content: enc.encode('BB') },
         ],
       ],
       ['/tmp', []],
@@ -154,6 +171,23 @@ describe('syncVfsToPyodide (bulk walkTree)', () => {
     expect(snapshot.get('/workspace/sub/b.txt')).toBe(2);
   });
 
+  it('round-trips binary file content byte-for-byte (no TextEncoder/decode coercion)', async () => {
+    // The previous string-typed walkTree mojibake'd any PNG / wheel
+    // / sqlite file in cwd. With Uint8Array content the bytes hit
+    // Pyodide's FS verbatim.
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe]);
+    const { rpc } = makeRpc((_inv) => [
+      { path: '/workspace/image.png', isDir: false, size: pngBytes.length, content: pngBytes },
+    ]);
+    const { pyodide, files } = makeFakePyodide();
+    await syncVfsToPyodide(rpc, pyodide, ['/workspace']);
+    // The fake Pyodide stores bytes via writeFile and exposes them
+    // as utf-8 decoded strings; assert via the FS readFile directly
+    // for byte-fidelity.
+    const stored = pyodide.FS.readFile('/workspace/image.png') as Uint8Array;
+    expect(Array.from(stored)).toEqual(Array.from(pngBytes));
+  });
+
   it('caps content with a maxFileBytes hint passed to walkTree', async () => {
     const { rpc, calls } = makeRpc((_inv) => []);
     const { pyodide } = makeFakePyodide();
@@ -166,29 +200,41 @@ describe('syncVfsToPyodide (bulk walkTree)', () => {
   });
 
   it('skips entries with no content (over-the-cap files) so Pyodide sees the dir layout without a corrupt body', async () => {
+    const enc = new TextEncoder();
+    const warnings: string[] = [];
     const { rpc } = makeRpc((_inv) => [
       { path: '/workspace/big.bin', isDir: false, size: 50_000_000 /* no content */ },
-      { path: '/workspace/small.txt', isDir: false, size: 2, content: 'OK' },
+      { path: '/workspace/small.txt', isDir: false, size: 2, content: enc.encode('OK') },
     ]);
     const { pyodide, files } = makeFakePyodide();
-    const snapshot = await syncVfsToPyodide(rpc, pyodide, ['/workspace']);
+    const snapshot = await syncVfsToPyodide(rpc, pyodide, ['/workspace'], (msg) =>
+      warnings.push(msg)
+    );
     expect(files.has('/workspace/big.bin')).toBe(false);
     expect(files.get('/workspace/small.txt')).toBe('OK');
     expect(snapshot.has('/workspace/big.bin')).toBe(false);
     expect(snapshot.get('/workspace/small.txt')).toBe(2);
+    // The skip surfaces as a stderr warning so the user can
+    // correlate Python's `FileNotFoundError` against the real cause.
+    expect(warnings.some((w) => w.includes('/workspace/big.bin') && w.includes('cap'))).toBe(true);
   });
 
-  it('tolerates an RPC rejection on one dir and still syncs the others', async () => {
+  it('tolerates an RPC rejection on one dir, surfaces it via warning, and still syncs the others', async () => {
+    const enc = new TextEncoder();
+    const warnings: string[] = [];
     const { rpc } = makeRpc((inv) => {
       if (inv.channel === 'vfs' && inv.op === 'walkTree') {
         if (inv.args[0] === '/missing') throw new Error('ENOENT');
-        return [{ path: '/tmp/x', isDir: false, size: 1, content: 'X' }];
+        return [{ path: '/tmp/x', isDir: false, size: 1, content: enc.encode('X') }];
       }
     });
     const { pyodide, files } = makeFakePyodide();
-    const snapshot = await syncVfsToPyodide(rpc, pyodide, ['/missing', '/tmp']);
+    const snapshot = await syncVfsToPyodide(rpc, pyodide, ['/missing', '/tmp'], (msg) =>
+      warnings.push(msg)
+    );
     expect(files.get('/tmp/x')).toBe('X');
     expect(snapshot.get('/tmp/x')).toBe(1);
+    expect(warnings.some((w) => w.includes('/missing') && w.includes('ENOENT'))).toBe(true);
   });
 });
 
@@ -210,7 +256,7 @@ describe('syncPyodideToVfs (diff-only writeBatch)', () => {
     const { rpc, calls } = makeRpc((inv) => {
       if (inv.channel === 'vfs' && inv.op === 'writeBatch') {
         written.push(inv.args[0] as WriteBatchPayload);
-        return true;
+        return OK_BATCH;
       }
     });
 
@@ -234,10 +280,32 @@ describe('syncPyodideToVfs (diff-only writeBatch)', () => {
       '/workspace/edited.txt',
       '/workspace/new.txt',
     ]);
-    expect(written[0].files?.find((f) => f.path === '/workspace/edited.txt')?.content).toBe(
-      'longer-edit'
-    );
-    expect(written[0].files?.find((f) => f.path === '/workspace/new.txt')?.content).toBe('created');
+    const edited = written[0].files?.find((f) => f.path === '/workspace/edited.txt');
+    const created = written[0].files?.find((f) => f.path === '/workspace/new.txt');
+    expect(edited?.content).toBeInstanceOf(Uint8Array);
+    expect(decode(edited!.content)).toBe('longer-edit');
+    expect(decode(created!.content)).toBe('created');
+  });
+
+  it('round-trips binary file content byte-for-byte through writeBatch (no TextDecoder corruption)', async () => {
+    // PIL writes PNG, numpy writes .npy: non-UTF-8 bytes that the
+    // previous TextDecoder-based path silently corrupted into U+FFFD.
+    const written: WriteBatchPayload[] = [];
+    const { rpc } = makeRpc((inv) => {
+      if (inv.op === 'writeBatch') {
+        written.push(inv.args[0] as WriteBatchPayload);
+        return OK_BATCH;
+      }
+    });
+    const { pyodide } = makeFakePyodide();
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe]);
+    pyodide.FS.writeFile('/workspace/out.png', pngBytes);
+
+    await syncPyodideToVfs(rpc, pyodide, ['/workspace'], new Map());
+
+    const persisted = written[0].files?.find((f) => f.path === '/workspace/out.png');
+    expect(persisted?.content).toBeInstanceOf(Uint8Array);
+    expect(Array.from(persisted!.content)).toEqual(Array.from(pngBytes));
   });
 
   it('includes brand-new directories in writeBatch.mkdirs', async () => {
@@ -245,7 +313,7 @@ describe('syncPyodideToVfs (diff-only writeBatch)', () => {
     const { rpc } = makeRpc((inv) => {
       if (inv.op === 'writeBatch') {
         written.push(inv.args[0] as WriteBatchPayload);
-        return true;
+        return OK_BATCH;
       }
     });
     const { pyodide } = makeFakePyodide();
@@ -267,7 +335,7 @@ describe('syncPyodideToVfs (diff-only writeBatch)', () => {
     const { rpc, calls } = makeRpc((inv) => {
       if (inv.op === 'writeBatch') {
         written.push(inv.args[0] as WriteBatchPayload);
-        return true;
+        return OK_BATCH;
       }
     });
     const { pyodide } = makeFakePyodide();
@@ -279,5 +347,28 @@ describe('syncPyodideToVfs (diff-only writeBatch)', () => {
 
     expect(calls.find((c) => c.op === 'writeBatch')).toBeUndefined();
     expect(written).toHaveLength(0);
+  });
+
+  it('surfaces per-entry failedFiles from writeBatch as stderr warnings', async () => {
+    // The host swallowed write rejections silently before; now the
+    // realm receives them and the user sees a warning instead of
+    // their output disappearing into the void.
+    const warnings: string[] = [];
+    const { rpc } = makeRpc((inv) => {
+      if (inv.op === 'writeBatch') {
+        return {
+          ok: true,
+          failedMkdirs: [],
+          failedFiles: [{ path: '/workspace/lost.txt', error: 'EACCES: denied' }],
+        } satisfies WriteBatchResult;
+      }
+    });
+    const { pyodide } = makeFakePyodide();
+    pyodide.FS.writeFile('/workspace/lost.txt', 'will-vanish');
+    await syncPyodideToVfs(rpc, pyodide, ['/workspace'], new Map(), (msg) => warnings.push(msg));
+
+    expect(warnings.some((w) => w.includes('/workspace/lost.txt') && w.includes('EACCES'))).toBe(
+      true
+    );
   });
 });

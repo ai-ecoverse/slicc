@@ -95,6 +95,22 @@ describe('makeSameOriginBypassFetch', () => {
     expect(getHeader(calls[0].init, 'x-bypass-llm-proxy')).toBe('1');
   });
 
+  it('handles init.headers passed as a Headers instance (not just a plain object)', async () => {
+    // Real fetch callers (proxiedFetch, every pi-ai provider via
+    // their SDK) construct `Headers` first. A refactor to
+    // `{ ...init?.headers }` would silently drop those entries
+    // because Headers isn't enumerable as a plain object.
+    const { fn, calls } = captureOrig();
+    const wrapped = makeSameOriginBypassFetch(fn, SELF_ORIGIN);
+    const headers = new Headers();
+    headers.set('authorization', 'Bearer token');
+    headers.set('content-type', 'application/json');
+    await wrapped('/api/x', { headers });
+    expect(getHeader(calls[0].init, 'authorization')).toBe('Bearer token');
+    expect(getHeader(calls[0].init, 'content-type')).toBe('application/json');
+    expect(getHeader(calls[0].init, 'x-bypass-llm-proxy')).toBe('1');
+  });
+
   it('returns the original fetch unchanged when selfOrigin is missing', async () => {
     const { fn } = captureOrig();
     const wrapped = makeSameOriginBypassFetch(fn, undefined);

@@ -27,7 +27,9 @@
 const BYPASS_HEADER = 'x-bypass-llm-proxy';
 const BYPASS_VALUE = '1';
 
-export type FetchFn = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+// Track the global `fetch` signature so the wrapper composes
+// transparently and stays in lockstep with lib.dom updates.
+export type FetchFn = typeof fetch;
 
 /**
  * Build a same-origin-aware fetch wrapper around `orig`. The wrapper

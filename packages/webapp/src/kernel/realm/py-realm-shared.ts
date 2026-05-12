@@ -16,7 +16,13 @@ import type { PyodideInterface } from 'pyodide';
 import { version as pyodidePackageVersion } from 'pyodide/package.json';
 import { resolvePinnedPackageVersion } from '../../shell/supplemental-commands/shared.js';
 import { RealmRpcClient, type RealmPortLike } from './realm-rpc.js';
-import type { RealmDoneMsg, RealmErrorMsg, RealmInitMsg } from './realm-types.js';
+import type {
+  RealmDoneMsg,
+  RealmErrorMsg,
+  RealmInitMsg,
+  WalkTreeEntry,
+  WriteBatchResult,
+} from './realm-types.js';
 
 export const PYODIDE_VERSION = resolvePinnedPackageVersion('pyodide', pyodidePackageVersion);
 export const PYODIDE_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
@@ -85,13 +91,24 @@ export async function runPyRealm(
     return;
   }
 
+  // Default `[cwd, '/tmp']` is deliberate: those are the two
+  // directories Python code almost always reads from (the working
+  // directory the user invoked from + the conventional scratch
+  // location). Adding `/workspace/` or `/shared/` to the default
+  // would mirror the entire workspace into Pyodide's FS on every
+  // invocation — minutes per `python3 -c "print(1)"` even with the
+  // bulk-RPC path. Callers that need wider visibility pass an
+  // explicit `pyodideSyncDirs`.
   const syncDirs = init.pyodideSyncDirs ?? [init.cwd, '/tmp'];
+  const pushWarning = (msg: string): void => {
+    stderrChunks.push(`Warning: ${msg}\n`);
+  };
   let preSyncSnapshot: Map<string, number> = new Map();
   try {
-    preSyncSnapshot = await syncVfsToPyodide(rpc, pyodide, syncDirs);
+    preSyncSnapshot = await syncVfsToPyodide(rpc, pyodide, syncDirs, pushWarning);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    stderrChunks.push(`Warning: VFS→Pyodide sync failed: ${message}\n`);
+    pushWarning(`VFS→Pyodide sync failed: ${message}`);
   }
 
   try {
@@ -133,10 +150,10 @@ export async function runPyRealm(
   }
 
   try {
-    await syncPyodideToVfs(rpc, pyodide, syncDirs, preSyncSnapshot);
+    await syncPyodideToVfs(rpc, pyodide, syncDirs, preSyncSnapshot, pushWarning);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    stderrChunks.push(`Warning: Pyodide→VFS sync failed: ${message}\n`);
+    pushWarning(`Pyodide→VFS sync failed: ${message}`);
   }
 
   rpc.dispose();
@@ -155,33 +172,34 @@ export async function runPyRealm(
 
 /**
  * Cap on per-file content shipped in `walkTree`. Files above the cap
- * are still listed (Pyodide gets the directory entry and the size)
- * but their content is not pre-loaded — Python `open()` on one will
- * see ENOENT. The trade-off is intentional: the previous unbounded
- * sync took minutes on workspace-sized trees because each large file
- * blocked the channel. 10 MB covers nearly every text artefact agents
- * actually script against; anything bigger should be read via the
- * shell layer instead.
+ * are listed in the walk (Pyodide sees the directory entry and the
+ * `size`) but their content is not pre-loaded — Python `open()` on
+ * one fails with ENOENT and the realm pushes a stderr warning naming
+ * the file so the symptom is debuggable. The trade-off is
+ * intentional: the previous unbounded sync took minutes on workspace-
+ * sized trees because every large file blocked the channel. 10 MB
+ * covers nearly every text artefact agents actually script against;
+ * anything bigger should be read via the shell layer instead.
  */
 const WALK_TREE_MAX_FILE_BYTES = 10 * 1024 * 1024;
 
-interface WalkTreeEntry {
-  path: string;
-  isDir: boolean;
-  size?: number;
-  content?: string;
-}
+type WarningSink = (message: string) => void;
 
 /**
  * Mirror VFS → Pyodide-FS for `dirs` in a single `walkTree` RPC per
  * directory. Returns `path → size` for every file that was actually
  * mirrored, so the post-execution diff can tell new/modified files
  * apart from untouched ones.
+ *
+ * Skipped files (cap-exceeded, unreadable, missing dir) are surfaced
+ * through `pushWarning` so the user can correlate Python's
+ * `FileNotFoundError` against the real cause instead of guessing.
  */
 export async function syncVfsToPyodide(
   rpc: RealmRpcClient,
   pyodide: PyodideInterface,
-  dirs: string[]
+  dirs: string[],
+  pushWarning: WarningSink = () => {}
 ): Promise<Map<string, number>> {
   const FS = pyodide.FS;
   const snapshot = new Map<string, number>();
@@ -202,23 +220,39 @@ export async function syncVfsToPyodide(
         dir,
         { maxFileBytes: WALK_TREE_MAX_FILE_BYTES },
       ]);
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushWarning(`VFS→Pyodide sync skipped '${dir}': ${message}`);
       continue;
     }
     for (const entry of entries) {
       try {
         if (entry.isDir) {
           ensurePyDir(entry.path);
-        } else if (entry.content !== undefined) {
-          // Parent dir guaranteed by the walk order (directories
-          // are emitted before their contents); still defensive.
-          const lastSlash = entry.path.lastIndexOf('/');
-          if (lastSlash > 0) ensurePyDir(entry.path.slice(0, lastSlash));
-          FS.writeFile(entry.path, entry.content);
-          snapshot.set(entry.path, entry.size ?? entry.content.length);
+          continue;
         }
-      } catch {
-        /* skip individual entries — bad path, encoding, etc. */
+        if (entry.content === undefined) {
+          // File listed without content — either above the
+          // WALK_TREE_MAX_FILE_BYTES cap or unreadable by the host.
+          // Don't write a stub: an empty file at the same path
+          // would mask the failure. Let the listing show through
+          // (via `readdir`) but surface why `open()` will ENOENT.
+          const reason =
+            entry.size > WALK_TREE_MAX_FILE_BYTES
+              ? `exceeds ${WALK_TREE_MAX_FILE_BYTES}-byte cap (${entry.size} bytes) — read via the shell instead`
+              : `unreadable from VFS`;
+          pushWarning(`VFS→Pyodide skipped '${entry.path}': ${reason}`);
+          continue;
+        }
+        // Parent dir guaranteed by the walk order (directories are
+        // emitted before their contents); still defensive.
+        const lastSlash = entry.path.lastIndexOf('/');
+        if (lastSlash > 0) ensurePyDir(entry.path.slice(0, lastSlash));
+        FS.writeFile(entry.path, entry.content);
+        snapshot.set(entry.path, entry.size);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        pushWarning(`VFS→Pyodide entry '${entry.path}' failed: ${message}`);
       }
     }
   }
@@ -229,25 +263,36 @@ export async function syncVfsToPyodide(
 /**
  * Mirror Pyodide-FS → VFS for `dirs`, but only for files that are
  * new or whose size changed since `preSyncSnapshot`. Sends one
- * `writeBatch` RPC per `dirs` entry; for a `python -c "print('hi')"`
- * with no FS writes that's a single empty batch (still cheap) instead
- * of N writeFile round-trips.
+ * `writeBatch` RPC carrying all the diff entries; for a
+ * `python -c "print('hi')"` with no FS writes that's zero RPCs
+ * instead of N writeFile round-trips.
  *
- * Size-only diffing is a deliberate trade — same-size content changes
- * can slip through. The previous implementation also re-wrote every
- * file every run, so callers that round-trip JSON or other structured
- * data hit it then too; the recommended workaround is the same: write
- * to a fresh path or change the byte count.
+ * Size-only diffing is a deliberate trade — same-size content
+ * changes can slip through. The previous implementation also
+ * re-wrote every file every run, so callers that round-trip JSON or
+ * other structured data hit it then too; the recommended workaround
+ * is the same: write to a fresh path or change the byte count.
+ *
+ * Binary outputs (PIL writing PNGs, numpy `.npy`, …) round-trip
+ * byte-for-byte: `FS.readFile` returns a `Uint8Array` and we ship
+ * it via `WriteBatchPayload.files[].content` (also `Uint8Array`).
+ * The previous TextDecoder-based path silently corrupted any
+ * non-UTF-8 bytes — fixed here.
+ *
+ * Host-side per-entry write failures come back in `WriteBatchResult`
+ * and surface as stderr warnings so the user notices when their
+ * Python output didn't reach VFS.
  */
 export async function syncPyodideToVfs(
   rpc: RealmRpcClient,
   pyodide: PyodideInterface,
   dirs: string[],
-  preSyncSnapshot: Map<string, number>
+  preSyncSnapshot: Map<string, number>,
+  pushWarning: WarningSink = () => {}
 ): Promise<void> {
   const FS = pyodide.FS;
   const newDirs = new Set<string>();
-  const changedFiles: Array<{ path: string; content: string }> = [];
+  const changedFiles: Array<{ path: string; content: Uint8Array }> = [];
 
   function walkBack(pyPath: string): void {
     let entries: string[];
@@ -271,10 +316,13 @@ export async function syncPyodideToVfs(
         const previousSize = preSyncSnapshot.get(full);
         if (previousSize === undefined || previousSize !== st.size) {
           try {
-            const content = new TextDecoder().decode(FS.readFile(full));
-            changedFiles.push({ path: full, content });
-          } catch {
-            /* skip unreadable */
+            const content = FS.readFile(full) as Uint8Array;
+            // Copy out of WASM heap: emscripten can reuse the view
+            // after the next FS call, same trap as magick-wasm.
+            changedFiles.push({ path: full, content: new Uint8Array(content) });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            pushWarning(`Pyodide→VFS read '${full}' failed: ${message}`);
           }
         }
       }
@@ -284,10 +332,22 @@ export async function syncPyodideToVfs(
   for (const dir of dirs) walkBack(dir);
 
   if (newDirs.size === 0 && changedFiles.length === 0) return;
+  let result: WriteBatchResult | undefined;
   try {
-    await rpc.call('vfs', 'writeBatch', [{ mkdirs: [...newDirs], files: changedFiles }]);
-  } catch {
-    /* writeBatch already tolerates per-entry failures host-side;
-       a top-level reject here means the channel is gone. */
+    result = await rpc.call<WriteBatchResult>('vfs', 'writeBatch', [
+      { mkdirs: [...newDirs], files: changedFiles },
+    ]);
+  } catch (err) {
+    // Top-level reject means the channel is gone — partial
+    // failures are reported via `result` instead.
+    const message = err instanceof Error ? err.message : String(err);
+    pushWarning(`Pyodide→VFS writeBatch RPC failed: ${message}`);
+    return;
+  }
+  for (const f of result.failedFiles) {
+    pushWarning(`Pyodide→VFS write '${f.path}' failed: ${f.error}`);
+  }
+  for (const d of result.failedMkdirs) {
+    pushWarning(`Pyodide→VFS mkdir '${d.path}' failed: ${d.error}`);
   }
 }

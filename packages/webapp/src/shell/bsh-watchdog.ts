@@ -238,7 +238,14 @@ export class BshWatchdog {
       // are now bounded instead of parking the realm.
       const mod = await __withTimeout(import('https://esm.sh/' + id), 15000, "require('" + id + "')");
       __requireCache[id] = mod.default !== undefined ? mod.default : mod;
-    } catch(e) { /* will throw at require() call time */ }
+    } catch(e) {
+      // Surface the failure (especially the timeout error) so the
+      // user can correlate the later "module not pre-loaded" against
+      // its real cause instead of seeing a generic error. Mirrors
+      // the writeStderr warning sandbox.html emits.
+      const __reason = e instanceof Error ? e.message : String(e);
+      console.warn("[bsh] failed to pre-load require('" + id + "'): " + __reason);
+    }
   }));
   const require = (id) => {
     const bareId = id.startsWith('node:') ? id.slice(5) : id;

@@ -214,7 +214,12 @@ export function createConvertCommand(name: string = 'convert'): Command {
         });
       });
 
-      if (!outputData) {
+      // `!outputData` is `false` for a zero-byte `Uint8Array` (it's
+      // still truthy), so the byte-length check is load-bearing:
+      // magick-wasm can silently return an empty buffer on
+      // unsupported-format quirks and we'd otherwise write a 0-byte
+      // JPEG with exit 0.
+      if (!outputData || (outputData as Uint8Array).byteLength === 0) {
         throw new Error('Failed to generate output image');
       }
 

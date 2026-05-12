@@ -275,4 +275,59 @@ describe('convert output snapshot (regression: WASM heap clobber)', () => {
     // still propagate.
     expect(persistedBytes.buffer).not.toBe(heap.buffer);
   });
+
+  it('rejects a zero-byte buffer with a clear error instead of writing a 0-byte JPEG', async () => {
+    // `!new Uint8Array(0)` is `false` (Uint8Array instances are
+    // truthy regardless of length), so the byte-length check is
+    // load-bearing. Magick-wasm has been observed handing back an
+    // empty buffer on certain unsupported-format quirks; without the
+    // length guard the user gets exit 0 and a 0-byte file that
+    // looks fine until the next consumer chokes.
+    const writtenContent: unknown[] = [];
+    const cmd = createConvertCommand();
+    const ctx = createMockCtx({
+      fs: {
+        readFileBuffer: vi.fn().mockResolvedValue(new Uint8Array([0xff, 0xd8, 0xff])),
+        writeFile: vi.fn(async (_path: string, content: unknown) => {
+          writtenContent.push(content);
+        }),
+      },
+    });
+
+    const mockImage = {
+      width: 10,
+      height: 10,
+      quality: 0,
+      resize: vi.fn(),
+      rotate: vi.fn(),
+      crop: vi.fn(),
+      write: vi.fn((_format: string, cb: (data: Uint8Array) => void) => {
+        cb(new Uint8Array(0));
+      }),
+    };
+
+    vi.spyOn(magickWasm, 'getMagick').mockResolvedValue({
+      ImageMagick: {
+        read: vi.fn(async (_bytes: Uint8Array, fn: (image: unknown) => Promise<void>) => {
+          await fn(mockImage);
+        }),
+      },
+      MagickFormat: { JPEG: 'JPEG', PNG: 'PNG' } as Record<string, string>,
+      MagickGeometry: class {
+        ignoreAspectRatio = false;
+      },
+      Percentage: class {
+        constructor(_n: number) {}
+        toDouble() {
+          return 0;
+        }
+      },
+      initializeImageMagick: vi.fn(),
+    } as unknown as Awaited<ReturnType<typeof magickWasm.getMagick>>);
+
+    const result = await cmd.execute(['/tmp/in.png', '/tmp/out.png'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Failed to generate output image');
+    expect(writtenContent).toHaveLength(0);
+  });
 });

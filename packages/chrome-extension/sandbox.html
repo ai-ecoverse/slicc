@@ -240,11 +240,16 @@ function bootstrapRealmPort(port) {
     'readline','repl','tty','inspector',
   ]);
   const BUILTINS_LOCAL = new Set(['fs', 'process', 'buffer']);
-  // Mirrors NODE_NATIVE_PACKAGES in js-realm-shared.ts. C++-bound
-  // packages never load in the sandbox; their CDN stubs hang on
-  // a transitive .node fetch instead of erroring cleanly, which
-  // used to park `node -e "require('sharp')"` for minutes before
-  // hitting any timeout. Keep alphabetical.
+  // Mirrors NODE_NATIVE_PACKAGES in kernel/realm/require-guards.ts
+  // (the canonical source-of-truth; js-realm-shared.ts imports from
+  // there). C++-bound packages never load in the sandbox; their CDN
+  // stubs hang on a transitive .node fetch instead of erroring
+  // cleanly, which used to park `node -e "require('sharp')"` for
+  // minutes before hitting any timeout. Keep alphabetical. The
+  // mirror-parity test in `packages/webapp/tests/shell/bsh-watchdog.test.ts`
+  // walks every entry from require-guards.ts and asserts it appears
+  // here, so adding a package to the canonical set without mirroring
+  // fails CI rather than silently re-enabling the realm hang.
   const NODE_NATIVE_PACKAGES = new Set([
     'bcrypt','better-sqlite3','canvas','cpu-features','fsevents','leveldown',
     'libxmljs','libxmljs2','node-gyp-build','node-sass','puppeteer','robotjs',

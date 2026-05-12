@@ -273,4 +273,27 @@ describe('resolvePyodideIndexURL', () => {
       (globalThis as { process?: unknown }).process = savedProcess;
     }
   });
+
+  it('extension precedence wins when BOTH chrome.runtime.id and process.versions.node are set', () => {
+    // Pins commit df93808b's branch order (extension → node → CDN).
+    // Vitest's own runtime has `process` set, so without faking the
+    // chrome global we'd never exercise the precedence. A future
+    // refactor that flips the order to (node → extension → CDN) must
+    // fail this test, not silently route the extension's runtime
+    // through the wrong branch.
+    const savedChrome = (globalThis as { chrome?: unknown }).chrome;
+    (globalThis as { chrome?: unknown }).chrome = {
+      runtime: {
+        id: 'test-ext-id',
+        getURL: (path: string) => `chrome-extension://test-ext-id/${path}`,
+      },
+    };
+    try {
+      // `process` is real (vitest is Node) — both predicates would
+      // succeed individually. Assert extension wins.
+      expect(resolvePyodideIndexURL()).toBe('chrome-extension://test-ext-id/pyodide/');
+    } finally {
+      (globalThis as { chrome?: unknown }).chrome = savedChrome;
+    }
+  });
 });

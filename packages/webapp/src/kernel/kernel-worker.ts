@@ -173,9 +173,11 @@ self.addEventListener('message', (event: MessageEvent) => {
 });
 
 async function boot(init: KernelWorkerInitMsg): Promise<void> {
-  // Stamp `x-bypass-llm-proxy: 1` on every worker-issued fetch so the
-  // page-installed LLM-proxy SW doesn't double-intercept worker
-  // requests. Must run before any fetcher does.
+  // Stamp `x-bypass-llm-proxy: 1` on same-origin worker fetches so
+  // the page-installed LLM-proxy SW doesn't double-intercept them.
+  // Cross-origin requests are intentionally left bare — see
+  // `kernel-worker-fetch-bypass.ts` for the CORS-preflight reasoning.
+  // Must run before any fetcher does.
   installFetchBypass();
 
   // The worker has no `localStorage` (Web Workers don't get one).

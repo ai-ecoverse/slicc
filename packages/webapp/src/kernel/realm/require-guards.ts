@@ -24,7 +24,13 @@
  * both locations.
  */
 
-export const NODE_NATIVE_PACKAGES = new Set([
+/**
+ * Source-of-truth array. Frozen `as const` so the literal type
+ * stays narrow; spread into `NODE_NATIVE_PACKAGES` for `.has()`
+ * membership checks and used to derive `NativePackageName` for
+ * hint-key typing.
+ */
+const NATIVE_PACKAGES = [
   'bcrypt',
   'better-sqlite3',
   'canvas',
@@ -43,9 +49,25 @@ export const NODE_NATIVE_PACKAGES = new Set([
   'sqlite3',
   'tree-sitter',
   'usb',
-]);
+] as const;
 
-export const NATIVE_PACKAGE_HINTS: Record<string, string> = {
+export type NativePackageName = (typeof NATIVE_PACKAGES)[number];
+
+/**
+ * `.has()` takes a `string` (user-controlled `require()` id), so
+ * the public type is `ReadonlySet<string>`. The membership domain
+ * is still pinned by the source-of-truth array above; the
+ * mirror-parity test in `bsh-watchdog.test.ts` walks every entry
+ * to assert sandbox.html and bsh-watchdog.ts carry it through.
+ */
+export const NODE_NATIVE_PACKAGES: ReadonlySet<string> = new Set<string>(NATIVE_PACKAGES);
+
+/**
+ * `Partial<Record<NativePackageName, string>>` because not every
+ * native package has a specific recommended alternative — but a
+ * typo here is now a compile error rather than a dead hint key.
+ */
+export const NATIVE_PACKAGE_HINTS: Partial<Record<NativePackageName, string>> = {
   sharp: " Use the built-in 'convert' shell command for image work.",
   canvas: " Use the built-in 'convert' / OffscreenCanvas for image work.",
   'better-sqlite3': " Use the built-in 'sqlite3' shell command (sql.js WASM).",
@@ -57,7 +79,10 @@ export const NATIVE_PACKAGE_HINTS: Record<string, string> = {
 export const LOAD_MODULE_TIMEOUT_MS = 15_000;
 
 export function nativePackageError(id: string, bareId: string): Error {
-  const hint = NATIVE_PACKAGE_HINTS[bareId] ?? '';
+  // `bareId` arrives as a free-form `string` from user `require()`
+  // calls; cast through the literal record so we can still index
+  // type-safely without losing the upstream signature.
+  const hint = (NATIVE_PACKAGE_HINTS as Record<string, string | undefined>)[bareId] ?? '';
   return new Error(
     `require('${id}'): '${bareId}' is a Node native module (C++ bindings) — it cannot run in the browser sandbox.${hint}`
   );

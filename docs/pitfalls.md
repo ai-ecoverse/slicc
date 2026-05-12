@@ -148,15 +148,17 @@ two bulk RPCs — `vfs.walkTree` (host → realm: paths + sizes + content) and
 `readDir`/`stat`/`readFile` chatter took minutes on workspace-sized cwds; the
 bulk path collapses that to two round-trips regardless of file count.
 
-| Behavior                  | Why                                                                                                                                  |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **10 MB file-size cap**   | Files above the cap are listed (Python sees the directory entry) but their content is not pre-loaded; `open()` on them throws ENOENT |
-| **Size-only diff**        | Post-sync compares Pyodide-FS size against the pre-execution snapshot; same-size content changes can slip through                    |
-| **Size = bytes, not UTF** | `FS.stat(...).size` reports raw bytes; `walkTree` returns `content.length` (UTF-16 code units) as a fallback                         |
+| Behavior                             | Why                                                                                                                                                                                                                                                                           |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **10 MB file-size cap**              | Files above the cap are listed (Python sees the directory entry + the `size` field) but their content is not pre-loaded. `open()` raises ENOENT and the realm pushes a stderr warning naming the file so the symptom is debuggable rather than a mystery `FileNotFoundError`. |
+| **Size-only diff**                   | Post-sync compares Pyodide-FS size against the pre-execution snapshot; same-size content changes can slip through. The trade-off is intentional; if it ever flips to hash-based diffing, the test pinning this should be updated, not deleted.                                |
+| **Binary content via Uint8Array**    | `walkTree`/`writeBatch` carry content as `Uint8Array`, not `string`, so PNG / PDF / wheel / sqlite files in cwd round-trip byte-for-byte. The previous string-based path silently corrupted any non-UTF-8 byte via `TextDecoder()` on the way out.                            |
+| **Per-entry write failures surface** | `writeBatch` returns `{ failedFiles, failedMkdirs }`; the realm pushes each into stderr so a Python script's `open('x','w').write(...)` failure can't disappear into the void.                                                                                                |
 
-When extending the sync (binary file support, attribute mirroring, etc.), keep
+When extending the sync (attribute mirroring, hash-based diffing, etc.), keep
 the two-RPC shape — adding round-trips inside the loop reintroduces the
-minutes-long stall.
+minutes-long stall — and keep `content: Uint8Array` so binary outputs don't
+regress to the TextDecoder corruption path.
 
 ## Runtime Detection: Workers Have No `window` Either
 
@@ -227,15 +229,21 @@ realm for minutes on a transitive `.node` loader fetch that never settled.
    `Promise.allSettled` indefinitely. The rejection includes the
    specifier and elapsed seconds so the agent knows what to drop.
 
-**Four call sites must stay in lockstep.** Adding a package to the native
-set means updating all four:
+**One canonical source + two hand-mirrors must stay in lockstep.** Adding
+a package to the native set means updating all three. Worker JS realm
+(`js-realm-shared.ts`) imports the canonical module, so it doesn't need
+hand-syncing.
 
-| Site                                                  | Notes                                                                                                                 |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `packages/webapp/src/kernel/realm/require-guards.ts`  | Canonical TS module; helpers + sets unit-tested in `require-guards.test.ts`                                           |
-| `packages/webapp/src/kernel/realm/js-realm-shared.ts` | Worker JS realm (standalone); imports from `require-guards.ts`                                                        |
-| `packages/chrome-extension/sandbox.html`              | Extension iframe realm — bundled outside the TS module graph; hand-mirror pinned by `node-command-loadmodule.test.ts` |
-| `packages/webapp/src/shell/bsh-watchdog.ts`           | `.bsh` runtime injected into target page via CDP `Runtime.evaluate`; hand-mirror in the wrapped script template       |
+| Site                                                 | Notes                                                                                                                                          |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/webapp/src/kernel/realm/require-guards.ts` | **Canonical** TS module; helpers + sets unit-tested in `require-guards.test.ts`. Worker JS realm imports from here, no drift surface.          |
+| `packages/chrome-extension/sandbox.html`             | Hand-mirror — extension iframe realm bundled outside the TS module graph. Pinned in `node-command-loadmodule.test.ts` + the parity test below. |
+| `packages/webapp/src/shell/bsh-watchdog.ts`          | Hand-mirror — `.bsh` runtime injected into target page via CDP `Runtime.evaluate`. Pinned in `bsh-watchdog.test.ts`.                           |
+
+The mirror-parity test in `bsh-watchdog.test.ts` walks every entry from
+the canonical `NODE_NATIVE_PACKAGES` and asserts both hand-mirrors carry
+it. A package added to the canonical set without mirroring fails CI
+rather than silently re-enabling the 5-minute realm hang.
 
 ## RestrictedFS Path Behavior
 

@@ -14,7 +14,14 @@
 
 import type { CommandContext } from 'just-bash';
 import type { RealmPortLike } from './realm-rpc.js';
-import type { RealmRpcRequest, RealmRpcResponse, SerializedFetchResponse } from './realm-types.js';
+import type {
+  RealmRpcRequest,
+  RealmRpcResponse,
+  SerializedFetchResponse,
+  WalkTreeEntry,
+  WriteBatchPayload,
+  WriteBatchResult,
+} from './realm-types.js';
 import { createNodeFetchAdapter } from '../../shell/supplemental-commands/node-fetch-adapter.js';
 
 export interface RealmHostHandle {
@@ -83,25 +90,6 @@ async function dispatch(req: RealmRpcRequest, ctx: CommandContext): Promise<unkn
 // Channel: vfs
 // ---------------------------------------------------------------------------
 
-/**
- * One entry in a `walkTree` response — paths are absolute (already
- * resolved against `ctx.cwd`). `content` is omitted when a file's
- * size exceeds the per-call `maxFileBytes` cap, when reading fails,
- * or for directory entries.
- */
-export interface WalkTreeEntry {
-  path: string;
-  isDir: boolean;
-  size?: number;
-  content?: string;
-}
-
-/** `writeBatch` payload — directories created before files. */
-export interface WriteBatchPayload {
-  mkdirs?: string[];
-  files?: Array<{ path: string; content: string }>;
-}
-
 async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Promise<unknown> {
   const path = typeof args[0] === 'string' ? (args[0] as string) : null;
   const resolved = path !== null ? ctx.fs.resolvePath(ctx.cwd, path) : null;
@@ -136,6 +124,9 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       // Recursive subtree dump in a single RPC. Replaces the
       // per-file readDir/stat/readFile chatter that made
       // VFS↔Pyodide sync take minutes on large `cwd` trees.
+      // Content is shipped as `Uint8Array` so binary files round-
+      // trip byte-for-byte; the realm-side sync hands them to
+      // Pyodide's `FS.writeFile` which accepts both.
       const opts = (args[1] as { maxFileBytes?: number } | undefined) ?? {};
       const maxBytes = typeof opts.maxFileBytes === 'number' ? opts.maxFileBytes : Infinity;
       const entries: WalkTreeEntry[] = [];
@@ -146,25 +137,35 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       // Bulk apply of a `{mkdirs, files}` payload. Used by the
       // post-sync diff path so a python invocation that only
       // wrote one file pays a single round-trip rather than N.
+      // Per-entry failures are collected and returned so the realm
+      // can surface them as stderr warnings instead of silently
+      // losing user output — see `WriteBatchResult`.
       const payload = (args[0] as WriteBatchPayload | undefined) ?? {};
+      const failedMkdirs: Array<{ path: string; error: string }> = [];
+      const failedFiles: Array<{ path: string; error: string }> = [];
       for (const dir of payload.mkdirs ?? []) {
         const resolvedDir = ctx.fs.resolvePath(ctx.cwd, dir);
         try {
           await ctx.fs.mkdir(resolvedDir, { recursive: true });
-        } catch {
-          /* tolerate races / already-exists */
+        } catch (err) {
+          // EEXIST is expected and ignored; everything else surfaces.
+          const message = err instanceof Error ? err.message : String(err);
+          if (!/EEXIST/i.test(message)) failedMkdirs.push({ path: dir, error: message });
         }
       }
       for (const file of payload.files ?? []) {
         const resolvedFile = ctx.fs.resolvePath(ctx.cwd, file.path);
         try {
           await ctx.fs.writeFile(resolvedFile, file.content);
-        } catch {
-          /* skip individual write failures so one bad file
-             doesn't fail the entire post-sync */
+        } catch (err) {
+          failedFiles.push({
+            path: file.path,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       }
-      return true;
+      const result: WriteBatchResult = { ok: true, failedMkdirs, failedFiles };
+      return result;
     }
     default:
       throw new Error(`realm-host: unknown vfs op '${op}'`);
@@ -195,15 +196,19 @@ async function collectTree(
       out.push({ path: full, isDir: true });
       await collectTree(ctx, full, maxBytes, out);
     } else if (st.isFile) {
-      const entry: WalkTreeEntry = { path: full, isDir: false, size: st.size };
       if (st.size <= maxBytes) {
         try {
-          entry.content = await ctx.fs.readFile(full);
+          // `readFileBuffer` returns the raw bytes — critical for
+          // binary round-trip. `readFile` defaults to UTF-8 and
+          // would mojibake any non-text payload.
+          const content = await ctx.fs.readFileBuffer(full);
+          out.push({ path: full, isDir: false, size: st.size, content });
+          continue;
         } catch {
-          /* leave content unset; realm will treat as missing */
+          /* leave content unset; realm will warn and skip */
         }
       }
-      out.push(entry);
+      out.push({ path: full, isDir: false, size: st.size });
     }
   }
 }
