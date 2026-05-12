@@ -14,7 +14,19 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { PyodideInterface } from 'pyodide';
 import type { RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
-import { syncVfsToPyodide, syncPyodideToVfs } from '../../../src/kernel/realm/py-realm-shared.js';
+import {
+  syncVfsToPyodide,
+  syncPyodideToVfs,
+  type PreSyncSnapshot,
+} from '../../../src/kernel/realm/py-realm-shared.js';
+
+function emptySnapshot(): PreSyncSnapshot {
+  return { files: new Map(), dirs: new Set() };
+}
+
+function snapshotOfFiles(entries: Iterable<[string, number]>): PreSyncSnapshot {
+  return { files: new Map(entries), dirs: new Set() };
+}
 
 type WalkEntry =
   | { path: string; isDir: true }
@@ -167,8 +179,15 @@ describe('syncVfsToPyodide (bulk walkTree)', () => {
     expect(calls.every((c) => c.op === 'walkTree')).toBe(true);
     expect(files.get('/workspace/a.txt')).toBe('A');
     expect(files.get('/workspace/sub/b.txt')).toBe('BB');
-    expect(snapshot.get('/workspace/a.txt')).toBe(1);
-    expect(snapshot.get('/workspace/sub/b.txt')).toBe(2);
+    expect(snapshot.files.get('/workspace/a.txt')).toBe(1);
+    expect(snapshot.files.get('/workspace/sub/b.txt')).toBe(2);
+    // The snapshot records every directory pre-sync created /
+    // touched so post-sync can tell "user mkdir'd this" apart
+    // from "pre-sync mirrored it in" and skip the redundant
+    // writeBatch.mkdirs entry.
+    expect(snapshot.dirs.has('/workspace')).toBe(true);
+    expect(snapshot.dirs.has('/workspace/sub')).toBe(true);
+    expect(snapshot.dirs.has('/tmp')).toBe(true);
   });
 
   it('round-trips binary file content byte-for-byte (no TextEncoder/decode coercion)', async () => {
@@ -179,11 +198,10 @@ describe('syncVfsToPyodide (bulk walkTree)', () => {
     const { rpc } = makeRpc((_inv) => [
       { path: '/workspace/image.png', isDir: false, size: pngBytes.length, content: pngBytes },
     ]);
-    const { pyodide, files } = makeFakePyodide();
+    const { pyodide } = makeFakePyodide();
     await syncVfsToPyodide(rpc, pyodide, ['/workspace']);
-    // The fake Pyodide stores bytes via writeFile and exposes them
-    // as utf-8 decoded strings; assert via the FS readFile directly
-    // for byte-fidelity.
+    // Assert via FS readFile directly for byte-fidelity (the fake
+    // Pyodide's separate `files` view UTF-8 decodes for ergonomics).
     const stored = pyodide.FS.readFile('/workspace/image.png') as Uint8Array;
     expect(Array.from(stored)).toEqual(Array.from(pngBytes));
   });
@@ -212,8 +230,8 @@ describe('syncVfsToPyodide (bulk walkTree)', () => {
     );
     expect(files.has('/workspace/big.bin')).toBe(false);
     expect(files.get('/workspace/small.txt')).toBe('OK');
-    expect(snapshot.has('/workspace/big.bin')).toBe(false);
-    expect(snapshot.get('/workspace/small.txt')).toBe(2);
+    expect(snapshot.files.has('/workspace/big.bin')).toBe(false);
+    expect(snapshot.files.get('/workspace/small.txt')).toBe(2);
     // The skip surfaces as a stderr warning so the user can
     // correlate Python's `FileNotFoundError` against the real cause.
     expect(warnings.some((w) => w.includes('/workspace/big.bin') && w.includes('cap'))).toBe(true);
@@ -233,7 +251,7 @@ describe('syncVfsToPyodide (bulk walkTree)', () => {
       warnings.push(msg)
     );
     expect(files.get('/tmp/x')).toBe('X');
-    expect(snapshot.get('/tmp/x')).toBe(1);
+    expect(snapshot.files.get('/tmp/x')).toBe(1);
     expect(warnings.some((w) => w.includes('/missing') && w.includes('ENOENT'))).toBe(true);
   });
 });
@@ -243,7 +261,7 @@ describe('syncPyodideToVfs (diff-only writeBatch)', () => {
     const { rpc, calls } = makeRpc(new Map());
     const { pyodide } = makeFakePyodide();
     pyodide.FS.writeFile('/workspace/a.txt', 'A');
-    const snapshot = new Map<string, number>([['/workspace/a.txt', 1]]);
+    const snapshot = snapshotOfFiles([['/workspace/a.txt', 1]]);
 
     await syncPyodideToVfs(rpc, pyodide, ['/workspace'], snapshot);
 
@@ -264,7 +282,7 @@ describe('syncPyodideToVfs (diff-only writeBatch)', () => {
     // Pre-existing files, captured in the snapshot.
     pyodide.FS.writeFile('/workspace/unchanged.txt', 'same'); // 4 bytes
     pyodide.FS.writeFile('/workspace/edited.txt', 'old'); // 3 bytes
-    const snapshot = new Map<string, number>([
+    const snapshot = snapshotOfFiles([
       ['/workspace/unchanged.txt', 4],
       ['/workspace/edited.txt', 3],
     ]);
@@ -301,7 +319,7 @@ describe('syncPyodideToVfs (diff-only writeBatch)', () => {
     const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe]);
     pyodide.FS.writeFile('/workspace/out.png', pngBytes);
 
-    await syncPyodideToVfs(rpc, pyodide, ['/workspace'], new Map());
+    await syncPyodideToVfs(rpc, pyodide, ['/workspace'], emptySnapshot());
 
     const persisted = written[0].files?.find((f) => f.path === '/workspace/out.png');
     expect(persisted?.content).toBeInstanceOf(Uint8Array);
@@ -317,7 +335,7 @@ describe('syncPyodideToVfs (diff-only writeBatch)', () => {
       }
     });
     const { pyodide } = makeFakePyodide();
-    const snapshot = new Map<string, number>();
+    const snapshot = emptySnapshot();
     pyodide.FS.mkdirTree('/workspace/new-dir');
     pyodide.FS.writeFile('/workspace/new-dir/hello.txt', 'hi');
 
@@ -325,6 +343,35 @@ describe('syncPyodideToVfs (diff-only writeBatch)', () => {
 
     expect(written[0].mkdirs).toContain('/workspace/new-dir');
     expect(written[0].files?.[0].path).toBe('/workspace/new-dir/hello.txt');
+  });
+
+  it('does NOT mkdir directories that pre-sync already populated (read-only mount safety)', async () => {
+    // The whole point of the dirs snapshot: pre-sync mirrors VFS
+    // directories (incl. read-only mounts like /proc) into Pyodide-FS.
+    // Post-sync used to treat every dir it saw as new and emit
+    // mkdir back to the read-only mount, flooding stderr with
+    // EACCES warnings on every python invocation. The dirs snapshot
+    // prevents that.
+    const written: WriteBatchPayload[] = [];
+    const { rpc } = makeRpc((inv) => {
+      if (inv.op === 'writeBatch') {
+        written.push(inv.args[0] as WriteBatchPayload);
+        return OK_BATCH;
+      }
+    });
+    const { pyodide } = makeFakePyodide();
+    pyodide.FS.mkdirTree('/proc/1');
+    pyodide.FS.mkdirTree('/proc/1024');
+    pyodide.FS.mkdirTree('/proc/self');
+    const snapshot: PreSyncSnapshot = {
+      files: new Map(),
+      dirs: new Set(['/proc', '/proc/1', '/proc/1024', '/proc/self']),
+    };
+
+    await syncPyodideToVfs(rpc, pyodide, ['/proc'], snapshot);
+
+    // No writeBatch at all because nothing changed under /proc.
+    expect(written).toHaveLength(0);
   });
 
   it('does not regress same-size content changes through (documented trade-off)', async () => {
@@ -340,7 +387,7 @@ describe('syncPyodideToVfs (diff-only writeBatch)', () => {
     });
     const { pyodide } = makeFakePyodide();
     pyodide.FS.writeFile('/workspace/notes.txt', 'abc');
-    const snapshot = new Map<string, number>([['/workspace/notes.txt', 3]]);
+    const snapshot = snapshotOfFiles([['/workspace/notes.txt', 3]]);
     pyodide.FS.writeFile('/workspace/notes.txt', 'XYZ'); // same length, different bytes
 
     await syncPyodideToVfs(rpc, pyodide, ['/workspace'], snapshot);
@@ -365,7 +412,9 @@ describe('syncPyodideToVfs (diff-only writeBatch)', () => {
     });
     const { pyodide } = makeFakePyodide();
     pyodide.FS.writeFile('/workspace/lost.txt', 'will-vanish');
-    await syncPyodideToVfs(rpc, pyodide, ['/workspace'], new Map(), (msg) => warnings.push(msg));
+    await syncPyodideToVfs(rpc, pyodide, ['/workspace'], emptySnapshot(), (msg) =>
+      warnings.push(msg)
+    );
 
     expect(warnings.some((w) => w.includes('/workspace/lost.txt') && w.includes('EACCES'))).toBe(
       true

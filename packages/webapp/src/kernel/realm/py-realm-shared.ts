@@ -103,7 +103,7 @@ export async function runPyRealm(
   const pushWarning = (msg: string): void => {
     stderrChunks.push(`Warning: ${msg}\n`);
   };
-  let preSyncSnapshot: Map<string, number> = new Map();
+  let preSyncSnapshot: PreSyncSnapshot = { files: new Map(), dirs: new Set() };
   try {
     preSyncSnapshot = await syncVfsToPyodide(rpc, pyodide, syncDirs, pushWarning);
   } catch (err) {
@@ -186,10 +186,28 @@ const WALK_TREE_MAX_FILE_BYTES = 10 * 1024 * 1024;
 type WarningSink = (message: string) => void;
 
 /**
+ * Snapshot of what pre-sync put into Pyodide-FS. The post-sync diff
+ * uses it to tell "user code created this" apart from "pre-sync
+ * mirrored it in." Files are size-keyed (same-size content edits
+ * slip through — documented trade-off); directories are tracked as
+ * a Set because we only need to know whether they pre-existed.
+ *
+ * Tracking dirs is load-bearing: without it the post-sync emits
+ * mkdir for every directory it sees in Pyodide-FS, and read-only
+ * VFS mounts like `/proc` (procfs-shaped, emits PID dirs at read
+ * time) flood stderr with `EACCES: read-only filesystem` warnings
+ * on every python invocation.
+ */
+export interface PreSyncSnapshot {
+  files: Map<string, number>;
+  dirs: Set<string>;
+}
+
+/**
  * Mirror VFS → Pyodide-FS for `dirs` in a single `walkTree` RPC per
- * directory. Returns `path → size` for every file that was actually
- * mirrored, so the post-execution diff can tell new/modified files
- * apart from untouched ones.
+ * directory. Returns the `PreSyncSnapshot` for the post-execution
+ * diff so it can tell new/modified entries apart from ones that
+ * pre-sync just mirrored in.
  *
  * Skipped files (cap-exceeded, unreadable, missing dir) are surfaced
  * through `pushWarning` so the user can correlate Python's
@@ -200,9 +218,12 @@ export async function syncVfsToPyodide(
   pyodide: PyodideInterface,
   dirs: string[],
   pushWarning: WarningSink = () => {}
-): Promise<Map<string, number>> {
+): Promise<PreSyncSnapshot> {
   const FS = pyodide.FS;
-  const snapshot = new Map<string, number>();
+  const snapshot: PreSyncSnapshot = {
+    files: new Map<string, number>(),
+    dirs: new Set<string>(),
+  };
 
   function ensurePyDir(path: string): void {
     try {
@@ -210,6 +231,7 @@ export async function syncVfsToPyodide(
     } catch {
       FS.mkdirTree(path);
     }
+    snapshot.dirs.add(path);
   }
 
   for (const dir of dirs) {
@@ -249,7 +271,7 @@ export async function syncVfsToPyodide(
         const lastSlash = entry.path.lastIndexOf('/');
         if (lastSlash > 0) ensurePyDir(entry.path.slice(0, lastSlash));
         FS.writeFile(entry.path, entry.content);
-        snapshot.set(entry.path, entry.size);
+        snapshot.files.set(entry.path, entry.size);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         pushWarning(`VFS→Pyodide entry '${entry.path}' failed: ${message}`);
@@ -287,7 +309,7 @@ export async function syncPyodideToVfs(
   rpc: RealmRpcClient,
   pyodide: PyodideInterface,
   dirs: string[],
-  preSyncSnapshot: Map<string, number>,
+  preSyncSnapshot: PreSyncSnapshot,
   pushWarning: WarningSink = () => {}
 ): Promise<void> {
   const FS = pyodide.FS;
@@ -310,10 +332,15 @@ export async function syncPyodideToVfs(
         continue;
       }
       if (FS.isDir(st.mode)) {
-        if (!preSyncSnapshot.has(full)) newDirs.add(full);
+        // Only emit mkdir for directories user code actually
+        // created. Pre-sync mirrors VFS dirs (incl. read-only
+        // mounts like /proc) into Pyodide-FS; without this check
+        // we'd try to mkdir them back into the read-only mount
+        // and spam EACCES warnings on every python invocation.
+        if (!preSyncSnapshot.dirs.has(full)) newDirs.add(full);
         walkBack(full);
       } else if (FS.isFile(st.mode)) {
-        const previousSize = preSyncSnapshot.get(full);
+        const previousSize = preSyncSnapshot.files.get(full);
         if (previousSize === undefined || previousSize !== st.size) {
           try {
             const content = FS.readFile(full) as Uint8Array;
