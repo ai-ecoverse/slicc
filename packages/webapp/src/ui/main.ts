@@ -953,11 +953,22 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       },
       broadcastToDip: (payload) => broadcastToDipsExt(payload),
       fireFinalLick: (data) => {
-        // Forward the synthetic completion event through the same
-        // relay any other sprinkle lick would use, so the offscreen
-        // cone receives it as a regular `[Sprinkle Event: welcome]`.
-        // Dedup-gated so a stray re-fire (HMR, double-mount) can't
-        // double the cone's greeting.
+        // Flush provider credentials to the worker before the lick.
+        const accountsVal = localStorage.getItem('slicc_accounts');
+        const modelVal = localStorage.getItem('selected-model');
+        if (accountsVal)
+          client.sendRaw({
+            type: 'local-storage-set',
+            key: 'slicc_accounts',
+            value: accountsVal,
+          } as any);
+        if (modelVal)
+          client.sendRaw({
+            type: 'local-storage-set',
+            key: 'selected-model',
+            value: modelVal,
+          } as any);
+
         const action = String((data as { action?: unknown })?.action ?? '');
         dispatchWelcomeLickOnce(
           action,
@@ -976,7 +987,14 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           const { createOAuthLauncher } = await import('../providers/oauth-service.js');
           const launcher = createOAuthLauncher();
           await cfg.onOAuthLogin(launcher, () => undefined);
-          return { ok: true };
+          const models = getProviderModelsExt(providerId).filter(
+            (m) => !isModelHiddenFromPickerExt(m.id)
+          );
+          const preferred = cfg.defaultModelId
+            ? models.find((m) => m.id.toLowerCase().includes(cfg.defaultModelId!.toLowerCase()))
+            : undefined;
+          const model = preferred ?? models[0];
+          return { ok: true, model: model ? `${providerId}:${model.id}` : undefined };
         } catch (err) {
           return {
             ok: false,
@@ -1760,9 +1778,25 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
       },
       broadcastToDip: (payload) => broadcastToDips(payload),
       fireFinalLick: (data) => {
-        // Forward through the same relay any sprinkle lick would use,
-        // gated by the persistent ledger so HMR / double-mount can't
-        // double the cone's greeting.
+        // Flush provider credentials to the worker before the lick.
+        // page-storage-sync may not have forwarded yet (e.g. if the
+        // OAuth callback ran before the sync was installed, or if
+        // setItem was called on an unpatched reference).
+        const accountsVal = localStorage.getItem('slicc_accounts');
+        const modelVal = localStorage.getItem('selected-model');
+        if (accountsVal)
+          client.sendRaw({
+            type: 'local-storage-set',
+            key: 'slicc_accounts',
+            value: accountsVal,
+          } as any);
+        if (modelVal)
+          client.sendRaw({
+            type: 'local-storage-set',
+            key: 'selected-model',
+            value: modelVal,
+          } as any);
+
         const action = String((data as { action?: unknown })?.action ?? '');
         dispatchWelcomeLickOnce(
           action,
@@ -1781,7 +1815,14 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
           const { createOAuthLauncher } = await import('../providers/oauth-service.js');
           const launcher = createOAuthLauncher();
           await cfg.onOAuthLogin(launcher, () => undefined);
-          return { ok: true };
+          const models = getProviderModels(providerId).filter(
+            (m) => !isModelHiddenFromPicker(m.id)
+          );
+          const preferred = cfg.defaultModelId
+            ? models.find((m) => m.id.toLowerCase().includes(cfg.defaultModelId!.toLowerCase()))
+            : undefined;
+          const model = preferred ?? models[0];
+          return { ok: true, model: model ? `${providerId}:${model.id}` : undefined };
         } catch (err) {
           return {
             ok: false,
