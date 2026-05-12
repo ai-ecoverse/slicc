@@ -113,6 +113,26 @@ File: `packages/chrome-extension/vite.config.ts` `closeBundle` hook must:
 2. Bundle ImageMagick WASM to `dist/extension/magick.wasm`
 3. Ensure manifest `web_accessible_resources` includes all assets
 
+## Python Realm: VFS Sync Is Diff-Aware and Size-Capped
+
+**File**: `packages/webapp/src/kernel/realm/py-realm-shared.ts`
+
+Pre- and post-execution sync between the VFS and Pyodide's emscripten FS uses
+two bulk RPCs — `vfs.walkTree` (host → realm: paths + sizes + content) and
+`vfs.writeBatch` (realm → host: mkdirs + file writes). The naive per-file
+`readDir`/`stat`/`readFile` chatter took minutes on workspace-sized cwds; the
+bulk path collapses that to two round-trips regardless of file count.
+
+| Behavior                  | Why                                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **10 MB file-size cap**   | Files above the cap are listed (Python sees the directory entry) but their content is not pre-loaded; `open()` on them throws ENOENT |
+| **Size-only diff**        | Post-sync compares Pyodide-FS size against the pre-execution snapshot; same-size content changes can slip through                    |
+| **Size = bytes, not UTF** | `FS.stat(...).size` reports raw bytes; `walkTree` returns `content.length` (UTF-16 code units) as a fallback                         |
+
+When extending the sync (binary file support, attribute mirroring, etc.), keep
+the two-RPC shape — adding round-trips inside the loop reintroduces the
+minutes-long stall.
+
 ## Runtime Detection: Workers Have No `window` Either
 
 **The Problem**

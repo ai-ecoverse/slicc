@@ -183,6 +183,208 @@ describe('realm RPC: vfs channel', () => {
   });
 });
 
+describe('realm RPC: vfs walkTree + writeBatch', () => {
+  function makeHierarchicalFs(): IFileSystem {
+    // `dirs` is a separate set so an empty directory still shows up
+    // in readdir of its parent (the flat `store` mock didn't model that).
+    const files = new Map<string, string>();
+    const dirs = new Set<string>(['/']);
+    function ensureParents(path: string): void {
+      let cursor = path;
+      while (cursor !== '/' && cursor.length > 0) {
+        const slash = cursor.lastIndexOf('/');
+        cursor = slash <= 0 ? '/' : cursor.slice(0, slash);
+        dirs.add(cursor);
+      }
+    }
+    const fs: IFileSystem = {
+      async readFile(path) {
+        const content = files.get(path);
+        if (content === undefined) throw new Error(`ENOENT: ${path}`);
+        return content;
+      },
+      async readFileBuffer(path) {
+        const content = files.get(path);
+        if (content === undefined) throw new Error(`ENOENT: ${path}`);
+        return new TextEncoder().encode(content);
+      },
+      async writeFile(path, content) {
+        const str = typeof content === 'string' ? content : new TextDecoder().decode(content);
+        files.set(path, str);
+        ensureParents(path);
+      },
+      async appendFile() {},
+      async exists(path) {
+        return files.has(path) || dirs.has(path);
+      },
+      async stat(path) {
+        if (files.has(path)) {
+          return {
+            isFile: true,
+            isDirectory: false,
+            isSymbolicLink: false,
+            mode: 0o644,
+            size: files.get(path)!.length,
+            mtime: new Date(),
+          };
+        }
+        if (dirs.has(path)) {
+          return {
+            isFile: false,
+            isDirectory: true,
+            isSymbolicLink: false,
+            mode: 0o755,
+            size: 0,
+            mtime: new Date(),
+          };
+        }
+        throw new Error(`ENOENT: ${path}`);
+      },
+      async mkdir(path) {
+        dirs.add(path);
+        ensureParents(path);
+      },
+      async readdir(path) {
+        if (!dirs.has(path)) throw new Error(`ENOENT: ${path}`);
+        const out = new Set<string>();
+        const prefix = path === '/' ? '/' : `${path}/`;
+        for (const f of files.keys()) {
+          if (!f.startsWith(prefix)) continue;
+          const rest = f.slice(prefix.length);
+          const slash = rest.indexOf('/');
+          out.add(slash === -1 ? rest : rest.slice(0, slash));
+        }
+        for (const d of dirs) {
+          if (!d.startsWith(prefix) || d === path) continue;
+          const rest = d.slice(prefix.length);
+          const slash = rest.indexOf('/');
+          out.add(slash === -1 ? rest : rest.slice(0, slash));
+        }
+        return [...out];
+      },
+      async rm() {},
+      async cp() {},
+      async mv() {},
+      resolvePath(base, path) {
+        if (path.startsWith('/')) return path;
+        return base === '/' ? `/${path}` : `${base}/${path}`;
+      },
+      getAllPaths() {
+        return [...files.keys()];
+      },
+      async chmod() {},
+      async symlink() {},
+      async link() {},
+      async readlink() {
+        return '';
+      },
+      async lstat(path) {
+        return fs.stat(path);
+      },
+      async realpath(path) {
+        return path;
+      },
+      async utimes() {},
+    };
+    // Seed with a few useful paths for tests
+    (fs as IFileSystem & { __seed: (path: string, content: string) => void }).__seed = (
+      path,
+      content
+    ) => {
+      files.set(path, content);
+      ensureParents(path);
+    };
+    return fs;
+  }
+
+  it('walkTree returns every entry under the root in a single RPC', async () => {
+    const fs = makeHierarchicalFs();
+    const seed = (fs as IFileSystem & { __seed?: (p: string, c: string) => void }).__seed!;
+    seed('/workspace/a.txt', 'A');
+    seed('/workspace/sub/b.txt', 'BB');
+    seed('/workspace/sub/c.txt', 'CCC');
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+
+    const entries = await client.call<
+      Array<{ path: string; isDir: boolean; size?: number; content?: string }>
+    >('vfs', 'walkTree', ['/workspace']);
+    const byPath = new Map(entries.map((e) => [e.path, e]));
+    expect(byPath.get('/workspace/sub')).toMatchObject({ isDir: true });
+    expect(byPath.get('/workspace/a.txt')).toMatchObject({ isDir: false, content: 'A', size: 1 });
+    expect(byPath.get('/workspace/sub/b.txt')).toMatchObject({ content: 'BB', size: 2 });
+    expect(byPath.get('/workspace/sub/c.txt')).toMatchObject({ content: 'CCC', size: 3 });
+    client.dispose();
+  });
+
+  it('walkTree honors maxFileBytes — large files are listed without content', async () => {
+    const fs = makeHierarchicalFs();
+    const seed = (fs as IFileSystem & { __seed?: (p: string, c: string) => void }).__seed!;
+    seed('/data/small.txt', 'xx');
+    seed('/data/large.bin', 'x'.repeat(1024));
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+
+    const entries = await client.call<
+      Array<{ path: string; isDir: boolean; size?: number; content?: string }>
+    >('vfs', 'walkTree', ['/data', { maxFileBytes: 100 }]);
+    const small = entries.find((e) => e.path === '/data/small.txt');
+    const large = entries.find((e) => e.path === '/data/large.bin');
+    expect(small?.content).toBe('xx');
+    expect(large?.content).toBeUndefined();
+    expect(large?.size).toBe(1024);
+    client.dispose();
+  });
+
+  it('walkTree returns an empty list for a missing directory rather than throwing', async () => {
+    const fs = makeHierarchicalFs();
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+
+    const entries = await client.call<unknown[]>('vfs', 'walkTree', ['/does-not-exist']);
+    expect(entries).toEqual([]);
+    client.dispose();
+  });
+
+  it('writeBatch creates mkdirs first and then writes files in order', async () => {
+    const fs = makeHierarchicalFs();
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+
+    await client.call('vfs', 'writeBatch', [
+      {
+        mkdirs: ['/workspace/new-dir'],
+        files: [
+          { path: '/workspace/new-dir/hello.txt', content: 'hi' },
+          { path: '/workspace/top.txt', content: 'top' },
+        ],
+      },
+    ]);
+    expect(await fs.readFile('/workspace/new-dir/hello.txt')).toBe('hi');
+    expect(await fs.readFile('/workspace/top.txt')).toBe('top');
+    client.dispose();
+  });
+
+  it('writeBatch is a no-op when both lists are empty', async () => {
+    const fs = makeHierarchicalFs();
+    const ctx = makeCtx({ fs });
+    const { realm, host } = makePortPair();
+    attachRealmHost(host, ctx);
+    const client = new RealmRpcClient(realm);
+    const ok = await client.call('vfs', 'writeBatch', [{}]);
+    expect(ok).toBe(true);
+    client.dispose();
+  });
+});
+
 describe('realm RPC: exec channel', () => {
   it('routes exec call through ctx.exec', async () => {
     const exec = vi.fn().mockResolvedValue({ stdout: 'output\n', stderr: '', exitCode: 0 });

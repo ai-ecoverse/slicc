@@ -86,8 +86,9 @@ export async function runPyRealm(
   }
 
   const syncDirs = init.pyodideSyncDirs ?? [init.cwd, '/tmp'];
+  let preSyncSnapshot: Map<string, number> = new Map();
   try {
-    await syncVfsToPyodide(rpc, pyodide, syncDirs);
+    preSyncSnapshot = await syncVfsToPyodide(rpc, pyodide, syncDirs);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     stderrChunks.push(`Warning: VFS→Pyodide sync failed: ${message}\n`);
@@ -132,7 +133,7 @@ export async function runPyRealm(
   }
 
   try {
-    await syncPyodideToVfs(rpc, pyodide, syncDirs);
+    await syncPyodideToVfs(rpc, pyodide, syncDirs, preSyncSnapshot);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     stderrChunks.push(`Warning: Pyodide→VFS sync failed: ${message}\n`);
@@ -152,12 +153,38 @@ export async function runPyRealm(
 // VFS ↔ Pyodide-FS sync (over RPC)
 // ---------------------------------------------------------------------------
 
+/**
+ * Cap on per-file content shipped in `walkTree`. Files above the cap
+ * are still listed (Pyodide gets the directory entry and the size)
+ * but their content is not pre-loaded — Python `open()` on one will
+ * see ENOENT. The trade-off is intentional: the previous unbounded
+ * sync took minutes on workspace-sized trees because each large file
+ * blocked the channel. 10 MB covers nearly every text artefact agents
+ * actually script against; anything bigger should be read via the
+ * shell layer instead.
+ */
+const WALK_TREE_MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+interface WalkTreeEntry {
+  path: string;
+  isDir: boolean;
+  size?: number;
+  content?: string;
+}
+
+/**
+ * Mirror VFS → Pyodide-FS for `dirs` in a single `walkTree` RPC per
+ * directory. Returns `path → size` for every file that was actually
+ * mirrored, so the post-execution diff can tell new/modified files
+ * apart from untouched ones.
+ */
 async function syncVfsToPyodide(
   rpc: RealmRpcClient,
   pyodide: PyodideInterface,
   dirs: string[]
-): Promise<void> {
+): Promise<Map<string, number>> {
   const FS = pyodide.FS;
+  const snapshot = new Map<string, number>();
 
   function ensurePyDir(path: string): void {
     try {
@@ -167,48 +194,62 @@ async function syncVfsToPyodide(
     }
   }
 
-  async function syncDir(vfsPath: string): Promise<void> {
-    ensurePyDir(vfsPath);
-    let entries: string[];
+  for (const dir of dirs) {
+    ensurePyDir(dir);
+    let entries: WalkTreeEntry[];
     try {
-      entries = await rpc.call<string[]>('vfs', 'readDir', [vfsPath]);
+      entries = await rpc.call<WalkTreeEntry[]>('vfs', 'walkTree', [
+        dir,
+        { maxFileBytes: WALK_TREE_MAX_FILE_BYTES },
+      ]);
     } catch {
-      return;
+      continue;
     }
-    for (const name of entries) {
-      const full = vfsPath === '/' ? `/${name}` : `${vfsPath}/${name}`;
+    for (const entry of entries) {
       try {
-        const stat = await rpc.call<{ isDirectory: boolean; isFile: boolean; size: number }>(
-          'vfs',
-          'stat',
-          [full]
-        );
-        if (stat.isDirectory) {
-          await syncDir(full);
-        } else {
-          const content = await rpc.call<string>('vfs', 'readFile', [full]);
-          ensurePyDir(vfsPath);
-          FS.writeFile(full, content);
+        if (entry.isDir) {
+          ensurePyDir(entry.path);
+        } else if (entry.content !== undefined) {
+          // Parent dir guaranteed by the walk order (directories
+          // are emitted before their contents); still defensive.
+          const lastSlash = entry.path.lastIndexOf('/');
+          if (lastSlash > 0) ensurePyDir(entry.path.slice(0, lastSlash));
+          FS.writeFile(entry.path, entry.content);
+          snapshot.set(entry.path, entry.size ?? entry.content.length);
         }
       } catch {
-        /* skip files we can't read */
+        /* skip individual entries — bad path, encoding, etc. */
       }
     }
   }
 
-  for (const dir of dirs) {
-    await syncDir(dir);
-  }
+  return snapshot;
 }
 
+/**
+ * Mirror Pyodide-FS → VFS for `dirs`, but only for files that are
+ * new or whose size changed since `preSyncSnapshot`. Sends one
+ * `writeBatch` RPC per `dirs` entry; for a `python -c "print('hi')"`
+ * with no FS writes that's a single empty batch (still cheap) instead
+ * of N writeFile round-trips.
+ *
+ * Size-only diffing is a deliberate trade — same-size content changes
+ * can slip through. The previous implementation also re-wrote every
+ * file every run, so callers that round-trip JSON or other structured
+ * data hit it then too; the recommended workaround is the same: write
+ * to a fresh path or change the byte count.
+ */
 async function syncPyodideToVfs(
   rpc: RealmRpcClient,
   pyodide: PyodideInterface,
-  dirs: string[]
+  dirs: string[],
+  preSyncSnapshot: Map<string, number>
 ): Promise<void> {
   const FS = pyodide.FS;
+  const newDirs = new Set<string>();
+  const changedFiles: Array<{ path: string; content: string }> = [];
 
-  async function writeBack(pyPath: string): Promise<void> {
+  function walkBack(pyPath: string): void {
     let entries: string[];
     try {
       entries = (FS.readdir(pyPath) as string[]).filter((n) => n !== '.' && n !== '..');
@@ -217,23 +258,36 @@ async function syncPyodideToVfs(
     }
     for (const name of entries) {
       const full = pyPath === '/' ? `/${name}` : `${pyPath}/${name}`;
+      let st: { mode: number; size: number };
       try {
-        const stat = FS.stat(full) as { mode: number };
-        if (FS.isDir(stat.mode)) {
-          await rpc.call('vfs', 'mkdir', [full]);
-          await writeBack(full);
-        } else {
-          const content = new TextDecoder().decode(FS.readFile(full));
-          await rpc.call('vfs', 'mkdir', [pyPath]);
-          await rpc.call('vfs', 'writeFile', [full, content]);
-        }
+        st = FS.stat(full) as { mode: number; size: number };
       } catch {
-        /* skip */
+        continue;
+      }
+      if (FS.isDir(st.mode)) {
+        if (!preSyncSnapshot.has(full)) newDirs.add(full);
+        walkBack(full);
+      } else if (FS.isFile(st.mode)) {
+        const previousSize = preSyncSnapshot.get(full);
+        if (previousSize === undefined || previousSize !== st.size) {
+          try {
+            const content = new TextDecoder().decode(FS.readFile(full));
+            changedFiles.push({ path: full, content });
+          } catch {
+            /* skip unreadable */
+          }
+        }
       }
     }
   }
 
-  for (const dir of dirs) {
-    await writeBack(dir);
+  for (const dir of dirs) walkBack(dir);
+
+  if (newDirs.size === 0 && changedFiles.length === 0) return;
+  try {
+    await rpc.call('vfs', 'writeBatch', [{ mkdirs: [...newDirs], files: changedFiles }]);
+  } catch {
+    /* writeBatch already tolerates per-entry failures host-side;
+       a top-level reject here means the channel is gone. */
   }
 }
