@@ -178,7 +178,7 @@ interface WalkTreeEntry {
  * mirrored, so the post-execution diff can tell new/modified files
  * apart from untouched ones.
  */
-async function syncVfsToPyodide(
+export async function syncVfsToPyodide(
   rpc: RealmRpcClient,
   pyodide: PyodideInterface,
   dirs: string[]
@@ -239,7 +239,7 @@ async function syncVfsToPyodide(
  * data hit it then too; the recommended workaround is the same: write
  * to a fresh path or change the byte count.
  */
-async function syncPyodideToVfs(
+export async function syncPyodideToVfs(
   rpc: RealmRpcClient,
   pyodide: PyodideInterface,
   dirs: string[],

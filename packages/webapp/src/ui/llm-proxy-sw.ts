@@ -36,6 +36,7 @@
 /// <reference lib="webworker" />
 
 import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-headers.js';
+import { synthesizeForwardResponse } from './llm-proxy-response.js';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -131,22 +132,10 @@ async function forwardThroughProxy(req: Request): Promise<Response> {
   // unrelated callers like validateApiKey() which depend on rejected
   // fetches to classify transient outages as `kind: 'skipped'`.
   const response = await fetch(FETCH_PROXY_PATH, init);
-  // Wrap in a synthetic Response. Critical for ESM module imports:
-  // when a SW responds with a Response that was itself produced by
-  // a `fetch(/api/fetch-proxy)`, the consumer sees
-  // `response.url = "localhost:5710/api/fetch-proxy"` and resolves
-  // any relative sub-imports against THAT — which 404s through the
-  // SPA fallback. Synthetic Responses have no own URL, so the SW
-  // contract surfaces them as the original request URL and relative
-  // imports point back at the same cross-origin host (where they're
-  // re-intercepted and proxied again). Body remains a streamed
-  // ReadableStream so SSE token-by-token UX still works for LLM
-  // completions; status, headers, and body pass through verbatim.
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  // Wrap in a synthetic Response (see `llm-proxy-response.ts` for
+  // the full rationale). Body stays a streamed ReadableStream so
+  // SSE token-by-token UX for LLM completions is unchanged.
+  return synthesizeForwardResponse(response);
 }
 
 async function readForwardBody(req: Request): Promise<BodyInit | undefined> {
