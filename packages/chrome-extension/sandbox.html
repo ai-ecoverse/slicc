@@ -240,6 +240,35 @@ function bootstrapRealmPort(port) {
     'readline','repl','tty','inspector',
   ]);
   const BUILTINS_LOCAL = new Set(['fs', 'process', 'buffer']);
+  // Mirrors NODE_NATIVE_PACKAGES in js-realm-shared.ts. C++-bound
+  // packages never load in the sandbox; their CDN stubs hang on
+  // a transitive .node fetch instead of erroring cleanly, which
+  // used to park `node -e "require('sharp')"` for minutes before
+  // hitting any timeout. Keep alphabetical.
+  const NODE_NATIVE_PACKAGES = new Set([
+    'bcrypt','better-sqlite3','canvas','cpu-features','fsevents','leveldown',
+    'libxmljs','libxmljs2','node-gyp-build','node-sass','puppeteer','robotjs',
+    'sass-embedded','sharp','snappy','sqlite3','tree-sitter','usb',
+  ]);
+  const NATIVE_PACKAGE_HINTS = {
+    sharp: " Use the built-in 'convert' shell command for image work.",
+    canvas: " Use the built-in 'convert' / OffscreenCanvas for image work.",
+    'better-sqlite3': " Use the built-in 'sqlite3' shell command (sql.js WASM).",
+    sqlite3: " Use the built-in 'sqlite3' shell command (sql.js WASM).",
+    bcrypt: ' Use crypto.subtle.digest() with PBKDF2 / Argon2 in pure JS.',
+    puppeteer: ' Use the built-in browser-automation shell commands.',
+  };
+  const LOAD_MODULE_TIMEOUT_MS = 15000;
+  function nativeError(id, bareId) {
+    const hint = NATIVE_PACKAGE_HINTS[bareId] || '';
+    return new Error("require('" + id + "'): '" + bareId + "' is a Node native module (C++ bindings) — it cannot run in the browser sandbox." + hint);
+  }
+  function withTimeout(promise, ms, label) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Timed out after ' + (ms/1000) + 's loading ' + label)), ms);
+      promise.then((v) => { clearTimeout(timer); resolve(v); }, (e) => { clearTimeout(timer); reject(e); });
+    });
+  }
 
   let nextId = 1;
   const pending = new Map();
@@ -256,7 +285,7 @@ function bootstrapRealmPort(port) {
       return;
     }
     if (data.type === 'realm-init') {
-      runRealm(data, port, pending, () => nextId++, NODE_BUILTINS_UNAVAILABLE, BUILTINS_LOCAL)
+      runRealm(data, port, pending, () => nextId++, NODE_BUILTINS_UNAVAILABLE, BUILTINS_LOCAL, NODE_NATIVE_PACKAGES, NATIVE_PACKAGE_HINTS, LOAD_MODULE_TIMEOUT_MS, nativeError, withTimeout)
         .catch((err) => {
           const message = err instanceof Error ? err.message : String(err);
           port.postMessage({ type: 'realm-error', message });
@@ -266,7 +295,7 @@ function bootstrapRealmPort(port) {
   port.start();
 }
 
-async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE, BUILTINS_LOCAL) {
+async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE, BUILTINS_LOCAL, NODE_NATIVE_PACKAGES, NATIVE_PACKAGE_HINTS, LOAD_MODULE_TIMEOUT_MS, nativeError, withTimeout) {
   if (init.kind !== 'js') {
     port.postMessage({ type: 'realm-error', message: 'realm-iframe: only kind:js supported' });
     return;
@@ -378,29 +407,39 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   const filtered = [...idsFound]
     .map((s) => s.startsWith('node:') ? s.slice(5) : s)
     .filter((s) => !BUILTINS_LOCAL.has(s) && !NODE_BUILTINS_UNAVAILABLE.has(s));
-  if (filtered.length > 0) {
-    const results = await Promise.allSettled(filtered.map(async (id) => {
-      const url = 'https://cdn.jsdelivr.net/npm/' + id;
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
-      const text = await resp.text();
-      const mod = { exports: {} };
-      try {
-        // Indirect Function call works inside the sandbox CSP.
-        // The call is for its side effects on `mod.exports`; the
-        // return value is discarded — `void` makes that explicit
-        // for static-analysis tools that flag bare side-effecting
-        // calls as "expression has no effect".
-        void (0, Function)('module', 'exports', text)(mod, mod.exports);
-      } catch(fnErr) {
-        throw new Error('Failed to execute module ' + id + ': ' + (fnErr instanceof Error ? fnErr.message : String(fnErr)));
-      }
-      const val = Object.keys(mod.exports).length > 0 ? mod.exports : (self[id] || mod.exports);
-      requireCache[id] = val;
+  const nativeIds = filtered.filter((s) => NODE_NATIVE_PACKAGES.has(s));
+  const loadable = filtered.filter((s) => !NODE_NATIVE_PACKAGES.has(s));
+  for (const id of nativeIds) {
+    writeStderr("Warning: " + nativeError(id, id).message + "\n");
+  }
+  if (loadable.length > 0) {
+    const results = await Promise.allSettled(loadable.map(async (id) => {
+      const fetchAndEval = async () => {
+        const url = 'https://cdn.jsdelivr.net/npm/' + id;
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
+        const text = await resp.text();
+        const mod = { exports: {} };
+        try {
+          // Indirect Function call works inside the sandbox CSP.
+          // The call is for its side effects on `mod.exports`; the
+          // return value is discarded — `void` makes that explicit
+          // for static-analysis tools that flag bare side-effecting
+          // calls as "expression has no effect".
+          void (0, Function)('module', 'exports', text)(mod, mod.exports);
+        } catch(fnErr) {
+          throw new Error('Failed to execute module ' + id + ': ' + (fnErr instanceof Error ? fnErr.message : String(fnErr)));
+        }
+        return Object.keys(mod.exports).length > 0 ? mod.exports : (self[id] || mod.exports);
+      };
+      // 15s ceiling per require — CDN stubs that chain into
+      // unresolvable transitive imports (the original sharp hang)
+      // are now bounded instead of parking the realm.
+      requireCache[id] = await withTimeout(fetchAndEval(), LOAD_MODULE_TIMEOUT_MS, "require('" + id + "')");
     }));
     for (let i = 0; i < results.length; i++) {
       if (results[i].status === 'rejected') {
-        writeStderr("Warning: failed to pre-load require('" + filtered[i] + "'): " + results[i].reason + "\n");
+        writeStderr("Warning: failed to pre-load require('" + loadable[i] + "'): " + results[i].reason + "\n");
       }
     }
   }
@@ -412,6 +451,9 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
       const hints = { http: ' Use fetch() instead.', https: ' Use fetch() instead.', child_process: ' Use exec() which is available as a shell bridge.', crypto: ' Use globalThis.crypto (Web Crypto API) instead.' };
       throw new Error("require('" + id + "'): Node built-in '" + bareId + "' is not available in the browser environment." + (hints[bareId] || ''));
+    }
+    if (NODE_NATIVE_PACKAGES.has(bareId)) {
+      throw nativeError(id, bareId);
     }
     if (id in requireCache) return requireCache[id];
     if (bareId in requireCache) return requireCache[bareId];
