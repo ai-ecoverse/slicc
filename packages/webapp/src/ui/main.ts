@@ -46,6 +46,7 @@ import { createAttachmentTmpWriter } from './attachment-vfs.js';
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
+import { flushCredentialsToWorker, resolveDefaultModel } from './onboarding-helpers.js';
 import { BrowserAPI, NavigationWatcher } from '../cdp/index.js';
 import { type Orchestrator } from '../scoops/index.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
@@ -953,22 +954,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       },
       broadcastToDip: (payload) => broadcastToDipsExt(payload),
       fireFinalLick: (data) => {
-        // Flush provider credentials to the worker before the lick.
-        const accountsVal = localStorage.getItem('slicc_accounts');
-        const modelVal = localStorage.getItem('selected-model');
-        if (accountsVal)
-          client.sendRaw({
-            type: 'local-storage-set',
-            key: 'slicc_accounts',
-            value: accountsVal,
-          } as any);
-        if (modelVal)
-          client.sendRaw({
-            type: 'local-storage-set',
-            key: 'selected-model',
-            value: modelVal,
-          } as any);
-
+        flushCredentialsToWorker(client);
         const action = String((data as { action?: unknown })?.action ?? '');
         dispatchWelcomeLickOnce(
           action,
@@ -987,14 +973,15 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           const { createOAuthLauncher } = await import('../providers/oauth-service.js');
           const launcher = createOAuthLauncher();
           await cfg.onOAuthLogin(launcher, () => undefined);
-          const models = getProviderModelsExt(providerId).filter(
-            (m) => !isModelHiddenFromPickerExt(m.id)
-          );
-          const preferred = cfg.defaultModelId
-            ? models.find((m) => m.id.toLowerCase().includes(cfg.defaultModelId!.toLowerCase()))
-            : undefined;
-          const model = preferred ?? models[0];
-          return { ok: true, model: model ? `${providerId}:${model.id}` : undefined };
+          return {
+            ok: true,
+            model: resolveDefaultModel(
+              providerId,
+              cfg,
+              getProviderModelsExt,
+              isModelHiddenFromPickerExt
+            ),
+          };
         } catch (err) {
           return {
             ok: false,
@@ -1778,25 +1765,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
       },
       broadcastToDip: (payload) => broadcastToDips(payload),
       fireFinalLick: (data) => {
-        // Flush provider credentials to the worker before the lick.
-        // page-storage-sync may not have forwarded yet (e.g. if the
-        // OAuth callback ran before the sync was installed, or if
-        // setItem was called on an unpatched reference).
-        const accountsVal = localStorage.getItem('slicc_accounts');
-        const modelVal = localStorage.getItem('selected-model');
-        if (accountsVal)
-          client.sendRaw({
-            type: 'local-storage-set',
-            key: 'slicc_accounts',
-            value: accountsVal,
-          } as any);
-        if (modelVal)
-          client.sendRaw({
-            type: 'local-storage-set',
-            key: 'selected-model',
-            value: modelVal,
-          } as any);
-
+        flushCredentialsToWorker(client);
         const action = String((data as { action?: unknown })?.action ?? '');
         dispatchWelcomeLickOnce(
           action,
@@ -1815,14 +1784,10 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
           const { createOAuthLauncher } = await import('../providers/oauth-service.js');
           const launcher = createOAuthLauncher();
           await cfg.onOAuthLogin(launcher, () => undefined);
-          const models = getProviderModels(providerId).filter(
-            (m) => !isModelHiddenFromPicker(m.id)
-          );
-          const preferred = cfg.defaultModelId
-            ? models.find((m) => m.id.toLowerCase().includes(cfg.defaultModelId!.toLowerCase()))
-            : undefined;
-          const model = preferred ?? models[0];
-          return { ok: true, model: model ? `${providerId}:${model.id}` : undefined };
+          return {
+            ok: true,
+            model: resolveDefaultModel(providerId, cfg, getProviderModels, isModelHiddenFromPicker),
+          };
         } catch (err) {
           return {
             ok: false,
