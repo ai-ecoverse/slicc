@@ -31,6 +31,7 @@ import { createBridgeMessageChannelTransport } from './transport-message-channel
 import { WorkerCdpProxy } from './cdp-worker-proxy.js';
 import { createPanelTerminalHost } from './panel-terminal-host.js';
 import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
+import { makeSameOriginBypassFetch } from './kernel-worker-fetch-bypass.js';
 
 // Provider registration is async-explicit (not side-effect import).
 // `providers/index.ts` switched to lazy `import.meta.glob` to break a
@@ -87,34 +88,19 @@ export interface KernelWorkerReadyMsg {
 // ---------------------------------------------------------------------------
 
 /**
- * Wrap `globalThis.fetch` to add `x-bypass-llm-proxy: 1` to every
- * outgoing request from the worker.
- *
- * Why: in standalone, the page registers `/llm-proxy-sw.js` as a
- * service worker that intercepts cross-origin LLM provider fetches
- * and reroutes them through `/api/fetch-proxy` to bypass CORS in
- * dev. The kernel worker is spawned by a SW-controlled page; in
- * Chromium, module-worker fetches can also be intercepted by the
- * page's SW. We don't want that — the worker has direct network
- * access (the LLM-proxy is for the page's `dist/ui` bundle), and
- * double-rerouting through `/api/fetch-proxy` would change the
- * origin / break credentials.
- *
- * The SW already honors `x-bypass-llm-proxy: 1` (see
- * `packages/webapp/src/ui/llm-proxy-sw.ts:71`). Installing this
- * wrapper at worker boot, before any fetcher runs, lets the SW
- * pass-through every worker-issued request.
+ * Wrap `globalThis.fetch` with a same-origin bypass-header stamper
+ * so the page-installed LLM-proxy SW never re-routes a worker-issued
+ * request to itself. See `kernel-worker-fetch-bypass.ts` for the
+ * full rationale; the short version is that stamping on cross-origin
+ * requests would turn every CDN fetch into a CORS-preflighted one,
+ * which strict CDNs (jsdelivr et al) reject.
  */
 function installFetchBypass(): void {
   const orig = globalThis.fetch;
   if (!orig) return;
-  globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const headers = new Headers(init?.headers);
-    if (!headers.has('x-bypass-llm-proxy')) {
-      headers.set('x-bypass-llm-proxy', '1');
-    }
-    return orig(input, { ...init, headers });
-  };
+  const selfOrigin =
+    typeof self !== 'undefined' && self.location ? self.location.origin : undefined;
+  globalThis.fetch = makeSameOriginBypassFetch(orig.bind(globalThis), selfOrigin);
 }
 
 // ---------------------------------------------------------------------------
