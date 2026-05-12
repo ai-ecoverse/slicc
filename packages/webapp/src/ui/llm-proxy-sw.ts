@@ -36,6 +36,7 @@
 /// <reference lib="webworker" />
 
 import { encodeForbiddenRequestHeaders, headersToRecord } from '../shell/proxy-headers.js';
+import { synthesizeForwardResponse } from './llm-proxy-response.js';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -131,12 +132,10 @@ async function forwardThroughProxy(req: Request): Promise<Response> {
   // unrelated callers like validateApiKey() which depend on rejected
   // fetches to classify transient outages as `kind: 'skipped'`.
   const response = await fetch(FETCH_PROXY_PATH, init);
-  // Return the proxy response unchanged. Its body is a streamed
-  // ReadableStream that pipes upstream chunks back to the page caller
-  // with no extra buffering — preserving SSE token-by-token UX for LLM
-  // completions. Status, headers (including X-Proxy-Set-Cookie and
-  // X-Proxy-Error), and body all pass through verbatim.
-  return response;
+  // Wrap in a synthetic Response (see `llm-proxy-response.ts` for
+  // the full rationale). Body stays a streamed ReadableStream so
+  // SSE token-by-token UX for LLM completions is unchanged.
+  return synthesizeForwardResponse(response);
 }
 
 async function readForwardBody(req: Request): Promise<BodyInit | undefined> {

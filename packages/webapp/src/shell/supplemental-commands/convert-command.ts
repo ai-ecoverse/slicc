@@ -197,14 +197,29 @@ export function createConvertCommand(name: string = 'convert'): Command {
           }
         }
 
-        // Write output
+        // Write output. Copy the bytes synchronously out of the
+        // WASM heap — magick-wasm hands us a Uint8Array view into
+        // its linear memory, which gets reused for other
+        // allocations after the callback returns. Holding the raw
+        // view across `await ctx.fs.writeFile(...)` lets later
+        // emscripten work clobber the region; the file then lands
+        // as whatever happens to sit at that slot (commonly
+        // null-terminated strings emscripten writes for format
+        // names, producing a "UTF-8 text with CRLF terminators"
+        // garbage file). Symptom only surfaces in extension/
+        // offscreen mode because of allocator timing differences.
         const outputFormat = inferFormat(outputPath) as any; // MagickFormat type
         image.write(outputFormat, (data: Uint8Array) => {
-          outputData = data;
+          outputData = new Uint8Array(data);
         });
       });
 
-      if (!outputData) {
+      // `!outputData` is `false` for a zero-byte `Uint8Array` (it's
+      // still truthy), so the byte-length check is load-bearing:
+      // magick-wasm can silently return an empty buffer on
+      // unsupported-format quirks and we'd otherwise write a 0-byte
+      // JPEG with exit 0.
+      if (!outputData || (outputData as Uint8Array).byteLength === 0) {
         throw new Error('Failed to generate output image');
       }
 

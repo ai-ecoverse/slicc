@@ -129,6 +129,46 @@ export interface SerializedFetchResponse {
   url: string;
 }
 
+/**
+ * One entry in a `vfs.walkTree` response. Paths are absolute (host
+ * already resolved against `ctx.cwd`).
+ *
+ * Discriminated on `isDir` so directory entries can't pretend to
+ * carry a `size`/`content` and file entries always carry a `size`.
+ * `content` is omitted ONLY when the file exceeded the per-call
+ * `maxFileBytes` cap or could not be read — see the realm-side
+ * skip-with-warning path in `py-realm-shared.ts`.
+ *
+ * `content` is `Uint8Array`, not `string`: walkTree must round-trip
+ * binary files (PNG, sqlite, .whl, …) byte-for-byte. The realm
+ * transfers ownership to avoid copying.
+ */
+export type WalkTreeEntry =
+  | { path: string; isDir: true }
+  | { path: string; isDir: false; size: number; content?: Uint8Array };
+
+/**
+ * Bulk-write payload for `vfs.writeBatch`. Directories are created
+ * before files; ordering across the two arrays is host-controlled.
+ * `content` is `Uint8Array` for the same reason as `WalkTreeEntry`.
+ */
+export interface WriteBatchPayload {
+  mkdirs?: readonly string[];
+  files?: ReadonlyArray<{ path: string; content: Uint8Array }>;
+}
+
+/**
+ * Per-entry result of a `vfs.writeBatch`. The host applies
+ * everything best-effort and reports back which paths it couldn't
+ * write so the realm can surface them as stderr warnings instead
+ * of silently losing the user's files.
+ */
+export interface WriteBatchResult {
+  ok: true;
+  failedMkdirs: ReadonlyArray<{ path: string; error: string }>;
+  failedFiles: ReadonlyArray<{ path: string; error: string }>;
+}
+
 /** Outbound from the realm. */
 export type RealmOutbound = RealmDoneMsg | RealmErrorMsg | RealmRpcRequest | RealmIframeReadyMsg;
 

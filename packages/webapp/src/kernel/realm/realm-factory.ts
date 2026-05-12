@@ -15,10 +15,13 @@
  * thread it into `runInRealm` so tests can substitute mocks.
  */
 
-import type { CommandContext } from 'just-bash';
 import { createIframeRealm } from './realm-iframe.js';
 import { createInProcessJsRealmFactory, createInProcessPyRealmFactory } from './realm-inprocess.js';
-import { resolveNodePackageBaseUrl } from '../../shell/supplemental-commands/shared.js';
+import {
+  isExtensionRuntime,
+  isNodeRuntime,
+  resolveNodePackageBaseUrl,
+} from '../../shell/supplemental-commands/shared.js';
 import { PYODIDE_CDN } from './py-realm-shared.js';
 import type { Realm, RealmFactory } from './realm-runner.js';
 import type { RealmKind } from './realm-types.js';
@@ -49,7 +52,7 @@ export function createDefaultRealmFactory(): RealmFactory {
       return inProcessPy({ kind, ctx });
     }
     // kind === 'js'
-    if (isExtension() && typeof document !== 'undefined') {
+    if (isExtensionRuntime() && typeof document !== 'undefined') {
       return createIframeRealm(kind, ctx);
     }
     if (typeof Worker !== 'undefined') return createJsWorkerRealm();
@@ -112,27 +115,27 @@ function wrapWorker(worker: Worker): Realm {
  * Pick the Pyodide indexURL for the current runtime. Used by
  * `python-command` to populate `RealmInitMsg.pyodideIndexURL` so
  * the worker side stays runtime-agnostic.
+ *
+ * Runtime detection MUST go extension → node → browser, in that
+ * order. The historical `typeof window === 'undefined'` shortcut
+ * misidentifies DedicatedWorkers (no `window`, but still a browser
+ * context) as Node and steers them at the local `node_modules`
+ * tree, which the Vite dev server returns the SPA fallback for —
+ * the worker then tries to load `<!DOCTYPE …>` as a WASM module.
  */
 export function resolvePyodideIndexURL(): string {
-  if (typeof window === 'undefined') {
+  if (isExtensionRuntime()) {
+    const c = (globalThis as { chrome?: { runtime?: { getURL?: (path: string) => string } } })
+      .chrome;
+    if (c?.runtime?.getURL) return c.runtime.getURL('pyodide/');
+  }
+  if (isNodeRuntime()) {
     return decodeURIComponent(
       resolveNodePackageBaseUrl('pyodide/pyodide.mjs', '../../../../../node_modules/pyodide/')
         .pathname
     );
   }
-  if (isExtension()) {
-    const c = (globalThis as { chrome?: { runtime?: { getURL?: (path: string) => string } } })
-      .chrome;
-    if (c?.runtime?.getURL) return c.runtime.getURL('pyodide/');
-  }
   return PYODIDE_CDN;
-}
-
-function isExtension(): boolean {
-  return (
-    typeof chrome !== 'undefined' &&
-    !!(chrome as { runtime?: { id?: string } } | undefined)?.runtime?.id
-  );
 }
 
 export type { RealmFactory, Realm, RealmKind };

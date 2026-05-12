@@ -14,7 +14,14 @@
 
 import type { CommandContext } from 'just-bash';
 import type { RealmPortLike } from './realm-rpc.js';
-import type { RealmRpcRequest, RealmRpcResponse, SerializedFetchResponse } from './realm-types.js';
+import type {
+  RealmRpcRequest,
+  RealmRpcResponse,
+  SerializedFetchResponse,
+  WalkTreeEntry,
+  WriteBatchPayload,
+  WriteBatchResult,
+} from './realm-types.js';
 import { createNodeFetchAdapter } from '../../shell/supplemental-commands/node-fetch-adapter.js';
 
 export interface RealmHostHandle {
@@ -113,8 +120,96 @@ async function dispatchVfs(op: string, args: unknown[], ctx: CommandContext): Pr
       return true;
     case 'resolvePath':
       return ctx.fs.resolvePath(ctx.cwd, args[0] as string);
+    case 'walkTree': {
+      // Recursive subtree dump in a single RPC. Replaces the
+      // per-file readDir/stat/readFile chatter that made
+      // VFS↔Pyodide sync take minutes on large `cwd` trees.
+      // Content is shipped as `Uint8Array` so binary files round-
+      // trip byte-for-byte; the realm-side sync hands them to
+      // Pyodide's `FS.writeFile` which accepts both.
+      const opts = (args[1] as { maxFileBytes?: number } | undefined) ?? {};
+      const maxBytes = typeof opts.maxFileBytes === 'number' ? opts.maxFileBytes : Infinity;
+      const entries: WalkTreeEntry[] = [];
+      await collectTree(ctx, resolved!, maxBytes, entries);
+      return entries;
+    }
+    case 'writeBatch': {
+      // Bulk apply of a `{mkdirs, files}` payload. Used by the
+      // post-sync diff path so a python invocation that only
+      // wrote one file pays a single round-trip rather than N.
+      // Per-entry failures are collected and returned so the realm
+      // can surface them as stderr warnings instead of silently
+      // losing user output — see `WriteBatchResult`.
+      const payload = (args[0] as WriteBatchPayload | undefined) ?? {};
+      const failedMkdirs: Array<{ path: string; error: string }> = [];
+      const failedFiles: Array<{ path: string; error: string }> = [];
+      for (const dir of payload.mkdirs ?? []) {
+        const resolvedDir = ctx.fs.resolvePath(ctx.cwd, dir);
+        try {
+          await ctx.fs.mkdir(resolvedDir, { recursive: true });
+        } catch (err) {
+          // EEXIST is expected and ignored; everything else surfaces.
+          const message = err instanceof Error ? err.message : String(err);
+          if (!/EEXIST/i.test(message)) failedMkdirs.push({ path: dir, error: message });
+        }
+      }
+      for (const file of payload.files ?? []) {
+        const resolvedFile = ctx.fs.resolvePath(ctx.cwd, file.path);
+        try {
+          await ctx.fs.writeFile(resolvedFile, file.content);
+        } catch (err) {
+          failedFiles.push({
+            path: file.path,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      const result: WriteBatchResult = { ok: true, failedMkdirs, failedFiles };
+      return result;
+    }
     default:
       throw new Error(`realm-host: unknown vfs op '${op}'`);
+  }
+}
+
+async function collectTree(
+  ctx: CommandContext,
+  root: string,
+  maxBytes: number,
+  out: WalkTreeEntry[]
+): Promise<void> {
+  let names: string[];
+  try {
+    names = await ctx.fs.readdir(root);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const full = root === '/' ? `/${name}` : `${root}/${name}`;
+    let st: { isDirectory: boolean; isFile: boolean; size: number };
+    try {
+      st = await ctx.fs.stat(full);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory) {
+      out.push({ path: full, isDir: true });
+      await collectTree(ctx, full, maxBytes, out);
+    } else if (st.isFile) {
+      if (st.size <= maxBytes) {
+        try {
+          // `readFileBuffer` returns the raw bytes — critical for
+          // binary round-trip. `readFile` defaults to UTF-8 and
+          // would mojibake any non-text payload.
+          const content = await ctx.fs.readFileBuffer(full);
+          out.push({ path: full, isDir: false, size: st.size, content });
+          continue;
+        } catch {
+          /* leave content unset; realm will warn and skip */
+        }
+      }
+      out.push({ path: full, isDir: false, size: st.size });
+    }
   }
 }
 

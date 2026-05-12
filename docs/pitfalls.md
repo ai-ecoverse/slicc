@@ -113,6 +113,93 @@ File: `packages/chrome-extension/vite.config.ts` `closeBundle` hook must:
 2. Bundle ImageMagick WASM to `dist/extension/magick.wasm`
 3. Ensure manifest `web_accessible_resources` includes all assets
 
+## emscripten WASM Heap Views: Copy Inside the Callback
+
+WASM modules built with emscripten — magick-wasm, Pyodide, sql.js — hand
+JavaScript callbacks `Uint8Array` views **into the WASM linear memory**, not
+owned buffers. After the callback returns, the runtime is free to reuse that
+memory region for other allocations. Holding the raw view across any
+subsequent `await` (or simply waiting for the next emscripten operation) lets
+later allocations clobber the bytes you thought you captured.
+
+The `convert` command had exactly this bug: `image.write(format, (data) => {
+outputData = data; })` followed by `await ctx.fs.writeFile(path, outputData)`.
+The output JPEG landed on disk as 1192 KB of UTF-8 text with CRLF terminators
+— emscripten's housekeeping output that had reused the memory slot in the
+meantime. Symptom only surfaced in extension/offscreen mode because of
+allocator timing.
+
+**The rule**: snapshot inside the callback with `new Uint8Array(data)` before
+the closure returns.
+
+| Site                                             | Status                                                                             |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| `shell/supplemental-commands/convert-command.ts` | Snapshots via `new Uint8Array(data)`; regression test in `convert-command.test.ts` |
+| `core/image-processor.ts`                        | Snapshots via `new Uint8Array(data)`                                               |
+| `cdp/browser-api.ts`                             | Consumes the view inside the callback to build base64 (no escape)                  |
+
+## Python Realm: VFS Sync Is Diff-Aware and Size-Capped
+
+**File**: `packages/webapp/src/kernel/realm/py-realm-shared.ts`
+
+Pre- and post-execution sync between the VFS and Pyodide's emscripten FS uses
+two bulk RPCs — `vfs.walkTree` (host → realm: paths + sizes + content) and
+`vfs.writeBatch` (realm → host: mkdirs + file writes). The naive per-file
+`readDir`/`stat`/`readFile` chatter took minutes on workspace-sized cwds; the
+bulk path collapses that to two round-trips regardless of file count.
+
+| Behavior                             | Why                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **10 MB file-size cap**              | Files above the cap are listed (Python sees the directory entry + the `size` field) but their content is not pre-loaded. `open()` raises ENOENT. Cap-exceeded files are **silently** skipped — a documented constraint, not an error worth surfacing on every invocation. Files that are within the cap but fail to read from the host DO warn so the user can debug the real failure. |
+| **Size-only diff**                   | Post-sync compares Pyodide-FS size against the pre-execution snapshot; same-size content changes can slip through. The trade-off is intentional; if it ever flips to hash-based diffing, the test pinning this should be updated, not deleted.                                                                                                                                         |
+| **Binary content via Uint8Array**    | `walkTree`/`writeBatch` carry content as `Uint8Array`, not `string`, so PNG / PDF / wheel / sqlite files in cwd round-trip byte-for-byte. The previous string-based path silently corrupted any non-UTF-8 byte via `TextDecoder()` on the way out.                                                                                                                                     |
+| **Per-entry write failures surface** | `writeBatch` returns `{ failedFiles, failedMkdirs }`; the realm pushes each into stderr so a Python script's `open('x','w').write(...)` failure can't disappear into the void.                                                                                                                                                                                                         |
+
+When extending the sync (attribute mirroring, hash-based diffing, etc.), keep
+the two-RPC shape — adding round-trips inside the loop reintroduces the
+minutes-long stall — and keep `content: Uint8Array` so binary outputs don't
+regress to the TextDecoder corruption path.
+
+## Runtime Detection: Workers Have No `window` Either
+
+**The Problem**
+
+`typeof window === 'undefined'` looks like a Node-vs-browser check but is actually a
+"no DOM" check — and a DedicatedWorker has no `window` either. The CLI standalone
+kernel runs in a DedicatedWorker (`packages/webapp/src/kernel/kernel-worker.ts`),
+the realm runners run in DedicatedWorkers in both floats, and the offscreen
+document does have a `window`. So `typeof window === 'undefined'` does NOT
+distinguish "Node" from "browser worker."
+
+The historical pattern in three resolvers — Pyodide indexURL, ImageMagick
+`magick.wasm`, `sql.js` — used this check to switch between local `node_modules`
+and the CDN. In CLI standalone, the agent shell runs in the kernel-worker (no
+`window`), so the check resolved to `/node_modules/<pkg>/`, which Vite's dev
+server doesn't serve — it returns the SPA fallback (`<!DOCTYPE …>`), and the
+worker then tries to load the HTML as a WASM/JS module with the obvious error:
+
+```
+WebAssembly.instantiate(): expected magic word 00 61 73 6d, found 3c 21 44 4f
+Failed to fetch dynamically imported module: …/pyodide.asm.js (MIME text/html)
+```
+
+**The Fix**
+
+Use the helpers in `packages/webapp/src/shell/supplemental-commands/shared.ts`:
+
+| Helper                 | True when…                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| `isNodeRuntime()`      | `typeof process !== 'undefined' && process.versions?.node` — vitest, node-server tooling      |
+| `isExtensionRuntime()` | `typeof chrome !== 'undefined' && chrome?.runtime?.id` — extension origin (incl. its workers) |
+
+Branch order must be **extension → node → browser CDN**: extension wins because
+extension workers also have `process`-less, `window`-less contexts where the CDN
+branch would be wrong (extension CSP blocks CDN), and Node wins over the
+browser-CDN fallback because vitest must not hit jsdelivr for unit tests.
+
+See `resolvePyodideIndexURL()` in `kernel/realm/realm-factory.ts` and
+`getMagick()` / `getSqlJs()` for the canonical pattern.
+
 ## Node Command: Three-Branch Path
 
 **File**: `packages/webapp/src/shell/supplemental-commands/node-command.ts`
@@ -123,6 +210,40 @@ File: `packages/chrome-extension/vite.config.ts` `closeBundle` hook must:
 | **CLI**       | Default                                                  | Uses constructor directly, accesses VirtualFS via `ctx.fs` bridge                           |
 
 The extension branch (lines 145–228) rebuilds the node shimmed environment inside the sandbox iframe because the sandbox has no access to the shell context.
+
+## JS Realm require(): Native-Package Guard + Pre-Fetch Timeout
+
+`require()` resolution in JS realms goes through two guard rails before
+the actual CDN fetch — without them, a stray `require('sharp')` parked the
+realm for minutes on a transitive `.node` loader fetch that never settled.
+
+1. **`NODE_NATIVE_PACKAGES` hard-fail set** — packages that ship C++
+   bindings via node-gyp/prebuild (sharp, canvas, sqlite3, better-sqlite3,
+   bcrypt, fsevents, robotjs, puppeteer, sass-embedded, tree-sitter, …).
+   The shim throws at pre-fetch time with a clear error and a hint
+   pointing the caller at a WASM-backed shell command — `convert` for
+   images, `sqlite3` for SQL, `crypto.subtle` for hashing.
+
+2. **`LOAD_MODULE_TIMEOUT_MS` (15 s)** — caps every actual `loadModule(id)`
+   so a CDN stub that stalls on a transitive import can't park
+   `Promise.allSettled` indefinitely. The rejection includes the
+   specifier and elapsed seconds so the agent knows what to drop.
+
+**One canonical source + two hand-mirrors must stay in lockstep.** Adding
+a package to the native set means updating all three. Worker JS realm
+(`js-realm-shared.ts`) imports the canonical module, so it doesn't need
+hand-syncing.
+
+| Site                                                 | Notes                                                                                                                                          |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/webapp/src/kernel/realm/require-guards.ts` | **Canonical** TS module; helpers + sets unit-tested in `require-guards.test.ts`. Worker JS realm imports from here, no drift surface.          |
+| `packages/chrome-extension/sandbox.html`             | Hand-mirror — extension iframe realm bundled outside the TS module graph. Pinned in `node-command-loadmodule.test.ts` + the parity test below. |
+| `packages/webapp/src/shell/bsh-watchdog.ts`          | Hand-mirror — `.bsh` runtime injected into target page via CDP `Runtime.evaluate`. Pinned in `bsh-watchdog.test.ts`.                           |
+
+The mirror-parity test in `bsh-watchdog.test.ts` walks every entry from
+the canonical `NODE_NATIVE_PACKAGES` and asserts both hand-mirrors carry
+it. A package added to the canonical set without mirroring fails CI
+rather than silently re-enabling the 5-minute realm hang.
 
 ## RestrictedFS Path Behavior
 
@@ -244,6 +365,45 @@ Host the real leader tray `WebSocket` in `packages/chrome-extension/src/service-
 | **Extension** | `createProxiedFetch()` → `fetch-proxy.fetch` SW Port | Routes through service worker Port handler with secret unmask/scrub; uses `host_permissions` |
 
 **Git CORS**: Same rules apply to isomorphic-git HTTP requests (clone, push, pull). Both modes now route through `createProxiedFetch()`.
+
+## Kernel-Worker Fetch Bypass: Same-Origin Only
+
+`packages/webapp/src/kernel/kernel-worker.ts` wraps `globalThis.fetch` to
+stamp `x-bypass-llm-proxy: 1` so the page-installed LLM-proxy SW doesn't
+re-route worker-issued requests. The wrapper is **scoped to same-origin
+requests only** — helper extracted to
+`packages/webapp/src/kernel/kernel-worker-fetch-bypass.ts` and unit-tested
+in `kernel-worker-fetch-bypass.test.ts`.
+
+Why the same-origin gate? Custom headers on cross-origin requests force a
+CORS preflight, and strict CDNs (jsdelivr, sql.js.org, …) reject the
+preflight because their `Access-Control-Allow-Headers` list doesn't include
+`x-bypass-llm-proxy`. Pyodide and ImageMagick used to noisily fall back to
+non-streaming WASM instantiation every load until the wrapper was scoped.
+
+Cross-origin worker fetches are intentionally left bare so the SW can route
+them through `/api/fetch-proxy` (one server hop). For one-shot wasm/asset
+payloads the round-trip cost is acceptable. `proxiedFetch` already targets
+same-origin `/api/fetch-proxy` directly, so LLM API streaming is unaffected.
+
+## SW respondWith: Wrap Proxy Responses to Preserve the Request URL
+
+`llm-proxy-sw.ts`'s `forwardThroughProxy()` cannot return the
+`fetch('/api/fetch-proxy')` Response directly. When the consumer of the
+intercepted request is an ESM module loader, the browser uses
+`response.url` as the base URL for resolving relative sub-imports. If the
+SW responds with the proxy fetch verbatim, `response.url` is
+`http://localhost:5710/api/fetch-proxy`, and a response body that contains
+`import './x.mjs'` lands at `http://localhost:5710/x.mjs` — Vite's SPA
+fallback then returns `text/html` and the import fails with "Failed to
+load module script".
+
+Wrap in a synthetic `new Response(body, { status, statusText, headers })`.
+The SW contract resolves `response.url` to the **original request URL**
+for synthetic responses, so relative imports point back at the cross-origin
+host (where they're re-intercepted and proxied again). Body stays a
+streamed `ReadableStream` so SSE token-by-token UX for LLM completions is
+unchanged.
 
 ## Response Status Code Constraints
 

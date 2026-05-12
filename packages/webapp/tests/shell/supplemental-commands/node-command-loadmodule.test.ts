@@ -45,4 +45,24 @@ describe('extension-mode JS realm __loadModule (sandbox.html)', () => {
   it('falls back to globalThis for libraries that set self[id]', () => {
     expect(sandboxSrc).toContain('self[id]');
   });
+
+  it('hard-fails Node-native packages before attempting the CDN fetch', () => {
+    // Without this, `require('sharp')` parked the realm for minutes
+    // on a transitive `.node` loader fetch instead of erroring.
+    expect(sandboxSrc).toContain('NODE_NATIVE_PACKAGES');
+    expect(sandboxSrc).toMatch(/'sharp'/);
+    expect(sandboxSrc).toContain('is a Node native module');
+  });
+
+  it('caps require pre-fetch with a hard timeout', () => {
+    // Bound to 15s so a stuck transitive import can't hang
+    // `Promise.allSettled` indefinitely.
+    expect(sandboxSrc).toContain('LOAD_MODULE_TIMEOUT_MS');
+    expect(sandboxSrc).toMatch(/Timed out after/);
+  });
+
+  it('points sharp / sqlite3 callers at the WASM-backed shell commands', () => {
+    expect(sandboxSrc).toContain("Use the built-in 'convert' shell command");
+    expect(sandboxSrc).toContain("Use the built-in 'sqlite3' shell command");
+  });
 });

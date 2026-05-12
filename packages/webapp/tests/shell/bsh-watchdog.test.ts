@@ -608,3 +608,90 @@ describe('BshWatchdog', () => {
     watchdog.stop();
   });
 });
+
+describe('BshWatchdog mirror of require-guards', () => {
+  // The wrapped-script template inside bsh-watchdog.ts hand-mirrors
+  // NODE_NATIVE_PACKAGES, NATIVE_PACKAGE_HINTS, and the withTimeout
+  // helper from `require-guards.ts`. The template lives in a string
+  // literal that runs in the target page via CDP, so it can't import
+  // the canonical TS module. These tests assert the mirror stays in
+  // lockstep with the source-of-truth — a drop or rename in either
+  // location would re-enable the original `require('sharp')` realm
+  // hang for `.bsh` scripts without anything else complaining.
+  let watchdogSource: string;
+
+  beforeEach(async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    watchdogSource = readFileSync(
+      resolve(__dirname, '..', '..', 'src', 'shell', 'bsh-watchdog.ts'),
+      'utf-8'
+    );
+  });
+
+  it('hand-mirrors the native-package set', () => {
+    expect(watchdogSource).toContain('__NODE_NATIVE_PACKAGES');
+    expect(watchdogSource).toMatch(/'sharp'/);
+    expect(watchdogSource).toMatch(/'sqlite3'/);
+    expect(watchdogSource).toMatch(/'bcrypt'/);
+  });
+
+  it('includes the same hint text as the canonical module so the agent gets the same UX', () => {
+    expect(watchdogSource).toContain("Use the built-in 'convert' shell command");
+    expect(watchdogSource).toContain('is a Node native module');
+  });
+
+  it('caps require pre-fetch with a hard timeout', () => {
+    expect(watchdogSource).toContain('__withTimeout');
+    expect(watchdogSource).toMatch(/Timed out after/);
+    expect(watchdogSource).toContain('15000');
+  });
+
+  it('surfaces pre-fetch failures via console.warn (not silent catch)', () => {
+    // The original implementation had `catch(e) { /* will throw at
+    // require() call time */ }` which swallowed the timeout reason.
+    // Sandbox.html does the right thing; the watchdog now matches.
+    expect(watchdogSource).toContain('failed to pre-load');
+    expect(watchdogSource).toContain('[bsh]');
+    // The bare-catch anti-pattern should be gone:
+    expect(watchdogSource).not.toMatch(/catch\(e\)\s*\{\s*\/\*\s*will throw at require/);
+  });
+});
+
+describe('NODE_NATIVE_PACKAGES mirror parity (canonical → sandbox.html, bsh-watchdog.ts)', () => {
+  // The pitfalls doc says three carriers must stay in lockstep:
+  // require-guards.ts (canonical), sandbox.html, bsh-watchdog.ts.
+  // Verify each canonical entry appears in both mirrors. Adding to
+  // require-guards.ts without mirroring will now fail this test
+  // instead of silently producing a 5-min hang at runtime.
+  it('every entry in require-guards.NODE_NATIVE_PACKAGES is present in both mirrors', async () => {
+    const { readFileSync } = await import('fs');
+    const { resolve, dirname } = await import('path');
+    const { fileURLToPath } = await import('url');
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(__dirname, '..', '..', '..', '..');
+    const { NODE_NATIVE_PACKAGES } = await import('../../src/kernel/realm/require-guards.js');
+    const sandboxSrc = readFileSync(
+      resolve(repoRoot, 'packages/chrome-extension/sandbox.html'),
+      'utf-8'
+    );
+    const watchdogSrc = readFileSync(
+      resolve(repoRoot, 'packages/webapp/src/shell/bsh-watchdog.ts'),
+      'utf-8'
+    );
+
+    const missingFromSandbox: string[] = [];
+    const missingFromWatchdog: string[] = [];
+    for (const pkg of NODE_NATIVE_PACKAGES) {
+      // Look for `'pkg'` or `"pkg"` so an unrelated occurrence
+      // (a comment fragment, say) doesn't satisfy the pin.
+      const needle = new RegExp(`['"]${pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]`);
+      if (!needle.test(sandboxSrc)) missingFromSandbox.push(pkg);
+      if (!needle.test(watchdogSrc)) missingFromWatchdog.push(pkg);
+    }
+    expect(missingFromSandbox, 'sandbox.html drifted from require-guards.ts').toEqual([]);
+    expect(missingFromWatchdog, 'bsh-watchdog.ts drifted from require-guards.ts').toEqual([]);
+  });
+});

@@ -19,6 +19,12 @@
 
 import { RealmRpcClient, type RealmPortLike } from './realm-rpc.js';
 import type { RealmDoneMsg, RealmInitMsg, SerializedFetchResponse } from './realm-types.js';
+import {
+  LOAD_MODULE_TIMEOUT_MS,
+  NODE_NATIVE_PACKAGES,
+  nativePackageError,
+  withTimeout,
+} from './require-guards.js';
 
 const NODE_BUILTINS_UNAVAILABLE = new Set([
   'http',
@@ -177,15 +183,28 @@ export async function runJsRealm(
   // Failures are surfaced via stderr but don't abort the run; the
   // require shim throws a descriptive error if user code tries to
   // consume a missing specifier.
+  //
+  // Two guard rails before the actual `loadModule` call:
+  //  - Hard-fail Node-native packages (sharp, sqlite3, …): their
+  //    CDN entries chain into `.node` loader fetches that hang
+  //    instead of erroring, so a bare `require('sharp')` could
+  //    park the realm for the full 15s timeout per specifier.
+  //  - Wrap every load in `withTimeout` so a stuck transitive
+  //    import can't park the realm indefinitely.
   const specifiers = extractRequireSpecifiers(init.code);
   const filteredSpecifiers = specifiers
     .map((s) => (s.startsWith('node:') ? s.slice(5) : s))
     .filter((s) => !BUILTINS_LOCAL.has(s) && !NODE_BUILTINS_UNAVAILABLE.has(s));
+  const nativeSpecifiers = filteredSpecifiers.filter((s) => NODE_NATIVE_PACKAGES.has(s));
+  const loadableSpecifiers = filteredSpecifiers.filter((s) => !NODE_NATIVE_PACKAGES.has(s));
+  for (const id of nativeSpecifiers) {
+    writeStderr(`Warning: ${nativePackageError(id, id).message}\n`);
+  }
   const requireCache: Record<string, unknown> = Object.create(null);
-  if (filteredSpecifiers.length > 0) {
+  if (loadableSpecifiers.length > 0) {
     const results = await Promise.allSettled(
-      filteredSpecifiers.map(async (id) => {
-        const mod = await loadModule(id);
+      loadableSpecifiers.map(async (id) => {
+        const mod = await withTimeout(loadModule(id), LOAD_MODULE_TIMEOUT_MS, `require('${id}')`);
         const val = mod && 'default' in mod ? mod.default : mod;
         requireCache[id] = val;
       })
@@ -194,7 +213,7 @@ export async function runJsRealm(
       const r = results[i];
       if (r.status === 'rejected') {
         const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
-        writeStderr(`Warning: failed to pre-load require('${filteredSpecifiers[i]}'): ${reason}\n`);
+        writeStderr(`Warning: failed to pre-load require('${loadableSpecifiers[i]}'): ${reason}\n`);
       }
     }
   }
@@ -210,6 +229,9 @@ export async function runJsRealm(
       throw new Error(
         `require('${id}'): path module not pre-loaded. Add require('path') as a static import.`
       );
+    }
+    if (NODE_NATIVE_PACKAGES.has(bareId)) {
+      throw nativePackageError(id, bareId);
     }
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
       const hints: Record<string, string> = {

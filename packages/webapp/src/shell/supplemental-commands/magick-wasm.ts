@@ -3,9 +3,15 @@
  *
  * Extracted from convert-command.ts so both `convert` and `image-processor`
  * can reuse the same cached WASM instance. Handles dual-mode loading:
- * - CLI/browser: CDN or local node_modules
  * - Extension: bundled magick.wasm via chrome.runtime.getURL
+ * - Node (vitest): local node_modules
+ * - Browser (CLI, incl. DedicatedWorker): CDN
+ *
+ * Detect Node via `process.versions.node` — `typeof window === 'undefined'`
+ * also matches DedicatedWorkers, which still need the CDN path.
  */
+
+import { isNodeRuntime } from './shared.js';
 
 export interface ImageMagickModule {
   initializeImageMagick: (wasmLocation: URL | Uint8Array) => Promise<void>;
@@ -74,13 +80,12 @@ export async function getMagick(): Promise<ImageMagickModule> {
           const wasmBytes = new Uint8Array(await resp.arrayBuffer());
           await magickModule.initializeImageMagick(wasmBytes);
         } else {
-          const wasmBase =
-            typeof window === 'undefined'
-              ? new URL(
-                  '../../../../../node_modules/@imagemagick/magick-wasm/dist/',
-                  import.meta.url
-                ).toString()
-              : MAGICK_WASM_CDN;
+          const wasmBase = isNodeRuntime()
+            ? new URL(
+                '../../../../../node_modules/@imagemagick/magick-wasm/dist/',
+                import.meta.url
+              ).toString()
+            : MAGICK_WASM_CDN;
           const wasmUrl = new URL('magick.wasm', wasmBase);
           await magickModule.initializeImageMagick(wasmUrl);
         }

@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createConvertCommand } from '../../../src/shell/supplemental-commands/convert-command.js';
 import type { IFileSystem } from 'just-bash';
+import * as magickWasm from '../../../src/shell/supplemental-commands/magick-wasm.js';
 
 function createMockCtx(overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string }> = {}) {
   const fs: Partial<IFileSystem> = {
@@ -192,5 +193,141 @@ describe('convert argument parsing (valid args, file-not-found)', () => {
     const cmd = createConvertCommand();
     await cmd.execute(['photo.png', 'out.png'], createMockCtx({ fs: { readFileBuffer } }));
     expect(readFileBuffer).toHaveBeenCalledWith('/home/photo.png');
+  });
+});
+
+describe('convert output snapshot (regression: WASM heap clobber)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('copies the image.write callback data so post-callback heap reuse cannot mangle the output', async () => {
+    // magick-wasm hands us a Uint8Array view INTO its linear memory.
+    // After the callback returns, the runtime is free to reuse those
+    // bytes for other allocations. If convert holds the raw view
+    // across `await ctx.fs.writeFile(...)`, the bytes the FS layer
+    // reads can be whatever junk emscripten wrote next — in the
+    // wild that's null-terminated format names and similar ASCII
+    // text, which made the on-disk file land as "UTF-8 text with
+    // CRLF terminators" garbage. Pin that we snapshot synchronously.
+    const heap = new Uint8Array(64);
+    for (let i = 0; i < 8; i++) heap[i] = i + 1; // 1..8 — distinctive
+    const view = new Uint8Array(heap.buffer, 0, 8);
+
+    const writtenContent: unknown[] = [];
+    const cmd = createConvertCommand();
+    const ctx = createMockCtx({
+      fs: {
+        readFileBuffer: vi.fn().mockResolvedValue(new Uint8Array([0xff, 0xd8, 0xff])),
+        writeFile: vi.fn(async (_path: string, content: unknown) => {
+          writtenContent.push(content);
+        }),
+      },
+    });
+
+    const mockImage = {
+      width: 10,
+      height: 10,
+      quality: 0,
+      resize: vi.fn(),
+      rotate: vi.fn(),
+      crop: vi.fn(),
+      write: vi.fn((_format: string, cb: (data: Uint8Array) => void) => {
+        cb(view);
+        // Simulate emscripten reusing the heap region after the
+        // callback returns — overwrite with text-looking bytes.
+        for (let i = 0; i < 8; i++) heap[i] = '\n'.charCodeAt(0);
+      }),
+    };
+
+    vi.spyOn(magickWasm, 'getMagick').mockResolvedValue({
+      ImageMagick: {
+        read: vi.fn(async (_bytes: Uint8Array, fn: (image: unknown) => Promise<void>) => {
+          await fn(mockImage);
+        }),
+      },
+      MagickFormat: { JPEG: 'JPEG', PNG: 'PNG' } as Record<string, string>,
+      MagickGeometry: class {
+        ignoreAspectRatio = false;
+        constructor() {}
+      },
+      Percentage: class {
+        constructor(_n: number) {}
+        toDouble() {
+          return 0;
+        }
+      },
+      initializeImageMagick: vi.fn(),
+    } as unknown as Awaited<ReturnType<typeof magickWasm.getMagick>>);
+
+    const result = await cmd.execute(['/tmp/in.png', '/tmp/out.png'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(writtenContent.length).toBe(1);
+
+    const persisted = writtenContent[0];
+    expect(persisted).toBeInstanceOf(Uint8Array);
+    const persistedBytes = persisted as Uint8Array;
+    // Pre-clobber bytes — if convert had kept the raw view, this
+    // would now be all `\n`.
+    expect(Array.from(persistedBytes)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    // And the snapshot must own its own backing buffer, not the
+    // shared heap — otherwise a later post-write clobber would
+    // still propagate.
+    expect(persistedBytes.buffer).not.toBe(heap.buffer);
+  });
+
+  it('rejects a zero-byte buffer with a clear error instead of writing a 0-byte JPEG', async () => {
+    // `!new Uint8Array(0)` is `false` (Uint8Array instances are
+    // truthy regardless of length), so the byte-length check is
+    // load-bearing. Magick-wasm has been observed handing back an
+    // empty buffer on certain unsupported-format quirks; without the
+    // length guard the user gets exit 0 and a 0-byte file that
+    // looks fine until the next consumer chokes.
+    const writtenContent: unknown[] = [];
+    const cmd = createConvertCommand();
+    const ctx = createMockCtx({
+      fs: {
+        readFileBuffer: vi.fn().mockResolvedValue(new Uint8Array([0xff, 0xd8, 0xff])),
+        writeFile: vi.fn(async (_path: string, content: unknown) => {
+          writtenContent.push(content);
+        }),
+      },
+    });
+
+    const mockImage = {
+      width: 10,
+      height: 10,
+      quality: 0,
+      resize: vi.fn(),
+      rotate: vi.fn(),
+      crop: vi.fn(),
+      write: vi.fn((_format: string, cb: (data: Uint8Array) => void) => {
+        cb(new Uint8Array(0));
+      }),
+    };
+
+    vi.spyOn(magickWasm, 'getMagick').mockResolvedValue({
+      ImageMagick: {
+        read: vi.fn(async (_bytes: Uint8Array, fn: (image: unknown) => Promise<void>) => {
+          await fn(mockImage);
+        }),
+      },
+      MagickFormat: { JPEG: 'JPEG', PNG: 'PNG' } as Record<string, string>,
+      MagickGeometry: class {
+        ignoreAspectRatio = false;
+      },
+      Percentage: class {
+        constructor(_n: number) {}
+        toDouble() {
+          return 0;
+        }
+      },
+      initializeImageMagick: vi.fn(),
+    } as unknown as Awaited<ReturnType<typeof magickWasm.getMagick>>);
+
+    const result = await cmd.execute(['/tmp/in.png', '/tmp/out.png'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Failed to generate output image');
+    expect(writtenContent).toHaveLength(0);
   });
 });
