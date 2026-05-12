@@ -217,7 +217,13 @@ describe('syncVfsToPyodide (bulk walkTree)', () => {
     expect(opts.maxFileBytes).toBeLessThanOrEqual(100 * 1024 * 1024); // sanity
   });
 
-  it('skips entries with no content (over-the-cap files) so Pyodide sees the dir layout without a corrupt body', async () => {
+  it('silently skips cap-exceeded files (no warning) so incidental large files in cwd are not noise', async () => {
+    // The previous policy fired a stderr warning for every
+    // cap-exceeded file on every python invocation, even when the
+    // user's code never touched the file. A typical "12 MB
+    // screenshot sitting in cwd" lit up `print('Hello, World!')`.
+    // Cap-exceeded is a documented constraint; only genuinely
+    // unreadable files warn now.
     const enc = new TextEncoder();
     const warnings: string[] = [];
     const { rpc } = makeRpc((_inv) => [
@@ -232,9 +238,23 @@ describe('syncVfsToPyodide (bulk walkTree)', () => {
     expect(files.get('/workspace/small.txt')).toBe('OK');
     expect(snapshot.files.has('/workspace/big.bin')).toBe(false);
     expect(snapshot.files.get('/workspace/small.txt')).toBe(2);
-    // The skip surfaces as a stderr warning so the user can
-    // correlate Python's `FileNotFoundError` against the real cause.
-    expect(warnings.some((w) => w.includes('/workspace/big.bin') && w.includes('cap'))).toBe(true);
+    expect(warnings.filter((w) => w.includes('/workspace/big.bin'))).toEqual([]);
+  });
+
+  it('still warns about files that are unreadable for non-cap reasons (host I/O error etc.)', async () => {
+    // Distinguish "content omitted because too large" (silent,
+    // expected) from "content omitted because the host failed to
+    // read it" (loud, surfaces the real failure).
+    const warnings: string[] = [];
+    const { rpc } = makeRpc((_inv) => [
+      // Within the cap but no content → unreadable, not cap.
+      { path: '/workspace/broken.txt', isDir: false, size: 50 /* no content */ },
+    ]);
+    const { pyodide } = makeFakePyodide();
+    await syncVfsToPyodide(rpc, pyodide, ['/workspace'], (msg) => warnings.push(msg));
+    expect(
+      warnings.some((w) => w.includes('/workspace/broken.txt') && w.includes('unreadable'))
+    ).toBe(true);
   });
 
   it('tolerates an RPC rejection on one dir, surfaces it via warning, and still syncs the others', async () => {

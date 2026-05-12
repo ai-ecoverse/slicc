@@ -295,12 +295,18 @@ export async function syncVfsToPyodide(
           // WALK_TREE_MAX_FILE_BYTES cap or unreadable by the host.
           // Don't write a stub: an empty file at the same path
           // would mask the failure. Let the listing show through
-          // (via `readdir`) but surface why `open()` will ENOENT.
-          const reason =
-            entry.size > WALK_TREE_MAX_FILE_BYTES
-              ? `exceeds ${WALK_TREE_MAX_FILE_BYTES}-byte cap (${entry.size} bytes) — read via the shell instead`
-              : `unreadable from VFS`;
-          pushWarning(`VFS→Pyodide skipped '${entry.path}': ${reason}`);
+          // (via `readdir`) but `open()` will surface ENOENT.
+          //
+          // Warning policy: cap-exceeded files are a documented
+          // constraint, not an error — surfacing one on every
+          // `python3 -c "..."` invocation just because the user
+          // happens to have a large screenshot in cwd is noise the
+          // agent reacts to as a fault to fix. Silently skip. By
+          // contrast, an unreadable file IS an error worth
+          // flagging — those still warn.
+          if (entry.size <= WALK_TREE_MAX_FILE_BYTES) {
+            pushWarning(`VFS→Pyodide skipped '${entry.path}': unreadable from VFS`);
+          }
           continue;
         }
         // Parent dir guaranteed by the walk order (directories are
