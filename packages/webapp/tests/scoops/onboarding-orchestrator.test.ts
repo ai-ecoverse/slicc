@@ -419,4 +419,160 @@ describe('OnboardingOrchestrator', () => {
       expect(reject.ok).toBe(false);
     });
   });
+
+  describe('handleOAuthAttempt', () => {
+    it('sets the model and fires the final lick on successful OAuth with a model', async () => {
+      const fs = new VirtualFS('oauth-ok-' + Math.random());
+      const selectedModels: string[] = [];
+      const finalLicks: FinalLickPayload[] = [];
+      const dipInbox: DipMessage[] = [];
+      const launchOAuth = vi.fn(async () => ({ ok: true, model: 'adobe:claude-sonnet-4-6' }));
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => baseCatalogue,
+        saveAccount: () => {},
+        setSelectedModel: (id) => selectedModels.push(id),
+        resolveModelLabel: (_p, m) => m.toUpperCase(),
+        broadcastToDip: (msg) => dipInbox.push(msg),
+        fireFinalLick: (data) => finalLicks.push(data),
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+        launchOAuth,
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleOAuthAttempt({ provider: 'adobe' });
+      expect(launchOAuth).toHaveBeenCalledWith('adobe', null);
+      expect(selectedModels).toEqual(['adobe:claude-sonnet-4-6']);
+      expect(finalLicks).toHaveLength(1);
+      expect(finalLicks[0].action).toBe('onboarding-complete-with-provider');
+      expect(finalLicks[0].data.provider).toBe('adobe');
+      expect(finalLicks[0].data.model).toBe('adobe:claude-sonnet-4-6');
+      expect(finalLicks[0].data.validation).toBe('oauth');
+      expect(orch.getStage()).toBe('complete');
+    });
+
+    it('fires the final lick but does not call setSelectedModel when OAuth returns no model', async () => {
+      const fs = new VirtualFS('oauth-nomodel-' + Math.random());
+      const selectedModels: string[] = [];
+      const finalLicks: FinalLickPayload[] = [];
+      const dipInbox: DipMessage[] = [];
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => baseCatalogue,
+        saveAccount: () => {},
+        setSelectedModel: (id) => selectedModels.push(id),
+        broadcastToDip: (msg) => dipInbox.push(msg),
+        fireFinalLick: (data) => finalLicks.push(data),
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+        launchOAuth: async () => ({ ok: true, model: null }),
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleOAuthAttempt({ provider: 'adobe' });
+      expect(selectedModels).toEqual([]);
+      expect(finalLicks).toHaveLength(1);
+      expect(finalLicks[0].data.model).toBeNull();
+      const okMsg = dipInbox.find((m) => m.type === 'slicc-connect-result' && m.ok);
+      expect(okMsg).toBeTruthy();
+    });
+
+    it('broadcasts an error and keeps stage at awaiting-connect when OAuth fails', async () => {
+      const fs = new VirtualFS('oauth-fail-' + Math.random());
+      const finalLicks: FinalLickPayload[] = [];
+      const dipInbox: DipMessage[] = [];
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => baseCatalogue,
+        saveAccount: () => {},
+        setSelectedModel: () => {},
+        broadcastToDip: (msg) => dipInbox.push(msg),
+        fireFinalLick: (data) => finalLicks.push(data),
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+        launchOAuth: async () => ({ ok: false, message: 'Login cancelled.' }),
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleOAuthAttempt({ provider: 'adobe' });
+      expect(finalLicks).toEqual([]);
+      const reject = dipInbox.find((m) => m.type === 'slicc-connect-result');
+      expect(reject.ok).toBe(false);
+      expect(reject.kind).toBe('failed');
+      expect(orch.getStage()).toBe('awaiting-connect');
+    });
+
+    it('broadcasts an error and keeps stage at awaiting-connect when launchOAuth throws', async () => {
+      const fs = new VirtualFS('oauth-throw-' + Math.random());
+      const finalLicks: FinalLickPayload[] = [];
+      const dipInbox: DipMessage[] = [];
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => baseCatalogue,
+        saveAccount: () => {},
+        setSelectedModel: () => {},
+        broadcastToDip: (msg) => dipInbox.push(msg),
+        fireFinalLick: (data) => finalLicks.push(data),
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+        launchOAuth: async () => {
+          throw new Error('popup closed');
+        },
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleOAuthAttempt({ provider: 'adobe' });
+      expect(finalLicks).toEqual([]);
+      const reject = dipInbox.find((m) => m.type === 'slicc-connect-result');
+      expect(reject.ok).toBe(false);
+      expect(reject.message).toContain('popup closed');
+      expect(orch.getStage()).toBe('awaiting-connect');
+    });
+
+    it('is a no-op when launchOAuth is not provided by the runtime', async () => {
+      const fs = new VirtualFS('oauth-noop-' + Math.random());
+      const finalLicks: FinalLickPayload[] = [];
+      const dipInbox: DipMessage[] = [];
+      const orch = new OnboardingOrchestrator({
+        fs,
+        postSystemMessage: () => {},
+        postDipReference: () => {},
+        getProviderCatalogue: () => baseCatalogue,
+        saveAccount: () => {},
+        setSelectedModel: () => {},
+        broadcastToDip: (msg) => dipInbox.push(msg),
+        fireFinalLick: (data) => finalLicks.push(data),
+        fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
+        rand: () => 0,
+        // launchOAuth intentionally omitted
+      });
+      await orch.handleOnboardingComplete({});
+      await orch.handleOAuthAttempt({ provider: 'adobe' });
+      expect(finalLicks).toEqual([]);
+      const reject = dipInbox.find((m) => m.type === 'slicc-connect-result');
+      expect(reject.ok).toBe(false);
+      expect(reject.message).toContain('not available');
+    });
+
+    it('ignores OAuth attempt when stage is already complete', async () => {
+      const h = makeHarness();
+      await h.orchestrator.handleOnboardingComplete({});
+      await h.orchestrator.handleConnectAttempt({
+        provider: 'openai',
+        apiKey: 'sk-good',
+        model: 'gpt-4o',
+      });
+      expect(h.orchestrator.getStage()).toBe('complete');
+      h.finalLicks.length = 0;
+      h.dipInbox.length = 0;
+      await h.orchestrator.handleOAuthAttempt({ provider: 'adobe' });
+      expect(h.finalLicks).toEqual([]);
+      expect(h.dipInbox).toEqual([]);
+    });
+  });
 });
