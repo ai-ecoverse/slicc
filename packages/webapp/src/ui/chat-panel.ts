@@ -974,6 +974,22 @@ export class ChatPanel {
       this.updateSendButtonState();
     });
 
+    this.textarea.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const imageFiles: File[] = [];
+      for (const item of items) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) imageFiles.push(file);
+        }
+      }
+      if (imageFiles.length > 0) {
+        e.preventDefault();
+        void this.addAttachmentsFromFiles(imageFiles);
+      }
+    });
+
     this.sendBtn.addEventListener('click', () => this.sendMessage());
     this.attachBtn.addEventListener('click', () => this.fileInput.click());
     this.fileInput.addEventListener('change', () => {
