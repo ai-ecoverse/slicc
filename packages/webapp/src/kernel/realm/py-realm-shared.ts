@@ -234,8 +234,45 @@ export async function syncVfsToPyodide(
     snapshot.dirs.add(path);
   }
 
+  /**
+   * Recursively record every dir/file Pyodide already has under
+   * `pyPath` into the snapshot. emscripten boots with a few
+   * built-ins inside `/proc` and `/dev` (notably `/proc/self/fd`
+   * for file-descriptor tracking) that the VFS procfs mount
+   * doesn't expose via `walkTree`. Without this seeding the
+   * post-sync diff would flag those as "new" and emit `mkdir`
+   * back to the read-only mount.
+   */
+  function recordExisting(pyPath: string): void {
+    let st: { mode: number; size: number };
+    try {
+      st = FS.stat(pyPath) as { mode: number; size: number };
+    } catch {
+      return;
+    }
+    if (FS.isDir(st.mode)) {
+      snapshot.dirs.add(pyPath);
+      let names: string[];
+      try {
+        names = (FS.readdir(pyPath) as string[]).filter((n) => n !== '.' && n !== '..');
+      } catch {
+        return;
+      }
+      for (const name of names) {
+        const full = pyPath === '/' ? `/${name}` : `${pyPath}/${name}`;
+        recordExisting(full);
+      }
+    } else if (FS.isFile(st.mode)) {
+      // Size-keyed so a same-size overwrite by the agent's
+      // Python still won't re-emit it. New files written by
+      // user code aren't in the snapshot, so they DO surface.
+      snapshot.files.set(pyPath, st.size);
+    }
+  }
+
   for (const dir of dirs) {
     ensurePyDir(dir);
+    recordExisting(dir);
     let entries: WalkTreeEntry[];
     try {
       entries = await rpc.call<WalkTreeEntry[]>('vfs', 'walkTree', [

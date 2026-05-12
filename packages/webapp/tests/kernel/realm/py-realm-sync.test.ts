@@ -254,6 +254,41 @@ describe('syncVfsToPyodide (bulk walkTree)', () => {
     expect(snapshot.files.get('/tmp/x')).toBe(1);
     expect(warnings.some((w) => w.includes('/missing') && w.includes('ENOENT'))).toBe(true);
   });
+
+  it("seeds the snapshot with Pyodide's pre-existing dirs (emscripten built-ins like /proc/self/fd)", async () => {
+    // Pyodide's emscripten FS creates /proc/self/fd at boot for
+    // file-descriptor tracking. The VFS procfs mount doesn't emit
+    // `self`, so `walkTree` never sees it. Without seeding from
+    // Pyodide's own FS, post-sync flagged `/proc/self` as new and
+    // tried to mkdir back into the read-only mount on every python
+    // invocation — visible in the wild as
+    // `Warning: Pyodide→VFS mkdir '/proc/self' failed: EACCES`.
+    const { rpc } = makeRpc((inv) => {
+      if (inv.op === 'walkTree') return [];
+    });
+    const { pyodide } = makeFakePyodide();
+    // Pre-existing Pyodide built-ins under /proc that VFS doesn't
+    // know about.
+    pyodide.FS.mkdirTree('/proc/self/fd');
+    const snapshot = await syncVfsToPyodide(rpc, pyodide, ['/proc']);
+    expect(snapshot.dirs.has('/proc/self')).toBe(true);
+    expect(snapshot.dirs.has('/proc/self/fd')).toBe(true);
+  });
+
+  it("records pre-existing Pyodide files (e.g. /lib/python3.12.zip) so post-sync doesn't mirror them back into VFS", async () => {
+    // If syncDirs included `/lib`, the post-sync walk would find
+    // Pyodide's bundled stdlib zip and — without seeding — emit it
+    // as a "new" file in writeBatch, polluting VFS with a 9MB
+    // payload it didn't ask for.
+    const { rpc } = makeRpc((inv) => {
+      if (inv.op === 'walkTree') return [];
+    });
+    const { pyodide } = makeFakePyodide();
+    pyodide.FS.mkdirTree('/lib');
+    pyodide.FS.writeFile('/lib/stdlib.zip', new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0xff]));
+    const snapshot = await syncVfsToPyodide(rpc, pyodide, ['/lib']);
+    expect(snapshot.files.get('/lib/stdlib.zip')).toBe(5);
+  });
 });
 
 describe('syncPyodideToVfs (diff-only writeBatch)', () => {
