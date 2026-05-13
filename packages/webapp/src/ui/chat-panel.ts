@@ -2174,8 +2174,13 @@ export class ChatPanel {
         .forEach((el) => el.classList.add('tool-call--stale'));
     }
     const el = this.createMessageEl(msg, showLabel, isLastAssistant);
-    this.messagesInner.appendChild(el);
-    this.reflowToolClusters();
+    // Don't inject an empty wrapper into the flex container — the gap: 16px
+    // between msg-groups would create a visible blank line. updateMessageEl
+    // will append it once the message has actual content or tool calls.
+    if (el.childElementCount > 0) {
+      this.messagesInner.appendChild(el);
+      this.reflowToolClusters();
+    }
     this.scrollToBottom();
   }
 
@@ -2198,6 +2203,22 @@ export class ChatPanel {
     const msg = this.findMessage(messageId);
     if (!msg) return;
     const existing = this.messagesEl.querySelector(`.msg-group[data-msg-id="${messageId}"]`);
+    const idx = this.messages.indexOf(msg);
+    const prev = idx > 0 ? this.messages[idx - 1] : null;
+    const showLabel = this.shouldShowLabel(msg, prev?.role ?? null, prev?.timestamp ?? 0);
+    let isLastAssistant = false;
+    if (msg.role === 'assistant') {
+      let lastIdx = -1;
+      for (let i = this.messages.length - 1; i >= 0; i--) {
+        if (this.messages[i].role === 'assistant') {
+          lastIdx = i;
+          break;
+        }
+      }
+      isLastAssistant = idx === lastIdx;
+    }
+    const stale = this.findLastRealUserIdx() > idx;
+    const newEl = this.createMessageEl(msg, showLabel, isLastAssistant, stale);
     if (existing) {
       this.disposeDipsForMessage(messageId);
       // Tool calls for sibling messages in this chain may be inside a
@@ -2207,25 +2228,20 @@ export class ChatPanel {
       // the stale clustered ones would coexist briefly until the next
       // reflow re-collected them.
       this.unwrapToolClusters();
-      // Determine showLabel based on previous message in the list
-      const idx = this.messages.indexOf(msg);
-      const prev = idx > 0 ? this.messages[idx - 1] : null;
-      const showLabel = this.shouldShowLabel(msg, prev?.role ?? null, prev?.timestamp ?? 0);
-      // Only show feedback on the last assistant message
-      let isLastAssistant = false;
-      if (msg.role === 'assistant') {
-        let lastIdx = -1;
-        for (let i = this.messages.length - 1; i >= 0; i--) {
-          if (this.messages[i].role === 'assistant') {
-            lastIdx = i;
-            break;
-          }
-        }
-        isLastAssistant = idx === lastIdx;
-      }
-      const stale = this.findLastRealUserIdx() > idx;
-      const newEl = this.createMessageEl(msg, showLabel, isLastAssistant, stale);
       existing.replaceWith(newEl);
+      this.reflowToolClusters();
+    } else if (newEl.childElementCount > 0) {
+      // Element was skipped in appendMessageEl because it was empty at the
+      // time — now that it has content, insert it at the correct position.
+      const nextMsg = this.messages[idx + 1];
+      const nextEl = nextMsg
+        ? this.messagesEl.querySelector(`.msg-group[data-msg-id="${nextMsg.id}"]`)
+        : null;
+      if (nextEl) {
+        this.messagesInner.insertBefore(newEl, nextEl);
+      } else {
+        this.messagesInner.appendChild(newEl);
+      }
       this.reflowToolClusters();
     }
     this.scrollToBottom();
