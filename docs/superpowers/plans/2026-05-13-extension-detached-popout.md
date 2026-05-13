@@ -1140,10 +1140,15 @@ async function handleDetachedClaim(sender: { tab?: { id: number }; url?: string 
   await writeStoredDetachedTabId(claimingTabId);
   await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
   await chrome.sidePanel.setOptions({ enabled: false });
-  chrome.runtime.sendMessage({
-    source: 'service-worker',
-    payload: { type: 'detached-active' },
-  });
+  // Fire-and-forget; .catch() suppresses the unhandled-rejection warning
+  // that Chrome emits when there are no listeners (e.g., no panel open).
+  // Matches the codebase pattern at service-worker.ts:171, 218, etc.
+  chrome.runtime
+    .sendMessage({
+      source: 'service-worker',
+      payload: { type: 'detached-active' },
+    })
+    .catch(() => {});
 
   // Best-effort hard close of any open side panel (Chrome 141+).
   const windows = await chrome.windows.getAll();
@@ -1967,10 +1972,15 @@ Add this block guarded by `isDetachedSelf`, placed right after the listener regi
 
 ```ts
 if (isDetachedSelf) {
-  chrome.runtime.sendMessage({
-    source: 'panel',
-    payload: { type: 'detached-claim' },
-  });
+  chrome.runtime
+    .sendMessage({
+      source: 'panel',
+      payload: { type: 'detached-claim' },
+    })
+    .catch(() => {
+      // SW not ready or no receivers — Chrome's normal cold-start condition.
+      // The claim is also re-emitted on Ctrl-R / reload via mainExtension boot.
+    });
 }
 ```
 
@@ -1982,10 +1992,14 @@ Still in `mainExtension`, before the function returns (or wherever the layout-co
 if (!isDetachedSelf) {
   layout.setShowPopoutButton(true);
   layout.setPopoutClickHandler(() => {
-    chrome.runtime.sendMessage({
-      source: 'panel',
-      payload: { type: 'detached-popout-request' },
-    });
+    chrome.runtime
+      .sendMessage({
+        source: 'panel',
+        payload: { type: 'detached-popout-request' },
+      })
+      .catch(() => {
+        // SW unreachable; the popout flow will retry on next click.
+      });
   });
 }
 ```
