@@ -2449,11 +2449,17 @@ async function main(): Promise<void> {
   const apiKey = getApiKey();
   const allowProviderlessTrayJoin = !apiKey && hasStoredTrayJoinUrl(window.localStorage);
 
-  // Build the layout — tabbed in extension mode, split panels in standalone
+  // Resolve UI runtime mode from chrome.runtime.id and URL query.
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const runtimeMode = resolveUiRuntimeMode(window.location.href, isExtension);
 
-  // Extension mode: delegate to offscreen-backed UI
+  // Detached extension tab (?detached=1): standalone-density Layout with
+  // the offscreen agent. See docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md
+  if (runtimeMode === 'extension-detached') {
+    return mainExtension(app, { detached: true });
+  }
+
+  // Side panel or non-detached index.html tab.
   if (runtimeMode === 'extension') {
     return mainExtension(app);
   }
