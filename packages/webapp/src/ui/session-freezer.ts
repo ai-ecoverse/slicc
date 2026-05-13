@@ -233,12 +233,47 @@ function toAgentMessages(messages: ChatMessage[]): AgentMessage[] {
   );
 }
 
+/** Markers for the embedded structured-data block. */
+const SESSION_DATA_START = '<!-- slicc:session-data\n';
+const SESSION_DATA_END = '\n-->';
+
 /**
- * Render the archive as markdown. Header is a small YAML-style block carrying
- * the metadata that used to live in the JSON envelope (so a future "thaw"
- * action can rehydrate timestamps without parsing the body); the body itself
- * is the same markdown the chat-panel produces for the "copy chat history"
- * long-press gesture.
+ * Strip ephemeral fields that should never survive into a frozen archive
+ * (transient pointers held only for the live render). What's left is a
+ * pure data shape suitable for JSON round-trip and re-render.
+ */
+function stripEphemeral(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) => {
+    const out: ChatMessage = {
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      timestamp: m.timestamp,
+    };
+    if (m.attachments?.length) out.attachments = m.attachments;
+    if (m.toolCalls?.length) {
+      out.toolCalls = m.toolCalls.map((tc) => ({
+        id: tc.id,
+        name: tc.name,
+        input: tc.input,
+        ...(tc.result !== undefined ? { result: tc.result } : {}),
+        ...(tc.isError ? { isError: tc.isError } : {}),
+      }));
+    }
+    if (m.source) out.source = m.source;
+    if (m.channel) out.channel = m.channel;
+    return out;
+  });
+}
+
+/**
+ * Render the archive as markdown. The frontmatter carries scalar
+ * metadata; an HTML-commented JSON block carries the full structured
+ * message list (toolCalls, attachments, source, channel, timestamps)
+ * so the read-only chat-panel view can render with the same fidelity
+ * as a live scoop. The visible markdown body below is what the chat
+ * panel's "copy chat history" long-press produces — that part stays
+ * human-readable.
  */
 function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
   const header =
@@ -249,9 +284,12 @@ function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
     `createdAt: ${archive.createdAt}\n` +
     `updatedAt: ${archive.updatedAt}\n` +
     `messageCount: ${archive.messageCount}\n` +
-    `---\n\n` +
-    `# ${archive.title}\n\n`;
-  return header + formatChatForClipboard(archive.messages);
+    `---\n\n`;
+  // Escape the only sequence that would prematurely close an HTML comment.
+  const dataJson = JSON.stringify(stripEphemeral(archive.messages)).replace(/-->/g, '-- >');
+  const dataBlock = `${SESSION_DATA_START}${dataJson}${SESSION_DATA_END}\n\n`;
+  const title = `# ${archive.title}\n\n`;
+  return header + dataBlock + title + formatChatForClipboard(archive.messages);
 }
 
 function cleanTitle(raw: string): string {
@@ -347,12 +385,17 @@ export function frozenSessionPath(entry: FrozenSessionIndexEntry): string {
 
 /**
  * Parse a frozen-session markdown archive (produced by `formatArchiveAsMarkdown`)
- * back into a structured form the chat-panel can render read-only.
+ * back into the structured shape the chat-panel renders.
  *
- * Tool calls embedded under `### Tool: ...` are folded into the owning
- * assistant message's content — read-only display doesn't need the
- * structured `toolCalls[]` form (no clusters to re-label, no re-runs).
- * Lossless rehydration is left to a future "thaw" feature.
+ * Modern archives carry a `<!-- slicc:session-data ... -->` block right
+ * after the frontmatter — that JSON contains the original `ChatMessage[]`
+ * with `toolCalls`, `attachments`, `source`, `channel`, and timestamps
+ * intact, so read-only display matches a live scoop. The visible
+ * markdown body below the data block is preserved for human readers.
+ *
+ * Archives without the data block (older runs, or imports from elsewhere)
+ * fall back to a heading-based text parser that recovers user/assistant
+ * roles only — tool calls become flat text under the assistant message.
  */
 export function parseFrozenArchive(markdown: string): {
   title: string;
@@ -369,12 +412,29 @@ export function parseFrozenArchive(markdown: string): {
     if (titleMatch) title = titleMatch[1].trim();
   }
 
-  // 2. Drop the leading `# title` heading if present.
+  // 2. Prefer the embedded structured-data block when present —
+  //    round-trip-rich rendering for tool calls, attachments, etc.
+  const dataMatch = body.match(/<!-- slicc:session-data\n([\s\S]*?)\n-->\n*/);
+  if (dataMatch) {
+    try {
+      const restored = dataMatch[1].replace(/-- >/g, '-->');
+      const parsed = JSON.parse(restored);
+      if (Array.isArray(parsed)) {
+        return { title, messages: parsed as ChatMessage[] };
+      }
+    } catch {
+      // Malformed block — fall through to text parser.
+    }
+    // Strip the block before the text parser sees it.
+    body = body.replace(/<!-- slicc:session-data\n[\s\S]*?\n-->\n*/, '');
+  }
+
+  // 3. Drop the leading `# title` heading if present.
   body = body.replace(/^#\s+[^\n]*\n+/, '');
 
-  // 3. Split on `## User` / `## Assistant` boundaries. Anything between two
-  //    headings (including nested `### Tool:` blocks) lands in the prior
-  //    message's content verbatim.
+  // 4. Heading-based fallback. Splits on `## User` / `## Assistant`
+  //    boundaries; nested `### Tool:` blocks land in the prior message's
+  //    content verbatim.
   const messages: ChatMessage[] = [];
   const headingRe = /^## (User|Assistant)\s*\n/gm;
   const heads: { role: 'user' | 'assistant'; start: number; bodyStart: number }[] = [];

@@ -347,4 +347,82 @@ describe('parseFrozenArchive', () => {
       messages: [],
     });
   });
+
+  it('prefers the embedded structured-data block over the markdown body', () => {
+    // The data block carries the truth (toolCalls, timestamps, source);
+    // the visible body below is just human-readable garnish and may be
+    // less detailed. Parser must trust the data block when present.
+    const data = JSON.stringify([
+      {
+        id: 'm1',
+        role: 'user',
+        content: 'run ls',
+        timestamp: 100,
+      },
+      {
+        id: 'm2',
+        role: 'assistant',
+        content: 'sure',
+        timestamp: 200,
+        toolCalls: [{ id: 't1', name: 'bash', input: { command: 'ls' }, result: 'file1\nfile2' }],
+      },
+    ]);
+    const md = [
+      '---',
+      'title: "tool run"',
+      '---',
+      '',
+      '<!-- slicc:session-data',
+      data,
+      '-->',
+      '',
+      '# tool run',
+      '',
+      '## User',
+      'run ls',
+      '',
+      '## Assistant',
+      'sure',
+      '',
+      '### Tool: bash',
+      'Input: { "command": "ls" }',
+      'Result: file1\nfile2',
+      '',
+    ].join('\n');
+    const { title, messages } = parseFrozenArchive(md);
+    expect(title).toBe('tool run');
+    expect(messages).toHaveLength(2);
+    expect(messages[0].timestamp).toBe(100);
+    expect(messages[1].toolCalls).toHaveLength(1);
+    expect(messages[1].toolCalls![0]).toMatchObject({
+      id: 't1',
+      name: 'bash',
+      input: { command: 'ls' },
+      result: 'file1\nfile2',
+    });
+  });
+
+  it('falls back to text parsing when the data block is malformed', () => {
+    const md = [
+      '---',
+      'title: "broken"',
+      '---',
+      '',
+      '<!-- slicc:session-data',
+      '{not valid json',
+      '-->',
+      '',
+      '## User',
+      'hi',
+      '',
+      '## Assistant',
+      'hello',
+      '',
+    ].join('\n');
+    const { title, messages } = parseFrozenArchive(md);
+    expect(title).toBe('broken');
+    expect(messages).toHaveLength(2);
+    expect(messages[0].content).toBe('hi');
+    expect(messages[1].content).toBe('hello');
+  });
 });
