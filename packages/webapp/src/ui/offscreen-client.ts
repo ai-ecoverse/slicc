@@ -79,6 +79,8 @@ export class OffscreenClient implements KernelClientFacade {
   /** Currently selected scoop JID (set by the UI). */
   selectedScoopJid: string | null = null;
 
+  private locked = false;
+
   /**
    * Optional transport injection. If omitted (today's extension
    * panel), the chrome.runtime adapter is constructed. Standalone
@@ -221,6 +223,16 @@ export class OffscreenClient implements KernelClientFacade {
   updateModel(): void {
     // Side panel already wrote to localStorage. Tell offscreen to re-read.
     this.send({ type: 'refresh-model' });
+  }
+
+  /**
+   * Mark this client as locked. While locked, all outbound traffic
+   * via send() is dropped and an error is surfaced to the UI.
+   * Used by the detached-popout flow to prevent a soon-to-close
+   * panel from sending duplicate user actions.
+   */
+  setLocked(locked: boolean): void {
+    this.locked = locked;
   }
 
   /**
@@ -614,6 +626,13 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private send(payload: PanelToOffscreenMessage): void {
+    if (this.locked) {
+      this.emitToUI({
+        type: 'error',
+        error: 'This window is detached. Close it and use the detached tab.',
+      });
+      return;
+    }
     this.transport.send(payload);
   }
 }
