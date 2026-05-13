@@ -520,12 +520,35 @@ async function fireFastForwardFinalLick(
 // Extension mode — pure UI connecting to offscreen agent engine
 // ---------------------------------------------------------------------------
 
-async function mainExtension(app: HTMLElement): Promise<void> {
+function enterDetachedActiveState(
+  client: import('./offscreen-client.js').OffscreenClient,
+  layout: Layout
+): void {
+  // Execution order: close → lock → overlay.
+  //
+  // 1. window.close() — happy path; if it works the rest is moot.
+  // 2. setLocked(true) — synchronously bounces any send() call. Doing
+  //    this BEFORE the overlay closes the brief window where the user
+  //    could click a still-active send button between close-failing and
+  //    overlay-appearing.
+  // 3. showDetachedActiveOverlay() — visible feedback.
+  try {
+    window.close();
+  } catch {
+    // window.close() may no-op in some Chrome configurations;
+    // layers 2+3 cover it.
+  }
+  client.setLocked(true);
+  layout.showDetachedActiveOverlay();
+}
+
+async function mainExtension(app: HTMLElement, options?: { detached?: boolean }): Promise<void> {
+  const isDetachedSelf = options?.detached === true;
   const { OffscreenClient } = await import('./offscreen-client.js');
   const { VirtualFS } = await import('../fs/index.js');
   const { publishAgentBridgeProxy } = await import('../scoops/agent-bridge.js');
 
-  const layout = new Layout(app, true);
+  const layout = new Layout(app, !isDetachedSelf);
   // Expose debug tab toggle for the shell `debug` command
   (window as unknown as Record<string, unknown>).__slicc_debug_tabs = (show: boolean) =>
     layout.setDebugTabs(show);
@@ -783,6 +806,50 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       }
     },
   });
+
+  // Detached popout: listen for the SW's broadcast that a detached tab
+  // has claimed the lock. Side panels and non-detached index.html tabs
+  // self-close; the detached tab itself ignores its own echo.
+  chrome.runtime.onMessage.addListener((msg) => {
+    // Return false (or void/undefined) on every path so Chrome does not
+    // keep sendResponse alive. This listener never responds.
+    if (typeof msg !== 'object' || msg === null) return false;
+    if (!('source' in msg) || !('payload' in msg)) return false;
+    const env = msg as { source: string; payload: { type?: string } };
+    if (env.source !== 'service-worker') return false;
+    if (env.payload?.type !== 'detached-active') return false;
+
+    if (isDetachedSelf) return false; // I am the claimer; ignore my own broadcast.
+
+    enterDetachedActiveState(client, layout);
+    return false;
+  });
+
+  if (isDetachedSelf) {
+    chrome.runtime
+      .sendMessage({
+        source: 'panel',
+        payload: { type: 'detached-claim' },
+      })
+      .catch(() => {
+        // SW not ready or no receivers — Chrome's normal cold-start condition.
+        // The claim is also re-emitted on Ctrl-R / reload via mainExtension boot.
+      });
+  }
+
+  if (!isDetachedSelf) {
+    layout.setShowPopoutButton(true);
+    layout.setPopoutClickHandler(() => {
+      chrome.runtime
+        .sendMessage({
+          source: 'panel',
+          payload: { type: 'detached-popout-request' },
+        })
+        .catch(() => {
+          // SW unreachable; the popout flow will retry on next click.
+        });
+    });
+  }
 
   // Wire local VFS to client so memory panel can read CLAUDE.md files
   client.setLocalFS(localFs);
