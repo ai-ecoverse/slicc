@@ -402,6 +402,27 @@ describe('parseFrozenArchive', () => {
     });
   });
 
+  it('preserves embedded quotes in the title via JSON-encoded frontmatter', () => {
+    // The writer emits `title: ${JSON.stringify(value)}`, so a title like
+    // `Debug "Auth" bug` round-trips as `title: "Debug \"Auth\" bug"`.
+    // The reader must parse the value as JSON when it starts with a
+    // quote so internal escapes survive — otherwise the regex stops at
+    // the first `"` and reopens the session with a truncated header.
+    const md = [
+      '---',
+      'id: session-cone',
+      `title: ${JSON.stringify('Debug "Auth" bug — with backslash \\ too')}`,
+      'frozenAt: 2026-05-13T19:00:00.000Z',
+      '---',
+      '',
+      '## User',
+      'hello',
+      '',
+    ].join('\n');
+    const { title } = parseFrozenArchive(md);
+    expect(title).toBe('Debug "Auth" bug — with backslash \\ too');
+  });
+
   it('falls back to text parsing when the data block is malformed', () => {
     const md = [
       '---',

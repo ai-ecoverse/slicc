@@ -573,9 +573,9 @@ export class ScoopsPanel {
 
   /**
    * Render the frozen-sessions section below the live scoops list. One row
-   * per archived session, newest first. Click reveals the archive JSON in
-   * the Files tab via `onFrozenSessionOpen`. Read-only chat playback can
-   * land in a follow-up — this PR ships discovery only.
+   * per archived session, newest first. Click opens the archive in the
+   * chat panel as a read-only view via `onFrozenSessionOpen` — the same
+   * affordance as clicking a live scoop.
    */
   private renderFrozenSessions(): void {
     const frozenEl = this.container.querySelector('.frozen-sessions-list');

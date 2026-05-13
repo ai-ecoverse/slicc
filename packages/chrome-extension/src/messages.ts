@@ -78,12 +78,16 @@ export interface RequestScoopMessagesMsg {
 
 export interface ClearChatMsg {
   type: 'clear-chat';
-  /**
-   * Which sessions to clear. `'cone'` (default) wipes only the cone — used
-   * by the "New session" button so scoops survive. `'all'` wipes every
-   * scoop's session as well; reserved for future "reset everything" flows.
-   */
-  target?: 'cone' | 'all';
+  /** Correlation id so the panel can await the bridge's ack and avoid
+   *  reloading before the live cone context has actually been cleared
+   *  (the offscreen document survives panel reload in extension mode,
+   *  so a missed clear would leave the old agent state running). */
+  requestId: string;
+}
+
+export interface ClearChatAckMsg {
+  type: 'clear-chat-ack';
+  requestId: string;
 }
 
 export interface ClearFilesystemMsg {
@@ -462,6 +466,7 @@ export type OffscreenToPanelMessage =
   | PanelCdpResponseMsg
   | OAuthResultMsg
   | TrayRuntimeStatusMsg
+  | ClearChatAckMsg
   // Terminal session events emitted by the worker's `TerminalSessionHost`.
   // Consumed by the panel's `TerminalSessionClient`.
   | TerminalEventMsg;

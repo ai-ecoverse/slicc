@@ -898,9 +898,9 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       log.info('New session: freezer skipped (long-press)');
     }
     await layout.panels.chat.deleteSessionById('session-cone');
-    // Bridge-side cone-only clear. The legacy clearAllMessages remains as a
-    // fallback inside the bridge for future "Reset everything" flows.
-    client.clearAllMessages({ target: 'cone' });
+    // Bridge-side cone-only clear. Awaits the bridge's ack so we don't
+    // reload while the offscreen agent context is still running.
+    await client.clearAllMessages();
   };
 
   layout.onClearFilesystem = async () => {
@@ -1807,7 +1807,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
       log.info('New session: freezer skipped (long-press)');
     }
     await layout.panels.chat.deleteSessionById('session-cone');
-    await client.clearAllMessages({ target: 'cone' });
+    await client.clearAllMessages();
   };
 
   // Frozen sessions sidebar (standalone only). The panel reads

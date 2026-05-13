@@ -193,6 +193,32 @@ export async function clearAllMessages(): Promise<void> {
   });
 }
 
+/**
+ * Delete every persisted ChannelMessage for one chat jid. Used by the
+ * "New session" flow to wipe the cone's history from the agent DB —
+ * without this, `processScoopQueue` walks back over old `getMessagesSince`
+ * rows on the next prompt and re-injects pre-reset turns into the
+ * fresh session.
+ */
+export async function clearMessagesForScoop(chatJid: string): Promise<void> {
+  const store = await getStore(STORES.MESSAGES, 'readwrite');
+  const index = store.index('chatJid_timestamp');
+  const range = IDBKeyRange.bound([chatJid, ''], [chatJid, '￿'], false, false);
+  return new Promise((resolve, reject) => {
+    const req = index.openCursor(range);
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (!cursor) {
+        resolve();
+        return;
+      }
+      cursor.delete();
+      cursor.continue();
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
 export async function saveMessage(msg: ChannelMessage): Promise<void> {
   const store = await getStore(STORES.MESSAGES, 'readwrite');
   return new Promise((resolve, reject) => {

@@ -869,37 +869,24 @@ export class OffscreenBridge implements KernelFacade {
       }
 
       case 'clear-chat': {
-        const target = msg.target ?? 'cone';
-        if (target === 'cone') {
-          // Cone-only clear (the "New session" path). Scoops keep their
-          // conversations and continue to run; the fresh cone inherits
-          // the existing roster.
-          const coneJid = this.orchestrator.getScoops().find((s) => s.isCone)?.jid;
-          if (coneJid) {
-            await this.orchestrator.clearScoopMessages(coneJid);
-          }
-          if (this.sessionStore) {
-            await this.sessionStore.delete('session-cone');
-          }
-          if (coneJid) {
-            this.messageBuffers.delete(coneJid);
-            this.currentMessageId.delete(coneJid);
-          }
-        } else {
-          // Legacy 'all' path — used internally for resets.
-          await this.orchestrator.clearAllMessages();
-          if (this.sessionStore) {
-            const scoops = this.orchestrator.getScoops();
-            await Promise.all(
-              scoops.map((scoop) => {
-                const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
-                return this.sessionStore!.delete(sessionId);
-              })
-            );
-          }
-          this.messageBuffers.clear();
-          this.currentMessageId.clear();
+        // Cone-only clear (the "New session" path). Scoops keep their
+        // conversations and continue to run; the fresh cone inherits
+        // the existing roster.
+        const coneJid = this.orchestrator.getScoops().find((s) => s.isCone)?.jid;
+        if (coneJid) {
+          await this.orchestrator.clearScoopMessages(coneJid);
         }
+        if (this.sessionStore) {
+          await this.sessionStore.delete('session-cone');
+        }
+        if (coneJid) {
+          this.messageBuffers.delete(coneJid);
+          this.currentMessageId.delete(coneJid);
+        }
+        // Acknowledge so the panel knows the clear completed before it
+        // calls `location.reload()` — important in extension mode where
+        // the offscreen document survives a panel reload.
+        this.emit({ type: 'clear-chat-ack', requestId: msg.requestId });
         break;
       }
 

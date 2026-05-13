@@ -405,11 +405,31 @@ export function parseFrozenArchive(markdown: string): {
   let title = 'Untitled';
 
   // 1. Strip YAML-style frontmatter and pull out the title.
+  //    The writer emits `title: ${JSON.stringify(value)}`, which means
+  //    quoted titles can contain `\"` and `\\` escapes (e.g. a title
+  //    like `Debug "Auth" bug`). Parse the value as JSON when it starts
+  //    with a quote so embedded escapes round-trip cleanly; fall back
+  //    to a raw read for unquoted scalars.
   const fmMatch = body.match(/^---\n([\s\S]*?)\n---\n+/);
   if (fmMatch) {
     body = body.slice(fmMatch[0].length);
-    const titleMatch = fmMatch[1].match(/^title:\s*"?([^"\n]*)"?\s*$/m);
-    if (titleMatch) title = titleMatch[1].trim();
+    const titleLine = fmMatch[1].match(/^title:\s*(.+?)\s*$/m);
+    if (titleLine) {
+      const raw = titleLine[1].trim();
+      if (raw.startsWith('"')) {
+        try {
+          // JSON.parse handles \", \\, \n, \uXXXX, etc. — same escapes
+          // JSON.stringify produced on the way in.
+          const decoded = JSON.parse(raw);
+          if (typeof decoded === 'string') title = decoded;
+        } catch {
+          // Malformed quoted value — strip surrounding quotes as a last resort.
+          title = raw.replace(/^"|"$/g, '');
+        }
+      } else {
+        title = raw;
+      }
+    }
   }
 
   // 2. Prefer the embedded structured-data block when present —

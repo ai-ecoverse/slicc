@@ -227,11 +227,32 @@ describe('OffscreenClient', () => {
     expect(envelope.payload.type).toBe('request-state');
   });
 
-  it('sends clear-chat', () => {
-    client.clearAllMessages();
+  it('sends clear-chat with a requestId and resolves once the ack arrives', async () => {
+    const pending = client.clearAllMessages();
 
     const envelope = sentMessages[0] as { source: string; payload: any };
     expect(envelope.payload.type).toBe('clear-chat');
+    expect(typeof envelope.payload.requestId).toBe('string');
+    expect(envelope.payload.requestId.length).toBeGreaterThan(0);
+
+    // Mirror the bridge's ack so the awaited Promise resolves.
+    simulateMessage('offscreen', {
+      type: 'clear-chat-ack',
+      requestId: envelope.payload.requestId,
+    });
+    await pending;
+  });
+
+  it('clear-chat resolves on timeout if no ack arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = client.clearAllMessages();
+      // 5s timeout backs out cleanly so the panel can reload anyway.
+      vi.advanceTimersByTime(5000);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('ignores messages from non-offscreen sources', () => {

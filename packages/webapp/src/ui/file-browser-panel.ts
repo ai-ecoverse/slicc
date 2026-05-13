@@ -116,32 +116,6 @@ export class FileBrowserPanel {
     this.refreshTimer = setInterval(() => this.refresh(), 3000);
   }
 
-  /**
-   * Expand every ancestor directory of `path` so a deeply-nested file is
-   * visible after a programmatic reveal. Always includes the root.
-   */
-  private expandAncestors(path: string): void {
-    this.expandedDirs.add('/');
-    const parts = path.split('/').filter(Boolean);
-    let cursor = '';
-    // Last segment is the file itself; we only expand the directories.
-    for (let i = 0; i < parts.length - 1; i++) {
-      cursor += `/${parts[i]}`;
-      this.expandedDirs.add(cursor);
-    }
-  }
-
-  /**
-   * Reveal a file in the tree: expand its parent directories, mark it as
-   * selected, and refresh. Used by the frozen-sessions sidebar to jump
-   * to an archive JSON.
-   */
-  async revealPath(path: string): Promise<void> {
-    this.expandAncestors(path);
-    this.selectedPath = path;
-    await this.refresh();
-  }
-
   /** Re-read the VFS and update the tree display (only if content changed). */
   async refresh(): Promise<void> {
     if (!this.fs) return;

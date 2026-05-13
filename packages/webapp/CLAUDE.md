@@ -95,9 +95,9 @@ Deep reference: `docs/kernel/process-model.md`.
 ### Frozen Sessions ("New session" flow)
 
 - Path: `packages/webapp/src/ui/session-freezer.ts`, `packages/webapp/src/ui/new-session.ts`
-- The avatar-popover "New session" entry and thread-header refresh button both run the freezer over the cone session, then clear only the cone (scoops survive). The freezer writes `/sessions/<timestamp>-<slug>.json` and prepends an entry to `/sessions/index.json`.
-- `scoops-panel.ts` renders the index as a frozen-sessions section below the live scoops list (standalone only — extension hides the rail). Clicking an entry switches to the Files tab and reveals the archive via `FileBrowserPanel.revealPath`.
-- Clearing semantics: `OffscreenClient.clearAllMessages({ target: 'cone' \| 'all' })` defaults to `'cone'`. The `'all'` path is preserved for internal reset flows and is not currently exposed in the UI.
+- The avatar-popover "New session" entry and thread-header refresh button both run the freezer over the cone session, then clear only the cone (scoops survive). The freezer writes `/sessions/<timestamp>-<slug>.md` (YAML frontmatter + an HTML-commented `slicc:session-data` block carrying the structured `ChatMessage[]` + a human-readable markdown body) and prepends an entry to `/sessions/index.json`.
+- `scoops-panel.ts` renders the index as a frozen-sessions section below the live scoops list (standalone only — extension hides the rail). Clicking an entry reads the archive, parses it via `parseFrozenArchive`, and hands the messages to `ChatPanel.displayFrozenSession` for a read-only render — same affordance as clicking a live scoop.
+- Clearing semantics: `OffscreenClient.clearAllMessages()` is cone-only. It awaits the bridge's `clear-chat-ack` before resolving so the panel can `location.reload()` without racing the offscreen agent context (which survives the panel reload in extension mode).
 
 ### UI
 

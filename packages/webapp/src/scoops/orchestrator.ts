@@ -1205,10 +1205,16 @@ export class Orchestrator {
 
   /**
    * Clear messages for a single scoop (live agent + persisted agent session
-   * + queued messages + timestamp tracking). Used by the "New session"
-   * flow to reset the cone while leaving every other scoop's runtime state
-   * untouched. The orchestrator-level `clearAllMessages` keeps its
-   * existing all-scoops semantics.
+   * + queued messages + timestamp tracking + per-scoop ChannelMessage
+   * history). Used by the "New session" flow to reset the cone while
+   * leaving every other scoop's runtime state untouched. The
+   * orchestrator-level `clearAllMessages` keeps its existing all-scoops
+   * semantics.
+   *
+   * The per-scoop channel-history wipe is load-bearing: without it,
+   * `processScoopQueue` calls `db.getMessagesSince(chatJid, '')` on the
+   * next prompt (because `lastAgentTimestamp` was just deleted) and
+   * replays every pre-reset turn back into the live agent.
    */
   async clearScoopMessages(jid: string): Promise<void> {
     const ctx = this.contexts.get(jid);
@@ -1224,6 +1230,12 @@ export class Orchestrator {
         });
       }
     }
+    await db.clearMessagesForScoop(jid).catch((err) => {
+      log.warn('Failed to clear persisted channel history for scoop', {
+        jid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     this.lastAgentTimestamp.delete(jid);
     this.messageQueues.set(jid, []);
     log.info('Scoop messages cleared', { jid });
