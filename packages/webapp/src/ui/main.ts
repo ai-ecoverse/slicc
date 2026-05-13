@@ -47,6 +47,8 @@ import { createAttachmentTmpWriter } from './attachment-vfs.js';
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
 import { flushCredentialsToWorker, resolveDefaultModel } from './onboarding-helpers.js';
+import { runNewSessionFreeze } from './new-session.js';
+import { frozenSessionPath, parseFrozenArchive } from './session-freezer.js';
 import { BrowserAPI, NavigationWatcher } from '../cdp/index.js';
 import { type Orchestrator } from '../scoops/index.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
@@ -225,12 +227,22 @@ function isUIFixtureRequested(): boolean {
 async function loadUIFixtureIntoChat(chatPanel: {
   switchToContext: (id: string, readOnly: boolean, scoopName?: string) => Promise<void>;
   loadMessages: (msgs: ChatMessage[]) => void;
+  setCompactionState?: (state: 'summarizing' | 'extracting-memory' | 'idle') => void;
 }): Promise<void> {
   const [{ createChatFixture, FIXTURE_SESSION_ID, FIXTURE_SCOOP_NAME }] = await Promise.all([
     import('./chat-fixture.js'),
   ]);
   await chatPanel.switchToContext(FIXTURE_SESSION_ID, true, FIXTURE_SCOOP_NAME);
   chatPanel.loadMessages(createChatFixture());
+  // Optional preview of the compaction ghost bubble for designers:
+  //   ?ui-fixture=1&compacting=summarizing
+  //   ?ui-fixture=1&compacting=extracting-memory
+  // (Anything else leaves the bubble off.)
+  const params = new URLSearchParams(window.location.search);
+  const compacting = params.get('compacting');
+  if (compacting === 'summarizing' || compacting === 'extracting-memory') {
+    chatPanel.setCompactionState?.(compacting);
+  }
   log.info('Loaded UI fixture session for design iteration');
 }
 
@@ -750,6 +762,13 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
       // so a panel reload would pick them up. Repaint the open chat.
       layout.panels.chat.loadMessages(messages as unknown as ChatMessage[]);
     },
+    onCompactionStateChange: (scoopJid, state) => {
+      // Only render the ghost bubble in the scoop the user is looking at —
+      // a different scoop compacting in the background shouldn't poke the
+      // foreground chat.
+      if (selectedScoop?.jid !== scoopJid) return;
+      layout.panels.chat.setCompactionState(state);
+    },
     onReady: async () => {
       try {
         log.info('Offscreen engine ready, scoop count:', client.getScoops().length);
@@ -912,16 +931,25 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
     if (selectedScoop) syncThinkingButtonForExtensionScoop(selectedScoop);
   };
 
-  // Wire clear chat — delete all scoop sessions from the shared IndexedDB
-  // synchronously (from the panel's perspective) before the reload happens.
-  // The bridge also clears its in-memory buffers via the clear-chat message.
-  layout.onClearChat = async () => {
-    const scoops = client.getScoops();
-    for (const scoop of scoops) {
-      const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
-      await layout.panels.chat.deleteSessionById(sessionId);
+  // Wire "New session" — freeze the cone's chat to /sessions/ via the
+  // freezer (memory extraction + title), then delete ONLY the cone session
+  // from IndexedDB. Scoops survive intentionally so the fresh cone inherits
+  // the existing scoop roster. Long-press passes `freeze: false` to discard
+  // the conversation without archiving it.
+  layout.onClearChat = async (opts) => {
+    if (opts?.freeze !== false) {
+      try {
+        await runNewSessionFreeze({ vfs: localFs });
+      } catch (err) {
+        log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
+      }
+    } else {
+      log.info('New session: freezer skipped (long-press)');
     }
-    client.clearAllMessages();
+    await layout.panels.chat.deleteSessionById('session-cone');
+    // Bridge-side cone-only clear. Awaits the bridge's ack so we don't
+    // reload while the offscreen agent context is still running.
+    await client.clearAllMessages();
   };
 
   layout.onClearFilesystem = async () => {
@@ -1759,6 +1787,12 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
         // `persistScoop` on each agent event.
         layout.panels.chat.loadMessages(messages as unknown as ChatMessage[]);
       },
+      onCompactionStateChange: (scoopJid, state) => {
+        // Render the ghost bubble only in the scoop the user is viewing —
+        // a background scoop's compaction shouldn't perturb the foreground.
+        if (selectedScoop?.jid !== scoopJid) return;
+        layout.panels.chat.setCompactionState(state);
+      },
       onReady: () => {
         log.info('Kernel worker ready, scoop count:', client.getScoops().length);
         const cone = client.getScoops().find((s) => s.isCone);
@@ -1797,6 +1831,77 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   };
   layout.onModelsRefreshed = () => {
     if (selectedScoop) syncThinkingButtonForScoop(selectedScoop);
+  };
+
+  // Wire local VFS to client so the memory panel (which reads
+  // /shared/CLAUDE.md via `client.getGlobalMemory()`) sees the actual
+  // file system. Without this the panel reads empty in standalone-worker
+  // mode — only the extension path was calling setLocalFS before.
+  client.setLocalFS(localFs);
+
+  // Wire "New session" — freeze the cone's chat to /sessions/ via the
+  // freezer (memory extraction + title), then clear ONLY the cone
+  // session via the kernel client. Scoops survive intentionally so the
+  // fresh cone inherits the existing scoop roster. When `opts.freeze`
+  // is false (long-press on the new-session button) the freezer is
+  // skipped entirely — useful when the user explicitly wants to discard.
+  layout.onClearChat = async (opts) => {
+    if (opts?.freeze !== false) {
+      try {
+        await runNewSessionFreeze({ vfs: localFs });
+      } catch (err) {
+        log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
+      }
+    } else {
+      log.info('New session: freezer skipped (long-press)');
+    }
+    await layout.panels.chat.deleteSessionById('session-cone');
+    await client.clearAllMessages();
+  };
+
+  // Frozen sessions sidebar (standalone only). The panel reads
+  // /sessions/index.json from the page-side VFS that already shares
+  // IndexedDB with the worker. Clicking an entry reads the archive
+  // markdown, parses it back into messages, and displays it in the
+  // chat panel read-only — matching the affordance of clicking a
+  // live scoop (which also opens the chat view rather than a file).
+  layout.panels.scoops.setVfs(localFs);
+  layout.onFrozenSessionOpen = (entry) => {
+    void (async () => {
+      try {
+        const raw = await localFs.readFile(frozenSessionPath(entry), { encoding: 'utf-8' });
+        const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+        const parsed = parseFrozenArchive(text);
+        const title = parsed.title || entry.title;
+        await layout.panels.chat.displayFrozenSession({
+          contextId: `frozen:${entry.filename}`,
+          messages: parsed.messages,
+          title,
+        });
+        layout.setThreadHeaderName(`❄ ${title}`);
+        layout.setActiveTab('chat');
+      } catch (err) {
+        log.warn('Failed to open frozen session', {
+          filename: entry.filename,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+  };
+
+  // Glow the New Session button as the live cone session grows past
+  // half the active model's context window. Coarse chars/4 estimate
+  // is enough — the goal is an affordance, not a billing meter.
+  layout.panels.chat.onMessagesChanged = (estimatedTokens) => {
+    let contextWindow = 200000;
+    try {
+      const model = resolveCurrentModel();
+      contextWindow = model.contextWindow ?? contextWindow;
+    } catch {
+      /* no active model — keep the default and the gauge stays cold */
+    }
+    const ratio = estimatedTokens / contextWindow;
+    layout.setNewSessionGlow(ratio);
   };
 
   // Wire chat agent handle. The handle's `sendMessage` posts a

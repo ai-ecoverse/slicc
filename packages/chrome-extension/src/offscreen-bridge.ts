@@ -218,6 +218,14 @@ export class OffscreenBridge implements KernelFacade {
         bridge.emitScoopList();
       },
 
+      onCompactionStateChange: (scoopJid, state) => {
+        bridge.emit({
+          type: 'compaction-state',
+          scoopJid,
+          state,
+        });
+      },
+
       onError: (scoopJid, error) => {
         bridge.emit({
           type: 'error',
@@ -861,20 +869,24 @@ export class OffscreenBridge implements KernelFacade {
       }
 
       case 'clear-chat': {
-        await this.orchestrator.clearAllMessages();
-        // Clear session store for all known scoops — must await so deletions
-        // complete before the panel reloads and re-reads from IndexedDB
-        if (this.sessionStore) {
-          const scoops = this.orchestrator.getScoops();
-          await Promise.all(
-            scoops.map((scoop) => {
-              const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
-              return this.sessionStore!.delete(sessionId);
-            })
-          );
+        // Cone-only clear (the "New session" path). Scoops keep their
+        // conversations and continue to run; the fresh cone inherits
+        // the existing roster.
+        const coneJid = this.orchestrator.getScoops().find((s) => s.isCone)?.jid;
+        if (coneJid) {
+          await this.orchestrator.clearScoopMessages(coneJid);
         }
-        this.messageBuffers.clear();
-        this.currentMessageId.clear();
+        if (this.sessionStore) {
+          await this.sessionStore.delete('session-cone');
+        }
+        if (coneJid) {
+          this.messageBuffers.delete(coneJid);
+          this.currentMessageId.delete(coneJid);
+        }
+        // Acknowledge so the panel knows the clear completed before it
+        // calls `location.reload()` — important in extension mode where
+        // the offscreen document survives a panel reload.
+        this.emit({ type: 'clear-chat-ack', requestId: msg.requestId });
         break;
       }
 

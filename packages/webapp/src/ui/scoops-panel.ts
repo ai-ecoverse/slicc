@@ -11,6 +11,8 @@
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 import { type Orchestrator } from '../scoops/orchestrator.js';
 import { createLogger } from '../core/logger.js';
+import type { VirtualFS } from '../fs/index.js';
+import { readSessionsIndex, type FrozenSessionIndexEntry } from './session-freezer.js';
 
 const log = createLogger('scoops-panel');
 
@@ -21,6 +23,13 @@ export interface ScoopsPanelCallbacks {
   onSendMessage: (scoopJid: string, text: string) => void;
   /** Called when the scoop list changes (for logo updates, etc.) */
   onScoopsChanged?: (scoops: RegisteredScoop[]) => void;
+  /**
+   * Called when the user clicks a frozen-session entry in the sidebar.
+   * Receives the full index entry so the wiring can read the archive
+   * file from the VFS, parse it, and hand it to the chat panel for
+   * read-only display.
+   */
+  onFrozenSessionOpen?: (entry: FrozenSessionIndexEntry) => void;
 }
 
 export class ScoopsPanel {
@@ -30,6 +39,8 @@ export class ScoopsPanel {
   private selectedScoopJid: string | null = null;
   private scoopStatuses: Map<string, ScoopTabState['status']> = new Map();
   private expanded = false;
+  private vfs: VirtualFS | null = null;
+  private frozenSessions: FrozenSessionIndexEntry[] = [];
 
   // Roaming eyes state
   private eyesEl: HTMLElement | null = null;
@@ -222,6 +233,33 @@ export class ScoopsPanel {
   setOrchestrator(orchestrator: Orchestrator): void {
     this.orchestrator = orchestrator;
     this.refreshScoops();
+  }
+
+  /**
+   * Wire the VFS so the panel can render the "Frozen sessions" section
+   * from `/sessions/index.json`. Standalone-only — extension mode hides
+   * the scoops panel entirely.
+   */
+  setVfs(vfs: VirtualFS): void {
+    this.vfs = vfs;
+    void this.refreshFrozenSessions();
+  }
+
+  /**
+   * Re-read `/sessions/index.json` and re-render the frozen-sessions
+   * section. Cheap (one VFS read) and safe to call on demand.
+   */
+  async refreshFrozenSessions(): Promise<void> {
+    if (!this.vfs) return;
+    try {
+      this.frozenSessions = await readSessionsIndex(this.vfs);
+    } catch (err) {
+      log.warn('Failed to read sessions index', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.frozenSessions = [];
+    }
+    this.renderFrozenSessions();
   }
 
   /** Update scoop status */
@@ -533,6 +571,99 @@ export class ScoopsPanel {
     this.moveEyes();
   }
 
+  /**
+   * Render the frozen-sessions section below the live scoops list. One row
+   * per archived session, newest first. Click opens the archive in the
+   * chat panel as a read-only view via `onFrozenSessionOpen` — the same
+   * affordance as clicking a live scoop.
+   */
+  private renderFrozenSessions(): void {
+    const frozenEl = this.container.querySelector('.frozen-sessions-list');
+    if (!frozenEl) return;
+
+    while (frozenEl.firstChild) frozenEl.removeChild(frozenEl.firstChild);
+
+    if (this.frozenSessions.length === 0) return;
+
+    // Section divider — keeps the icon rail readable when frozen sessions
+    // sit directly below live scoops.
+    const divider = document.createElement('div');
+    divider.className = 'frozen-sessions-divider';
+    frozenEl.appendChild(divider);
+
+    for (const entry of this.frozenSessions) {
+      const item = document.createElement('div');
+      item.className = 'frozen-session-item';
+      item.setAttribute('aria-label', entry.title);
+
+      // Snowflake glyph — distinguishes frozen entries from the colorful
+      // live-scoop blobs.
+      const iconWrap = document.createElement('div');
+      iconWrap.className = 'frozen-session-icon-wrap';
+      const ns = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(ns, 'svg');
+      svg.setAttribute('width', '16');
+      svg.setAttribute('height', '16');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', 'currentColor');
+      svg.setAttribute('stroke-width', '2');
+      svg.setAttribute('stroke-linecap', 'round');
+      svg.setAttribute('stroke-linejoin', 'round');
+      const paths = ['M12 2v20', 'M2 12h20', 'M19.07 4.93l-14.14 14.14', 'M4.93 4.93l14.14 14.14'];
+      for (const d of paths) {
+        const p = document.createElementNS(ns, 'path');
+        p.setAttribute('d', d);
+        svg.appendChild(p);
+      }
+      iconWrap.appendChild(svg);
+      item.appendChild(iconWrap);
+
+      // Title + relative time — visible only when the rail is expanded
+      // (`.layout__scoops--expanded` rules give .scoop-info its size and
+      // hide it in the collapsed icon-only view).
+      const infoEl = document.createElement('div');
+      infoEl.className = 'scoop-info';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'scoop-name';
+      nameEl.textContent = entry.title;
+      infoEl.appendChild(nameEl);
+      const subtitleEl = document.createElement('div');
+      subtitleEl.className = 'scoop-subtitle';
+      subtitleEl.textContent = formatRelativeTime(entry.frozenAt);
+      infoEl.appendChild(subtitleEl);
+      item.appendChild(infoEl);
+
+      // Click: hand the entry off to the layout, which reads the archive
+      // and displays it in the chat panel like a scoop selection would.
+      item.addEventListener('click', () => {
+        this.callbacks.onFrozenSessionOpen?.(entry);
+      });
+
+      // Hover tooltip: title + relative time. Same fixed-position tooltip
+      // mechanism the live scoops use.
+      item.addEventListener('mouseenter', () => {
+        const tip = document.createElement('div');
+        tip.className = 'scoop-fixed-tooltip';
+        tip.textContent = `${entry.title} · ${formatRelativeTime(entry.frozenAt)}`;
+        document.body.appendChild(tip);
+        const rect = item.getBoundingClientRect();
+        tip.style.top = `${rect.top + rect.height / 2}px`;
+        tip.style.left = `${rect.right + 8}px`;
+        (item as any).__tip = tip;
+      });
+      item.addEventListener('mouseleave', () => {
+        const tip = (item as any).__tip;
+        if (tip) {
+          tip.remove();
+          (item as any).__tip = null;
+        }
+      });
+
+      frozenEl.appendChild(item);
+    }
+  }
+
   /** Select a scoop */
   private selectScoop(scoop: RegisteredScoop): void {
     this.selectedScoopJid = scoop.jid;
@@ -647,6 +778,12 @@ export class ScoopsPanel {
     list.className = 'scoops-list';
     panel.appendChild(list);
 
+    // Frozen sessions — populated by `refreshFrozenSessions()` when a VFS
+    // is attached. Empty (and visually hidden via :empty CSS) until then.
+    const frozenList = document.createElement('div');
+    frozenList.className = 'frozen-sessions-list';
+    panel.appendChild(frozenList);
+
     this.container.appendChild(panel);
 
     // Add styles — UXC icon rail mode
@@ -690,6 +827,90 @@ export class ScoopsPanel {
       }
       .scoops-list::-webkit-scrollbar {
         display: none;
+      }
+
+      /* Frozen sessions section — past cone conversations archived
+         by the "New session" button. Sits below the live scoops list. */
+      .frozen-sessions-list {
+        width: 100%;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        padding-top: 4px;
+      }
+      .frozen-sessions-list:empty {
+        display: none;
+      }
+      .frozen-sessions-divider {
+        width: 24px;
+        height: 1px;
+        background: rgba(0, 0, 0, 0.08);
+        margin: 4px 0 4px 9px;
+      }
+      .frozen-session-item {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        margin-left: 5px;
+        border-radius: 8px;
+        cursor: pointer;
+        color: var(--s2-content-disabled);
+        opacity: 0.7;
+        transition: opacity 120ms, color 120ms, background 120ms;
+      }
+      .frozen-session-item:hover {
+        opacity: 1;
+        color: var(--s2-content-default);
+        background: rgba(0, 0, 0, 0.04);
+      }
+      /* Hide the inline title in the collapsed icon-only rail. */
+      .frozen-session-item .scoop-info { display: none; }
+
+      /* Expanded rail: match scoop-item layout so the title fits beside the icon. */
+      .layout__scoops--expanded .frozen-session-item {
+        width: 100%;
+        height: auto;
+        justify-content: flex-start;
+        padding: 8px 5px;
+        margin-left: 0;
+        gap: 8px;
+        opacity: 1;
+      }
+      .layout__scoops--expanded .frozen-session-item .scoop-info {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        flex: 1;
+        min-width: 0;
+        justify-content: center;
+      }
+      .layout__scoops--expanded .frozen-session-item .scoop-name {
+        font-size: 13px;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: var(--s2-content-secondary);
+        line-height: 16px;
+      }
+      .layout__scoops--expanded .frozen-session-item .scoop-subtitle {
+        font-size: 11px;
+        font-weight: 400;
+        color: var(--s2-content-disabled);
+        line-height: 1.4;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .frozen-session-icon-wrap {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
       }
 
       .scoops-empty {
@@ -963,4 +1184,20 @@ export class ScoopsPanel {
 `;
     this.container.appendChild(style);
   }
+}
+
+/**
+ * Render a frozen-session `frozenAt` ISO timestamp as a short relative
+ * label ("3m ago", "2d ago"). Falls back to the literal string on
+ * parse failure so the tooltip never reads "NaN ago".
+ */
+function formatRelativeTime(iso: string): string {
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return iso;
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (diffSec < 60) return 'just now';
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  if (diffSec < 604800) return `${Math.floor(diffSec / 86400)}d ago`;
+  return new Date(ts).toLocaleDateString();
 }

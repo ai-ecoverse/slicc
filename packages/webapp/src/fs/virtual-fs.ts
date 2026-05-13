@@ -138,6 +138,32 @@ export class VirtualFS {
   }
 
   /**
+   * Force the LightningFS superblock to commit to IndexedDB immediately.
+   *
+   * LightningFS debounces directory-metadata saves: a `mkdir` or `writeFile`
+   * that creates new inodes returns once the in-memory cache is updated,
+   * but the superblock IDB write is deferred. If the page is reloaded
+   * before the debounce timer fires, those new directories and files
+   * appear orphaned on next boot (their inode blocks are present but
+   * not linked from the root metadata).
+   *
+   * Call this before any operation that may kill the page (`location.reload`,
+   * navigation away, tab close) when newly-created paths must survive.
+   * No-op if the backend doesn't expose flush.
+   */
+  async flush(): Promise<void> {
+    const pfs = this.lfs as unknown as {
+      _backend?: { flush?: () => Promise<void>; saveSuperblock?: { cancel?: () => void } };
+    };
+    // Cancel the debounced saver — otherwise it might fire AFTER our flush,
+    // with stale superblock data captured at debounce-schedule time.
+    pfs._backend?.saveSuperblock?.cancel?.();
+    if (pfs._backend?.flush) {
+      await pfs._backend.flush();
+    }
+  }
+
+  /**
    * Writability predicate — the unrestricted VirtualFS has no ACL, so every
    * path is writable. Exists to mirror {@link RestrictedFS.canWrite} so
    * callers (e.g., the `agent` shell command) can duck-type across both

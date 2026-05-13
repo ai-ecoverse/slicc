@@ -89,6 +89,15 @@ Deep reference: `docs/kernel/process-model.md`.
 
 - Path: `packages/webapp/src/core/context-compaction.ts`
 - Handles large-context summarization, image resizing, and overflow recovery.
+- When `onMemoryUpdates` is wired on `CompactionConfig` (cone only — see `scoop-context.ts` wiring), compaction makes a second LLM call that shares the same system prompt to extract durable memories. The system prompt embeds the serialized conversation so Anthropic prompt caching hits on the prefix and the memory call is near-free. Memory bullets land in `/shared/CLAUDE.md` via `orchestrator.appendGlobalMemory`. Memory extraction is best-effort and never blocks compaction.
+- `runOneOffCompactionCall` is the reusable primitive — same shared-system-prompt shape, single call. Used by the "New session" freezer to generate a title and extract memories over the live cone session.
+
+### Frozen Sessions ("New session" flow)
+
+- Path: `packages/webapp/src/ui/session-freezer.ts`, `packages/webapp/src/ui/new-session.ts`
+- The avatar-popover "New session" entry and thread-header refresh button both run the freezer over the cone session, then clear only the cone (scoops survive). The freezer writes `/sessions/<timestamp>-<slug>.md` (YAML frontmatter + an HTML-commented `slicc:session-data` block carrying the structured `ChatMessage[]` + a human-readable markdown body) and prepends an entry to `/sessions/index.json`.
+- `scoops-panel.ts` renders the index as a frozen-sessions section below the live scoops list (standalone only — extension hides the rail). Clicking an entry reads the archive, parses it via `parseFrozenArchive`, and hands the messages to `ChatPanel.displayFrozenSession` for a read-only render — same affordance as clicking a live scoop.
+- Clearing semantics: `OffscreenClient.clearAllMessages()` is cone-only. It awaits the bridge's `clear-chat-ack` before resolving so the panel can `location.reload()` without racing the offscreen agent context (which survives the panel reload in extension mode).
 
 ### UI
 

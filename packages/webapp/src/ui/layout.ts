@@ -30,7 +30,9 @@ import { TerminalPanel } from './terminal-panel.js';
 import { FileBrowserPanel } from './file-browser-panel.js';
 import { MemoryPanel } from './memory-panel.js';
 import { ScoopsPanel } from './scoops-panel.js';
+import type { FrozenSessionIndexEntry } from './session-freezer.js';
 import { ScoopSwitcher } from './scoop-switcher.js';
+import { attachLongPressGesture } from './long-press.js';
 import {
   getApiKey,
   clearAllSettings,
@@ -90,6 +92,8 @@ export class Layout {
   // Thread header (sub-header with scoop name)
   private threadHeaderEl!: HTMLElement;
   private threadHeaderName!: HTMLElement;
+  /** Thread-header "New session" button — populated by `setupChatHeader`. */
+  private newSessionBtn: HTMLButtonElement | null = null;
 
   // Right side — always-visible vertical icon rail + collapsible
   // content panel beside it. Replaces the old horizontal mini-tabs.
@@ -150,8 +154,21 @@ export class Layout {
    */
   public onModelsRefreshed?: () => void;
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
-  public onClearChat?: () => Promise<void>;
+  /**
+   * Fired by the "New session" button. When `freeze` is true (default), the
+   * handler archives the cone session before clearing. The long-press
+   * gesture passes `freeze: false` to discard the conversation without
+   * adding it to /sessions/.
+   */
+  public onClearChat?: (opts?: { freeze?: boolean }) => Promise<void>;
   public onClearFilesystem?: () => Promise<void>;
+  /**
+   * Fired when the user clicks an entry in the frozen-sessions sidebar
+   * section. Receives the full index entry; the standalone wiring reads
+   * the archive markdown and displays it in the chat panel read-only.
+   * Standalone-only — the extension build hides the rail entirely.
+   */
+  public onFrozenSessionOpen?: (entry: FrozenSessionIndexEntry) => void;
   public onSprinkleClose?: (name: string) => void;
   /**
    * Fired when the user clicks a sprinkle's rail icon. Lets the
@@ -297,6 +314,37 @@ export class Layout {
    * content and the rest are rail items, so we collapse the rail for
    * `chat` and activate the matching rail item otherwise.
    */
+  /**
+   * Toggle the "context getting full" glow on the New Session button.
+   * Receives the current context-fill ratio (estimated tokens divided
+   * by the active model's context window). Two-tier visual:
+   *
+   *   - ≥ 0.5  → soft glow (`glow`)        — "consider freezing"
+   *   - ≥ 0.85 → strong glow (`glow--hot`) — "compaction is imminent"
+   *
+   * Below 0.5 the button is plain. No-op when the button hasn't been
+   * mounted (extension mode hides the thread-header entry).
+   */
+  /**
+   * Set the thread-header title text. Used by frozen-session display
+   * (so the header reads "❄ <archive title>") without going through
+   * the scoop-select code path. No-op in extension mode where the
+   * header is a detached node.
+   */
+  setThreadHeaderName(text: string): void {
+    if (this.threadHeaderName && this.threadHeaderName.isConnected) {
+      this.threadHeaderName.textContent = text;
+    }
+  }
+
+  setNewSessionGlow(ratio: number): void {
+    if (!this.newSessionBtn) return;
+    const hot = ratio >= 0.85;
+    const warm = ratio >= 0.5;
+    this.newSessionBtn.classList.toggle('glow', warm);
+    this.newSessionBtn.classList.toggle('glow--hot', hot);
+  }
+
   setActiveTab(id: TabId): void {
     this.activeTab = id;
     if (id === 'chat') {
@@ -820,12 +868,20 @@ export class Layout {
     popover.appendChild(sepChat);
 
     const clearChatBtn = document.createElement('button');
-    clearChatBtn.className = 'avatar-popover__item avatar-popover__item--danger';
-    clearChatBtn.textContent = 'Clear chat';
+    clearChatBtn.className = 'avatar-popover__item';
+    clearChatBtn.textContent = 'New session';
     clearChatBtn.addEventListener('click', async () => {
       popover.remove();
-      await this.panels?.chat?.clearSession();
-      await this.onClearChat?.();
+      // The freezer runs inside onClearChat and reads the cone's session
+      // from IndexedDB. We must NOT delete the panel's session before that
+      // happens (the freezer would see nothing). When onClearChat is wired
+      // (the normal case) it handles the cone clear itself; only fall back
+      // to clearing the panel-local view if no handler is registered.
+      if (this.onClearChat) {
+        await this.onClearChat({ freeze: true });
+      } else {
+        await this.panels?.chat?.clearSession();
+      }
       location.reload();
     });
     popover.appendChild(clearChatBtn);
@@ -943,15 +999,36 @@ export class Layout {
     // Clear chat button — the rail now owns panel toggling, so the
     // chat header drops the panel-toggle button entirely.
     const clearChatBtn = document.createElement('button');
-    clearChatBtn.className = 'thread-header__panel-toggle';
-    clearChatBtn.dataset.tooltip = 'Clear Chat';
-    clearChatBtn.setAttribute('aria-label', 'Clear Chat');
+    clearChatBtn.className = 'thread-header__panel-toggle thread-header__new-session';
+    // Long, explanatory tooltip — the action is non-obvious enough that
+    // a 1-word label would mislead users into thinking it's a destructive
+    // "clear" button. Long-press is the only secondary affordance.
+    clearChatBtn.dataset.tooltip =
+      'New session for faster responses — history and memories will be kept. Long press to discard this session without saving memory.';
+    clearChatBtn.setAttribute(
+      'aria-label',
+      'New session — keeps memory and history. Hold to discard without saving memory.'
+    );
+    this.newSessionBtn = clearChatBtn;
+    // "Compose new" — square with a pencil, matches the universal
+    // "start a new thread" pattern (Slack, Discord, modern chat apps).
     clearChatBtn.innerHTML =
-      '<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="m8.249,15.021c-.4,0-.733-.317-.748-.72l-.25-6.5c-.017-.414.307-.763.72-.778.01-.001.021-.001.03-.001.4,0,.733.317.748.72l.25,6.5c.017.414-.307.763-.72.778-.01.001-.021.001-.03.001Z" fill="currentColor"/><path d="m11.751,15.021c-.01,0-.02,0-.03-.001-.413-.016-.736-.364-.72-.778l.25-6.5c.015-.403.348-.72.748-.72.01,0,.02,0,.03.001.413.016.736.364.72.778l-.25,6.5c-.015.403-.348.72-.748.72Z" fill="currentColor"/><path d="m17,4h-3.5v-.75c0-1.24-1.01-2.25-2.25-2.25h-2.5c-1.24,0-2.25,1.01-2.25,2.25v.75h-3.5c-.414,0-.75.336-.75.75s.336.75.75.75h.52l.422,10.342c.048,1.21,1.036,2.158,2.248,2.158h7.619c1.212,0,2.2-.948,2.248-2.158l.422-10.342h.52c.414,0,.75-.336.75-.75s-.336-.75-.75-.75Zm-9-.75c0-.413.337-.75.75-.75h2.5c.413,0,.75.337.75.75v.75h-4v-.75Zm6.56,12.531c-.017.403-.346.719-.75.719h-7.619c-.404,0-.733-.316-.75-.719l-.42-10.281h9.959l-.42,10.281Z" fill="currentColor"/></svg>';
-    clearChatBtn.addEventListener('click', async () => {
-      await this.panels.chat.clearSession();
-      await this.onClearChat?.();
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>' +
+      '<path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/>' +
+      '</svg>';
+    const runNewSession = async (opts?: { freeze?: boolean }) => {
+      if (this.onClearChat) {
+        await this.onClearChat(opts);
+      } else {
+        await this.panels.chat.clearSession();
+      }
       location.reload();
+    };
+    // Short click → freeze + clear. Long press / modifier-click → discard.
+    attachLongPressGesture(clearChatBtn, {
+      onShortClick: () => void runNewSession({ freeze: true }),
+      onLongPress: () => void runNewSession({ freeze: false }),
     });
 
     const threadActions = document.createElement('div');
@@ -1119,6 +1196,7 @@ export class Layout {
         },
         onSendMessage: () => {},
         onScoopsChanged: (scoops) => this.updateLogoScoops(scoops),
+        onFrozenSessionOpen: (vfsPath) => this.onFrozenSessionOpen?.(vfsPath),
       }),
     };
 

@@ -78,6 +78,16 @@ export interface RequestScoopMessagesMsg {
 
 export interface ClearChatMsg {
   type: 'clear-chat';
+  /** Correlation id so the panel can await the bridge's ack and avoid
+   *  reloading before the live cone context has actually been cleared
+   *  (the offscreen document survives panel reload in extension mode,
+   *  so a missed clear would leave the old agent state running). */
+  requestId: string;
+}
+
+export interface ClearChatAckMsg {
+  type: 'clear-chat-ack';
+  requestId: string;
 }
 
 export interface ClearFilesystemMsg {
@@ -269,6 +279,18 @@ export interface ScoopStatusMsg {
   type: 'scoop-status';
   scoopJid: string;
   status: ScoopTabState['status'];
+}
+
+/**
+ * Fired by the offscreen agent's compaction transformer as it enters
+ * and leaves the summarize / memory-extract LLM phases. The panel
+ * renders a ghost-bubble affordance while the state is non-idle so the
+ * user knows why the agent is silent. `'idle'` clears the affordance.
+ */
+export interface CompactionStateMsg {
+  type: 'compaction-state';
+  scoopJid: string;
+  state: 'summarizing' | 'extracting-memory' | 'idle';
 }
 
 /**
@@ -467,6 +489,7 @@ export type OffscreenToPanelMessage =
   | OffscreenReadyMsg
   | AgentEventMsg
   | ScoopStatusMsg
+  | CompactionStateMsg
   | ScoopListMsg
   | StateSnapshotMsg
   | ErrorMsg
@@ -476,6 +499,7 @@ export type OffscreenToPanelMessage =
   | PanelCdpResponseMsg
   | OAuthResultMsg
   | TrayRuntimeStatusMsg
+  | ClearChatAckMsg
   // Terminal session events emitted by the worker's `TerminalSessionHost`.
   // Consumed by the panel's `TerminalSessionClient`.
   | TerminalEventMsg;

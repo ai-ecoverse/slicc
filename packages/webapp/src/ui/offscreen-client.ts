@@ -54,6 +54,16 @@ export interface OffscreenClientCallbacks {
   ) => void;
   /** Called when the offscreen engine is ready and state has been received. */
   onReady?: () => void;
+  /**
+   * Fired when a scoop's compaction transformer enters or leaves a
+   * phase. The panel uses this to render a ghost-bubble affordance
+   * while the agent is silent on summarize / memory-extract calls;
+   * `'idle'` clears the affordance.
+   */
+  onCompactionStateChange?: (
+    scoopJid: string,
+    state: 'summarizing' | 'extracting-memory' | 'idle'
+  ) => void;
 }
 
 export class OffscreenClient implements KernelClientFacade {
@@ -65,6 +75,11 @@ export class OffscreenClient implements KernelClientFacade {
   private ready = false;
   private stateRetryTimer: ReturnType<typeof setInterval> | null = null;
   private localFs: VirtualFS | null = null;
+  /**
+   * Pending `clear-chat` requests awaiting the bridge's ack. Keyed by
+   * `requestId`; resolved when a `clear-chat-ack` envelope arrives.
+   */
+  private pendingClearAcks = new Map<string, () => void>();
   /**
    * KernelTransport — defaults to the chrome.runtime adapter.
    * A `MessageChannel`-backed transport can be passed via the
@@ -253,8 +268,22 @@ export class OffscreenClient implements KernelClientFacade {
     this.send({ type: 'set-thinking-level', scoopJid: jid, level });
   }
 
+  /**
+   * Cone-only chat clear. Sends a `clear-chat` envelope to the bridge
+   * and resolves only after the bridge's `clear-chat-ack` lands — so
+   * callers can `await` this before `location.reload()` without
+   * racing the offscreen document (which survives the panel reload in
+   * extension mode). A 5-second timeout backs out cleanly in the rare
+   * case the bridge is wedged; reload still proceeds.
+   */
   async clearAllMessages(): Promise<void> {
-    this.send({ type: 'clear-chat' });
+    const requestId = `clear-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const ack = new Promise<void>((resolve) => {
+      this.pendingClearAcks.set(requestId, resolve);
+    });
+    this.send({ type: 'clear-chat', requestId });
+    await Promise.race([ack, new Promise<void>((resolve) => setTimeout(resolve, 5000))]);
+    this.pendingClearAcks.delete(requestId);
   }
 
   clearFilesystem(): void {
@@ -369,6 +398,19 @@ export class OffscreenClient implements KernelClientFacade {
       case 'scoop-status':
         this.handleScoopStatus(msg as ScoopStatusMsg);
         break;
+
+      case 'compaction-state':
+        this.callbacks.onCompactionStateChange?.(msg.scoopJid, msg.state);
+        break;
+
+      case 'clear-chat-ack': {
+        const resolve = this.pendingClearAcks.get(msg.requestId);
+        if (resolve) {
+          this.pendingClearAcks.delete(msg.requestId);
+          resolve();
+        }
+        break;
+      }
 
       case 'scoop-created':
         this.handleScoopCreated(msg as ScoopCreatedMsg);

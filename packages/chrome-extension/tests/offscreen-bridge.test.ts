@@ -661,6 +661,7 @@ describe('OffscreenBridge handlePanelMessage', () => {
       stopScoop: vi.fn(),
       clearQueuedMessages: vi.fn().mockResolvedValue(undefined),
       clearAllMessages: vi.fn().mockResolvedValue(undefined),
+      clearScoopMessages: vi.fn().mockResolvedValue(undefined),
       delegateToScoop: vi.fn().mockResolvedValue(undefined),
       updateModel: vi.fn(),
     };
@@ -710,16 +711,25 @@ describe('OffscreenBridge handlePanelMessage', () => {
     expect(store.delete).toHaveBeenCalledWith('session-test-scoop');
   });
 
-  it('dispatches clear-chat and clears all sessions', async () => {
-    simulatePanelMessage({ type: 'clear-chat' });
+  it('dispatches clear-chat: clears only the cone session and emits an ack', async () => {
+    sentMessages.length = 0;
+    simulatePanelMessage({ type: 'clear-chat', requestId: 'req-123' });
 
     await new Promise((r) => setTimeout(r, 10));
 
-    expect(mockOrchestrator.clearAllMessages).toHaveBeenCalled();
+    // Cone-only: scoops keep their sessions; clearScoopMessages does the
+    // per-scoop wipe (including the channel-history rows in the agent DB).
+    expect(mockOrchestrator.clearScoopMessages).toHaveBeenCalledWith('cone_1');
+    expect(mockOrchestrator.clearAllMessages).not.toHaveBeenCalled();
     const store = (bridge as any).sessionStore;
-    // Should delete sessions for both cone and scoop
     expect(store.delete).toHaveBeenCalledWith('session-cone');
-    expect(store.delete).toHaveBeenCalledWith('session-test-scoop');
+    expect(store.delete).not.toHaveBeenCalledWith('session-test-scoop');
+
+    // Ack must carry the same requestId so the panel can match it.
+    const ack = sentMessages.find((m: any) => m?.payload?.type === 'clear-chat-ack') as
+      | { payload: { type: string; requestId: string } }
+      | undefined;
+    expect(ack?.payload.requestId).toBe('req-123');
   });
 
   it('dispatches abort to orchestrator.stopScoop', async () => {

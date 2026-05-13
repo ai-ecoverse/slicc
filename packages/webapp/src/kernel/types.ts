@@ -191,6 +191,12 @@ export interface KernelClientFacade {
   // -------------------------------------------------------------------------
   updateModel(): void;
   setScoopThinkingLevel(jid: string, level: ThinkingLevel | undefined): void;
+  /**
+   * Cone-only chat clear, used by the "New session" flow. Resolves only
+   * after the host has acknowledged the clear so the panel can safely
+   * `location.reload()` without racing the offscreen agent context (in
+   * extension mode the offscreen document survives the panel reload).
+   */
   clearAllMessages(): Promise<void>;
   clearFilesystem(): void;
   requestState(): void;

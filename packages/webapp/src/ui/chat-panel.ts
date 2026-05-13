@@ -244,6 +244,15 @@ export class ChatPanel {
    */
   private drafts = new Map<string, Array<DraftDipInstance | null>>();
   public onDipLick?: (action: string, data: unknown) => void;
+  /**
+   * Fired whenever the displayed message list changes (new message,
+   * streaming update, switch to a new context). The estimated token
+   * count is a coarse chars/4 heuristic over message content + tool
+   * call JSON — same family of estimate the compaction pass uses,
+   * accurate enough to drive UI affordances like the "context getting
+   * full" glow on the New Session button.
+   */
+  public onMessagesChanged?: (estimatedTokens: number) => void;
   private modelSelectorEl!: HTMLElement;
   public onModelChange?: (modelId: string) => void;
   private thinkingBtn!: HTMLButtonElement;
@@ -382,6 +391,36 @@ export class ChatPanel {
   }
 
   /** Switch to a different scoop's chat context. */
+  /**
+   * Render a frozen-session archive as a read-only chat view. Bypasses
+   * `SessionStore` (the archive lives on the VFS, not in IndexedDB) and
+   * does NOT persist on the way out — the contextId is namespaced so a
+   * subsequent `persistSessionAsync()` would no-op rather than poison
+   * the live cone session.
+   */
+  async displayFrozenSession(opts: {
+    /** Unique id for this view; prefixed with `frozen:` so it can't collide with a real session. */
+    contextId: string;
+    /** Pre-parsed messages from the archive. */
+    messages: ChatMessage[];
+    /** Title to show in the thread header. */
+    title: string;
+  }): Promise<void> {
+    await this.persistSessionAsync();
+    this.setStreamingState(false);
+    this.currentStreamId = null;
+    this.cancelPendingDelta();
+    this.resetEphemeralLlmState();
+    if (this.textarea) this.textarea.placeholder = ChatPanel.DEFAULT_PLACEHOLDER;
+    this.sessionId = opts.contextId;
+    // The current-scoop label is a free-form string in this code path —
+    // re-use it as a "frozen indicator" so the thread header reads naturally.
+    this.currentScoopName = `❄ ${opts.title}`;
+    this.setReadOnly(true);
+    this.messages = opts.messages.map((m) => ({ ...m, isStreaming: false }));
+    this.renderMessages();
+  }
+
   async switchToContext(contextId: string, readOnly: boolean, scoopName?: string): Promise<void> {
     // Save current session first
     await this.persistSessionAsync();
@@ -601,6 +640,65 @@ export class ChatPanel {
     this.renderMessages();
     this.persistSession();
     this.renderModelSelector();
+  }
+
+  /**
+   * Toggle the in-flight compaction ghost bubble. Called by the kernel
+   * client when the active scoop's compaction transformer enters or
+   * leaves a phase. The bubble lives outside `this.messages` (it's not
+   * a persisted ChatMessage) — it's a sibling `.msg-group--ghost` node
+   * appended to the messages container that we tear down on idle.
+   *
+   * `'idle'` removes the bubble. The other states show different
+   * labels so the user knows whether we're crunching the conversation
+   * (summarizing) or persisting learnings (extracting-memory).
+   */
+  setCompactionState(state: 'summarizing' | 'extracting-memory' | 'idle'): void {
+    const existing = this.messagesInner?.querySelector(':scope > .msg-group--compaction');
+    if (state === 'idle') {
+      existing?.remove();
+      return;
+    }
+    const label =
+      state === 'extracting-memory'
+        ? 'Saving memories from this session…'
+        : 'Compacting earlier messages to save context…';
+    if (existing) {
+      const labelEl = existing.querySelector('.msg-group--compaction__label');
+      if (labelEl) labelEl.textContent = label;
+      return;
+    }
+    const ghost = this.createCompactionGhostBubble(label);
+    this.messagesInner.appendChild(ghost);
+    this.scrollToBottom();
+  }
+
+  /**
+   * Build the ghost-bubble DOM. Lucide `archive` icon (a box with a
+   * slot, suggesting "filing away") + animated dots after the label so
+   * the bubble visibly pulses while the LLM call is in flight.
+   */
+  private createCompactionGhostBubble(label: string): HTMLElement {
+    const group = document.createElement('div');
+    group.className = 'msg-group msg-group--compaction';
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-group--compaction__bubble';
+    // Lucide `archive` — keep paths inline so we don't have to load the
+    // sprite bundle for one icon.
+    bubble.innerHTML =
+      '<svg class="msg-group--compaction__icon" xmlns="http://www.w3.org/2000/svg" ' +
+      'width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<rect width="20" height="5" x="2" y="3" rx="1"/>' +
+      '<path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/>' +
+      '<path d="M10 12h4"/>' +
+      '</svg>' +
+      '<span class="msg-group--compaction__label"></span>' +
+      '<span class="msg-group--compaction__dots" aria-hidden="true"><span></span><span></span><span></span></span>';
+    const labelEl = bubble.querySelector('.msg-group--compaction__label');
+    if (labelEl) labelEl.textContent = label;
+    group.appendChild(bubble);
+    return group;
   }
 
   /** Clear all messages from the display (doesn't affect session store). */
@@ -2155,6 +2253,42 @@ export class ChatPanel {
     this.autoScrollAttached = true;
     this.hideJumpPill();
     this.scrollToBottom(true);
+    this.notifyMessagesChanged();
+  }
+
+  /**
+   * Rough chars/4 estimator over the current message list. Same family
+   * of heuristic the compaction pass uses (pi-coding-agent's
+   * `estimateTokens`), just over the UI's `ChatMessage` shape rather
+   * than the structured `AgentMessage`. Folds tool-call I/O into the
+   * count so long tool-result transcripts move the gauge appropriately.
+   */
+  private estimateChatTokens(): number {
+    let chars = 0;
+    for (const m of this.messages) {
+      chars += m.content?.length ?? 0;
+      if (m.toolCalls) {
+        for (const tc of m.toolCalls) {
+          chars += tc.name.length;
+          try {
+            chars += JSON.stringify(tc.input ?? {}).length;
+          } catch {
+            /* circular / non-serializable — ignore */
+          }
+          if (tc.result) chars += tc.result.length;
+        }
+      }
+    }
+    return Math.ceil(chars / 4);
+  }
+
+  private notifyMessagesChanged(): void {
+    if (!this.onMessagesChanged) return;
+    try {
+      this.onMessagesChanged(this.estimateChatTokens());
+    } catch {
+      /* listener bug must not break rendering */
+    }
   }
 
   private appendMessageEl(msg: ChatMessage): void {
@@ -2182,6 +2316,7 @@ export class ChatPanel {
       this.reflowToolClusters();
     }
     this.scrollToBottom();
+    this.notifyMessagesChanged();
   }
 
   /** Determine whether to show the sender label for a message */
