@@ -4,7 +4,7 @@
 
 **Goal:** Add a "Pop out" affordance to the SLICC Chrome extension side panel that opens the same agent state in a full-page tab using the standalone split-pane layout, with global mutual exclusion enforced by the service worker.
 
-**Architecture:** New URL-flagged runtime mode `extension-detached` reuses the offscreen agent. Service worker coordinates a single detached tab globally via `chrome.storage.session`, with three layers of mutual exclusion (window close, UI overlay, send-path lock check in `OffscreenClient.send()`). Boot reconciliation replaces the unconditional top-level `setPanelBehavior` call to survive MV3 SW eviction.
+**Architecture:** New URL-flagged runtime mode `extension-detached` reuses the offscreen agent. Service worker coordinates a single detached tab globally via `chrome.storage.session`, with three layers of mutual exclusion on the panel side (window close, send-path lock check in `OffscreenClient.send()`, non-dismissible UI overlay — `enterDetachedActiveState` runs them in that order so sends are blocked before the overlay paints). Boot reconciliation replaces the unconditional top-level `setPanelBehavior` call to survive MV3 SW eviction.
 
 **Tech Stack:** TypeScript, vitest, Chrome MV3 extension APIs (`chrome.sidePanel`, `chrome.action.onClicked`, `chrome.tabs`, `chrome.windows`, `chrome.storage.session`, `chrome.runtime.onStartup` / `onInstalled`).
 
@@ -373,7 +373,7 @@ export interface ServiceWorkerEnvelope {
 Run: `npm run typecheck`
 Expected: PASS.
 
-Note on exhaustiveness: `OffscreenBridge.handlePanelMessage` at `packages/chrome-extension/src/offscreen-bridge.ts:745` has a `switch (msg.type)` over `PanelToOffscreenMessage` WITHOUT a `default:` clause. Adding `DetachedPopoutRequestMsg | DetachedClaimMsg` to the union is therefore safe — unknown payload types silently fall through. If a future maintainer adds `default: throw assertNever(...)` for exhaustiveness, an explicit `case 'detached-popout-request': case 'detached-claim': return;` no-op pair must be added to preserve detached mode. The spec asserts this dependency explicitly.
+Note on exhaustiveness: `OffscreenBridge.handlePanelMessage` (declared at `packages/chrome-extension/src/offscreen-bridge.ts:745`, with the `switch (msg.type)` at ~L748) has no `default:` clause and no `assertNever`. Adding `DetachedPopoutRequestMsg | DetachedClaimMsg` to the union is therefore safe — unknown payload types silently fall through. If a future maintainer adds `default: throw assertNever(...)` for exhaustiveness, an explicit `case 'detached-popout-request': case 'detached-claim': return;` no-op pair must be added to preserve detached mode. The spec asserts this dependency explicitly.
 
 - [ ] **Step 6: Commit**
 
@@ -2017,9 +2017,13 @@ In non-detached mode:
 - shows the popout button wired to detached-popout-request
 
 Both modes install a detached-active listener that calls
-enterDetachedActiveState — window.close() + overlay +
-setLocked(true) — except in the detached tab itself, which
-ignores its own echo via the isDetachedSelf guard.
+enterDetachedActiveState — window.close() → setLocked(true) →
+showDetachedActiveOverlay() — except in the detached tab itself,
+which ignores its own echo via the isDetachedSelf guard.
+
+Order matters: locking before the overlay paints closes the brief
+window where a still-active send button could leak traffic if
+window.close() doesn't take effect.
 EOF
 )"
 ```
@@ -2196,13 +2200,21 @@ the locked tab ID in `chrome.storage.session`.
 top-level + `onStartup` + `onInstalled`, so MV3 SW eviction and
 browser cold-start cannot leave the lock half-applied.
 
-**Three-layer mutual exclusion** on the panel side:
+**Three-layer mutual exclusion** on the panel side. In code,
+`enterDetachedActiveState` executes them in this order:
 
-1. `window.close()` from the panel + `chrome.sidePanel.close({ windowId })` from SW
-2. `Layout.showDetachedActiveOverlay()` — non-dismissible overlay
-3. `OffscreenClient.setLocked(true)` — short-circuits the private
+1. `window.close()` — happy path.
+2. `OffscreenClient.setLocked(true)` — short-circuits the private
    `send()` chokepoint so no user-action message reaches offscreen
-   even if the user interacts with a stuck UI.
+   even if `window.close()` doesn't take effect. Done BEFORE the
+   overlay paints so a still-visible send button can't leak traffic
+   in the interim.
+3. `Layout.showDetachedActiveOverlay()` — non-dismissible visual
+   feedback with a "Close this window" button.
+
+Separately, the SW makes a best-effort `chrome.sidePanel.close({ windowId })`
+call per window after broadcasting `detached-active` (Chrome 141+).
+This is independent of `enterDetachedActiveState`.
 
 **Non-detached `index.html` tabs** (e.g., the local QA recipe surface)
 are treated as side-panel-equivalent: they DO listen for `detached-active`
@@ -2346,9 +2358,10 @@ panel. State (chat history, scoops, VFS) is shared.
 While a detached tab is open, the side panel is disabled globally
 (across all Chrome windows) — clicking the toolbar icon focuses the
 detached tab. This is intentional; close the tab to restore the side
-panel. Detached popout requires Chrome 141+ for the hard-close
-fallback to apply; older Chrome versions still work but rely on the
-panel's own `window.close()` path.
+panel. The optional best-effort SW hard-close of any open side panels
+uses `chrome.sidePanel.close` (Chrome 141+). Older Chrome versions
+still get full mutual exclusion via `window.close()` from the panel,
+the send-path lock, and the non-dismissible overlay.
 ```
 
 - [ ] **Step 8: Search root `CLAUDE.md` for stale wording**
