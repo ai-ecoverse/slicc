@@ -212,9 +212,18 @@ export class Layout {
       return;
     }
     if (this.popoutButtonEl) return;
-    // Layout's buildHeader() creates a top-level `<div class="header">`.
-    const headerEl = this.root.querySelector('.header') as HTMLElement | null;
-    if (!headerEl) return;
+
+    // In standalone mode, Layout has a top-of-window `.header` div.
+    // In extension mode, that header is omitted (the side panel is
+    // narrower and uses `.thread-header` as its primary chrome).
+    // Put the button wherever the user's eye is already looking.
+    const containerEl = (
+      this.isExtension
+        ? this.root.querySelector('.thread-header')
+        : this.root.querySelector('.header')
+    ) as HTMLElement | null;
+    if (!containerEl) return;
+
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'header__popout-btn';
@@ -225,7 +234,7 @@ export class Layout {
       btn.disabled = true; // prevent double-fire
       this.popoutClickHandler?.();
     });
-    headerEl.appendChild(btn);
+    containerEl.appendChild(btn);
     this.popoutButtonEl = btn;
   }
 
