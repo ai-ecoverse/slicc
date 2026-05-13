@@ -100,7 +100,7 @@ If a shell command needs to affect the panel UI, use the dual-context pattern:
 1. try a direct `window.__slicc_*` hook when running in the panel
 2. fall back to `chrome.runtime.sendMessage(...)` when running from offscreen
 
-`debug on` is the canonical example of this pattern.
+The `sprinkle` command's `sprinkle-op` relay path is the canonical example today.
 
 ## Runtime Conventions
 

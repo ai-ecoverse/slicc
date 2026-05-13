@@ -6,30 +6,8 @@ const ALL_EXTENSION_TAB_SPECS = [
   { id: 'memory', label: 'Memory' },
 ] as const;
 
-const HIDDEN_TABS_KEY = 'slicc-hidden-tabs';
-const DEFAULT_HIDDEN_TABS = ['terminal', 'memory'];
-
-/** Read hidden tab IDs from localStorage. */
-export function getHiddenTabs(): Set<string> {
-  try {
-    const raw = localStorage.getItem(HIDDEN_TABS_KEY);
-    if (!raw) return new Set(DEFAULT_HIDDEN_TABS);
-    return new Set(JSON.parse(raw) as string[]);
-  } catch {
-    return new Set(DEFAULT_HIDDEN_TABS);
-  }
-}
-
-/** Set hidden tab IDs in localStorage. Chat cannot be hidden. */
-export function setHiddenTabs(ids: string[]): void {
-  const filtered = ids.filter((id) => id !== 'chat');
-  localStorage.setItem(HIDDEN_TABS_KEY, JSON.stringify(filtered));
-}
-
-/** Visible extension tab specs (filtered by localStorage config). */
-export const EXTENSION_TAB_SPECS = ALL_EXTENSION_TAB_SPECS.filter(
-  (tab) => !getHiddenTabs().has(tab.id)
-);
+/** Built-in extension tab specs (all visible — Terminal/Memory used to be hidden). */
+export const EXTENSION_TAB_SPECS = ALL_EXTENSION_TAB_SPECS;
 
 /** Built-in tab id union. Dynamic sprinkles use arbitrary string ids. */
 export type BuiltinExtensionTabId = (typeof ALL_EXTENSION_TAB_SPECS)[number]['id'];

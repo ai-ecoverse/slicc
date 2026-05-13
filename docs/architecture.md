@@ -176,7 +176,6 @@ The kernel host is the off-main-thread home for the agent engine. In standalone,
 | `oauth-token-command.ts` | `oauth-token` — retrieve OAuth access tokens for configured providers with auto-login                                                                                       |
 | `playwright-command.ts`  | `playwright-cli` / `playwright` / `puppeteer` — browser automation shell commands (navigate, snapshot, click, screenshot, cookies, HAR recording)                           |
 | `sprinkle-command.ts`    | `sprinkle` — list, open, close, and refresh `.shtml` sprinkle panels from the agent                                                                                         |
-| `debug-command.ts`       | `debug` — toggle Terminal/Memory tabs in extension mode (extension-only, uses dual-context hook+relay pattern)                                                              |
 | `magick-wasm.ts`         | Shared ImageMagick WASM initialization module for dual-mode (CLI/browser CDN vs extension bundled) image processing                                                         |
 
 ### packages/webapp/src/skills/ — Skill Discovery
@@ -222,7 +221,7 @@ All skills (native and compatibility) are read-only — the slicc-specific `mani
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `main.ts`                   | Entry point: `main()` for CLI/Electron embedded app, `mainExtension()` for extension (uses OffscreenClient). Handles layout, API key, orchestrator, skill drag/drop                                  |
 | `offscreen-client.ts`       | Extension-only: side panel's interface to offscreen engine. Provides AgentHandle + Orchestrator-compatible facade via chrome.runtime messages                                                        |
-| `layout.ts`                 | Unified split-pane layout. `Layout(root, isExtension)` toggles density (scoops rail, switcher, avatar, debug-tab defaults). Detached popout mode passes `isExtension=false` for full standalone UX.  |
+| `layout.ts`                 | Unified split-pane layout. `Layout(root, isExtension)` toggles density (scoops rail, switcher, avatar). Detached popout mode passes `isExtension=false` for full standalone UX.                      |
 | `tabbed-ui.ts`              | Shared Chat/Terminal/Files/Memory tab definitions + normalization helpers reused by the extension layout and injected overlay shell                                                                  |
 | `overlay-shell-state.ts`    | Pure state transitions for the injected Electron overlay shell (open/close + active tab)                                                                                                             |
 | `electron-overlay.ts`       | Browser-side custom elements for the injected Electron overlay shell: launcher button, sidebar, persistent iframe host, and parent→iframe tab sync                                                   |
@@ -341,7 +340,7 @@ The Chrome extension uses a three-layer design to keep the agent engine alive ac
 
 **CDP Proxy:** Offscreen documents can't call `chrome.debugger` directly. Instead, offscreen sends `CdpProxyMessage` through the service worker, which translates to `chrome.debugger` commands and routes results back.
 
-**Dual Shell Context:** Both the side panel and offscreen document run their own WasmShell instance. The panel shell powers the Terminal tab; the offscreen shell executes agent bash tool calls. They share VFS via IndexedDB but NOT window globals or DOM. Shell commands that affect the panel UI (e.g., `debug on`) must use the dual-context pattern: try `window.__slicc_*` hook first (panel), fall back to `chrome.runtime.sendMessage` relay (offscreen → panel). See `docs/pitfalls.md` "Extension Dual-Shell Context".
+**Dual Shell Context:** Both the side panel and offscreen document run their own WasmShell instance. The panel shell powers the Terminal tab; the offscreen shell executes agent bash tool calls. They share VFS via IndexedDB but NOT window globals or DOM. Shell commands that need to affect the panel UI from the offscreen agent must use the dual-context pattern: try a `window.__slicc_*` hook first (panel), fall back to `chrome.runtime.sendMessage` relay (offscreen → panel). See `docs/pitfalls.md` "Extension Dual-Shell Context".
 
 ## Data Flow Diagrams
 

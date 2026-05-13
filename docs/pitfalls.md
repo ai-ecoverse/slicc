@@ -699,39 +699,36 @@ The service worker must only import **types** (erased at compile time) from othe
 
 In extension mode, there are **two separate WasmShell instances** running in different execution contexts:
 
-| Context                | Location                                         | Shell purpose                    | Window globals                        |
-| ---------------------- | ------------------------------------------------ | -------------------------------- | ------------------------------------- |
-| **Side panel**         | `packages/webapp/src/ui/main.ts` (mainExtension) | Terminal tab — user-facing shell | Has Layout, `__slicc_debug_tabs`, DOM |
-| **Offscreen document** | `packages/chrome-extension/src/offscreen.ts`     | Agent's bash tool — LLM-driven   | Has Orchestrator, no DOM/Layout       |
+| Context                | Location                                         | Shell purpose                    | Window globals                  |
+| ---------------------- | ------------------------------------------------ | -------------------------------- | ------------------------------- |
+| **Side panel**         | `packages/webapp/src/ui/main.ts` (mainExtension) | Terminal tab — user-facing shell | Has Layout + DOM                |
+| **Offscreen document** | `packages/chrome-extension/src/offscreen.ts`     | Agent's bash tool — LLM-driven   | Has Orchestrator, no DOM/Layout |
 
 These contexts share IndexedDB (VFS, sessions) but **NOT** window globals, DOM, or Layout instances. They communicate via `chrome.runtime` messages routed through the service worker.
 
 **The Pattern: UI-Affecting Shell Commands**
 
-Shell commands that need to affect the side panel UI (e.g., `debug on` toggling tabs) must handle both contexts:
+When a shell command run by the agent (offscreen context) needs to drive the side panel UI, use the dual-context pattern:
 
 1. **Direct hook** (panel context): check `window.__slicc_*` — if present, call directly
-2. **Message relay** (offscreen context): send `chrome.runtime.sendMessage({ source: 'offscreen', payload: { type: '...', ... } })` → service worker routes to panel → `OffscreenClient` handles in `setupMessageListener()`
+2. **Message relay** (offscreen context): send `chrome.runtime.sendMessage({ source: 'offscreen', payload: { type: '...', ... } })` → service worker routes to panel → `OffscreenClient` handles in `setupMessageListener()` and dispatches to the appropriate Layout/panel API.
 
 ```typescript
 // Pattern: try direct hook, fall back to message relay
-const toggle = (window as any).__slicc_debug_tabs;
+const toggle = (window as any).__slicc_someUiOp;
 if (toggle) {
-  toggle(show); // Running in panel context
+  toggle(arg); // Running in panel context
 } else {
-  chrome.runtime.sendMessage({ source: 'offscreen', payload: { type: 'debug-tabs', show } });
+  chrome.runtime.sendMessage({ source: 'offscreen', payload: { type: 'some-ui-op', arg } });
 }
 ```
 
-**Current example**: `debug-command.ts` uses this pattern. Panel registers hook in `main.ts`; `offscreen-client.ts` handles the relay message.
+The only built-in supplemental command using this today is the sprinkle subsystem (`sprinkle-op` relay in `offscreen-client.ts`); follow the same shape for any new UI-affecting commands.
 
 **Related Files**
 
-- `packages/webapp/src/shell/supplemental-commands/debug-command.ts` (dual-context command, tries hook then relay)
-- `packages/webapp/src/ui/main.ts` line 187 (registers `__slicc_debug_tabs` hook)
-- `packages/webapp/src/ui/offscreen-client.ts` line 235 (relays `debug-tabs` message to hook)
-- `packages/webapp/src/ui/layout.ts` `setDebugTabs()` (UI state — adds/removes tabs dynamically)
-- `packages/webapp/src/ui/tabbed-ui.ts` `setHiddenTabs()` (persistence — saves to localStorage)
+- `packages/webapp/src/ui/offscreen-client.ts` `setupMessageListener()` (handles offscreen-relayed payloads)
+- `packages/webapp/src/ui/layout.ts` (panel-side state surface)
 
 ## Dual-Mode Testing Checklist
 
