@@ -40,7 +40,7 @@ interface ChromeDebuggerAPI {
 }
 
 interface ChromeTab {
-  id: number;
+  id?: number;
   title?: string;
   url?: string;
   windowId?: number;

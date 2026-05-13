@@ -117,7 +117,7 @@ function isValidClaimUrl(rawUrl: string | undefined): boolean {
   return u.origin === expectedOrigin && isExtensionIndex && u.searchParams.get('detached') === '1';
 }
 
-async function handleDetachedClaim(sender: { tab?: { id: number }; url?: string }): Promise<void> {
+async function handleDetachedClaim(sender: ChromeMessageSender): Promise<void> {
   const claimingTabId = sender.tab?.id;
   if (claimingTabId === undefined) return;
   if (!isValidClaimUrl(sender.url)) return;
@@ -130,13 +130,13 @@ async function handleDetachedClaim(sender: { tab?: { id: number }; url?: string 
   }
 
   if (storedTabId !== undefined) {
-    let existing: { id: number; windowId?: number } | undefined;
+    let existing: ChromeTab | undefined;
     try {
       existing = await chrome.tabs.get(storedTabId);
     } catch {
       existing = undefined;
     }
-    if (existing !== undefined) {
+    if (existing !== undefined && existing.id !== undefined) {
       // A different detached tab already holds the lock. Close the new one.
       await chrome.tabs.remove(claimingTabId);
       await chrome.tabs.update(existing.id, { active: true });
@@ -207,14 +207,11 @@ chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
   return false;
 });
 
-async function handleActionClick(clickedTab: {
-  id: number | undefined;
-  windowId?: number;
-}): Promise<void> {
+async function handleActionClick(clickedTab: ChromeTab): Promise<void> {
   const storedId = await readStoredDetachedTabId();
 
   if (storedId !== undefined) {
-    let alive: { id: number; windowId?: number } | undefined;
+    let alive: ChromeTab | undefined;
     try {
       alive = await chrome.tabs.get(storedId);
     } catch {
