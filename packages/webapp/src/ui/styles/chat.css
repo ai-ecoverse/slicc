@@ -266,6 +266,12 @@
   gap: 8px;
 }
 
+/* Empty groups left behind after tool-call clustering must not contribute
+   to the parent container's gap: 16px. */
+.msg-group:empty {
+  display: none;
+}
+
 /* Queued messages — dimmed to distinguish from sent messages */
 .msg--queued {
   opacity: 0.55;

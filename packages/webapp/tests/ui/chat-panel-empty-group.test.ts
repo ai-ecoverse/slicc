@@ -156,6 +156,48 @@ describe('ChatPanel empty msg-group gap fix', () => {
     expect(groups[1].dataset.msgId).toBe('u2');
   });
 
+  it('vacated msg-groups left after clustering have no visible size (display:none via CSS :empty)', () => {
+    // After reflowToolClusters, continuation groups that had their tool calls
+    // moved into a cluster become empty. They must not contribute to the
+    // parent flex container gap. jsdom does not compute CSS, so we assert the
+    // element is empty — the :empty { display:none } rule in chat.css handles
+    // the visual suppression.
+    panel.loadMessages([
+      { id: 'u1', role: 'user', content: 'go', timestamp: 1000 },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: '',
+        timestamp: 2000,
+        toolCalls: [{ id: 'tc-1', name: 'bash', input: {}, result: 'ok' }],
+      },
+      {
+        id: 'a2',
+        role: 'assistant',
+        content: '',
+        timestamp: 2100,
+        toolCalls: [{ id: 'tc-2', name: 'bash', input: {}, result: 'ok' }],
+      },
+      {
+        id: 'a3',
+        role: 'assistant',
+        content: '',
+        timestamp: 2200,
+        toolCalls: [{ id: 'tc-3', name: 'bash', input: {}, result: 'ok' }],
+      },
+    ]);
+
+    // All three tool calls should be clustered.
+    expect(container.querySelectorAll('.tool-call-cluster').length).toBe(1);
+
+    // Continuation groups that lost their tool calls to the cluster are empty.
+    const emptyGroups = [...container.querySelectorAll('.msg-group')].filter(
+      (g) => g.childElementCount === 0
+    );
+    // They exist in the DOM (load-bearing for chain detection) but are empty.
+    expect(emptyGroups.length).toBeGreaterThan(0);
+  });
+
   it('does not produce duplicate msg-groups when updateMessageEl is called on an existing element', () => {
     const msg: ChatMessage = {
       id: 'a1',
