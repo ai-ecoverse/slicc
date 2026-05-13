@@ -42,7 +42,7 @@ The detached tab's URL is `chrome-extension://<id>/index.html?detached=1`. The q
 | `packages/webapp/src/ui/runtime-mode.ts`            | Add `'extension-detached'` to `UiRuntimeMode`. Add `DETACHED_RUNTIME_QUERY_NAME = 'detached'` and `DETACHED_RUNTIME_QUERY_VALUE = '1'`. `resolveUiRuntimeMode` returns `'extension-detached'` when `isExtension && url.searchParams.get('detached') === '1'`.                                                                                                                                                                                                                                                                                                           |
 | `packages/webapp/src/ui/main.ts`                    | Branch on `'extension-detached'` to call `mainExtension(app, { detached: true })`. In detached mode, `mainExtension` instantiates `new Layout(app, false)` (standalone density) instead of the current `new Layout(app, true)`. On boot, emit a `detached-claim` envelope to the SW. Unconditionally install the `detached-active` listener (so plain `index.html` tabs without `?detached=1` also self-close when a detached tab claims the lock).                                                                                                                     |
 | `packages/chrome-extension/src/service-worker.ts`   | New state machine for detached lifecycle, persisted in `chrome.storage.session`. New message handlers for the `detached-popout-request` and `detached-claim` envelopes (see protocol section below). New `chrome.action.onClicked` handler. New `chrome.tabs.onRemoved` listener that resolves the lock when the detached tab disappears.                                                                                                                                                                                                                               |
-| `packages/chrome-extension/src/messages.ts`         | Typed envelopes for the new messages, following the existing `{ source, payload }` pattern — see "Message protocol" below. Add a `'service-worker'` source envelope variant if it is not already present in `ServiceWorkerEnvelope`.                                                                                                                                                                                                                                                                                                                                    |
+| `packages/chrome-extension/src/messages.ts`         | Extend the existing `ServiceWorkerEnvelope` and `PanelEnvelope` payload unions with the three new discriminator types (`detached-popout-request`, `detached-claim`, `detached-active`). The envelope infrastructure itself is already in place (`ServiceWorkerEnvelope` at `messages.ts:539–544`); only payload-union additions are required.                                                                                                                                                                                                                           |
 | `packages/chrome-extension/src/chrome.d.ts`         | Type surface additions required by the SW flow: `sidePanel.setOptions({ enabled?, path?, tabId? })`, `sidePanel.open({ tabId })`, `action.onClicked.addListener(callback: (tab) => void)`, `tabs.onRemoved.addListener(callback: (tabId, removeInfo) => void)`, `tabs.update(tabId, { active })`, `windows.update(windowId, { focused })`, `storage.session` (same shape as `storage.local`). Plus `chrome.runtime.onMessage` already provides `sender.tab.id` and `sender.url` — those are already in `ChromeMessageSender` and `ChromeTab` but verify field coverage. |
 | Side panel UI (extension `main.ts` path)            | New header button "Pop out" that sends a `detached-popout-request` envelope to the SW. Listens for `detached-active` and calls `window.close()` on receipt (with a fallback documented in error-handling).                                                                                                                                                                                                                                                                                                                                                              |
 | `packages/chrome-extension/src/offscreen-bridge.ts` | No changes. Broadcast is already client-agnostic via `chrome.runtime` and tolerates a panel closing and a new panel opening — the same path used today when a user closes and reopens the side panel. Mutual exclusion ensures the bridge only ever fans out to one live UI client at a time.                                                                                                                                                                                                                                                                           |
@@ -70,6 +70,16 @@ Three new envelope payloads:
 //   Detached tab handler: ignore (it's the claimer).
 { source: 'service-worker', payload: { type: 'detached-active' } }
 ```
+
+The `detached-active` listener installed in `mainExtension` must guard its `window.close()` call on the runtime mode — specifically, it MUST NOT close itself when running with `?detached=1`. The simplest form:
+
+```ts
+if (runtimeMode !== 'extension-detached') {
+  window.close();
+}
+```
+
+This ensures the claimer tab never inadvertently closes itself when its own broadcast echoes back, and it keeps the listener logic identical between the side panel and non-detached `index.html` surfaces.
 
 The `payload.type` values use the existing convention of kebab-case discriminators with no `slicc:` prefix, matching the codebase pattern (e.g., `refresh-tray-runtime`, `navigate-lick`).
 
@@ -107,8 +117,12 @@ Detached tab: main() boots, detects ?detached=1
 
 SW: receives detached-claim with sender.tab.id = T,
     and validates sender.url:
-      const u = new URL(sender.url);
-      u.origin === chrome.runtime.getURL('').slice(0, -1)
+      if (!sender.url) reject;            // belt-and-suspenders for tests/mocks
+      let u: URL;
+      try { u = new URL(sender.url); }
+      catch { reject; }
+      const expectedOrigin = new URL(chrome.runtime.getURL('index.html')).origin;
+      u.origin === expectedOrigin
         && u.pathname === '/index.html'
         && u.searchParams.get('detached') === '1'
   → if !storage.detachedTabId or chrome.tabs.get(storage.detachedTabId) rejects:
@@ -204,7 +218,7 @@ All SW event handlers (`onMessage`, `onClicked`, `onRemoved`) read storage on en
 ## Security considerations
 
 - All new message types use `sender.tab.id` from `chrome.runtime.onMessage`, never values supplied in the message body, for tab identity.
-- The SW additionally parses `sender.url` as a `URL` and validates `origin`, `pathname === '/index.html'`, and `searchParams.get('detached') === '1'`. Substring matches like `url.includes('?detached=1')` MUST NOT be used — they are brittle to query reordering and additional parameters.
+- The SW additionally parses `sender.url` as a `URL` and validates `origin`, `pathname === '/index.html'`, and `searchParams.get('detached') === '1'`. Substring matches like `url.includes('?detached=1')` MUST NOT be used — they are brittle to query reordering and additional parameters. A missing `sender.url` or a `new URL()` throw MUST reject the claim outright (defensive against test mocks and unexpected sender shapes).
 - The "non-detached `index.html` tabs are side-panel-equivalent" rule above is what makes the spec's mutual-exclusion guarantee real: without it, a plain `index.html` tab would silently become a second UI client and concurrent user actions (sending messages, navigating scoops) would be duplicated by the offscreen agent.
 - No new permissions required. `tabs`, `sidePanel`, `storage` are already in the manifest.
 
