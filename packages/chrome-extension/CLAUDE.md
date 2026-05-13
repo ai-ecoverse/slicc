@@ -205,6 +205,63 @@ pkill -f "Google Chrome.*slicc-ext-profile"
 The same `EXT` and `PROFILE` paths can be reused on the next run, but
 re-running step 1 + step 3 is the safest way to pick up code changes.
 
+### Detached popout QA scenarios
+
+Build with `SLICC_EXT_DEV=1` (as above) and launch Chrome for Testing
+with the recipe. Then verify each scenario:
+
+1. **Click popout button from side panel.**
+   - Side panel header shows "Pop out" button.
+   - Click → new tab opens at
+     `chrome-extension://<id>/index.html?detached=1`.
+   - Side panel closes itself.
+   - Chat history is intact in the detached tab.
+
+2. **Toolbar icon while detached open.**
+   - Click toolbar icon → existing detached tab focuses, side panel
+     does NOT open.
+   - If detached tab is in another window, the window also focuses.
+
+3. **Close detached → return to side panel.**
+   - Close the detached tab.
+   - Click toolbar icon → side panel opens normally.
+
+4. **Direct URL access.**
+   - Paste `chrome-extension://<id>/index.html?detached=1` into a new
+     tab.
+   - It boots into detached mode and locks the side panel.
+
+5. **Reload detached tab.**
+   - Ctrl-R the detached tab.
+   - It rehydrates into detached mode (idempotent claim, no extra tabs).
+
+6. **Browser restart with "Continue where you left off."**
+   - Close all Chrome for Testing windows with the detached tab open.
+   - Relaunch.
+   - When the restored detached tab activates, the lock re-applies.
+   - Verify the discarded-state caveat: if Chrome restores the tab as
+     discarded, side panel may briefly be available; once the user
+     focuses the detached tab, lock applies.
+
+7. **Drag detached tab to a new window.**
+   - Drag tab out of its window.
+   - In the new window, click the toolbar icon → existing detached
+     tab focuses (in the other window).
+
+8. **Extension-page capability differences.**
+   - In the detached tab, run a mount command that uses
+     `showDirectoryPicker()` (e.g., `mount /workspace/scratch`).
+     Verify it works under a normal tab gesture context, since the
+     detached tab is a normal tab not a side panel.
+   - Verify mic/voice input behaves the same as in the side panel
+     (or note differences for follow-up).
+
+9. **Tray runtime config survives popout.**
+   - In the side panel, configure tray runtime (paste join URL).
+   - Click popout.
+   - In the detached tab, verify the tray runtime is still connected
+     and `refresh-tray-runtime` relays work.
+
 ## Secret-Aware Fetch Proxy
 
 The service worker handles `fetch-proxy.fetch` Port connections for secret-aware HTTP proxying. The Port `onMessage` listener attaches **synchronously** in `onConnect` (via `handleFetchProxyConnectionAsync` — the pipeline is awaited INSIDE the listener); the previous "await build → then add listener" pattern silently dropped the page's immediate `request` message, which made `curl` hang. See `docs/pitfalls.md` "Chrome Port: onMessage Listener Must Attach Synchronously".
