@@ -338,11 +338,16 @@ export class OffscreenClient implements KernelClientFacade {
   private handleOffscreenMessage(msg: OffscreenToPanelMessage | StateSnapshotMsg): void {
     switch (msg.type) {
       case 'offscreen-ready':
-        log.info('Offscreen engine ready');
-        if (!this.ready) {
-          // Request state now that offscreen is confirmed ready
-          this.send({ type: 'request-state' });
+        if (this.ready) {
+          // Offscreen restarted while panel was open (e.g. MV3 SW killed and
+          // recreated the offscreen doc). Reset so the state-snapshot handler
+          // treats the next snapshot as a first-ready and fires onReady again.
+          log.warn('Offscreen restarted — re-requesting state');
+          this.ready = false;
+        } else {
+          log.info('Offscreen engine ready');
         }
+        this.send({ type: 'request-state' });
         break;
 
       case 'agent-event':

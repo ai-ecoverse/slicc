@@ -346,6 +346,29 @@ describe('OffscreenClient', () => {
     expect(onReady).toHaveBeenCalled();
   });
 
+  it('resets ready and re-requests state when offscreen restarts mid-session', () => {
+    const onReady = vi.fn();
+    const c2 = new OffscreenClient({ ...callbacks, onReady });
+
+    // First boot: offscreen-ready → request-state → state-snapshot → ready
+    simulateMessage('offscreen', { type: 'offscreen-ready' });
+    simulateMessage('offscreen', { type: 'state-snapshot', scoops: [], activeScoopJid: null });
+    expect(c2.isReady()).toBe(true);
+    expect(onReady).toHaveBeenCalledTimes(1);
+    sentMessages.length = 0;
+
+    // Offscreen restarts: second offscreen-ready while already ready
+    simulateMessage('offscreen', { type: 'offscreen-ready' });
+    expect(c2.isReady()).toBe(false);
+    const requestStateMsg = (sentMessages[0] as { payload: any })?.payload;
+    expect(requestStateMsg?.type).toBe('request-state');
+
+    // New state-snapshot arrives → onReady fires again
+    simulateMessage('offscreen', { type: 'state-snapshot', scoops: [], activeScoopJid: null });
+    expect(c2.isReady()).toBe(true);
+    expect(onReady).toHaveBeenCalledTimes(2);
+  });
+
   it('handles tool_start and tool_end events', () => {
     client.selectedScoopJid = 'cone_123';
     const handle = client.createAgentHandle();
