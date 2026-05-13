@@ -3,8 +3,9 @@
  * Uses a single fixed-position element appended to <body>,
  * so tooltips are never clipped by overflow:hidden ancestors.
  *
- * Placement auto-detects: prefers below, flips above if near bottom,
- * shifts horizontally to stay within viewport.
+ * Placement honors `data-tooltip-pos` ('top' | 'bottom' | 'left' | 'right',
+ * default 'bottom'), flips to the opposite side when the preferred side is
+ * clipped, then clamps to the viewport on both axes.
  */
 
 const DELAY = 100; // ms before showing
@@ -58,23 +59,35 @@ function show(target: HTMLElement): void {
   } else if (pos === 'right') {
     top = rect.top + rect.height / 2 - tipRect.height / 2;
     left = rect.right + GAP;
+  } else if (pos === 'left') {
+    top = rect.top + rect.height / 2 - tipRect.height / 2;
+    left = rect.left - tipRect.width - GAP;
   } else {
     // bottom (default)
     top = rect.bottom + GAP;
     left = rect.left + rect.width / 2 - tipRect.width / 2;
   }
 
-  // Auto-flip vertical if clipped
+  // Auto-flip to the opposite side when the preferred side is clipped.
   if (pos === 'bottom' && top + tipRect.height > window.innerHeight - 4) {
     top = rect.top - tipRect.height - GAP;
   } else if (pos === 'top' && top < 4) {
     top = rect.bottom + GAP;
+  } else if (pos === 'left' && left < 4) {
+    left = rect.right + GAP;
+  } else if (pos === 'right' && left + tipRect.width > window.innerWidth - 4) {
+    left = rect.left - tipRect.width - GAP;
   }
 
-  // Clamp horizontal to viewport
+  // Clamp to the viewport on both axes (covers diagonal overflow and the
+  // along-axis spread of left/right placements near a corner).
   if (left < 4) left = 4;
   if (left + tipRect.width > window.innerWidth - 4) {
     left = window.innerWidth - tipRect.width - 4;
+  }
+  if (top < 4) top = 4;
+  if (top + tipRect.height > window.innerHeight - 4) {
+    top = window.innerHeight - tipRect.height - 4;
   }
 
   tip.style.top = `${top}px`;
