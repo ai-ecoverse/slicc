@@ -2,7 +2,7 @@
  * Layout — unified split-pane shell for both CLI and extension.
  *
  * The `isExtension` constructor flag toggles density (scoops rail,
- * scoop switcher, avatar, debug-tab defaults). The extension
+ * scoop switcher, avatar). The extension
  * (side panel) mode uses isExtension=true; the detached popout mode
  * uses isExtension=false to get the full standalone rail UX.
  *

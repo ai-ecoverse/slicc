@@ -723,12 +723,13 @@ if (toggle) {
 }
 ```
 
-The only built-in supplemental command using this today is the sprinkle subsystem (`sprinkle-op` relay in `offscreen-client.ts`); follow the same shape for any new UI-affecting commands.
+No built-in supplemental command currently uses this hook+relay shape — the previous example (`debug-command.ts`) was removed when Terminal/Memory became unconditional in the rail. The sprinkle subsystem solves a related problem differently (a `globalThis.__slicc_sprinkleManager` proxy interface published in both realms, dispatching `sprinkle-op` request/response RPCs), and is the right reference for new code that needs full bidirectional dispatch rather than a fire-and-forget UI side effect.
 
 **Related Files**
 
-- `packages/webapp/src/ui/offscreen-client.ts` `setupMessageListener()` (handles offscreen-relayed payloads)
-- `packages/webapp/src/ui/layout.ts` (panel-side state surface)
+- `packages/chrome-extension/src/sprinkle-proxy.ts` (offscreen-side proxy that publishes `globalThis.__slicc_sprinkleManager` and relays via `sprinkle-op`)
+- `packages/webapp/src/ui/main.ts` (`client.setSprinkleOpHandler(...)` — where the panel-side handler is registered)
+- `packages/webapp/src/ui/offscreen-client.ts` `setupMessageListener()` (routes `sprinkle-op` payloads to the registered handler)
 
 ## Dual-Mode Testing Checklist
 
