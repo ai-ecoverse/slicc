@@ -1,9 +1,13 @@
 /**
- * Layout — split-pane (standalone) or tabbed (extension) layout.
+ * Layout — unified split-pane shell for both CLI and extension.
  *
- * Standalone mode (CLI):
+ * The `isExtension` constructor flag toggles density (scoops rail,
+ * scoop switcher, avatar, debug-tab defaults). The extension
+ * (side panel) mode uses isExtension=true; the detached popout mode
+ * uses isExtension=false to get the full standalone rail UX.
+ *
  *   ┌───────┬─────────────┬───┬───────────────┐
- *   │  Header (full width)                    │
+ *   │  Header (popout btn, scoop switcher, etc.)│
  *   ├───────┬─────────────┬───┬───────────────┤
  *   │Scoops │             │ ║ │  Terminal      │
  *   │       │  Chat       │ ║ ├───────────────┤
@@ -11,13 +15,8 @@
  *   │       │             │ ║ │               │
  *   └───────┴─────────────┴───┴───────────────┘
  *
- * Extension mode (side panel):
- *   ┌─ Header [switcher] ─────────┐
- *   ├─ Tabs: [Chat] [Term] [Files] [Memory] ─┤
- *   │                                │
- *   │  Active panel (full size)      │
- *   │                                │
- *   └────────────────────────────────┘
+ * Detached popout spec:
+ *   docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md
  */
 
 import { ChatPanel } from './chat-panel.js';

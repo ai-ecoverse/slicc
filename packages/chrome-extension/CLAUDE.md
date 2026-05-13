@@ -12,7 +12,7 @@ The extension keeps the agent alive when the side panel closes by splitting resp
 
 ```text
 Side Panel (UI)
-  offscreen-client.ts, tabbed UI, terminal shell
+  offscreen-client.ts, side panel UI, terminal shell
         ↓ chrome.runtime messages
 Service Worker Relay
   service-worker.ts, chrome.debugger proxy, tab grouping
@@ -26,6 +26,43 @@ Offscreen Document
 - **Side panel**: user-visible UI, terminal tab, reconnect logic.
 - **Service worker**: routes messages between panel and offscreen, proxies CDP to `chrome.debugger`.
 - **Offscreen document**: runs the agent engine, orchestrator, VFS, and tool execution loop.
+
+## Detached Popout
+
+The extension supports popping the side panel out into a full-page tab
+via a "Pop out" button in the side panel header, or by opening
+`chrome-extension://<id>/index.html?detached=1` directly.
+
+**Mutual exclusion** is global across all Chrome windows: at most one
+detached tab exists at a time, and while it does the side panel is
+disabled. The service worker is the sole coordinator and persists
+the locked tab ID in `chrome.storage.session`.
+
+**Boot reconciliation:** `reconcileDetachedLockOnBoot()` runs at
+top-level + `onStartup` + `onInstalled`, so MV3 SW eviction and
+browser cold-start cannot leave the lock half-applied.
+
+**Three-layer mutual exclusion** on the panel side. In code,
+`enterDetachedActiveState` executes them in this order:
+
+1. `window.close()` — happy path.
+2. `OffscreenClient.setLocked(true)` — short-circuits the private
+   `send()` chokepoint so no user-action message reaches offscreen
+   even if `window.close()` doesn't take effect. Done BEFORE the
+   overlay paints so a still-visible send button can't leak traffic
+   in the interim.
+3. `Layout.showDetachedActiveOverlay()` — non-dismissible visual
+   feedback with a "Close this window" button.
+
+Separately, the SW makes a best-effort `chrome.sidePanel.close({ windowId })`
+call per window after broadcasting `detached-active` (Chrome 141+).
+This is independent of `enterDetachedActiveState`.
+
+**Non-detached `index.html` tabs** (e.g., the local QA recipe surface)
+are treated as side-panel-equivalent: they DO listen for `detached-active`
+and self-close, but DO NOT count as the canonical detached tab.
+
+**Spec:** `docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md`.
 
 ## Key Files
 
