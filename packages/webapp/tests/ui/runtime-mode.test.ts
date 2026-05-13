@@ -16,6 +16,32 @@ describe('runtime-mode', () => {
     expect(resolveUiRuntimeMode('http://localhost:5710/electron', true)).toBe('extension');
   });
 
+  it('returns extension-detached when isExtension and ?detached=1 is set', () => {
+    expect(resolveUiRuntimeMode('chrome-extension://abc/index.html?detached=1', true)).toBe(
+      'extension-detached'
+    );
+  });
+
+  it('returns extension when isExtension and ?detached is missing or wrong value', () => {
+    expect(resolveUiRuntimeMode('chrome-extension://abc/index.html', true)).toBe('extension');
+    expect(resolveUiRuntimeMode('chrome-extension://abc/index.html?detached=0', true)).toBe(
+      'extension'
+    );
+    expect(resolveUiRuntimeMode('chrome-extension://abc/index.html?other=1', true)).toBe(
+      'extension'
+    );
+  });
+
+  it('ignores ?detached=1 when not an extension context', () => {
+    // ?detached=1 alone (no isExtension) must not flip standalone to detached.
+    expect(resolveUiRuntimeMode('http://localhost:5710/?detached=1', false)).toBe('standalone');
+  });
+
+  it('classifies extension-detached the same as extension for tray defaults', () => {
+    expect(shouldUseRuntimeModeTrayDefaults('extension-detached', false)).toBe(false);
+    expect(shouldUseRuntimeModeTrayDefaults('extension-detached', true)).toBe(false);
+  });
+
   it('detects electron overlay mode from the path and legacy query param', () => {
     expect(resolveUiRuntimeMode('http://localhost:5710/electron', false)).toBe('electron-overlay');
     expect(resolveUiRuntimeMode('http://localhost:5710/electron/', false)).toBe('electron-overlay');
