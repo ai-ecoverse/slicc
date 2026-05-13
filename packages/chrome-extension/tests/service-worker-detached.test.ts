@@ -272,3 +272,121 @@ describe('detached popout — boot reconciliation', () => {
     });
   });
 });
+
+describe('detached popout — claim handler', () => {
+  beforeEach(() => {
+    resetMocks();
+  });
+
+  function sendClaim(tabId: number, url: string): void {
+    const env = {
+      source: 'panel',
+      payload: { type: 'detached-claim' },
+    };
+    const sender = { tab: { id: tabId }, url };
+    for (const listener of onMessageListeners) {
+      listener(env, sender, () => {});
+    }
+  }
+
+  it('locks on first claim from a valid detached URL', async () => {
+    await loadSw();
+    sidePanelCalls.length = 0;
+
+    tabsStore.set(7, { id: 7, windowId: 100 });
+    sendClaim(7, 'chrome-extension://test/index.html?detached=1');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(sessionStorage.get('slicc.detached.tabId')).toBe(7);
+    expect(sidePanelCalls).toContainEqual({
+      method: 'setPanelBehavior',
+      args: { openPanelOnActionClick: false },
+    });
+    expect(sidePanelCalls).toContainEqual({
+      method: 'setOptions',
+      args: { enabled: false },
+    });
+    expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith({
+      source: 'service-worker',
+      payload: { type: 'detached-active' },
+    });
+  });
+
+  it('accepts pathname / as well as /index.html', async () => {
+    await loadSw();
+    sidePanelCalls.length = 0;
+    tabsStore.set(8, { id: 8, windowId: 100 });
+
+    sendClaim(8, 'chrome-extension://test/?detached=1');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(sessionStorage.get('slicc.detached.tabId')).toBe(8);
+  });
+
+  it('rejects claim with missing sender.url', async () => {
+    await loadSw();
+    sidePanelCalls.length = 0;
+    tabsStore.set(9, { id: 9, windowId: 100 });
+
+    const env = {
+      source: 'panel',
+      payload: { type: 'detached-claim' },
+    };
+    for (const listener of onMessageListeners) {
+      listener(env, { tab: { id: 9 } }, () => {});
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(sessionStorage.has('slicc.detached.tabId')).toBe(false);
+  });
+
+  it('rejects claim from a wrong-origin URL', async () => {
+    await loadSw();
+    sidePanelCalls.length = 0;
+    tabsStore.set(10, { id: 10, windowId: 100 });
+
+    sendClaim(10, 'https://evil.example.com/index.html?detached=1');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(sessionStorage.has('slicc.detached.tabId')).toBe(false);
+  });
+
+  it('rejects claim missing the detached=1 searchParam', async () => {
+    await loadSw();
+    sidePanelCalls.length = 0;
+    tabsStore.set(11, { id: 11, windowId: 100 });
+
+    sendClaim(11, 'chrome-extension://test/index.html');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(sessionStorage.has('slicc.detached.tabId')).toBe(false);
+  });
+
+  it('treats a same-tab reclaim as idempotent', async () => {
+    sessionStorage.set('slicc.detached.tabId', 12);
+    tabsStore.set(12, { id: 12, windowId: 100 });
+    await loadSw();
+    sidePanelCalls.length = 0;
+    mockChrome.runtime.sendMessage.mockClear();
+
+    sendClaim(12, 'chrome-extension://test/index.html?detached=1');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(sessionStorage.get('slicc.detached.tabId')).toBe(12);
+    expect(mockChrome.runtime.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('closes the new tab and focuses the existing one when a different detached already exists', async () => {
+    sessionStorage.set('slicc.detached.tabId', 20);
+    tabsStore.set(20, { id: 20, windowId: 100 });
+    tabsStore.set(21, { id: 21, windowId: 200 });
+    await loadSw();
+
+    sendClaim(21, 'chrome-extension://test/index.html?detached=1');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockChrome.tabs.remove).toHaveBeenCalledWith(21);
+    expect(mockChrome.tabs.update).toHaveBeenCalledWith(20, { active: true });
+    expect(mockChrome.windows.update).toHaveBeenCalledWith(100, { focused: true });
+  });
+});

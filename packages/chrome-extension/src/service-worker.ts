@@ -99,6 +99,99 @@ chrome.runtime.onInstalled.addListener(() => {
   reconcileDetachedLockOnBoot().catch(() => {});
 });
 
+function isValidClaimUrl(rawUrl: string | undefined): boolean {
+  if (!rawUrl) return false;
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  let expectedOrigin: string;
+  try {
+    expectedOrigin = new URL(chrome.runtime.getURL('index.html')).origin;
+  } catch {
+    return false;
+  }
+  const isExtensionIndex = u.pathname === '/index.html' || u.pathname === '/';
+  return u.origin === expectedOrigin && isExtensionIndex && u.searchParams.get('detached') === '1';
+}
+
+async function handleDetachedClaim(sender: { tab?: { id: number }; url?: string }): Promise<void> {
+  const claimingTabId = sender.tab?.id;
+  if (claimingTabId === undefined) return;
+  if (!isValidClaimUrl(sender.url)) return;
+
+  const storedTabId = await readStoredDetachedTabId();
+
+  if (storedTabId === claimingTabId) {
+    // Idempotent reclaim (detached tab reload). No state change.
+    return;
+  }
+
+  if (storedTabId !== undefined) {
+    let existing: { id: number; windowId?: number } | undefined;
+    try {
+      existing = await chrome.tabs.get(storedTabId);
+    } catch {
+      existing = undefined;
+    }
+    if (existing !== undefined) {
+      // A different detached tab already holds the lock. Close the new one.
+      await chrome.tabs.remove(claimingTabId);
+      await chrome.tabs.update(existing.id, { active: true });
+      if (existing.windowId !== undefined) {
+        await chrome.windows.update(existing.windowId, { focused: true });
+      }
+      return;
+    }
+    // Stored tab is gone; fall through to lock with the new claimer.
+  }
+
+  await writeStoredDetachedTabId(claimingTabId);
+  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
+  await chrome.sidePanel.setOptions({ enabled: false });
+  // Fire-and-forget; .catch() suppresses the unhandled-rejection warning
+  // that Chrome emits when there are no listeners (e.g., no panel open).
+  // Matches the codebase pattern at service-worker.ts:171, 218, etc.
+  chrome.runtime
+    .sendMessage({
+      source: 'service-worker',
+      payload: { type: 'detached-active' },
+    })
+    .catch(() => {});
+
+  // Best-effort hard close of any open side panel (Chrome 141+).
+  const windows = await chrome.windows.getAll();
+  await Promise.all(
+    windows.map(async (win) => {
+      try {
+        await chrome.sidePanel.close({ windowId: win.id });
+      } catch {
+        // No side panel open in that window — normal case, swallow.
+      }
+    })
+  );
+}
+
+chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
+  // Return false explicitly to tell Chrome we will not call sendResponse
+  // asynchronously. Returning true keeps sendResponse alive and conflicts
+  // with the other SW onMessage listeners that may want to respond.
+  if (typeof message !== 'object' || message === null) return false;
+  if (!('source' in message) || !('payload' in message)) return false;
+  const env = message as { source: string; payload: { type?: string } };
+  if (env.source !== 'panel') return false;
+
+  if (env.payload?.type === 'detached-claim') {
+    handleDetachedClaim(sender).catch((err) => {
+      console.error('[slicc-sw] handleDetachedClaim failed', err);
+    });
+    return false;
+  }
+  return false;
+});
+
 // ---------------------------------------------------------------------------
 // Offscreen document lifecycle
 // ---------------------------------------------------------------------------
