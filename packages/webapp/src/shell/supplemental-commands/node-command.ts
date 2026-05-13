@@ -15,7 +15,7 @@
  */
 
 import { defineCommand } from 'just-bash';
-import type { Command } from 'just-bash';
+import type { Command, CommandContext } from 'just-bash';
 import { NODE_VERSION } from './shared.js';
 import { executeJsCode } from '../jsh-executor.js';
 
@@ -43,6 +43,12 @@ export function createNodeCommand(): Command {
     let code = '';
     let filename = '<stdin>';
     let argv: string[] = ['node'];
+    // `node`'s read-from-stdin branch consumes `ctx.stdin` AS THE CODE.
+    // The inner script must not also see that same buffer as its own
+    // stdin (it would be reading its own source) — we hand it an empty
+    // stdin via a context override. The `-e` and script-file branches
+    // keep the upstream pipeline's stdin intact.
+    let innerCtx: CommandContext = ctx;
 
     if (args.length > 0 && (args[0] === '-e' || args[0] === '--eval')) {
       if (!args[1]) {
@@ -72,6 +78,7 @@ export function createNodeCommand(): Command {
       code = ctx.stdin;
       filename = '<stdin>';
       argv = ['node'];
+      innerCtx = { ...ctx, stdin: '' };
     } else if (args.length > 0) {
       return {
         stdout: '',
@@ -86,6 +93,6 @@ export function createNodeCommand(): Command {
       };
     }
 
-    return executeJsCode(code, argv, ctx, undefined, { filename });
+    return executeJsCode(code, argv, innerCtx, undefined, { filename });
   });
 }

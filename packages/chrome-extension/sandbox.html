@@ -321,6 +321,30 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     error: (...a) => writeStderr(a.map(formatArg).join(' ') + '\n'),
   };
   const NODE_EXIT = Symbol('NODE_EXIT');
+  // Stdin surface — mirror of js-realm-shared.ts. `process.stdin.read()`
+  // returns the buffer once then `null` (Node EOF semantics, shared with
+  // the async iterator); `toString()` is a non-consuming view. See the
+  // shared module for the full rationale.
+  const stdinBuffer = init.stdin ?? '';
+  let stdinConsumed = false;
+  const stdinShim = {
+    isTTY: false,
+    read() {
+      if (stdinConsumed) return null;
+      stdinConsumed = true;
+      return stdinBuffer;
+    },
+    toString() { return stdinBuffer; },
+    [Symbol.asyncIterator]() {
+      return {
+        async next() {
+          if (stdinConsumed) return { value: undefined, done: true };
+          stdinConsumed = true;
+          return { value: stdinBuffer, done: false };
+        },
+      };
+    },
+  };
   const processShim = {
     argv: init.argv,
     env: init.env,
@@ -330,6 +354,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       e[NODE_EXIT] = Number.isFinite(code) ? Number(code) : 0;
       throw e;
     },
+    stdin: stdinShim,
     stdout: { write: writeStdout },
     stderr: { write: writeStderr },
   };

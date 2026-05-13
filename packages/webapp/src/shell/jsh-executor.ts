@@ -111,6 +111,11 @@ export async function executeJsCode(
     env: Object.fromEntries(ctx.env.entries()),
     cwd: ctx.cwd,
     filename,
+    // Forward the upstream pipeline's stdin (just-bash exposes it as a
+    // string per `CommandContext.stdin`) so `.jsh` scripts and `node`/
+    // `node -e` invocations can read piped input via `process.stdin.read()`
+    // or the top-level `stdin` parameter.
+    stdin: ctx.stdin,
     ctx,
     ppid: pmConfig?.getParentPid?.(),
   });

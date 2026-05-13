@@ -109,6 +109,51 @@ export async function runJsRealm(
     error: (...parts: unknown[]) => writeStderr(`${parts.map(formatConsoleArg).join(' ')}\n`),
   };
 
+  // `init.stdin` arrives as a buffered string from the kernel — pipelines
+  // upstream of the realm (the WasmShell exec pipeline, the registered
+  // `.jsh` command path, `node`/`node -e` via supplemental-commands) all
+  // populate it before posting `realm-init`. Stdin in the realm is
+  // therefore fully read-ahead; we don't model a streaming Readable.
+  //
+  // Exposed exclusively via `process.stdin` to avoid burning a top-level
+  // identifier. Earlier drafts also injected `stdin` as an AsyncFunction
+  // parameter for ergonomics, but `stdin` is a common user variable name
+  // (more so than `fs` / `exec` / `fetch`); reserving it would have
+  // turned any pre-existing `let stdin = …` into a strict-mode
+  // SyntaxError. Scripts that want the short form can alias it
+  // themselves: `const { stdin } = process; const data = stdin.read();`.
+  //
+  // EOF semantics match Node's `Readable.read()`: the first `read()`
+  // returns the full buffer, subsequent calls return `null`. A single
+  // `consumed` flag is shared with the async iterator, so
+  // `for await (const c of process.stdin)` after a `read()` (or a
+  // second iteration) yields nothing — same as Node where `'end'`
+  // fires once. `toString()` always returns the original buffer
+  // because it's a view (`String(process.stdin)`), not a consumer.
+  // `process.stdin.isTTY` is always `false`; there's no terminal.
+  const stdinBuffer = init.stdin ?? '';
+  let stdinConsumed = false;
+  const stdinShim = {
+    isTTY: false,
+    read(): string | null {
+      if (stdinConsumed) return null;
+      stdinConsumed = true;
+      return stdinBuffer;
+    },
+    toString(): string {
+      return stdinBuffer;
+    },
+    [Symbol.asyncIterator](): AsyncIterator<string> {
+      return {
+        async next(): Promise<IteratorResult<string>> {
+          if (stdinConsumed) return { value: undefined, done: true };
+          stdinConsumed = true;
+          return { value: stdinBuffer, done: false };
+        },
+      };
+    },
+  };
+
   const processShim = {
     argv: init.argv,
     env: init.env,
@@ -117,6 +162,7 @@ export async function runJsRealm(
       const normalized = Number.isFinite(codeValue) ? Number(codeValue) : 0;
       throw new NodeExitError(normalized);
     },
+    stdin: stdinShim,
     stdout: { write: writeStdout },
     stderr: { write: writeStderr },
   };
