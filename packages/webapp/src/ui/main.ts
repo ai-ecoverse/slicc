@@ -1593,6 +1593,22 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   let selectedScoop: RegisteredScoop | null = null;
   let client!: InstanceType<typeof OffscreenClient>;
 
+  // Sync the brain icon to the active scoop's resolved model + persisted
+  // thinking-level. Mirrors `syncThinkingButtonForExtensionScoop` in
+  // `mainExtension`. The legacy inline standalone path had an equivalent
+  // helper; it was lost in 07cdce16 ("remove legacy inline-orchestrator
+  // standalone path") and never re-wired here, so the brain icon stayed
+  // hidden in standalone-worker mode regardless of model capability.
+  const syncThinkingButtonForScoop = (scoop: RegisteredScoop): void => {
+    const modelId = scoop.config?.modelId;
+    const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
+    layout.panels.chat.setModelSupportsReasoning(
+      !!model.reasoning,
+      getSupportedThinkingLevels(model).includes('xhigh')
+    );
+    layout.panels.chat.setThinkingLevel(scoop.config?.thinkingLevel);
+  };
+
   const selectScoop = async (scoop: RegisteredScoop): Promise<void> => {
     selectedScoop = scoop;
     client.selectedScoopJid = scoop.jid;
@@ -1615,6 +1631,8 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     if (client.isProcessing(scoop.jid)) {
       layout.panels.chat.setProcessing(true);
     }
+
+    syncThinkingButtonForScoop(scoop);
   };
 
   // Per-instance discriminator so same-origin RPC channels (sprinkle
@@ -1708,6 +1726,29 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   layout.panels.memory.setOrchestrator(client as unknown as Orchestrator);
   layout.setScoopSwitcherOrchestrator?.(client as unknown as Orchestrator);
   layout.onScoopSelect = selectScoop;
+
+  // Brain-icon wiring (mirrors `mainExtension`).
+  // - `onModelChange`: persist the user's choice locally so the worker's
+  //   storage shim sees the same `selected-model` it would after reload,
+  //   ask the worker to refresh its resolved model, and re-sync the
+  //   thinking button (different models support different levels).
+  // - `onThinkingLevelChange`: persist the brain-icon cycle into the
+  //   active scoop's `config.thinkingLevel` over the wire.
+  // - `onModelsRefreshed`: provider-account add/remove can flip a model
+  //   from unavailable→available (or vice versa); re-sync so the brain
+  //   reflects the post-refresh capabilities.
+  layout.onModelChange = (modelId) => {
+    localStorage.setItem('selected-model', modelId);
+    client.updateModel();
+    if (selectedScoop) syncThinkingButtonForScoop(selectedScoop);
+  };
+  layout.onThinkingLevelChange = (level) => {
+    if (!selectedScoop) return;
+    client.setScoopThinkingLevel(selectedScoop.jid, level);
+  };
+  layout.onModelsRefreshed = () => {
+    if (selectedScoop) syncThinkingButtonForScoop(selectedScoop);
+  };
 
   // Wire chat agent handle. The handle's `sendMessage` posts a
   // `user-message` over the wire; the worker's bridge handles it.
