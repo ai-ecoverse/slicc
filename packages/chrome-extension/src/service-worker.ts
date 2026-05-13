@@ -174,6 +174,13 @@ async function handleDetachedClaim(sender: { tab?: { id: number }; url?: string 
   );
 }
 
+async function handleDetachedPopoutRequest(): Promise<void> {
+  const detachedUrl = `${chrome.runtime.getURL('index.html')}?detached=1`;
+  await chrome.tabs.create({ url: detachedUrl, active: true });
+  // The lock change is driven by the new tab's detached-claim message,
+  // not by tab creation. See spec.
+}
+
 chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
   // Return false explicitly to tell Chrome we will not call sendResponse
   // asynchronously. Returning true keeps sendResponse alive and conflicts
@@ -186,6 +193,13 @@ chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
   if (env.payload?.type === 'detached-claim') {
     handleDetachedClaim(sender).catch((err) => {
       console.error('[slicc-sw] handleDetachedClaim failed', err);
+    });
+    return false;
+  }
+
+  if (env.payload?.type === 'detached-popout-request') {
+    handleDetachedPopoutRequest().catch((err) => {
+      console.error('[slicc-sw] handleDetachedPopoutRequest failed', err);
     });
     return false;
   }

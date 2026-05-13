@@ -390,3 +390,30 @@ describe('detached popout — claim handler', () => {
     expect(mockChrome.windows.update).toHaveBeenCalledWith(100, { focused: true });
   });
 });
+
+describe('detached popout — popout-request handler', () => {
+  beforeEach(() => {
+    resetMocks();
+  });
+
+  it('creates the detached tab with ?detached=1 active and does not lock yet', async () => {
+    await loadSw();
+    sidePanelCalls.length = 0;
+
+    const env = {
+      source: 'panel',
+      payload: { type: 'detached-popout-request' },
+    };
+    for (const listener of onMessageListeners) {
+      listener(env, {}, () => {});
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockChrome.tabs.create).toHaveBeenCalledWith({
+      url: 'chrome-extension://test/index.html?detached=1',
+      active: true,
+    });
+    // The lock is set by the new tab's claim, not by tab creation.
+    expect(sessionStorage.has('slicc.detached.tabId')).toBe(false);
+  });
+});
