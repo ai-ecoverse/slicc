@@ -340,7 +340,61 @@ export async function readSessionsIndex(vfs: VirtualFS): Promise<FrozenSessionIn
   }
 }
 
-/** Path to the archive JSON for a given index entry. Useful for "open in Files" actions. */
+/** Path to the archive markdown for a given index entry. */
 export function frozenSessionPath(entry: FrozenSessionIndexEntry): string {
   return `${SESSIONS_DIR}/${entry.filename}`;
+}
+
+/**
+ * Parse a frozen-session markdown archive (produced by `formatArchiveAsMarkdown`)
+ * back into a structured form the chat-panel can render read-only.
+ *
+ * Tool calls embedded under `### Tool: ...` are folded into the owning
+ * assistant message's content — read-only display doesn't need the
+ * structured `toolCalls[]` form (no clusters to re-label, no re-runs).
+ * Lossless rehydration is left to a future "thaw" feature.
+ */
+export function parseFrozenArchive(markdown: string): {
+  title: string;
+  messages: ChatMessage[];
+} {
+  let body = markdown;
+  let title = 'Untitled';
+
+  // 1. Strip YAML-style frontmatter and pull out the title.
+  const fmMatch = body.match(/^---\n([\s\S]*?)\n---\n+/);
+  if (fmMatch) {
+    body = body.slice(fmMatch[0].length);
+    const titleMatch = fmMatch[1].match(/^title:\s*"?([^"\n]*)"?\s*$/m);
+    if (titleMatch) title = titleMatch[1].trim();
+  }
+
+  // 2. Drop the leading `# title` heading if present.
+  body = body.replace(/^#\s+[^\n]*\n+/, '');
+
+  // 3. Split on `## User` / `## Assistant` boundaries. Anything between two
+  //    headings (including nested `### Tool:` blocks) lands in the prior
+  //    message's content verbatim.
+  const messages: ChatMessage[] = [];
+  const headingRe = /^## (User|Assistant)\s*\n/gm;
+  const heads: { role: 'user' | 'assistant'; start: number; bodyStart: number }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = headingRe.exec(body)) !== null) {
+    heads.push({
+      role: m[1] === 'User' ? 'user' : 'assistant',
+      start: m.index,
+      bodyStart: m.index + m[0].length,
+    });
+  }
+  for (let i = 0; i < heads.length; i++) {
+    const end = i + 1 < heads.length ? heads[i + 1].start : body.length;
+    const content = body.slice(heads[i].bodyStart, end).trim();
+    messages.push({
+      id: `frozen-${i}`,
+      role: heads[i].role,
+      content,
+      timestamp: 0,
+    });
+  }
+  return { title, messages };
 }

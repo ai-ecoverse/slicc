@@ -12,11 +12,7 @@ import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 import { type Orchestrator } from '../scoops/orchestrator.js';
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/index.js';
-import {
-  readSessionsIndex,
-  frozenSessionPath,
-  type FrozenSessionIndexEntry,
-} from './session-freezer.js';
+import { readSessionsIndex, type FrozenSessionIndexEntry } from './session-freezer.js';
 
 const log = createLogger('scoops-panel');
 
@@ -29,10 +25,11 @@ export interface ScoopsPanelCallbacks {
   onScoopsChanged?: (scoops: RegisteredScoop[]) => void;
   /**
    * Called when the user clicks a frozen-session entry in the sidebar.
-   * Receives the VFS path of the archive JSON. The standalone wiring uses
-   * this to reveal the file in the Files tab.
+   * Receives the full index entry so the wiring can read the archive
+   * file from the VFS, parse it, and hand it to the chat panel for
+   * read-only display.
    */
-  onFrozenSessionOpen?: (vfsPath: string) => void;
+  onFrozenSessionOpen?: (entry: FrozenSessionIndexEntry) => void;
 }
 
 export class ScoopsPanel {
@@ -637,10 +634,10 @@ export class ScoopsPanel {
       infoEl.appendChild(subtitleEl);
       item.appendChild(infoEl);
 
-      // Click: open the archive in the Files tab.
-      const vfsPath = frozenSessionPath(entry);
+      // Click: hand the entry off to the layout, which reads the archive
+      // and displays it in the chat panel like a scoop selection would.
       item.addEventListener('click', () => {
-        this.callbacks.onFrozenSessionOpen?.(vfsPath);
+        this.callbacks.onFrozenSessionOpen?.(entry);
       });
 
       // Hover tooltip: title + relative time. Same fixed-position tooltip

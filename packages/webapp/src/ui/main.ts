@@ -48,6 +48,7 @@ import { createAttachmentTmpWriter } from './attachment-vfs.js';
 import { registerProviders } from '../providers/index.js';
 import { flushCredentialsToWorker, resolveDefaultModel } from './onboarding-helpers.js';
 import { runNewSessionFreeze } from './new-session.js';
+import { frozenSessionPath, parseFrozenArchive } from './session-freezer.js';
 import { BrowserAPI, NavigationWatcher } from '../cdp/index.js';
 import { type Orchestrator } from '../scoops/index.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
@@ -1788,12 +1789,47 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
 
   // Frozen sessions sidebar (standalone only). The panel reads
   // /sessions/index.json from the page-side VFS that already shares
-  // IndexedDB with the worker. Clicking an entry switches to the Files
-  // tab and reveals the archive markdown file.
+  // IndexedDB with the worker. Clicking an entry reads the archive
+  // markdown, parses it back into messages, and displays it in the
+  // chat panel read-only — matching the affordance of clicking a
+  // live scoop (which also opens the chat view rather than a file).
   layout.panels.scoops.setVfs(localFs);
-  layout.onFrozenSessionOpen = (vfsPath) => {
-    layout.setActiveTab('files');
-    void layout.panels.fileBrowser.revealPath(vfsPath);
+  layout.onFrozenSessionOpen = (entry) => {
+    void (async () => {
+      try {
+        const raw = await localFs.readFile(frozenSessionPath(entry), { encoding: 'utf-8' });
+        const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+        const parsed = parseFrozenArchive(text);
+        const title = parsed.title || entry.title;
+        await layout.panels.chat.displayFrozenSession({
+          contextId: `frozen:${entry.filename}`,
+          messages: parsed.messages,
+          title,
+        });
+        layout.setThreadHeaderName(`❄ ${title}`);
+        layout.setActiveTab('chat');
+      } catch (err) {
+        log.warn('Failed to open frozen session', {
+          filename: entry.filename,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+  };
+
+  // Glow the New Session button as the live cone session grows past
+  // half the active model's context window. Coarse chars/4 estimate
+  // is enough — the goal is an affordance, not a billing meter.
+  layout.panels.chat.onMessagesChanged = (estimatedTokens) => {
+    let contextWindow = 200000;
+    try {
+      const model = resolveCurrentModel();
+      contextWindow = model.contextWindow ?? contextWindow;
+    } catch {
+      /* no active model — keep the default and the gauge stays cold */
+    }
+    const ratio = estimatedTokens / contextWindow;
+    layout.setNewSessionGlow(ratio);
   };
 
   // Wire chat agent handle. The handle's `sendMessage` posts a

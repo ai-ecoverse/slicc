@@ -244,6 +244,15 @@ export class ChatPanel {
    */
   private drafts = new Map<string, Array<DraftDipInstance | null>>();
   public onDipLick?: (action: string, data: unknown) => void;
+  /**
+   * Fired whenever the displayed message list changes (new message,
+   * streaming update, switch to a new context). The estimated token
+   * count is a coarse chars/4 heuristic over message content + tool
+   * call JSON — same family of estimate the compaction pass uses,
+   * accurate enough to drive UI affordances like the "context getting
+   * full" glow on the New Session button.
+   */
+  public onMessagesChanged?: (estimatedTokens: number) => void;
   private modelSelectorEl!: HTMLElement;
   public onModelChange?: (modelId: string) => void;
   private thinkingBtn!: HTMLButtonElement;
@@ -382,6 +391,36 @@ export class ChatPanel {
   }
 
   /** Switch to a different scoop's chat context. */
+  /**
+   * Render a frozen-session archive as a read-only chat view. Bypasses
+   * `SessionStore` (the archive lives on the VFS, not in IndexedDB) and
+   * does NOT persist on the way out — the contextId is namespaced so a
+   * subsequent `persistSessionAsync()` would no-op rather than poison
+   * the live cone session.
+   */
+  async displayFrozenSession(opts: {
+    /** Unique id for this view; prefixed with `frozen:` so it can't collide with a real session. */
+    contextId: string;
+    /** Pre-parsed messages from the archive. */
+    messages: ChatMessage[];
+    /** Title to show in the thread header. */
+    title: string;
+  }): Promise<void> {
+    await this.persistSessionAsync();
+    this.setStreamingState(false);
+    this.currentStreamId = null;
+    this.cancelPendingDelta();
+    this.resetEphemeralLlmState();
+    if (this.textarea) this.textarea.placeholder = ChatPanel.DEFAULT_PLACEHOLDER;
+    this.sessionId = opts.contextId;
+    // The current-scoop label is a free-form string in this code path —
+    // re-use it as a "frozen indicator" so the thread header reads naturally.
+    this.currentScoopName = `❄ ${opts.title}`;
+    this.setReadOnly(true);
+    this.messages = opts.messages.map((m) => ({ ...m, isStreaming: false }));
+    this.renderMessages();
+  }
+
   async switchToContext(contextId: string, readOnly: boolean, scoopName?: string): Promise<void> {
     // Save current session first
     await this.persistSessionAsync();
@@ -2155,6 +2194,42 @@ export class ChatPanel {
     this.autoScrollAttached = true;
     this.hideJumpPill();
     this.scrollToBottom(true);
+    this.notifyMessagesChanged();
+  }
+
+  /**
+   * Rough chars/4 estimator over the current message list. Same family
+   * of heuristic the compaction pass uses (pi-coding-agent's
+   * `estimateTokens`), just over the UI's `ChatMessage` shape rather
+   * than the structured `AgentMessage`. Folds tool-call I/O into the
+   * count so long tool-result transcripts move the gauge appropriately.
+   */
+  private estimateChatTokens(): number {
+    let chars = 0;
+    for (const m of this.messages) {
+      chars += m.content?.length ?? 0;
+      if (m.toolCalls) {
+        for (const tc of m.toolCalls) {
+          chars += tc.name.length;
+          try {
+            chars += JSON.stringify(tc.input ?? {}).length;
+          } catch {
+            /* circular / non-serializable — ignore */
+          }
+          if (tc.result) chars += tc.result.length;
+        }
+      }
+    }
+    return Math.ceil(chars / 4);
+  }
+
+  private notifyMessagesChanged(): void {
+    if (!this.onMessagesChanged) return;
+    try {
+      this.onMessagesChanged(this.estimateChatTokens());
+    } catch {
+      /* listener bug must not break rendering */
+    }
   }
 
   private appendMessageEl(msg: ChatMessage): void {
@@ -2182,6 +2257,7 @@ export class ChatPanel {
       this.reflowToolClusters();
     }
     this.scrollToBottom();
+    this.notifyMessagesChanged();
   }
 
   /** Determine whether to show the sender label for a message */

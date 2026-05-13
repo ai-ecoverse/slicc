@@ -19,7 +19,11 @@ vi.mock('../../src/ui/chat-panel.js', () => ({
       .join(''),
 }));
 
-import { freezeConeSession, readSessionsIndex } from '../../src/ui/session-freezer.js';
+import {
+  freezeConeSession,
+  parseFrozenArchive,
+  readSessionsIndex,
+} from '../../src/ui/session-freezer.js';
 import type { SessionStore } from '../../src/ui/session-store.js';
 
 /**
@@ -269,5 +273,78 @@ describe('freezeConeSession', () => {
     expect(index).toHaveLength(2);
     expect(index[0].title).toBe('Second session');
     expect(index[1].title).toBe('First session');
+  });
+});
+
+describe('parseFrozenArchive', () => {
+  it('round-trips title + user/assistant messages from a freezer-shaped archive', () => {
+    const md = [
+      '---',
+      'id: session-cone',
+      'title: "Auth bug investigation"',
+      'frozenAt: 2026-05-13T19:00:00.000Z',
+      'createdAt: 100',
+      'updatedAt: 200',
+      'messageCount: 3',
+      '---',
+      '',
+      '# Auth bug investigation',
+      '',
+      '## User',
+      'why is the token rotating every minute',
+      '',
+      '## Assistant',
+      'checking the refresh window now',
+      '',
+      '## User',
+      'thanks',
+      '',
+    ].join('\n');
+    const { title, messages } = parseFrozenArchive(md);
+    expect(title).toBe('Auth bug investigation');
+    expect(messages).toHaveLength(3);
+    expect(messages[0]).toMatchObject({
+      role: 'user',
+      content: 'why is the token rotating every minute',
+    });
+    expect(messages[1]).toMatchObject({
+      role: 'assistant',
+      content: 'checking the refresh window now',
+    });
+    expect(messages[2]).toMatchObject({ role: 'user', content: 'thanks' });
+  });
+
+  it('folds nested ### Tool: blocks into the owning assistant message', () => {
+    const md = [
+      '---',
+      'title: "tool run"',
+      '---',
+      '',
+      '# tool run',
+      '',
+      '## User',
+      'run ls',
+      '',
+      '## Assistant',
+      'sure',
+      '',
+      '### Tool: bash',
+      'Input: { "command": "ls" }',
+      'Result: file1\nfile2',
+      '',
+    ].join('\n');
+    const { messages } = parseFrozenArchive(md);
+    expect(messages).toHaveLength(2);
+    // The tool block is folded into the assistant's content verbatim.
+    expect(messages[1].role).toBe('assistant');
+    expect(messages[1].content).toContain('### Tool: bash');
+    expect(messages[1].content).toContain('"command": "ls"');
+  });
+
+  it('returns empty messages and Untitled when nothing matches', () => {
+    expect(parseFrozenArchive('no headings here at all')).toEqual({
+      title: 'Untitled',
+      messages: [],
+    });
   });
 });

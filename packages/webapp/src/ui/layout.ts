@@ -25,6 +25,7 @@ import { TerminalPanel } from './terminal-panel.js';
 import { FileBrowserPanel } from './file-browser-panel.js';
 import { MemoryPanel } from './memory-panel.js';
 import { ScoopsPanel } from './scoops-panel.js';
+import type { FrozenSessionIndexEntry } from './session-freezer.js';
 import { ScoopSwitcher } from './scoop-switcher.js';
 import { attachLongPressGesture } from './long-press.js';
 import {
@@ -86,6 +87,8 @@ export class Layout {
   // Thread header (sub-header with scoop name)
   private threadHeaderEl!: HTMLElement;
   private threadHeaderName!: HTMLElement;
+  /** Thread-header "New session" button — populated by `setupChatHeader`. */
+  private newSessionBtn: HTMLButtonElement | null = null;
 
   // Right side — always-visible vertical icon rail + collapsible
   // content panel beside it. Replaces the old horizontal mini-tabs.
@@ -151,10 +154,11 @@ export class Layout {
   public onClearFilesystem?: () => Promise<void>;
   /**
    * Fired when the user clicks an entry in the frozen-sessions sidebar
-   * section. Receives the VFS path of the archive JSON. Standalone-only;
-   * the extension build skips this section entirely.
+   * section. Receives the full index entry; the standalone wiring reads
+   * the archive markdown and displays it in the chat panel read-only.
+   * Standalone-only — the extension build hides the rail entirely.
    */
-  public onFrozenSessionOpen?: (vfsPath: string) => void;
+  public onFrozenSessionOpen?: (entry: FrozenSessionIndexEntry) => void;
   public onSprinkleClose?: (name: string) => void;
   /**
    * Fired when the user clicks a sprinkle's rail icon. Lets the
@@ -216,6 +220,37 @@ export class Layout {
    * content and the rest are rail items, so we collapse the rail for
    * `chat` and activate the matching rail item otherwise.
    */
+  /**
+   * Toggle the "context getting full" glow on the New Session button.
+   * Receives the current context-fill ratio (estimated tokens divided
+   * by the active model's context window). Two-tier visual:
+   *
+   *   - ≥ 0.5  → soft glow (`glow`)        — "consider freezing"
+   *   - ≥ 0.85 → strong glow (`glow--hot`) — "compaction is imminent"
+   *
+   * Below 0.5 the button is plain. No-op when the button hasn't been
+   * mounted (extension mode hides the thread-header entry).
+   */
+  /**
+   * Set the thread-header title text. Used by frozen-session display
+   * (so the header reads "❄ <archive title>") without going through
+   * the scoop-select code path. No-op in extension mode where the
+   * header is a detached node.
+   */
+  setThreadHeaderName(text: string): void {
+    if (this.threadHeaderName && this.threadHeaderName.isConnected) {
+      this.threadHeaderName.textContent = text;
+    }
+  }
+
+  setNewSessionGlow(ratio: number): void {
+    if (!this.newSessionBtn) return;
+    const hot = ratio >= 0.85;
+    const warm = ratio >= 0.5;
+    this.newSessionBtn.classList.toggle('glow', warm);
+    this.newSessionBtn.classList.toggle('glow--hot', hot);
+  }
+
   setActiveTab(id: TabId): void {
     this.activeTab = id;
     if (id === 'chat') {
@@ -870,9 +905,17 @@ export class Layout {
     // Clear chat button — the rail now owns panel toggling, so the
     // chat header drops the panel-toggle button entirely.
     const clearChatBtn = document.createElement('button');
-    clearChatBtn.className = 'thread-header__panel-toggle';
-    clearChatBtn.dataset.tooltip = 'New session · hold to discard';
-    clearChatBtn.setAttribute('aria-label', 'New session — hold to discard without freezing');
+    clearChatBtn.className = 'thread-header__panel-toggle thread-header__new-session';
+    // Long, explanatory tooltip — the action is non-obvious enough that
+    // a 1-word label would mislead users into thinking it's a destructive
+    // "clear" button. Long-press is the only secondary affordance.
+    clearChatBtn.dataset.tooltip =
+      'New session for faster responses — history and memories will be kept. Long press to discard this session without saving memory.';
+    clearChatBtn.setAttribute(
+      'aria-label',
+      'New session — keeps memory and history. Hold to discard without saving memory.'
+    );
+    this.newSessionBtn = clearChatBtn;
     // "Compose new" — square with a pencil, matches the universal
     // "start a new thread" pattern (Slack, Discord, modern chat apps).
     clearChatBtn.innerHTML =

@@ -218,6 +218,39 @@
   height: 16px;
 }
 
+/* "Context getting full" affordance on the New Session button. Two
+   tiers — warm glow at ~50% of the active model's context window,
+   stronger glow + slow pulse past ~85% (compaction imminent). The
+   button keeps its hover/click affordances on top of the glow. */
+.thread-header__new-session.glow {
+  color: var(--s2-notice, #c97a00);
+  box-shadow:
+    0 0 0 1px rgba(201, 122, 0, 0.25),
+    0 0 12px rgba(201, 122, 0, 0.45);
+  background: rgba(201, 122, 0, 0.08);
+}
+.thread-header__new-session.glow--hot {
+  color: var(--s2-negative, #d73220);
+  box-shadow:
+    0 0 0 1px rgba(215, 50, 32, 0.35),
+    0 0 16px rgba(215, 50, 32, 0.55);
+  background: rgba(215, 50, 32, 0.1);
+  animation: new-session-pulse 2.4s ease-in-out infinite;
+}
+@keyframes new-session-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(215, 50, 32, 0.35),
+      0 0 16px rgba(215, 50, 32, 0.55);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(215, 50, 32, 0.55),
+      0 0 22px rgba(215, 50, 32, 0.85);
+  }
+}
+
 /* UXC: Chat gradient overlay at top */
 .chat__gradient-top {
   position: absolute;
