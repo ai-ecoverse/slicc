@@ -109,6 +109,41 @@ export async function runJsRealm(
     error: (...parts: unknown[]) => writeStderr(`${parts.map(formatConsoleArg).join(' ')}\n`),
   };
 
+  // `init.stdin` arrives as a buffered string from the kernel — pipelines
+  // upstream of the realm (the WasmShell exec pipeline, the registered
+  // `.jsh` command path, `node`/`node -e` via supplemental-commands) all
+  // populate it before posting `realm-init`. Stdin in the realm is
+  // therefore fully read-ahead; we don't model a streaming Readable.
+  // Surfaces:
+  //   • `stdin` — top-level AsyncFunction parameter; the ergonomic
+  //     "`const lines = stdin.split('\\n')`" path for `.jsh` scripts.
+  //   • `process.stdin.read()` — Node-like sync read returning the same
+  //     buffered string.
+  //   • `process.stdin[Symbol.asyncIterator]` — yields the buffered
+  //     string once, so `for await (const chunk of process.stdin)` works
+  //     for code copy-pasted from Node tutorials.
+  // `process.stdin.isTTY` is always `false`; there's no terminal.
+  const stdinBuffer = init.stdin ?? '';
+  const stdinShim = {
+    isTTY: false,
+    read(): string {
+      return stdinBuffer;
+    },
+    toString(): string {
+      return stdinBuffer;
+    },
+    [Symbol.asyncIterator](): AsyncIterator<string> {
+      let yielded = false;
+      return {
+        async next(): Promise<IteratorResult<string>> {
+          if (yielded) return { value: undefined, done: true };
+          yielded = true;
+          return { value: stdinBuffer, done: false };
+        },
+      };
+    },
+  };
+
   const processShim = {
     argv: init.argv,
     env: init.env,
@@ -117,6 +152,7 @@ export async function runJsRealm(
       const normalized = Number.isFinite(codeValue) ? Number(codeValue) : 0;
       throw new NodeExitError(normalized);
     },
+    stdin: stdinShim,
     stdout: { write: writeStdout },
     stderr: { write: writeStderr },
   };
@@ -267,7 +303,8 @@ export async function runJsRealm(
       module: typeof moduleShim,
       exports: Record<string, unknown>,
       exec: typeof execBridge,
-      fetch: typeof realmFetch
+      fetch: typeof realmFetch,
+      stdin: string
     ) => Promise<unknown>;
     const fn = new AsyncFn(
       'fs',
@@ -278,6 +315,7 @@ export async function runJsRealm(
       'exports',
       'exec',
       'fetch',
+      'stdin',
       `"use strict";\n${init.code}`
     );
     await fn(
@@ -288,7 +326,8 @@ export async function runJsRealm(
       moduleShim,
       moduleShim.exports,
       execBridge,
-      realmFetch
+      realmFetch,
+      stdinBuffer
     );
   } catch (err: unknown) {
     if (err instanceof NodeExitError) {

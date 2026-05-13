@@ -321,6 +321,26 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     error: (...a) => writeStderr(a.map(formatArg).join(' ') + '\n'),
   };
   const NODE_EXIT = Symbol('NODE_EXIT');
+  // Stdin surfaces — mirror of js-realm-shared.ts. Top-level `stdin`
+  // parameter for ergonomics, plus `process.stdin.read()` and async
+  // iteration for Node-like compatibility. See the shared module's
+  // comment for the full rationale.
+  const stdinBuffer = init.stdin || '';
+  const stdinShim = {
+    isTTY: false,
+    read() { return stdinBuffer; },
+    toString() { return stdinBuffer; },
+    [Symbol.asyncIterator]() {
+      let yielded = false;
+      return {
+        async next() {
+          if (yielded) return { value: undefined, done: true };
+          yielded = true;
+          return { value: stdinBuffer, done: false };
+        },
+      };
+    },
+  };
   const processShim = {
     argv: init.argv,
     env: init.env,
@@ -330,6 +350,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       e[NODE_EXIT] = Number.isFinite(code) ? Number(code) : 0;
       throw e;
     },
+    stdin: stdinShim,
     stdout: { write: writeStdout },
     stderr: { write: writeStderr },
   };
@@ -470,10 +491,10 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   try {
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     const fn = new AsyncFunction(
-      'fs', 'process', 'console', 'require', 'module', 'exports', 'exec', 'fetch',
+      'fs', 'process', 'console', 'require', 'module', 'exports', 'exec', 'fetch', 'stdin',
       '"use strict";\n' + init.code
     );
-    await fn(fsBridge, processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, execBridge, realmFetch);
+    await fn(fsBridge, processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, execBridge, realmFetch, stdinBuffer);
   } catch (err) {
     if (err && typeof err === 'object' && NODE_EXIT in err) {
       exitCode = err[NODE_EXIT];

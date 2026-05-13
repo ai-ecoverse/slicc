@@ -375,6 +375,37 @@ describe('WasmShell .jsh command registration', () => {
     expect(result.stdout).toContain('hello world');
   });
 
+  it('threads piped stdin into registered .jsh commands', async () => {
+    // The agent-facing path: a `.jsh` script registered as a bash command
+    // must be able to read piped input. Before stdin-in-jsh support, the
+    // script would see an empty string regardless of the upstream pipe.
+    await fs.writeFile(
+      '/workspace/skills/test-cmd/scripts/upper.jsh',
+      'process.stdout.write(stdin.toUpperCase());'
+    );
+
+    const shell = new WasmShell({ fs });
+    await shell.syncJshCommands();
+
+    const piped = await shell.executeCommand('echo -n hello | upper');
+    expect(piped.exitCode).toBe(0);
+    expect(piped.stdout).toBe('HELLO');
+  });
+
+  it('exposes process.stdin.read() inside registered .jsh commands', async () => {
+    await fs.writeFile(
+      '/workspace/skills/test-cmd/scripts/wc-bytes.jsh',
+      'console.log(process.stdin.read().length);'
+    );
+
+    const shell = new WasmShell({ fs });
+    await shell.syncJshCommands();
+
+    const piped = await shell.executeCommand('echo -n abcdef | wc-bytes');
+    expect(piped.exitCode).toBe(0);
+    expect(piped.stdout.trim()).toBe('6');
+  });
+
   it('does not shadow built-in commands with .jsh files of the same name', async () => {
     // Create a .jsh file named "echo" — should NOT override the built-in
     await fs.writeFile('/workspace/skills/test-cmd/scripts/echo.jsh', 'console.log("fake echo");');

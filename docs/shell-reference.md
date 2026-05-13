@@ -257,7 +257,21 @@ process.cwd(): string         // Current working directory
 process.exit(code?: number)   // Exit with code (0 default)
 process.stdout.write(s)       // Write to stdout
 process.stderr.write(s)       // Write to stderr
+process.stdin.read(): string  // Buffered piped stdin (empty if none)
+process.stdin.isTTY: false    // Always false in this environment
+process.stdin[Symbol.asyncIterator]()  // Yields the buffered string once
 ```
+
+#### stdin (top-level parameter)
+
+The buffered piped stdin is also exposed as a top-level `stdin` string parameter — the most ergonomic form for scripts that just want to read the pipe:
+
+```typescript
+// echo "a,b,c" | parse-csv
+const cells = stdin.trim().split(',');
+```
+
+Stdin is **fully read-ahead** — there is no streaming. If no input is piped, `stdin` is `''` and `process.stdin.read()` returns `''`.
 
 #### console
 

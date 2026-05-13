@@ -112,14 +112,15 @@ function createMockCtx(
   execFn?: (
     command: string,
     options: { cwd?: string }
-  ) => Promise<{ stdout: string; stderr: string; exitCode: number }>
+  ) => Promise<{ stdout: string; stderr: string; exitCode: number }>,
+  stdin = ''
 ): CommandContext {
   const env = new Map<string, string>(Object.entries(envVars));
   const ctx: CommandContext = {
     fs: createMockFs(files),
     cwd: '/workspace',
     env,
-    stdin: '',
+    stdin,
   };
   if (execFn) {
     ctx.exec = execFn as CommandContext['exec'];
@@ -554,5 +555,88 @@ describe('jsh-executor — process manager wiring', () => {
     });
     const result = await executeJshFile('/workspace/hi.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
+  });
+});
+
+describe('stdin in .jsh scripts', () => {
+  it('exposes piped stdin as the top-level `stdin` parameter', async () => {
+    const ctx = createMockCtx(
+      { '/workspace/cat.jsh': 'process.stdout.write(stdin);' },
+      {},
+      undefined,
+      'hello from upstream\n'
+    );
+    const result = await executeJshFile('/workspace/cat.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('hello from upstream\n');
+  });
+
+  it('exposes piped stdin via process.stdin.read()', async () => {
+    const ctx = createMockCtx(
+      { '/workspace/read.jsh': 'console.log(process.stdin.read().length);' },
+      {},
+      undefined,
+      'abcdef'
+    );
+    const result = await executeJshFile('/workspace/read.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('6');
+  });
+
+  it('supports `for await (const chunk of process.stdin)` iteration', async () => {
+    const ctx = createMockCtx(
+      {
+        '/workspace/iter.jsh':
+          'let total = ""; for await (const c of process.stdin) total += c; console.log(total.toUpperCase());',
+      },
+      {},
+      undefined,
+      'hi'
+    );
+    const result = await executeJshFile('/workspace/iter.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('HI');
+  });
+
+  it('exposes empty string when no stdin is piped', async () => {
+    const ctx = createMockCtx({
+      '/workspace/empty.jsh':
+        'console.log(JSON.stringify({ top: stdin, viaProcess: process.stdin.read(), tty: process.stdin.isTTY }));',
+    });
+    const result = await executeJshFile('/workspace/empty.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout.trim());
+    expect(parsed).toEqual({ top: '', viaProcess: '', tty: false });
+  });
+
+  it('preserves binary-shaped (latin1) stdin bytes verbatim', async () => {
+    // just-bash threads non-UTF-8 binary as a latin1 string (one JS char
+    // per byte). The realm must hand it back to user code byte-identical.
+    const bytes = String.fromCharCode(0x00, 0xff, 0x7f, 0x80, 0xc3, 0xa9);
+    const ctx = createMockCtx(
+      {
+        '/workspace/echo.jsh':
+          'const codes = []; for (const c of stdin) codes.push(c.charCodeAt(0)); console.log(codes.join(","));',
+      },
+      {},
+      undefined,
+      bytes
+    );
+    const result = await executeJshFile('/workspace/echo.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('0,255,127,128,195,169');
+  });
+
+  it('does not break scripts that ignore stdin', async () => {
+    // Regression guard for the additive AsyncFunction parameter.
+    const ctx = createMockCtx(
+      { '/workspace/quiet.jsh': 'console.log("ok");' },
+      {},
+      undefined,
+      'some piped input the script will never read'
+    );
+    const result = await executeJshFile('/workspace/quiet.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('ok\n');
   });
 });
