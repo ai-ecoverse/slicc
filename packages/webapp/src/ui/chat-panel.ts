@@ -642,6 +642,65 @@ export class ChatPanel {
     this.renderModelSelector();
   }
 
+  /**
+   * Toggle the in-flight compaction ghost bubble. Called by the kernel
+   * client when the active scoop's compaction transformer enters or
+   * leaves a phase. The bubble lives outside `this.messages` (it's not
+   * a persisted ChatMessage) — it's a sibling `.msg-group--ghost` node
+   * appended to the messages container that we tear down on idle.
+   *
+   * `'idle'` removes the bubble. The other states show different
+   * labels so the user knows whether we're crunching the conversation
+   * (summarizing) or persisting learnings (extracting-memory).
+   */
+  setCompactionState(state: 'summarizing' | 'extracting-memory' | 'idle'): void {
+    const existing = this.messagesInner?.querySelector(':scope > .msg-group--compaction');
+    if (state === 'idle') {
+      existing?.remove();
+      return;
+    }
+    const label =
+      state === 'extracting-memory'
+        ? 'Saving memories from this session…'
+        : 'Compacting earlier messages to save context…';
+    if (existing) {
+      const labelEl = existing.querySelector('.msg-group--compaction__label');
+      if (labelEl) labelEl.textContent = label;
+      return;
+    }
+    const ghost = this.createCompactionGhostBubble(label);
+    this.messagesInner.appendChild(ghost);
+    this.scrollToBottom();
+  }
+
+  /**
+   * Build the ghost-bubble DOM. Lucide `archive` icon (a box with a
+   * slot, suggesting "filing away") + animated dots after the label so
+   * the bubble visibly pulses while the LLM call is in flight.
+   */
+  private createCompactionGhostBubble(label: string): HTMLElement {
+    const group = document.createElement('div');
+    group.className = 'msg-group msg-group--compaction';
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-group--compaction__bubble';
+    // Lucide `archive` — keep paths inline so we don't have to load the
+    // sprite bundle for one icon.
+    bubble.innerHTML =
+      '<svg class="msg-group--compaction__icon" xmlns="http://www.w3.org/2000/svg" ' +
+      'width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<rect width="20" height="5" x="2" y="3" rx="1"/>' +
+      '<path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/>' +
+      '<path d="M10 12h4"/>' +
+      '</svg>' +
+      '<span class="msg-group--compaction__label"></span>' +
+      '<span class="msg-group--compaction__dots" aria-hidden="true"><span></span><span></span><span></span></span>';
+    const labelEl = bubble.querySelector('.msg-group--compaction__label');
+    if (labelEl) labelEl.textContent = label;
+    group.appendChild(bubble);
+    return group;
+  }
+
   /** Clear all messages from the display (doesn't affect session store). */
   clear(): void {
     this.messages = [];

@@ -245,6 +245,18 @@ export interface ScoopStatusMsg {
 }
 
 /**
+ * Fired by the offscreen agent's compaction transformer as it enters
+ * and leaves the summarize / memory-extract LLM phases. The panel
+ * renders a ghost-bubble affordance while the state is non-idle so the
+ * user knows why the agent is silent. `'idle'` clears the affordance.
+ */
+export interface CompactionStateMsg {
+  type: 'compaction-state';
+  scoopJid: string;
+  state: 'summarizing' | 'extracting-memory' | 'idle';
+}
+
+/**
  * Subset of `ScoopConfig` (see `packages/webapp/src/scoops/types.ts`)
  * carried across the offscreen → panel boundary. The panel only needs
  * the persisted-per-scoop bits that drive the UI affordances (model
@@ -440,6 +452,7 @@ export type OffscreenToPanelMessage =
   | OffscreenReadyMsg
   | AgentEventMsg
   | ScoopStatusMsg
+  | CompactionStateMsg
   | ScoopListMsg
   | StateSnapshotMsg
   | ErrorMsg

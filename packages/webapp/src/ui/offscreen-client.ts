@@ -54,6 +54,16 @@ export interface OffscreenClientCallbacks {
   ) => void;
   /** Called when the offscreen engine is ready and state has been received. */
   onReady?: () => void;
+  /**
+   * Fired when a scoop's compaction transformer enters or leaves a
+   * phase. The panel uses this to render a ghost-bubble affordance
+   * while the agent is silent on summarize / memory-extract calls;
+   * `'idle'` clears the affordance.
+   */
+  onCompactionStateChange?: (
+    scoopJid: string,
+    state: 'summarizing' | 'extracting-memory' | 'idle'
+  ) => void;
 }
 
 export class OffscreenClient implements KernelClientFacade {
@@ -356,6 +366,10 @@ export class OffscreenClient implements KernelClientFacade {
 
       case 'scoop-status':
         this.handleScoopStatus(msg as ScoopStatusMsg);
+        break;
+
+      case 'compaction-state':
+        this.callbacks.onCompactionStateChange?.(msg.scoopJid, msg.state);
         break;
 
       case 'scoop-created':

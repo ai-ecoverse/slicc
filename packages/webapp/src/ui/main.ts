@@ -225,12 +225,22 @@ function isUIFixtureRequested(): boolean {
 async function loadUIFixtureIntoChat(chatPanel: {
   switchToContext: (id: string, readOnly: boolean, scoopName?: string) => Promise<void>;
   loadMessages: (msgs: ChatMessage[]) => void;
+  setCompactionState?: (state: 'summarizing' | 'extracting-memory' | 'idle') => void;
 }): Promise<void> {
   const [{ createChatFixture, FIXTURE_SESSION_ID, FIXTURE_SCOOP_NAME }] = await Promise.all([
     import('./chat-fixture.js'),
   ]);
   await chatPanel.switchToContext(FIXTURE_SESSION_ID, true, FIXTURE_SCOOP_NAME);
   chatPanel.loadMessages(createChatFixture());
+  // Optional preview of the compaction ghost bubble for designers:
+  //   ?ui-fixture=1&compacting=summarizing
+  //   ?ui-fixture=1&compacting=extracting-memory
+  // (Anything else leaves the bubble off.)
+  const params = new URLSearchParams(window.location.search);
+  const compacting = params.get('compacting');
+  if (compacting === 'summarizing' || compacting === 'extracting-memory') {
+    chatPanel.setCompactionState?.(compacting);
+  }
   log.info('Loaded UI fixture session for design iteration');
 }
 
@@ -748,6 +758,13 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       // The offscreen has already persisted the messages to IndexedDB,
       // so a panel reload would pick them up. Repaint the open chat.
       layout.panels.chat.loadMessages(messages as unknown as ChatMessage[]);
+    },
+    onCompactionStateChange: (scoopJid, state) => {
+      // Only render the ghost bubble in the scoop the user is looking at —
+      // a different scoop compacting in the background shouldn't poke the
+      // foreground chat.
+      if (selectedScoop?.jid !== scoopJid) return;
+      layout.panels.chat.setCompactionState(state);
     },
     onReady: async () => {
       try {
@@ -1720,6 +1737,12 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
         // streaming pipeline, which keeps writing through
         // `persistScoop` on each agent event.
         layout.panels.chat.loadMessages(messages as unknown as ChatMessage[]);
+      },
+      onCompactionStateChange: (scoopJid, state) => {
+        // Render the ghost bubble only in the scoop the user is viewing —
+        // a background scoop's compaction shouldn't perturb the foreground.
+        if (selectedScoop?.jid !== scoopJid) return;
+        layout.panels.chat.setCompactionState(state);
       },
       onReady: () => {
         log.info('Kernel worker ready, scoop count:', client.getScoops().length);

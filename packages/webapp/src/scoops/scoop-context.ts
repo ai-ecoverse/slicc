@@ -214,6 +214,13 @@ export interface ScoopContextCallbacks {
    * compaction pass skips its second LLM call entirely.
    */
   appendGlobalMemory?: (bullets: string, meta: { source: string }) => Promise<void>;
+  /**
+   * Optional lifecycle hook for compaction. Emitted by the compaction
+   * `transformContext` before and after each LLM call so the panel can
+   * render a ghost-bubble affordance while the agent is silent.
+   * `state === 'idle'` clears the affordance.
+   */
+  onCompactionStateChange?: (state: 'summarizing' | 'extracting-memory' | 'idle') => void;
   /** BrowserAPI provider for browser automation commands */
   getBrowserAPI: () => BrowserAPI;
 }
@@ -479,6 +486,7 @@ export class ScoopContext {
         getApiKey: () => getApiKey() ?? undefined,
         headers: compactionHeaders,
         onMemoryUpdates,
+        onCompactionStateChange: this.callbacks.onCompactionStateChange,
       });
 
       // Guard: dispose() may have run while init() was awaiting above.

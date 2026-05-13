@@ -218,6 +218,14 @@ export class OffscreenBridge implements KernelFacade {
         bridge.emitScoopList();
       },
 
+      onCompactionStateChange: (scoopJid, state) => {
+        bridge.emit({
+          type: 'compaction-state',
+          scoopJid,
+          state,
+        });
+      },
+
       onError: (scoopJid, error) => {
         bridge.emit({
           type: 'error',

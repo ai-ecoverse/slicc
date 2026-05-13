@@ -327,6 +327,49 @@ describe('createCompactContext', () => {
     expect(onMemoryUpdates.mock.calls[0][0]).toContain('user prefers vim');
   });
 
+  it('emits compaction lifecycle states in order, ending with idle', async () => {
+    const onMemoryUpdates = vi.fn();
+    const onCompactionStateChange = vi.fn();
+    mockCompleteSimple
+      .mockResolvedValueOnce(llmResponse('summary'))
+      .mockResolvedValueOnce(llmResponse('- a memory'));
+
+    const compact = createCompactContext({
+      ...mockConfig,
+      onMemoryUpdates,
+      onCompactionStateChange,
+    });
+    const baseMsg = 'x'.repeat(65000);
+    const messages = Array.from({ length: 12 }, () => createMessage('user', baseMsg));
+    await compact(messages);
+
+    const states = onCompactionStateChange.mock.calls.map((c) => c[0]);
+    expect(states).toEqual(['summarizing', 'extracting-memory', 'idle']);
+  });
+
+  it('skips the extracting-memory state when onMemoryUpdates is not wired', async () => {
+    const onCompactionStateChange = vi.fn();
+    mockCompleteSimple.mockResolvedValueOnce(llmResponse('summary'));
+    const compact = createCompactContext({ ...mockConfig, onCompactionStateChange });
+    const baseMsg = 'x'.repeat(65000);
+    const messages = Array.from({ length: 12 }, () => createMessage('user', baseMsg));
+    await compact(messages);
+    expect(onCompactionStateChange.mock.calls.map((c) => c[0])).toEqual(['summarizing', 'idle']);
+  });
+
+  it('emits idle even when the summary call fails (fallback path)', async () => {
+    const onCompactionStateChange = vi.fn();
+    mockCompleteSimple.mockRejectedValueOnce(new Error('boom'));
+    const compact = createCompactContext({ ...mockConfig, onCompactionStateChange });
+    const baseMsg = 'x'.repeat(65000);
+    const messages = Array.from({ length: 12 }, () => createMessage('user', baseMsg));
+    await compact(messages);
+    // Whatever else fired, the LAST emission must be 'idle' so the UI
+    // never gets stuck showing the ghost bubble.
+    const states = onCompactionStateChange.mock.calls.map((c) => c[0]);
+    expect(states[states.length - 1]).toBe('idle');
+  });
+
   it('summary and memory calls share an identical system prompt (prefix-cache invariant)', async () => {
     const onMemoryUpdates = vi.fn();
     mockCompleteSimple

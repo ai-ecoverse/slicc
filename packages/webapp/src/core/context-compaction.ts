@@ -97,7 +97,27 @@ export interface CompactionConfig {
    * not block compaction. When omitted, no memory call is made.
    */
   onMemoryUpdates?: (bullets: string) => Promise<void> | void;
+  /**
+   * Optional lifecycle hook for the UI. Fired around the compaction LLM
+   * calls so the chat panel can render a ghost-bubble affordance instead
+   * of leaving the user wondering why the agent is silent.
+   *
+   * Sequence on a typical compaction:
+   *   'summarizing'        → before the summary call
+   *   'extracting-memory'  → before the memory call (only when
+   *                          `onMemoryUpdates` is also wired)
+   *   'idle'               → in `finally`, always fires last
+   *
+   * No-op when omitted.
+   */
+  onCompactionStateChange?: (state: CompactionState) => void;
 }
+
+/**
+ * Phases of an in-flight compaction. `idle` is the resting state; the UI
+ * should clear any compaction-specific affordance when it sees it.
+ */
+export type CompactionState = 'summarizing' | 'extracting-memory' | 'idle';
 
 /**
  * Lightweight serializer that renders an AgentMessage array as a text block
@@ -336,6 +356,17 @@ export function createCompactContext(
       keeping: messagesToKeep.length,
     });
 
+    // Emit lifecycle hook safely — listener bugs must never abort compaction.
+    const emit = (state: CompactionState): void => {
+      try {
+        config.onCompactionStateChange?.(state);
+      } catch (e) {
+        log.warn('onCompactionStateChange listener threw', {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    };
+
     // Attempt LLM-powered summarization
     const apiKey = config.getApiKey();
     if (apiKey) {
@@ -345,6 +376,7 @@ export function createCompactContext(
         // Summary uses ~80% of the reserve budget for output, mirroring the
         // pi-coding-agent default.
         const summaryMaxTokens = Math.floor(0.8 * reserveTokens);
+        emit('summarizing');
         const summary = await runCompactionCall(
           config.model,
           apiKey,
@@ -373,6 +405,7 @@ export function createCompactContext(
           // Memory budget is much smaller — bullets, not a structured doc.
           const memoryMaxTokens = 2048;
           try {
+            emit('extracting-memory');
             const bullets = await runCompactionCall(
               config.model,
               apiKey,
@@ -401,6 +434,7 @@ export function createCompactContext(
           }
         }
 
+        emit('idle');
         return [summaryMessage, ...messagesToKeep];
       } catch (err) {
         log.warn('LLM summarization failed, falling back to naive drop', {
@@ -410,6 +444,9 @@ export function createCompactContext(
     } else {
       log.warn('No API key available for LLM summarization, falling back to naive drop');
     }
+    // Always clear the indicator before returning — both the fallback path
+    // and any successful early-return must leave the UI in the resting state.
+    emit('idle');
 
     // Fallback: naive drop (same as old behavior but without eager truncation)
     const compactedMsg: UserMessage = {

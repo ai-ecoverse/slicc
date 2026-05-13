@@ -63,6 +63,16 @@ export interface OrchestratorCallbacks {
   onSendMessage: (targetJid: string, text: string) => void;
   /** Called when scoop status changes */
   onStatusChange: (scoopJid: string, status: ScoopTabState['status']) => void;
+  /**
+   * Called when the scoop's compaction pass enters / leaves a phase. The
+   * UI uses this to render a ghost-bubble affordance while the agent is
+   * silent during the summarize + memory-extract round-trips. `'idle'`
+   * clears the affordance.
+   */
+  onCompactionStateChange?: (
+    scoopJid: string,
+    state: 'summarizing' | 'extracting-memory' | 'idle'
+  ) => void;
   /** Called on error */
   onError: (scoopJid: string, error: string) => void;
   /** Get the BrowserAPI used by browser automation commands */
@@ -1528,6 +1538,9 @@ export class Orchestrator {
         if (status === 'ready' && !scoop.isCone) {
           void this.maybeNotifyConeOnScoopComplete(jid);
         }
+      },
+      onCompactionStateChange: (state) => {
+        this.callbacks.onCompactionStateChange?.(jid, state);
       },
       onToolStart: (toolName, toolInput) => {
         this.callbacks.onToolStart?.(jid, toolName, toolInput);
