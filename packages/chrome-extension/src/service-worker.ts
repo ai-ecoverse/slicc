@@ -44,6 +44,31 @@ import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared-ts';
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 // ---------------------------------------------------------------------------
+// Detached popout state
+// ---------------------------------------------------------------------------
+
+const DETACHED_TAB_ID_KEY = 'slicc.detached.tabId';
+
+async function readStoredDetachedTabId(): Promise<number | undefined> {
+  try {
+    const result = await chrome.storage.session.get(DETACHED_TAB_ID_KEY);
+    const raw = result[DETACHED_TAB_ID_KEY];
+    return typeof raw === 'number' ? raw : undefined;
+  } catch (err) {
+    console.error('[slicc-sw] storage.session.get failed', err);
+    return undefined;
+  }
+}
+
+async function writeStoredDetachedTabId(tabId: number): Promise<void> {
+  await chrome.storage.session.set({ [DETACHED_TAB_ID_KEY]: tabId });
+}
+
+async function clearStoredDetachedTabId(): Promise<void> {
+  await chrome.storage.session.remove(DETACHED_TAB_ID_KEY);
+}
+
+// ---------------------------------------------------------------------------
 // Offscreen document lifecycle
 // ---------------------------------------------------------------------------
 
