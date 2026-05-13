@@ -120,6 +120,7 @@ import {
 // circular module-evaluation order.
 import { broadcastToDips } from './dip.js';
 import { isExtensionMessage } from '../../../chrome-extension/src/messages.js';
+import { enterDetachedActiveState } from './detached-active.js';
 
 const log = createLogger('main');
 
@@ -520,28 +521,6 @@ async function fireFastForwardFinalLick(
 // ---------------------------------------------------------------------------
 // Extension mode — pure UI connecting to offscreen agent engine
 // ---------------------------------------------------------------------------
-
-function enterDetachedActiveState(
-  client: import('./offscreen-client.js').OffscreenClient,
-  layout: Layout
-): void {
-  // Execution order: close → lock → overlay.
-  //
-  // 1. window.close() — happy path; if it works the rest is moot.
-  // 2. setLocked(true) — synchronously bounces any send() call. Doing
-  //    this BEFORE the overlay closes the brief window where the user
-  //    could click a still-active send button between close-failing and
-  //    overlay-appearing.
-  // 3. showDetachedActiveOverlay() — visible feedback.
-  try {
-    window.close();
-  } catch {
-    // window.close() may no-op in some Chrome configurations;
-    // layers 2+3 cover it.
-  }
-  client.setLocked(true);
-  layout.showDetachedActiveOverlay();
-}
 
 async function mainExtension(app: HTMLElement, options?: { detached?: boolean }): Promise<void> {
   const isDetachedSelf = options?.detached === true;

@@ -381,6 +381,10 @@ describe('detached popout — claim handler', () => {
     tabsStore.set(20, { id: 20, windowId: 100 });
     tabsStore.set(21, { id: 21, windowId: 200 });
     await loadSw();
+    // Clear all side-panel calls from boot reconciliation so we only see
+    // claim-handler side effects in the assertions below.
+    sidePanelCalls.length = 0;
+    mockChrome.runtime.sendMessage.mockClear();
 
     sendClaim(21, 'chrome-extension://test/index.html?detached=1');
     await new Promise((r) => setTimeout(r, 0));
@@ -388,6 +392,98 @@ describe('detached popout — claim handler', () => {
     expect(mockChrome.tabs.remove).toHaveBeenCalledWith(21);
     expect(mockChrome.tabs.update).toHaveBeenCalledWith(20, { active: true });
     expect(mockChrome.windows.update).toHaveBeenCalledWith(100, { focused: true });
+
+    // Negative assertions — the duplicate-tab branch must NOT re-broadcast
+    // detached-active or re-toggle panel behavior. If it did, the canonical
+    // detached tab would call enterDetachedActiveState on itself.
+    expect(sidePanelCalls).toHaveLength(0);
+    expect(mockChrome.runtime.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'service-worker',
+        payload: expect.objectContaining({ type: 'detached-active' }),
+      })
+    );
+    // Storage unchanged — still pointing at 20, not 21.
+    expect(sessionStorage.get('slicc.detached.tabId')).toBe(20);
+  });
+
+  it('rejects claim when sender.tab is missing', async () => {
+    await loadSw();
+    sidePanelCalls.length = 0;
+
+    // Sender has url but no tab — e.g., a popup or background page.
+    const env = {
+      source: 'panel',
+      payload: { type: 'detached-claim' },
+    };
+    for (const listener of onMessageListeners) {
+      listener(env, { url: 'chrome-extension://test/index.html?detached=1' }, () => {});
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(sessionStorage.has('slicc.detached.tabId')).toBe(false);
+  });
+
+  it('rejects claim when source is not panel', async () => {
+    await loadSw();
+    sidePanelCalls.length = 0;
+    tabsStore.set(40, { id: 40, windowId: 100 });
+
+    // Simulate an envelope coming FROM the offscreen document (or any non-panel source).
+    const env = {
+      source: 'offscreen',
+      payload: { type: 'detached-claim' },
+    };
+    for (const listener of onMessageListeners) {
+      listener(
+        env,
+        { tab: { id: 40 }, url: 'chrome-extension://test/index.html?detached=1' },
+        () => {}
+      );
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Storage and side panel state unchanged — claim was rejected at the source filter.
+    expect(sessionStorage.has('slicc.detached.tabId')).toBe(false);
+  });
+
+  it('best-effort sidePanel.close fans out across all windows on first claim', async () => {
+    // Two windows alive; the SW should close the side panel in each after the broadcast.
+    windowsStore.push({ id: 11 }, { id: 12 });
+    await loadSw();
+    sidePanelCalls.length = 0;
+
+    tabsStore.set(50, { id: 50, windowId: 100 });
+    sendClaim(50, 'chrome-extension://test/index.html?detached=1');
+    await new Promise((r) => setTimeout(r, 0));
+
+    // sidePanel.close should have been called once per window.
+    expect(sidePanelCalls).toContainEqual({ method: 'close', args: { windowId: 11 } });
+    expect(sidePanelCalls).toContainEqual({ method: 'close', args: { windowId: 12 } });
+  });
+
+  it('tolerates sidePanel.close rejection (window has no side panel open)', async () => {
+    // sidePanel.close throws — represents "no active side panel in that window."
+    // Implementation must swallow per-window so other windows still get tried.
+    windowsStore.push({ id: 11 }, { id: 12 });
+    mockChrome.sidePanel.close.mockImplementation(async (args: unknown) => {
+      sidePanelCalls.push({ method: 'close', args });
+      throw new Error('No active side panel');
+    });
+    await loadSw();
+    sidePanelCalls.length = 0;
+
+    tabsStore.set(60, { id: 60, windowId: 100 });
+    sendClaim(60, 'chrome-extension://test/index.html?detached=1');
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Both windows attempted — rejection in one doesn't abort the other.
+    expect(sidePanelCalls.filter((c) => c.method === 'close')).toHaveLength(2);
+
+    // Restore the mock for subsequent tests.
+    mockChrome.sidePanel.close.mockImplementation(async (args: unknown) => {
+      sidePanelCalls.push({ method: 'close', args });
+    });
   });
 });
 
