@@ -756,14 +756,19 @@ async function cdpGetTargets(): Promise<Record<string, unknown>> {
     chrome.tabs.query({ active: true, currentWindow: true }),
   ]);
   const activeTabIds = new Set(activeTabs.map((t) => t.id));
-  const targetInfos = tabs.map((tab) => ({
-    targetId: String(tab.id),
-    type: 'page',
-    title: tab.title ?? '',
-    url: tab.url ?? '',
-    attached: attachedTabs.has(tab.id!),
-    active: activeTabIds.has(tab.id!),
-  }));
+  // Skip tabs without a numeric id (devtools, anonymous pages). They
+  // can't be CDP-attached targets — without this filter, String(undefined)
+  // would surface "undefined" as a targetId and tab.id! would crash.
+  const targetInfos = tabs
+    .filter((tab): tab is typeof tab & { id: number } => typeof tab.id === 'number')
+    .map((tab) => ({
+      targetId: String(tab.id),
+      type: 'page',
+      title: tab.title ?? '',
+      url: tab.url ?? '',
+      attached: attachedTabs.has(tab.id),
+      active: activeTabIds.has(tab.id),
+    }));
   return { targetInfos };
 }
 
