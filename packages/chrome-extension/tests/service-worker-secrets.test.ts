@@ -62,6 +62,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
         group: vi.fn(),
         onCreated: { addListener: vi.fn() },
         onUpdated: { addListener: vi.fn() },
+        onRemoved: { addListener: vi.fn() },
       },
       tabGroups: { update: vi.fn() },
       debugger: {

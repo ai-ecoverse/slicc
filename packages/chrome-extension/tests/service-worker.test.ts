@@ -106,6 +106,9 @@ function createChromeMock() {
       onUpdated: {
         addListener: vi.fn(),
       },
+      onRemoved: {
+        addListener: vi.fn(),
+      },
     },
     tabGroups: {
       update: vi.fn(async () => undefined),

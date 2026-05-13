@@ -467,3 +467,46 @@ describe('detached popout — action.onClicked', () => {
     expect(sessionStorage.has('slicc.detached.tabId')).toBe(false);
   });
 });
+
+describe('detached popout — tabs.onRemoved', () => {
+  beforeEach(() => {
+    resetMocks();
+  });
+
+  it('unlocks when the locked tab is removed', async () => {
+    sessionStorage.set('slicc.detached.tabId', 50);
+    tabsStore.set(50, { id: 50, windowId: 100 });
+    await loadSw();
+    sidePanelCalls.length = 0;
+
+    for (const cb of tabsRemovedListeners) {
+      cb(50, { windowId: 100, isWindowClosing: false });
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(sessionStorage.has('slicc.detached.tabId')).toBe(false);
+    expect(sidePanelCalls).toContainEqual({
+      method: 'setPanelBehavior',
+      args: { openPanelOnActionClick: true },
+    });
+    expect(sidePanelCalls).toContainEqual({
+      method: 'setOptions',
+      args: { enabled: true },
+    });
+  });
+
+  it('does nothing when an unrelated tab is removed', async () => {
+    sessionStorage.set('slicc.detached.tabId', 60);
+    tabsStore.set(60, { id: 60, windowId: 100 });
+    await loadSw();
+    sidePanelCalls.length = 0;
+
+    for (const cb of tabsRemovedListeners) {
+      cb(999, { windowId: 100, isWindowClosing: false });
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(sessionStorage.get('slicc.detached.tabId')).toBe(60);
+    expect(sidePanelCalls).toHaveLength(0);
+  });
+});

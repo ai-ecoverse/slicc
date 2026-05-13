@@ -245,6 +245,20 @@ chrome.action.onClicked.addListener((tab) => {
   });
 });
 
+async function handleTabRemoved(tabId: number): Promise<void> {
+  const storedId = await readStoredDetachedTabId();
+  if (storedId !== tabId) return;
+  await clearStoredDetachedTabId();
+  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  await chrome.sidePanel.setOptions({ enabled: true });
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  handleTabRemoved(tabId).catch((err) => {
+    console.error('[slicc-sw] handleTabRemoved failed', err);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Offscreen document lifecycle
 // ---------------------------------------------------------------------------
