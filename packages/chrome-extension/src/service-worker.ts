@@ -25,6 +25,7 @@ import type {
   OAuthRequestMsg,
   OAuthResultMsg,
 } from './messages.js';
+import { isExtensionMessage } from './messages.js';
 import {
   executeDaSignAndForward,
   executeS3SignAndForward,
@@ -186,19 +187,20 @@ chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
   // Return false explicitly to tell Chrome we will not call sendResponse
   // asynchronously. Returning true keeps sendResponse alive and conflicts
   // with the other SW onMessage listeners that may want to respond.
-  if (typeof message !== 'object' || message === null) return false;
-  if (!('source' in message) || !('payload' in message)) return false;
-  const env = message as { source: string; payload: { type?: string } };
-  if (env.source !== 'panel') return false;
+  if (!isExtensionMessage(message)) return false;
+  if (message.source !== 'panel') return false;
+  const payloadType = (message.payload as { type?: string }).type;
 
-  if (env.payload?.type === 'detached-claim') {
+  if (payloadType === 'detached-claim') {
     handleDetachedClaim(sender).catch((err) => {
-      console.error('[slicc-sw] handleDetachedClaim failed', err);
+      // Step-context already logged by handleDetachedClaim's internal catch.
+      // This catch is the final safety net so the rejection doesn't go unhandled.
+      console.error('[slicc-sw] handleDetachedClaim unhandled', err);
     });
     return false;
   }
 
-  if (env.payload?.type === 'detached-popout-request') {
+  if (payloadType === 'detached-popout-request') {
     handleDetachedPopoutRequest().catch((err) => {
       console.error('[slicc-sw] handleDetachedPopoutRequest failed', err);
     });

@@ -119,6 +119,7 @@ import {
 // "o is not a function" error in the fs chunk because of the resulting
 // circular module-evaluation order.
 import { broadcastToDips } from './dip.js';
+import { isExtensionMessage } from '../../../chrome-extension/src/messages.js';
 
 const log = createLogger('main');
 
@@ -813,11 +814,10 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   chrome.runtime.onMessage.addListener((msg) => {
     // Return false (or void/undefined) on every path so Chrome does not
     // keep sendResponse alive. This listener never responds.
-    if (typeof msg !== 'object' || msg === null) return false;
-    if (!('source' in msg) || !('payload' in msg)) return false;
-    const env = msg as { source: string; payload: { type?: string } };
-    if (env.source !== 'service-worker') return false;
-    if (env.payload?.type !== 'detached-active') return false;
+    if (!isExtensionMessage(msg)) return false;
+    if (msg.source !== 'service-worker') return false;
+    const payloadType = (msg.payload as { type?: string }).type;
+    if (payloadType !== 'detached-active') return false;
 
     if (isDetachedSelf) return false; // I am the claimer; ignore my own broadcast.
 
