@@ -47,6 +47,7 @@ import { createAttachmentTmpWriter } from './attachment-vfs.js';
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
 import { flushCredentialsToWorker, resolveDefaultModel } from './onboarding-helpers.js';
+import { runNewSessionFreeze } from './new-session.js';
 import { BrowserAPI, NavigationWatcher } from '../cdp/index.js';
 import { type Orchestrator } from '../scoops/index.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
@@ -863,16 +864,20 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     if (selectedScoop) syncThinkingButtonForExtensionScoop(selectedScoop);
   };
 
-  // Wire clear chat — delete all scoop sessions from the shared IndexedDB
-  // synchronously (from the panel's perspective) before the reload happens.
-  // The bridge also clears its in-memory buffers via the clear-chat message.
+  // Wire "New session" — freeze the cone's chat to /sessions/ via the
+  // freezer (memory extraction + title), then delete ONLY the cone session
+  // from IndexedDB. Scoops survive intentionally so the fresh cone inherits
+  // the existing scoop roster.
   layout.onClearChat = async () => {
-    const scoops = client.getScoops();
-    for (const scoop of scoops) {
-      const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
-      await layout.panels.chat.deleteSessionById(sessionId);
+    try {
+      await runNewSessionFreeze({ vfs: localFs });
+    } catch (err) {
+      log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
     }
-    client.clearAllMessages();
+    await layout.panels.chat.deleteSessionById('session-cone');
+    // Bridge-side cone-only clear. The legacy clearAllMessages remains as a
+    // fallback inside the bridge for future "Reset everything" flows.
+    client.clearAllMessages({ target: 'cone' });
   };
 
   layout.onClearFilesystem = async () => {
@@ -1748,6 +1753,30 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   };
   layout.onModelsRefreshed = () => {
     if (selectedScoop) syncThinkingButtonForScoop(selectedScoop);
+  };
+
+  // Wire "New session" — freeze the cone's chat to /sessions/ via the
+  // freezer (memory extraction + title), then clear ONLY the cone
+  // session via the kernel client. Scoops survive intentionally so the
+  // fresh cone inherits the existing scoop roster.
+  layout.onClearChat = async () => {
+    try {
+      await runNewSessionFreeze({ vfs: localFs });
+    } catch (err) {
+      log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
+    }
+    await layout.panels.chat.deleteSessionById('session-cone');
+    await client.clearAllMessages({ target: 'cone' });
+  };
+
+  // Frozen sessions sidebar (standalone only). The panel reads
+  // /sessions/index.json from the page-side VFS that already shares
+  // IndexedDB with the worker. Clicking an entry switches to the Files
+  // tab and reveals the archive JSON.
+  layout.panels.scoops.setVfs(localFs);
+  layout.onFrozenSessionOpen = (vfsPath) => {
+    layout.setActiveTab('files');
+    void layout.panels.fileBrowser.revealPath(vfsPath);
   };
 
   // Wire chat agent handle. The handle's `sendMessage` posts a

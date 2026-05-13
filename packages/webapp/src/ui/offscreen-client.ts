@@ -241,8 +241,8 @@ export class OffscreenClient implements KernelClientFacade {
     this.send({ type: 'set-thinking-level', scoopJid: jid, level });
   }
 
-  async clearAllMessages(): Promise<void> {
-    this.send({ type: 'clear-chat' });
+  async clearAllMessages(opts: { target?: 'cone' | 'all' } = {}): Promise<void> {
+    this.send({ type: 'clear-chat', target: opts.target ?? 'cone' });
   }
 
   clearFilesystem(): void {

@@ -89,6 +89,15 @@ Deep reference: `docs/kernel/process-model.md`.
 
 - Path: `packages/webapp/src/core/context-compaction.ts`
 - Handles large-context summarization, image resizing, and overflow recovery.
+- When `onMemoryUpdates` is wired on `CompactionConfig` (cone only — see `scoop-context.ts` wiring), compaction makes a second LLM call that shares the same system prompt to extract durable memories. The system prompt embeds the serialized conversation so Anthropic prompt caching hits on the prefix and the memory call is near-free. Memory bullets land in `/shared/CLAUDE.md` via `orchestrator.appendGlobalMemory`. Memory extraction is best-effort and never blocks compaction.
+- `runOneOffCompactionCall` is the reusable primitive — same shared-system-prompt shape, single call. Used by the "New session" freezer to generate a title and extract memories over the live cone session.
+
+### Frozen Sessions ("New session" flow)
+
+- Path: `packages/webapp/src/ui/session-freezer.ts`, `packages/webapp/src/ui/new-session.ts`
+- The avatar-popover "New session" entry and thread-header refresh button both run the freezer over the cone session, then clear only the cone (scoops survive). The freezer writes `/sessions/<timestamp>-<slug>.json` and prepends an entry to `/sessions/index.json`.
+- `scoops-panel.ts` renders the index as a frozen-sessions section below the live scoops list (standalone only — extension hides the rail). Clicking an entry switches to the Files tab and reveals the archive via `FileBrowserPanel.revealPath`.
+- Clearing semantics: `OffscreenClient.clearAllMessages({ target: 'cone' \| 'all' })` defaults to `'cone'`. The `'all'` path is preserved for internal reset flows and is not currently exposed in the UI.
 
 ### UI
 

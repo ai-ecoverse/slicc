@@ -137,6 +137,7 @@ function makeOrchestratorMock() {
     stopScoop: vi.fn(),
     clearQueuedMessages: vi.fn().mockResolvedValue(undefined),
     clearAllMessages: vi.fn().mockResolvedValue(undefined),
+    clearScoopMessages: vi.fn().mockResolvedValue(undefined),
     delegateToScoop: vi.fn().mockResolvedValue(undefined),
     updateModel: vi.fn(),
     setScoopThinkingLevel: vi.fn().mockResolvedValue(undefined),
@@ -232,9 +233,22 @@ describe('Kernel facade parity', () => {
     expect(orchestrator.unregisterScoop).toHaveBeenCalledWith('scoop_test');
   });
 
-  // 3. clear-chat deletes every scoop's session id
-  it('client.clearAllMessages → SessionStore.delete called for every scoop session', async () => {
+  // 3. clear-chat default (target=cone) deletes only the cone session
+  it('client.clearAllMessages() → SessionStore.delete called only for the cone session', async () => {
     await client.clearAllMessages();
+    await tick();
+
+    const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;
+    expect(sessionStore.delete).toHaveBeenCalledWith('session-cone');
+    expect(sessionStore.delete).not.toHaveBeenCalledWith('session-test-scoop');
+    // Cone-only path uses clearScoopMessages, not clearAllMessages.
+    expect(orchestrator.clearScoopMessages).toHaveBeenCalledWith('cone_1');
+    expect(orchestrator.clearAllMessages).not.toHaveBeenCalled();
+  });
+
+  // 3b. explicit target='all' still wipes every scoop's session
+  it('client.clearAllMessages({target: "all"}) → SessionStore.delete called for every scoop session', async () => {
+    await client.clearAllMessages({ target: 'all' });
     await tick();
 
     const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;

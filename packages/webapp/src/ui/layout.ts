@@ -142,6 +142,12 @@ export class Layout {
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
   public onClearChat?: () => Promise<void>;
   public onClearFilesystem?: () => Promise<void>;
+  /**
+   * Fired when the user clicks an entry in the frozen-sessions sidebar
+   * section. Receives the VFS path of the archive JSON. Standalone-only;
+   * the extension build skips this section entirely.
+   */
+  public onFrozenSessionOpen?: (vfsPath: string) => void;
   public onSprinkleClose?: (name: string) => void;
   /**
    * Fired when the user clicks a sprinkle's rail icon. Lets the
@@ -726,12 +732,20 @@ export class Layout {
     popover.appendChild(sepChat);
 
     const clearChatBtn = document.createElement('button');
-    clearChatBtn.className = 'avatar-popover__item avatar-popover__item--danger';
-    clearChatBtn.textContent = 'Clear chat';
+    clearChatBtn.className = 'avatar-popover__item';
+    clearChatBtn.textContent = 'New session';
     clearChatBtn.addEventListener('click', async () => {
       popover.remove();
-      await this.panels?.chat?.clearSession();
-      await this.onClearChat?.();
+      // The freezer runs inside onClearChat and reads the cone's session
+      // from IndexedDB. We must NOT delete the panel's session before that
+      // happens (the freezer would see nothing). When onClearChat is wired
+      // (the normal case) it handles the cone clear itself; only fall back
+      // to clearing the panel-local view if no handler is registered.
+      if (this.onClearChat) {
+        await this.onClearChat();
+      } else {
+        await this.panels?.chat?.clearSession();
+      }
       location.reload();
     });
     popover.appendChild(clearChatBtn);
@@ -850,13 +864,20 @@ export class Layout {
     // chat header drops the panel-toggle button entirely.
     const clearChatBtn = document.createElement('button');
     clearChatBtn.className = 'thread-header__panel-toggle';
-    clearChatBtn.dataset.tooltip = 'Clear Chat';
-    clearChatBtn.setAttribute('aria-label', 'Clear Chat');
+    clearChatBtn.dataset.tooltip = 'New session';
+    clearChatBtn.setAttribute('aria-label', 'New session');
     clearChatBtn.innerHTML =
       '<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="m8.249,15.021c-.4,0-.733-.317-.748-.72l-.25-6.5c-.017-.414.307-.763.72-.778.01-.001.021-.001.03-.001.4,0,.733.317.748.72l.25,6.5c.017.414-.307.763-.72.778-.01.001-.021.001-.03.001Z" fill="currentColor"/><path d="m11.751,15.021c-.01,0-.02,0-.03-.001-.413-.016-.736-.364-.72-.778l.25-6.5c.015-.403.348-.72.748-.72.01,0,.02,0,.03.001.413.016.736.364.72.778l-.25,6.5c-.015.403-.348.72-.748.72Z" fill="currentColor"/><path d="m17,4h-3.5v-.75c0-1.24-1.01-2.25-2.25-2.25h-2.5c-1.24,0-2.25,1.01-2.25,2.25v.75h-3.5c-.414,0-.75.336-.75.75s.336.75.75.75h.52l.422,10.342c.048,1.21,1.036,2.158,2.248,2.158h7.619c1.212,0,2.2-.948,2.248-2.158l.422-10.342h.52c.414,0,.75-.336.75-.75s-.336-.75-.75-.75Zm-9-.75c0-.413.337-.75.75-.75h2.5c.413,0,.75.337.75.75v.75h-4v-.75Zm6.56,12.531c-.017.403-.346.719-.75.719h-7.619c-.404,0-.733-.316-.75-.719l-.42-10.281h9.959l-.42,10.281Z" fill="currentColor"/></svg>';
     clearChatBtn.addEventListener('click', async () => {
-      await this.panels.chat.clearSession();
-      await this.onClearChat?.();
+      // Same freezer contract as the avatar-popover entry: when onClearChat
+      // is wired it handles the cone clear (after running the freezer). We
+      // only fall back to the panel-local clearSession when no handler is
+      // registered, so the freezer is never starved of the message list.
+      if (this.onClearChat) {
+        await this.onClearChat();
+      } else {
+        await this.panels.chat.clearSession();
+      }
       location.reload();
     });
 
@@ -1025,6 +1046,7 @@ export class Layout {
         },
         onSendMessage: () => {},
         onScoopsChanged: (scoops) => this.updateLogoScoops(scoops),
+        onFrozenSessionOpen: (vfsPath) => this.onFrozenSessionOpen?.(vfsPath),
       }),
     };
 

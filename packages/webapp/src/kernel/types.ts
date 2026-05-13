@@ -191,7 +191,7 @@ export interface KernelClientFacade {
   // -------------------------------------------------------------------------
   updateModel(): void;
   setScoopThinkingLevel(jid: string, level: ThinkingLevel | undefined): void;
-  clearAllMessages(): Promise<void>;
+  clearAllMessages(opts?: { target?: 'cone' | 'all' }): Promise<void>;
   clearFilesystem(): void;
   requestState(): void;
   sendSprinkleLick(sprinkleName: string, body: unknown, targetScoop?: string): void;

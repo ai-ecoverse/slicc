@@ -368,6 +368,29 @@ export class Orchestrator {
     log.info('Global memory updated');
   }
 
+  /**
+   * Append a block of auto-extracted memory bullets to /shared/CLAUDE.md.
+   * Used by the compaction memory-extraction pass and by the "New session"
+   * freezer flow.
+   *
+   * Inserts a dated heading so auto-extracted memories are attributable and
+   * easy to prune by hand. The `source` field is included in the heading
+   * (e.g., "compaction", "new-session") so the user can see why a block
+   * was added.
+   */
+  async appendGlobalMemory(bullets: string, meta: { source: string }): Promise<void> {
+    if (!this.sharedFs) return;
+    const trimmed = bullets.trim();
+    if (!trimmed) return;
+    const current = await this.getGlobalMemory();
+    const date = new Date().toISOString().slice(0, 10);
+    const heading = `## Auto-extracted (${date}, ${meta.source})`;
+    const separator = current.length === 0 || current.endsWith('\n') ? '' : '\n';
+    const block = `${separator}\n${heading}\n\n${trimmed}\n`;
+    await this.setGlobalMemory(current + block);
+    log.info('Global memory appended', { source: meta.source, length: trimmed.length });
+  }
+
   /** Get the shared VirtualFS */
   getSharedFS(): VirtualFS | null {
     return this.sharedFs;
@@ -1170,6 +1193,32 @@ export class Orchestrator {
     log.info('Filesystem reset and defaults re-seeded');
   }
 
+  /**
+   * Clear messages for a single scoop (live agent + persisted agent session
+   * + queued messages + timestamp tracking). Used by the "New session"
+   * flow to reset the cone while leaving every other scoop's runtime state
+   * untouched. The orchestrator-level `clearAllMessages` keeps its
+   * existing all-scoops semantics.
+   */
+  async clearScoopMessages(jid: string): Promise<void> {
+    const ctx = this.contexts.get(jid);
+    if (ctx) {
+      ctx.clearMessages();
+      if (this.sessionStore) {
+        const sessionId = ctx.getSessionId();
+        await this.sessionStore.delete(sessionId).catch((err) => {
+          log.warn('Failed to clear agent session for scoop', {
+            jid,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+    }
+    this.lastAgentTimestamp.delete(jid);
+    this.messageQueues.set(jid, []);
+    log.info('Scoop messages cleared', { jid });
+  }
+
   /** Clear all messages from the orchestrator DB, agent sessions, and live agent contexts. */
   async clearAllMessages(): Promise<void> {
     await db.clearAllMessages();
@@ -1528,6 +1577,9 @@ export class Orchestrator {
         : undefined,
       getGlobalMemory: () => this.getGlobalMemory(),
       setGlobalMemory: scoop.isCone ? (content) => this.setGlobalMemory(content) : undefined,
+      appendGlobalMemory: scoop.isCone
+        ? (bullets, meta) => this.appendGlobalMemory(bullets, meta)
+        : undefined,
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),
     };
 

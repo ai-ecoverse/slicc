@@ -208,6 +208,12 @@ export interface ScoopContextCallbacks {
   getGlobalMemory: () => Promise<string>;
   /** Update global CLAUDE.md (cone only) */
   setGlobalMemory?: (content: string) => Promise<void>;
+  /**
+   * Append auto-extracted memory bullets to /shared/CLAUDE.md (cone only).
+   * Called by the compaction memory-extraction pass. When omitted the
+   * compaction pass skips its second LLM call entirely.
+   */
+  appendGlobalMemory?: (bullets: string, meta: { source: string }) => Promise<void>;
   /** BrowserAPI provider for browser automation commands */
   getBrowserAPI: () => BrowserAPI;
 }
@@ -460,10 +466,19 @@ export class ScoopContext {
       // join the same session as the agent's tool turns.
       const compactionHeaders =
         model.provider === 'adobe' ? { 'X-Session-Id': adobeSessionId } : undefined;
+      // Auto-extracted memory is cone-only — scoops keep their own local
+      // memory files curated by the user. Wiring the callback only for the
+      // cone also skips the second compaction LLM call entirely for scoops.
+      const onMemoryUpdates =
+        this.scoop.isCone && this.callbacks.appendGlobalMemory
+          ? (bullets: string) =>
+              this.callbacks.appendGlobalMemory!(bullets, { source: 'compaction' })
+          : undefined;
       const compactFn = createCompactContext({
         model,
         getApiKey: () => getApiKey() ?? undefined,
         headers: compactionHeaders,
+        onMemoryUpdates,
       });
 
       // Guard: dispose() may have run while init() was awaiting above.

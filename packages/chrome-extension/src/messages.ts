@@ -78,6 +78,12 @@ export interface RequestScoopMessagesMsg {
 
 export interface ClearChatMsg {
   type: 'clear-chat';
+  /**
+   * Which sessions to clear. `'cone'` (default) wipes only the cone — used
+   * by the "New session" button so scoops survive. `'all'` wipes every
+   * scoop's session as well; reserved for future "reset everything" flows.
+   */
+  target?: 'cone' | 'all';
 }
 
 export interface ClearFilesystemMsg {
