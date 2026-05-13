@@ -181,6 +181,21 @@ export interface LocalStorageClearMsg {
   type: 'local-storage-clear';
 }
 
+// Detached popout messages — panel ↔ SW coordination.
+// See docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md.
+
+export interface DetachedPopoutRequestMsg {
+  type: 'detached-popout-request';
+}
+
+export interface DetachedClaimMsg {
+  type: 'detached-claim';
+}
+
+export interface DetachedActiveMsg {
+  type: 'detached-active';
+}
+
 export type PanelToOffscreenMessage =
   | UserMessageMsg
   | ConeCreateMsg
@@ -206,7 +221,9 @@ export type PanelToOffscreenMessage =
   // Panel-driven terminal session control. Routed by the worker's
   // `TerminalSessionHost`, ignored by `OffscreenBridge`. The full
   // envelope shape lives in `terminal-protocol.ts`.
-  | TerminalControlMsg;
+  | TerminalControlMsg
+  | DetachedPopoutRequestMsg
+  | DetachedClaimMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)
@@ -538,7 +555,12 @@ export interface PanelEnvelope {
 
 export interface ServiceWorkerEnvelope {
   source: 'service-worker';
-  payload: CdpProxyMessage | TraySocketEventMessage | OAuthResultMsg | NavigateLickMsg;
+  payload:
+    | CdpProxyMessage
+    | TraySocketEventMessage
+    | OAuthResultMsg
+    | NavigateLickMsg
+    | DetachedActiveMsg;
 }
 
 export type ExtensionMessage = OffscreenEnvelope | PanelEnvelope | ServiceWorkerEnvelope;
