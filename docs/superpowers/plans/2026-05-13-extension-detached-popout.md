@@ -685,6 +685,10 @@ const mockChrome = {
       tabsStore.delete(id);
       tabsRemoved.push(id);
     }),
+    query: vi.fn(async () => []),
+    group: vi.fn(async () => 1),
+    onCreated: { addListener: vi.fn() },
+    onUpdated: { addListener: vi.fn() },
     onRemoved: {
       addListener: (cb: (typeof tabsRemovedListeners)[number]) => {
         tabsRemovedListeners.push(cb);
@@ -696,6 +700,8 @@ const mockChrome = {
     getAll: vi.fn(async () => windowsStore.slice()),
   },
   action: {
+    setBadgeText: vi.fn(async () => undefined),
+    setBadgeBackgroundColor: vi.fn(async () => undefined),
     onClicked: {
       addListener: (cb: (typeof actionClickListeners)[number]) => {
         actionClickListeners.push(cb);
@@ -721,6 +727,34 @@ const mockChrome = {
       },
     },
     sendMessage: vi.fn(async () => {}),
+    // The existing SW also registers an onConnect handler for the
+    // fetch-proxy Port at module load. Provide a no-op so import doesn't throw.
+    onConnect: { addListener: vi.fn() },
+    lastError: undefined,
+  },
+  // The SW's module-level code touches each of these surfaces. They are
+  // no-ops here because the detached-popout tests don't exercise them,
+  // but they MUST exist or the dynamic SW import throws "addListener of undefined".
+  debugger: {
+    attach: vi.fn(),
+    detach: vi.fn(),
+    sendCommand: vi.fn(async () => ({})),
+    onEvent: { addListener: vi.fn() },
+    onDetach: { addListener: vi.fn() },
+  },
+  offscreen: {
+    hasDocument: vi.fn(async () => true),
+    createDocument: vi.fn(async () => {}),
+  },
+  identity: {
+    launchWebAuthFlow: vi.fn(),
+    getRedirectURL: vi.fn(),
+  },
+  webRequest: {
+    onHeadersReceived: { addListener: vi.fn() },
+  },
+  tabGroups: {
+    update: vi.fn(async () => undefined),
   },
 };
 
@@ -751,6 +785,13 @@ async function loadSw(): Promise<void> {
   // Allow the top-level reconcileDetachedLockOnBoot() promise to settle.
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+// If the dynamic import above throws "Cannot read properties of undefined
+// (reading 'addListener')" or similar, the SW's existing top-level code
+// touches a chrome.* surface this mock doesn't cover. Inspect the actual
+// error stack; extend the mock with a no-op for the missing surface; rerun.
+// The existing `packages/chrome-extension/tests/service-worker.test.ts`
+// is a reference for the full chrome.* surface area the SW expects.
 
 describe('detached popout — boot reconciliation', () => {
   beforeEach(() => {
@@ -1532,22 +1573,22 @@ Open `packages/webapp/tests/ui/offscreen-client.test.ts` and add a new test insi
 
 ```ts
 it('blocks outbound messages when locked', () => {
-  // refreshModel() is a public method that calls this.send(...). Use it
-  // as a proxy for any send-path invocation; see offscreen-client.ts:223.
-  client.refreshModel();
+  // updateModel() is a public method that calls this.send({ type: 'refresh-model' }).
+  // Source: packages/webapp/src/ui/offscreen-client.ts updateModel() at ~line 222.
+  client.updateModel();
   const beforeLockCount = sentMessages.length;
 
   client.setLocked(true);
-  client.refreshModel();
+  client.updateModel();
   expect(sentMessages.length).toBe(beforeLockCount); // no new send
 
   client.setLocked(false);
-  client.refreshModel();
+  client.updateModel();
   expect(sentMessages.length).toBeGreaterThan(beforeLockCount);
 });
 ```
 
-Note: this test assumes `refreshModel` is a public method on `OffscreenClient` that calls `send()`. Verify by reading `packages/webapp/src/ui/offscreen-client.ts` around line 223 — `refreshModel()` calls `this.send({ type: 'refresh-model' })`. If your read of the file shows a different public method invoking `send()`, substitute it here.
+Note: the public method name on `OffscreenClient` is `updateModel()` (the discriminator it sends is `'refresh-model'` — don't be fooled by the type literal). If a future refactor renames it, substitute any public method on `OffscreenClient` that invokes `this.send(...)` — any of them exercises the lock.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -1562,7 +1603,7 @@ Open `packages/webapp/src/ui/offscreen-client.ts`. Find an appropriate place nea
 private locked = false;
 ```
 
-Add a public method on the class (placement next to other public methods like `refreshModel` is fine):
+Add a public method on the class (placement next to other public methods like `updateModel` is fine):
 
 ```ts
 /**
@@ -1640,9 +1681,9 @@ Layout-side surface for the popout button and the detached-active overlay. The a
 
 - [ ] **Step 1: Read the relevant section of `layout.ts` to find the header construction**
 
-Run: `grep -n "buildSplitLayout\|header\|primaryRail" packages/webapp/src/ui/layout.ts | head -20`
+Run: `grep -n "buildHeader\|header.className\|className = 'header" packages/webapp/src/ui/layout.ts | head -10`
 
-Locate where the header is built and where scoop switcher / settings buttons are appended. We'll add the popout button alongside them.
+Verified: Layout's `buildHeader()` creates a `<div class="header">` (no BEM prefix), with `.header__brand`, `.header__row`, `.header__title`, `.header__spacer` as inner elements. The popout button will be appended to the `.header` element. If the implementer's read shows a different class, substitute the correct one in `setShowPopoutButton` below.
 
 - [ ] **Step 2: Add a private field for the button and overlay**
 
@@ -1671,11 +1712,12 @@ setShowPopoutButton(show: boolean): void {
     return;
   }
   if (this.popoutButtonEl) return;
-  const headerEl = this.root.querySelector('.layout-header') as HTMLElement | null;
+  // Layout's buildHeader() creates a top-level `<div class="header">`.
+  const headerEl = this.root.querySelector('.header') as HTMLElement | null;
   if (!headerEl) return;
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'layout-popout-btn';
+  btn.className = 'header__popout-btn';
   btn.title = 'Open in a new tab';
   btn.textContent = '⤴'; // simple glyph; CSS may replace with icon
   btn.setAttribute('aria-label', 'Pop out to a new tab');
@@ -1724,26 +1766,30 @@ showDetachedActiveOverlay(): void {
 
 - [ ] **Step 4: Add minimal CSS for the overlay**
 
-Find the existing CSS file Layout uses. Run:
+Find the CSS file that styles `.header`. Run:
 
 ```bash
-grep -rn "layout-header" packages/webapp/src/ui/styles/ | head -3
+grep -rn "\.header[^_a-zA-Z]" packages/webapp/src/ui/styles/ | head -5
 ```
 
-Append the following rules to whichever stylesheet currently defines `.layout-header`:
+Append the following rules to whichever stylesheet currently defines `.header`:
 
 ```css
-.layout-popout-btn {
+.header__popout-btn {
   background: transparent;
-  border: 1px solid var(--s2-content-tertiary, #717171);
-  color: var(--s2-content-primary, inherit);
+  border: 1px solid currentColor;
+  color: inherit;
   border-radius: 4px;
   padding: 4px 8px;
   cursor: pointer;
   font-size: 14px;
+  opacity: 0.7;
 }
-.layout-popout-btn:disabled {
-  opacity: 0.5;
+.header__popout-btn:hover {
+  opacity: 1;
+}
+.header__popout-btn:disabled {
+  opacity: 0.3;
   cursor: not-allowed;
 }
 
@@ -1764,8 +1810,8 @@ Append the following rules to whichever stylesheet currently defines `.layout-he
 .layout-detached-overlay-close {
   margin-top: 1.5rem;
   padding: 0.6rem 1.5rem;
-  background: var(--s2-content-primary, #fff);
-  color: var(--s2-bg, #000);
+  background: #fff;
+  color: #000;
   border: none;
   border-radius: 6px;
   cursor: pointer;
@@ -1848,7 +1894,9 @@ Rationale: `isExtension` (the Layout flag) is `true` for non-detached and `false
 
 - [ ] **Step 3: Install the `detached-active` listener**
 
-After `OffscreenClient` is constructed in `mainExtension` (search for `new OffscreenClient` in the function body — the exact instantiation point), add this block. Use the actual variable names from the surrounding code:
+Verified: `mainExtension` declares `let client` and assigns `client = new OffscreenClient({...})` at `main.ts:662`. The OffscreenClient instance is in scope under the name `client`.
+
+Add this block AFTER the `client = new OffscreenClient(...)` assignment (search for `new OffscreenClient` to locate it):
 
 ```ts
 // Detached popout: listen for the SW's broadcast that a detached tab
@@ -1863,7 +1911,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 
   if (isDetachedSelf) return; // I am the claimer; ignore my own broadcast.
 
-  enterDetachedActiveState(offscreenClient, layout);
+  enterDetachedActiveState(client, layout);
 });
 ```
 
