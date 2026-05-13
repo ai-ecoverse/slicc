@@ -319,3 +319,49 @@
   background: var(--s2-border-subtle);
   margin: 4px 0;
 }
+
+/* ================================================================== */
+/* Popout button + detached-active overlay                             */
+/* ================================================================== */
+.header__popout-btn {
+  background: transparent;
+  border: 1px solid currentColor;
+  color: inherit;
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 14px;
+  opacity: 0.7;
+}
+.header__popout-btn:hover {
+  opacity: 1;
+}
+.header__popout-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.layout-detached-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+  color: #fff;
+  font-size: 16px;
+  padding: 2rem;
+  text-align: center;
+}
+.layout-detached-overlay-close {
+  margin-top: 1.5rem;
+  padding: 0.6rem 1.5rem;
+  background: #fff;
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}

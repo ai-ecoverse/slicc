@@ -115,6 +115,11 @@ export class Layout {
   private scoopSwitcher: ScoopSwitcher | null = null;
   private scoopSwitcherEl: HTMLElement | null = null;
 
+  // Popout button + detached-active overlay (extension mode)
+  private popoutButtonEl?: HTMLButtonElement;
+  private popoutClickHandler?: () => void;
+  private detachedActiveOverlayEl?: HTMLDivElement;
+
   // User avatar element
   private avatarEl!: HTMLElement;
 
@@ -193,6 +198,69 @@ export class Layout {
   /** Re-render the scoop switcher dropdown (extension mode). */
   refreshScoopSwitcher?(): void {
     this.scoopSwitcher?.refresh();
+  }
+
+  /**
+   * Show or hide the "Pop out" header button. The click handler is
+   * provided by setPopoutClickHandler — Layout itself does not know
+   * about the SW envelope shape.
+   */
+  setShowPopoutButton(show: boolean): void {
+    if (!show) {
+      this.popoutButtonEl?.remove();
+      this.popoutButtonEl = undefined;
+      return;
+    }
+    if (this.popoutButtonEl) return;
+    // Layout's buildHeader() creates a top-level `<div class="header">`.
+    const headerEl = this.root.querySelector('.header') as HTMLElement | null;
+    if (!headerEl) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'header__popout-btn';
+    btn.title = 'Open in a new tab';
+    btn.textContent = '⤴'; // simple glyph; CSS may replace with icon
+    btn.setAttribute('aria-label', 'Pop out to a new tab');
+    btn.addEventListener('click', () => {
+      btn.disabled = true; // prevent double-fire
+      this.popoutClickHandler?.();
+    });
+    headerEl.appendChild(btn);
+    this.popoutButtonEl = btn;
+  }
+
+  /** Wire the popout button click handler. Replaces any previous handler. */
+  setPopoutClickHandler(handler: () => void): void {
+    this.popoutClickHandler = handler;
+  }
+
+  /**
+   * Render a non-dismissible full-Layout overlay indicating that a
+   * detached tab has taken over. The only escape is closing this
+   * window via the overlay's close button.
+   */
+  showDetachedActiveOverlay(): void {
+    if (this.detachedActiveOverlayEl) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'layout-detached-overlay';
+    overlay.setAttribute('role', 'alertdialog');
+    overlay.setAttribute('aria-modal', 'true');
+
+    const msg = document.createElement('p');
+    msg.textContent = 'Detached in another tab. Close this window to continue.';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'layout-detached-overlay-close';
+    btn.textContent = 'Close this window';
+    btn.addEventListener('click', () => {
+      window.close();
+    });
+
+    overlay.appendChild(msg);
+    overlay.appendChild(btn);
+    this.root.appendChild(overlay);
+    this.detachedActiveOverlayEl = overlay;
   }
 
   /**
