@@ -15,7 +15,7 @@ import type { VirtualFS } from '../fs/index.js';
 import type { RestrictedFS } from '../fs/restricted-fs.js';
 import { WasmShell } from '../shell/index.js';
 import { Agent, adaptTools, createLogger } from '../core/index.js';
-import { createCompactContext } from '../core/context-compaction.js';
+import { createCompactContext, stripOrphanedToolResults } from '../core/context-compaction.js';
 import type {
   AgentEvent as CoreAgentEvent,
   AgentMessage,
@@ -423,11 +423,12 @@ export class ScoopContext {
         try {
           const saved = await this.sessionStore.load(this.sessionId);
           if (saved) {
-            restoredMessages = saved.messages;
+            restoredMessages = stripOrphanedToolResults(saved.messages);
             this.sessionCreatedAt = saved.createdAt;
             log.info('Restored agent session', {
               folder: this.scoop.folder,
               messageCount: restoredMessages.length,
+              droppedOrphans: saved.messages.length - restoredMessages.length,
             });
           }
         } catch (err) {

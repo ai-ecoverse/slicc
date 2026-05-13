@@ -38,6 +38,35 @@ function hasRole(message: AgentMessage, role: string): boolean {
   return (message as { role: string }).role === role;
 }
 
+/**
+ * Drop any `toolResult` messages at the HEAD of `messages` whose `toolCallId`
+ * has no matching `toolCall` block in the immediately preceding assistant message.
+ *
+ * This happens after compaction slices away the assistant turn that contained
+ * the matching `tool_use` blocks. Bedrock (and Claude in strict mode) rejects
+ * such orphaned `tool_result` blocks with a 400 error.
+ *
+ * The function is intentionally conservative: it only removes leading orphans
+ * so the invariant "every toolResult follows an assistant message that contains
+ * its toolCallId" holds for the messages the LLM will see after the summary
+ * message is prepended.
+ */
+export function stripOrphanedToolResults(messages: AgentMessage[]): AgentMessage[] {
+  // Collect toolCallIds from the first assistant message (if any).
+  // After compaction the summary message is prepended as a user message,
+  // so there is no preceding assistant message — any leading toolResults
+  // are orphaned by definition.
+  let i = 0;
+  while (i < messages.length && hasRole(messages[i], 'toolResult')) {
+    const tr = messages[i] as { role: string; toolCallId?: string };
+    log.warn('Dropping orphaned toolResult (no preceding assistant message)', {
+      toolCallId: tr.toolCallId,
+    });
+    i++;
+  }
+  return i > 0 ? messages.slice(i) : messages;
+}
+
 export interface CompactionConfig {
   model: Model<Api>;
   getApiKey: () => string | undefined;
@@ -118,7 +147,7 @@ export function createCompactContext(
     }
 
     const messagesToSummarize = messages.slice(0, cutIndex);
-    const messagesToKeep = messages.slice(cutIndex);
+    const messagesToKeep = stripOrphanedToolResults(messages.slice(cutIndex));
 
     log.info('Compaction cut point', {
       summarizing: messagesToSummarize.length,
@@ -233,7 +262,8 @@ export async function compactContext(messages: AgentMessage[]): Promise<AgentMes
     timestamp: Date.now(),
   };
 
-  const result = [compactedMsg, ...messages.slice(cutIndex)];
+  const kept = stripOrphanedToolResults(messages.slice(cutIndex));
+  const result = [compactedMsg, ...kept];
 
   log.info('Context compacted (legacy)', {
     originalMessages: messages.length,

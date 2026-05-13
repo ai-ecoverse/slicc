@@ -47,7 +47,11 @@ vi.mock('@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js', ()
   },
 }));
 
-import { compactContext, createCompactContext } from '../../src/core/context-compaction.js';
+import {
+  compactContext,
+  createCompactContext,
+  stripOrphanedToolResults,
+} from '../../src/core/context-compaction.js';
 
 /** Cast helper used in assertions where a typed AgentMessage view of an array of content blocks is needed. */
 function asTestMessage(message: AgentMessage): TestMessage {
@@ -470,6 +474,54 @@ describe('createCompactContext', () => {
     expect(mockGenerateSummary).not.toHaveBeenCalled();
   });
 
+  it('strips orphaned toolResults left at the head after compaction cut', async () => {
+    // Scenario: assistant+toolResult pair lands at the cut boundary such that
+    // the assistant is summarized away but the toolResult is kept. The resulting
+    // array would start with an orphaned toolResult that Bedrock rejects.
+    const compact = createCompactContext({ ...mockConfig, getApiKey: () => undefined });
+    const baseMsg = 'x'.repeat(65000);
+    // Craft history so the cut lands right after an assistant-with-tool-call turn,
+    // leaving the matching toolResult as the first kept message.
+    const messages: AgentMessage[] = [
+      createMessage('user', baseMsg),
+      createMessage('assistant', baseMsg),
+      createMessage('user', baseMsg),
+      createMessage('assistant', baseMsg),
+      createMessage('user', baseMsg),
+      // This assistant+toolResult pair will straddle the cut point
+      createAssistantWithToolCalls(baseMsg, ['orphan-id']),
+      createToolResult('small result', 'orphan-id'),
+      createMessage('user', 'follow up'),
+    ];
+
+    const result = await compact(messages);
+
+    // The result must never start with a toolResult
+    expect(asTestMessage(result[0]).role).not.toBe('toolResult');
+
+    // No toolResult in the output should be orphaned
+    for (let i = 0; i < result.length; i++) {
+      const msg = asTestMessage(result[i]);
+      if (msg.role !== 'toolResult' || !msg.toolCallId) continue;
+      let found = false;
+      for (let j = i - 1; j >= 0; j--) {
+        const prev = asTestMessage(result[j]);
+        if (prev.role === 'assistant' && Array.isArray(prev.content)) {
+          if (
+            prev.content.some(
+              (c: TestContentBlock) => c.type === 'toolCall' && c.id === msg.toolCallId
+            )
+          ) {
+            found = true;
+            break;
+          }
+        }
+        if (prev.role !== 'toolResult') break;
+      }
+      expect(found).toBe(true);
+    }
+  });
+
   it('full-size tool results survive until compaction', async () => {
     const compact = createCompactContext(mockConfig);
     // Tool results pass through at full fidelity — overflow recovery handles sizing if needed
@@ -487,5 +539,61 @@ describe('createCompactContext', () => {
     expect(result).toEqual(messages);
     // Tool result preserved at full size
     expect(firstText(result[2])).toBe(largeResult);
+  });
+});
+
+describe('stripOrphanedToolResults', () => {
+  it('returns the array unchanged when it does not start with a toolResult', () => {
+    const messages: AgentMessage[] = [
+      createMessage('user', 'hello'),
+      createAssistantWithToolCalls('calling', ['t1']),
+      createToolResult('result', 't1'),
+    ];
+    const result = stripOrphanedToolResults(messages);
+    expect(result).toBe(messages); // same reference — no copy made
+  });
+
+  it('returns empty array unchanged', () => {
+    const result = stripOrphanedToolResults([]);
+    expect(result).toEqual([]);
+  });
+
+  it('drops a single orphaned toolResult at the head', () => {
+    const messages: AgentMessage[] = [
+      createToolResult('orphan', 'orphan-id'),
+      createMessage('user', 'follow up'),
+      createMessage('assistant', 'response'),
+    ];
+    const result = stripOrphanedToolResults(messages);
+    expect(result).toHaveLength(2);
+    expect(asTestMessage(result[0]).role).toBe('user');
+  });
+
+  it('drops multiple consecutive orphaned toolResults at the head', () => {
+    const messages: AgentMessage[] = [
+      createToolResult('orphan-1', 'id-1'),
+      createToolResult('orphan-2', 'id-2'),
+      createMessage('user', 'next turn'),
+    ];
+    const result = stripOrphanedToolResults(messages);
+    expect(result).toHaveLength(1);
+    expect(asTestMessage(result[0]).role).toBe('user');
+  });
+
+  it('does not drop toolResults that appear after an assistant message', () => {
+    const messages: AgentMessage[] = [
+      createMessage('user', 'hello'),
+      createAssistantWithToolCalls('calling', ['t1', 't2']),
+      createToolResult('result-1', 't1'),
+      createToolResult('result-2', 't2'),
+    ];
+    const result = stripOrphanedToolResults(messages);
+    expect(result).toHaveLength(4);
+  });
+
+  it('returns all-toolResult array as empty', () => {
+    const messages: AgentMessage[] = [createToolResult('a', 'id-a'), createToolResult('b', 'id-b')];
+    const result = stripOrphanedToolResults(messages);
+    expect(result).toEqual([]);
   });
 });
