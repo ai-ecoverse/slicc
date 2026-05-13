@@ -541,9 +541,6 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   const { publishAgentBridgeProxy } = await import('../scoops/agent-bridge.js');
 
   const layout = new Layout(app, !isDetachedSelf);
-  // Expose debug tab toggle for the shell `debug` command
-  (window as unknown as Record<string, unknown>).__slicc_debug_tabs = (show: boolean) =>
-    layout.setDebugTabs(show);
   await layout.panels.chat.initSession('session-cone');
 
   // Publish the AgentBridge proxy on the panel realm's globalThis. The

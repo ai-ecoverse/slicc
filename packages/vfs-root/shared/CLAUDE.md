@@ -30,7 +30,6 @@ Easy to miss. Try before DevTools, env vars, or external tools:
 - `webhook` / `crontask` — register HTTP-webhook or cron lick handlers
 - `agent <cwd> <cmds> <prompt>` — one-shot fire-and-forget scoop
 - `serve <dir>` — host a VFS dir over HTTP
-- `debug` — show Terminal + Memory panels (extension mode)
 
 ## Principles
 

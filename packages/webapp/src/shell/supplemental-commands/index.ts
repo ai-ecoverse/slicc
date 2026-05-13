@@ -35,7 +35,6 @@ import {
 } from './clipboard-commands.js';
 import { createSayCommand } from './say-command.js';
 import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
-import { createDebugCommand } from './debug-command.js';
 import { createModelsCommand } from './models-command.js';
 import { createCostCommand } from './cost-command.js';
 import { createNukeCommand } from './nuke-command.js';
@@ -122,12 +121,6 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPsCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
   ];
-
-  // Extension-only commands
-  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-  if (isExtension) {
-    commands.push(createDebugCommand());
-  }
 
   if (options.fs) {
     commands.push(

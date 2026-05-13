@@ -86,8 +86,7 @@ export class OffscreenClient implements KernelClientFacade {
    * constructor so the standalone panel can drive the same client
    * over the kernel worker. The transport delivers raw
    * `ExtensionMessage` envelopes either way so the existing source
-   * filter and special-case routing (`debug-tabs`, `sprinkle-op`)
-   * stay intact.
+   * filter and special-case routing (`sprinkle-op`) stay intact.
    */
   private transport: KernelTransport<ExtensionMessage, PanelToOffscreenMessage>;
 
@@ -361,14 +360,8 @@ export class OffscreenClient implements KernelClientFacade {
   private setupMessageListener(): void {
     this.transport.onMessage((msg) => {
       if (msg.source !== 'offscreen') return;
-      const payload = msg.payload as { type?: string; show?: unknown };
-      // Route debug-tabs toggle to the panel's Layout
-      if (payload?.type === 'debug-tabs') {
-        const toggle = (window as unknown as Record<string, unknown>).__slicc_debug_tabs as
-          | ((show: boolean) => void)
-          | undefined;
-        toggle?.(!!payload.show);
-      } else if (payload?.type === 'sprinkle-op' && this.sprinkleOpHandler) {
+      const payload = msg.payload as { type?: string };
+      if (payload?.type === 'sprinkle-op' && this.sprinkleOpHandler) {
         this.sprinkleOpHandler(payload);
       } else {
         this.handleOffscreenMessage(msg.payload as OffscreenToPanelMessage | StateSnapshotMsg);

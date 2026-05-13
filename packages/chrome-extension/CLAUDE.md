@@ -100,7 +100,7 @@ If a shell command needs to affect the panel UI, use the dual-context pattern:
 1. try a direct `window.__slicc_*` hook when running in the panel
 2. fall back to `chrome.runtime.sendMessage(...)` when running from offscreen
 
-`debug on` is the canonical example of this pattern.
+No supplemental command currently uses this exact hook+relay shape — the previous example (`debug-command.ts`) was removed when Terminal/Memory became unconditional in the rail. The sprinkle subsystem solves a related problem with a proxy-interface approach (`globalThis.__slicc_sprinkleManager` published in both realms with different implementations, dispatching `sprinkle-op` request/response RPCs); see `docs/pitfalls.md` "Extension Dual-Shell Context" for the full reference.
 
 ## Runtime Conventions
 

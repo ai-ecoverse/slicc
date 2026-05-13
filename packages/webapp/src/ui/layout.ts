@@ -2,7 +2,7 @@
  * Layout — unified split-pane shell for both CLI and extension.
  *
  * The `isExtension` constructor flag toggles density (scoops rail,
- * scoop switcher, avatar, debug-tab defaults). The extension
+ * scoop switcher, avatar). The extension
  * (side panel) mode uses isExtension=true; the detached popout mode
  * uses isExtension=false to get the full standalone rail UX.
  *
@@ -50,7 +50,7 @@ import { copyTextToClipboard } from './clipboard.js';
 import { computeTrayMenuModel } from './tray-join-url.js';
 import { showSyncEnabledDialog } from './sync-dialog.js';
 import { getTrayResetter } from '../shell/supplemental-commands/host-command.js';
-import { getHiddenTabs, setHiddenTabs, type ExtensionTabId } from './tabbed-ui.js';
+import { type ExtensionTabId } from './tabbed-ui.js';
 import { RailZone } from './rail-zone.js';
 import { PanelRegistry } from './panel-registry.js';
 import { showSprinklePicker } from './sprinkle-picker.js';
@@ -108,15 +108,9 @@ export class Layout {
   // continue to work even though the actual tab bar is gone.
   private tabContainers = new Map<TabId, HTMLElement>();
   private activeTab: TabId = 'chat';
-  /** Pre-created containers for debug tabs (terminal, memory) — always created, rail items added on demand. */
-  private debugTabContainers: { terminal: HTMLElement; memory: HTMLElement } | null = null;
-  /**
-   * Cached element handle for the Memory rail container — needed so
-   * `setDebugTabs(true)` can re-mount the rail item without losing
-   * the existing MemoryPanel mount.
-   */
+  /** Cached element handle for the Memory rail container. */
   private memoryContainer!: HTMLElement;
-  /** Cached SVGs reused when re-mounting pinned rail items. */
+  /** Cached SVGs for pinned rail items. */
   private terminalIconSvg = '';
   private memoryIconSvg = '';
 
@@ -374,57 +368,6 @@ export class Layout {
     const active = this.primaryRail.getActiveItemId();
     if (active && active.startsWith('sprinkle-')) return;
     this.primaryRail.activateItem('terminal');
-  }
-
-  /**
-   * Show or hide the Terminal + Memory rail items.
-   *
-   * The `debug` shell command used to flip the visibility of these
-   * tabs in the legacy tabbed extension layout. With the unified rail
-   * the items are addable/removable like sprinkles, so we mirror the
-   * same on/off semantics by adding or removing them from the rail.
-   * Files stays pinned in the rail in either mode.
-   */
-  setDebugTabs(show: boolean): void {
-    setHiddenTabs(show ? [] : ['terminal', 'memory']);
-    if (!this.primaryRail) return;
-    if (show) {
-      // Re-add only if missing — addItem is a no-op when the id
-      // already exists, so this is safe to call repeatedly.
-      this.ensurePinnedRailItem('terminal');
-      this.ensurePinnedRailItem('memory');
-    } else {
-      this.primaryRail.removeItem('terminal');
-      this.primaryRail.removeItem('memory');
-    }
-  }
-
-  /**
-   * Re-mount a previously-removed pinned rail item without losing
-   * the cached panel container. Called from `setDebugTabs(true)` to
-   * restore terminal/memory after the user enabled debug mode.
-   */
-  private ensurePinnedRailItem(id: 'terminal' | 'memory'): void {
-    if (!this.primaryRail || this.primaryRail.hasItem(id)) return;
-    if (id === 'terminal') {
-      this.primaryRail.addItem({
-        id: 'terminal',
-        label: 'Terminal',
-        icon: this.terminalIconSvg,
-        element: this.terminalContainer,
-        position: 'bottom',
-        onActivate: () => this.panels?.terminal?.refit(),
-      });
-    } else {
-      this.primaryRail.addItem({
-        id: 'memory',
-        label: 'Memory',
-        icon: this.memoryIconSvg,
-        element: this.memoryContainer,
-        position: 'bottom',
-        onActivate: () => this.panels?.memory?.refresh(),
-      });
-    }
   }
 
   // ── Shared: Header ──────────────────────────────────────────────────
@@ -1127,22 +1070,16 @@ export class Layout {
     this.memoryIconSvg =
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"></path><path d="M9 13a4.5 4.5 0 0 0 3-4"></path><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"></path><path d="M3.477 10.896a4 4 0 0 1 .585-.396"></path><path d="M6 18a4 4 0 0 1-1.967-.516"></path><path d="M12 13h4"></path><path d="M12 18h6a2 2 0 0 1 2 2v1"></path><path d="M12 8h8"></path><path d="M16 8V5a2 2 0 0 1 2-2"></path><circle cx="16" cy="13" r=".5"></circle><circle cx="18" cy="3" r=".5"></circle><circle cx="20" cy="21" r=".5"></circle><circle cx="20" cy="8" r=".5"></circle></svg>';
 
-    // In extension mode the panel is too narrow to host the legacy
-    // debug surfaces by default — terminal + memory live behind the
-    // shell's `debug` toggle. Files remains pinned in either mode.
-    const showDebugByDefault = !this.isExtension || !getHiddenTabs().has('terminal');
-
-    // Pinned bottom-section tools — always present, mounted from boot.
-    if (showDebugByDefault) {
-      this.primaryRail.addItem({
-        id: 'terminal',
-        label: 'Terminal',
-        icon: this.terminalIconSvg,
-        element: this.terminalContainer,
-        position: 'bottom',
-        onActivate: () => this.panels?.terminal?.refit(),
-      });
-    }
+    // Pinned bottom-section tools — always present, mounted from boot
+    // in both standalone and extension modes.
+    this.primaryRail.addItem({
+      id: 'terminal',
+      label: 'Terminal',
+      icon: this.terminalIconSvg,
+      element: this.terminalContainer,
+      position: 'bottom',
+      onActivate: () => this.panels?.terminal?.refit(),
+    });
     this.primaryRail.addItem({
       id: 'files',
       label: 'Files',
@@ -1150,16 +1087,14 @@ export class Layout {
       element: fileBrowserContainer,
       position: 'bottom',
     });
-    if (showDebugByDefault) {
-      this.primaryRail.addItem({
-        id: 'memory',
-        label: 'Memory',
-        icon: this.memoryIconSvg,
-        element: this.memoryContainer,
-        position: 'bottom',
-        onActivate: () => this.panels?.memory?.refresh(),
-      });
-    }
+    this.primaryRail.addItem({
+      id: 'memory',
+      label: 'Memory',
+      icon: this.memoryIconSvg,
+      element: this.memoryContainer,
+      position: 'bottom',
+      onActivate: () => this.panels?.memory?.refresh(),
+    });
 
     // [+] only appears when sprinkles overflow the available rail height.
     this.primaryRail.enableAddButton();
