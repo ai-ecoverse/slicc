@@ -8,6 +8,17 @@ vi.mock('../../src/core/context-compaction.js', () => ({
   runOneOffCompactionCall: (...args: unknown[]) => mockRunOneOffCompactionCall(...args),
 }));
 
+// chat-panel imports a wide chunk (incl. SessionStore via indexeddb shims) at
+// module load — the freezer only needs `formatChatForClipboard`. Stub it to a
+// minimal markdown renderer so the freezer's `.md` output is testable without
+// pulling the entire chat-panel surface into the test environment.
+vi.mock('../../src/ui/chat-panel.js', () => ({
+  formatChatForClipboard: (messages: { role: string; content: string }[]) =>
+    messages
+      .map((m) => `## ${m.role === 'user' ? 'User' : 'Assistant'}\n${m.content}\n\n`)
+      .join(''),
+}));
+
 import { freezeConeSession, readSessionsIndex } from '../../src/ui/session-freezer.js';
 import type { SessionStore } from '../../src/ui/session-store.js';
 
@@ -115,9 +126,17 @@ describe('freezeConeSession', () => {
     expect(result!.messageCount).toBe(4);
 
     // Archive file landed under /sessions/, named with the slugified title.
+    // Format: markdown with a YAML-style header.
     const archivePath = `/sessions/${result!.filename}`;
     expect(vfs.files.has(archivePath)).toBe(true);
-    expect(result!.filename).toMatch(/fixing-the-auth-bug\.json$/);
+    expect(result!.filename).toMatch(/fixing-the-auth-bug\.md$/);
+    const archiveContent = vfs.files.get(archivePath)!;
+    expect(archiveContent).toMatch(/^---\n/);
+    expect(archiveContent).toContain('title: "Fixing the auth bug"');
+    expect(archiveContent).toContain('messageCount: 4');
+    expect(archiveContent).toContain('# Fixing the auth bug');
+    expect(archiveContent).toContain('## User');
+    expect(archiveContent).toContain('## Assistant');
 
     // Index updated with the new entry first.
     const index = await readSessionsIndex(

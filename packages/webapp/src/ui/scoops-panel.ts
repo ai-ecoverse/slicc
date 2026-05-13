@@ -622,6 +622,21 @@ export class ScoopsPanel {
       iconWrap.appendChild(svg);
       item.appendChild(iconWrap);
 
+      // Title + relative time — visible only when the rail is expanded
+      // (`.layout__scoops--expanded` rules give .scoop-info its size and
+      // hide it in the collapsed icon-only view).
+      const infoEl = document.createElement('div');
+      infoEl.className = 'scoop-info';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'scoop-name';
+      nameEl.textContent = entry.title;
+      infoEl.appendChild(nameEl);
+      const subtitleEl = document.createElement('div');
+      subtitleEl.className = 'scoop-subtitle';
+      subtitleEl.textContent = formatRelativeTime(entry.frozenAt);
+      infoEl.appendChild(subtitleEl);
+      item.appendChild(infoEl);
+
       // Click: open the archive in the Files tab.
       const vfsPath = frozenSessionPath(entry);
       item.addEventListener('click', () => {
@@ -854,6 +869,51 @@ export class ScoopsPanel {
         opacity: 1;
         color: var(--s2-content-default);
         background: rgba(0, 0, 0, 0.04);
+      }
+      /* Hide the inline title in the collapsed icon-only rail. */
+      .frozen-session-item .scoop-info { display: none; }
+
+      /* Expanded rail: match scoop-item layout so the title fits beside the icon. */
+      .layout__scoops--expanded .frozen-session-item {
+        width: 100%;
+        height: auto;
+        justify-content: flex-start;
+        padding: 8px 5px;
+        margin-left: 0;
+        gap: 8px;
+        opacity: 1;
+      }
+      .layout__scoops--expanded .frozen-session-item .scoop-info {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        flex: 1;
+        min-width: 0;
+        justify-content: center;
+      }
+      .layout__scoops--expanded .frozen-session-item .scoop-name {
+        font-size: 13px;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: var(--s2-content-secondary);
+        line-height: 16px;
+      }
+      .layout__scoops--expanded .frozen-session-item .scoop-subtitle {
+        font-size: 11px;
+        font-weight: 400;
+        color: var(--s2-content-disabled);
+        line-height: 1.4;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .frozen-session-icon-wrap {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
       }
 
       .scoops-empty {

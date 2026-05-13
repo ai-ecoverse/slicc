@@ -31,6 +31,7 @@ import {
   COMPACTION_MEMORY_INSTRUCTION,
   COMPACTION_TITLE_INSTRUCTION,
 } from '../core/context-compaction.js';
+import { formatChatForClipboard } from './chat-panel.js';
 
 const log = createLogger('session-freezer');
 
@@ -164,9 +165,11 @@ export async function freezeConeSession(
   }
   if (!title) title = heuristicTitle(session.messages);
 
-  // 3. Write the archive and update the index.
+  // 3. Write the archive and update the index. Archive is markdown — same
+  //    format the chat-panel uses for the "copy chat history" long-press,
+  //    plus a small YAML-style header for the freezer's own metadata.
   const frozenAt = new Date().toISOString();
-  const filename = `${frozenAt.replace(/[:.]/g, '-')}-${slugify(title)}.json`;
+  const filename = `${frozenAt.replace(/[:.]/g, '-')}-${slugify(title)}.md`;
   const archive: FrozenSessionArchive = {
     id: session.id,
     title,
@@ -176,6 +179,7 @@ export async function freezeConeSession(
     messageCount: session.messages.length,
     messages: session.messages,
   };
+  const archiveMarkdown = formatArchiveAsMarkdown(archive);
   const indexEntry: FrozenSessionIndexEntry = {
     filename,
     title,
@@ -184,7 +188,7 @@ export async function freezeConeSession(
   };
   try {
     await ensureDir(opts.vfs, SESSIONS_DIR);
-    await opts.vfs.writeFile(`${SESSIONS_DIR}/${filename}`, JSON.stringify(archive, null, 2));
+    await opts.vfs.writeFile(`${SESSIONS_DIR}/${filename}`, archiveMarkdown);
     await updateSessionsIndex(opts.vfs, indexEntry);
     // LightningFS debounces superblock saves — `location.reload()` after
     // this returns would race the debounce timer and orphan the new
@@ -227,6 +231,27 @@ function toAgentMessages(messages: ChatMessage[]): AgentMessage[] {
         timestamp: m.timestamp,
       }) as unknown as AgentMessage
   );
+}
+
+/**
+ * Render the archive as markdown. Header is a small YAML-style block carrying
+ * the metadata that used to live in the JSON envelope (so a future "thaw"
+ * action can rehydrate timestamps without parsing the body); the body itself
+ * is the same markdown the chat-panel produces for the "copy chat history"
+ * long-press gesture.
+ */
+function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
+  const header =
+    `---\n` +
+    `id: ${archive.id}\n` +
+    `title: ${JSON.stringify(archive.title)}\n` +
+    `frozenAt: ${archive.frozenAt}\n` +
+    `createdAt: ${archive.createdAt}\n` +
+    `updatedAt: ${archive.updatedAt}\n` +
+    `messageCount: ${archive.messageCount}\n` +
+    `---\n\n` +
+    `# ${archive.title}\n\n`;
+  return header + formatChatForClipboard(archive.messages);
 }
 
 function cleanTitle(raw: string): string {

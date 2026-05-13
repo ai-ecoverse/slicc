@@ -867,12 +867,17 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // Wire "New session" — freeze the cone's chat to /sessions/ via the
   // freezer (memory extraction + title), then delete ONLY the cone session
   // from IndexedDB. Scoops survive intentionally so the fresh cone inherits
-  // the existing scoop roster.
-  layout.onClearChat = async () => {
-    try {
-      await runNewSessionFreeze({ vfs: localFs });
-    } catch (err) {
-      log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
+  // the existing scoop roster. Long-press passes `freeze: false` to discard
+  // the conversation without archiving it.
+  layout.onClearChat = async (opts) => {
+    if (opts?.freeze !== false) {
+      try {
+        await runNewSessionFreeze({ vfs: localFs });
+      } catch (err) {
+        log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
+      }
+    } else {
+      log.info('New session: freezer skipped (long-press)');
     }
     await layout.panels.chat.deleteSessionById('session-cone');
     // Bridge-side cone-only clear. The legacy clearAllMessages remains as a
@@ -1755,15 +1760,27 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     if (selectedScoop) syncThinkingButtonForScoop(selectedScoop);
   };
 
+  // Wire local VFS to client so the memory panel (which reads
+  // /shared/CLAUDE.md via `client.getGlobalMemory()`) sees the actual
+  // file system. Without this the panel reads empty in standalone-worker
+  // mode — only the extension path was calling setLocalFS before.
+  client.setLocalFS(localFs);
+
   // Wire "New session" — freeze the cone's chat to /sessions/ via the
   // freezer (memory extraction + title), then clear ONLY the cone
   // session via the kernel client. Scoops survive intentionally so the
-  // fresh cone inherits the existing scoop roster.
-  layout.onClearChat = async () => {
-    try {
-      await runNewSessionFreeze({ vfs: localFs });
-    } catch (err) {
-      log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
+  // fresh cone inherits the existing scoop roster. When `opts.freeze`
+  // is false (long-press on the new-session button) the freezer is
+  // skipped entirely — useful when the user explicitly wants to discard.
+  layout.onClearChat = async (opts) => {
+    if (opts?.freeze !== false) {
+      try {
+        await runNewSessionFreeze({ vfs: localFs });
+      } catch (err) {
+        log.warn('Freezer step failed (clearing anyway)', { error: String(err) });
+      }
+    } else {
+      log.info('New session: freezer skipped (long-press)');
     }
     await layout.panels.chat.deleteSessionById('session-cone');
     await client.clearAllMessages({ target: 'cone' });
@@ -1772,7 +1789,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   // Frozen sessions sidebar (standalone only). The panel reads
   // /sessions/index.json from the page-side VFS that already shares
   // IndexedDB with the worker. Clicking an entry switches to the Files
-  // tab and reveals the archive JSON.
+  // tab and reveals the archive markdown file.
   layout.panels.scoops.setVfs(localFs);
   layout.onFrozenSessionOpen = (vfsPath) => {
     layout.setActiveTab('files');
