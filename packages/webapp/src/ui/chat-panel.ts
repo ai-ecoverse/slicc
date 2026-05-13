@@ -2817,6 +2817,17 @@ export class ChatPanel {
     // Drop any anchors that didn't map to a rebuilt cluster — chain may
     // have shrunk below the threshold or been broken by a user turn.
     this.openClusterAnchors.clear();
+
+    // Mark empty msg-groups so CSS can suppress them from the flex gap.
+    // We use a data attribute rather than relying solely on :empty because
+    // browsers may disagree on whether a whitespace-only text node counts.
+    this.messagesInner.querySelectorAll<HTMLElement>(':scope > .msg-group').forEach((g) => {
+      if (g.childElementCount === 0) {
+        g.dataset.empty = '';
+      } else {
+        delete g.dataset.empty;
+      }
+    });
   }
 
   /** Build a "Working" cluster around an existing list of `.tool-call`

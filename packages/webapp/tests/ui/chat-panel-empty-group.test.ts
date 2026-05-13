@@ -190,12 +190,14 @@ describe('ChatPanel empty msg-group gap fix', () => {
     // All three tool calls should be clustered.
     expect(container.querySelectorAll('.tool-call-cluster').length).toBe(1);
 
-    // Continuation groups that lost their tool calls to the cluster are empty.
+    // Continuation groups that lost their tool calls to the cluster are empty
+    // and must be marked data-empty so CSS suppresses them from the flex gap.
     const emptyGroups = [...container.querySelectorAll('.msg-group')].filter(
       (g) => g.childElementCount === 0
     );
-    // They exist in the DOM (load-bearing for chain detection) but are empty.
+    // They exist in the DOM (load-bearing for chain detection) but are hidden.
     expect(emptyGroups.length).toBeGreaterThan(0);
+    emptyGroups.forEach((g) => expect((g as HTMLElement).dataset.empty).toBeDefined());
   });
 
   it('does not produce duplicate msg-groups when updateMessageEl is called on an existing element', () => {

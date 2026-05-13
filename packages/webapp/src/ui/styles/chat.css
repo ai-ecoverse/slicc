@@ -267,8 +267,10 @@
 }
 
 /* Empty groups left behind after tool-call clustering must not contribute
-   to the parent container's gap: 16px. */
-.msg-group:empty {
+   to the parent container's gap: 16px. Use both :empty (no child nodes)
+   and a data attribute set explicitly by JS for groups with text nodes. */
+.msg-group:empty,
+.msg-group[data-empty] {
   display: none;
 }
 
