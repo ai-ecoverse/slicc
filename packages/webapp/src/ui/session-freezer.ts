@@ -186,6 +186,11 @@ export async function freezeConeSession(
     await ensureDir(opts.vfs, SESSIONS_DIR);
     await opts.vfs.writeFile(`${SESSIONS_DIR}/${filename}`, JSON.stringify(archive, null, 2));
     await updateSessionsIndex(opts.vfs, indexEntry);
+    // LightningFS debounces superblock saves — `location.reload()` after
+    // this returns would race the debounce timer and orphan the new
+    // /sessions/ directory inode. Force a flush so the writes are
+    // durable on IDB before the caller reloads.
+    await opts.vfs.flush();
     log.info('Cone session frozen', { filename, title, messageCount: session.messages.length });
     return { ...indexEntry, archive };
   } catch (err) {

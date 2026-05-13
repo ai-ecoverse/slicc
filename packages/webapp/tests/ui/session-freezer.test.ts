@@ -34,6 +34,9 @@ function makeFakeVfs() {
     async mkdir(_path: string, _opts?: unknown): Promise<void> {
       // no-op
     },
+    async flush(): Promise<void> {
+      // no-op
+    },
   };
 }
 
