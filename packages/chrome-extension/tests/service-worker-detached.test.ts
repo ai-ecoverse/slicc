@@ -230,4 +230,45 @@ describe('detached popout — boot reconciliation', () => {
       args: { openPanelOnActionClick: true },
     });
   });
+
+  it('runs the reconciler when onStartup or onInstalled fires', async () => {
+    // Boot with empty storage first; reconciler does default unlock.
+    await loadSw();
+    expect(onStartupListeners.length).toBeGreaterThanOrEqual(1);
+    expect(onInstalledListeners.length).toBeGreaterThanOrEqual(1);
+
+    // Now simulate a state change happening while the SW is alive,
+    // and fire each listener. Each should re-run the reconciler.
+    sessionStorage.set('slicc.detached.tabId', 77);
+    tabsStore.set(77, {
+      id: 77,
+      windowId: 200,
+      url: 'chrome-extension://test/index.html?detached=1',
+    });
+    sidePanelCalls.length = 0;
+
+    onStartupListeners[0]();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sidePanelCalls).toContainEqual({
+      method: 'setPanelBehavior',
+      args: { openPanelOnActionClick: false },
+    });
+    expect(sidePanelCalls).toContainEqual({
+      method: 'setOptions',
+      args: { enabled: false },
+    });
+
+    // onInstalled should produce the same effect.
+    sidePanelCalls.length = 0;
+    onInstalledListeners[0]();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sidePanelCalls).toContainEqual({
+      method: 'setPanelBehavior',
+      args: { openPanelOnActionClick: false },
+    });
+    expect(sidePanelCalls).toContainEqual({
+      method: 'setOptions',
+      args: { enabled: false },
+    });
+  });
 });
