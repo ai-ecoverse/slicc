@@ -184,6 +184,16 @@ export interface LocalStorageClearMsg {
 // Detached popout messages — panel ↔ SW coordination.
 // See docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md.
 
+/**
+ * URL query parameter that marks a detached extension page.
+ * The detached popout flow uses these constants to construct the
+ * extension URL (`?detached=1`) and to validate inbound claim messages.
+ *
+ * Spec: docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md
+ */
+export const DETACHED_RUNTIME_QUERY_NAME = 'detached';
+export const DETACHED_RUNTIME_QUERY_VALUE = '1';
+
 export interface DetachedPopoutRequestMsg {
   type: 'detached-popout-request';
 }
@@ -196,6 +206,12 @@ export interface DetachedActiveMsg {
   type: 'detached-active';
 }
 
+// NOTE: not every member of this union actually reaches the offscreen
+// document. Several (e.g., OAuthRequestMsg, DetachedPopoutRequestMsg,
+// DetachedClaimMsg) are panel→SW messages that the SW handles directly
+// and never forwards. The union name is historical; the envelope
+// `source: 'panel'` is what discriminates the wire path. Splitting by
+// destination would force a second `source` tag at the call sites.
 export type PanelToOffscreenMessage =
   | UserMessageMsg
   | ConeCreateMsg

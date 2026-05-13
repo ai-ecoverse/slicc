@@ -25,7 +25,11 @@ import type {
   OAuthRequestMsg,
   OAuthResultMsg,
 } from './messages.js';
-import { isExtensionMessage } from './messages.js';
+import {
+  isExtensionMessage,
+  DETACHED_RUNTIME_QUERY_NAME,
+  DETACHED_RUNTIME_QUERY_VALUE,
+} from './messages.js';
 import {
   executeDaSignAndForward,
   executeS3SignAndForward,
@@ -114,8 +118,16 @@ function isValidClaimUrl(rawUrl: string | undefined): boolean {
   } catch {
     return false;
   }
+  // Accept both '/index.html' (explicit) and '/' (root → index.html
+  // served by the manifest's default). Both produce the same boot
+  // path; reject anything else so e.g. /secrets.html?detached=1
+  // cannot claim the lock.
   const isExtensionIndex = u.pathname === '/index.html' || u.pathname === '/';
-  return u.origin === expectedOrigin && isExtensionIndex && u.searchParams.get('detached') === '1';
+  return (
+    u.origin === expectedOrigin &&
+    isExtensionIndex &&
+    u.searchParams.get(DETACHED_RUNTIME_QUERY_NAME) === DETACHED_RUNTIME_QUERY_VALUE
+  );
 }
 
 async function handleDetachedClaim(sender: ChromeMessageSender): Promise<void> {
@@ -193,7 +205,7 @@ async function handleDetachedClaim(sender: ChromeMessageSender): Promise<void> {
 }
 
 async function handleDetachedPopoutRequest(): Promise<void> {
-  const detachedUrl = `${chrome.runtime.getURL('index.html')}?detached=1`;
+  const detachedUrl = `${chrome.runtime.getURL('index.html')}?${DETACHED_RUNTIME_QUERY_NAME}=${DETACHED_RUNTIME_QUERY_VALUE}`;
   await chrome.tabs.create({ url: detachedUrl, active: true });
   // The lock change is driven by the new tab's detached-claim message,
   // not by tab creation. See spec.
@@ -245,8 +257,11 @@ async function handleActionClick(clickedTab: ChromeTab): Promise<void> {
   }
 
   // Recovery: no detached tab actually exists.
-  // Fire-and-forget the cleanup so it doesn't consume gesture budget
-  // before sidePanel.open is invoked.
+  // Fire-and-forget the cleanup (don't await) so the user-gesture
+  // context from chrome.action.onClicked is still active when
+  // sidePanel.open() is called below. Awaiting any Promise inside
+  // a gesture-triggered listener can consume the activation and
+  // cause sidePanel.open to reject.
   chrome.storage.session.remove(DETACHED_TAB_ID_KEY).catch(() => {});
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
   chrome.sidePanel.setOptions({ enabled: true }).catch(() => {});

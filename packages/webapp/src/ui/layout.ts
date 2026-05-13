@@ -15,6 +15,12 @@
  *   │       │             │ ║ │               │
  *   └───────┴─────────────┴───┴───────────────┘
  *
+ * Extension-mode placement note: when isExtension=true, buildHeader
+ * returns early and no `.header` element is rendered. The popout
+ * button is attached to `.thread-header` instead (see
+ * setShowPopoutButton). The diagram above depicts the
+ * isExtension=false (standalone / detached) layout.
+ *
  * Detached popout spec:
  *   docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md
  */
