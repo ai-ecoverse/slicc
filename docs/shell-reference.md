@@ -251,27 +251,38 @@ Rule: First basename wins (no conflicts)
 #### process
 
 ```typescript
-process.argv: string[]        // ['node', 'script.jsh', ...args]
-process.env: object           // Environment variables
-process.cwd(): string         // Current working directory
-process.exit(code?: number)   // Exit with code (0 default)
-process.stdout.write(s)       // Write to stdout
-process.stderr.write(s)       // Write to stderr
-process.stdin.read(): string  // Buffered piped stdin (empty if none)
-process.stdin.isTTY: false    // Always false in this environment
-process.stdin[Symbol.asyncIterator]()  // Yields the buffered string once
+process.argv: string[]                       // ['node', 'script.jsh', ...args]
+process.env: object                          // Environment variables
+process.cwd(): string                        // Current working directory
+process.exit(code?: number)                  // Exit with code (0 default)
+process.stdout.write(s)                      // Write to stdout
+process.stderr.write(s)                      // Write to stderr
+process.stdin.read(): string | null          // Buffered piped stdin; null after EOF
+process.stdin.isTTY: false                   // Always false in this environment
+process.stdin[Symbol.asyncIterator]()        // Yields the buffered string once
+String(process.stdin)                        // Non-consuming view of the buffer
 ```
 
-#### stdin (top-level parameter)
+#### stdin (via `process.stdin`)
 
-The buffered piped stdin is also exposed as a top-level `stdin` string parameter — the most ergonomic form for scripts that just want to read the pipe:
+Stdin from upstream pipelines is buffered fully before the script runs — there is **no streaming**. `read()` drains the buffer with Node-like EOF semantics:
 
 ```typescript
 // echo "a,b,c" | parse-csv
-const cells = stdin.trim().split(',');
+const data = process.stdin.read(); // 'a,b,c\n'
+const again = process.stdin.read(); // null — buffer was drained
 ```
 
-Stdin is **fully read-ahead** — there is no streaming. If no input is piped, `stdin` is `''` and `process.stdin.read()` returns `''`.
+The async iterator shares that consumed state with `read()`, so re-iterating yields nothing after the first pass (and yields nothing at all if you called `read()` first):
+
+```typescript
+let total = '';
+for await (const chunk of process.stdin) total += chunk;
+```
+
+For a non-consuming view, use `String(process.stdin)` or `process.stdin.toString()`. If no input is piped, the first `read()` returns `''` and subsequent calls return `null`.
+
+Stdin is intentionally NOT exposed as a top-level identifier — user scripts are free to declare their own `const stdin = …` without colliding with the runtime.
 
 #### console
 

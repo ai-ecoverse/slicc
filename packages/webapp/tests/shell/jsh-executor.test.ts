@@ -559,9 +559,11 @@ describe('jsh-executor — process manager wiring', () => {
 });
 
 describe('stdin in .jsh scripts', () => {
-  it('exposes piped stdin as the top-level `stdin` parameter', async () => {
+  it('exposes piped stdin via process.stdin.read()', async () => {
     const ctx = createMockCtx(
-      { '/workspace/cat.jsh': 'process.stdout.write(stdin);' },
+      {
+        '/workspace/cat.jsh': 'const data = process.stdin.read(); process.stdout.write(data);',
+      },
       {},
       undefined,
       'hello from upstream\n'
@@ -571,7 +573,7 @@ describe('stdin in .jsh scripts', () => {
     expect(result.stdout).toBe('hello from upstream\n');
   });
 
-  it('exposes piped stdin via process.stdin.read()', async () => {
+  it('returns the byte length when stdin is read as a string', async () => {
     const ctx = createMockCtx(
       { '/workspace/read.jsh': 'console.log(process.stdin.read().length);' },
       {},
@@ -598,15 +600,86 @@ describe('stdin in .jsh scripts', () => {
     expect(result.stdout.trim()).toBe('HI');
   });
 
-  it('exposes empty string when no stdin is piped', async () => {
+  it('returns null on subsequent process.stdin.read() calls (Node EOF semantics)', async () => {
+    const ctx = createMockCtx(
+      {
+        '/workspace/eof.jsh':
+          'const a = process.stdin.read(); const b = process.stdin.read(); console.log(JSON.stringify({ a, b }));',
+      },
+      {},
+      undefined,
+      'data'
+    );
+    const result = await executeJshFile('/workspace/eof.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual({ a: 'data', b: null });
+  });
+
+  it('shares EOF state between read() and the async iterator', async () => {
+    const ctx = createMockCtx(
+      {
+        '/workspace/shared-eof.jsh':
+          'process.stdin.read(); let n = 0; for await (const _ of process.stdin) n++; console.log(n);',
+      },
+      {},
+      undefined,
+      'data'
+    );
+    const result = await executeJshFile('/workspace/shared-eof.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('0');
+  });
+
+  it('async iterator yields once then ends', async () => {
+    const ctx = createMockCtx(
+      {
+        '/workspace/iter-twice.jsh': [
+          'let first = ""; for await (const c of process.stdin) first += c;',
+          'let second = ""; for await (const c of process.stdin) second += c;',
+          'console.log(JSON.stringify({ first, second }));',
+        ].join('\n'),
+      },
+      {},
+      undefined,
+      'once'
+    );
+    const result = await executeJshFile('/workspace/iter-twice.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual({ first: 'once', second: '' });
+  });
+
+  it('process.stdin.toString() is a non-consuming view', async () => {
+    const ctx = createMockCtx(
+      {
+        '/workspace/view.jsh': [
+          'const view = String(process.stdin);',
+          'const read = process.stdin.read();',
+          'console.log(JSON.stringify({ view, read }));',
+        ].join('\n'),
+      },
+      {},
+      undefined,
+      'data'
+    );
+    const result = await executeJshFile('/workspace/view.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual({ view: 'data', read: 'data' });
+  });
+
+  it('exposes null + empty defaults when no stdin is piped', async () => {
     const ctx = createMockCtx({
       '/workspace/empty.jsh':
-        'console.log(JSON.stringify({ top: stdin, viaProcess: process.stdin.read(), tty: process.stdin.isTTY }));',
+        'console.log(JSON.stringify({ first: process.stdin.read(), second: process.stdin.read(), tty: process.stdin.isTTY }));',
     });
     const result = await executeJshFile('/workspace/empty.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
-    const parsed = JSON.parse(result.stdout.trim());
-    expect(parsed).toEqual({ top: '', viaProcess: '', tty: false });
+    // Even with no piped input, the first read drains the (empty) buffer
+    // and subsequent reads return null — same behavior as a real EOF stream.
+    expect(JSON.parse(result.stdout.trim())).toEqual({
+      first: '',
+      second: null,
+      tty: false,
+    });
   });
 
   it('preserves binary-shaped (latin1) stdin bytes verbatim', async () => {
@@ -616,7 +689,7 @@ describe('stdin in .jsh scripts', () => {
     const ctx = createMockCtx(
       {
         '/workspace/echo.jsh':
-          'const codes = []; for (const c of stdin) codes.push(c.charCodeAt(0)); console.log(codes.join(","));',
+          'const data = process.stdin.read(); const codes = []; for (const c of data) codes.push(c.charCodeAt(0)); console.log(codes.join(","));',
       },
       {},
       undefined,
@@ -627,8 +700,28 @@ describe('stdin in .jsh scripts', () => {
     expect(result.stdout.trim()).toBe('0,255,127,128,195,169');
   });
 
+  it('does not collide with scripts that declare their own `stdin` identifier', async () => {
+    // Earlier drafts of this feature injected `stdin` as a 9th
+    // AsyncFunction parameter. That would have made the line below a
+    // strict-mode SyntaxError (duplicate declaration). Surfacing only
+    // via `process.stdin` keeps the identifier free for user code.
+    const ctx = createMockCtx(
+      {
+        '/workspace/local-name.jsh': [
+          'const stdin = "user-owned name";',
+          'console.log(stdin);',
+        ].join('\n'),
+      },
+      {},
+      undefined,
+      'piped'
+    );
+    const result = await executeJshFile('/workspace/local-name.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('user-owned name');
+  });
+
   it('does not break scripts that ignore stdin', async () => {
-    // Regression guard for the additive AsyncFunction parameter.
     const ctx = createMockCtx(
       { '/workspace/quiet.jsh': 'console.log("ok");' },
       {},

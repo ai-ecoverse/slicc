@@ -114,30 +114,40 @@ export async function runJsRealm(
   // `.jsh` command path, `node`/`node -e` via supplemental-commands) all
   // populate it before posting `realm-init`. Stdin in the realm is
   // therefore fully read-ahead; we don't model a streaming Readable.
-  // Surfaces:
-  //   • `stdin` — top-level AsyncFunction parameter; the ergonomic
-  //     "`const lines = stdin.split('\\n')`" path for `.jsh` scripts.
-  //   • `process.stdin.read()` — Node-like sync read returning the same
-  //     buffered string.
-  //   • `process.stdin[Symbol.asyncIterator]` — yields the buffered
-  //     string once, so `for await (const chunk of process.stdin)` works
-  //     for code copy-pasted from Node tutorials.
+  //
+  // Exposed exclusively via `process.stdin` to avoid burning a top-level
+  // identifier. Earlier drafts also injected `stdin` as an AsyncFunction
+  // parameter for ergonomics, but `stdin` is a common user variable name
+  // (more so than `fs` / `exec` / `fetch`); reserving it would have
+  // turned any pre-existing `let stdin = …` into a strict-mode
+  // SyntaxError. Scripts that want the short form can alias it
+  // themselves: `const { stdin } = process; const data = stdin.read();`.
+  //
+  // EOF semantics match Node's `Readable.read()`: the first `read()`
+  // returns the full buffer, subsequent calls return `null`. A single
+  // `consumed` flag is shared with the async iterator, so
+  // `for await (const c of process.stdin)` after a `read()` (or a
+  // second iteration) yields nothing — same as Node where `'end'`
+  // fires once. `toString()` always returns the original buffer
+  // because it's a view (`String(process.stdin)`), not a consumer.
   // `process.stdin.isTTY` is always `false`; there's no terminal.
   const stdinBuffer = init.stdin ?? '';
+  let stdinConsumed = false;
   const stdinShim = {
     isTTY: false,
-    read(): string {
+    read(): string | null {
+      if (stdinConsumed) return null;
+      stdinConsumed = true;
       return stdinBuffer;
     },
     toString(): string {
       return stdinBuffer;
     },
     [Symbol.asyncIterator](): AsyncIterator<string> {
-      let yielded = false;
       return {
         async next(): Promise<IteratorResult<string>> {
-          if (yielded) return { value: undefined, done: true };
-          yielded = true;
+          if (stdinConsumed) return { value: undefined, done: true };
+          stdinConsumed = true;
           return { value: stdinBuffer, done: false };
         },
       };
@@ -303,8 +313,7 @@ export async function runJsRealm(
       module: typeof moduleShim,
       exports: Record<string, unknown>,
       exec: typeof execBridge,
-      fetch: typeof realmFetch,
-      stdin: string
+      fetch: typeof realmFetch
     ) => Promise<unknown>;
     const fn = new AsyncFn(
       'fs',
@@ -315,7 +324,6 @@ export async function runJsRealm(
       'exports',
       'exec',
       'fetch',
-      'stdin',
       `"use strict";\n${init.code}`
     );
     await fn(
@@ -326,8 +334,7 @@ export async function runJsRealm(
       moduleShim,
       moduleShim.exports,
       execBridge,
-      realmFetch,
-      stdinBuffer
+      realmFetch
     );
   } catch (err: unknown) {
     if (err instanceof NodeExitError) {

@@ -144,7 +144,7 @@ Deep reference: `docs/kernel/process-model.md`.
 - Command name is the basename without `.jsh`.
 - `packages/webapp/src/shell/script-catalog.ts` shares discovery across `WasmShell`, `which`, and other lookup paths. Raw scanning still comes from `jsh-discovery.ts`, which scans `/workspace/skills` first, then the wider VFS.
 - Scripts run in an async wrapper: prefer top-level `await` and always `await fs.*` operations.
-- Stdin from upstream pipelines is fully buffered (no streaming) and exposed two ways: a top-level `stdin` string parameter and `process.stdin.read()` / `process.stdin[Symbol.asyncIterator]()`. `process.stdin.isTTY` is always `false`. Empty when no input is piped. `node`'s read-from-stdin branch (when stdin is the script source) hands the inner script an empty stdin so it can't read its own source.
+- Stdin from upstream pipelines is fully buffered (no streaming) and exposed via `process.stdin`. `read()` drains the buffer with Node-like EOF semantics (returns the buffered string the first time, `null` thereafter) and shares that consumed state with `for await (const chunk of process.stdin)`. `String(process.stdin)` is a non-consuming view. `process.stdin.isTTY` is always `false`. `node`'s read-from-stdin branch (when stdin is the script source) hands the inner script an empty stdin so it can't read its own source. Stdin is intentionally NOT exposed as a top-level identifier so user scripts can keep declaring `const stdin = …` without colliding.
 
 ### `.bsh` browser scripts
 

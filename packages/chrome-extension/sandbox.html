@@ -321,21 +321,25 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     error: (...a) => writeStderr(a.map(formatArg).join(' ') + '\n'),
   };
   const NODE_EXIT = Symbol('NODE_EXIT');
-  // Stdin surfaces — mirror of js-realm-shared.ts. Top-level `stdin`
-  // parameter for ergonomics, plus `process.stdin.read()` and async
-  // iteration for Node-like compatibility. See the shared module's
-  // comment for the full rationale.
-  const stdinBuffer = init.stdin || '';
+  // Stdin surface — mirror of js-realm-shared.ts. `process.stdin.read()`
+  // returns the buffer once then `null` (Node EOF semantics, shared with
+  // the async iterator); `toString()` is a non-consuming view. See the
+  // shared module for the full rationale.
+  const stdinBuffer = init.stdin ?? '';
+  let stdinConsumed = false;
   const stdinShim = {
     isTTY: false,
-    read() { return stdinBuffer; },
+    read() {
+      if (stdinConsumed) return null;
+      stdinConsumed = true;
+      return stdinBuffer;
+    },
     toString() { return stdinBuffer; },
     [Symbol.asyncIterator]() {
-      let yielded = false;
       return {
         async next() {
-          if (yielded) return { value: undefined, done: true };
-          yielded = true;
+          if (stdinConsumed) return { value: undefined, done: true };
+          stdinConsumed = true;
           return { value: stdinBuffer, done: false };
         },
       };
@@ -491,10 +495,10 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   try {
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     const fn = new AsyncFunction(
-      'fs', 'process', 'console', 'require', 'module', 'exports', 'exec', 'fetch', 'stdin',
+      'fs', 'process', 'console', 'require', 'module', 'exports', 'exec', 'fetch',
       '"use strict";\n' + init.code
     );
-    await fn(fsBridge, processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, execBridge, realmFetch, stdinBuffer);
+    await fn(fsBridge, processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, execBridge, realmFetch);
   } catch (err) {
     if (err && typeof err === 'object' && NODE_EXIT in err) {
       exitCode = err[NODE_EXIT];

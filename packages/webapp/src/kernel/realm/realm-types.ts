@@ -42,7 +42,14 @@ export interface RealmInitMsg {
   cwd: string;
   /** Filename surfaced to the user code (`<eval>`, `<stdin>`, or a path). */
   filename: string;
-  /** Optional initial stdin (string) — Pyodide reads it from `sys.stdin`. */
+  /**
+   * Optional initial stdin (string). Consumed by both realms:
+   *   • Python — surfaced as `sys.stdin`.
+   *   • JS — surfaced as `process.stdin.read()` / `for await ... of
+   *     process.stdin`, with Node-like EOF semantics (single read drains
+   *     the buffer). See `js-realm-shared.ts` for the full shim.
+   * The buffer is fully read-ahead; the realms don't model streaming.
+   */
   stdin?: string;
   /** `loadPyodide({indexURL})` for `kind:'py'`. */
   pyodideIndexURL?: string;

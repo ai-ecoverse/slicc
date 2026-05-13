@@ -381,7 +381,7 @@ describe('WasmShell .jsh command registration', () => {
     // script would see an empty string regardless of the upstream pipe.
     await fs.writeFile(
       '/workspace/skills/test-cmd/scripts/upper.jsh',
-      'process.stdout.write(stdin.toUpperCase());'
+      'process.stdout.write(process.stdin.read().toUpperCase());'
     );
 
     const shell = new WasmShell({ fs });
