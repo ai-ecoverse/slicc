@@ -1,0 +1,4 @@
+{
+  "clientId": "1060201354894-f9p3m1qbkk9ck4kmqr4l15lb4k1n7043.apps.googleusercontent.com",
+  "scopes": "openid email profile https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/spreadsheets"
+}

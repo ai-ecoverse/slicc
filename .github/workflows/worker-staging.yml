@@ -51,9 +51,11 @@ jobs:
           secrets: |
             CLOUDFLARE_TURN_API_TOKEN
             GITHUB_CLIENT_SECRET
+            GOOGLE_CLIENT_SECRET
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.OAUTH_GOOGLE_WORKSPACE_SECRET }}
 
       - name: Wait before staging deploy retry 2
         if: steps.deploy_attempt_1.outcome == 'failure'
@@ -73,9 +75,11 @@ jobs:
           secrets: |
             CLOUDFLARE_TURN_API_TOKEN
             GITHUB_CLIENT_SECRET
+            GOOGLE_CLIENT_SECRET
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.OAUTH_GOOGLE_WORKSPACE_SECRET }}
 
       - name: Finalize staging deploy metadata
         id: deploy

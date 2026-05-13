@@ -59,4 +59,12 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     clientIdEnvKey: 'GITHUB_CLIENT_ID',
     clientSecretEnvKey: 'GITHUB_CLIENT_SECRET',
   },
+  google: {
+    name: 'Google',
+    tokenEndpoint: 'https://oauth2.googleapis.com/token',
+    revokeEndpoint: 'https://oauth2.googleapis.com/revoke',
+    revokeMethod: 'post-body',
+    clientIdEnvKey: 'GOOGLE_CLIENT_ID',
+    clientSecretEnvKey: 'GOOGLE_CLIENT_SECRET',
+  },
 };

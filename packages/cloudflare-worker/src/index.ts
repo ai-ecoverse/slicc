@@ -134,6 +134,8 @@ export async function handleWorkerRequest(
         oauth: {
           github:
             typeof envRecord.GITHUB_CLIENT_ID === 'string' ? envRecord.GITHUB_CLIENT_ID : undefined,
+          google:
+            typeof envRecord.GOOGLE_CLIENT_ID === 'string' ? envRecord.GOOGLE_CLIENT_ID : undefined,
         },
       },
       200,
