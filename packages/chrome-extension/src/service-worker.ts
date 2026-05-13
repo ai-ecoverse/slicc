@@ -123,57 +123,73 @@ async function handleDetachedClaim(sender: ChromeMessageSender): Promise<void> {
   if (claimingTabId === undefined) return;
   if (!isValidClaimUrl(sender.url)) return;
 
-  const storedTabId = await readStoredDetachedTabId();
+  let step = 'read-stored-tab-id';
+  try {
+    const storedTabId = await readStoredDetachedTabId();
 
-  if (storedTabId === claimingTabId) {
-    // Idempotent reclaim (detached tab reload). No state change.
-    return;
-  }
-
-  if (storedTabId !== undefined) {
-    let existing: ChromeTab | undefined;
-    try {
-      existing = await chrome.tabs.get(storedTabId);
-    } catch {
-      existing = undefined;
-    }
-    if (existing !== undefined && existing.id !== undefined) {
-      // A different detached tab already holds the lock. Close the new one.
-      await chrome.tabs.remove(claimingTabId);
-      await chrome.tabs.update(existing.id, { active: true });
-      if (existing.windowId !== undefined) {
-        await chrome.windows.update(existing.windowId, { focused: true });
-      }
+    if (storedTabId === claimingTabId) {
+      // Idempotent reclaim (detached tab reload). No state change.
       return;
     }
-    // Stored tab is gone; fall through to lock with the new claimer.
-  }
 
-  await writeStoredDetachedTabId(claimingTabId);
-  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
-  await chrome.sidePanel.setOptions({ enabled: false });
-  // Fire-and-forget; .catch() suppresses the unhandled-rejection warning
-  // that Chrome emits when there are no listeners (e.g., no panel open).
-  // Matches the codebase's existing fire-and-forget pattern for
-  // chrome.runtime.sendMessage.
-  chrome.runtime
-    .sendMessage({
-      source: 'service-worker',
-      payload: { type: 'detached-active' },
-    })
-    .catch(() => {});
-
-  // Best-effort hard close of any open side panel (Chrome 141+).
-  const windows = await chrome.windows.getAll();
-  await Promise.all(
-    windows.map(async (win) => {
+    if (storedTabId !== undefined) {
+      step = 'check-existing-tab';
+      let existing: ChromeTab | undefined;
       try {
-        await chrome.sidePanel.close({ windowId: win.id });
+        existing = await chrome.tabs.get(storedTabId);
       } catch {
-        // No side panel open in that window — normal case, swallow.
+        existing = undefined;
       }
-    })
-  );
+      if (existing !== undefined && existing.id !== undefined) {
+        // A different detached tab already holds the lock. Close the new one.
+        step = 'remove-claiming-tab';
+        await chrome.tabs.remove(claimingTabId);
+        step = 'focus-existing-tab';
+        await chrome.tabs.update(existing.id, { active: true });
+        if (existing.windowId !== undefined) {
+          step = 'focus-existing-window';
+          await chrome.windows.update(existing.windowId, { focused: true });
+        }
+        return;
+      }
+      // Stored tab is gone; fall through to lock with the new claimer.
+    }
+
+    step = 'write-detached-tab-id';
+    await writeStoredDetachedTabId(claimingTabId);
+    step = 'set-panel-behavior-locked';
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
+    step = 'set-options-disabled';
+    await chrome.sidePanel.setOptions({ enabled: false });
+    step = 'broadcast-detached-active';
+    // Fire-and-forget; .catch() suppresses the unhandled-rejection warning
+    // that Chrome emits when there are no listeners (e.g., no panel open).
+    // Matches the codebase's existing fire-and-forget pattern for
+    // chrome.runtime.sendMessage.
+    chrome.runtime
+      .sendMessage({
+        source: 'service-worker',
+        payload: { type: 'detached-active' },
+      })
+      .catch(() => {});
+
+    // Best-effort hard close of any open side panel (Chrome 141+).
+    step = 'get-windows';
+    const windows = await chrome.windows.getAll();
+    step = 'close-side-panels';
+    await Promise.all(
+      windows.map(async (win) => {
+        try {
+          await chrome.sidePanel.close({ windowId: win.id });
+        } catch {
+          // No side panel open in that window — normal case, swallow.
+        }
+      })
+    );
+  } catch (err) {
+    console.error(`[slicc-sw] handleDetachedClaim failed at step=${step}`, err);
+    throw err;
+  }
 }
 
 async function handleDetachedPopoutRequest(): Promise<void> {
