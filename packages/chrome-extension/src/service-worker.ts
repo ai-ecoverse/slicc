@@ -38,12 +38,6 @@ import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './s
 import { readOrCreateSwSessionId } from './sw-session-id.js';
 import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared-ts';
 // ---------------------------------------------------------------------------
-// Side panel behavior
-// ---------------------------------------------------------------------------
-
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-
-// ---------------------------------------------------------------------------
 // Detached popout state
 // ---------------------------------------------------------------------------
 
@@ -67,6 +61,43 @@ async function writeStoredDetachedTabId(tabId: number): Promise<void> {
 async function clearStoredDetachedTabId(): Promise<void> {
   await chrome.storage.session.remove(DETACHED_TAB_ID_KEY);
 }
+
+async function reconcileDetachedLockOnBoot(): Promise<void> {
+  const storedTabId = await readStoredDetachedTabId();
+
+  if (storedTabId !== undefined) {
+    let tabAlive = false;
+    try {
+      await chrome.tabs.get(storedTabId);
+      tabAlive = true;
+    } catch {
+      // Tab gone (closed/discarded while SW was evicted)
+    }
+
+    if (tabAlive) {
+      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
+      await chrome.sidePanel.setOptions({ enabled: false });
+      return;
+    }
+
+    await clearStoredDetachedTabId();
+  }
+
+  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  await chrome.sidePanel.setOptions({ enabled: true });
+}
+
+reconcileDetachedLockOnBoot().catch((err) => {
+  console.error('[slicc-sw] reconcile detached lock failed', err);
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  reconcileDetachedLockOnBoot().catch(() => {});
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  reconcileDetachedLockOnBoot().catch(() => {});
+});
 
 // ---------------------------------------------------------------------------
 // Offscreen document lifecycle

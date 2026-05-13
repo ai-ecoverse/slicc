@@ -23,6 +23,8 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
       runtime: {
         onConnect: { addListener: (fn: any) => connectListeners.push(fn) },
         onMessage: { addListener: (fn: any) => messageListeners.push(fn) },
+        onInstalled: { addListener: vi.fn() },
+        onStartup: { addListener: vi.fn() },
         id: 'test-id',
       },
       storage: {
@@ -40,8 +42,13 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
             for (const k of arr) delete storageMap[k];
           }),
         },
+        session: {
+          get: vi.fn(async () => ({})),
+          set: vi.fn(async () => undefined),
+          remove: vi.fn(async () => undefined),
+        },
       },
-      sidePanel: { setPanelBehavior: vi.fn() },
+      sidePanel: { setPanelBehavior: vi.fn(), setOptions: vi.fn() },
       offscreen: { hasDocument: vi.fn(async () => true) },
       action: { setBadgeText: vi.fn(), setBadgeBackgroundColor: vi.fn() },
       tabs: {

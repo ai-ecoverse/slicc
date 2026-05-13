@@ -53,6 +53,7 @@ function createChromeMock() {
   return {
     sidePanel: {
       setPanelBehavior: vi.fn(),
+      setOptions: vi.fn(),
     },
     offscreen: {
       hasDocument: vi.fn(async () => true),
@@ -64,6 +65,11 @@ function createChromeMock() {
     },
     storage: {
       local: {
+        get: vi.fn(async () => ({})),
+        set: vi.fn(async () => undefined),
+        remove: vi.fn(async () => undefined),
+      },
+      session: {
         get: vi.fn(async () => ({})),
         set: vi.fn(async () => undefined),
         remove: vi.fn(async () => undefined),
@@ -82,6 +88,9 @@ function createChromeMock() {
         addListener: vi.fn(),
       },
       onInstalled: {
+        addListener: vi.fn(),
+      },
+      onStartup: {
         addListener: vi.fn(),
       },
     },
