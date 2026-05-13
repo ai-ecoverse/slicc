@@ -38,6 +38,37 @@ function hasRole(message: AgentMessage, role: string): boolean {
   return (message as { role: string }).role === role;
 }
 
+/**
+ * Drop any `toolResult` messages at the HEAD of `messages`.
+ *
+ * A leading `toolResult` is orphaned by definition: there is no preceding
+ * assistant message that contains its `toolCallId`. This arises in two
+ * call sites:
+ *
+ *  1. **Session restore** (`scoop-context.ts`): IndexedDB can persist a
+ *     corrupt session whose first message is a `toolResult` (e.g. a browser
+ *     crash mid-save, or sessions written before the walk-back guard was
+ *     introduced). Without stripping it, Bedrock rejects the next prompt
+ *     with "unexpected tool_use_id found in tool_result blocks".
+ *
+ *  2. **After compaction** (defense-in-depth): the walk-back guard in both
+ *     `createCompactContext` and `compactContext` already ensures
+ *     `slice(cutIndex)` does not start with a `toolResult`, so the strip
+ *     is normally a no-op here. It is kept as a safety net against future
+ *     changes to the cut algebra.
+ */
+export function stripOrphanedToolResults(messages: AgentMessage[]): AgentMessage[] {
+  let i = 0;
+  while (i < messages.length && hasRole(messages[i], 'toolResult')) {
+    const tr = messages[i] as { role: string; toolCallId?: string };
+    log.warn('Dropping orphaned toolResult (no preceding assistant message)', {
+      toolCallId: tr.toolCallId,
+    });
+    i++;
+  }
+  return i > 0 ? messages.slice(i) : messages;
+}
+
 export interface CompactionConfig {
   model: Model<Api>;
   getApiKey: () => string | undefined;
@@ -118,7 +149,7 @@ export function createCompactContext(
     }
 
     const messagesToSummarize = messages.slice(0, cutIndex);
-    const messagesToKeep = messages.slice(cutIndex);
+    const messagesToKeep = stripOrphanedToolResults(messages.slice(cutIndex));
 
     log.info('Compaction cut point', {
       summarizing: messagesToSummarize.length,
@@ -233,7 +264,8 @@ export async function compactContext(messages: AgentMessage[]): Promise<AgentMes
     timestamp: Date.now(),
   };
 
-  const result = [compactedMsg, ...messages.slice(cutIndex)];
+  const kept = stripOrphanedToolResults(messages.slice(cutIndex));
+  const result = [compactedMsg, ...kept];
 
   log.info('Context compacted (legacy)', {
     originalMessages: messages.length,
