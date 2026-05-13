@@ -95,7 +95,8 @@ Deep reference: `docs/kernel/process-model.md`.
 - Path: `packages/webapp/src/ui/`
 - Vanilla TypeScript; no framework.
 - `main.ts` boots standalone mode or delegates to the extension offscreen client.
-- `layout.ts`, `tabbed-ui.ts`, and `tab-zone.ts` manage the main container model.
+- `layout.ts`, `tabbed-ui.ts`, and `tab-zone.ts` manage the main container model. `Layout(root, isExtension)` constructs the shell; the `isExtension` flag is not styling-only — it toggles scoops-rail visibility, scoop-switcher use, rail full-page behavior, avatar location, and default debug-tab visibility. The detached popout mode (see `docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md`) uses `isExtension=false` so a popped-out tab gets the full standalone rail UX, not a stretched side panel.
+- `runtime-mode.ts` defines `UiRuntimeMode` (`'standalone' | 'extension' | 'electron-overlay' | 'extension-detached'`) — `resolveUiRuntimeMode()` inspects `window.location.href` and the extension flag to pick the boot path in `main.ts`.
 - `preview-sw.ts` serves `/preview/*` content from VFS and is built as a standalone IIFE.
 - **Design-time chat fixture**: load the app with `?ui-fixture=1` (also accepts `?ui-fixture` or `?ui-fixture=true`) to swap the chat view for a synthetic session covering every message variant — user/assistant bubbles, markdown + code blocks, all four tool-call states, the six lick channels, delegation, queued messages, and a streaming tail. Messages live in `chat-fixture.ts` (pure `createChatFixture()`) and persist to a dedicated `session-ui-fixture` id so real scoop storage is untouched; clicking any real scoop cleanly exits fixture mode. Vite HMR picks up CSS changes live against the fixture. When adding new message UI variants, extend `createChatFixture()` and the matching assertion in `tests/ui/chat-fixture.test.ts` so the harness stays comprehensive.
 

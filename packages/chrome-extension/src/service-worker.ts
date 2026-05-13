@@ -26,6 +26,11 @@ import type {
   OAuthResultMsg,
 } from './messages.js';
 import {
+  isExtensionMessage,
+  DETACHED_RUNTIME_QUERY_NAME,
+  DETACHED_RUNTIME_QUERY_VALUE,
+} from './messages.js';
+import {
   executeDaSignAndForward,
   executeS3SignAndForward,
   type DaSignAndForwardEnvelope,
@@ -38,10 +43,252 @@ import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './s
 import { readOrCreateSwSessionId } from './sw-session-id.js';
 import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared-ts';
 // ---------------------------------------------------------------------------
-// Side panel behavior
+// Detached popout state
 // ---------------------------------------------------------------------------
 
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+const DETACHED_TAB_ID_KEY = 'slicc.detached.tabId';
+
+async function readStoredDetachedTabId(): Promise<number | undefined> {
+  try {
+    const result = await chrome.storage.session.get(DETACHED_TAB_ID_KEY);
+    const raw = result[DETACHED_TAB_ID_KEY];
+    return typeof raw === 'number' ? raw : undefined;
+  } catch (err) {
+    console.error('[slicc-sw] storage.session.get failed', err);
+    return undefined;
+  }
+}
+
+async function writeStoredDetachedTabId(tabId: number): Promise<void> {
+  await chrome.storage.session.set({ [DETACHED_TAB_ID_KEY]: tabId });
+}
+
+async function clearStoredDetachedTabId(): Promise<void> {
+  await chrome.storage.session.remove(DETACHED_TAB_ID_KEY);
+}
+
+async function reconcileDetachedLockOnBoot(): Promise<void> {
+  const storedTabId = await readStoredDetachedTabId();
+
+  if (storedTabId !== undefined) {
+    let tabAlive = false;
+    try {
+      await chrome.tabs.get(storedTabId);
+      tabAlive = true;
+    } catch {
+      // Tab gone (closed/discarded while SW was evicted)
+    }
+
+    if (tabAlive) {
+      await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
+      await chrome.sidePanel.setOptions({ enabled: false });
+      return;
+    }
+
+    await clearStoredDetachedTabId();
+  }
+
+  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  await chrome.sidePanel.setOptions({ enabled: true });
+}
+
+reconcileDetachedLockOnBoot().catch((err) => {
+  console.error('[slicc-sw] reconcile detached lock failed', err);
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  reconcileDetachedLockOnBoot().catch(() => {});
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  reconcileDetachedLockOnBoot().catch(() => {});
+});
+
+function isValidClaimUrl(rawUrl: string | undefined): boolean {
+  if (!rawUrl) return false;
+  let u: URL;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  let expectedOrigin: string;
+  try {
+    expectedOrigin = new URL(chrome.runtime.getURL('index.html')).origin;
+  } catch {
+    return false;
+  }
+  // Accept both '/index.html' (explicit) and '/' (root → index.html
+  // served by the manifest's default). Both produce the same boot
+  // path; reject anything else so e.g. /secrets.html?detached=1
+  // cannot claim the lock.
+  const isExtensionIndex = u.pathname === '/index.html' || u.pathname === '/';
+  return (
+    u.origin === expectedOrigin &&
+    isExtensionIndex &&
+    u.searchParams.get(DETACHED_RUNTIME_QUERY_NAME) === DETACHED_RUNTIME_QUERY_VALUE
+  );
+}
+
+async function handleDetachedClaim(sender: ChromeMessageSender): Promise<void> {
+  const claimingTabId = sender.tab?.id;
+  if (claimingTabId === undefined) return;
+  if (!isValidClaimUrl(sender.url)) return;
+
+  let step = 'read-stored-tab-id';
+  try {
+    const storedTabId = await readStoredDetachedTabId();
+
+    if (storedTabId === claimingTabId) {
+      // Idempotent reclaim (detached tab reload). No state change.
+      return;
+    }
+
+    if (storedTabId !== undefined) {
+      step = 'check-existing-tab';
+      let existing: ChromeTab | undefined;
+      try {
+        existing = await chrome.tabs.get(storedTabId);
+      } catch {
+        existing = undefined;
+      }
+      if (existing !== undefined && existing.id !== undefined) {
+        // A different detached tab already holds the lock. Close the new one.
+        step = 'remove-claiming-tab';
+        await chrome.tabs.remove(claimingTabId);
+        step = 'focus-existing-tab';
+        await chrome.tabs.update(existing.id, { active: true });
+        if (existing.windowId !== undefined) {
+          step = 'focus-existing-window';
+          await chrome.windows.update(existing.windowId, { focused: true });
+        }
+        return;
+      }
+      // Stored tab is gone; fall through to lock with the new claimer.
+    }
+
+    step = 'write-detached-tab-id';
+    await writeStoredDetachedTabId(claimingTabId);
+    step = 'set-panel-behavior-locked';
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
+    step = 'set-options-disabled';
+    await chrome.sidePanel.setOptions({ enabled: false });
+    step = 'broadcast-detached-active';
+    // Fire-and-forget; .catch() suppresses the unhandled-rejection warning
+    // that Chrome emits when there are no listeners (e.g., no panel open).
+    // Matches the codebase's existing fire-and-forget pattern for
+    // chrome.runtime.sendMessage.
+    chrome.runtime
+      .sendMessage({
+        source: 'service-worker',
+        payload: { type: 'detached-active' },
+      })
+      .catch(() => {});
+
+    // Best-effort hard close of any open side panel (Chrome 141+).
+    step = 'get-windows';
+    const windows = await chrome.windows.getAll();
+    step = 'close-side-panels';
+    await Promise.all(
+      windows.map(async (win) => {
+        try {
+          await chrome.sidePanel.close({ windowId: win.id });
+        } catch {
+          // No side panel open in that window — normal case, swallow.
+        }
+      })
+    );
+  } catch (err) {
+    console.error(`[slicc-sw] handleDetachedClaim failed at step=${step}`, err);
+    throw err;
+  }
+}
+
+async function handleDetachedPopoutRequest(): Promise<void> {
+  const detachedUrl = `${chrome.runtime.getURL('index.html')}?${DETACHED_RUNTIME_QUERY_NAME}=${DETACHED_RUNTIME_QUERY_VALUE}`;
+  await chrome.tabs.create({ url: detachedUrl, active: true });
+  // The lock change is driven by the new tab's detached-claim message,
+  // not by tab creation. See spec.
+}
+
+chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
+  // Return false explicitly to tell Chrome we will not call sendResponse
+  // asynchronously. Returning true keeps sendResponse alive and conflicts
+  // with the other SW onMessage listeners that may want to respond.
+  if (!isExtensionMessage(message)) return false;
+  if (message.source !== 'panel') return false;
+  const payloadType = (message.payload as { type?: string }).type;
+
+  if (payloadType === 'detached-claim') {
+    handleDetachedClaim(sender).catch((err) => {
+      // Step-context already logged by handleDetachedClaim's internal catch.
+      // This catch is the final safety net so the rejection doesn't go unhandled.
+      console.error('[slicc-sw] handleDetachedClaim unhandled', err);
+    });
+    return false;
+  }
+
+  if (payloadType === 'detached-popout-request') {
+    handleDetachedPopoutRequest().catch((err) => {
+      console.error('[slicc-sw] handleDetachedPopoutRequest failed', err);
+    });
+    return false;
+  }
+  return false;
+});
+
+async function handleActionClick(clickedTab: ChromeTab): Promise<void> {
+  const storedId = await readStoredDetachedTabId();
+
+  if (storedId !== undefined) {
+    let alive: ChromeTab | undefined;
+    try {
+      alive = await chrome.tabs.get(storedId);
+    } catch {
+      alive = undefined;
+    }
+    if (alive !== undefined) {
+      await chrome.tabs.update(storedId, { active: true });
+      if (alive.windowId !== undefined) {
+        await chrome.windows.update(alive.windowId, { focused: true });
+      }
+      return;
+    }
+  }
+
+  // Recovery: no detached tab actually exists.
+  // Fire-and-forget the cleanup (don't await) so the user-gesture
+  // context from chrome.action.onClicked is still active when
+  // sidePanel.open() is called below. Awaiting any Promise inside
+  // a gesture-triggered listener can consume the activation and
+  // cause sidePanel.open to reject.
+  chrome.storage.session.remove(DETACHED_TAB_ID_KEY).catch(() => {});
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  chrome.sidePanel.setOptions({ enabled: true }).catch(() => {});
+  if (clickedTab.id !== undefined) {
+    await chrome.sidePanel.open({ tabId: clickedTab.id });
+  }
+}
+
+chrome.action.onClicked.addListener((tab) => {
+  handleActionClick(tab).catch((err) => {
+    console.error('[slicc-sw] handleActionClick failed', err);
+  });
+});
+
+async function handleTabRemoved(tabId: number): Promise<void> {
+  const storedId = await readStoredDetachedTabId();
+  if (storedId !== tabId) return;
+  await clearStoredDetachedTabId();
+  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  await chrome.sidePanel.setOptions({ enabled: true });
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  handleTabRemoved(tabId).catch((err) => {
+    console.error('[slicc-sw] handleTabRemoved failed', err);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Offscreen document lifecycle

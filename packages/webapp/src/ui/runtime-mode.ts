@@ -3,12 +3,23 @@ import {
   isBuiltinExtensionTabId,
   type ExtensionTabId,
 } from './tabbed-ui.js';
+import {
+  DETACHED_RUNTIME_QUERY_NAME,
+  DETACHED_RUNTIME_QUERY_VALUE,
+} from '../../../chrome-extension/src/messages.js';
 
-export type UiRuntimeMode = 'standalone' | 'extension' | 'electron-overlay';
+export type UiRuntimeMode = 'standalone' | 'extension' | 'electron-overlay' | 'extension-detached';
 
 export const ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE = 'electron-overlay';
 export const ELECTRON_OVERLAY_RUNTIME_PATH = '/electron';
 export const ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE = 'slicc-electron-overlay:set-tab';
+// Re-export shared detached-runtime constants from chrome-extension/messages.ts
+// so panel-side code (resolveUiRuntimeMode) and SW-side code share the same
+// source of truth.
+export {
+  DETACHED_RUNTIME_QUERY_NAME,
+  DETACHED_RUNTIME_QUERY_VALUE,
+} from '../../../chrome-extension/src/messages.js';
 
 export interface ElectronOverlaySetTabMessage {
   type: typeof ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE;
@@ -16,8 +27,17 @@ export interface ElectronOverlaySetTabMessage {
 }
 
 export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean): UiRuntimeMode {
-  if (isExtension) return 'extension';
-
+  if (isExtension) {
+    try {
+      const url = new URL(locationHref);
+      if (url.searchParams.get(DETACHED_RUNTIME_QUERY_NAME) === DETACHED_RUNTIME_QUERY_VALUE) {
+        return 'extension-detached';
+      }
+    } catch {
+      // Fall through to plain 'extension' mode.
+    }
+    return 'extension';
+  }
   try {
     const url = new URL(locationHref);
     return isElectronOverlayUrl(url) ? 'electron-overlay' : 'standalone';

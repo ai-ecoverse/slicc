@@ -234,6 +234,21 @@ describe('OffscreenClient', () => {
     expect(envelope.payload.type).toBe('clear-chat');
   });
 
+  it('blocks outbound messages when locked', () => {
+    // updateModel() is a public method that calls this.send({ type: 'refresh-model' }).
+    // Source: packages/webapp/src/ui/offscreen-client.ts updateModel() at ~line 222.
+    client.updateModel();
+    const beforeLockCount = sentMessages.length;
+
+    client.setLocked(true);
+    client.updateModel();
+    expect(sentMessages.length).toBe(beforeLockCount); // no new send
+
+    client.setLocked(false);
+    client.updateModel();
+    expect(sentMessages.length).toBeGreaterThan(beforeLockCount);
+  });
+
   it('ignores messages from non-offscreen sources', () => {
     client.selectedScoopJid = 'cone_123';
     const handle = client.createAgentHandle();

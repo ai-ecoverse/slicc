@@ -1,9 +1,13 @@
 /**
- * Layout — split-pane (standalone) or tabbed (extension) layout.
+ * Layout — unified split-pane shell for both CLI and extension.
  *
- * Standalone mode (CLI):
+ * The `isExtension` constructor flag toggles density (scoops rail,
+ * scoop switcher, avatar, debug-tab defaults). The extension
+ * (side panel) mode uses isExtension=true; the detached popout mode
+ * uses isExtension=false to get the full standalone rail UX.
+ *
  *   ┌───────┬─────────────┬───┬───────────────┐
- *   │  Header (full width)                    │
+ *   │  Header (popout btn, scoop switcher, etc.)│
  *   ├───────┬─────────────┬───┬───────────────┤
  *   │Scoops │             │ ║ │  Terminal      │
  *   │       │  Chat       │ ║ ├───────────────┤
@@ -11,13 +15,14 @@
  *   │       │             │ ║ │               │
  *   └───────┴─────────────┴───┴───────────────┘
  *
- * Extension mode (side panel):
- *   ┌─ Header [switcher] ─────────┐
- *   ├─ Tabs: [Chat] [Term] [Files] [Memory] ─┤
- *   │                                │
- *   │  Active panel (full size)      │
- *   │                                │
- *   └────────────────────────────────┘
+ * Extension-mode placement note: when isExtension=true, buildHeader
+ * returns early and no `.header` element is rendered. The popout
+ * button is attached to `.thread-header` instead (see
+ * setShowPopoutButton). The diagram above depicts the
+ * isExtension=false (standalone / detached) layout.
+ *
+ * Detached popout spec:
+ *   docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md
  */
 
 import { ChatPanel } from './chat-panel.js';
@@ -115,6 +120,11 @@ export class Layout {
   private scoopSwitcher: ScoopSwitcher | null = null;
   private scoopSwitcherEl: HTMLElement | null = null;
 
+  // Popout button + detached-active overlay (extension mode)
+  private popoutButtonEl?: HTMLButtonElement;
+  private popoutClickHandler?: () => void;
+  private detachedActiveOverlayEl?: HTMLDivElement;
+
   // User avatar element
   private avatarEl!: HTMLElement;
 
@@ -193,6 +203,90 @@ export class Layout {
   /** Re-render the scoop switcher dropdown (extension mode). */
   refreshScoopSwitcher?(): void {
     this.scoopSwitcher?.refresh();
+  }
+
+  /**
+   * Show or hide the "Pop out" header button. The click handler is
+   * provided by setPopoutClickHandler — Layout itself does not know
+   * about the SW envelope shape.
+   */
+  setShowPopoutButton(show: boolean): void {
+    if (!show) {
+      this.popoutButtonEl?.remove();
+      this.popoutButtonEl = undefined;
+      return;
+    }
+    if (this.popoutButtonEl) return;
+
+    // In standalone mode, Layout has a top-of-window `.header` div.
+    // In extension mode, that header is omitted (the side panel is
+    // narrower and uses `.thread-header` as its primary chrome).
+    // Put the button wherever the user's eye is already looking.
+    const containerEl = (
+      this.isExtension
+        ? this.root.querySelector('.thread-header')
+        : this.root.querySelector('.header')
+    ) as HTMLElement | null;
+    if (!containerEl) return;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'header__popout-btn';
+    btn.title = 'Open in a new tab';
+    btn.textContent = '⤴'; // simple glyph; CSS may replace with icon
+    btn.setAttribute('aria-label', 'Pop out to a new tab');
+    btn.addEventListener('click', () => {
+      btn.disabled = true; // prevent double-fire
+      this.popoutClickHandler?.();
+    });
+    containerEl.appendChild(btn);
+    this.popoutButtonEl = btn;
+  }
+
+  /** Wire the popout button click handler. Replaces any previous handler. */
+  setPopoutClickHandler(handler: () => void): void {
+    this.popoutClickHandler = handler;
+  }
+
+  /**
+   * Re-enable the popout button after a failed click. Used by the
+   * SW-roundtrip caller when chrome.runtime.sendMessage rejects (e.g.,
+   * cold-start with no receivers). Safe to call when the button is
+   * absent or already enabled.
+   */
+  resetPopoutButton(): void {
+    if (this.popoutButtonEl) {
+      this.popoutButtonEl.disabled = false;
+    }
+  }
+
+  /**
+   * Render a non-dismissible full-Layout overlay indicating that a
+   * detached tab has taken over. The only escape is closing this
+   * window via the overlay's close button.
+   */
+  showDetachedActiveOverlay(): void {
+    if (this.detachedActiveOverlayEl) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'layout-detached-overlay';
+    overlay.setAttribute('role', 'alertdialog');
+    overlay.setAttribute('aria-modal', 'true');
+
+    const msg = document.createElement('p');
+    msg.textContent = 'Detached in another tab. Close this window to continue.';
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'layout-detached-overlay-close';
+    btn.textContent = 'Close this window';
+    btn.addEventListener('click', () => {
+      window.close();
+    });
+
+    overlay.appendChild(msg);
+    overlay.appendChild(btn);
+    this.root.appendChild(overlay);
+    this.detachedActiveOverlayEl = overlay;
   }
 
   /**

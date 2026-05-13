@@ -119,6 +119,8 @@ import {
 // "o is not a function" error in the fs chunk because of the resulting
 // circular module-evaluation order.
 import { broadcastToDips } from './dip.js';
+import { isExtensionMessage } from '../../../chrome-extension/src/messages.js';
+import { enterDetachedActiveState } from './detached-active.js';
 
 const log = createLogger('main');
 
@@ -520,12 +522,13 @@ async function fireFastForwardFinalLick(
 // Extension mode — pure UI connecting to offscreen agent engine
 // ---------------------------------------------------------------------------
 
-async function mainExtension(app: HTMLElement): Promise<void> {
+async function mainExtension(app: HTMLElement, options?: { detached?: boolean }): Promise<void> {
+  const isDetachedSelf = options?.detached === true;
   const { OffscreenClient } = await import('./offscreen-client.js');
   const { VirtualFS } = await import('../fs/index.js');
   const { publishAgentBridgeProxy } = await import('../scoops/agent-bridge.js');
 
-  const layout = new Layout(app, true);
+  const layout = new Layout(app, !isDetachedSelf);
   // Expose debug tab toggle for the shell `debug` command
   (window as unknown as Record<string, unknown>).__slicc_debug_tabs = (show: boolean) =>
     layout.setDebugTabs(show);
@@ -783,6 +786,52 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       }
     },
   });
+
+  // Detached popout: listen for the SW's broadcast that a detached tab
+  // has claimed the lock. Side panels and non-detached index.html tabs
+  // self-close; the detached tab itself ignores its own echo.
+  chrome.runtime.onMessage.addListener((msg) => {
+    // Return false (or void/undefined) on every path so Chrome does not
+    // keep sendResponse alive. This listener never responds.
+    if (!isExtensionMessage(msg)) return false;
+    if (msg.source !== 'service-worker') return false;
+    const payloadType = (msg.payload as { type?: string }).type;
+    if (payloadType !== 'detached-active') return false;
+
+    if (isDetachedSelf) return false; // I am the claimer; ignore my own broadcast.
+
+    enterDetachedActiveState(client, layout);
+    return false;
+  });
+
+  if (isDetachedSelf) {
+    chrome.runtime
+      .sendMessage({
+        source: 'panel',
+        payload: { type: 'detached-claim' },
+      })
+      .catch(() => {
+        // SW not ready or no receivers — Chrome's normal cold-start condition.
+        // The claim is also re-emitted on Ctrl-R / reload via mainExtension boot.
+      });
+  }
+
+  if (!isDetachedSelf) {
+    layout.setShowPopoutButton(true);
+    layout.setPopoutClickHandler(() => {
+      chrome.runtime
+        .sendMessage({
+          source: 'panel',
+          payload: { type: 'detached-popout-request' },
+        })
+        .catch((err) => {
+          // SW unreachable or message rejected. Re-enable the button so the
+          // user can retry; surface the failure in the dev console.
+          console.warn('[slicc] detached-popout-request failed', err);
+          layout.resetPopoutButton();
+        });
+    });
+  }
 
   // Wire local VFS to client so memory panel can read CLAUDE.md files
   client.setLocalFS(localFs);
@@ -2382,11 +2431,17 @@ async function main(): Promise<void> {
   const apiKey = getApiKey();
   const allowProviderlessTrayJoin = !apiKey && hasStoredTrayJoinUrl(window.localStorage);
 
-  // Build the layout — tabbed in extension mode, split panels in standalone
+  // Resolve UI runtime mode from chrome.runtime.id and URL query.
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const runtimeMode = resolveUiRuntimeMode(window.location.href, isExtension);
 
-  // Extension mode: delegate to offscreen-backed UI
+  // Detached extension tab (?detached=1): standalone-density Layout with
+  // the offscreen agent. See docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md
+  if (runtimeMode === 'extension-detached') {
+    return mainExtension(app, { detached: true });
+  }
+
+  // Side panel or non-detached index.html tab.
   if (runtimeMode === 'extension') {
     return mainExtension(app);
   }

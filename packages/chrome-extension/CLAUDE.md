@@ -12,7 +12,7 @@ The extension keeps the agent alive when the side panel closes by splitting resp
 
 ```text
 Side Panel (UI)
-  offscreen-client.ts, tabbed UI, terminal shell
+  offscreen-client.ts, side panel UI, terminal shell
         ↓ chrome.runtime messages
 Service Worker Relay
   service-worker.ts, chrome.debugger proxy, tab grouping
@@ -26,6 +26,43 @@ Offscreen Document
 - **Side panel**: user-visible UI, terminal tab, reconnect logic.
 - **Service worker**: routes messages between panel and offscreen, proxies CDP to `chrome.debugger`.
 - **Offscreen document**: runs the agent engine, orchestrator, VFS, and tool execution loop.
+
+## Detached Popout
+
+The extension supports popping the side panel out into a full-page tab
+via a "Pop out" button in the side panel header, or by opening
+`chrome-extension://<id>/index.html?detached=1` directly.
+
+**Mutual exclusion** is global across all Chrome windows: at most one
+detached tab exists at a time, and while it does the side panel is
+disabled. The service worker is the sole coordinator and persists
+the locked tab ID in `chrome.storage.session`.
+
+**Boot reconciliation:** `reconcileDetachedLockOnBoot()` runs at
+top-level + `onStartup` + `onInstalled`, so MV3 SW eviction and
+browser cold-start cannot leave the lock half-applied.
+
+**Three-layer mutual exclusion** on the panel side. In code,
+`enterDetachedActiveState` executes them in this order:
+
+1. `window.close()` — happy path.
+2. `OffscreenClient.setLocked(true)` — short-circuits the private
+   `send()` chokepoint so no user-action message reaches offscreen
+   even if `window.close()` doesn't take effect. Done BEFORE the
+   overlay paints so a still-visible send button can't leak traffic
+   in the interim.
+3. `Layout.showDetachedActiveOverlay()` — non-dismissible visual
+   feedback with a "Close this window" button.
+
+Separately, the SW makes a best-effort `chrome.sidePanel.close({ windowId })`
+call per window after broadcasting `detached-active` (Chrome 141+).
+This is independent of `enterDetachedActiveState`.
+
+**Non-detached `index.html` tabs** (e.g., the local QA recipe surface)
+are treated as side-panel-equivalent: they DO listen for `detached-active`
+and self-close, but DO NOT count as the canonical detached tab.
+
+**Spec:** `docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md`.
 
 ## Key Files
 
@@ -167,6 +204,63 @@ pkill -f "Google Chrome.*slicc-ext-profile"
 
 The same `EXT` and `PROFILE` paths can be reused on the next run, but
 re-running step 1 + step 3 is the safest way to pick up code changes.
+
+### Detached popout QA scenarios
+
+Build with `SLICC_EXT_DEV=1` (as above) and launch Chrome for Testing
+with the recipe. Then verify each scenario:
+
+1. **Click popout button from side panel.**
+   - Side panel header shows "Pop out" button.
+   - Click → new tab opens at
+     `chrome-extension://<id>/index.html?detached=1`.
+   - Side panel closes itself.
+   - Chat history is intact in the detached tab.
+
+2. **Toolbar icon while detached open.**
+   - Click toolbar icon → existing detached tab focuses, side panel
+     does NOT open.
+   - If detached tab is in another window, the window also focuses.
+
+3. **Close detached → return to side panel.**
+   - Close the detached tab.
+   - Click toolbar icon → side panel opens normally.
+
+4. **Direct URL access.**
+   - Paste `chrome-extension://<id>/index.html?detached=1` into a new
+     tab.
+   - It boots into detached mode and locks the side panel.
+
+5. **Reload detached tab.**
+   - Ctrl-R the detached tab.
+   - It rehydrates into detached mode (idempotent claim, no extra tabs).
+
+6. **Browser restart with "Continue where you left off."**
+   - Close all Chrome for Testing windows with the detached tab open.
+   - Relaunch.
+   - When the restored detached tab activates, the lock re-applies.
+   - Verify the discarded-state caveat: if Chrome restores the tab as
+     discarded, side panel may briefly be available; once the user
+     focuses the detached tab, lock applies.
+
+7. **Drag detached tab to a new window.**
+   - Drag tab out of its window.
+   - In the new window, click the toolbar icon → existing detached
+     tab focuses (in the other window).
+
+8. **Extension-page capability differences.**
+   - In the detached tab, run a mount command that uses
+     `showDirectoryPicker()` (e.g., `mount /workspace/scratch`).
+     Verify it works under a normal tab gesture context, since the
+     detached tab is a normal tab not a side panel.
+   - Verify mic/voice input behaves the same as in the side panel
+     (or note differences for follow-up).
+
+9. **Tray runtime config survives popout.**
+   - In the side panel, configure tray runtime (paste join URL).
+   - Click popout.
+   - In the detached tab, verify the tray runtime is still connected
+     and `refresh-tray-runtime` relays work.
 
 ## Secret-Aware Fetch Proxy
 

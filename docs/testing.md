@@ -321,7 +321,12 @@ Key pattern: Helper functions reduce boilerplate and make tests more readable.
 
 - **DOM rendering**: UI panels (ChatPanel, TerminalPanel, FilePanel)
 - **WASM runtime**: just-bash shell (covered by tool tests)
-- **Chrome API**: DebuggerClient, service workers
+- **Chrome API**: DebuggerClient, service workers — EXCEPT
+  state-machine and lifecycle-reconciliation logic (e.g., the
+  detached-popout SW state machine), which MUST be unit-tested
+  with mocked `chrome.*` APIs. See
+  `packages/chrome-extension/tests/service-worker-detached.test.ts`
+  for the established mock pattern.
 - **xterm.js**: Terminal rendering (manually verified)
 
 For skipped categories, ensure **manual verification in both CLI and extension modes** before committing.

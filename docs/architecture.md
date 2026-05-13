@@ -222,7 +222,7 @@ All skills (native and compatibility) are read-only — the slicc-specific `mani
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `main.ts`                   | Entry point: `main()` for CLI/Electron embedded app, `mainExtension()` for extension (uses OffscreenClient). Handles layout, API key, orchestrator, skill drag/drop                                  |
 | `offscreen-client.ts`       | Extension-only: side panel's interface to offscreen engine. Provides AgentHandle + Orchestrator-compatible facade via chrome.runtime messages                                                        |
-| `layout.ts`                 | Split-pane (CLI) or tabbed (extension) layout; auto-selects based on extension detection                                                                                                             |
+| `layout.ts`                 | Unified split-pane layout. `Layout(root, isExtension)` toggles density (scoops rail, switcher, avatar, debug-tab defaults). Detached popout mode passes `isExtension=false` for full standalone UX.  |
 | `tabbed-ui.ts`              | Shared Chat/Terminal/Files/Memory tab definitions + normalization helpers reused by the extension layout and injected overlay shell                                                                  |
 | `overlay-shell-state.ts`    | Pure state transitions for the injected Electron overlay shell (open/close + active tab)                                                                                                             |
 | `electron-overlay.ts`       | Browser-side custom elements for the injected Electron overlay shell: launcher button, sidebar, persistent iframe host, and parent→iframe tab sync                                                   |
@@ -324,6 +324,8 @@ The Chrome extension uses a three-layer design to keep the agent engine alive ac
 │  Dispatches CDP via service worker proxy                      │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+**Detached popout:** the side panel can also be popped out into a full-page tab (`chrome-extension://<id>/index.html?detached=1`). The detached tab is a second valid UI client surface — it talks to the same offscreen agent via the same `chrome.runtime` messages as the side panel. The service worker enforces global mutual exclusion (at most one detached tab; side panel disabled while one exists). See `packages/chrome-extension/CLAUDE.md` "Detached Popout" and `docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md`.
 
 **Message Flow:**
 
@@ -576,16 +578,16 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 
 ### UI & Layout
 
-| I need to...                           | Modify                                                                           |
-| -------------------------------------- | -------------------------------------------------------------------------------- |
-| Add a new UI panel                     | `packages/webapp/src/ui/<panel>-panel.ts` + integrate in `layout.ts` + `main.ts` |
-| Change layout (split vs tabbed)        | `packages/webapp/src/ui/layout.ts`                                               |
-| Change message rendering (HTML format) | `packages/webapp/src/ui/message-renderer.ts`                                     |
-| Add voice input features               | `packages/webapp/src/ui/voice-input.ts`                                          |
-| Change preview service worker          | `packages/webapp/src/ui/preview-sw.ts`                                           |
-| Change provider/model selection        | `packages/webapp/src/ui/provider-settings.ts`                                    |
-| Change theme handling                  | `packages/webapp/src/ui/theme.ts`                                                |
-| Change session storage                 | `packages/webapp/src/ui/session-store.ts`                                        |
+| I need to...                                             | Modify                                                                           |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Add a new UI panel                                       | `packages/webapp/src/ui/<panel>-panel.ts` + integrate in `layout.ts` + `main.ts` |
+| Change layout density (`Layout(root, isExtension)` flag) | `packages/webapp/src/ui/layout.ts`                                               |
+| Change message rendering (HTML format)                   | `packages/webapp/src/ui/message-renderer.ts`                                     |
+| Add voice input features                                 | `packages/webapp/src/ui/voice-input.ts`                                          |
+| Change preview service worker                            | `packages/webapp/src/ui/preview-sw.ts`                                           |
+| Change provider/model selection                          | `packages/webapp/src/ui/provider-settings.ts`                                    |
+| Change theme handling                                    | `packages/webapp/src/ui/theme.ts`                                                |
+| Change session storage                                   | `packages/webapp/src/ui/session-store.ts`                                        |
 
 ### CLI Server
 

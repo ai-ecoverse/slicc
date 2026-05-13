@@ -105,6 +105,19 @@ npm run build:extension
 
 Load `dist/extension/` as an unpacked extension in `chrome://extensions`, then open the SLICC side panel.
 
+**Pop out to a full-page tab.** In the Chrome extension, the side panel
+header has a "Pop out" button that opens SLICC in a full-page tab with
+the standalone split-pane layout. Close the tab to return to the side
+panel. State (chat history, scoops, VFS) is shared.
+
+While a detached tab is open, the side panel is disabled globally
+(across all Chrome windows) — clicking the toolbar icon focuses the
+detached tab. This is intentional; close the tab to restore the side
+panel. The optional best-effort SW hard-close of any open side panels
+uses `chrome.sidePanel.close` (Chrome 141+). Older Chrome versions
+still get full mutual exclusion via `window.close()` from the panel,
+the send-path lock, and the non-dismissible overlay.
+
 ### 5. Run a second browser
 
 SLICC can mirror itself across multiple browsers, even on other machines:

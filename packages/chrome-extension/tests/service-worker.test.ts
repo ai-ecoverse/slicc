@@ -53,6 +53,7 @@ function createChromeMock() {
   return {
     sidePanel: {
       setPanelBehavior: vi.fn(),
+      setOptions: vi.fn(),
     },
     offscreen: {
       hasDocument: vi.fn(async () => true),
@@ -61,9 +62,15 @@ function createChromeMock() {
     action: {
       setBadgeText: vi.fn(async () => undefined),
       setBadgeBackgroundColor: vi.fn(async () => undefined),
+      onClicked: { addListener: vi.fn() },
     },
     storage: {
       local: {
+        get: vi.fn(async () => ({})),
+        set: vi.fn(async () => undefined),
+        remove: vi.fn(async () => undefined),
+      },
+      session: {
         get: vi.fn(async () => ({})),
         set: vi.fn(async () => undefined),
         remove: vi.fn(async () => undefined),
@@ -84,6 +91,9 @@ function createChromeMock() {
       onInstalled: {
         addListener: vi.fn(),
       },
+      onStartup: {
+        addListener: vi.fn(),
+      },
     },
     tabs: {
       query: vi.fn(async () => []),
@@ -94,6 +104,9 @@ function createChromeMock() {
         addListener: vi.fn(),
       },
       onUpdated: {
+        addListener: vi.fn(),
+      },
+      onRemoved: {
         addListener: vi.fn(),
       },
     },

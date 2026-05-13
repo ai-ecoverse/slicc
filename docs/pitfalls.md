@@ -848,3 +848,27 @@ that touched LLM call paths, a new code path is bypassing the wiring.
 - Coverage: `tests/scoops/scoop-context.session-id.test.ts` asserts
   both wiring points use the same identifier; gates against future
   reverts.
+
+## Detached popout: boot is the lock event
+
+The detached popout flow accepts three entry paths: the side-panel
+"Pop out" button, direct URL navigation (paste/bookmark), and
+Chrome's tab restore. ALL three converge on the detached tab's boot
+emitting a `detached-claim` envelope to the SW — the button is a
+convenience, not a trust signal. Spec:
+`docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md`.
+
+## Detached popout: claim URL validation
+
+The SW's claim handler parses `sender.url` as a URL and validates
+`origin`, pathname (`/index.html` or `/`), and
+`searchParams.get('detached') === '1'`. Substring matches on
+`sender.url` MUST NOT be used — they are brittle to query reordering.
+
+## Detached popout: top-frame requirement for claim emission
+
+`detached-claim` MUST be sent from the detached tab's top frame
+because validation uses the sender document URL; a nested
+sprinkle iframe will not carry `?detached=1` and the claim will
+be rejected. Future code that moves the claim-emit point must
+preserve this.
