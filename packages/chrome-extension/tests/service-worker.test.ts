@@ -62,6 +62,7 @@ function createChromeMock() {
     action: {
       setBadgeText: vi.fn(async () => undefined),
       setBadgeBackgroundColor: vi.fn(async () => undefined),
+      onClicked: { addListener: vi.fn() },
     },
     storage: {
       local: {

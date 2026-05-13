@@ -206,6 +206,45 @@ chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
   return false;
 });
 
+async function handleActionClick(clickedTab: {
+  id: number | undefined;
+  windowId?: number;
+}): Promise<void> {
+  const storedId = await readStoredDetachedTabId();
+
+  if (storedId !== undefined) {
+    let alive: { id: number; windowId?: number } | undefined;
+    try {
+      alive = await chrome.tabs.get(storedId);
+    } catch {
+      alive = undefined;
+    }
+    if (alive !== undefined) {
+      await chrome.tabs.update(storedId, { active: true });
+      if (alive.windowId !== undefined) {
+        await chrome.windows.update(alive.windowId, { focused: true });
+      }
+      return;
+    }
+  }
+
+  // Recovery: no detached tab actually exists.
+  // Fire-and-forget the cleanup so it doesn't consume gesture budget
+  // before sidePanel.open is invoked.
+  chrome.storage.session.remove(DETACHED_TAB_ID_KEY).catch(() => {});
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  chrome.sidePanel.setOptions({ enabled: true }).catch(() => {});
+  if (clickedTab.id !== undefined) {
+    await chrome.sidePanel.open({ tabId: clickedTab.id });
+  }
+}
+
+chrome.action.onClicked.addListener((tab) => {
+  handleActionClick(tab).catch((err) => {
+    console.error('[slicc-sw] handleActionClick failed', err);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Offscreen document lifecycle
 // ---------------------------------------------------------------------------

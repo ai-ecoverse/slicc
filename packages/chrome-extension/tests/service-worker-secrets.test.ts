@@ -50,7 +50,11 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
       },
       sidePanel: { setPanelBehavior: vi.fn(), setOptions: vi.fn() },
       offscreen: { hasDocument: vi.fn(async () => true) },
-      action: { setBadgeText: vi.fn(), setBadgeBackgroundColor: vi.fn() },
+      action: {
+        setBadgeText: vi.fn(),
+        setBadgeBackgroundColor: vi.fn(),
+        onClicked: { addListener: vi.fn() },
+      },
       tabs: {
         query: vi.fn(async () => []),
         create: vi.fn(),

@@ -417,3 +417,53 @@ describe('detached popout — popout-request handler', () => {
     expect(sessionStorage.has('slicc.detached.tabId')).toBe(false);
   });
 });
+
+describe('detached popout — action.onClicked', () => {
+  beforeEach(() => {
+    resetMocks();
+  });
+
+  it('focuses the detached tab and window when stored tab is alive', async () => {
+    sessionStorage.set('slicc.detached.tabId', 30);
+    tabsStore.set(30, { id: 30, windowId: 555 });
+    await loadSw();
+
+    for (const cb of actionClickListeners) {
+      cb({ id: 42, windowId: 0 });
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockChrome.tabs.update).toHaveBeenCalledWith(30, { active: true });
+    expect(mockChrome.windows.update).toHaveBeenCalledWith(555, { focused: true });
+    expect(mockChrome.sidePanel.open).not.toHaveBeenCalled();
+  });
+
+  it('recovers and opens side panel when stored tab is gone', async () => {
+    sessionStorage.set('slicc.detached.tabId', 99); // not in tabsStore
+    await loadSw();
+    sidePanelCalls.length = 0;
+
+    for (const cb of actionClickListeners) {
+      cb({ id: 42, windowId: 0 });
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(sessionStorage.has('slicc.detached.tabId')).toBe(false);
+    expect(mockChrome.sidePanel.open).toHaveBeenCalledWith({ tabId: 42 });
+  });
+
+  it('skips sidePanel.open when clickedTab.id is undefined', async () => {
+    sessionStorage.set('slicc.detached.tabId', 88); // gone
+    await loadSw();
+    mockChrome.sidePanel.open.mockClear();
+
+    for (const cb of actionClickListeners) {
+      cb({ id: undefined, windowId: 0 });
+    }
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockChrome.sidePanel.open).not.toHaveBeenCalled();
+    // Cleanup still runs.
+    expect(sessionStorage.has('slicc.detached.tabId')).toBe(false);
+  });
+});
