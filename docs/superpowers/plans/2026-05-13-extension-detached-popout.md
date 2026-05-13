@@ -373,6 +373,8 @@ export interface ServiceWorkerEnvelope {
 Run: `npm run typecheck`
 Expected: PASS.
 
+Note on exhaustiveness: `OffscreenBridge.handlePanelMessage` at `packages/chrome-extension/src/offscreen-bridge.ts:745` has a `switch (msg.type)` over `PanelToOffscreenMessage` WITHOUT a `default:` clause. Adding `DetachedPopoutRequestMsg | DetachedClaimMsg` to the union is therefore safe — unknown payload types silently fall through. If a future maintainer adds `default: throw assertNever(...)` for exhaustiveness, an explicit `case 'detached-popout-request': case 'detached-claim': return;` no-op pair must be added to preserve detached mode. The spec asserts this dependency explicitly.
+
 - [ ] **Step 6: Commit**
 
 ```bash
@@ -384,6 +386,10 @@ Add DetachedPopoutRequestMsg, DetachedClaimMsg, DetachedActiveMsg
 interfaces and extend PanelToOffscreenMessage and
 ServiceWorkerEnvelope.payload unions to include them. No handler
 wiring yet; that lands in subsequent tasks.
+
+Safe addition: handlePanelMessage in offscreen-bridge.ts has no
+default-throw, so detached payloads silently fall through (as the
+spec asserts).
 EOF
 )"
 ```
@@ -905,6 +911,8 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 ```
 
+Note on coexistence with `ensureOffscreen`: the existing SW already has `chrome.runtime.onInstalled?.addListener?.(() => { ensureOffscreen(); })` at `service-worker.ts:93` and a top-level `ensureOffscreen()` call at line 96. Leave those calls in place; the new reconciler runs alongside without conflict (each toggles a different chrome API surface — reconciler touches `sidePanel.*`, ensureOffscreen touches `chrome.offscreen.*`). Note that Task 1 changes the `onInstalled?` typings to non-optional; verify the existing `?.addListener?.(...)` call still compiles or simplify it to `chrome.runtime.onInstalled.addListener(() => ensureOffscreen())` in the same edit.
+
 - [ ] **Step 5: Run the tests**
 
 Run: `npx vitest run packages/chrome-extension/tests/service-worker-detached.test.ts`
@@ -1157,17 +1165,21 @@ Add this code below the `handleDetachedClaim` definition:
 
 ```ts
 chrome.runtime.onMessage.addListener((message, sender, _sendResponse) => {
-  if (typeof message !== 'object' || message === null) return;
-  if (!('source' in message) || !('payload' in message)) return;
+  // Return false explicitly to tell Chrome we will not call sendResponse
+  // asynchronously. Returning true keeps sendResponse alive and conflicts
+  // with the other SW onMessage listeners that may want to respond.
+  if (typeof message !== 'object' || message === null) return false;
+  if (!('source' in message) || !('payload' in message)) return false;
   const env = message as { source: string; payload: { type?: string } };
-  if (env.source !== 'panel') return;
+  if (env.source !== 'panel') return false;
 
   if (env.payload?.type === 'detached-claim') {
     handleDetachedClaim(sender).catch((err) => {
       console.error('[slicc-sw] handleDetachedClaim failed', err);
     });
-    return;
+    return false;
   }
+  return false;
 });
 ```
 
@@ -1270,8 +1282,9 @@ Update the listener registered in Task 6, adding a branch for `detached-popout-r
     handleDetachedClaim(sender).catch((err) => {
       console.error('[slicc-sw] handleDetachedClaim failed', err);
     });
-    return;
+    return false;
   }
+  return false;
 });
 ```
 
@@ -1282,15 +1295,16 @@ with:
     handleDetachedClaim(sender).catch((err) => {
       console.error('[slicc-sw] handleDetachedClaim failed', err);
     });
-    return;
+    return false;
   }
 
   if (env.payload?.type === 'detached-popout-request') {
     handleDetachedPopoutRequest().catch((err) => {
       console.error('[slicc-sw] handleDetachedPopoutRequest failed', err);
     });
-    return;
+    return false;
   }
+  return false;
 });
 ```
 
@@ -1903,15 +1917,18 @@ Add this block AFTER the `client = new OffscreenClient(...)` assignment (search 
 // has claimed the lock. Side panels and non-detached index.html tabs
 // self-close; the detached tab itself ignores its own echo.
 chrome.runtime.onMessage.addListener((msg) => {
-  if (typeof msg !== 'object' || msg === null) return;
-  if (!('source' in msg) || !('payload' in msg)) return;
+  // Return false (or void/undefined) on every path so Chrome does not
+  // keep sendResponse alive. This listener never responds.
+  if (typeof msg !== 'object' || msg === null) return false;
+  if (!('source' in msg) || !('payload' in msg)) return false;
   const env = msg as { source: string; payload: { type?: string } };
-  if (env.source !== 'service-worker') return;
-  if (env.payload?.type !== 'detached-active') return;
+  if (env.source !== 'service-worker') return false;
+  if (env.payload?.type !== 'detached-active') return false;
 
-  if (isDetachedSelf) return; // I am the claimer; ignore my own broadcast.
+  if (isDetachedSelf) return false; // I am the claimer; ignore my own broadcast.
 
   enterDetachedActiveState(client, layout);
+  return false;
 });
 ```
 
@@ -1924,22 +1941,29 @@ function enterDetachedActiveState(
   client: import('./offscreen-client.js').OffscreenClient,
   layout: Layout
 ): void {
-  // Layer 1: try to close this window.
+  // Execution order matters: close → lock → overlay.
+  //
+  // 1. window.close() — happy path; if it works the rest is moot.
+  // 2. setLocked(true) — synchronously bounces any send() call. Doing
+  //    this BEFORE the overlay closes the window where the user could
+  //    click a still-active send button between close-failing and
+  //    overlay-appearing.
+  // 3. showDetachedActiveOverlay() — visible feedback.
   try {
     window.close();
   } catch {
-    // window.close() may no-op in some Chrome configurations; layer 2+3 cover it.
+    // window.close() may no-op in some Chrome configurations; layers 2+3 cover it.
   }
-  // Layer 2: visible hard-disable.
-  layout.showDetachedActiveOverlay();
-  // Layer 3: block all outbound traffic from this OffscreenClient instance.
   client.setLocked(true);
+  layout.showDetachedActiveOverlay();
 }
 ```
 
 - [ ] **Step 5: Emit the claim on boot when detached**
 
-In `mainExtension`, just after `OffscreenClient` is instantiated and connected (look for where existing setup messages or `request-state` sends happen — likely shortly after `new OffscreenClient`), add this block guarded by `isDetachedSelf`:
+Emit the claim immediately AFTER the `detached-active` listener installation from Step 3. This ordering guarantees the listener is in place before the SW broadcast returns; the listener guards on `isDetachedSelf` so the claimer ignores its own echo regardless. The claim does NOT need to wait for any further OffscreenClient readiness — the broadcast it triggers is independent of the panel↔offscreen state-snapshot traffic.
+
+Add this block guarded by `isDetachedSelf`, placed right after the listener registration:
 
 ```ts
 if (isDetachedSelf) {
@@ -2318,6 +2342,13 @@ other extension/UI descriptions):
 header has a "Pop out" button that opens SLICC in a full-page tab with
 the standalone split-pane layout. Close the tab to return to the side
 panel. State (chat history, scoops, VFS) is shared.
+
+While a detached tab is open, the side panel is disabled globally
+(across all Chrome windows) — clicking the toolbar icon focuses the
+detached tab. This is intentional; close the tab to restore the side
+panel. Detached popout requires Chrome 141+ for the hard-close
+fallback to apply; older Chrome versions still work but rely on the
+panel's own `window.close()` path.
 ```
 
 - [ ] **Step 8: Search root `CLAUDE.md` for stale wording**
