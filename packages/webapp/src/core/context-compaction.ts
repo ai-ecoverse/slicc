@@ -39,23 +39,25 @@ function hasRole(message: AgentMessage, role: string): boolean {
 }
 
 /**
- * Drop any `toolResult` messages at the HEAD of `messages` whose `toolCallId`
- * has no matching `toolCall` block in the immediately preceding assistant message.
+ * Drop any `toolResult` messages at the HEAD of `messages`.
  *
- * This happens after compaction slices away the assistant turn that contained
- * the matching `tool_use` blocks. Bedrock (and Claude in strict mode) rejects
- * such orphaned `tool_result` blocks with a 400 error.
+ * A leading `toolResult` is orphaned by definition: there is no preceding
+ * assistant message that contains its `toolCallId`. This arises in two
+ * call sites:
  *
- * The function is intentionally conservative: it only removes leading orphans
- * so the invariant "every toolResult follows an assistant message that contains
- * its toolCallId" holds for the messages the LLM will see after the summary
- * message is prepended.
+ *  1. **Session restore** (`scoop-context.ts`): IndexedDB can persist a
+ *     corrupt session whose first message is a `toolResult` (e.g. a browser
+ *     crash mid-save, or sessions written before the walk-back guard was
+ *     introduced). Without stripping it, Bedrock rejects the next prompt
+ *     with "unexpected tool_use_id found in tool_result blocks".
+ *
+ *  2. **After compaction** (defense-in-depth): the walk-back guard in both
+ *     `createCompactContext` and `compactContext` already ensures
+ *     `slice(cutIndex)` does not start with a `toolResult`, so the strip
+ *     is normally a no-op here. It is kept as a safety net against future
+ *     changes to the cut algebra.
  */
 export function stripOrphanedToolResults(messages: AgentMessage[]): AgentMessage[] {
-  // Collect toolCallIds from the first assistant message (if any).
-  // After compaction the summary message is prepended as a user message,
-  // so there is no preceding assistant message — any leading toolResults
-  // are orphaned by definition.
   let i = 0;
   while (i < messages.length && hasRole(messages[i], 'toolResult')) {
     const tr = messages[i] as { role: string; toolCallId?: string };

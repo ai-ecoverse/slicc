@@ -474,21 +474,20 @@ describe('createCompactContext', () => {
     expect(mockGenerateSummary).not.toHaveBeenCalled();
   });
 
-  it('strips orphaned toolResults left at the head after compaction cut', async () => {
-    // Scenario: assistant+toolResult pair lands at the cut boundary such that
-    // the assistant is summarized away but the toolResult is kept. The resulting
-    // array would start with an orphaned toolResult that Bedrock rejects.
+  it('walk-back guard keeps assistant+toolResult pair together across the cut', async () => {
+    // Verifies the walk-back guard (lines 137-141 in context-compaction.ts):
+    // when the naive cut would land on a toolResult, cutIndex is walked back
+    // to include the preceding assistant, so the kept slice never starts with
+    // an orphaned toolResult. Note: `stripOrphanedToolResults` is a no-op
+    // here — the guard is what makes this pass.
     const compact = createCompactContext({ ...mockConfig, getApiKey: () => undefined });
     const baseMsg = 'x'.repeat(65000);
-    // Craft history so the cut lands right after an assistant-with-tool-call turn,
-    // leaving the matching toolResult as the first kept message.
     const messages: AgentMessage[] = [
       createMessage('user', baseMsg),
       createMessage('assistant', baseMsg),
       createMessage('user', baseMsg),
       createMessage('assistant', baseMsg),
       createMessage('user', baseMsg),
-      // This assistant+toolResult pair will straddle the cut point
       createAssistantWithToolCalls(baseMsg, ['orphan-id']),
       createToolResult('small result', 'orphan-id'),
       createMessage('user', 'follow up'),
