@@ -153,7 +153,8 @@ async function handleDetachedClaim(sender: { tab?: { id: number }; url?: string 
   await chrome.sidePanel.setOptions({ enabled: false });
   // Fire-and-forget; .catch() suppresses the unhandled-rejection warning
   // that Chrome emits when there are no listeners (e.g., no panel open).
-  // Matches the codebase pattern at service-worker.ts:171, 218, etc.
+  // Matches the codebase's existing fire-and-forget pattern for
+  // chrome.runtime.sendMessage.
   chrome.runtime
     .sendMessage({
       source: 'service-worker',
