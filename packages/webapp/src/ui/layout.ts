@@ -243,6 +243,18 @@ export class Layout {
   }
 
   /**
+   * Re-enable the popout button after a failed click. Used by the
+   * SW-roundtrip caller when chrome.runtime.sendMessage rejects (e.g.,
+   * cold-start with no receivers). Safe to call when the button is
+   * absent or already enabled.
+   */
+  resetPopoutButton(): void {
+    if (this.popoutButtonEl) {
+      this.popoutButtonEl.disabled = false;
+    }
+  }
+
+  /**
    * Render a non-dismissible full-Layout overlay indicating that a
    * detached tab has taken over. The only escape is closing this
    * window via the overlay's close button.

@@ -845,8 +845,11 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
           source: 'panel',
           payload: { type: 'detached-popout-request' },
         })
-        .catch(() => {
-          // SW unreachable; the popout flow will retry on next click.
+        .catch((err) => {
+          // SW unreachable or message rejected. Re-enable the button so the
+          // user can retry; surface the failure in the dev console.
+          console.warn('[slicc] detached-popout-request failed', err);
+          layout.resetPopoutButton();
         });
     });
   }
