@@ -65,7 +65,7 @@
   },
   "dependencies": {
     "express": "^5.0.0",
-    "pyodide": "0.29.3",
+    "pyodide": "0.29.4",
     "ws": "^8.18.0"
   },
   "devDependencies": {
