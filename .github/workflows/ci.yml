@@ -575,7 +575,7 @@ jobs:
       - name: Build node-server
         run: npm run build -w @slicc/node-server
       - name: Pack
-        run: echo "tarball=$(npm pack)" >> "$GITHUB_OUTPUT"
+        run: echo "tarball=$(npm pack --quiet | tail -1)" >> "$GITHUB_OUTPUT"
         id: pack
       - name: Test global install
         run: |
