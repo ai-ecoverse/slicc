@@ -575,13 +575,14 @@ jobs:
       - name: Build node-server
         run: npm run build -w @slicc/node-server
       - name: Pack
-        run: npm pack
+        run: echo "tarball=$(npm pack)" >> "$GITHUB_OUTPUT"
+        id: pack
       - name: Test global install
         run: |
-          npm install -g ./sliccy-*.tgz
+          npm install -g ./${{ steps.pack.outputs.tarball }}
           slicc --version
       - name: Test npx
-        run: npx --yes sliccy@file:./sliccy-*.tgz --version
+        run: npx --yes "sliccy@file:./${{ steps.pack.outputs.tarball }}" --version
 
   # Wait for any in-progress release before allowing merge queue to land.
   # Only runs on merge_group events; skipped (= passing) for PRs.
