@@ -31,7 +31,7 @@
     "fflate": "^0.8.2",
     "isomorphic-dompurify": "^3.1.0",
     "isomorphic-git": "1.37.6",
-    "just-bash": "2.14.4",
+    "just-bash": "2.14.5",
     "lucide": "^1.8.0",
     "marked": "^18.0.0",
     "openai": "^6.26.0",
