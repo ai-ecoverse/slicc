@@ -41,6 +41,8 @@ import { makeSameOriginBypassFetch } from './kernel-worker-fetch-bypass.js';
 // `registerProviders()` during boot before any code that reads from
 // the registry runs.
 import { registerProviders } from '../providers/index.js';
+import { startStandaloneLeaderTray } from './standalone-tray.js';
+import { TRAY_WORKER_STORAGE_KEY, TRAY_JOIN_STORAGE_KEY } from '../scoops/tray-runtime-config.js';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -217,6 +219,24 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     callbacks,
     logger: console,
   });
+  const kernelHost = host;
+
+  // Re-wire leader tray. Commit 07cdce16 removed the inline standalone
+  // orchestrator path (main.ts) where LeaderTrayManager was previously
+  // created. The localStorage shim carries the tray-worker-base-url
+  // that mainStandaloneWorker resolved via resolveTrayRuntimeConfig,
+  // so we pick it up here and start the leader when no join URL is
+  // stored (join URL presence means this instance is a follower, not a
+  // leader, and the follower path is handled separately).
+  // See standalone-tray.ts for the extracted, testable implementation.
+  const _trayWorkerBaseUrl = localStorage.getItem(TRAY_WORKER_STORAGE_KEY);
+  const _storedJoinUrl = localStorage.getItem(TRAY_JOIN_STORAGE_KEY);
+  if (_trayWorkerBaseUrl && !_storedJoinUrl) {
+    startStandaloneLeaderTray({
+      workerBaseUrl: _trayWorkerBaseUrl,
+      lickManager: kernelHost.lickManager,
+    });
+  }
 
   // Publish a sprinkle-manager proxy on the worker's globalThis so the
   // `sprinkle` / `open` / `upskill` shell commands can reach the real
