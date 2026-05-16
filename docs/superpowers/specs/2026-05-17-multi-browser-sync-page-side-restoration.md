@@ -71,11 +71,11 @@ sequenceDiagram
     participant Lick as LickManager
     participant Scoop as Scoop turn
 
-    Ext->>Tray: HTTP POST /webhook/<id>
-    Tray->>LTM: ws: {type:'webhook.event', ...}
+    Ext->>Tray: HTTP POST /webhook/{webhookId}
+    Tray->>LTM: ws webhook.event (webhookId, headers, body)
     LTM->>Lick: handleWebhookEvent(id, headers, body)
     Note right of Lick: direct JS call, same process
-    Lick->>Scoop: emit LickEvent → targeted scoop
+    Lick->>Scoop: emit LickEvent to targeted scoop
 ```
 
 ## 3. Current state on PR #667 (worker-side fix, partial)
