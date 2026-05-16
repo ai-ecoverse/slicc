@@ -341,6 +341,22 @@ export class OffscreenClient implements KernelClientFacade {
     } as PanelToOffscreenMessage);
   }
 
+  /**
+   * Relay a webhook event from the page-side `LeaderTrayManager` into the
+   * worker-side `LickManager`. The leader receives `webhook.event` control
+   * messages from the Cloudflare tray; this method forwards them across the
+   * bridge so the lick manager (which lives in the kernel worker post-refactor)
+   * can route to the registered scoop. Fire-and-forget — no ack expected.
+   */
+  sendWebhookEvent(webhookId: string, headers: Record<string, string>, body: unknown): void {
+    this.send({
+      type: 'lick-webhook-event',
+      webhookId,
+      headers,
+      body,
+    } as PanelToOffscreenMessage);
+  }
+
   /** Register a handler for sprinkle-op messages from the offscreen proxy. */
   setSprinkleOpHandler(handler: (payload: unknown) => void): void {
     this.sprinkleOpHandler = handler;
