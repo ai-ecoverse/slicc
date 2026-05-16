@@ -9,8 +9,9 @@
  *   Extension: chrome.identity.launchWebAuthFlow via service worker
  */
 
-import type { OAuthLauncher } from './types.js';
+import type { InterceptingOAuthLauncher, OAuthLauncher } from './types.js';
 import { getPanelRpcClient } from '../kernel/panel-rpc.js';
+import { createInterceptingOAuthLauncher } from './intercepted-oauth.js';
 
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
 
@@ -21,6 +22,39 @@ export function createOAuthLauncher(): OAuthLauncher {
   // through the panel-RPC bridge so the page can open the real window.
   if (typeof window === 'undefined') return launchOAuthViaPanel;
   return launchOAuthCli;
+}
+
+/**
+ * Resolve the active CDP transport and build an
+ * {@link InterceptingOAuthLauncher} bound to it. Returns null when no
+ * transport is available in the current runtime (e.g. plain webapp with no
+ * controlled browser attached), so the caller can fall back gracefully.
+ *
+ * Intentionally async + lazy: the transport-lookup paths differ by mode
+ * (DebuggerClient in extension mode, CDPClient in CLI/node-server mode) and
+ * we don't want to import them eagerly.
+ *
+ * NOTE (draft PR): the active-transport lookup below is the integration
+ * point where slicc decides which CDP client owns the current session.
+ * The exact accessor needs reviewer guidance — for the extension surface
+ * it's the DebuggerClient instance, for CLI it's the CDPClient over
+ * WebSocket. Stubbed to null in both cases until those accessors are
+ * wired; that keeps the rest of the abstraction reviewable in isolation.
+ */
+export async function createInterceptingOAuthLauncherForCurrentRuntime(): Promise<InterceptingOAuthLauncher | null> {
+  const transport = await resolveActiveCdpTransport();
+  if (!transport) return null;
+  return createInterceptingOAuthLauncher(transport);
+}
+
+async function resolveActiveCdpTransport() {
+  // TODO(slicc reviewer): wire to the active CDP transport.
+  //   - Extension: DebuggerClient instance from cdp-bridge.ts / debugger-client.ts
+  //   - CLI / node-server: CDPClient over WebSocket from cdp-client.ts
+  //   - Worker: panel-RPC bridge to the page's transport
+  // For the draft PR this returns null, surfacing a clean error from the
+  // oauth-token command, but the abstraction is otherwise complete.
+  return null;
 }
 
 /**
