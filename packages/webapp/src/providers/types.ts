@@ -15,6 +15,62 @@ import type {
  */
 export type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
 
+/**
+ * Outbound-request rewrite applied during an intercepted OAuth flow.
+ *
+ * Lets the provider patch authorize URLs (e.g. add xAI's `plan=generic`) or
+ * substitute test fixtures, without touching the launcher itself.
+ */
+export interface OAuthRequestRewrite {
+  /** Substring matched against the outbound request URL (case-sensitive). */
+  match: string;
+  /** Search params to add or override on matching requests. */
+  appendParams?: Record<string, string>;
+  /** Replace the URL entirely (preserving method + headers). */
+  replaceUrl?: string;
+}
+
+/**
+ * Configuration for one run of the intercepted OAuth flow. The launcher
+ * navigates a controlled-browser tab to `authorizeUrl`, intercepts the first
+ * outbound request that matches `redirectUriPattern`, and resolves with the
+ * full captured URL (which carries the code + state in the query string).
+ * No HTTP server is ever bound to the redirect port.
+ */
+export interface InterceptOAuthConfig {
+  /** Authorize URL — the launcher navigates the OAuth tab here. */
+  authorizeUrl: string;
+  /**
+   * Pattern matching the loopback (or other) redirect URI we want to capture.
+   * Supports a trailing `*` glob; e.g. `http://127.0.0.1:56121/*`.
+   * The launcher resolves with the *full* URL of the first matching request.
+   */
+  redirectUriPattern: string;
+  /**
+   * Optional outbound-request rewrites, applied to any URL the OAuth tab
+   * navigates to (authorize, intermediate hops, redirect). Useful for vendor
+   * quirks like xAI's `plan=generic` requirement.
+   */
+  rewrite?: OAuthRequestRewrite[];
+  /**
+   * What to do with the OAuth tab after capture. Default: `"close"`.
+   * - `"close"` — close the tab via `Target.closeTarget`.
+   * - `"leave"` — leave the tab open (useful for debugging).
+   */
+  onCapture?: 'close' | 'leave';
+  /** Override the default timeout. Default: 120_000 ms. */
+  timeoutMs?: number;
+}
+
+/**
+ * Launcher that drives the OAuth flow inside the controlled browser and
+ * intercepts the redirect via CDP `Fetch.requestPaused` instead of running a
+ * local callback server. See {@link InterceptOAuthConfig}.
+ *
+ * Returns the captured redirect URL on success, or null on timeout/cancel.
+ */
+export type InterceptingOAuthLauncher = (config: InterceptOAuthConfig) => Promise<string | null>;
+
 /** Options passed to onOAuthLogin from the caller (e.g. oauth-token command). */
 export interface OAuthLoginOptions {
   /**
@@ -111,6 +167,22 @@ export interface ProviderConfig {
    */
   onOAuthLogin?: (
     launcher: OAuthLauncher,
+    onSuccess: () => void,
+    options?: OAuthLoginOptions
+  ) => Promise<void>;
+  /**
+   * Alternative login hook that uses the controlled-browser interceptor
+   * instead of a popup / chrome.identity flow. Providers implement EITHER
+   * `onOAuthLogin` OR this — the `oauth-token` command dispatches based on
+   * which is present.
+   *
+   * The intercepting launcher captures the redirect URL by watching the
+   * controlled tab's outbound network traffic via CDP, with no local HTTP
+   * server. Suited to providers whose OAuth client only accepts loopback
+   * redirect URIs (e.g. xAI Grok, Google Cloud Code Assist).
+   */
+  onOAuthLoginIntercepted?: (
+    launcher: InterceptingOAuthLauncher,
     onSuccess: () => void,
     options?: OAuthLoginOptions
   ) => Promise<void>;
