@@ -42,6 +42,7 @@ import {
   getAccounts,
   getBaseUrlForProvider,
 } from '../src/ui/provider-settings.js';
+import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -307,16 +308,20 @@ export const config: ProviderConfig = {
     const scopes = resolveScopes(proxyConfig);
     const imsEnv = resolveImsEnvironment(proxyConfig);
 
+    // Resolve the page origin via panel-RPC when invoked from the kernel
+    // `DedicatedWorker` (no `window`); the page-context login path still
+    // reads `window.location.*` directly through the helper.
+    const pageInfo = isExtension ? null : await getOAuthPageOrigin();
     const redirectUri = isExtension
       ? (adobeConfig.extensionRedirectUri ??
         `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
-      : (adobeConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
+      : (adobeConfig.redirectUri ?? `${pageInfo!.origin}/auth/callback`);
 
     // Build OAuth state with port and CSRF nonce for the sliccy.ai relay (CLI only)
     const oauthState = !isExtension
       ? btoa(
           JSON.stringify({
-            port: parseInt(new URL(window.location.href).port || '5710', 10),
+            port: parseInt(new URL(pageInfo!.href).port || '5710', 10),
             path: '/auth/callback',
             nonce: crypto.randomUUID(),
           })

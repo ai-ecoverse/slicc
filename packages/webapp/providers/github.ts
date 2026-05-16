@@ -41,6 +41,7 @@ import {
   revokeOAuthToken,
   getWorkerBaseUrl,
 } from '../src/providers/oauth-code-exchange.js';
+import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
 import { GLOBAL_FS_DB_NAME } from '../src/fs/global-db.js';
 
 // ── Config ─────────────────────────────────────────────────────────
@@ -457,9 +458,14 @@ export const config: ProviderConfig = {
     // reads the `state` param (source=local|extension) and forwards to the
     // correct final destination. Using one registered URL per OAuth App lets
     // GitHub OAuth Apps (single-callback) work for both CLI and extension.
+    //
+    // The CLI branch resolves `origin` / `href` via `getOAuthPageOrigin()` so
+    // the same code works when `onOAuthLogin` is invoked from a shell command
+    // running inside the kernel `DedicatedWorker` (which has no `window`).
+    const pageInfo = isExtension ? null : await getOAuthPageOrigin();
     const redirectUri = isExtension
       ? `${getWorkerBaseUrl()}/auth/callback`
-      : `${runtimeWorkerBaseUrl ?? window.location.origin}/auth/callback`;
+      : `${runtimeWorkerBaseUrl ?? pageInfo!.origin}/auth/callback`;
 
     const nonce = crypto.randomUUID();
     const extensionId = isExtension
@@ -468,7 +474,7 @@ export const config: ProviderConfig = {
     const stateData = isExtension
       ? { source: 'extension', extensionId, path: '/github', nonce }
       : {
-          port: parseInt(new URL(window.location.href).port || '5710', 10),
+          port: parseInt(new URL(pageInfo!.href).port || '5710', 10),
           path: '/auth/callback',
           nonce,
         };

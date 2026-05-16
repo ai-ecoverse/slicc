@@ -225,3 +225,122 @@ describe('github.ts onOAuthLogin writes masked token to VFS', () => {
     expect(vfsToken).not.toContain('ghp_REAL_token_123');
   });
 });
+
+describe('github.ts onOAuthLogin in worker context (no window)', () => {
+  let originalFetch: typeof globalThis.fetch;
+  let originalLocalStorage: Storage;
+  let originalWindow: any;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    originalLocalStorage = globalThis.localStorage;
+    originalWindow = (globalThis as any).window;
+
+    const lsData: Record<string, string> = {};
+    (globalThis as any).localStorage = {
+      getItem: (k: string) => lsData[k] ?? null,
+      setItem: (k: string, v: string) => {
+        lsData[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete lsData[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(lsData)) delete lsData[k];
+      },
+    };
+    delete (globalThis as any).chrome;
+    // Worker realm: explicitly remove the window global so the github
+    // provider must resolve page origin via panel-RPC.
+    delete (globalThis as any).window;
+
+    // Stand-in panel-RPC bridge that answers page-info from the simulated page.
+    (globalThis as any).__slicc_panelRpc = {
+      call: vi.fn(async (op: string) => {
+        if (op !== 'page-info') throw new Error(`unexpected op ${op}`);
+        return {
+          origin: 'http://localhost:5711',
+          href: 'http://localhost:5711/?cone=1',
+          title: '',
+        };
+      }),
+      dispose: () => {},
+    };
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    (globalThis as any).localStorage = originalLocalStorage;
+    if (originalWindow === undefined) {
+      delete (globalThis as any).window;
+    } else {
+      (globalThis as any).window = originalWindow;
+    }
+    delete (globalThis as any).__slicc_panelRpc;
+  });
+
+  it('resolves redirectUri and state port via panel-RPC instead of throwing "window is not defined"', async () => {
+    let observedAuthorizeUrl = '';
+    globalThis.fetch = vi.fn(async (url: any) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/api/runtime-config')) {
+        return {
+          ok: true,
+          json: async () => ({ oauth: { github: 'worker-client-id' } }),
+        } as any;
+      }
+      if (urlStr.includes('/oauth/token')) {
+        return {
+          ok: true,
+          json: async () => ({
+            access_token: 'ghp_worker_token',
+            token_type: 'Bearer',
+            scope: 'repo',
+          }),
+        } as any;
+      }
+      if (urlStr.includes('api.github.com/user')) {
+        return {
+          ok: true,
+          json: async () => ({ login: 'worker-user', id: 7 }),
+        } as any;
+      }
+      if (urlStr.includes('/api/secrets/oauth-update')) {
+        return {
+          ok: true,
+          json: async () => ({
+            providerId: 'github',
+            name: 'oauth.github.token',
+            maskedValue: 'ghp_masked_worker',
+            domains: ['github.com'],
+          }),
+        } as any;
+      }
+      return { ok: false, status: 404 } as any;
+    });
+
+    const { config } = await import('../../providers/github.js');
+
+    const fakeLauncher = vi.fn(async (url: string) => {
+      observedAuthorizeUrl = url;
+      const authUrl = new URL(url);
+      const state = authUrl.searchParams.get('state');
+      const stateData = state ? JSON.parse(atob(state)) : null;
+      return `https://x.com/callback?code=worker-code&nonce=${stateData?.nonce ?? ''}`;
+    });
+
+    // Must NOT throw "window is not defined"
+    await expect(config.onOAuthLogin!(fakeLauncher, () => {}, undefined)).resolves.toBeUndefined();
+
+    // Authorize URL must carry a state with the page port (5711) reconstructed
+    // from the panel-RPC page-info response, not the default 5710.
+    const auth = new URL(observedAuthorizeUrl);
+    const stateRaw = auth.searchParams.get('state');
+    expect(stateRaw).toBeTruthy();
+    const stateData = JSON.parse(atob(stateRaw!));
+    expect(stateData.port).toBe(5711);
+
+    // redirect_uri must point at the page origin returned by panel-RPC
+    expect(auth.searchParams.get('redirect_uri')).toBe('http://localhost:5711/auth/callback');
+  });
+});

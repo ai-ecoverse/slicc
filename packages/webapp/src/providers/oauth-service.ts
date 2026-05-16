@@ -24,6 +24,32 @@ export function createOAuthLauncher(): OAuthLauncher {
 }
 
 /**
+ * Worker-aware page origin lookup. Provider `onOAuthLogin` implementations
+ * construct redirect URIs and OAuth `state` payloads from
+ * `window.location.origin` / `window.location.href`, but when the shell
+ * command `oauth-token <provider>` invokes them they run inside the kernel
+ * `DedicatedWorker` where `window` is undefined. This helper returns the page
+ * origin directly when called in the page (or extension offscreen DOM), and
+ * routes through panel-RPC `page-info` when called from the worker.
+ *
+ * Throws when neither path is available so callers surface a clear error
+ * instead of `ReferenceError: window is not defined`.
+ */
+export async function getOAuthPageOrigin(): Promise<{ origin: string; href: string }> {
+  if (typeof window !== 'undefined') {
+    return { origin: window.location.origin, href: window.location.href };
+  }
+  const rpc = getPanelRpcClient();
+  if (!rpc) {
+    throw new Error(
+      'OAuth from worker context requires the panel-RPC bridge (no page-info available)'
+    );
+  }
+  const info = await rpc.call('page-info', undefined);
+  return { origin: info.origin, href: info.href };
+}
+
+/**
  * Worker-context OAuth launcher. Delegates to the page via panel-RPC so the
  * page can open a real popup window (workers have no `window.open`).
  */
