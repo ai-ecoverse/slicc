@@ -8,6 +8,7 @@ import {
   getFollowerTrayRuntimeStatus,
   type FollowerTrayRuntimeStatus,
 } from '../../scoops/tray-follower-status.js';
+import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 
 export interface ConnectedFollowerInfo {
   runtimeId: string;
@@ -41,6 +42,59 @@ export function setTrayResetter(resetter: (() => Promise<LeaderTrayRuntimeStatus
 
 export function getTrayResetter(): (() => Promise<LeaderTrayRuntimeStatus>) | undefined {
   return trayResetter ?? undefined;
+}
+
+// localStorage keys written by page-side subscriptions in main.ts and
+// propagated to the kernel worker's Map-backed shim via installPageStorageSync.
+const LEADER_STATUS_STORAGE_KEY = 'slicc.leaderTrayStatus';
+const LEADER_FOLLOWERS_STORAGE_KEY = 'slicc.leaderTrayFollowers';
+
+// In the standalone-worker path the leader tray runs on the page. The
+// worker's module global stays 'inactive', so fall back to the localStorage
+// shim value that main.ts keeps current via subscribeToLeaderTrayRuntimeStatus.
+function getLeaderStatusWithFallback(): LeaderTrayRuntimeStatus {
+  const moduleStatus = getLeaderTrayRuntimeStatus();
+  if (moduleStatus.state !== 'inactive') return moduleStatus;
+  try {
+    const stored = (globalThis as { localStorage?: Storage }).localStorage?.getItem(
+      LEADER_STATUS_STORAGE_KEY
+    );
+    if (stored) {
+      const parsed = JSON.parse(stored) as LeaderTrayRuntimeStatus;
+      if (parsed?.state && parsed.state !== 'inactive') return parsed;
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return moduleStatus;
+}
+
+// Same reason: the module-level getter is only set on the page thread.
+// Fall back to the localStorage shim value written by onFollowerCountChanged.
+function getFollowersWithFallback(): ConnectedFollowerInfo[] {
+  if (connectedFollowersGetter) return connectedFollowersGetter();
+  try {
+    const stored = (globalThis as { localStorage?: Storage }).localStorage?.getItem(
+      LEADER_FOLLOWERS_STORAGE_KEY
+    );
+    if (stored) return JSON.parse(stored) as ConnectedFollowerInfo[];
+  } catch {
+    // ignore parse errors
+  }
+  return [];
+}
+
+// When `host reset` runs from the kernel-worker's terminal, the worker's
+// module-level `trayResetter` is null (the page is the only side that
+// calls `setTrayResetter`). Bridge to the page via panel-RPC so the
+// `tray-reset` handler installed in `mainStandaloneWorker` can drive
+// `pageLeaderTray.reset()`. Returns `undefined` when no panel-RPC client
+// is published (e.g. in tests, or in extension mode where the offscreen
+// document has its own DOM and doesn't need the bridge).
+function buildPanelRpcResetter(): (() => Promise<LeaderTrayRuntimeStatus>) | undefined {
+  const client = getPanelRpcClient();
+  if (!client) return undefined;
+  return async () => await client.call('tray-reset', undefined);
 }
 
 export interface HostCommandOptions {
@@ -146,9 +200,9 @@ export function formatFollowerOutput(status: FollowerTrayRuntimeStatus): string 
 }
 
 export function createHostCommand(options: HostCommandOptions = {}): Command {
-  const getStatus = options.getStatus ?? getLeaderTrayRuntimeStatus;
+  const getStatus = options.getStatus ?? getLeaderStatusWithFallback;
   const getFollowerSt = options.getFollowerStatus ?? getFollowerTrayRuntimeStatus;
-  const getFollowers = options.getFollowers ?? getConnectedFollowers;
+  const getFollowers = options.getFollowers ?? getFollowersWithFallback;
 
   return defineCommand('host', async (args) => {
     if (args.includes('--help') || args.includes('-h')) {
@@ -156,7 +210,17 @@ export function createHostCommand(options: HostCommandOptions = {}): Command {
     }
 
     if (args[0] === 'reset') {
-      return handleReset(getFollowerSt, getStatus, options.resetTray ?? getTrayResetter());
+      // Resolution order for the resetter:
+      //   1. options.resetTray — explicit override for tests / future callers.
+      //   2. getTrayResetter() — page-thread path; the page sets this via
+      //      setTrayResetter after starting pageLeaderTray.
+      //   3. Panel-RPC `tray-reset` — worker-thread path. Standalone runs
+      //      the host shell command inside the kernel worker, where the
+      //      module-level trayResetter is null; bridge to the page so it
+      //      can drive pageLeaderTray.reset(). Returns the new
+      //      LeaderTrayRuntimeStatus.
+      const resetter = options.resetTray ?? getTrayResetter() ?? buildPanelRpcResetter();
+      return handleReset(getFollowerSt, getStatus, resetter);
     }
 
     if (args.length > 0) {
