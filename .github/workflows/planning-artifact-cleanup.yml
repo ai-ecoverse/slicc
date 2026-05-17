@@ -105,15 +105,27 @@ jobs:
               exit 0
             fi
 
+            # mergeStateStatus reference:
+            #   CLEAN / HAS_HOOKS  -> green, ready to enqueue
+            #   UNSTABLE           -> required checks pending or failing; keep waiting
+            #   BLOCKED            -> usually transient while CI is still running on a
+            #                         fresh push (queue + required checks not yet green);
+            #                         keep waiting until the polling timeout
+            #   UNKNOWN            -> GitHub still computing; keep waiting
+            #   DIRTY / BEHIND     -> needs human attention (conflict or rebase)
+            #   DRAFT              -> shouldn't happen for this workflow, but treat as terminal
             case "$merge_state" in
-              CLEAN|UNSTABLE|HAS_HOOKS)
+              CLEAN | HAS_HOOKS)
                 if [ "$mergeable" = "MERGEABLE" ]; then
                   break
                 fi
                 ;;
-              DIRTY|BLOCKED)
+              DIRTY | BEHIND | DRAFT)
                 echo "PR is $merge_state; cannot enqueue. Exiting."
                 exit 0
+                ;;
+              *)
+                # UNSTABLE, BLOCKED, UNKNOWN, anything else -> keep polling.
                 ;;
             esac
 
