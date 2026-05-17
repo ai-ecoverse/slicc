@@ -2389,6 +2389,9 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
         browserTransport: realCdpTransport,
         vfs: localFs,
       });
+      layout.panels.chat.setLeaderBroadcast((text, id, att) =>
+        pageLeaderTray?.sync.broadcastUserMessage(text, id, att)
+      );
     }
   }
 
@@ -2435,6 +2438,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     pageLeaderTray = null;
     setConnectedFollowersGetter(null);
     setTrayResetter(null);
+    layout.panels.chat.setLeaderBroadcast(null);
 
     pageFollowerTray?.stop();
     pageFollowerTray = null;

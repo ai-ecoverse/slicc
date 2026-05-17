@@ -218,6 +218,9 @@ export class ChatPanel {
   private keydownListener: ((e: KeyboardEvent) => void) | null = null;
   private messages: ChatMessage[] = [];
   private agent: AgentHandle | null = null;
+  private leaderBroadcast:
+    | ((text: string, messageId: string, attachments?: MessageAttachment[]) => void)
+    | null = null;
   private unsubscribe: (() => void) | null = null;
   private isStreaming = false;
   private currentStreamId: string | null = null;
@@ -338,6 +341,13 @@ export class ChatPanel {
     this.unsubscribe?.();
     this.agent = agent;
     this.unsubscribe = agent.onEvent((ev) => this.handleAgentEvent(ev));
+  }
+
+  /** Register a broadcast hook for when the leader sends their own user message. */
+  setLeaderBroadcast(
+    fn: ((text: string, messageId: string, attachments?: MessageAttachment[]) => void) | null
+  ): void {
+    this.leaderBroadcast = fn;
   }
 
   /** Set a callback for terminal output events. */
@@ -1246,6 +1256,7 @@ export class ChatPanel {
 
     // Send to agent (orchestrator persists & queues if the cone is busy)
     this.agent?.sendMessage(text, msg.id, attachments);
+    this.leaderBroadcast?.(text, msg.id, attachments);
   }
 
   private handleAgentEvent(event: AgentEvent): void {
