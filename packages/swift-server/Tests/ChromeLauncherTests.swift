@@ -243,6 +243,61 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertEqual(spawns.count, 0, "processFactory must not be invoked when a Chrome is already on the CDP port")
     }
 
+    func testDiscoverLaunchedChromePidReturnsSetDifferenceImmediately() async {
+        // Pre-existing Chrome instances: PIDs 100 and 200. The
+        // LaunchServices spawn adds PID 300; `discoverLaunchedChromePid`
+        // should return 300 without waiting out the full budget.
+        let bundleURL = URL(fileURLWithPath: "/Applications/Google Chrome.app")
+        let launcher = ChromeLauncher(
+            runningPidsForBundle: { url in
+                XCTAssertEqual(url.standardizedFileURL, bundleURL.standardizedFileURL)
+                return [100, 200, 300]
+            }
+        )
+
+        let pid = await launcher.discoverLaunchedChromePid(
+            bundleURL: bundleURL,
+            existingPids: [100, 200],
+            timeout: 1.0
+        )
+
+        XCTAssertEqual(pid, 300)
+    }
+
+    func testDiscoverLaunchedChromePidWaitsForNewPidToAppear() async {
+        // First poll returns only pre-existing PIDs; second poll returns
+        // the new one. Verifies the loop actually polls instead of
+        // resolving on the first read.
+        let bundleURL = URL(fileURLWithPath: "/Applications/Google Chrome.app")
+        let snapshots = AtomicSnapshotBox(values: [[100, 200], [100, 200, 555]])
+        let launcher = ChromeLauncher(
+            runningPidsForBundle: { _ in snapshots.next() }
+        )
+
+        let pid = await launcher.discoverLaunchedChromePid(
+            bundleURL: bundleURL,
+            existingPids: [100, 200],
+            timeout: 1.0
+        )
+
+        XCTAssertEqual(pid, 555)
+    }
+
+    func testDiscoverLaunchedChromePidReturnsNilOnTimeout() async {
+        let bundleURL = URL(fileURLWithPath: "/Applications/Google Chrome.app")
+        let launcher = ChromeLauncher(
+            runningPidsForBundle: { _ in [100, 200] }
+        )
+
+        let pid = await launcher.discoverLaunchedChromePid(
+            bundleURL: bundleURL,
+            existingPids: [100, 200],
+            timeout: 0.2
+        )
+
+        XCTAssertNil(pid)
+    }
+
     private func makeLauncher(
         existingPaths: Set<String> = [],
         directoryListings: [String: [String]] = [:],
@@ -257,5 +312,23 @@ final class ChromeLauncherTests: XCTestCase {
             currentDirectoryProvider: { currentDirectory },
             homeDirectoryProvider: { homeDirectory }
         )
+    }
+}
+
+private final class AtomicSnapshotBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var queue: [Set<pid_t>]
+
+    init(values: [Set<pid_t>]) {
+        self.queue = values
+    }
+
+    func next() -> Set<pid_t> {
+        lock.lock()
+        defer { lock.unlock() }
+        if queue.count > 1 {
+            return queue.removeFirst()
+        }
+        return queue.first ?? []
     }
 }

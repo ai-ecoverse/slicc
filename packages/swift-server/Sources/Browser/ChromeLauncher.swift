@@ -1,9 +1,12 @@
+import AppKit
 import Foundation
 import Logging
 
 private let defaultChromeUserDataDirName = "browser-coding-agent-chrome"
 private let defaultServePort = 5710
 private let defaultChromeLaunchTimeout: TimeInterval = 15
+private let chromePidDiscoveryTimeout: TimeInterval = 5
+private let chromePidDiscoveryPollIntervalNanos: UInt64 = 100_000_000
 private let cdpPortRegex = try! NSRegularExpression(
     pattern: #"DevTools listening on ws://[^:]+:(\d+)/"#,
     options: []
@@ -12,6 +15,21 @@ private let cdpPortRegex = try! NSRegularExpression(
 struct ChromeProcess: @unchecked Sendable {
     let process: Process
     let cdpPort: Int
+    /// Real Chrome browser-process PID when the spawn went through
+    /// `/usr/bin/open` (LaunchServices), `nil` for the direct-exec
+    /// fallback (where `process.processIdentifier` is already Chrome's
+    /// PID). The graceful-shutdown handler needs this because in the
+    /// LaunchServices path `process` wraps `open`, so SIGKILL'ing
+    /// `process.processIdentifier` would only kill the `open` helper and
+    /// leave Chrome running — which then holds the CDP port and user
+    /// data dir, blocking the next launch.
+    let chromePid: pid_t?
+
+    init(process: Process, cdpPort: Int, chromePid: pid_t? = nil) {
+        self.process = process
+        self.cdpPort = cdpPort
+        self.chromePid = chromePid
+    }
 }
 
 struct ChromeLaunchConfig: Sendable {
@@ -101,6 +119,11 @@ struct ChromeLauncher: Sendable {
     private let homeDirectoryProvider: @Sendable () -> String
     private let processFactory: @Sendable () -> Process
     private let fetchData: @Sendable (URL) async throws -> (Data, URLResponse)
+    /// Snapshot the PIDs of every running app whose bundle URL matches
+    /// `bundleURL` (canonical Chrome.app, Chrome for Testing.app, etc.).
+    /// Injected so tests can simulate "new Chrome process appeared after
+    /// launch" without actually spawning Chrome.
+    private let runningPidsForBundle: @Sendable (URL) -> Set<pid_t>
 
     init(
         logger: Logger = Logger(label: "slicc.chrome-launcher"),
@@ -125,6 +148,17 @@ struct ChromeLauncher: Sendable {
             request.timeoutInterval = 2
             request.cachePolicy = .reloadIgnoringLocalCacheData
             return try await URLSession.shared.data(for: request)
+        },
+        runningPidsForBundle: @escaping @Sendable (URL) -> Set<pid_t> = { bundleURL in
+            let canonical = bundleURL.standardizedFileURL
+            return Set(NSWorkspace.shared.runningApplications.compactMap { app -> pid_t? in
+                guard let appBundleURL = app.bundleURL?.standardizedFileURL,
+                      appBundleURL == canonical,
+                      app.processIdentifier > 0 else {
+                    return nil
+                }
+                return app.processIdentifier
+            })
         }
     ) {
         self.logger = logger
@@ -135,6 +169,7 @@ struct ChromeLauncher: Sendable {
         self.homeDirectoryProvider = homeDirectoryProvider
         self.processFactory = processFactory
         self.fetchData = fetchData
+        self.runningPidsForBundle = runningPidsForBundle
     }
 
     func findChromeExecutable() -> String? {
@@ -253,6 +288,8 @@ struct ChromeLauncher: Sendable {
         process.standardError = stderrPipe
 
         let usesLaunchServices: Bool
+        let chromeBundleURL: URL?
+        let preexistingChromePids: Set<pid_t>
         if let appBundlePath = resolveAppBundle(forExecutable: executable) {
             // Route the spawn through `/usr/bin/open` so LaunchServices owns
             // the new Chrome process. Without this, slicc-server (and
@@ -270,6 +307,14 @@ struct ChromeLauncher: Sendable {
                 chromeArgs: chromeArgs
             )
             usesLaunchServices = true
+            // Snapshot every running Chrome instance for this bundle *before*
+            // spawning so we can identify the new process by set-difference
+            // after `open` returns. `-n` in `buildOpenLaunchArgs` always
+            // forces a fresh instance, so the new PID is guaranteed to be
+            // outside this set.
+            let bundleURL = URL(fileURLWithPath: appBundlePath)
+            chromeBundleURL = bundleURL
+            preexistingChromePids = runningPidsForBundle(bundleURL)
         } else {
             // Fallback for bare-binary paths (largely a test affordance):
             // exec the binary directly and scrape its stderr for the CDP
@@ -277,15 +322,42 @@ struct ChromeLauncher: Sendable {
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = chromeArgs
             usesLaunchServices = false
+            chromeBundleURL = nil
+            preexistingChromePids = []
         }
 
         try process.run()
         logger.info("Launched Chrome at \(executable)")
 
         let actualPort: Int
+        let chromePid: pid_t?
         if usesLaunchServices {
             actualPort = config.cdpPort
             try await waitForCDPReady(port: actualPort, timeout: config.launchTimeout, process: process)
+            // CDP is up, so Chrome must be running — discover its real PID
+            // via NSWorkspace so the SIGKILL fallback in
+            // GracefulShutdownHandler.closeBrowser can target Chrome
+            // itself rather than the `open` helper that started it. The
+            // discovery has its own short budget; missing the PID is
+            // logged but non-fatal (`Browser.close` via CDP still works
+            // for normal shutdowns, and the registry will just no-op the
+            // last-resort SIGKILL).
+            if let bundleURL = chromeBundleURL {
+                chromePid = await discoverLaunchedChromePid(
+                    bundleURL: bundleURL,
+                    existingPids: preexistingChromePids,
+                    timeout: chromePidDiscoveryTimeout
+                )
+                if let chromePid {
+                    logger.info("Resolved Chrome PID via LaunchServices: \(chromePid)")
+                } else {
+                    logger.warning(
+                        "Could not resolve Chrome PID after \(chromePidDiscoveryTimeout)s; SIGKILL fallback will be a no-op"
+                    )
+                }
+            } else {
+                chromePid = nil
+            }
         } else {
             let outputMonitor = ChromeOutputMonitor(
                 process: process,
@@ -295,9 +367,31 @@ struct ChromeLauncher: Sendable {
             )
             actualPort = try await outputMonitor.awaitPort(timeout: config.launchTimeout)
             _ = try await waitForCDP(port: actualPort)
+            chromePid = nil
         }
         logger.info("Chrome CDP listening on port \(actualPort)")
-        return ChromeProcess(process: process, cdpPort: actualPort)
+        return ChromeProcess(process: process, cdpPort: actualPort, chromePid: chromePid)
+    }
+
+    /// Poll `runningPidsForBundle` for a new PID that wasn't present in
+    /// `existingPids`. Returns the first new PID or `nil` if the timeout
+    /// elapses (e.g. the user terminated Chrome from the Dock before we
+    /// could observe it). Exposed at `internal` visibility so unit tests
+    /// can drive it directly with a stubbed `runningPidsForBundle`.
+    func discoverLaunchedChromePid(
+        bundleURL: URL,
+        existingPids: Set<pid_t>,
+        timeout: TimeInterval
+    ) async -> pid_t? {
+        let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(max(timeout, 0) * 1_000_000_000)
+        while DispatchTime.now().uptimeNanoseconds < deadline {
+            let candidates = runningPidsForBundle(bundleURL).subtracting(existingPids)
+            if let pid = candidates.min() {
+                return pid
+            }
+            try? await Task.sleep(nanoseconds: chromePidDiscoveryPollIntervalNanos)
+        }
+        return runningPidsForBundle(bundleURL).subtracting(existingPids).min()
     }
 
     /// Poll Chrome's `/json/version` endpoint until it answers with a CDP
