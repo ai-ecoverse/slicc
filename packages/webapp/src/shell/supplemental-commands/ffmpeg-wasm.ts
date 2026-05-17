@@ -12,25 +12,40 @@
  * the user-facing latency on every cold start is painful.
  *
  * Extension mode: cross-origin `importScripts` is blocked under the
- * extension origin's CSP, so we fetch the core JS + wasm + the
- * library's inner-worker JS as bytes and hand the loader same-
- * origin `blob:` URLs. The worker can then `importScripts(blobUrl)`
- * without tripping CSP.
+ * extension origin's CSP, so we fetch the core JS + wasm as bytes
+ * and hand the loader same-origin `blob:` URLs. The wrapper's inner
+ * worker is bundled at build time via `?raw` so it always matches
+ * the installed wrapper version (no separate CDN fetch needed).
  *
  * Standalone CLI: `unpkg.com` ships CORS-enabled responses, so the
  * loader feeds it the bare CDN URLs. The proxied-fetch path on the
  * page side handles the bytes-into-cache hop transparently.
+ *
+ * Renovate compatibility: the core version is derived from the
+ * `CORE_URL` constant exported by `@ffmpeg/ffmpeg/dist/esm/const.js`,
+ * which the installed wrapper bumps in lockstep with its own
+ * release. When renovate updates `@ffmpeg/ffmpeg` in `package.json`,
+ * the CDN base URL auto-tracks the new core version — no
+ * hand-maintained constants here.
  */
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';
+// Vite `?raw` inlines the wrapper worker source at build time using
+// the package's public `./worker` subpath export, so the extension's
+// blob-URL path always serves bytes that match the installed wrapper
+// even if renovate bumps the wrapper version (no separate CDN fetch
+// for worker.js, no version-skew risk).
+import ffmpegWorkerSource from '@ffmpeg/ffmpeg/worker?raw';
 import { isExtensionRuntime } from './shared.js';
 
-// Versions are pinned in `packages/webapp/package.json`. The CDN
-// path for the core artifacts is decoupled from the wrapper version
-// because @ffmpeg/ffmpeg and @ffmpeg/core release on independent
-// cadences.
+// Pin @ffmpeg/core version explicitly. The wrapper does NOT depend on
+// `@ffmpeg/core` in its package.json (you bring your own URL), so
+// renovate cannot bump this constant automatically as part of the
+// wrapper upgrade flow. The custom manager entry in `renovate.json`
+// teaches renovate to treat this string as an npm version pin for
+// `@ffmpeg/core`, so it raises a PR whenever a new core releases.
+// renovate: datasource=npm depName=@ffmpeg/core
 const FFMPEG_CORE_VERSION = '0.12.10';
-const FFMPEG_PKG_VERSION = '0.12.15';
 
 // @ffmpeg/ffmpeg always spawns its inner worker as `type: "module"`,
 // so `importScripts(coreURL)` synchronously fails (module workers
@@ -41,9 +56,8 @@ const FFMPEG_PKG_VERSION = '0.12.15';
 // surfaces as `ERROR_IMPORT_FAILURE` ("failed to import
 // ffmpeg-core.js"). Always point at /esm/.
 export const FFMPEG_CORE_CDN_BASE = `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm/`;
-export const FFMPEG_WORKER_CDN_BASE = `https://unpkg.com/@ffmpeg/ffmpeg@${FFMPEG_PKG_VERSION}/dist/esm/`;
 
-const CACHE_NAME = `slicc-ffmpeg-${FFMPEG_CORE_VERSION}-${FFMPEG_PKG_VERSION}`;
+const CACHE_NAME = `slicc-ffmpeg-${FFMPEG_CORE_VERSION}`;
 
 interface FfmpegAssetUrls {
   coreURL: string;
@@ -88,7 +102,6 @@ async function loadFfmpeg(onProgress?: (msg: string) => void): Promise<FFmpeg> {
 async function resolveAssetUrls(log: (msg: string) => void): Promise<FfmpegAssetUrls> {
   const coreUrl = `${FFMPEG_CORE_CDN_BASE}ffmpeg-core.js`;
   const wasmUrl = `${FFMPEG_CORE_CDN_BASE}ffmpeg-core.wasm`;
-  const workerUrl = `${FFMPEG_WORKER_CDN_BASE}worker.js`;
 
   if (!isExtensionRuntime()) {
     // Pre-warm the Cache Storage so the worker's importScripts call
@@ -99,19 +112,21 @@ async function resolveAssetUrls(log: (msg: string) => void): Promise<FfmpegAsset
     return { coreURL: coreUrl, wasmURL: wasmUrl };
   }
 
-  // Extension origin: stage all three assets through blob URLs so
-  // the loader's `importScripts(coreURL)` and the implicit
-  // worker spawn both stay same-origin under the extension CSP.
+  // Extension origin: stage the heavy core / wasm bytes through
+  // blob URLs so the loader's dynamic `import(coreURL)` stays
+  // same-origin under the extension CSP. The wrapper worker source
+  // is inlined from the installed @ffmpeg/ffmpeg bundle at build
+  // time (see `ffmpegWorkerSource`), so it always matches the
+  // wrapper's wire protocol without an extra CDN fetch.
   log('downloading ffmpeg-core (cached after first run)...');
-  const [coreBytes, wasmBytes, workerBytes] = await Promise.all([
+  const [coreBytes, wasmBytes] = await Promise.all([
     fetchWithCache(coreUrl, 'application/javascript', log),
     fetchWithCache(wasmUrl, 'application/wasm', log),
-    fetchWithCache(workerUrl, 'application/javascript', log),
   ]);
   return {
     coreURL: bytesToBlobUrl(coreBytes, 'application/javascript'),
     wasmURL: bytesToBlobUrl(wasmBytes, 'application/wasm'),
-    classWorkerURL: bytesToBlobUrl(workerBytes, 'application/javascript'),
+    classWorkerURL: stringToBlobUrl(ffmpegWorkerSource, 'application/javascript'),
   };
 }
 
@@ -174,15 +189,18 @@ function bytesToBlobUrl(bytes: Uint8Array, contentType: string): string {
   return URL.createObjectURL(new Blob([buffer], { type: contentType }));
 }
 
+function stringToBlobUrl(source: string, contentType: string): string {
+  return URL.createObjectURL(new Blob([source], { type: contentType }));
+}
+
 function shortUrl(url: string): string {
   return url.replace(/^https?:\/\//, '').slice(0, 64);
 }
 
 /**
- * Drop the cached `FFmpeg` instance. Test-only — production
- * callers share the single loaded instance for the lifetime of the
- * realm. Returns the now-discarded instance so tests can assert on
- * cleanup.
+ * Drop the cached `FFmpeg` instance promise so the next `getFfmpeg`
+ * call rebuilds from scratch. Test-only — production callers share
+ * the single loaded instance for the lifetime of the realm.
  */
 export function resetFfmpegForTests(): void {
   ffmpegPromise = null;

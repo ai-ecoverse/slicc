@@ -65,7 +65,7 @@ describe('parseFfmpegArgs', () => {
     expect(parsed.outputPath).toBe('photo.jpg');
   });
 
-  it('keeps multiple inputs in order with their pre-input options', () => {
+  it('binds pre-file options to the next input (not the output)', () => {
     const parsed = parseFfmpegArgs([
       '-i',
       'a.mp4',
@@ -78,12 +78,27 @@ describe('parseFfmpegArgs', () => {
       'merged.mp4',
     ]);
     expect(parsed.inputs.map((i) => i.path)).toEqual(['a.mp4', 'b.mp4']);
+    // `-ss 5` precedes the SECOND `-i`, so it must attach to b.mp4
+    // and NOT leak into the output options. The fact that ffmpeg
+    // would interpret `-ss 5` after `-i a.mp4` as a seek on b.mp4
+    // is the whole reason for the option-binding semantics.
+    expect(parsed.inputs[0].raw).not.toContain('-ss');
+    expect(parsed.inputs[1].raw.join(' ')).toContain('-ss 5');
+    expect(parsed.outputOpts).not.toContain('-ss');
     expect(parsed.outputOpts).toContain('-filter_complex');
     expect(parsed.outputPath).toBe('merged.mp4');
   });
 
   it('errors when -i is missing its value', () => {
-    expect(() => parseFfmpegArgs(['-i'])).toThrow(/requires a path/);
+    expect(() => parseFfmpegArgs(['-i'])).toThrow(/requires a/);
+  });
+
+  it('errors when a generic value-taking flag is missing its value', () => {
+    expect(() => parseFfmpegArgs(['-i', 'in.mp4', '-t'])).toThrow(/-t requires a value/);
+  });
+
+  it('errors when -f is missing its value', () => {
+    expect(() => parseFfmpegArgs(['-f'])).toThrow(/-f requires a value/);
   });
 });
 
@@ -182,6 +197,32 @@ describe('buildCameraRequest', () => {
     expect(request.deviceId).toBeUndefined();
     expect(request.captureAudio).toBe(true);
     expect(request.audioDeviceId).toBe('0');
+    // Audio-only must NOT request a video track from getUserMedia —
+    // otherwise the camera permission prompt surfaces and devices
+    // without a webcam fail with NotFoundError.
+    expect(request.captureVideo).toBe(false);
+  });
+
+  it('keeps video on for video+audio captures', () => {
+    const parsed = parseFfmpegArgs(['-f', 'avfoundation', '-i', '0:0', '-t', '2', 'clip.webm']);
+    const { request } = buildCameraRequest(parsed);
+    expect(request.captureVideo).toBe(true);
+  });
+
+  it('does not treat -update 0 as photo mode', () => {
+    const parsed = parseFfmpegArgs([
+      '-f',
+      'avfoundation',
+      '-i',
+      '0',
+      '-update',
+      '0',
+      '-t',
+      '2',
+      'clip.webm',
+    ]);
+    const { request } = buildCameraRequest(parsed);
+    expect(request.mode).toBe('video');
   });
 
   it('flags transcode when output is .mp4 (capture is always webm)', () => {

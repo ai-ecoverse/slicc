@@ -106,8 +106,13 @@ function ffmpegVersion(): { stdout: string; stderr: string; exitCode: number } {
  * spinning up the WASM runtime.
  */
 export interface ParsedFfmpegInvocation {
-  globalOpts: string[];
+  /**
+   * Inputs in order. Each input's `raw` carries the options that
+   * precede it on the command line (so the wasm reconstruction can
+   * splice them back into argv unchanged).
+   */
   inputs: ParsedInput[];
+  /** Options that precede the final output positional. */
   outputOpts: string[];
   outputPath: string | null;
   listDevices: boolean;
@@ -151,18 +156,24 @@ export function parseAvfoundationDeviceSpec(spec: string): {
 }
 
 export function parseFfmpegArgs(args: string[]): ParsedFfmpegInvocation {
-  const globalOpts: string[] = [];
   const inputs: ParsedInput[] = [];
-  const outputOpts: string[] = [];
+  let outputOpts: string[] = [];
   let outputPath: string | null = null;
   let listDevices = false;
   let warmupMs: number | undefined;
   let exactSize = false;
   let i = 0;
+  // ffmpeg's option binding rule: most options apply to the *next*
+  // file (input or output) they precede on the command line. We
+  // collect each option into `pendingOpts` and flush it the next
+  // time we hit a `-i FILE` (binds to that input) or a positional
+  // path (binds to that output). This preserves correctness for
+  // multi-input invocations like `-i a.mp4 -ss 5 -i b.mp4 out.mp4`
+  // where `-ss 5` is a seek on `b.mp4`, not an output option.
+  let pendingOpts: string[] = [];
   let pendingFormat: string | undefined;
   let pendingVideoSize: { width: number; height: number } | undefined;
   let pendingFrameRate: number | undefined;
-  let pendingPreInputRaw: string[] = [];
 
   const takesValue = (flag: string): boolean => {
     // Conservative list of ffmpeg flags that consume a single value.
@@ -211,59 +222,69 @@ export function parseFfmpegArgs(args: string[]): ParsedFfmpegInvocation {
     ]).has(flag);
   };
 
+  const requireValue = (flag: string): string => {
+    const v = args[i + 1];
+    if (typeof v !== 'string') {
+      throw new Error(`ffmpeg: ${flag} requires a value`);
+    }
+    return v;
+  };
+
   while (i < args.length) {
     const tok = args[i];
     if (tok === '-i') {
-      const path = args[i + 1];
-      if (typeof path !== 'string') {
-        throw new Error('ffmpeg: -i requires a path argument');
-      }
+      const path = requireValue('-i');
       inputs.push({
         path,
         format: pendingFormat,
         videoSize: pendingVideoSize,
         frameRate: pendingFrameRate,
-        raw: [...pendingPreInputRaw, '-i', path],
+        raw: [...pendingOpts, '-i', path],
       });
       pendingFormat = undefined;
       pendingVideoSize = undefined;
       pendingFrameRate = undefined;
-      pendingPreInputRaw = [];
+      pendingOpts = [];
       i += 2;
       continue;
     }
-    if (tok === '-f' && typeof args[i + 1] === 'string') {
-      pendingFormat = args[i + 1];
-      pendingPreInputRaw.push(tok, args[i + 1]);
+    if (tok === '-f') {
+      const value = requireValue('-f');
+      pendingFormat = value;
+      pendingOpts.push(tok, value);
       i += 2;
       continue;
     }
-    if (tok === '-video_size' && typeof args[i + 1] === 'string') {
-      const m = /^(\d+)x(\d+)$/.exec(args[i + 1]);
+    if (tok === '-video_size') {
+      const value = requireValue('-video_size');
+      const m = /^(\d+)x(\d+)$/.exec(value);
       if (m) pendingVideoSize = { width: parseInt(m[1], 10), height: parseInt(m[2], 10) };
-      pendingPreInputRaw.push(tok, args[i + 1]);
+      pendingOpts.push(tok, value);
       i += 2;
       continue;
     }
-    if (tok === '-framerate' && typeof args[i + 1] === 'string') {
-      const n = parseFloat(args[i + 1]);
+    if (tok === '-framerate') {
+      const value = requireValue('-framerate');
+      const n = parseFloat(value);
       if (!Number.isNaN(n)) pendingFrameRate = n;
-      pendingPreInputRaw.push(tok, args[i + 1]);
+      pendingOpts.push(tok, value);
       i += 2;
       continue;
     }
     // avfoundation device enumeration request. ffmpeg writes the
     // device list to stderr and exits non-zero with "Output file is
     // required" if you actually try to run, so we intercept up front.
-    if (tok === '-list_devices' && typeof args[i + 1] === 'string') {
-      if (/^(true|1|yes)$/i.test(args[i + 1])) listDevices = true;
-      pendingPreInputRaw.push(tok, args[i + 1]);
+    if (tok === '-list_devices') {
+      const value = requireValue('-list_devices');
+      if (/^(true|1|yes)$/i.test(value)) listDevices = true;
+      pendingOpts.push(tok, value);
       i += 2;
       continue;
     }
     // Custom flag: photo warmup override (ms).
-    if (tok === '-warmup' && typeof args[i + 1] === 'string') {
-      const n = parseInt(args[i + 1], 10);
+    if (tok === '-warmup') {
+      const value = requireValue('-warmup');
+      const n = parseInt(value, 10);
       if (!Number.isNaN(n) && n >= 0) warmupMs = n;
       i += 2;
       continue;
@@ -276,32 +297,25 @@ export function parseFfmpegArgs(args: string[]): ParsedFfmpegInvocation {
     }
     if (tok.startsWith('-')) {
       if (takesValue(tok)) {
-        const value = args[i + 1];
-        if (inputs.length === 0) {
-          pendingPreInputRaw.push(tok, value);
-          globalOpts.push(tok, value);
-        } else {
-          outputOpts.push(tok, value);
-        }
+        const value = requireValue(tok);
+        pendingOpts.push(tok, value);
         i += 2;
         continue;
       }
-      if (inputs.length === 0) {
-        pendingPreInputRaw.push(tok);
-        globalOpts.push(tok);
-      } else {
-        outputOpts.push(tok);
-      }
+      pendingOpts.push(tok);
       i += 1;
       continue;
     }
-    // Positional: the trailing token is the output path.
+    // Positional: binds to an output file. Whatever options were
+    // pending at this point apply to *this* output. We currently
+    // surface only the last output, but options for it are correct.
     outputPath = tok;
+    outputOpts = pendingOpts;
+    pendingOpts = [];
     i += 1;
   }
 
   return {
-    globalOpts,
     inputs,
     outputOpts,
     outputPath,
@@ -347,9 +361,13 @@ export function buildCameraRequest(parsed: ParsedFfmpegInvocation): {
 
   const framesIdx = parsed.outputOpts.indexOf('-frames:v');
   const wantsSingleFrame = framesIdx >= 0 && parsed.outputOpts[framesIdx + 1] === '1';
-  const updateMode =
-    parsed.outputOpts.includes('-update') ||
-    parsed.outputOpts[parsed.outputOpts.indexOf('-update') + 1] === '1';
+  // `-update 1` is ffmpeg's image-sequence "overwrite same file"
+  // toggle; treat anything else (including `-update 0` or a missing
+  // flag) as off. The previous shortcut also reached index -1 + 1
+  // and matched on `outputOpts[0] === '1'`, which mis-classified
+  // some invocations.
+  const updateIdx = parsed.outputOpts.indexOf('-update');
+  const updateMode = updateIdx >= 0 && parsed.outputOpts[updateIdx + 1] === '1';
   const tIdx = parsed.outputOpts.indexOf('-t');
   const durationSeconds = tIdx >= 0 ? parseFloat(parsed.outputOpts[tIdx + 1]) : NaN;
 
@@ -357,7 +375,10 @@ export function buildCameraRequest(parsed: ParsedFfmpegInvocation): {
   const inferredMime = inferOutputMime(parsed.outputPath);
   const isPhotoOutput = /^image\//.test(inferredMime);
   // Audio-only requests collapse to video-mode at the capture layer
-  // (MediaRecorder records audio tracks into a webm container).
+  // (MediaRecorder records audio tracks into a webm container) but
+  // `captureVideo: false` is forwarded so getUserMedia doesn't ask
+  // for a camera that isn't needed (avoids the camera-permission
+  // prompt + fails gracefully on devices with no webcam).
   const audioOnly = !spec.video && !!spec.audio;
   const photo = !audioOnly && (wantsSingleFrame || updateMode || isPhotoOutput);
 
@@ -395,6 +416,7 @@ export function buildCameraRequest(parsed: ParsedFfmpegInvocation): {
     request: {
       mode: 'video',
       deviceId: spec.video,
+      captureVideo: !audioOnly,
       ...(wantsAudio ? { captureAudio: true } : {}),
       ...(spec.audio ? { audioDeviceId: spec.audio } : {}),
       width: input.videoSize?.width,
@@ -824,10 +846,11 @@ async function runWasmFfmpeg(
       await ffmpeg.writeFile(input.ffmpegName, input.bytes);
     }
 
-    // Rebuild argv with the MEMFS-local input names. Output options
-    // and the trailing positional output are passed through as the
-    // user wrote them, just with the path rewritten to MEMFS.
-    const finalArgs: string[] = [...parsed.globalOpts];
+    // Rebuild argv with the MEMFS-local input names. Each input's
+    // `raw` carries the options that precede it on the user's
+    // command line, so splicing them back keeps per-input flags
+    // (`-ss`, `-f`, `-vf`, …) bound to the right file.
+    const finalArgs: string[] = [];
     for (const [idx, input] of parsed.inputs.entries()) {
       // Strip the original -i path and replace with the MEMFS name.
       // Preserve any pre-input options the user provided (`-f`,

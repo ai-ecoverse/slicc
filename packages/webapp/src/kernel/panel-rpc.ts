@@ -101,6 +101,12 @@ export type PanelRpcRequest =
         deviceId?: string;
         audioDeviceId?: string;
         captureAudio?: boolean;
+        /**
+         * Open a video track on the stream. Defaults to true for
+         * photo / video mode; set to false for audio-only video
+         * captures so `getUserMedia` doesn't request a camera.
+         */
+        captureVideo?: boolean;
         width?: number;
         height?: number;
         frameRate?: number;

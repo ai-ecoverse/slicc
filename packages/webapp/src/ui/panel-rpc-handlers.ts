@@ -246,6 +246,13 @@ export interface CameraCaptureRequest {
   audioDeviceId?: string;
   /** Include the mic track on a video recording. Ignored for photos. */
   captureAudio?: boolean;
+  /**
+   * Open a video track on the stream. Defaults to true. Set to
+   * false for audio-only video captures so `getUserMedia` doesn't
+   * request a camera (avoiding the camera-permission prompt and
+   * NotFoundError on devices with no webcam).
+   */
+  captureVideo?: boolean;
   width?: number;
   height?: number;
   frameRate?: number;
@@ -300,13 +307,25 @@ export async function captureCamera(req: CameraCaptureRequest): Promise<CameraCa
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error('getUserMedia is not supported in this browser');
   }
-  const resolvedDeviceId = await resolveDeviceId(req.deviceId, 'videoinput');
+  // Photo mode always needs a camera. Video mode defaults to camera-on
+  // but honors an explicit `captureVideo: false` so callers can ask
+  // for audio-only recordings (mic into a webm container) without
+  // surfacing a camera-permission prompt or failing on camera-less
+  // devices.
+  const wantVideo = req.mode === 'photo' || req.captureVideo !== false;
   const wantAudio = !!req.captureAudio && req.mode === 'video';
+  if (!wantVideo && !wantAudio) {
+    throw new Error('camera capture: at least one of video or audio must be requested');
+  }
+  const resolvedDeviceId = wantVideo
+    ? await resolveDeviceId(req.deviceId, 'videoinput')
+    : undefined;
   const resolvedAudioId = wantAudio
     ? await resolveDeviceId(req.audioDeviceId, 'audioinput')
     : undefined;
 
   const stream = await getStreamWithFallback({
+    wantVideo,
     videoDeviceId: resolvedDeviceId,
     audioDeviceId: resolvedAudioId,
     wantAudio,
@@ -317,27 +336,36 @@ export async function captureCamera(req: CameraCaptureRequest): Promise<CameraCa
   });
 
   try {
-    const video = document.createElement('video');
-    video.srcObject = stream;
-    video.muted = true;
-    video.playsInline = true;
-    await new Promise<void>((resolve, reject) => {
-      video.onloadedmetadata = () =>
-        video
-          .play()
-          .then(() => resolve())
-          .catch(reject);
-      video.onerror = () => reject(new Error('Failed to load camera stream'));
-    });
-    // Always wait at least two animation frames so the camera has
-    // emitted a usable frame at all.
-    await new Promise<void>((r) => requestAnimationFrame(() => r()));
-    await new Promise<void>((r) => requestAnimationFrame(() => r()));
-
-    const width = video.videoWidth;
-    const height = video.videoHeight;
+    // Only spin up an HTMLVideoElement when there's actually a video
+    // track to display; audio-only recordings would otherwise hang on
+    // `onloadedmetadata` waiting for dimensions that never arrive.
+    let video: HTMLVideoElement | null = null;
+    let width = 0;
+    let height = 0;
+    if (wantVideo) {
+      video = document.createElement('video');
+      video.srcObject = stream;
+      video.muted = true;
+      video.playsInline = true;
+      const v = video;
+      await new Promise<void>((resolve, reject) => {
+        v.onloadedmetadata = () =>
+          v
+            .play()
+            .then(() => resolve())
+            .catch(reject);
+        v.onerror = () => reject(new Error('Failed to load camera stream'));
+      });
+      // Always wait at least two animation frames so the camera has
+      // emitted a usable frame at all.
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      width = v.videoWidth;
+      height = v.videoHeight;
+    }
 
     if (req.mode === 'photo') {
+      if (!video) throw new Error('photo capture requires a video track');
       // Auto-exposure / auto-white-balance on most webcams need
       // ~1–2s to converge after the stream opens. The previous
       // 2-RAF wait (~33ms) routinely produced a "dark first frame"
@@ -418,6 +446,7 @@ async function resolveDeviceId(
 }
 
 interface StreamSpec {
+  wantVideo: boolean;
   videoDeviceId: string | undefined;
   audioDeviceId: string | undefined;
   wantAudio: boolean;
@@ -436,7 +465,8 @@ interface StreamSpec {
  * downgrade from the resulting track settings.
  */
 async function getStreamWithFallback(spec: StreamSpec): Promise<MediaStream> {
-  const buildVideo = (mode: 'exact' | 'ideal'): MediaTrackConstraints | true => {
+  const buildVideo = (mode: 'exact' | 'ideal'): MediaTrackConstraints | boolean => {
+    if (!spec.wantVideo) return false;
     const c: MediaTrackConstraints = {};
     if (spec.videoDeviceId) c.deviceId = { exact: spec.videoDeviceId };
     if (spec.width) c.width = mode === 'exact' ? { exact: spec.width } : { ideal: spec.width };
