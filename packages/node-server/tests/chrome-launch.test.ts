@@ -12,6 +12,8 @@ import {
   findChromeExecutable,
   getDefaultCdpLaunchTimeoutMs,
   parseCdpPortFromStderr,
+  planChromeSpawn,
+  resolveChromeAppBundle,
   resolveChromeLaunchProfile,
   waitForCdpPort,
   waitForCdpPortFromActivePortFile,
@@ -105,6 +107,100 @@ describe('chrome-launch', () => {
       '--load-extension=/repo/dist/extension',
       'http://localhost:3000',
     ]);
+  });
+
+  describe('resolveChromeAppBundle', () => {
+    it('walks up to the canonical Chrome .app bundle on darwin', () => {
+      expect(
+        resolveChromeAppBundle(
+          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          'darwin'
+        )
+      ).toBe('/Applications/Google Chrome.app');
+    });
+
+    it('walks up to a Chrome for Testing bundle on darwin', () => {
+      const exe =
+        '/Users/test/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
+      expect(resolveChromeAppBundle(exe, 'darwin')).toBe(
+        '/Users/test/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app'
+      );
+    });
+
+    it('returns null on non-darwin platforms even when given a .app-style path', () => {
+      const exe = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+      expect(resolveChromeAppBundle(exe, 'linux')).toBeNull();
+      expect(resolveChromeAppBundle(exe, 'win32')).toBeNull();
+    });
+
+    it('returns null for bare-binary paths on darwin', () => {
+      expect(resolveChromeAppBundle('/usr/local/bin/chromium', 'darwin')).toBeNull();
+      expect(resolveChromeAppBundle('/tmp/just-a-binary', 'darwin')).toBeNull();
+    });
+  });
+
+  describe('planChromeSpawn', () => {
+    const baseArgs = [
+      '--remote-debugging-port=9222',
+      '--user-data-dir=/tmp/profile',
+      'about:blank',
+    ];
+
+    it('routes darwin Chrome through /usr/bin/open with -n -a <bundle> -W --args …', () => {
+      // The exact prefix shape matters: dropping `--args` would let `open`
+      // swallow Chrome's flags into its own option parser; reordering
+      // before `--args` would do the same. Pin the full prefix so a
+      // refactor that breaks LaunchServices delegation breaks the build.
+      const plan = planChromeSpawn({
+        executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        chromeArgs: baseArgs,
+        platform: 'darwin',
+      });
+      expect(plan.command).toBe('/usr/bin/open');
+      expect(plan.args.slice(0, 5)).toEqual([
+        '-n',
+        '-a',
+        '/Applications/Google Chrome.app',
+        '-W',
+        '--args',
+      ]);
+      expect(plan.args.slice(5)).toEqual(baseArgs);
+      expect(plan.usesLaunchServices).toBe(true);
+    });
+
+    it('uses a direct exec on linux and windows', () => {
+      const linuxPlan = planChromeSpawn({
+        executablePath: '/usr/bin/google-chrome',
+        chromeArgs: baseArgs,
+        platform: 'linux',
+      });
+      expect(linuxPlan).toEqual({
+        command: '/usr/bin/google-chrome',
+        args: baseArgs,
+        usesLaunchServices: false,
+      });
+
+      const winPlan = planChromeSpawn({
+        executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        chromeArgs: baseArgs,
+        platform: 'win32',
+      });
+      expect(winPlan.command).toBe('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe');
+      expect(winPlan.usesLaunchServices).toBe(false);
+    });
+
+    it('falls back to direct exec for bare-binary paths on darwin', () => {
+      const plan = planChromeSpawn({
+        executablePath: '/opt/chromium/chromium-bin',
+        chromeArgs: baseArgs,
+        platform: 'darwin',
+      });
+      expect(plan).toEqual({
+        command: '/opt/chromium/chromium-bin',
+        args: baseArgs,
+        usesLaunchServices: false,
+      });
+    });
   });
 
   it('prefers CHROME_PATH over discovered installations', () => {
