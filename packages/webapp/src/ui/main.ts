@@ -60,6 +60,7 @@ import {
   LeaderTrayManager,
   createTrayFetch,
   getLeaderTrayRuntimeStatus,
+  subscribeToLeaderTrayRuntimeStatus,
 } from '../scoops/tray-leader.js';
 import {
   DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
@@ -2348,6 +2349,19 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
           agentHandle.sendMessage(text, messageId, attachments);
         },
         onFollowerAbort: () => agentHandle.stop(),
+        onFollowerCountChanged: (_count) => {
+          const followerPeers = pageLeaderTray?.peers.getPeers() ?? [];
+          window.localStorage.setItem(
+            'slicc.leaderTrayFollowers',
+            JSON.stringify(
+              followerPeers.map((p) => ({
+                runtimeId: p.bootstrapId,
+                runtime: p.runtime,
+                connectedAt: p.connectedAt ?? undefined,
+              }))
+            )
+          );
+        },
         sendWebhookEvent: (id, headers, body) => client.sendWebhookEvent(id, headers, body),
         onAgentEvent: (handler) => agentHandle.onEvent(handler),
         browserAPI: browser,
@@ -2373,6 +2387,18 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     );
     setTrayResetter(() => pageLeaderTray!.reset());
   }
+
+  // Propagate page-side leader status into the worker's localStorage shim so
+  // `host` in the terminal (running in the kernel worker) can read the live
+  // state. `installPageStorageSync` forwards page-side localStorage writes to
+  // the worker via `local-storage-set` messages that update its Map-backed shim.
+  subscribeToLeaderTrayRuntimeStatus((status) => {
+    window.localStorage.setItem('slicc.leaderTrayStatus', JSON.stringify(status));
+  });
+  window.localStorage.setItem(
+    'slicc.leaderTrayStatus',
+    JSON.stringify(getLeaderTrayRuntimeStatus())
+  );
 
   // Runtime tray-join: the settings dialog dispatches this event when the
   // user pastes a join URL and clicks "Connect". Wire a listener so the

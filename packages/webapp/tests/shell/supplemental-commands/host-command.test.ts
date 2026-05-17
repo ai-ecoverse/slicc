@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createHostCommand,
   formatFollowerOutput,
@@ -306,6 +306,109 @@ describe('host command', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('status: follower (reconnecting)');
     expect(result.stdout).toContain('reconnect_attempts: 3');
+  });
+
+  describe('localStorage fallback (standalone-worker path)', () => {
+    // Install a Map-backed localStorage shim matching the kernel worker's shim
+    // so fallback reads work in the Node test environment (no real localStorage).
+    beforeEach(() => {
+      const store = new Map<string, string>();
+      const shim: Storage = {
+        get length() {
+          return store.size;
+        },
+        key: (i) => Array.from(store.keys())[i] ?? null,
+        getItem: (k) => store.get(k) ?? null,
+        setItem: (k, v) => {
+          store.set(k, v);
+        },
+        removeItem: (k) => {
+          store.delete(k);
+        },
+        clear: () => {
+          store.clear();
+        },
+      };
+      Object.defineProperty(globalThis, 'localStorage', {
+        value: shim,
+        configurable: true,
+        writable: true,
+      });
+    });
+
+    afterEach(() => {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    });
+
+    it('reads leader status from localStorage when module global is inactive', async () => {
+      (globalThis as { localStorage?: Storage }).localStorage?.setItem(
+        'slicc.leaderTrayStatus',
+        JSON.stringify({
+          state: 'leader',
+          session: {
+            workerBaseUrl: 'https://tray.example.com',
+            trayId: 'tray-ls-1',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            controllerId: 'ctrl-1',
+            controllerUrl: 'https://tray.example.com/ctrl/ctrl-1',
+            joinUrl: 'https://tray.example.com/join/tray-ls-1',
+            webhookUrl: 'https://tray.example.com/webhooks/tray-ls-1',
+            leaderKey: 'lk',
+            leaderWebSocketUrl: 'wss://tray.example.com/ws',
+            runtime: 'slicc-standalone',
+          },
+          error: null,
+        })
+      );
+
+      // createHostCommand with no options → uses getLeaderStatusWithFallback
+      const result = await createHostCommand().execute([], {} as never);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('status: leader');
+      expect(result.stdout).toContain('join_url: https://tray.example.com/join/tray-ls-1');
+    });
+
+    it('reads followers from localStorage when module getter is not set', async () => {
+      (globalThis as { localStorage?: Storage }).localStorage?.setItem(
+        'slicc.leaderTrayStatus',
+        JSON.stringify({
+          state: 'leader',
+          session: {
+            workerBaseUrl: 'https://tray.example.com',
+            trayId: 'tray-ls-2',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            controllerId: 'ctrl-2',
+            controllerUrl: 'https://tray.example.com/ctrl/ctrl-2',
+            joinUrl: 'https://tray.example.com/join/tray-ls-2',
+            webhookUrl: 'https://tray.example.com/webhooks/tray-ls-2',
+            leaderKey: 'lk',
+            leaderWebSocketUrl: 'wss://tray.example.com/ws',
+            runtime: 'slicc-standalone',
+          },
+          error: null,
+        })
+      );
+      (globalThis as { localStorage?: Storage }).localStorage?.setItem(
+        'slicc.leaderTrayFollowers',
+        JSON.stringify([{ runtimeId: 'peer-from-storage' }])
+      );
+
+      const result = await createHostCommand().execute([], {} as never);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('followers:');
+      expect(result.stdout).toContain('  - peer-from-storage');
+    });
+
+    it('returns inactive output when localStorage key is also inactive', async () => {
+      (globalThis as { localStorage?: Storage }).localStorage?.setItem(
+        'slicc.leaderTrayStatus',
+        JSON.stringify({ state: 'inactive', session: null, error: null })
+      );
+
+      const result = await createHostCommand().execute([], {} as never);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('status: inactive');
+    });
   });
 });
 

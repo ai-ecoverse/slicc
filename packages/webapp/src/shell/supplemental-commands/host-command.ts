@@ -43,6 +43,46 @@ export function getTrayResetter(): (() => Promise<LeaderTrayRuntimeStatus>) | un
   return trayResetter ?? undefined;
 }
 
+// localStorage keys written by page-side subscriptions in main.ts and
+// propagated to the kernel worker's Map-backed shim via installPageStorageSync.
+const LEADER_STATUS_STORAGE_KEY = 'slicc.leaderTrayStatus';
+const LEADER_FOLLOWERS_STORAGE_KEY = 'slicc.leaderTrayFollowers';
+
+// In the standalone-worker path the leader tray runs on the page. The
+// worker's module global stays 'inactive', so fall back to the localStorage
+// shim value that main.ts keeps current via subscribeToLeaderTrayRuntimeStatus.
+function getLeaderStatusWithFallback(): LeaderTrayRuntimeStatus {
+  const moduleStatus = getLeaderTrayRuntimeStatus();
+  if (moduleStatus.state !== 'inactive') return moduleStatus;
+  try {
+    const stored = (globalThis as { localStorage?: Storage }).localStorage?.getItem(
+      LEADER_STATUS_STORAGE_KEY
+    );
+    if (stored) {
+      const parsed = JSON.parse(stored) as LeaderTrayRuntimeStatus;
+      if (parsed?.state && parsed.state !== 'inactive') return parsed;
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return moduleStatus;
+}
+
+// Same reason: the module-level getter is only set on the page thread.
+// Fall back to the localStorage shim value written by onFollowerCountChanged.
+function getFollowersWithFallback(): ConnectedFollowerInfo[] {
+  if (connectedFollowersGetter) return connectedFollowersGetter();
+  try {
+    const stored = (globalThis as { localStorage?: Storage }).localStorage?.getItem(
+      LEADER_FOLLOWERS_STORAGE_KEY
+    );
+    if (stored) return JSON.parse(stored) as ConnectedFollowerInfo[];
+  } catch {
+    // ignore parse errors
+  }
+  return [];
+}
+
 export interface HostCommandOptions {
   getStatus?: () => LeaderTrayRuntimeStatus;
   getFollowerStatus?: () => FollowerTrayRuntimeStatus;
@@ -146,9 +186,9 @@ export function formatFollowerOutput(status: FollowerTrayRuntimeStatus): string 
 }
 
 export function createHostCommand(options: HostCommandOptions = {}): Command {
-  const getStatus = options.getStatus ?? getLeaderTrayRuntimeStatus;
+  const getStatus = options.getStatus ?? getLeaderStatusWithFallback;
   const getFollowerSt = options.getFollowerStatus ?? getFollowerTrayRuntimeStatus;
-  const getFollowers = options.getFollowers ?? getConnectedFollowers;
+  const getFollowers = options.getFollowers ?? getFollowersWithFallback;
 
   return defineCommand('host', async (args) => {
     if (args.includes('--help') || args.includes('-h')) {
