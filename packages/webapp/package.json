@@ -17,6 +17,8 @@
     "@codemirror/language": "^6.12.3",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.41.0",
+    "@ffmpeg/ffmpeg": "0.12.15",
+    "@ffmpeg/util": "0.12.2",
     "@imagemagick/magick-wasm": "^0.0.40",
     "@isomorphic-git/lightning-fs": "4.6.2",
     "@lezer/highlight": "^1.2.3",
