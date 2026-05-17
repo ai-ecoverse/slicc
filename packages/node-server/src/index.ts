@@ -18,6 +18,7 @@ import {
 import { getElectronAppPorts } from './electron-runtime.js';
 import {
   buildChromeLaunchArgs,
+  clearStaleDevToolsActivePort,
   ensureQaProfileScaffold,
   findChromeExecutable,
   planChromeSpawn,
@@ -571,6 +572,14 @@ async function main() {
       launchUrl: browserLaunchUrl,
       profile: chromeProfile,
     });
+
+    // Profile directories are reused across runs (both the dev
+    // `/tmp/browser-coding-agent-chrome` profile and the persistent
+    // `.qa/chrome/<profile>` QA profiles). Chrome never proactively
+    // clears `DevToolsActivePort` on shutdown, so a stale file from a
+    // previous crash/SIGKILL would let our active-port-file poller win
+    // the race instantly with the wrong port. Clear it before spawn.
+    await clearStaleDevToolsActivePort(chromeProfile.userDataDir);
 
     // On macOS, route through `/usr/bin/open` so LaunchServices owns the
     // new Chrome process. Without this hop the terminal that started

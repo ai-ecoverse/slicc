@@ -1,5 +1,5 @@
 import { existsSync, readdirSync } from 'fs';
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import type { ChildProcess } from 'child_process';
@@ -561,6 +561,30 @@ export function waitForCdpPortFromStderr(
       }
     });
   });
+}
+
+/**
+ * Delete a stale `<userDataDir>/DevToolsActivePort` left behind by a
+ * previous Chrome run before we spawn a new one. Otherwise
+ * `waitForCdpPortFromActivePortFile` can win the race instantly with the
+ * old port from a crashed / SIGKILL'd previous launch — Chrome only
+ * writes the file when its listener comes up, and never proactively
+ * clears it on shutdown. The file lives inside a profile directory that
+ * is reused across runs (both the dev `/tmp/browser-coding-agent-chrome`
+ * profile and the persistent `.qa/chrome/<profile>` QA profiles), so the
+ * stale-port window is real.
+ *
+ * ENOENT is fine (no previous run); other errors are swallowed too
+ * because a failure to unlink shouldn't block a launch — the worst case
+ * is the pre-existing stale-port behavior, which is what we want to
+ * avoid but is not worth crashing over.
+ */
+export async function clearStaleDevToolsActivePort(userDataDir: string): Promise<void> {
+  try {
+    await unlink(join(userDataDir, 'DevToolsActivePort'));
+  } catch {
+    // Intentionally ignored — see docstring.
+  }
 }
 
 /**

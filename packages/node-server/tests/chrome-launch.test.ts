@@ -5,8 +5,12 @@ import { join } from 'path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { existsSync as fsExistsSync } from 'fs';
+import { stat } from 'fs/promises';
+
 import {
   buildChromeLaunchArgs,
+  clearStaleDevToolsActivePort,
   DEFAULT_CDP_LAUNCH_TIMEOUT_MS,
   ensureQaProfileScaffold,
   findChromeExecutable,
@@ -566,5 +570,35 @@ describe('waitForCdpPort (race)', () => {
     );
 
     await expect(promise).resolves.toBe(33333);
+  });
+});
+
+describe('clearStaleDevToolsActivePort', () => {
+  it('deletes an existing DevToolsActivePort file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-active-port-'));
+    tempDirs.push(dir);
+    const filePath = join(dir, 'DevToolsActivePort');
+    await writeFile(filePath, '49321\n/devtools/browser/abc-123\n');
+    expect(fsExistsSync(filePath)).toBe(true);
+
+    await clearStaleDevToolsActivePort(dir);
+
+    expect(fsExistsSync(filePath)).toBe(false);
+    // Profile dir itself is untouched.
+    await expect(stat(dir)).resolves.toBeDefined();
+  });
+
+  it('is a no-op when no file exists (ENOENT swallowed)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-clear-active-port-'));
+    tempDirs.push(dir);
+    await expect(clearStaleDevToolsActivePort(dir)).resolves.toBeUndefined();
+  });
+
+  it('does not throw when the directory itself is missing', async () => {
+    const missing = join(
+      tmpdir(),
+      `slicc-clear-active-port-missing-${Date.now()}-${Math.random()}`
+    );
+    await expect(clearStaleDevToolsActivePort(missing)).resolves.toBeUndefined();
   });
 });
