@@ -97,6 +97,32 @@ export type PanelRpcRequest =
       payload: { url: string };
     }
   | {
+      op: 'capture-camera';
+      payload: {
+        mode: 'photo' | 'video';
+        deviceId?: string;
+        audioDeviceId?: string;
+        captureAudio?: boolean;
+        /**
+         * Open a video track on the stream. Defaults to true for
+         * photo / video mode; set to false for audio-only video
+         * captures so `getUserMedia` doesn't request a camera.
+         */
+        captureVideo?: boolean;
+        width?: number;
+        height?: number;
+        frameRate?: number;
+        exactSize?: boolean;
+        mimeType: string;
+        quality?: number;
+        durationMs?: number;
+        /** Photo mode: ms to let the sensor's auto-exposure settle
+         * before grabbing the frame. */
+        warmupMs?: number;
+      };
+    }
+  | { op: 'enumerate-media-devices'; payload?: undefined }
+  | {
       // Reset the page-side multi-browser-sync leader tray. The
       // tray subsystem lives on the page (DOM, RTCPeerConnections,
       // sync-manager state), so the worker can't drive
@@ -120,6 +146,17 @@ export interface PanelRpcResults {
   'clipboard-write-image': { done: true };
   'window-open': { opened: boolean };
   'oauth-popup': { redirectUrl: string | null };
+  'capture-camera': {
+    bytes: ArrayBuffer;
+    mimeType: string;
+    width: number;
+    height: number;
+    durationMs?: number;
+  };
+  'enumerate-media-devices': {
+    videoinputs: Array<{ deviceId: string; label: string; groupId?: string }>;
+    audioinputs: Array<{ deviceId: string; label: string; groupId?: string }>;
+  };
   'tray-reset': LeaderTrayRuntimeStatus;
 }
 

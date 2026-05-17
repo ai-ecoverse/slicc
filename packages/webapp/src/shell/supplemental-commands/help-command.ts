@@ -26,7 +26,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Search', ['find', 'rg']],
   ['Navigation & paths', ['pwd', 'basename', 'dirname', 'tree', 'du', 'cd']],
   ['Archives', ['zip', 'unzip', 'pdftk', 'pdf']],
-  ['Media', ['convert', 'magick']],
+  ['Media', ['convert', 'magick', 'ffmpeg']],
   ['Audio', ['say', 'afplay', 'chime']],
   [
     'Environment & shell',

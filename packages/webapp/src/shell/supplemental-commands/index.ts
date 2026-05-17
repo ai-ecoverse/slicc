@@ -10,6 +10,7 @@ import { createOpenCommand } from './open-command.js';
 import { createPdftkCommand } from './pdftk-command.js';
 import { createPlaywrightCommand, PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
 import { createPython3LikeCommand } from './python-command.js';
+import { createFfmpegCommand } from './ffmpeg-command.js';
 import { createServeCommand } from './serve-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
 import { createUnameCommand } from './uname-command.js';
@@ -89,6 +90,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createNodeCommand(),
     createPython3LikeCommand('python3'),
     createPython3LikeCommand('python'),
+    createFfmpegCommand(),
     createWebhookCommand(),
     createWebsocatCommand(),
     createCrontaskCommand(),
