@@ -485,7 +485,7 @@ describe('getDefaultCdpLaunchTimeoutMs', () => {
 });
 
 describe('waitForCdpPortFromActivePortFile', () => {
-  const trustingVerify = async (_port: number) => true;
+  const trustingVerify = async (_port: number, _ws: string | null) => true;
 
   it('resolves with the port written to DevToolsActivePort', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
@@ -502,6 +502,27 @@ describe('waitForCdpPortFromActivePortFile', () => {
     }, 30);
 
     await expect(promise).resolves.toBe(49321);
+  });
+
+  it('forwards the websocket path from the file to the verifier', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    await writeFile(join(dir, 'DevToolsActivePort'), '49322\n/devtools/browser/0001-fingerprint\n');
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    let seenPort: number | null = null;
+    let seenPath: string | null = null;
+    const verifyPort = async (port: number, ws: string | null) => {
+      seenPort = port;
+      seenPath = ws;
+      return true;
+    };
+
+    await expect(
+      waitForCdpPortFromActivePortFile(dir, child, 2000, 10, { verifyPort })
+    ).resolves.toBe(49322);
+    expect(seenPort).toBe(49322);
+    expect(seenPath).toBe('/devtools/browser/0001-fingerprint');
   });
 
   it('rejects on timeout when the file never appears', async () => {
@@ -541,7 +562,7 @@ describe('waitForCdpPortFromActivePortFile', () => {
     const { EventEmitter } = await import('events');
     const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
     const probedPorts: number[] = [];
-    const verifyPort = async (port: number) => {
+    const verifyPort = async (port: number, _ws: string | null) => {
       probedPorts.push(port);
       return port === 22222;
     };
@@ -559,29 +580,53 @@ describe('waitForCdpPortFromActivePortFile', () => {
     expect(probedPorts.indexOf(11111)).toBeLessThan(probedPorts.indexOf(22222));
   });
 
-  it('keeps polling when verifyPort never returns true and eventually times out', async () => {
+  it('keeps polling when verifyPort never returns true and eventually times out with a stale-port message', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
     tempDirs.push(dir);
     await writeFile(join(dir, 'DevToolsActivePort'), '33333\n/devtools/browser/zombie\n');
     const { EventEmitter } = await import('events');
     const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
     let probeCount = 0;
-    const verifyPort = async (_port: number) => {
+    const verifyPort = async (_port: number, _ws: string | null) => {
       probeCount += 1;
       return false;
     };
 
+    // Timeout message MUST distinguish "file appeared but its port never
+    // answered CDP" from "file never showed up" — otherwise stale-port
+    // failures look identical to clean misses in the logs.
     await expect(
       waitForCdpPortFromActivePortFile(dir, child, 200, 10, { verifyPort })
-    ).rejects.toThrow(/Timed out waiting for DevToolsActivePort/);
-    // Sanity: the poller actually probed multiple times rather than
-    // bailing after the first stale read.
+    ).rejects.toThrow(/Port 33333 from DevToolsActivePort.*never answered CDP/);
+    expect(probeCount).toBeGreaterThan(1);
+  });
+
+  it('treats a synchronously-throwing verifier as not-alive and keeps polling', async () => {
+    // Defensive: even though the production verifier never throws,
+    // injecting one that does (or that returns a port that pushes
+    // probeCdpAlive over its range guard) must not abort the poll
+    // loop and hang discovery indefinitely.
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    await writeFile(join(dir, 'DevToolsActivePort'), '44444\n/devtools/browser/anything\n');
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    let probeCount = 0;
+    const verifyPort = async (_port: number, _ws: string | null) => {
+      probeCount += 1;
+      throw new Error('rude verifier');
+    };
+
+    await expect(
+      waitForCdpPortFromActivePortFile(dir, child, 150, 10, { verifyPort })
+    ).rejects.toThrow(/never answered CDP/);
+    // The exception MUST NOT have collapsed the loop after the first probe.
     expect(probeCount).toBeGreaterThan(1);
   });
 });
 
 describe('waitForCdpPort (race)', () => {
-  const trustingVerify = async (_port: number) => true;
+  const trustingVerify = async (_port: number, _ws: string | null) => true;
 
   it('resolves from stderr when the active-port file is delayed', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
@@ -735,7 +780,105 @@ describe('probeCdpAlive', () => {
     const port = (probe.address() as import('net').AddressInfo).port;
     await new Promise<void>((resolve) => probe.close(() => resolve()));
 
-    await expect(probeCdpAlive(port, 300)).resolves.toBe(false);
+    await expect(probeCdpAlive(port, { timeoutMs: 300 })).resolves.toBe(false);
+  });
+
+  it('returns false for out-of-range ports without throwing', async () => {
+    // A stale or corrupt DevToolsActivePort can easily contain values
+    // like 70000. Handing that straight to http.request raises
+    // ERR_SOCKET_BAD_PORT synchronously — the probe contract says
+    // collapse it to false and let the caller retry.
+    await expect(probeCdpAlive(70000)).resolves.toBe(false);
+    await expect(probeCdpAlive(-1)).resolves.toBe(false);
+    await expect(probeCdpAlive(0)).resolves.toBe(false);
+    await expect(probeCdpAlive(Number.NaN)).resolves.toBe(false);
+    await expect(probeCdpAlive(3.14)).resolves.toBe(false);
+  });
+
+  it('returns false when the server delays the response past timeoutMs', async () => {
+    const { createServer } = await import('http');
+    // Server accepts the connection but never sends a response.
+    const server = createServer(() => {
+      /* hold the request open */
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      const started = Date.now();
+      await expect(probeCdpAlive(port, { timeoutMs: 150 })).resolves.toBe(false);
+      // Sanity: the probe respected its own timeout rather than waiting
+      // for the server's default keep-alive deadline.
+      expect(Date.now() - started).toBeLessThan(2000);
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns false when the response body exceeds the size cap', async () => {
+    const { createServer } = await import('http');
+    // Real /json/version is well under 1 KiB. Anything larger than
+    // 16 KiB is treated as a foreign service spraying junk.
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      // Emit ~32 KiB of plausibly-JSON-looking payload.
+      res.write('{"webSocketDebuggerUrl":"ws://127.0.0.1:0/devtools/browser/abc","junk":"');
+      res.write('A'.repeat(32 * 1024));
+      res.end('"}');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      await expect(probeCdpAlive(port)).resolves.toBe(false);
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns true when the response websocket path matches expectedWebSocketPath', async () => {
+    const { createServer } = await import('http');
+    const wsPath = '/devtools/browser/match-uuid';
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:0${wsPath}` }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      await expect(probeCdpAlive(port, { expectedWebSocketPath: wsPath })).resolves.toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns false when expectedWebSocketPath does not match the served URL', async () => {
+    // Guards against the port-reuse case where a stale
+    // DevToolsActivePort points at a port now serving an unrelated
+    // Chrome/CDP instance. The probe must reject it because the
+    // websocket path (the per-Chrome browser UUID) won't match.
+    const { createServer } = await import('http');
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          webSocketDebuggerUrl: 'ws://127.0.0.1:0/devtools/browser/served-by-someone-else',
+        })
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      await expect(
+        probeCdpAlive(port, { expectedWebSocketPath: '/devtools/browser/our-uuid' })
+      ).resolves.toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it('returns false when the port answers HTTP but not with a CDP payload', async () => {
