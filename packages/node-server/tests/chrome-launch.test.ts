@@ -17,6 +17,7 @@ import {
   getDefaultCdpLaunchTimeoutMs,
   parseCdpPortFromStderr,
   planChromeSpawn,
+  probeCdpAlive,
   resolveChromeAppBundle,
   resolveChromeLaunchProfile,
   waitForCdpPort,
@@ -484,13 +485,17 @@ describe('getDefaultCdpLaunchTimeoutMs', () => {
 });
 
 describe('waitForCdpPortFromActivePortFile', () => {
+  const trustingVerify = async (_port: number) => true;
+
   it('resolves with the port written to DevToolsActivePort', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
     tempDirs.push(dir);
     const { EventEmitter } = await import('events');
     const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
 
-    const promise = waitForCdpPortFromActivePortFile(dir, child, 2000, 10);
+    const promise = waitForCdpPortFromActivePortFile(dir, child, 2000, 10, {
+      verifyPort: trustingVerify,
+    });
     // Simulate Chrome writing the file shortly after launch.
     setTimeout(() => {
       void writeFile(join(dir, 'DevToolsActivePort'), '49321\n/devtools/browser/abc-123\n');
@@ -505,9 +510,9 @@ describe('waitForCdpPortFromActivePortFile', () => {
     const { EventEmitter } = await import('events');
     const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
 
-    await expect(waitForCdpPortFromActivePortFile(dir, child, 100, 10)).rejects.toThrow(
-      /Timed out waiting for DevToolsActivePort/
-    );
+    await expect(
+      waitForCdpPortFromActivePortFile(dir, child, 100, 10, { verifyPort: trustingVerify })
+    ).rejects.toThrow(/Timed out waiting for DevToolsActivePort/);
   });
 
   it('rejects when Chrome exits before writing the file', async () => {
@@ -516,14 +521,68 @@ describe('waitForCdpPortFromActivePortFile', () => {
     const { EventEmitter } = await import('events');
     const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
 
-    const promise = waitForCdpPortFromActivePortFile(dir, child, 5000, 10);
+    const promise = waitForCdpPortFromActivePortFile(dir, child, 5000, 10, {
+      verifyPort: trustingVerify,
+    });
     setTimeout(() => child.emit('exit', 1), 20);
 
     await expect(promise).rejects.toThrow(/exited with code 1/);
   });
+
+  it('treats the file content as stale when verifyPort returns false, waiting for a live port', async () => {
+    // Simulate: file exists from a previous crashed run pointing at port 11111
+    // (which is no longer a CDP endpoint), then the freshly-spawned Chrome
+    // overwrites the file with port 22222 which IS live. The poller must
+    // reject 11111 and only resolve once it sees 22222.
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    const filePath = join(dir, 'DevToolsActivePort');
+    await writeFile(filePath, '11111\n/devtools/browser/stale\n');
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    const probedPorts: number[] = [];
+    const verifyPort = async (port: number) => {
+      probedPorts.push(port);
+      return port === 22222;
+    };
+
+    const promise = waitForCdpPortFromActivePortFile(dir, child, 2000, 10, { verifyPort });
+    setTimeout(() => {
+      void writeFile(filePath, '22222\n/devtools/browser/fresh\n');
+    }, 50);
+
+    await expect(promise).resolves.toBe(22222);
+    expect(probedPorts).toContain(11111);
+    expect(probedPorts).toContain(22222);
+    // The poller MUST NOT have resolved on the stale port even though
+    // the file content parsed cleanly.
+    expect(probedPorts.indexOf(11111)).toBeLessThan(probedPorts.indexOf(22222));
+  });
+
+  it('keeps polling when verifyPort never returns true and eventually times out', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    await writeFile(join(dir, 'DevToolsActivePort'), '33333\n/devtools/browser/zombie\n');
+    const { EventEmitter } = await import('events');
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    let probeCount = 0;
+    const verifyPort = async (_port: number) => {
+      probeCount += 1;
+      return false;
+    };
+
+    await expect(
+      waitForCdpPortFromActivePortFile(dir, child, 200, 10, { verifyPort })
+    ).rejects.toThrow(/Timed out waiting for DevToolsActivePort/);
+    // Sanity: the poller actually probed multiple times rather than
+    // bailing after the first stale read.
+    expect(probeCount).toBeGreaterThan(1);
+  });
 });
 
 describe('waitForCdpPort (race)', () => {
+  const trustingVerify = async (_port: number) => true;
+
   it('resolves from stderr when the active-port file is delayed', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
     tempDirs.push(dir);
@@ -532,7 +591,11 @@ describe('waitForCdpPort (race)', () => {
     const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
     (child as { stderr: typeof stderr }).stderr = stderr;
 
-    const promise = waitForCdpPort(child, { userDataDir: dir, timeoutMs: 5000 });
+    const promise = waitForCdpPort(child, {
+      userDataDir: dir,
+      timeoutMs: 5000,
+      verifyPort: trustingVerify,
+    });
     stderr.emit(
       'data',
       Buffer.from('DevTools listening on ws://127.0.0.1:11111/devtools/browser/id\n')
@@ -549,12 +612,44 @@ describe('waitForCdpPort (race)', () => {
     const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
     (child as { stderr: typeof stderr }).stderr = stderr;
 
-    const promise = waitForCdpPort(child, { userDataDir: dir, timeoutMs: 2000 });
+    const promise = waitForCdpPort(child, {
+      userDataDir: dir,
+      timeoutMs: 2000,
+      verifyPort: trustingVerify,
+    });
     setTimeout(() => {
       void writeFile(join(dir, 'DevToolsActivePort'), '22222\n/devtools/browser/zzz\n');
     }, 30);
 
     await expect(promise).resolves.toBe(22222);
+  });
+
+  it('forwards verifyPort to the active-port-file leg so stale ports are rejected end-to-end', async () => {
+    // The race must keep the stderr leg available as a fallback even
+    // when the file leg keeps seeing a stale port — otherwise the
+    // single user-data-dir profile-reuse race that prompted this fix
+    // would still hang.
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-active-port-'));
+    tempDirs.push(dir);
+    await writeFile(join(dir, 'DevToolsActivePort'), '11111\n/devtools/browser/stale\n');
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPort(child, {
+      userDataDir: dir,
+      timeoutMs: 2000,
+      verifyPort: async () => false,
+    });
+    setTimeout(() => {
+      stderr.emit(
+        'data',
+        Buffer.from('DevTools listening on ws://127.0.0.1:55555/devtools/browser/fresh\n')
+      );
+    }, 30);
+
+    await expect(promise).resolves.toBe(55555);
   });
 
   it('falls back to plain stderr-only waiting when no userDataDir is provided', async () => {
@@ -600,5 +695,82 @@ describe('clearStaleDevToolsActivePort', () => {
       `slicc-clear-active-port-missing-${Date.now()}-${Math.random()}`
     );
     await expect(clearStaleDevToolsActivePort(missing)).resolves.toBeUndefined();
+  });
+});
+
+describe('probeCdpAlive', () => {
+  it('returns true when /json/version answers with a valid CDP payload', async () => {
+    const { createServer } = await import('http');
+    const server = createServer((req, res) => {
+      if (req.url === '/json/version') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            Browser: 'Chrome/148.0.7778.167',
+            webSocketDebuggerUrl: 'ws://127.0.0.1:0/devtools/browser/abc',
+          })
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      await expect(probeCdpAlive(port)).resolves.toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns false when nothing is listening on the port', async () => {
+    // Bind+release to find a port we know is free, then immediately
+    // probe it. The OS may rebind quickly to another service, but the
+    // probe should still return false within its own timeout.
+    const { createServer } = await import('net');
+    const probe = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const port = (probe.address() as import('net').AddressInfo).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+    await expect(probeCdpAlive(port, 300)).resolves.toBe(false);
+  });
+
+  it('returns false when the port answers HTTP but not with a CDP payload', async () => {
+    // Distinguishes Chrome's CDP from any other HTTP service that
+    // happens to be on the same port (think: a dev server, a misrouted
+    // health check, etc.). Without this we could accept a 200 from a
+    // completely unrelated process as "Chrome is up".
+    const { createServer } = await import('http');
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ hello: 'world' }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      await expect(probeCdpAlive(port)).resolves.toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('returns false when the port answers with non-2xx', async () => {
+    const { createServer } = await import('http');
+    const server = createServer((_req, res) => {
+      res.writeHead(500);
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('net').AddressInfo).port;
+
+    try {
+      await expect(probeCdpAlive(port)).resolves.toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

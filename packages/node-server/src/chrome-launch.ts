@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from 'fs';
 import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
+import { request as httpRequest } from 'http';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import type { ChildProcess } from 'child_process';
@@ -588,25 +589,109 @@ export async function clearStaleDevToolsActivePort(userDataDir: string): Promise
 }
 
 /**
+ * Single-shot HTTP probe of Chrome's `/json/version` endpoint. Resolves
+ * `true` only when the port answers with a 2xx response whose body is
+ * valid JSON with a non-empty `webSocketDebuggerUrl` (the CDP fingerprint
+ * — won't false-positive on some other HTTP service squatting on the
+ * port). All errors / timeouts collapse to `false` so the caller can
+ * retry without exception plumbing.
+ *
+ * Kept small and stdlib-only (`node:http`) to avoid pulling another
+ * fetch implementation into the launcher hot path.
+ */
+export function probeCdpAlive(port: number, timeoutMs = 500): Promise<boolean> {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const settle = (alive: boolean) => {
+      if (resolved) return;
+      resolved = true;
+      resolve(alive);
+    };
+    const req = httpRequest(
+      {
+        host: '127.0.0.1',
+        port,
+        path: '/json/version',
+        method: 'GET',
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status < 200 || status >= 300) {
+          res.resume();
+          settle(false);
+          return;
+        }
+        let body = '';
+        res.setEncoding('utf-8');
+        res.on('data', (chunk: string) => {
+          body += chunk;
+          // Cap the body size — the real /json/version payload is well
+          // under 1 KiB, so anything larger is junk from another service.
+          if (body.length > 16_384) {
+            res.destroy();
+            settle(false);
+          }
+        });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(body) as { webSocketDebuggerUrl?: unknown };
+            settle(
+              typeof parsed.webSocketDebuggerUrl === 'string' &&
+                parsed.webSocketDebuggerUrl.length > 0
+            );
+          } catch {
+            settle(false);
+          }
+        });
+        res.on('error', () => settle(false));
+      }
+    );
+    req.on('error', () => settle(false));
+    req.on('timeout', () => {
+      req.destroy();
+      settle(false);
+    });
+    req.end();
+  });
+}
+
+/**
  * Poll `<userDataDir>/DevToolsActivePort` for the CDP port. Chrome writes
  * this file as soon as the DevTools listener is up — its first line is
  * the port, the second is the websocket path. This is the canonical way
  * Chromium itself recommends discovering the chosen port and is far more
  * reliable than scraping stderr.
  *
- * Resolves with the parsed port. Rejects on timeout or process exit.
+ * Validation: before resolving, probe `/json/version` on the discovered
+ * port. The file is written by Chrome but reused across runs in the same
+ * profile directory, and `clearStaleDevToolsActivePort` is a
+ * best-effort unlink that races our spawn. If the probe fails we treat
+ * the file content as stale and keep polling for either an updated file
+ * (the freshly-spawned Chrome about to overwrite it) or the eventual
+ * timeout. This belt-and-suspenders pairs with the pre-spawn deletion
+ * to make the discovery resilient to crashed previous runs that left
+ * the file pointing at a now-dead TCP port.
+ *
+ * Resolves with the parsed port once both the file content and the
+ * live CDP probe succeed. Rejects on timeout or process exit.
  *
  * @param userDataDir absolute path Chrome was launched with via `--user-data-dir=`
  * @param child       the Chrome child process (used to bail out on early exit)
  * @param timeoutMs   total budget before giving up
  * @param pollMs      polling cadence (default 50ms)
+ * @param options     test seam — inject a custom `verifyPort` to avoid
+ *                    real network probes in unit tests.
  */
 export function waitForCdpPortFromActivePortFile(
   userDataDir: string,
   child: ChildProcess,
   timeoutMs: number = getDefaultCdpLaunchTimeoutMs(),
-  pollMs = 50
+  pollMs = 50,
+  options: { verifyPort?: (port: number) => Promise<boolean> } = {}
 ): Promise<number> {
+  const verifyPort = options.verifyPort ?? ((port: number) => probeCdpAlive(port));
+
   return new Promise((resolve, reject) => {
     let settled = false;
     const path = join(userDataDir, 'DevToolsActivePort');
@@ -620,6 +705,7 @@ export function waitForCdpPortFromActivePortFile(
 
     const tick = async (): Promise<void> => {
       if (settled) return;
+      let candidatePort: number | null = null;
       try {
         const contents = await readFile(path, 'utf-8');
         // First line is the port; second is the WS path. Chrome writes both
@@ -630,8 +716,7 @@ export function waitForCdpPortFromActivePortFile(
         if (firstLine) {
           const port = Number.parseInt(firstLine, 10);
           if (Number.isFinite(port) && port > 0) {
-            finish(() => resolve(port));
-            return;
+            candidatePort = port;
           }
         }
       } catch (err) {
@@ -639,6 +724,19 @@ export function waitForCdpPortFromActivePortFile(
         // else is ignored too: we'd rather fall back to the stderr path
         // racing alongside this poller than reject early.
         void err;
+      }
+
+      if (candidatePort !== null) {
+        // Verify the file's port actually answers CDP. A stale file
+        // (e.g. from a previous run that crashed before
+        // `clearStaleDevToolsActivePort` could land) will fail this
+        // probe and fall through to the next tick.
+        const alive = await verifyPort(candidatePort);
+        if (settled) return; // child exited mid-probe — `child.on('exit')` already rejected.
+        if (alive) {
+          finish(() => resolve(candidatePort!));
+          return;
+        }
       }
 
       if (Date.now() - startedAt >= timeoutMs) {
@@ -670,12 +768,27 @@ export function waitForCdpPortFromActivePortFile(
  */
 export function waitForCdpPort(
   child: ChildProcess,
-  options: { userDataDir?: string; timeoutMs?: number } = {}
+  options: {
+    userDataDir?: string;
+    timeoutMs?: number;
+    /**
+     * Test seam — forwarded to `waitForCdpPortFromActivePortFile` so unit
+     * tests can simulate the "file says port X, but X isn't actually
+     * answering CDP" stale-port race without binding a real socket.
+     */
+    verifyPort?: (port: number) => Promise<boolean>;
+  } = {}
 ): Promise<number> {
   const timeoutMs = options.timeoutMs ?? getDefaultCdpLaunchTimeoutMs();
   const stderrPromise = waitForCdpPortFromStderr(child, timeoutMs);
   if (!options.userDataDir) return stderrPromise;
-  const filePromise = waitForCdpPortFromActivePortFile(options.userDataDir, child, timeoutMs);
+  const filePromise = waitForCdpPortFromActivePortFile(
+    options.userDataDir,
+    child,
+    timeoutMs,
+    undefined,
+    { verifyPort: options.verifyPort }
+  );
   // Suppress unhandled-rejection warnings on the loser.
   stderrPromise.catch(() => {});
   filePromise.catch(() => {});
