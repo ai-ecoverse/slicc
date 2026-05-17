@@ -2357,6 +2357,52 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     }
   }
 
+  // Wire host-command setters so `host` in the terminal shows connected
+  // followers and `host reset` works. These module-level setters are read
+  // by the host shell command (which runs in the kernel worker's shell
+  // context, where the tray manager singletons are not live — the page
+  // owns them post-refactor, so the shell command reads them via these
+  // injected callbacks instead).
+  if (pageLeaderTray) {
+    setConnectedFollowersGetter(() =>
+      pageLeaderTray!.peers.getPeers().map((p) => ({
+        runtimeId: p.bootstrapId,
+        runtime: p.runtime,
+        connectedAt: p.connectedAt ?? undefined,
+      }))
+    );
+    setTrayResetter(() => pageLeaderTray!.reset());
+  }
+
+  // Runtime tray-join: the settings dialog dispatches this event when the
+  // user pastes a join URL and clicks "Connect". Wire a listener so the
+  // follower tray starts immediately without requiring a page reload.
+  // (The extension path uses chrome.runtime.sendMessage → `refresh-tray-runtime`
+  // instead; this is the standalone equivalent.)
+  window.addEventListener('slicc:tray-join', (rawEvent: Event) => {
+    const event = rawEvent as CustomEvent<{ joinUrl: string }>;
+    const joinUrl = event.detail?.joinUrl;
+    if (!joinUrl) return;
+
+    pageLeaderTray?.stop();
+    pageLeaderTray = null;
+    setConnectedFollowersGetter(null);
+    setTrayResetter(null);
+
+    pageFollowerTray?.stop();
+    pageFollowerTray = null;
+
+    pageFollowerTray = startPageFollowerTray({
+      joinUrl,
+      onSnapshot: (messages) => layout.panels.chat.loadMessages(messages),
+      onUserMessage: (text, _messageId, _scoopJid, attachments) =>
+        layout.panels.chat.addUserMessage(text, attachments),
+      onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
+      setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
+      browserAPI: browser,
+    });
+  });
+
   // Tear down on page unload so the WebSocket and any open data channels
   // close cleanly. Best-effort — beforeunload is not guaranteed to fire
   // on every navigation, but the tray worker's session TTL handles the
