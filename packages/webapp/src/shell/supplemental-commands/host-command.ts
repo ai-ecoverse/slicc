@@ -8,6 +8,7 @@ import {
   getFollowerTrayRuntimeStatus,
   type FollowerTrayRuntimeStatus,
 } from '../../scoops/tray-follower-status.js';
+import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 
 export interface ConnectedFollowerInfo {
   runtimeId: string;
@@ -81,6 +82,19 @@ function getFollowersWithFallback(): ConnectedFollowerInfo[] {
     // ignore parse errors
   }
   return [];
+}
+
+// When `host reset` runs from the kernel-worker's terminal, the worker's
+// module-level `trayResetter` is null (the page is the only side that
+// calls `setTrayResetter`). Bridge to the page via panel-RPC so the
+// `tray-reset` handler installed in `mainStandaloneWorker` can drive
+// `pageLeaderTray.reset()`. Returns `undefined` when no panel-RPC client
+// is published (e.g. in tests, or in extension mode where the offscreen
+// document has its own DOM and doesn't need the bridge).
+function buildPanelRpcResetter(): (() => Promise<LeaderTrayRuntimeStatus>) | undefined {
+  const client = getPanelRpcClient();
+  if (!client) return undefined;
+  return async () => await client.call('tray-reset', undefined);
 }
 
 export interface HostCommandOptions {
@@ -196,7 +210,17 @@ export function createHostCommand(options: HostCommandOptions = {}): Command {
     }
 
     if (args[0] === 'reset') {
-      return handleReset(getFollowerSt, getStatus, options.resetTray ?? getTrayResetter());
+      // Resolution order for the resetter:
+      //   1. options.resetTray — explicit override for tests / future callers.
+      //   2. getTrayResetter() — page-thread path; the page sets this via
+      //      setTrayResetter after starting pageLeaderTray.
+      //   3. Panel-RPC `tray-reset` — worker-thread path. Standalone runs
+      //      the host shell command inside the kernel worker, where the
+      //      module-level trayResetter is null; bridge to the page so it
+      //      can drive pageLeaderTray.reset(). Returns the new
+      //      LeaderTrayRuntimeStatus.
+      const resetter = options.resetTray ?? getTrayResetter() ?? buildPanelRpcResetter();
+      return handleReset(getFollowerSt, getStatus, resetter);
     }
 
     if (args.length > 0) {

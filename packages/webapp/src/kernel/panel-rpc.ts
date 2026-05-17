@@ -38,6 +38,8 @@
  * commands run directly there.
  */
 
+import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+
 const PANEL_RPC_CHANNEL = 'slicc-panel-rpc';
 const DEFAULT_TIMEOUT_MS = 15_000;
 
@@ -93,6 +95,17 @@ export type PanelRpcRequest =
   | {
       op: 'oauth-popup';
       payload: { url: string };
+    }
+  | {
+      // Reset the page-side multi-browser-sync leader tray. The
+      // tray subsystem lives on the page (DOM, RTCPeerConnections,
+      // sync-manager state), so the worker can't drive
+      // `LeaderTrayManager.reset()` directly — it bridges through
+      // here. Result is the new runtime status after the new session
+      // is established (or an error from the leader's start flow).
+      // Handler throws when no leader tray is active.
+      op: 'tray-reset';
+      payload?: undefined;
     };
 
 export interface PanelRpcResults {
@@ -107,6 +120,7 @@ export interface PanelRpcResults {
   'clipboard-write-image': { done: true };
   'window-open': { opened: boolean };
   'oauth-popup': { redirectUrl: string | null };
+  'tray-reset': LeaderTrayRuntimeStatus;
 }
 
 export type PanelRpcOp = PanelRpcRequest['op'];

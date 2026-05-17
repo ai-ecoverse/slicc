@@ -11,12 +11,29 @@
  */
 
 import type { PanelRpcHandlers } from '../kernel/panel-rpc.js';
+import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+
+/**
+ * Options threaded into the handler factory. Each callback is optional
+ * — the corresponding op rejects with a clear error when the callback
+ * is absent (e.g. tray-reset before the leader tray has booted).
+ */
+export interface StandalonePanelRpcHandlerOptions {
+  /**
+   * Reset the page-side leader tray and return the post-reset status.
+   * Wired by `mainStandaloneWorker` to `pageLeaderTray.reset()` when
+   * a leader is active; left undefined otherwise.
+   */
+  resetTray?: () => Promise<LeaderTrayRuntimeStatus>;
+}
 
 /**
  * Build a record of handlers suitable for `installPanelRpcHandler`.
  * Pure factory so the handler set is easy to test under JSDOM.
  */
-export function createStandalonePanelRpcHandlers(): PanelRpcHandlers {
+export function createStandalonePanelRpcHandlers(
+  options: StandalonePanelRpcHandlerOptions = {}
+): PanelRpcHandlers {
   return {
     'page-info': () => ({
       origin: window.location.origin,
@@ -207,6 +224,13 @@ export function createStandalonePanelRpcHandlers(): PanelRpcHandlers {
     'oauth-popup': async ({ url }) => {
       const redirectUrl = await openOAuthPopup(url);
       return { redirectUrl };
+    },
+
+    'tray-reset': async () => {
+      if (!options.resetTray) {
+        throw new Error('host reset: no active tray session to reset');
+      }
+      return await options.resetTray();
     },
   };
 }

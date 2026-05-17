@@ -2256,16 +2256,37 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     instanceId,
   });
 
+  // Hoisted forward-declaration of the page-side tray handles. They
+  // are populated by the tray init block below, but several earlier
+  // wirings (panel-RPC `tray-reset` handler) need to close over them.
+  // The closures read the current value at call time, so the
+  // assignment happening later is fine.
+  let pageLeaderTray: PageLeaderTrayHandle | null = null;
+  let pageFollowerTray: PageFollowerTrayHandle | null = null;
+
   // Install the panel-RPC handler so DOM-bound shell commands run by
   // the kernel worker (screencapture / say / afplay / clipboard /
   // open, plus the playwright app-origin lookup) can reach the page.
   // `imgcat` is intentionally terminal-only and stays out of the
   // bridge — it's meant for the in-panel terminal, not the agent.
+  //
+  // `tray-reset` is the special case: the leader tray subsystem runs
+  // on the page (`RTCDataChannel` non-transferability), so `host reset`
+  // typed in the worker terminal has to bridge here to reach
+  // `pageLeaderTray.reset()`. The callback reads the current value of
+  // `pageLeaderTray` so it picks up assignments made after install.
   const { installPanelRpcHandler } = await import('../kernel/panel-rpc.js');
   const { createStandalonePanelRpcHandlers } = await import('./panel-rpc-handlers.js');
   const stopPanelRpcHandler = installPanelRpcHandler({
     instanceId,
-    handlers: createStandalonePanelRpcHandlers(),
+    handlers: createStandalonePanelRpcHandlers({
+      resetTray: async () => {
+        if (!pageLeaderTray) {
+          throw new Error('no active tray session to reset');
+        }
+        return await pageLeaderTray.reset();
+      },
+    }),
   });
   // Tear down on session reload so the handler doesn't outlive its
   // page (the channel would still receive requests and try to call
@@ -2293,8 +2314,8 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   // it's a leader; if neither is set, the feature is dormant.
   //
   // See docs/superpowers/specs/2026-05-17-multi-browser-sync-page-side-restoration.md
-  let pageLeaderTray: PageLeaderTrayHandle | null = null;
-  let pageFollowerTray: PageFollowerTrayHandle | null = null;
+  // (pageLeaderTray / pageFollowerTray are forward-declared above so the
+  // panel-RPC handler can close over them.)
   {
     const storedJoinUrl = window.localStorage.getItem(TRAY_JOIN_STORAGE_KEY);
     const storedWorkerBaseUrl = window.localStorage.getItem(TRAY_WORKER_STORAGE_KEY);
