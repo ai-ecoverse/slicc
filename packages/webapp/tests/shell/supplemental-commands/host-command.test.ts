@@ -410,6 +410,132 @@ describe('host command', () => {
       expect(result.stdout).toContain('status: inactive');
     });
   });
+
+  describe('host reset — panel-RPC bridge fallback (standalone-worker path)', () => {
+    // The kernel worker's WasmShell executes `host reset`. The worker's
+    // module-level trayResetter is null (the page is the only side that
+    // calls setTrayResetter). `getPanelRpcClient()` returns the bridge
+    // client published as `globalThis.__slicc_panelRpc` by kernel-worker.ts;
+    // we stub that here to assert the bridge fallback is used.
+
+    function leaderStatusForBridge() {
+      return {
+        state: 'leader' as const,
+        session: {
+          workerBaseUrl: 'https://tray.example.com',
+          trayId: 'tray-bridge-new',
+          createdAt: '2026-05-17T00:00:00.000Z',
+          controllerId: 'controller-1',
+          controllerUrl: 'https://tray.example.com/controller/controller-1',
+          joinUrl: 'https://tray.example.com/join/tray-bridge-new',
+          webhookUrl: 'https://tray.example.com/webhooks/tray-bridge-new',
+          leaderKey: 'leader-key',
+          leaderWebSocketUrl: 'wss://tray.example.com/ws',
+          runtime: 'slicc-standalone',
+        },
+        error: null,
+      };
+    }
+
+    afterEach(() => {
+      delete (globalThis as Record<string, unknown>).__slicc_panelRpc;
+    });
+
+    it('routes host reset through the panel-RPC client when no trayResetter is set', async () => {
+      // No options.resetTray and no setTrayResetter() call — both the
+      // explicit override and the module-level getter return undefined.
+      // Bridge client is the only path left.
+      const calls: Array<{ op: string; payload: unknown }> = [];
+      (globalThis as Record<string, unknown>).__slicc_panelRpc = {
+        call: async (op: string, payload: unknown) => {
+          calls.push({ op, payload });
+          return leaderStatusForBridge();
+        },
+        dispose: () => {},
+      };
+
+      const cmd = createHostCommand({
+        // getStatus / getFollowerStatus stubbed so the precondition checks
+        // (leader/follower state) pass and reset is actually attempted.
+        getStatus: () => leaderStatusForBridge(),
+        getFollowerStatus: () => ({
+          state: 'inactive' as const,
+          joinUrl: null,
+          trayId: null,
+          error: null,
+          lastPingTime: null,
+          reconnectAttempts: 0,
+          attachAttempts: 0,
+          lastAttachCode: null,
+          connectingSince: null,
+          lastError: null,
+        }),
+        getFollowers: () => [],
+      });
+
+      const result = await cmd.execute(['reset'], {} as never);
+      expect(calls).toEqual([{ op: 'tray-reset', payload: undefined }]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Tray session reset. All followers disconnected.');
+      expect(result.stdout).toContain('join_url: https://tray.example.com/join/tray-bridge-new');
+    });
+
+    it('surfaces panel-RPC errors as host reset failures', async () => {
+      (globalThis as Record<string, unknown>).__slicc_panelRpc = {
+        call: async () => {
+          throw new Error('no active tray session to reset');
+        },
+        dispose: () => {},
+      };
+
+      const cmd = createHostCommand({
+        getStatus: () => leaderStatusForBridge(),
+        getFollowerStatus: () => ({
+          state: 'inactive' as const,
+          joinUrl: null,
+          trayId: null,
+          error: null,
+          lastPingTime: null,
+          reconnectAttempts: 0,
+          attachAttempts: 0,
+          lastAttachCode: null,
+          connectingSince: null,
+          lastError: null,
+        }),
+        getFollowers: () => [],
+      });
+
+      const result = await cmd.execute(['reset'], {} as never);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('host reset:');
+      expect(result.stderr).toContain('no active tray session to reset');
+    });
+
+    it('still reports "not available in this environment" when neither resetter nor bridge is present', async () => {
+      // No setTrayResetter() AND no panel-RPC client → resetter resolves
+      // to undefined → existing error message stands.
+      delete (globalThis as Record<string, unknown>).__slicc_panelRpc;
+      const cmd = createHostCommand({
+        getStatus: () => leaderStatusForBridge(),
+        getFollowerStatus: () => ({
+          state: 'inactive' as const,
+          joinUrl: null,
+          trayId: null,
+          error: null,
+          lastPingTime: null,
+          reconnectAttempts: 0,
+          attachAttempts: 0,
+          lastAttachCode: null,
+          connectingSince: null,
+          lastError: null,
+        }),
+        getFollowers: () => [],
+      });
+      const result = await cmd.execute(['reset'], {} as never);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('not available in this environment');
+    });
+  });
 });
 
 describe('formatLeaderOutput', () => {
