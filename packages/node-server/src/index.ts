@@ -18,10 +18,12 @@ import {
 import { getElectronAppPorts } from './electron-runtime.js';
 import {
   buildChromeLaunchArgs,
+  clearStaleDevToolsActivePort,
   ensureQaProfileScaffold,
   findChromeExecutable,
+  planChromeSpawn,
   resolveChromeLaunchProfile,
-  waitForCdpPortFromStderr,
+  waitForCdpPort,
 } from './chrome-launch.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
@@ -571,16 +573,39 @@ async function main() {
       profile: chromeProfile,
     });
 
-    launchedBrowserProcess = spawn(chromePath, chromeArgs, {
+    // Profile directories are reused across runs (both the dev
+    // `/tmp/browser-coding-agent-chrome` profile and the persistent
+    // `.qa/chrome/<profile>` QA profiles). Chrome never proactively
+    // clears `DevToolsActivePort` on shutdown, so a stale file from a
+    // previous crash/SIGKILL would let our active-port-file poller win
+    // the race instantly with the wrong port. Clear it before spawn.
+    await clearStaleDevToolsActivePort(chromeProfile.userDataDir);
+
+    // On macOS, route through `/usr/bin/open` so LaunchServices owns the
+    // new Chrome process. Without this hop the terminal that started
+    // `node` stays in Chrome's TCC responsibility chain, which silently
+    // breaks `getUserMedia()` (camera/mic in Google Meet, Zoom, etc.)
+    // whenever the terminal hasn't already been granted camera/microphone
+    // access. With LaunchServices in the loop, Chrome becomes its own
+    // TCC responsible process and the user's
+    // `/Applications/Google Chrome.app` privacy grant applies as expected.
+    const spawnPlan = planChromeSpawn({ executablePath: chromePath, chromeArgs });
+
+    launchedBrowserProcess = spawn(spawnPlan.command, spawnPlan.args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
       env: { ...process.env, GOOGLE_CRASHPAD_DISABLE: '1' },
     });
     launchedBrowserLabel = chromeProfile.displayName;
 
-    // Parse the actual CDP port from Chrome's stderr before piping output.
-    // Chrome prints "DevTools listening on ws://HOST:PORT/..." to stderr.
-    const actualCdpPort = await waitForCdpPortFromStderr(launchedBrowserProcess);
+    // Use the stderr-vs-DevToolsActivePort race so we work in both
+    // direct-exec mode (Linux/Windows, or bare-binary fallbacks where
+    // stderr carries Chrome's banner) and LaunchServices mode (macOS,
+    // where stderr belongs to `open` and only the active-port file
+    // surfaces the real CDP port).
+    const actualCdpPort = await waitForCdpPort(launchedBrowserProcess, {
+      userDataDir: chromeProfile.userDataDir,
+    });
     CDP_PORT = actualCdpPort;
     console.log(`Chrome CDP listening on port ${CDP_PORT}`);
 

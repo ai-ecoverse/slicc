@@ -1,5 +1,5 @@
 import { existsSync, readdirSync } from 'fs';
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import type { ChildProcess } from 'child_process';
@@ -172,6 +172,76 @@ export function buildChromeLaunchArgs(options: {
 
   args.push(options.launchUrl);
   return args;
+}
+
+/**
+ * Walk up from a Chrome executable path
+ * (`…/Foo.app/Contents/MacOS/Foo`) to its enclosing `.app` bundle so we
+ * can hand it to `/usr/bin/open -a`. Returns `null` on non-darwin
+ * platforms or bare-binary paths so the caller falls back to a direct
+ * exec (Linux/Windows have no LaunchServices equivalent).
+ */
+export function resolveChromeAppBundle(
+  executablePath: string,
+  platform: NodeJS.Platform = process.platform
+): string | null {
+  if (platform !== 'darwin') return null;
+  const parts = executablePath.split('/');
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i]?.toLowerCase().endsWith('.app')) {
+      return parts.slice(0, i + 1).join('/');
+    }
+  }
+  return null;
+}
+
+export interface ChromeSpawnPlan {
+  command: string;
+  args: string[];
+  /**
+   * `true` when the spawn is routed through `/usr/bin/open` so
+   * LaunchServices owns the new Chrome process. The caller should rely
+   * on `DevToolsActivePort` for CDP port discovery in this mode because
+   * `open`'s stderr never carries Chrome's `DevTools listening on …`
+   * banner.
+   */
+  usesLaunchServices: boolean;
+}
+
+/**
+ * Decide how to spawn Chrome so macOS TCC attributes camera/microphone
+ * requests to Chrome itself rather than to whatever terminal launched
+ * `node`. On darwin, when we can resolve an enclosing `.app` bundle for
+ * the Chrome executable, route the spawn through
+ * `/usr/bin/open -n -a <bundle> -W --args …` so LaunchServices becomes
+ * Chrome's parent and TCC responsible process. Without this hop,
+ * `getUserMedia()` calls in Google Meet, Zoom, etc. hang forever on
+ * machines where the terminal app has never been granted camera/mic
+ * access (or has no `NS{Camera,Microphone}UsageDescription`).
+ *
+ * On Linux / Windows, fall back to a direct exec — neither platform has
+ * a LaunchServices equivalent, and they don't suffer the same TCC
+ * inheritance problem.
+ */
+export function planChromeSpawn(options: {
+  executablePath: string;
+  chromeArgs: string[];
+  platform?: NodeJS.Platform;
+}): ChromeSpawnPlan {
+  const platform = options.platform ?? process.platform;
+  const bundle = resolveChromeAppBundle(options.executablePath, platform);
+  if (bundle) {
+    return {
+      command: '/usr/bin/open',
+      args: ['-n', '-a', bundle, '-W', '--args', ...options.chromeArgs],
+      usesLaunchServices: true,
+    };
+  }
+  return {
+    command: options.executablePath,
+    args: options.chromeArgs,
+    usesLaunchServices: false,
+  };
 }
 
 function findPuppeteerChromeForTesting(
@@ -491,6 +561,30 @@ export function waitForCdpPortFromStderr(
       }
     });
   });
+}
+
+/**
+ * Delete a stale `<userDataDir>/DevToolsActivePort` left behind by a
+ * previous Chrome run before we spawn a new one. Otherwise
+ * `waitForCdpPortFromActivePortFile` can win the race instantly with the
+ * old port from a crashed / SIGKILL'd previous launch — Chrome only
+ * writes the file when its listener comes up, and never proactively
+ * clears it on shutdown. The file lives inside a profile directory that
+ * is reused across runs (both the dev `/tmp/browser-coding-agent-chrome`
+ * profile and the persistent `.qa/chrome/<profile>` QA profiles), so the
+ * stale-port window is real.
+ *
+ * ENOENT is fine (no previous run); other errors are swallowed too
+ * because a failure to unlink shouldn't block a launch — the worst case
+ * is the pre-existing stale-port behavior, which is what we want to
+ * avoid but is not worth crashing over.
+ */
+export async function clearStaleDevToolsActivePort(userDataDir: string): Promise<void> {
+  try {
+    await unlink(join(userDataDir, 'DevToolsActivePort'));
+  } catch {
+    // Intentionally ignored — see docstring.
+  }
 }
 
 /**
