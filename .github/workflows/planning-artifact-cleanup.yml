@@ -68,8 +68,62 @@ jobs:
           fi
           echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Enable auto-merge for cleanup PR
+      - name: Add cleanup PR to merge queue
         if: steps.cleanup.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr merge --auto "${{ steps.pr.outputs.url }}"
+          PR_URL: ${{ steps.pr.outputs.url }}
+        # `gh pr merge --auto` only enables auto-merge, which does NOT add
+        # the PR to a required merge queue. We poll until the PR is
+        # mergeable (CI green) and then explicitly enqueue via the
+        # `enqueuePullRequest` GraphQL mutation, which is what the
+        # "Merge when ready" button calls.
+        run: |
+          set -euo pipefail
+          PR_ID=$(gh pr view "$PR_URL" --json id --jq '.id')
+
+          already_queued=$(gh pr view "$PR_URL" --json isInMergeQueue --jq '.isInMergeQueue')
+          if [ "$already_queued" = "true" ]; then
+            echo "PR already in merge queue; nothing to do."
+            exit 0
+          fi
+
+          attempts=60
+          sleep_seconds=30
+          for i in $(seq 1 "$attempts"); do
+            state=$(gh pr view "$PR_URL" \
+              --json mergeable,mergeStateStatus,isInMergeQueue \
+              --jq '"\(.mergeable)|\(.mergeStateStatus)|\(.isInMergeQueue)"')
+            mergeable=${state%%|*}
+            rest=${state#*|}
+            merge_state=${rest%%|*}
+            queued=${rest#*|}
+            echo "attempt $i/$attempts mergeable=$mergeable mergeStateStatus=$merge_state isInMergeQueue=$queued"
+
+            if [ "$queued" = "true" ]; then
+              echo "PR entered queue out-of-band; done."
+              exit 0
+            fi
+
+            case "$merge_state" in
+              CLEAN|UNSTABLE|HAS_HOOKS)
+                if [ "$mergeable" = "MERGEABLE" ]; then
+                  break
+                fi
+                ;;
+              DIRTY|BLOCKED)
+                echo "PR is $merge_state; cannot enqueue. Exiting."
+                exit 0
+                ;;
+            esac
+
+            if [ "$i" -eq "$attempts" ]; then
+              echo "Timed out waiting for PR to become mergeable."
+              exit 1
+            fi
+            sleep "$sleep_seconds"
+          done
+
+          gh api graphql \
+            -f query='mutation($id:ID!){ enqueuePullRequest(input:{pullRequestId:$id}){ mergeQueueEntry{ position } } }' \
+            -F id="$PR_ID"
