@@ -52,6 +52,8 @@ import { frozenSessionPath, parseFrozenArchive } from './session-freezer.js';
 import { BrowserAPI, NavigationWatcher } from '../cdp/index.js';
 import { type Orchestrator } from '../scoops/index.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
+import { clearAllMessages as clearOrchestratorMessages } from '../scoops/db.js';
+import { SessionStore as AgentSessionStore } from '../core/session.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import {
@@ -1806,6 +1808,34 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   layout.panels.memory.setOrchestrator(client as unknown as Orchestrator);
   layout.setScoopSwitcherOrchestrator?.(client as unknown as Orchestrator);
   layout.onScoopSelect = selectScoop;
+
+  // Wire clear chat — must drive the IDB clears from the PAGE in
+  // standalone, because the kernel worker is a DedicatedWorker that
+  // `location.reload()` tears down moments after this handler returns —
+  // possibly before its own `clear-chat` handler has finished persisting.
+  // Mirrors what `orchestrator.clearAllMessages` does, minus the
+  // in-memory bits that the soon-to-respawn worker doesn't carry across
+  // the reload. Three same-origin IDBs to clear:
+  //  - `slicc-groups.messages` — inter-scoop ChannelMessage history
+  //  - `agent-sessions`        — per-scoop AgentMessage[] (the actual
+  //                              conversation memory the LLM resumes from)
+  //  - `browser-coding-agent`  — the panel's view cache
+  // The extension path doesn't need this — its offscreen document
+  // survives the side-panel reload, so its `clear-chat` handler has time
+  // to complete.
+  layout.onClearChat = async () => {
+    await clearOrchestratorMessages().catch(() => {});
+    await new AgentSessionStore().clearAll().catch(() => {});
+    const scoops = client.getScoops();
+    for (const scoop of scoops) {
+      const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+      await layout.panels.chat.deleteSessionById(sessionId);
+    }
+    // Fire-and-forget; the page-side IDB writes above are what survive
+    // the reload. This just keeps the worker's in-memory buffers tidy
+    // in case the reload races us.
+    client.clearAllMessages();
+  };
 
   // Brain-icon wiring (mirrors `mainExtension`).
   // - `onModelChange`: persist the user's choice locally so the worker's
