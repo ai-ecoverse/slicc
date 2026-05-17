@@ -54,6 +54,14 @@ enum ChromeLauncherError: LocalizedError, Sendable {
     case chromeExitedBeforeReportingPort(Int32)
     case timedOutWaitingForPort(TimeInterval)
     case cdpUnavailable(Int)
+    /// `/usr/bin/open` returned a non-zero exit code while trying to start
+    /// Chrome via LaunchServices. We use `open` so that LaunchServices —
+    /// not slicc-server / Sliccstart — becomes Chrome's parent and TCC
+    /// responsible process; this matters for camera/microphone access on
+    /// macOS, where TCC otherwise blames the closest GUI ancestor for the
+    /// hardware request and silently drops it if the ancestor has no
+    /// `NS{Camera,Microphone}UsageDescription`.
+    case openLaunchFailed(exitCode: Int32, executable: String)
     /// A Chrome instance was already listening on the requested CDP port
     /// when we tried to launch our own. Spawning a second Chrome with the
     /// same user-data-dir would have made the new process hand its URL
@@ -78,6 +86,8 @@ enum ChromeLauncherError: LocalizedError, Sendable {
         case .chromeAlreadyRunning(let port, let browser):
             let tail = browser.map { " (\($0))" } ?? ""
             return "A Chrome instance is already running on CDP port \(port)\(tail). Quit it before starting slicc-server again."
+        case .openLaunchFailed(let exitCode, let executable):
+            return "/usr/bin/open exited with code \(exitCode) while launching \(executable)."
         }
     }
 }
@@ -160,6 +170,36 @@ struct ChromeLauncher: Sendable {
         return args
     }
 
+    /// Compose the argument vector for `/usr/bin/open` that launches the
+    /// resolved Chrome `.app` bundle with our Chromium flags. The exact
+    /// `-n -a <bundle> -W --args …` shape mirrors `ElectronLauncher`, so
+    /// LaunchServices owns the spawned process and Chrome — not
+    /// slicc-server — becomes its own TCC responsible process for camera
+    /// and microphone access.
+    func buildOpenLaunchArgs(
+        appBundlePath: String,
+        chromeArgs: [String]
+    ) -> [String] {
+        return ["-n", "-a", appBundlePath, "-W", "--args"] + chromeArgs
+    }
+
+    /// Walk up from a Chrome executable path (`…/Foo.app/Contents/MacOS/Foo`)
+    /// to its enclosing `.app` bundle. Returns `nil` for bare-binary paths
+    /// (which falls back to the direct-exec launch path used in tests).
+    func resolveAppBundle(forExecutable executablePath: String) -> String? {
+        let url = URL(fileURLWithPath: executablePath)
+        let pathComponents = url.pathComponents
+        // Look for the deepest path component ending in ".app". Both
+        // canonical Chrome ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        // and Chrome for Testing
+        // ("~/.cache/puppeteer/chrome/mac-X/chrome-mac-arm64/Google Chrome for Testing.app/…")
+        // sit inside a `.app` bundle that LaunchServices can open.
+        guard let appIndex = pathComponents.lastIndex(where: { $0.lowercased().hasSuffix(".app") }) else {
+            return nil
+        }
+        return NSString.path(withComponents: Array(pathComponents.prefix(appIndex + 1)))
+    }
+
     func resolveUserDataDir(tmpDir: String? = nil, servePort: Int? = nil) -> String {
         let baseTmpDir = normalizedPath(tmpDir)
             ?? normalizedPath(environmentProvider()["TMPDIR"])
@@ -196,8 +236,7 @@ struct ChromeLauncher: Sendable {
         }
 
         let process = processFactory()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = buildLaunchArgs(
+        let chromeArgs = buildLaunchArgs(
             cdpPort: config.cdpPort,
             launchUrl: config.launchUrl,
             userDataDir: config.userDataDir,
@@ -213,20 +252,92 @@ struct ChromeLauncher: Sendable {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
-        let outputMonitor = ChromeOutputMonitor(
-            process: process,
-            stdout: stdoutPipe.fileHandleForReading,
-            stderr: stderrPipe.fileHandleForReading,
-            logger: logger
-        )
+        let usesLaunchServices: Bool
+        if let appBundlePath = resolveAppBundle(forExecutable: executable) {
+            // Route the spawn through `/usr/bin/open` so LaunchServices owns
+            // the new Chrome process. Without this, slicc-server (and
+            // therefore Sliccstart) stays in Chrome's TCC responsibility
+            // chain; macOS then blames our launcher bundle for any
+            // camera/microphone access Chrome makes — and silently denies
+            // it because the launcher has no NS*UsageDescription. With
+            // LaunchServices in the loop, Chrome becomes its own TCC
+            // responsible process and the canonical
+            // "/Applications/Google Chrome.app" privacy grant applies as
+            // users expect.
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            process.arguments = buildOpenLaunchArgs(
+                appBundlePath: appBundlePath,
+                chromeArgs: chromeArgs
+            )
+            usesLaunchServices = true
+        } else {
+            // Fallback for bare-binary paths (largely a test affordance):
+            // exec the binary directly and scrape its stderr for the CDP
+            // port the way we used to.
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = chromeArgs
+            usesLaunchServices = false
+        }
 
         try process.run()
         logger.info("Launched Chrome at \(executable)")
 
-        let actualPort = try await outputMonitor.awaitPort(timeout: config.launchTimeout)
-        _ = try await waitForCDP(port: actualPort)
+        let actualPort: Int
+        if usesLaunchServices {
+            actualPort = config.cdpPort
+            try await waitForCDPReady(port: actualPort, timeout: config.launchTimeout, process: process)
+        } else {
+            let outputMonitor = ChromeOutputMonitor(
+                process: process,
+                stdout: stdoutPipe.fileHandleForReading,
+                stderr: stderrPipe.fileHandleForReading,
+                logger: logger
+            )
+            actualPort = try await outputMonitor.awaitPort(timeout: config.launchTimeout)
+            _ = try await waitForCDP(port: actualPort)
+        }
         logger.info("Chrome CDP listening on port \(actualPort)")
         return ChromeProcess(process: process, cdpPort: actualPort)
+    }
+
+    /// Poll Chrome's `/json/version` endpoint until it answers with a CDP
+    /// payload or the launch budget runs out. This is the LaunchServices
+    /// counterpart to `ChromeOutputMonitor.awaitPort()`: when we spawn
+    /// Chrome through `/usr/bin/open`, the open helper is the only thing
+    /// connected to our stderr pipe and the CDP `DevTools listening on`
+    /// banner never reaches us. We also watch the `open` process so a
+    /// non-zero LaunchServices exit fails fast instead of waiting out the
+    /// full timeout.
+    private func waitForCDPReady(port: Int, timeout: TimeInterval, process: Process) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(max(timeout, 0) * 1_000_000_000)
+        let pollIntervalNanos: UInt64 = 100_000_000
+        let versionURL = URL(string: "http://127.0.0.1:\(port)/json/version")!
+
+        while DispatchTime.now().uptimeNanoseconds < deadline {
+            if !process.isRunning {
+                let exitCode = process.terminationStatus
+                if exitCode != 0 {
+                    throw ChromeLauncherError.openLaunchFailed(exitCode: exitCode, executable: "/usr/bin/open")
+                }
+                // `open` exits 0 once LaunchServices has handed off; keep polling.
+            }
+
+            do {
+                let (data, response) = try await fetchData(versionURL)
+                if let httpResponse = response as? HTTPURLResponse,
+                   (200..<300).contains(httpResponse.statusCode),
+                   Self.extractWebSocketDebuggerURL(from: data) != nil {
+                    return
+                }
+            } catch {
+                // Keep polling — transient connection refused is expected
+                // while Chrome boots.
+            }
+
+            try await Task.sleep(nanoseconds: pollIntervalNanos)
+        }
+
+        throw ChromeLauncherError.timedOutWaitingForPort(timeout)
     }
 
     func waitForCDP(port: Int, retries: Int = 50, delay: TimeInterval = 0.1) async throws -> String {

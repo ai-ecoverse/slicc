@@ -52,6 +52,59 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertEqual(args.last, "http://127.0.0.1:5710")
     }
 
+    func testResolveAppBundleWalksUpFromCanonicalChromeExecutable() {
+        let launcher = makeLauncher()
+
+        XCTAssertEqual(
+            launcher.resolveAppBundle(
+                forExecutable: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            ),
+            "/Applications/Google Chrome.app"
+        )
+    }
+
+    func testResolveAppBundleHandlesChromeForTestingPath() {
+        let launcher = makeLauncher()
+        let cached = "/Users/test/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+
+        XCTAssertEqual(
+            launcher.resolveAppBundle(forExecutable: cached),
+            "/Users/test/.cache/puppeteer/chrome/mac-123/chrome-mac-arm64/Google Chrome for Testing.app"
+        )
+    }
+
+    func testResolveAppBundleReturnsNilForBareBinary() {
+        let launcher = makeLauncher()
+
+        XCTAssertNil(launcher.resolveAppBundle(forExecutable: "/usr/local/bin/chromium"))
+        XCTAssertNil(launcher.resolveAppBundle(forExecutable: "/tmp/just-a-binary"))
+    }
+
+    func testBuildOpenLaunchArgsRoutesThroughLaunchServicesWithChromeArgs() {
+        let launcher = makeLauncher()
+        let chromeArgs = launcher.buildLaunchArgs(
+            cdpPort: 9333,
+            launchUrl: "http://127.0.0.1:5710",
+            userDataDir: "/tmp/profile",
+            extensionPath: nil
+        )
+        let args = launcher.buildOpenLaunchArgs(
+            appBundlePath: "/Applications/Google Chrome.app",
+            chromeArgs: chromeArgs
+        )
+
+        // The `-n -a <bundle> -W --args …` shape is what frees Chrome from
+        // slicc-server's TCC responsibility chain. Pin the prefix so a
+        // refactor that drops `--args` (which would swallow the Chrome
+        // flags into `open`'s own option parser) breaks the build.
+        XCTAssertEqual(args[0], "-n")
+        XCTAssertEqual(args[1], "-a")
+        XCTAssertEqual(args[2], "/Applications/Google Chrome.app")
+        XCTAssertEqual(args[3], "-W")
+        XCTAssertEqual(args[4], "--args")
+        XCTAssertEqual(Array(args.suffix(chromeArgs.count)), chromeArgs)
+    }
+
     func testResolveUserDataDirAddsSuffixForNonDefaultServePort() {
         let launcher = makeLauncher(environment: ["TMPDIR": "/tmp/runtime"])
 
