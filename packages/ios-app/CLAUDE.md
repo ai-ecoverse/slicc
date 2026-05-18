@@ -10,42 +10,48 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 
 ## Layout
 
-| Path                                                                                                 | Purpose                                                                                                                                                                                                                     |
-| ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SliccFollower/App/SliccFollowerApp.swift`, `App/AppState.swift`                                     | App entry + central `@MainActor AppState` (connection lifecycle, per-scoop message buffers, sprinkle state, CDP bridge wiring)                                                                                              |
-| `SliccFollower/Models/SyncProtocol.swift`                                                            | `Codable` mirror of `packages/webapp/src/scoops/tray-sync-protocol.ts`. Source of truth for the wire format on the Swift side — **must stay in sync** with the TS file                                                      |
-| `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`                                   | Chat + signaling data types                                                                                                                                                                                                 |
-| `SliccFollower/Sync/FollowerSyncManager.swift`                                                       | Legacy delegate-based sync manager. **Newer protocol messages (scoops/sprinkles/CDP/federated targets) are handled by `AppState.handleDataChannelMessage` directly** — `FollowerSyncManager` only routes a subset of events |
-| `SliccFollower/Sync/Keepalive.swift`                                                                 | `DataChannelKeepalive` ping/pong actor                                                                                                                                                                                      |
-| `SliccFollower/Networking/TraySignaling.swift`, `TrayFollowerConnector.swift`, `WebRTCManager.swift` | Signaling client + WebRTC peer/data-channel setup                                                                                                                                                                           |
-| `SliccFollower/CDP/CDPBridge.swift`, `CDPTarget.swift`                                               | Hosts WKWebViews as CDP targets the leader can drive remotely                                                                                                                                                               |
-| `SliccFollower/Views/ChatView.swift`, `MessageListView.swift`, `MessageWebView.swift`                | SwiftUI chat surface; `MessageWebView` is a WKWebView that streams messages via JS for performance                                                                                                                          |
-| `SliccFollower/Views/SprinkleWebView.swift`, `InlineSprinkleView.swift`, `SprinkleSidebarView.swift` | Renders `.shtml` sprinkle content received from the leader via `sprinkle.content`. Bridge calls (`lick`, `setState`, etc.) are intercepted via `WKScriptMessageHandler` — VFS APIs are stubbed (graceful degradation)       |
-| `SliccFollower/Views/TabsCarouselView.swift`                                                         | Carousel of locally hosted CDP target WKWebViews                                                                                                                                                                            |
-| `SliccFollower/WebView/`                                                                             | Static `chat.html` / `chat.css` / `chat.js` for the chat WebView surface (bundled as resources)                                                                                                                             |
-| `SliccFollower/Resources/Assets.xcassets`                                                            | App icon + asset catalog                                                                                                                                                                                                    |
-| `SliccFollowerTests/`                                                                                | XCTest target                                                                                                                                                                                                               |
+| Path                                                                                                                                                                                          | Purpose                                                                                                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SliccFollower/App/SliccFollowerApp.swift`, `App/AppState.swift`                                                                                                                              | App entry + central `@MainActor AppState` (connection lifecycle, per-scoop message buffers, sprinkle state, CDP bridge wiring)                                                                                              |
+| `SliccFollower/Models/SyncProtocol.swift`                                                                                                                                                     | `Codable` mirror (partial — see "Protocol Mirror Invariant" below) of `packages/webapp/src/scoops/tray-sync-protocol.ts`                                                                                                    |
+| `SliccFollower/Models/ChatMessage.swift`, `Models/TrayTypes.swift`                                                                                                                            | Chat + signaling data types                                                                                                                                                                                                 |
+| `SliccFollower/Sync/FollowerSyncManager.swift`                                                                                                                                                | Legacy delegate-based sync manager. **Newer protocol messages (scoops/sprinkles/CDP/federated targets) are handled by `AppState.handleDataChannelMessage` directly** — `FollowerSyncManager` only routes a subset of events |
+| `SliccFollower/Sync/Keepalive.swift`                                                                                                                                                          | `DataChannelKeepalive` ping/pong actor                                                                                                                                                                                      |
+| `SliccFollower/Networking/TraySignaling.swift`, `TrayFollowerConnector.swift`, `WebRTCManager.swift`                                                                                          | Signaling client + WebRTC peer/data-channel setup                                                                                                                                                                           |
+| `SliccFollower/CDP/CDPBridge.swift`, `CDPTarget.swift`                                                                                                                                        | Hosts WKWebViews as CDP targets the leader can drive remotely                                                                                                                                                               |
+| `SliccFollower/Views/ChatView.swift`, `MessageListView.swift`                                                                                                                                 | SwiftUI chat surface. `MessageListView` is the active renderer; `MessageWebView.swift` is a retired WKWebView-based predecessor that lingers on disk but is no longer wired                                                 |
+| `SliccFollower/Views/SprinkleWebView.swift`, `InlineSprinkleView.swift`, `SprinkleSidebarView.swift`                                                                                          | Renders `.shtml` sprinkle content received from the leader via `sprinkle.content`. Bridge calls (`lick`, `setState`, etc.) intercepted via `WKScriptMessageHandler` — VFS APIs are stubbed (graceful degradation)           |
+| `SliccFollower/Views/TabsCarouselView.swift`                                                                                                                                                  | Carousel of locally hosted CDP target WKWebViews                                                                                                                                                                            |
+| Other views (`ChatFixture.swift`, `ConnectionStatusView.swift`, `ContentView.swift`, `InputBar.swift`, `MarkdownText.swift`, `MessageBubble.swift`, `SettingsView.swift`, `SliccIcons.swift`) | Top-level shell + smaller UI fragments — not exhaustive                                                                                                                                                                     |
+| `SliccFollower/WebView/`                                                                                                                                                                      | Static `chat.html` / `chat.css` / `chat.js` resources bundled by the retired `MessageWebView` path; still copied by the current build                                                                                       |
+| `SliccFollower/Resources/Assets.xcassets`                                                                                                                                                     | App icon + asset catalog                                                                                                                                                                                                    |
+
+`Package.swift` declares only the library product — there is no XCTest target yet, so `swift test` is a no-op until one is added.
 
 ## Protocol Mirror Invariant
 
-`Models/SyncProtocol.swift` mirrors `packages/webapp/src/scoops/tray-sync-protocol.ts` message-for-message. When you change one side of the protocol:
+`Models/SyncProtocol.swift` mirrors a **subset** of `packages/webapp/src/scoops/tray-sync-protocol.ts` — see the matrix in `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture". Federated `cdp.response` / `cdp.event` / `tab.opened` / `tab.open.error` in either direction, follower-initiated `cdp.request` and `tab.open`, and federated `fs.*` are TS-only today. The file headers at `SyncProtocol.swift:145` and `:334` declare the omission explicitly.
+
+When you change the protocol:
 
 1. Update the TS union in `tray-sync-protocol.ts`.
-2. Update the Swift `Codable` enum (and `CodingKeys`) in `Models/SyncProtocol.swift`.
+2. Update the Swift `Codable` enum (`LeaderToFollowerMessage` and/or `FollowerToLeaderMessage`) **including the matching arm in the `init(from:)` decoder switch**. Adding only the enum case without the decoder branch falls through to `.unknown` on `LeaderToFollowerMessage` (silent drop) or throws on `FollowerToLeaderMessage` (loud).
 3. Update the leader broadcast in `tray-leader-sync.ts`.
-4. Update the **browser** follower in `tray-follower-sync.ts` AND the **iOS** follower in `AppState.handleDataChannelMessage`.
-5. Bump tests on both sides.
+4. Update each follower that needs to handle the new message:
+   - **Browser follower (TS)**: extend the `handleLeaderMessage` switch in `tray-follower-sync.ts`, plus the page-side controller wiring if the change is user-visible.
+   - **iOS follower (Swift)**: for newer messages (scoops/sprinkles/CDP/federated-targets family), edit `AppState.handleDataChannelMessage`. For legacy chat events (`agent_event` variants, `snapshot`, `user_message_echo`), edit `FollowerSyncManager.swift` instead — those flow through its delegate.
+5. Bump tests on both sides. Note: `swift test` is unavailable today (no XCTest target), so Swift parity is enforced by inspection until a test target lands.
 
-Skipping step 4 (iOS) results in the iOS app silently dropping new message types via the `unknown` case in `LeaderToFollowerMessage.init(from:)`.
+Skipping the iOS update lets `LeaderToFollowerMessage.init(from:)` quietly drop the new message via the `.unknown` case — no crash, no log, the feature just doesn't reach the iOS user. This is the most common form of protocol drift in this codebase.
 
 ## What this app supports vs the browser follower
 
-The iOS follower predates the in-browser follower for sprinkle sync. As of writing it is the **only follower** with sprinkle rendering parity if `tray-follower-sync.ts` has not been updated. When implementing follower-side features on the TS side, model the behavior on `AppState`:
+Both followers now implement sprinkle rendering (the TS implementation landed in this branch and matches the iOS surface). iOS remains the longer-deployed reference; when adding a follower-side feature on the TS side, model the behavior on `AppState`:
 
 - Connection lifecycle: `connect()` / `disconnect()` / `dataChannelOpened()` / `handleDisconnect(reason:)`
 - Message dispatch: `handleDataChannelMessage(_ data: Data)` switch
 - Sprinkles: `refreshSprinkles()`, `fetchSprinkleContent(_:)` with chunk reassembly + waiter dedup, `sendSprinkleLick(_:body:targetScoop:)`, `handleSprinkleContent(...)`
-- Multi-scoop: `selectScoop`, `swipeToNext/PreviousScoop`, per-scoop `messagesByScoop` buffer + scheduled flush throttling
+- Multi-scoop: `selectScoop`, `swipeToNextScoop` / `swipeToPreviousScoop`, per-scoop `messagesByScoop` buffer + scheduled flush throttling
 - Agent events: `handleAgentEvent(_:scoopJid:)` with the same scoop-targeted buffer update + per-render-loop throttle
 
 ## Build
@@ -53,7 +59,6 @@ The iOS follower predates the in-browser follower for sprinkle sync. As of writi
 ```bash
 cd packages/ios-app
 swift build                                      # Library build (CI smoke)
-swift test                                       # Unit tests
 xcodegen generate                                # Regenerate SliccFollower.xcodeproj from project.yml
 xcodebuild -project SliccFollower.xcodeproj …    # IPA / TestFlight builds
 ```
@@ -62,7 +67,8 @@ TestFlight automation lives in `scripts/package-and-upload-testflight.sh` (consu
 
 ## Related Guides
 
-- `packages/webapp/src/scoops/tray-sync-protocol.ts` — canonical protocol (the file this app's `SyncProtocol.swift` mirrors)
+- `packages/webapp/src/scoops/tray-sync-protocol.ts` — canonical protocol (the file this app's `SyncProtocol.swift` partially mirrors)
 - `packages/webapp/src/scoops/tray-leader-sync.ts` — leader-side broadcast/respond logic
-- `packages/webapp/src/scoops/tray-follower-sync.ts` — browser follower; mirrors a subset of this app's responsibilities
+- `packages/webapp/src/scoops/tray-follower-sync.ts` — browser follower
+- `packages/webapp/src/ui/sprinkle-follower-controller.ts` — browser follower's page-side sprinkle renderer (mirrors `SprinkleWebView` behavior)
 - `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture" — cross-float overview

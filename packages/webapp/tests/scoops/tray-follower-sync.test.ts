@@ -1561,5 +1561,147 @@ describe('FollowerSyncManager', () => {
         })
       ).not.toThrow();
     });
+
+    // C4: the chunked branch used to silently create a buffer for an unknown
+    // requestId, accumulate chunks, and on completion write the assembled
+    // content into `sprinkleContentCache` — even though no waiter existed.
+    // A misbehaving (or replaying) leader could then poison the cache. The
+    // fix mirrors the non-chunked guard: drop unsolicited deliveries.
+    it('drops chunked sprinkle.content for an unknown requestId without poisoning the cache', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      // No pending fetch — deliver chunked content anyway.
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId: 'stale',
+        sprinkleName: 'gone',
+        content: 'poison-1',
+        chunkIndex: 0,
+        totalChunks: 1,
+      });
+
+      // A subsequent legitimate fetch for the same sprinkle name must go on
+      // the wire — the cache must not have been pre-populated by the stale
+      // delivery.
+      const pending = follower.fetchSprinkleContent('gone');
+      const sent = channel.parseSent();
+      expect(sent).toHaveLength(1);
+      expect(sent[0].type).toBe('sprinkle.fetch');
+      if (sent[0].type !== 'sprinkle.fetch') throw new Error('unreachable');
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId: sent[0].requestId,
+        sprinkleName: 'gone',
+        content: 'fresh',
+      });
+      await expect(pending).resolves.toBe('fresh');
+    });
+
+    it('drops chunked sprinkle.content with chunkIndex out of bounds', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      void follower.fetchSprinkleContent('x').catch(() => {});
+      const sent = channel.parseSent();
+      if (sent[0].type !== 'sprinkle.fetch') throw new Error('unreachable');
+      const requestId = sent[0].requestId;
+
+      // Misbehaving leader: chunkIndex equals totalChunks (out of [0, total)).
+      expect(() =>
+        channel.simulateLeaderMessage({
+          type: 'sprinkle.content',
+          requestId,
+          sprinkleName: 'x',
+          content: 'bad',
+          chunkIndex: 5,
+          totalChunks: 3,
+        })
+      ).not.toThrow();
+      // Also negative chunkIndex.
+      expect(() =>
+        channel.simulateLeaderMessage({
+          type: 'sprinkle.content',
+          requestId,
+          sprinkleName: 'x',
+          content: 'bad',
+          chunkIndex: -1,
+          totalChunks: 3,
+        })
+      ).not.toThrow();
+    });
+
+    it('does not double-count duplicate chunks (idempotent)', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const pending = follower.fetchSprinkleContent('big');
+      const sent = channel.parseSent();
+      if (sent[0].type !== 'sprinkle.fetch') throw new Error('unreachable');
+      const requestId = sent[0].requestId;
+
+      // Duplicate chunk 0 should NOT advance the completion count toward 3.
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'big',
+        content: 'A',
+        chunkIndex: 0,
+        totalChunks: 3,
+      });
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'big',
+        content: 'A-dup',
+        chunkIndex: 0,
+        totalChunks: 3,
+      });
+      // Promise must NOT have resolved yet (only 1 of 3 unique chunks).
+      let resolved = false;
+      void pending.then(() => {
+        resolved = true;
+      });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'big',
+        content: 'B',
+        chunkIndex: 1,
+        totalChunks: 3,
+      });
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'big',
+        content: 'C',
+        chunkIndex: 2,
+        totalChunks: 3,
+      });
+      await expect(pending).resolves.toBe('ABC');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Default case + last-error replay (suggestions S2 / I5 from the PR review).
+  // ---------------------------------------------------------------------------
+
+  describe('protocol drift safety', () => {
+    it('logs but does not throw on an unknown leader message type', () => {
+      const channel = new FakeChannel();
+      new FollowerSyncManager(channel);
+
+      expect(() =>
+        channel.simulateLeaderMessage({
+          // Intentionally invent a type the switch does not handle.
+          type: 'future.feature' as unknown as 'snapshot',
+          messages: [],
+          scoopJid: '',
+        } as never)
+      ).not.toThrow();
+    });
   });
 });

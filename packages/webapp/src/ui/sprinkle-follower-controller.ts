@@ -58,6 +58,8 @@ interface OpenEntry {
   container: HTMLElement;
 }
 
+type UpdateCallback = (data: unknown) => void;
+
 export class SprinkleFollowerController {
   private readonly sync: SprinkleFollowerSync;
   private readonly addSprinkle: SprinkleFollowerControllerOptions['addSprinkle'];
@@ -67,6 +69,31 @@ export class SprinkleFollowerController {
   private readonly open = new Map<string, OpenEntry>();
   /** Sprinkle names with an in-flight open, used to dedupe rapid `updateAvailable` calls. */
   private readonly opening = new Set<string>();
+  /**
+   * Latest desired-open snapshot the controller has been told to honor. Used
+   * by `openLocally` after the await on `fetchSprinkleContent` resolves to
+   * decide whether the leader still wants this sprinkle open — otherwise a
+   * leader-driven close mid-fetch would lead to a zombie sprinkle attached
+   * after the controller had already been told to drop it.
+   */
+  private latestDesiredOpen = new Set<string>();
+  /**
+   * Buffered `sprinkle.update` payloads keyed by sprinkleName, for sprinkles
+   * currently in `opening` (the renderer doesn't exist yet, so we can't push
+   * directly). Latest update wins — mirrors the iOS follower's
+   * `AppState.sprinkleUpdates[name]` behavior. Replayed once the open
+   * completes, then cleared.
+   */
+  private readonly pendingUpdates = new Map<string, unknown>();
+  /**
+   * Per-sprinkle update listener registry. The renderer's `pushUpdate` only
+   * reaches the rendered context for iframe-based modes (extension sandbox,
+   * full-doc srcdoc). In **CLI inline mode** the renderer executes the
+   * sprinkle's `<script>` directly in the panel, so the only path for
+   * `slicc.on('update', cb)` to receive updates is this registry — fanned
+   * out alongside `renderer.pushUpdate` in `handleSprinkleUpdate`.
+   */
+  private readonly updateListeners = new Map<string, Set<UpdateCallback>>();
   private disposed = false;
 
   constructor(options: SprinkleFollowerControllerOptions) {
@@ -90,10 +117,19 @@ export class SprinkleFollowerController {
     for (const s of sprinkles) {
       if (s.open) desiredOpen.set(s.name, s);
     }
+    // Publish before we start any awaits so a concurrent `openLocally` can
+    // see the latest snapshot when its fetch resolves.
+    this.latestDesiredOpen = new Set(desiredOpen.keys());
 
     // Close anything that's open locally but no longer open on the leader.
     for (const name of [...this.open.keys()]) {
       if (!desiredOpen.has(name)) this.closeLocally(name);
+    }
+    // Drop buffered updates for sprinkles the leader no longer wants open.
+    // Otherwise a re-open via a fresh `sprinkles.list` would surface a stale
+    // update from a different lifecycle.
+    for (const name of [...this.pendingUpdates.keys()]) {
+      if (!desiredOpen.has(name)) this.pendingUpdates.delete(name);
     }
 
     // Open everything that's open on the leader but not yet here.
@@ -105,14 +141,35 @@ export class SprinkleFollowerController {
     await Promise.allSettled(opens);
   }
 
-  /** Handle a `sprinkle.update` payload from the leader. */
+  /**
+   * Handle a `sprinkle.update` payload from the leader.
+   *
+   * Three cases:
+   *   - Sprinkle is open → push to its renderer AND fan out to bridge listeners.
+   *   - Sprinkle is in `opening` (fetch in flight) → buffer the latest payload
+   *     so it can be replayed when the open finishes (mirrors iOS).
+   *   - Otherwise → drop silently. The leader is sending an update for a
+   *     sprinkle the follower never opened (race, or the leader closed it
+   *     between broadcasts).
+   */
   handleSprinkleUpdate(sprinkleName: string, data: unknown): void {
+    if (this.disposed) return;
+
     const entry = this.open.get(sprinkleName);
-    if (!entry) {
-      log.debug('Dropping sprinkle.update for closed sprinkle', { sprinkleName });
+    if (entry) {
+      entry.renderer.pushUpdate(data);
+      this.fanOutToListeners(sprinkleName, data);
       return;
     }
-    entry.renderer.pushUpdate(data);
+
+    if (this.opening.has(sprinkleName)) {
+      // Buffer the latest update — replayed by `openLocally` after the fetch
+      // resolves and the sprinkle attaches.
+      this.pendingUpdates.set(sprinkleName, data);
+      return;
+    }
+
+    log.debug('Dropping sprinkle.update for unknown sprinkle', { sprinkleName });
   }
 
   /** Tear down all open sprinkles. */
@@ -120,6 +177,8 @@ export class SprinkleFollowerController {
     if (this.disposed) return;
     this.disposed = true;
     for (const name of [...this.open.keys()]) this.closeLocally(name);
+    this.pendingUpdates.clear();
+    this.latestDesiredOpen.clear();
   }
 
   // ---------------------------------------------------------------------------
@@ -133,6 +192,7 @@ export class SprinkleFollowerController {
       content = await this.sync.fetchSprinkleContent(name);
     } catch (err) {
       this.opening.delete(name);
+      this.pendingUpdates.delete(name);
       log.warn('Failed to fetch sprinkle content from leader', {
         sprinkleName: name,
         error: err instanceof Error ? err.message : String(err),
@@ -140,11 +200,14 @@ export class SprinkleFollowerController {
       return;
     }
 
-    // Re-check guards: another updateAvailable might have closed the sprinkle
-    // (or disposed the controller) while we awaited content. Skip in that
-    // case so we don't double-attach.
-    if (this.disposed) {
+    // Re-check both guards after the await: the controller may have been
+    // disposed, OR the leader may have closed the sprinkle while the fetch
+    // was in flight. In either case we must NOT attach — otherwise we'd
+    // leave a zombie sprinkle in the rail that the next reconcile would
+    // tear down (visible UX regression).
+    if (this.disposed || !this.latestDesiredOpen.has(name)) {
       this.opening.delete(name);
+      this.pendingUpdates.delete(name);
       return;
     }
 
@@ -173,9 +236,47 @@ export class SprinkleFollowerController {
       // Leave the rail entry in place but the renderer may be partial. The
       // user's next reconcile will tear it down if the leader closes it.
     }
+
+    // Replay any update payload that arrived during the fetch await. The
+    // leader has no signal that the follower is still loading, so without
+    // this the first update post-open would be silently lost.
+    const buffered = this.pendingUpdates.get(name);
+    if (buffered !== undefined) {
+      this.pendingUpdates.delete(name);
+      renderer.pushUpdate(buffered);
+      this.fanOutToListeners(name, buffered);
+    }
+  }
+
+  /**
+   * Fan an update payload out to every callback registered against this
+   * sprinkle via the bridge's `on('update', cb)`. Listener exceptions are
+   * isolated — one broken handler does not starve siblings.
+   */
+  private fanOutToListeners(sprinkleName: string, data: unknown): void {
+    const listeners = this.updateListeners.get(sprinkleName);
+    if (!listeners) return;
+    // Snapshot before iterating so a listener calling `off()` mid-fan-out
+    // doesn't disturb the iteration order.
+    for (const cb of [...listeners]) {
+      try {
+        cb(data);
+      } catch (err) {
+        log.warn('Sprinkle update listener threw', {
+          sprinkleName,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   private closeLocally(name: string): void {
+    // Clear listeners and pending updates regardless of whether the entry is
+    // present — a re-open of the same sprinkle name must not inherit stale
+    // listeners or undelivered updates from the previous renderer.
+    this.updateListeners.delete(name);
+    this.pendingUpdates.delete(name);
+
     const entry = this.open.get(name);
     if (!entry) return;
     try {
@@ -215,14 +316,19 @@ export class SprinkleFollowerController {
         // owns `getSprinkleRoute(name)`, so we don't compute a targetScoop here.
         this.sync.sendSprinkleLick(sprinkleName, { action, data });
       },
-      on: () => {
-        /* Update listeners live in the renderer (sandbox or inline). The
-         * SprinkleRenderer.pushUpdate path forwards `sprinkle.update` payloads
-         * into the rendered context — no separate listener registry needed at
-         * the controller level. */
+      on: (event, callback) => {
+        if (event !== 'update') return;
+        let set = this.updateListeners.get(sprinkleName);
+        if (!set) {
+          set = new Set();
+          this.updateListeners.set(sprinkleName, set);
+        }
+        set.add(callback);
       },
-      off: () => {
-        /* See `on`. */
+      off: (event, callback) => {
+        if (event !== 'update') return;
+        const set = this.updateListeners.get(sprinkleName);
+        set?.delete(callback);
       },
       readFile: () =>
         Promise.reject(new Error('readFile not supported in follower-rendered sprinkle')),
@@ -239,15 +345,26 @@ export class SprinkleFollowerController {
       setState: (data) => {
         try {
           localStorage.setItem(`slicc-sprinkle-state:${sprinkleName}`, JSON.stringify(data));
-        } catch {
-          /* localStorage full */
+        } catch (err) {
+          // Real failure modes here: QuotaExceededError, SecurityError
+          // (Safari private mode), JSON.stringify on circular refs. The
+          // sprinkle silently loses its persisted state — log so the
+          // failure is at least observable in DevTools.
+          log.warn('Sprinkle setState failed', {
+            sprinkleName,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       },
       getState: () => {
         try {
           const raw = localStorage.getItem(`slicc-sprinkle-state:${sprinkleName}`);
           return raw ? JSON.parse(raw) : null;
-        } catch {
+        } catch (err) {
+          log.warn('Sprinkle getState failed', {
+            sprinkleName,
+            error: err instanceof Error ? err.message : String(err),
+          });
           return null;
         }
       },

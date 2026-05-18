@@ -329,8 +329,15 @@ async function init(): Promise<void> {
             // for `sprinkles.list` / `sprinkle.update` are bound above.
             const hub: OffscreenMessageHub = {
               sendToPanel: (envelope) => {
-                chrome.runtime.sendMessage(envelope).catch(() => {
-                  // No panel open — expected, drop silently.
+                chrome.runtime.sendMessage(envelope).catch((err: unknown) => {
+                  // "Could not establish connection. Receiving end does not
+                  // exist" is the expected case (no panel open) — drop it.
+                  // Anything else (extension-context-invalidated, message
+                  // length exceeded, serialization errors on non-cloneable
+                  // payloads) is worth a log so the failure is observable.
+                  const msg = err instanceof Error ? err.message : String(err);
+                  if (/receiving end does not exist/i.test(msg)) return;
+                  log.warn('Offscreen → panel sendMessage failed', { error: msg });
                 });
               },
               onPanelMessage: (handler) => {

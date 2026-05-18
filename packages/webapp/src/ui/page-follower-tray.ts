@@ -191,6 +191,12 @@ export function startPageFollowerTray(
       activeSprinkleController = sprinkleController;
     }
 
+    // Throttled error logging — `refreshTargets` runs every 5 s, so a
+    // sustained CDP failure (browser crashed, permission revoked) must not
+    // flood logs. We log once on transition to failing and at most once per
+    // ~minute thereafter so the user has some signal in DevTools that
+    // federated CDP is silently broken.
+    let lastTargetErrorLogAt = 0;
     const refreshTargets = async (): Promise<void> => {
       try {
         const pages = await options.browserAPI.listPages();
@@ -202,8 +208,14 @@ export function startPageFollowerTray(
           pages.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url })),
           runtimeId
         );
-      } catch {
-        /* ignore — best-effort target advertisement */
+      } catch (err) {
+        const now = Date.now();
+        if (now - lastTargetErrorLogAt > 60_000) {
+          lastTargetErrorLogAt = now;
+          log.warn('Follower target advertisement failed (best-effort)', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     };
 

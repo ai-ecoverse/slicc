@@ -2,8 +2,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import {
   PanelFollowerSprinkleProxy,
   connectOffscreenFollowerSprinkleBridge,
-  type OffscreenFollowerSprinkleSync,
 } from '../src/follower-sprinkle-bridge.js';
+import type { SprinkleFollowerSync } from '../../../packages/webapp/src/ui/sprinkle-follower-controller.js';
 import type { SprinkleSummary } from '../../../packages/webapp/src/scoops/tray-sync-protocol.js';
 
 /**
@@ -40,7 +40,7 @@ function createBus() {
   };
 }
 
-function makeOffscreenSync(): OffscreenFollowerSprinkleSync & {
+function makeOffscreenSync(): SprinkleFollowerSync & {
   fetched: string[];
   licks: Array<{ name: string; body: unknown; targetScoop?: string }>;
   contentByName: Map<string, string>;
@@ -172,32 +172,79 @@ describe('PanelFollowerSprinkleProxy ↔ OffscreenFollowerSprinkleBridge', () =>
     expect(onSprinklesList).toHaveBeenCalled();
   });
 
-  it('detach() stops the offscreen bridge from receiving further panel messages', async () => {
-    const proxy = new PanelFollowerSprinkleProxy(bus.panelSender, bus.panelSubscriber);
-    // First fetch through the bridge works.
-    offscreenSync.contentByName.set('one', 'first');
-    await expect(proxy.fetchSprinkleContent('one')).resolves.toBe('first');
-
-    // Detach the active bridge.
-    // (The bridge constructed in beforeEach is the one to detach.)
-    // Hard to grab from outside, so we wire a second bridge then detach the first:
-    // Mimic the realistic scenario where a reconnect builds a new bridge.
-    // For this test we just detach and confirm new sends produce no fetches.
-    const secondBridge = connectOffscreenFollowerSprinkleBridge(bus.offscreenHub, offscreenSync);
-    secondBridge.detach();
-    // Both bridges are now offscreen handlers; the first one still works.
-    // To prove detach() works, build a fresh bus.
+  it('detach() stops the offscreen bridge from forwarding new payloads to the panel', () => {
     const bus2 = createBus();
     const offscreenSync2 = makeOffscreenSync();
-    const lonely = connectOffscreenFollowerSprinkleBridge(bus2.offscreenHub, offscreenSync2);
-    lonely.detach();
-    const proxy2 = new PanelFollowerSprinkleProxy(bus2.panelSender, bus2.panelSubscriber);
-    // No-one is listening for fetch requests now.
-    const hanging = proxy2.fetchSprinkleContent('whatever');
-    await new Promise((r) => setTimeout(r, 5));
-    // The fetch is still pending — nothing on the other side will resolve it.
-    expect(offscreenSync2.fetched).toEqual([]);
-    proxy2.dispose(); // Reject to avoid an unhandled-promise warning.
-    await expect(hanging).rejects.toThrow(/disposed/);
+    const onSprinklesList = vi.fn();
+    new PanelFollowerSprinkleProxy(bus2.panelSender, bus2.panelSubscriber, { onSprinklesList });
+    const bridge2 = connectOffscreenFollowerSprinkleBridge(bus2.offscreenHub, offscreenSync2);
+
+    // Before detach, forwards land in the panel listener.
+    bridge2.forwardSprinklesList([
+      { name: 'a', title: 'A', path: '/a.shtml', open: true, autoOpen: false },
+    ]);
+    expect(onSprinklesList).toHaveBeenCalledTimes(1);
+
+    // After detach, subsequent forwards are no-ops.
+    bridge2.detach();
+    bridge2.forwardSprinklesList([]);
+    bridge2.forwardSprinkleUpdate('a', { step: 1 });
+    expect(onSprinklesList).toHaveBeenCalledTimes(1);
+  });
+
+  it('detach() drops in-flight fetch replies started before detach (no late envelope leak)', async () => {
+    const bus2 = createBus();
+    let resolveFetch!: (s: string) => void;
+    const stuckSync: SprinkleFollowerSync = {
+      fetchSprinkleContent: () =>
+        new Promise<string>((r) => {
+          resolveFetch = r;
+        }),
+      sendSprinkleLick: () => {},
+    };
+    const bridge = connectOffscreenFollowerSprinkleBridge(bus2.offscreenHub, stuckSync);
+    const proxy = new PanelFollowerSprinkleProxy(
+      bus2.panelSender,
+      bus2.panelSubscriber,
+      {},
+      {
+        fetchTimeoutMs: 1_000_000,
+      }
+    );
+
+    const pending = proxy.fetchSprinkleContent('x');
+    // Detach the offscreen bridge BEFORE the leader-side fetch resolves.
+    bridge.detach();
+    resolveFetch('late content');
+    // The bridge must not have forwarded the result to the panel; the fetch
+    // promise stays pending. Confirm by racing against a short timer.
+    const winner = await Promise.race([
+      pending.then(() => 'resolved' as const),
+      new Promise<'still-pending'>((r) => setTimeout(() => r('still-pending'), 25)),
+    ]);
+    expect(winner).toBe('still-pending');
+    proxy.dispose(); // Avoid an unhandled rejection.
+    await expect(pending).rejects.toThrow(/disposed/);
+  });
+
+  it('fetchSprinkleContent times out when offscreen never responds', async () => {
+    const bus2 = createBus();
+    // No bridge wired against bus2 — fetches enter the void.
+    const proxy = new PanelFollowerSprinkleProxy(
+      bus2.panelSender,
+      bus2.panelSubscriber,
+      {},
+      {
+        fetchTimeoutMs: 20,
+      }
+    );
+
+    await expect(proxy.fetchSprinkleContent('x')).rejects.toThrow(/timed out/i);
+  });
+
+  it('fetchSprinkleContent rejects synchronously when called on a disposed proxy', async () => {
+    const proxy = new PanelFollowerSprinkleProxy(bus.panelSender, bus.panelSubscriber);
+    proxy.dispose();
+    await expect(proxy.fetchSprinkleContent('x')).rejects.toThrow(/disposed/);
   });
 });

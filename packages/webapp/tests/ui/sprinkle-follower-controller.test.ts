@@ -45,7 +45,13 @@ const FakeRenderer = SprinkleRenderer as unknown as {
     rendered: string;
     disposed: boolean;
     pushed: unknown[];
-    api: { lick: (e: unknown) => void; close: () => void; stopCone: () => void };
+    api: {
+      lick: (e: unknown) => void;
+      close: () => void;
+      stopCone: () => void;
+      on: (event: 'update', cb: (data: unknown) => void) => void;
+      off: (event: 'update', cb: (data: unknown) => void) => void;
+    };
   }>;
   reset(): void;
 };
@@ -60,26 +66,59 @@ function makeSprinkle(name: string, opts: Partial<SprinkleSummary> = {}): Sprink
   };
 }
 
-function makeFakeSync(): SprinkleFollowerSync & {
+interface FakeSync extends SprinkleFollowerSync {
   fetched: string[];
   licks: Array<{ name: string; body: unknown; targetScoop?: string }>;
   contentByName: Map<string, string>;
-} {
+  /** When set for a given name, calls to `fetchSprinkleContent(name)` resolve
+   *  only when the test invokes the returned resolver. Used to drive timing
+   *  races (e.g. close-while-opening, update-during-open). */
+  installManualFetch(name: string): {
+    resolve: (content: string) => void;
+    reject: (err: Error) => void;
+  };
+}
+
+function makeFakeSync(): FakeSync {
   const contentByName = new Map<string, string>();
   const fetched: string[] = [];
   const licks: Array<{ name: string; body: unknown; targetScoop?: string }> = [];
-  const sync: SprinkleFollowerSync = {
-    fetchSprinkleContent: vi.fn(async (name: string) => {
+  const manualGate = new Map<
+    string,
+    { resolve: (content: string) => void; reject: (err: Error) => void }
+  >();
+
+  const sync = {
+    fetched,
+    licks,
+    contentByName,
+    fetchSprinkleContent: vi.fn(async (name: string): Promise<string> => {
       fetched.push(name);
+      const gate = manualGate.get(name);
+      if (gate) {
+        manualGate.delete(name);
+        return new Promise<string>((resolve, reject) => {
+          gate.resolve = resolve;
+          gate.reject = reject;
+        });
+      }
       const content = contentByName.get(name);
       if (content === undefined) throw new Error(`no content stub for ${name}`);
       return content;
     }),
-    sendSprinkleLick: vi.fn((name, body, targetScoop) => {
+    sendSprinkleLick: vi.fn((name: string, body: unknown, targetScoop?: string) => {
       licks.push({ name, body, targetScoop });
     }),
+    installManualFetch(name: string) {
+      const handle = {
+        resolve: (() => {}) as (content: string) => void,
+        reject: (() => {}) as (err: Error) => void,
+      };
+      manualGate.set(name, handle);
+      return handle;
+    },
   };
-  return Object.assign(sync, { fetched, licks, contentByName });
+  return sync as FakeSync;
 }
 
 describe('SprinkleFollowerController', () => {
@@ -251,6 +290,164 @@ describe('SprinkleFollowerController', () => {
       expect(removeSprinkle).toHaveBeenCalledWith('a');
       expect(removeSprinkle).toHaveBeenCalledWith('b');
       expect(FakeRenderer.instances.every((r) => r.disposed)).toBe(true);
+    });
+
+    it('handleSprinkleUpdate after dispose is a no-op (I7 disposed guard)', async () => {
+      sync.contentByName.set('a', '<p>a</p>');
+      await controller.updateAvailable([makeSprinkle('a', { open: true })]);
+      const renderer = FakeRenderer.instances[0];
+
+      controller.dispose();
+      controller.handleSprinkleUpdate('a', { stale: true });
+
+      // pushUpdate should not have been called for the post-dispose payload.
+      expect(renderer.pushed).toEqual([]);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Concurrency edges — C1 (update buffering), C2 (close-during-open race).
+  // The PR review caught both of these as real holes; tests pin them.
+  // ---------------------------------------------------------------------------
+
+  describe('C2: close-during-open race', () => {
+    it('does not attach a sprinkle the leader closed while content was still loading', async () => {
+      const gate = sync.installManualFetch('x');
+
+      const first = controller.updateAvailable([makeSprinkle('x', { open: true })]);
+      // Leader closes the sprinkle while the fetch is in flight.
+      await controller.updateAvailable([makeSprinkle('x', { open: false })]);
+      // Now resolve the fetch — controller must NOT attach the sprinkle.
+      gate.resolve('<p>late</p>');
+      await first;
+
+      expect(addSprinkle).not.toHaveBeenCalled();
+      expect(removeSprinkle).not.toHaveBeenCalled();
+      // No renderer should have been constructed.
+      expect(FakeRenderer.instances).toHaveLength(0);
+    });
+
+    it('does not attach when the sprinkle vanishes from the list while fetching', async () => {
+      const gate = sync.installManualFetch('x');
+
+      const first = controller.updateAvailable([makeSprinkle('x', { open: true })]);
+      await controller.updateAvailable([]);
+      gate.resolve('<p>late</p>');
+      await first;
+
+      expect(addSprinkle).not.toHaveBeenCalled();
+      expect(FakeRenderer.instances).toHaveLength(0);
+    });
+
+    it('still attaches if the latest list keeps the sprinkle open', async () => {
+      const gate = sync.installManualFetch('x');
+
+      const first = controller.updateAvailable([makeSprinkle('x', { open: true })]);
+      // A reconcile mid-fetch — still open.
+      await controller.updateAvailable([makeSprinkle('x', { open: true })]);
+      gate.resolve('<p>ok</p>');
+      await first;
+
+      expect(addSprinkle).toHaveBeenCalledTimes(1);
+      expect(FakeRenderer.instances).toHaveLength(1);
+    });
+  });
+
+  describe('C1: sprinkle.update during in-flight open', () => {
+    it('buffers a sprinkle.update arriving before the open finishes and replays it', async () => {
+      const gate = sync.installManualFetch('x');
+
+      const first = controller.updateAvailable([makeSprinkle('x', { open: true })]);
+      // Update arrives before fetch resolves — must be buffered, not dropped.
+      controller.handleSprinkleUpdate('x', { step: 1 });
+      // A second update overwrites the first (iOS behavior: latest wins).
+      controller.handleSprinkleUpdate('x', { step: 2 });
+      gate.resolve('<p>ok</p>');
+      await first;
+
+      const renderer = FakeRenderer.instances[0];
+      expect(renderer.pushed).toEqual([{ step: 2 }]);
+    });
+
+    it('does not buffer when the sprinkle gets cancelled mid-fetch', async () => {
+      const gate = sync.installManualFetch('x');
+
+      const first = controller.updateAvailable([makeSprinkle('x', { open: true })]);
+      controller.handleSprinkleUpdate('x', { step: 1 });
+      // Leader closes the sprinkle. Buffer for 'x' should be cleared.
+      await controller.updateAvailable([makeSprinkle('x', { open: false })]);
+      gate.resolve('<p>late</p>');
+      await first;
+
+      // Sprinkle was never attached — buffer should not surface anywhere.
+      expect(FakeRenderer.instances).toHaveLength(0);
+    });
+  });
+
+  describe('C3: bridge on/off update listeners (CLI inline mode)', () => {
+    it('delivers handleSprinkleUpdate payloads to bridge.on("update") listeners', async () => {
+      sync.contentByName.set('welcome', '<p>hi</p>');
+      await controller.updateAvailable([makeSprinkle('welcome', { open: true })]);
+      const received: unknown[] = [];
+      FakeRenderer.instances[0].api.on('update', (data) => received.push(data));
+
+      controller.handleSprinkleUpdate('welcome', { step: 1 });
+      controller.handleSprinkleUpdate('welcome', { step: 2 });
+
+      expect(received).toEqual([{ step: 1 }, { step: 2 }]);
+    });
+
+    it('off() removes the listener so further updates are not delivered to it', async () => {
+      sync.contentByName.set('welcome', '<p>hi</p>');
+      await controller.updateAvailable([makeSprinkle('welcome', { open: true })]);
+      const received: unknown[] = [];
+      const cb = (data: unknown) => received.push(data);
+      FakeRenderer.instances[0].api.on('update', cb);
+      FakeRenderer.instances[0].api.off('update', cb);
+
+      controller.handleSprinkleUpdate('welcome', { step: 1 });
+
+      expect(received).toEqual([]);
+    });
+
+    it('fans out to listeners AND to renderer.pushUpdate', async () => {
+      sync.contentByName.set('welcome', '<p>hi</p>');
+      await controller.updateAvailable([makeSprinkle('welcome', { open: true })]);
+      const received: unknown[] = [];
+      FakeRenderer.instances[0].api.on('update', (data) => received.push(data));
+
+      controller.handleSprinkleUpdate('welcome', { step: 1 });
+
+      expect(received).toEqual([{ step: 1 }]);
+      expect(FakeRenderer.instances[0].pushed).toEqual([{ step: 1 }]);
+    });
+
+    it('drops listener errors without breaking sibling listeners', async () => {
+      sync.contentByName.set('welcome', '<p>hi</p>');
+      await controller.updateAvailable([makeSprinkle('welcome', { open: true })]);
+      const ok: unknown[] = [];
+      FakeRenderer.instances[0].api.on('update', () => {
+        throw new Error('listener bug');
+      });
+      FakeRenderer.instances[0].api.on('update', (data) => ok.push(data));
+
+      controller.handleSprinkleUpdate('welcome', { step: 1 });
+
+      expect(ok).toEqual([{ step: 1 }]);
+    });
+
+    it('clears listeners when the sprinkle is closed locally', async () => {
+      sync.contentByName.set('welcome', '<p>hi</p>');
+      await controller.updateAvailable([makeSprinkle('welcome', { open: true })]);
+      const received: unknown[] = [];
+      FakeRenderer.instances[0].api.on('update', (data) => received.push(data));
+
+      await controller.updateAvailable([makeSprinkle('welcome', { open: false })]);
+      // Re-open; the stale listener from the previous renderer must be gone.
+      await controller.updateAvailable([makeSprinkle('welcome', { open: true })]);
+      controller.handleSprinkleUpdate('welcome', { step: 1 });
+
+      expect(received).toEqual([]);
     });
   });
 });

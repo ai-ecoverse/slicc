@@ -68,7 +68,10 @@ export interface FollowerSyncManagerOptions {
   onSprinkleUpdate?: (sprinkleName: string, data: unknown) => void;
 }
 
-/** Internal buffer for chunked sprinkle.content reassembly. Mirrors `SprinkleFetchBuffer` in iOS `AppState.swift`. */
+/** Internal buffer for chunked sprinkle.content reassembly. Mirrors the
+ *  private `SprinkleFetchBuffer` struct in `packages/ios-app/SliccFollower/
+ *  App/AppState.swift` (defined as a fileprivate type inside the `AppState`
+ *  class). */
 interface SprinkleFetchBuffer {
   sprinkleName: string;
   chunks: Map<number, string>;
@@ -454,6 +457,16 @@ export class FollowerSyncManager implements AgentHandle {
         setFollowerLastPingTime(Date.now());
         break;
       }
+      default: {
+        // Protocol drift safety net — mirrors the iOS follower's explicit
+        // `.unknown` case (`AppState.swift`). If the leader emits a new
+        // message type that this follower hasn't been updated to handle,
+        // log once and ignore rather than throwing or silently dropping.
+        log.debug('Unknown leader message type', {
+          type: (message as { type?: string }).type,
+        });
+        break;
+      }
     }
   }
 
@@ -477,19 +490,48 @@ export class FollowerSyncManager implements AgentHandle {
       return;
     }
 
+    // Both chunked and non-chunked paths require an outstanding fetch — a
+    // delivery for an unknown requestId is either a late post-disconnect
+    // arrival or a misbehaving leader. Drop silently in both cases; the
+    // previous chunked-branch behavior (auto-create a buffer) could let an
+    // unsolicited payload poison `sprinkleContentCache`.
+    if (!this.pendingSprinkleFetches.has(requestId)) {
+      log.debug('Dropping sprinkle.content for unknown requestId', {
+        sprinkleName,
+        requestId,
+      });
+      return;
+    }
+
     let assembled: string | null = null;
 
     if (chunkIndex !== undefined && totalChunks !== undefined) {
-      const buffer =
-        this.pendingSprinkleFetches.get(requestId) ??
-        ({
+      // Reject obviously-malformed chunk indices instead of accepting them
+      // into the buffer (a chunkIndex >= totalChunks would otherwise grow
+      // the buffer beyond the assembly threshold without ever satisfying
+      // the strict equality below).
+      if (chunkIndex < 0 || chunkIndex >= totalChunks) {
+        log.warn('Dropping sprinkle.content with out-of-range chunkIndex', {
           sprinkleName,
-          chunks: new Map<number, string>(),
+          chunkIndex,
           totalChunks,
-        } satisfies SprinkleFetchBuffer);
+        });
+        return;
+      }
+      const buffer = this.pendingSprinkleFetches.get(requestId)!;
       buffer.totalChunks = totalChunks;
-      buffer.chunks.set(chunkIndex, content);
-      this.pendingSprinkleFetches.set(requestId, buffer);
+      // Idempotent against duplicate chunks: only the FIRST delivery for a
+      // given index advances the completion count. A retry race or
+      // misbehaving leader sending two payloads for the same index does
+      // not falsely trigger early assembly.
+      if (!buffer.chunks.has(chunkIndex)) {
+        buffer.chunks.set(chunkIndex, content);
+      } else {
+        log.warn('Dropping duplicate sprinkle.content chunk', {
+          sprinkleName,
+          chunkIndex,
+        });
+      }
       if (buffer.chunks.size >= totalChunks) {
         const ordered: string[] = [];
         for (let i = 0; i < totalChunks; i++) {
@@ -507,12 +549,7 @@ export class FollowerSyncManager implements AgentHandle {
         this.pendingSprinkleFetches.delete(requestId);
       }
     } else {
-      // Non-chunked single response.
-      if (!this.pendingSprinkleFetches.has(requestId)) {
-        // No outstanding request — leader is misbehaving or this is a late
-        // delivery after timeout/disconnect. Drop silently rather than crash.
-        return;
-      }
+      // Non-chunked single response — request is known (checked above).
       assembled = content;
       this.pendingSprinkleFetches.delete(requestId);
     }
@@ -618,7 +655,18 @@ export class FollowerSyncManager implements AgentHandle {
 
     try {
       const result = await transport.send('Target.createTarget', { url, background: true });
-      const targetId = result['targetId'] as string;
+      const targetId = result['targetId'];
+      // Some CDP versions / target denial paths can return without a usable
+      // targetId. Surface a meaningful error instead of forwarding "undefined"
+      // and letting the leader fail later attaching to a junk id.
+      if (typeof targetId !== 'string' || targetId.length === 0) {
+        this.sync.send({
+          type: 'tab.open.error',
+          requestId,
+          error: 'Target.createTarget did not return a usable targetId',
+        });
+        return;
+      }
       this.sync.send({ type: 'tab.opened', requestId, targetId });
       this.options.onTargetsChanged?.();
     } catch (err) {
@@ -760,7 +808,22 @@ export class FollowerSyncManager implements AgentHandle {
       return;
     }
 
-    const responses = await handleFsRequest(vfs, request);
+    // Mirror the executeLocalCDP / executeLocalTabOpen pattern: any rejection
+    // from `handleFsRequest` (broken VFS, permission error, malformed path)
+    // becomes an `fs.response` with `ok: false` instead of an unhandled async
+    // rejection — otherwise the leader's `fsResolvers` entry would never
+    // resolve, hanging any caller awaiting the response.
+    let responses;
+    try {
+      responses = await handleFsRequest(vfs, request);
+    } catch (err) {
+      this.sync.send({
+        type: 'fs.response',
+        requestId,
+        response: { ok: false, error: err instanceof Error ? err.message : String(err) },
+      });
+      return;
+    }
     for (const response of responses) {
       this.sync.send({ type: 'fs.response', requestId, response });
     }

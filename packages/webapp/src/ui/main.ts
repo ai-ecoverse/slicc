@@ -1416,21 +1416,33 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // When the extension acts as a tray follower, the offscreen document hosts
   // the `FollowerSyncManager` (it has signaling + WebRTC). DOM-bound sprinkle
   // rendering lives here in the side panel. The panel↔offscreen bridge in
-  // `chrome-extension/src/follower-sprinkle-bridge.ts` carries `sprinkles.list`
-  // / `sprinkle.update` / `sprinkle.content` between them. The controller
-  // shares layout callbacks with the local `SprinkleManager` above — leader-
-  // pushed sprinkles surface in the same rail as local ones. If the offscreen
-  // is not in follower mode, no `follower-sprinkles-list` messages arrive
-  // and the controller stays idle.
+  // `chrome-extension/src/follower-sprinkle-bridge.ts` carries the
+  // `follower-sprinkles-list` / `follower-sprinkle-update` /
+  // `follower-sprinkle-fetch` / `follower-sprinkle-fetch-result` /
+  // `follower-sprinkle-lick` runtime envelopes between them (these wrap the
+  // leader-facing wire messages `sprinkles.list` / `sprinkle.update` /
+  // `sprinkle.content` / `sprinkle.fetch` / `sprinkle.lick`, which only the
+  // offscreen sees on the WebRTC channel). The controller shares layout
+  // callbacks with the local `SprinkleManager` above — leader-pushed
+  // sprinkles surface in the same rail as local ones. If the offscreen is
+  // not in follower mode, no `follower-sprinkles-list` envelopes arrive
+  // and the controller stays idle; pending fetches reject with a timeout
+  // after 15 s so the controller doesn't pin `opening` forever.
   const { PanelFollowerSprinkleProxy } =
     await import('../../../chrome-extension/src/follower-sprinkle-bridge.js');
   const { SprinkleFollowerController } = await import('./sprinkle-follower-controller.js');
   const followerSprinkleSender = {
     send(envelope: { source: 'panel'; payload: unknown }): void {
-      chrome.runtime.sendMessage(envelope).catch(() => {
-        // Offscreen not awake — drop silently. The proxy's fetch promise
-        // will hang until the offscreen wakes up and responds, or until
-        // the controller is torn down.
+      chrome.runtime.sendMessage(envelope).catch((err: unknown) => {
+        // "Receiving end does not exist" is expected when no offscreen is
+        // awake (or the extension is not in follower mode). The proxy's
+        // bounded fetch timeout will surface the failure to the controller.
+        // Anything else (extension context invalidated, message size
+        // exceeded, non-cloneable payloads) is logged so the failure is
+        // observable in DevTools.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/receiving end does not exist/i.test(msg)) return;
+        log.warn('Panel → offscreen sendMessage failed', { error: msg });
       });
     },
   };
