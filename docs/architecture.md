@@ -203,6 +203,16 @@ All skills (native and compatibility) are read-only — the slicc-specific `mani
 | `scheduler.ts`              | TaskScheduler for internal task scheduling (used by orchestrator)                                                                                                                                                                                                                                                           |
 | `heartbeat.ts`              | Heartbeat monitoring (detects when scoop contexts are idle)                                                                                                                                                                                                                                                                 |
 | `skills.ts`                 | loadSkills, formatSkillsForPrompt: load SKILL.md files into agent system prompt; createDefaultSkills: bundled defaults                                                                                                                                                                                                      |
+| `tray-sync-protocol.ts`     | Typed `LeaderToFollowerMessage` / `FollowerToLeaderMessage` unions + chunked snapshot/CDP/sprinkle helpers. Single source of truth — the iOS follower's `SyncProtocol.swift` mirrors this file message-for-message                                                                                                          |
+| `tray-leader-sync.ts`       | Leader-side `LeaderSyncManager`: broadcasts agent events, snapshots, scoop list, sprinkle list + content + updates to all connected followers; routes inbound `sprinkle.fetch`/`sprinkle.lick`/`scoops.select`/`request_snapshot` from followers, plus federated CDP and FS                                                 |
+| `tray-follower-sync.ts`     | Follower-side `FollowerSyncManager` (TS — used by browser standalone follower and extension offscreen follower). Implements `AgentHandle`, receives agent events / snapshots / scoop list / sprinkle messages from leader, advertises local browser targets, forwards CDP+FS for federated targets                          |
+| `tray-leader.ts`            | `LeaderTrayManager`: WebSocket liaison with the cloudflare-worker tray hub; control-message dispatch                                                                                                                                                                                                                        |
+| `tray-follower.ts`          | `FollowerTrayManager` + `startFollowerWithAutoReconnect`: WebRTC signaling client, peer-connection setup, auto-reconnect with backoff                                                                                                                                                                                       |
+| `tray-webrtc.ts`            | `TrayDataChannelLike` interface and shared WebRTC helpers used by both sides                                                                                                                                                                                                                                                |
+| `tray-fs-handler.ts`        | Handles inbound `fs.request` messages by running them against the local VFS and chunking large file responses                                                                                                                                                                                                               |
+| `tray-target-registry.ts`   | Leader-side merged registry of CDP targets across all connected runtimes (leader + followers)                                                                                                                                                                                                                               |
+| `tray-runtime-config.ts`    | `resolveTrayRuntimeConfig`: derives `{ joinUrl, workerBaseUrl }` from URL + storage; determines leader vs follower role                                                                                                                                                                                                     |
+| `tray-follower-status.ts`   | Observable status surface for the follower runtime (`connecting`/`connected`/`error`); used by UI                                                                                                                                                                                                                           |
 | `types.ts`                  | RegisteredScoop, ChannelMessage, ScoopTabState, ScheduledTask, WebhookEntry, CronTaskEntry                                                                                                                                                                                                                                  |
 | `index.ts`                  | Re-exports                                                                                                                                                                                                                                                                                                                  |
 
@@ -341,6 +351,56 @@ The Chrome extension uses a three-layer design to keep the agent engine alive ac
 **CDP Proxy:** Offscreen documents can't call `chrome.debugger` directly. Instead, offscreen sends `CdpProxyMessage` through the service worker, which translates to `chrome.debugger` commands and routes results back.
 
 **Dual Shell Context:** Both the side panel and offscreen document run their own WasmShell instance. The panel shell powers the Terminal tab; the offscreen shell executes agent bash tool calls. They share VFS via IndexedDB but NOT window globals or DOM. Shell commands that need to affect the panel UI from the offscreen agent must use the dual-context pattern: try a `window.__slicc_*` hook first (panel), fall back to `chrome.runtime.sendMessage` relay (offscreen → panel). See `docs/pitfalls.md` "Extension Dual-Shell Context".
+
+## Multi-Browser Sync (Tray) Architecture
+
+SLICC instances can connect to one another over WebRTC data channels to form a **tray** — one **leader** owning the agent runtime and any number of **followers** mirroring its state. The cloudflare-worker is the signaling hub; once the data channel is open, all sync traffic is peer-to-peer.
+
+### Roles
+
+- **Leader**: owns the orchestrator, agent loop, scoops, sprinkles, and lick router. Broadcasts state changes; responds to follower requests (snapshot, sprinkle.fetch, sprinkle.lick, scoops.select, federated CDP/FS).
+- **Follower**: presents the leader's chat + sprinkles to a local user, forwards user input back to the leader. Owns no agent runtime — its `ChatPanel` is wired to the follower sync as its `AgentHandle`.
+
+### Implementations
+
+| Float                       | Code                                                                                                | Notes                                                                                                                                                  |
+| --------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Standalone browser leader   | `packages/webapp/src/ui/page-leader-tray.ts` + `packages/webapp/src/scoops/tray-leader-sync.ts`     | Wired in `main.ts` when no join URL is present and a worker base URL is configured                                                                     |
+| Standalone browser follower | `packages/webapp/src/ui/page-follower-tray.ts` + `packages/webapp/src/scoops/tray-follower-sync.ts` | Wired in `main.ts` when a join URL is stored. Drives the page's chat panel via the follower sync's `AgentHandle`                                       |
+| Extension leader            | `packages/chrome-extension/src/offscreen.ts` (`workerBaseUrl` branch in `syncTrayRuntime`)          | Uses `ServiceWorkerLeaderTraySocket` to keep the WebSocket alive in the service worker                                                                 |
+| Extension follower          | `packages/chrome-extension/src/offscreen.ts` (`joinUrl` branch in `syncTrayRuntime`)                | Constructs a `FollowerSyncManager` against the leader; results relayed to the side panel via `offscreen-bridge` (`bridge.applyFollowerSnapshot`, etc.) |
+| iOS follower (native)       | `packages/ios-app/SliccFollower/`                                                                   | Standalone Swift implementation of the protocol — mirrors `tray-sync-protocol.ts` in `Models/SyncProtocol.swift`. See `packages/ios-app/CLAUDE.md`     |
+
+### Protocol
+
+`packages/webapp/src/scoops/tray-sync-protocol.ts` is the single source of truth for the wire format. The iOS follower's `packages/ios-app/SliccFollower/Models/SyncProtocol.swift` mirrors it message-for-message — change one, change the other.
+
+| Direction       | Message                                                                                                     | Used for                                                                                                                             |
+| --------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Leader→Follower | `snapshot`, `snapshot_chunk`                                                                                | Full chat replacement (chunked above 64 KB)                                                                                          |
+| Leader→Follower | `agent_event`                                                                                               | Streaming agent events (`content_delta`, `tool_use_start`, etc.)                                                                     |
+| Leader→Follower | `user_message_echo`                                                                                         | Mirrors any user message (local or from any follower) back to all followers                                                          |
+| Leader→Follower | `status`, `error`, `ping`, `pong`                                                                           | Liveness + scoop processing state                                                                                                    |
+| Leader→Follower | `scoops.list`                                                                                               | Multi-scoop awareness — list + active scoop JID                                                                                      |
+| Leader→Follower | `sprinkles.list`, `sprinkle.content`, `sprinkle.update`                                                     | Sprinkle list + on-demand .shtml content (chunked) + agent → sprinkle updates                                                        |
+| Leader→Follower | `targets.registry`, `cdp.request`, `cdp.response`, `cdp.event`, `tab.open`, `tab.opened`, `tab.open.error`  | Federated CDP across runtimes                                                                                                        |
+| Leader→Follower | `fs.request`, `fs.response`                                                                                 | Federated FS (read/write/stat/walk against a follower's local VFS)                                                                   |
+| Follower→Leader | `user_message`, `abort`                                                                                     | Forward chat input + cancellation                                                                                                    |
+| Follower→Leader | `request_snapshot`, `scoops.select`                                                                         | Request a fresh snapshot (optionally for a specific scoop the follower has selected)                                                 |
+| Follower→Leader | `sprinkles.refresh`, `sprinkle.fetch`, `sprinkle.lick`                                                      | Re-request sprinkle list; fetch .shtml content by name; forward a lick from a follower-rendered sprinkle to the leader's lick router |
+| Follower→Leader | `targets.advertise`, `cdp.request`, `cdp.response`, `cdp.event`, `tab.open`, `tab.opened`, `tab.open.error` | Federated CDP                                                                                                                        |
+| Follower→Leader | `fs.request`, `fs.response`                                                                                 | Federated FS                                                                                                                         |
+
+### Sprinkle Sync Specifics
+
+Sprinkle .shtml files live in the **leader's** VFS only — followers see them via three messages:
+
+- The leader sends `sprinkles.list` on follower attach and on every 5 s broadcast (`page-leader-tray.ts`).
+- The follower opens a sprinkle by sending `sprinkle.fetch` with a request ID; the leader replies with one or more `sprinkle.content` messages (chunked above 64 KB) containing the raw .shtml.
+- The follower renders the content and forwards any `sprinkle.lick` events back to the leader. The leader routes them through its lick manager (where `getSprinkleRoute(name)` may target a non-cone scoop).
+- When the leader's `SprinkleManager.sendToSprinkle(name, data)` runs, `LeaderSyncManager.broadcastSprinkleUpdate(name, data)` mirrors the payload to every follower as `sprinkle.update`.
+
+The follower's rendered sprinkle has **no local VFS access** to the leader — VFS bridge methods (`readFile`, `writeFile`, etc.) operate against the follower's own (possibly empty) VFS, or are stubbed depending on the follower implementation.
 
 ## Data Flow Diagrams
 
@@ -574,6 +634,17 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 | Manage webhooks/crontasks                                | `packages/webapp/src/scoops/lick-manager.ts`                                                                               |
 | Change skill loading                                     | `packages/webapp/src/scoops/skills.ts`                                                                                     |
 | Change types (RegisteredScoop, etc.)                     | `packages/webapp/src/scoops/types.ts`                                                                                      |
+
+### Multi-Browser Sync (Tray)
+
+| I need to...                                 | Modify                                                                                                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Add or change a sync message (wire format)   | `packages/webapp/src/scoops/tray-sync-protocol.ts` **and** `packages/ios-app/SliccFollower/Models/SyncProtocol.swift` (mirror)                         |
+| Broadcast new state from the leader          | `packages/webapp/src/scoops/tray-leader-sync.ts` (new `broadcast*` method); wire periodic re-broadcast in `packages/webapp/src/ui/page-leader-tray.ts` |
+| Handle a new message in the browser follower | `packages/webapp/src/scoops/tray-follower-sync.ts` (extend `handleLeaderMessage` switch + options callbacks)                                           |
+| Handle a new message in the iOS follower     | `packages/ios-app/SliccFollower/App/AppState.swift` (extend `handleDataChannelMessage` switch); add UI binding in the relevant `Views/*.swift`         |
+| Add follower-side rendering (browser)        | `packages/webapp/src/ui/page-follower-tray.ts` + create a follower-specific controller; wire layout callbacks in `packages/webapp/src/ui/main.ts`      |
+| Change tray signaling / reconnect behavior   | `packages/webapp/src/scoops/tray-leader.ts`, `packages/webapp/src/scoops/tray-follower.ts`, `packages/webapp/src/scoops/tray-webrtc.ts`                |
 
 ### UI & Layout
 

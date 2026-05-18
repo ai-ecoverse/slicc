@@ -78,6 +78,15 @@ Deep reference: `docs/kernel/process-model.md`.
 - Active surface is file tools, `bash`, and scoop/nanoclaw helpers.
 - Browser automation is intentionally routed through shell commands rather than a separate tool family.
 
+### Tray Sync (multi-browser leader/follower)
+
+- Path: `packages/webapp/src/scoops/tray-*`, plus page wiring in `packages/webapp/src/ui/page-leader-tray.ts` and `packages/webapp/src/ui/page-follower-tray.ts`.
+- `tray-sync-protocol.ts` is the **single source of truth** for the wire format. The iOS follower (`packages/ios-app/SliccFollower/Models/SyncProtocol.swift`) mirrors it message-for-message — if you add or rename a message here, update the Swift file too.
+- `tray-leader-sync.ts` (`LeaderSyncManager`) — broadcasts agent events, snapshots, scoops list, sprinkle list/content/updates, federated CDP, federated FS; handles inbound requests from followers (snapshot, sprinkle.fetch, sprinkle.lick, scoops.select, CDP/FS routing).
+- `tray-follower-sync.ts` (`FollowerSyncManager`) — TS follower used by **both** the standalone browser follower (`page-follower-tray.ts`) and the extension offscreen follower (`packages/chrome-extension/src/offscreen.ts` `joinUrl` branch). Implements `AgentHandle` so a follower's `ChatPanel.setAgent(sync)` forwards user input to the leader instead of a local orchestrator.
+- The iOS native follower (`packages/ios-app/SliccFollower/`) is a **separate implementation** of the same protocol — it does NOT consume `tray-follower-sync.ts`. Match its behavior when adding follower-side rendering (e.g., sprinkle handling lives in `AppState.handleDataChannelMessage` + `AppState.fetchSprinkleContent` on the Swift side).
+- Sprinkle sync: leader-side wiring in `page-leader-tray.ts` (`getSprinkles`, `readSprinkleContent`, `onSprinkleLick`, periodic `broadcastSprinklesList`). Follower-side: the follower receives `sprinkles.list`, asks for `.shtml` content on demand via `sprinkle.fetch` (chunked reply via `sprinkle.content`), renders it locally, and forwards lick events back as `sprinkle.lick`. The leader pushes `sprinkle.update` payloads when `SprinkleManager.sendToSprinkle(name, data)` runs.
+
 ### Core Agent
 
 - Path: `packages/webapp/src/core/`

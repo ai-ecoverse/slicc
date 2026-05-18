@@ -15,6 +15,7 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 | `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                |
 | `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                     |
 | `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                     |
+| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC       |
 | `packages/dev-tools/`         | Repo-level tooling guidance for build helpers, QA setup, configs, and test utilities |
 | `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages                |
 
@@ -47,6 +48,7 @@ For runtime-specific commands, use the nearest guide:
 - [`packages/vfs-root/CLAUDE.md`](packages/vfs-root/CLAUDE.md)
 - [`packages/swift-launcher/CLAUDE.md`](packages/swift-launcher/CLAUDE.md)
 - [`packages/swift-server/CLAUDE.md`](packages/swift-server/CLAUDE.md)
+- [`packages/ios-app/CLAUDE.md`](packages/ios-app/CLAUDE.md)
 - [`packages/dev-tools/CLAUDE.md`](packages/dev-tools/CLAUDE.md)
 - [`docs/CLAUDE.md`](docs/CLAUDE.md)
 
