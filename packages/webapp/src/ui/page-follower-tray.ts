@@ -34,6 +34,9 @@ import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import type { AgentHandle, ChatMessage } from './types.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
+import type { SprinkleSummary } from '../scoops/tray-sync-protocol.js';
+import type { SprinkleAddOptions } from './sprinkle-manager.js';
+import { SprinkleFollowerController } from './sprinkle-follower-controller.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('page-follower-tray');
@@ -67,6 +70,31 @@ export interface StartPageFollowerTrayOptions {
 
   // --- BrowserAPI for federated target advertisement ---
   browserAPI: BrowserAPI;
+
+  // --- Sprinkle sync wiring (optional) ---
+  /**
+   * Add a sprinkle panel to the host layout. When omitted, the follower simply
+   * does not surface the leader's sprinkles — chat sync still works fully.
+   * Matches the signature of `SprinkleManagerCallbacks.addSprinkle` so callers
+   * can pass through the same layout callbacks used by the leader's
+   * `SprinkleManager`.
+   */
+  addSprinkle?: (
+    name: string,
+    title: string,
+    element: HTMLElement,
+    zone?: string,
+    options?: SprinkleAddOptions
+  ) => void;
+  /** Remove a sprinkle panel from the host layout. */
+  removeSprinkle?: (name: string) => void;
+  /**
+   * Notified when the leader updates the sprinkle list. The host layout can
+   * use this to update e.g. a sprinkle picker without subscribing to the
+   * follower sync directly. Optional — `SprinkleFollowerController` already
+   * handles open-state mirroring.
+   */
+  onSprinklesList?: (sprinkles: SprinkleSummary[]) => void;
 
   // --- Test hooks ---
   /** @internal Override fetch (defaults to plain `fetch`). */
@@ -107,6 +135,7 @@ export function startPageFollowerTray(
   const refreshIntervalMs = options._refreshIntervalMs ?? 5000;
 
   let activeSync: FollowerSyncManager | null = null;
+  let activeSprinkleController: SprinkleFollowerController | null = null;
   let targetRefreshInterval: ReturnType<typeof setInterval> | null = null;
   let reconnectHandle: FollowerAutoReconnectHandle | null = null;
 
@@ -114,6 +143,10 @@ export function startPageFollowerTray(
     if (targetRefreshInterval) {
       clearInterval(targetRefreshInterval);
       targetRefreshInterval = null;
+    }
+    if (activeSprinkleController) {
+      activeSprinkleController.dispose();
+      activeSprinkleController = null;
     }
     if (!activeSync) return;
     options.browserAPI.setTrayTargetProvider(null);
@@ -124,6 +157,13 @@ export function startPageFollowerTray(
   const wireFollowerSync = (connection: FollowerTrayConnection): void => {
     detachSync();
     const runtimeId = `follower-${connection.bootstrapId}`;
+
+    // The sprinkle controller (if the caller wired sprinkle layout callbacks)
+    // is constructed lazily here so it shares the lifecycle of this sync
+    // instance — a transient WebRTC drop tears it down and a reconnect rebuilds
+    // it against the new channel.
+    let sprinkleController: SprinkleFollowerController | null = null;
+
     const sync = new FollowerSyncManager(connection.channel, {
       browserTransport: options.browserAPI.getTransport(),
       browserAPI: options.browserAPI,
@@ -131,11 +171,25 @@ export function startPageFollowerTray(
       onUserMessage: options.onUserMessage,
       onStatus: options.onStatus,
       onTargetsChanged: () => void refreshTargets(),
+      onSprinklesList: (sprinkles) => {
+        options.onSprinklesList?.(sprinkles);
+        void sprinkleController?.updateAvailable(sprinkles);
+      },
+      onSprinkleUpdate: (name, data) => sprinkleController?.handleSprinkleUpdate(name, data),
       onDisconnect: (reason) => {
         log.warn('Follower sync disconnected', { reason });
         detachSync();
       },
     });
+
+    if (options.addSprinkle && options.removeSprinkle) {
+      sprinkleController = new SprinkleFollowerController({
+        sync,
+        addSprinkle: options.addSprinkle,
+        removeSprinkle: options.removeSprinkle,
+      });
+      activeSprinkleController = sprinkleController;
+    }
 
     const refreshTargets = async (): Promise<void> => {
       try {

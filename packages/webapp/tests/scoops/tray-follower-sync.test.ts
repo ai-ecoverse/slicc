@@ -1233,4 +1233,333 @@ describe('FollowerSyncManager', () => {
       }
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Sprinkle handling — mirrors the iOS follower (`AppState.swift`):
+  // sprinkles.list → onSprinklesList; sprinkle.content → fetch promise (chunk
+  // reassembly + dedupe + error rejection); sprinkle.update → onSprinkleUpdate;
+  // outbound: refreshSprinkles / fetchSprinkleContent / sendSprinkleLick.
+  // ---------------------------------------------------------------------------
+
+  describe('sprinkle handling', () => {
+    it('dispatches sprinkles.list to onSprinklesList', () => {
+      const channel = new FakeChannel();
+      const onSprinklesList = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onSprinklesList });
+
+      const sprinkles = [
+        {
+          name: 'welcome',
+          title: 'Welcome',
+          path: '/shared/sprinkles/welcome.shtml',
+          open: true,
+          autoOpen: true,
+        },
+        {
+          name: 'todo',
+          title: 'Todo',
+          path: '/workspace/sprinkles/todo.shtml',
+          open: false,
+          autoOpen: false,
+        },
+      ];
+      channel.simulateLeaderMessage({ type: 'sprinkles.list', sprinkles });
+
+      expect(onSprinklesList).toHaveBeenCalledWith(sprinkles);
+      expect(follower.getSprinkles()).toEqual(sprinkles);
+    });
+
+    it('dispatches sprinkle.update to onSprinkleUpdate', () => {
+      const channel = new FakeChannel();
+      const onSprinkleUpdate = vi.fn();
+      new FollowerSyncManager(channel, { onSprinkleUpdate });
+
+      const data = { kind: 'progress', step: 'install', percent: 42 };
+      channel.simulateLeaderMessage({ type: 'sprinkle.update', sprinkleName: 'welcome', data });
+
+      expect(onSprinkleUpdate).toHaveBeenCalledWith('welcome', data);
+    });
+
+    it('refreshSprinkles sends sprinkles.refresh to the leader', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      follower.refreshSprinkles();
+
+      const sent = channel.parseSent();
+      expect(sent).toEqual([{ type: 'sprinkles.refresh' }]);
+    });
+
+    it('sendSprinkleLick forwards lick to the leader with body and targetScoop', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      follower.sendSprinkleLick('welcome', { action: 'click', data: { button: 'go' } }, 'scoop-1');
+
+      const sent = channel.parseSent();
+      expect(sent).toEqual([
+        {
+          type: 'sprinkle.lick',
+          sprinkleName: 'welcome',
+          body: { action: 'click', data: { button: 'go' } },
+          targetScoop: 'scoop-1',
+        },
+      ]);
+    });
+
+    it('sendSprinkleLick omits targetScoop when not provided', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      follower.sendSprinkleLick('welcome', { action: 'click' });
+
+      const sent = channel.parseSent() as Array<Record<string, unknown>>;
+      expect(sent[0].targetScoop).toBeUndefined();
+    });
+
+    it('fetchSprinkleContent sends sprinkle.fetch and resolves with single-chunk content', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const pending = follower.fetchSprinkleContent('welcome');
+
+      const sent = channel.parseSent();
+      expect(sent).toHaveLength(1);
+      expect(sent[0].type).toBe('sprinkle.fetch');
+      if (sent[0].type !== 'sprinkle.fetch') throw new Error('unreachable');
+      const requestId = sent[0].requestId;
+      expect(sent[0].sprinkleName).toBe('welcome');
+
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'welcome',
+        content: '<p>Hello</p>',
+      });
+
+      await expect(pending).resolves.toBe('<p>Hello</p>');
+    });
+
+    it('fetchSprinkleContent reassembles chunked sprinkle.content responses', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const pending = follower.fetchSprinkleContent('big');
+      const sent = channel.parseSent();
+      if (sent[0].type !== 'sprinkle.fetch') throw new Error('unreachable');
+      const requestId = sent[0].requestId;
+
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'big',
+        content: '<p>One',
+        chunkIndex: 0,
+        totalChunks: 3,
+      });
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'big',
+        content: ' Two',
+        chunkIndex: 1,
+        totalChunks: 3,
+      });
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'big',
+        content: ' Three</p>',
+        chunkIndex: 2,
+        totalChunks: 3,
+      });
+
+      await expect(pending).resolves.toBe('<p>One Two Three</p>');
+    });
+
+    it('fetchSprinkleContent handles out-of-order chunks', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const pending = follower.fetchSprinkleContent('big');
+      const sent = channel.parseSent();
+      if (sent[0].type !== 'sprinkle.fetch') throw new Error('unreachable');
+      const requestId = sent[0].requestId;
+
+      // Deliver chunks 2 → 0 → 1 to verify ordered reassembly.
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'big',
+        content: 'C',
+        chunkIndex: 2,
+        totalChunks: 3,
+      });
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'big',
+        content: 'A',
+        chunkIndex: 0,
+        totalChunks: 3,
+      });
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'big',
+        content: 'B',
+        chunkIndex: 1,
+        totalChunks: 3,
+      });
+
+      await expect(pending).resolves.toBe('ABC');
+    });
+
+    it('fetchSprinkleContent rejects when sprinkle.content carries an error', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const pending = follower.fetchSprinkleContent('missing');
+      const sent = channel.parseSent();
+      if (sent[0].type !== 'sprinkle.fetch') throw new Error('unreachable');
+      const requestId = sent[0].requestId;
+
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'missing',
+        content: '',
+        error: 'Sprinkle not found: missing',
+      });
+
+      await expect(pending).rejects.toThrow('Sprinkle not found: missing');
+    });
+
+    it('fetchSprinkleContent dedupes concurrent calls for the same sprinkle', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const first = follower.fetchSprinkleContent('welcome');
+      const second = follower.fetchSprinkleContent('welcome');
+
+      const sent = channel.parseSent();
+      expect(sent).toHaveLength(1); // Only one outbound fetch.
+      if (sent[0].type !== 'sprinkle.fetch') throw new Error('unreachable');
+      const requestId = sent[0].requestId;
+
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'welcome',
+        content: '<p>Welcome</p>',
+      });
+
+      await expect(first).resolves.toBe('<p>Welcome</p>');
+      await expect(second).resolves.toBe('<p>Welcome</p>');
+    });
+
+    it('fetchSprinkleContent caches resolved content and returns it without re-fetching', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const first = follower.fetchSprinkleContent('welcome');
+      const sent = channel.parseSent();
+      if (sent[0].type !== 'sprinkle.fetch') throw new Error('unreachable');
+      const requestId = sent[0].requestId;
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId,
+        sprinkleName: 'welcome',
+        content: 'cached-content',
+      });
+      await expect(first).resolves.toBe('cached-content');
+
+      // Second call should hit cache, not send another fetch.
+      const second = follower.fetchSprinkleContent('welcome');
+      await expect(second).resolves.toBe('cached-content');
+      expect(channel.parseSent()).toHaveLength(1);
+    });
+
+    it('clearSprinkleCache forces the next fetchSprinkleContent to re-request from the leader', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const first = follower.fetchSprinkleContent('welcome');
+      let sent = channel.parseSent();
+      if (sent[0].type !== 'sprinkle.fetch') throw new Error('unreachable');
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId: sent[0].requestId,
+        sprinkleName: 'welcome',
+        content: 'v1',
+      });
+      await first;
+
+      follower.clearSprinkleCache('welcome');
+      const second = follower.fetchSprinkleContent('welcome');
+      sent = channel.parseSent();
+      expect(sent).toHaveLength(2); // Re-fetched.
+      if (sent[1].type !== 'sprinkle.fetch') throw new Error('unreachable');
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId: sent[1].requestId,
+        sprinkleName: 'welcome',
+        content: 'v2',
+      });
+      await expect(second).resolves.toBe('v2');
+    });
+
+    it('close rejects pending sprinkle fetches so callers do not hang', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const pending = follower.fetchSprinkleContent('welcome');
+      // Don't deliver a response.
+      follower.close();
+
+      await expect(pending).rejects.toThrow(/closed|disconnect/i);
+    });
+
+    it('handleDisconnect (via channel close) rejects pending sprinkle fetches', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const pending = follower.fetchSprinkleContent('welcome');
+      channel.simulateClose();
+
+      await expect(pending).rejects.toThrow(/closed|disconnect/i);
+    });
+
+    it('does not crash on sprinkles.list when no callback is registered', () => {
+      const channel = new FakeChannel();
+      new FollowerSyncManager(channel);
+
+      expect(() =>
+        channel.simulateLeaderMessage({ type: 'sprinkles.list', sprinkles: [] })
+      ).not.toThrow();
+    });
+
+    it('does not crash on sprinkle.update when no callback is registered', () => {
+      const channel = new FakeChannel();
+      new FollowerSyncManager(channel);
+
+      expect(() =>
+        channel.simulateLeaderMessage({ type: 'sprinkle.update', sprinkleName: 'x', data: {} })
+      ).not.toThrow();
+    });
+
+    it('drops sprinkle.content that does not match a pending fetch (no crash)', () => {
+      const channel = new FakeChannel();
+      new FollowerSyncManager(channel);
+
+      expect(() =>
+        channel.simulateLeaderMessage({
+          type: 'sprinkle.content',
+          requestId: 'stale',
+          sprinkleName: 'gone',
+          content: 'ignored',
+        })
+      ).not.toThrow();
+    });
+  });
 });

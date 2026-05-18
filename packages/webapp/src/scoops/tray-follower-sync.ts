@@ -19,6 +19,7 @@ import {
   type TrayTargetEntry,
   type TrayFsRequest,
   type TrayFsResponse,
+  type SprinkleSummary,
 } from './tray-sync-protocol.js';
 import { handleFsRequest } from './tray-fs-handler.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
@@ -61,6 +62,17 @@ export interface FollowerSyncManagerOptions {
   vfs?: VirtualFS;
   /** Called when local browser targets may have changed (e.g. after a tab is opened or closed). */
   onTargetsChanged?: () => void;
+  /** Called when the leader sends an updated sprinkle list. */
+  onSprinklesList?: (sprinkles: SprinkleSummary[]) => void;
+  /** Called when the leader sends a `sprinkle.update` payload (mirrors `SprinkleManager.sendToSprinkle`). */
+  onSprinkleUpdate?: (sprinkleName: string, data: unknown) => void;
+}
+
+/** Internal buffer for chunked sprinkle.content reassembly. Mirrors `SprinkleFetchBuffer` in iOS `AppState.swift`. */
+interface SprinkleFetchBuffer {
+  sprinkleName: string;
+  chunks: Map<number, string>;
+  totalChunks: number;
 }
 
 /**
@@ -103,6 +115,19 @@ export class FollowerSyncManager implements AgentHandle {
       reject: (err: Error) => void;
       responses: TrayFsResponse[];
     }
+  >();
+  /** Latest sprinkle summaries received from the leader (most-recent `sprinkles.list`). */
+  private latestSprinkles: SprinkleSummary[] = [];
+  /** Cache of resolved sprinkle .shtml content by name. Cleared on explicit invalidate. */
+  private readonly sprinkleContentCache = new Map<string, string>();
+  /** In-flight `sprinkle.fetch` request buffers, keyed by requestId. */
+  private readonly pendingSprinkleFetches = new Map<string, SprinkleFetchBuffer>();
+  /** Map of sprinkleName → requestId for the in-flight fetch (used to dedupe concurrent calls). */
+  private readonly inflightSprinkleByName = new Map<string, string>();
+  /** Waiters awaiting a sprinkle.content reply, keyed by sprinkleName. */
+  private readonly sprinkleContentWaiters = new Map<
+    string,
+    Array<{ resolve: (content: string) => void; reject: (err: Error) => void }>
   >();
   constructor(
     channel: TrayDataChannelLike,
@@ -185,6 +210,7 @@ export class FollowerSyncManager implements AgentHandle {
     this.sync.close();
     this.eventListeners.clear();
     this.cleanupCDPEventForwarding();
+    this.rejectPendingSprinkleFetches('Follower sync closed');
     log.info('Follower sync closed');
   }
 
@@ -196,6 +222,63 @@ export class FollowerSyncManager implements AgentHandle {
   /** Get the stored target registry entries from the leader. */
   getTargets(): TrayTargetEntry[] {
     return this.targetEntries;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sprinkle sync — mirrors `packages/ios-app/SliccFollower/App/AppState.swift`
+  // (refreshSprinkles / fetchSprinkleContent / sendSprinkleLick / chunked
+  // sprinkle.content reassembly + concurrent-fetch dedupe via waiter list).
+  // ---------------------------------------------------------------------------
+
+  /** Latest sprinkle list received from the leader. */
+  getSprinkles(): SprinkleSummary[] {
+    return this.latestSprinkles;
+  }
+
+  /** Ask the leader to re-broadcast the sprinkle list. */
+  refreshSprinkles(): void {
+    this.sync.send({ type: 'sprinkles.refresh' });
+  }
+
+  /**
+   * Fetch the raw .shtml content for a sprinkle. Returns cached content when
+   * available, otherwise sends `sprinkle.fetch` and awaits the reassembled
+   * `sprinkle.content` response. Concurrent calls for the same sprinkle name
+   * share a single inflight request and resolve together.
+   */
+  fetchSprinkleContent(sprinkleName: string): Promise<string> {
+    const cached = this.sprinkleContentCache.get(sprinkleName);
+    if (cached !== undefined) return Promise.resolve(cached);
+
+    return new Promise<string>((resolve, reject) => {
+      const waiters = this.sprinkleContentWaiters.get(sprinkleName) ?? [];
+      waiters.push({ resolve, reject });
+      this.sprinkleContentWaiters.set(sprinkleName, waiters);
+
+      // Only one in-flight request per name. Subsequent calls latch onto the
+      // same waiter list.
+      if (this.inflightSprinkleByName.has(sprinkleName)) return;
+
+      const requestId = `sprinkle-fetch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      this.inflightSprinkleByName.set(sprinkleName, requestId);
+      this.pendingSprinkleFetches.set(requestId, {
+        sprinkleName,
+        chunks: new Map(),
+        totalChunks: 1,
+      });
+      this.sync.send({ type: 'sprinkle.fetch', requestId, sprinkleName });
+    });
+  }
+
+  /** Forward a sprinkle lick (from a follower-rendered sprinkle) to the leader. */
+  sendSprinkleLick(sprinkleName: string, body: unknown, targetScoop?: string): void {
+    this.sync.send({ type: 'sprinkle.lick', sprinkleName, body, targetScoop });
+  }
+
+  /** Invalidate the cached .shtml content for one sprinkle (or all). */
+  clearSprinkleCache(sprinkleName?: string): void {
+    if (sprinkleName === undefined) this.sprinkleContentCache.clear();
+    else this.sprinkleContentCache.delete(sprinkleName);
   }
 
   // ---------------------------------------------------------------------------
@@ -228,6 +311,7 @@ export class FollowerSyncManager implements AgentHandle {
     this.cleanupCDPEventForwarding();
     this.unsubscribe();
     this.sync.close();
+    this.rejectPendingSprinkleFetches(`Follower sync disconnected: ${reason}`);
 
     // Notify higher-level code for potential reconnection
     this.options.onDisconnect?.(reason);
@@ -341,6 +425,23 @@ export class FollowerSyncManager implements AgentHandle {
         this.routeFsResponse(message.requestId, message.response);
         break;
       }
+      case 'sprinkles.list':
+        log.info('Sprinkles list received from leader', {
+          sprinkleCount: message.sprinkles.length,
+        });
+        this.latestSprinkles = message.sprinkles;
+        this.options.onSprinklesList?.(message.sprinkles);
+        break;
+
+      case 'sprinkle.content':
+        this.handleSprinkleContent(message);
+        break;
+
+      case 'sprinkle.update':
+        log.debug('Sprinkle update received', { sprinkleName: message.sprinkleName });
+        this.options.onSprinkleUpdate?.(message.sprinkleName, message.data);
+        break;
+
       case 'ping': {
         // Leader is pinging us — respond with pong and treat as liveness signal
         this.keepalive.receivePing();
@@ -354,6 +455,86 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       }
     }
+  }
+
+  /**
+   * Reassemble chunked `sprinkle.content` responses and resolve the waiting
+   * fetchers. Mirrors `handleSprinkleContent` in iOS `AppState.swift` — same
+   * chunk-buffer + ordered-join + waiter-resolve flow, plus error rejection.
+   */
+  private handleSprinkleContent(
+    message: LeaderToFollowerMessage & { type: 'sprinkle.content' }
+  ): void {
+    const { requestId, sprinkleName, content, chunkIndex, totalChunks, error } = message;
+
+    if (error) {
+      log.warn('sprinkle.content error from leader', { sprinkleName, error });
+      this.pendingSprinkleFetches.delete(requestId);
+      this.inflightSprinkleByName.delete(sprinkleName);
+      const waiters = this.sprinkleContentWaiters.get(sprinkleName) ?? [];
+      this.sprinkleContentWaiters.delete(sprinkleName);
+      for (const waiter of waiters) waiter.reject(new Error(error));
+      return;
+    }
+
+    let assembled: string | null = null;
+
+    if (chunkIndex !== undefined && totalChunks !== undefined) {
+      const buffer =
+        this.pendingSprinkleFetches.get(requestId) ??
+        ({
+          sprinkleName,
+          chunks: new Map<number, string>(),
+          totalChunks,
+        } satisfies SprinkleFetchBuffer);
+      buffer.totalChunks = totalChunks;
+      buffer.chunks.set(chunkIndex, content);
+      this.pendingSprinkleFetches.set(requestId, buffer);
+      if (buffer.chunks.size >= totalChunks) {
+        const ordered: string[] = [];
+        for (let i = 0; i < totalChunks; i++) {
+          const chunk = buffer.chunks.get(i);
+          if (chunk === undefined) {
+            log.warn('Chunked sprinkle.content missing chunk after assembly', {
+              sprinkleName,
+              missingIndex: i,
+            });
+            return; // Wait for the missing chunk.
+          }
+          ordered.push(chunk);
+        }
+        assembled = ordered.join('');
+        this.pendingSprinkleFetches.delete(requestId);
+      }
+    } else {
+      // Non-chunked single response.
+      if (!this.pendingSprinkleFetches.has(requestId)) {
+        // No outstanding request — leader is misbehaving or this is a late
+        // delivery after timeout/disconnect. Drop silently rather than crash.
+        return;
+      }
+      assembled = content;
+      this.pendingSprinkleFetches.delete(requestId);
+    }
+
+    if (assembled === null) return;
+
+    this.sprinkleContentCache.set(sprinkleName, assembled);
+    this.inflightSprinkleByName.delete(sprinkleName);
+    const waiters = this.sprinkleContentWaiters.get(sprinkleName) ?? [];
+    this.sprinkleContentWaiters.delete(sprinkleName);
+    for (const waiter of waiters) waiter.resolve(assembled);
+  }
+
+  /** Reject every pending sprinkle fetch with the given reason. */
+  private rejectPendingSprinkleFetches(reason: string): void {
+    const err = new Error(reason);
+    for (const [, waiters] of this.sprinkleContentWaiters) {
+      for (const waiter of waiters) waiter.reject(err);
+    }
+    this.sprinkleContentWaiters.clear();
+    this.pendingSprinkleFetches.clear();
+    this.inflightSprinkleByName.clear();
   }
 
   private emitEvent(event: AgentEvent): void {

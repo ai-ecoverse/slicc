@@ -2306,6 +2306,23 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
         onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
         setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
         browserAPI: browser,
+        // Follower-side sprinkle rendering: the leader broadcasts `sprinkles.list`,
+        // and the `SprinkleFollowerController` (inside `startPageFollowerTray`)
+        // mirrors the open-state by fetching `.shtml` content over the data
+        // channel and rendering through the same layout callbacks the local
+        // `SprinkleManager` uses for its own local sprinkles. Name collisions
+        // with locally-discovered sprinkles are possible but rare — the
+        // follower is typically running against an empty/disconnected VFS for
+        // sprinkle discovery purposes.
+        addSprinkle: (name, title, element, zone, options) =>
+          layout.addSprinkle(
+            name,
+            title,
+            element,
+            zone as 'primary' | 'drawer' | undefined,
+            options
+          ),
+        removeSprinkle: (name) => layout.removeSprinkle(name),
       });
     } else if (storedWorkerBaseUrl) {
       pageLeaderTray = startPageLeaderTray({

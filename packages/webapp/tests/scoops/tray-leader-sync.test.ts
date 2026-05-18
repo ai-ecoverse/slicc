@@ -1676,4 +1676,264 @@ describe('LeaderSyncManager', () => {
       expect(transport.state).toBe('disconnected');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Sprinkle sync — close coverage gap for the leader side. Mirrors the iOS
+  // follower's expectations against the protocol described in
+  // `tray-sync-protocol.ts` + `packages/ios-app/SliccFollower/App/AppState.swift`.
+  // ---------------------------------------------------------------------------
+
+  describe('sprinkle sync', () => {
+    function makeSprinkles(): import('../../src/scoops/tray-sync-protocol.js').SprinkleSummary[] {
+      return [
+        {
+          name: 'welcome',
+          title: 'Welcome',
+          path: '/shared/sprinkles/welcome.shtml',
+          open: true,
+          autoOpen: true,
+        },
+        {
+          name: 'todo',
+          title: 'Todo',
+          path: '/workspace/sprinkles/todo.shtml',
+          open: false,
+          autoOpen: false,
+        },
+      ];
+    }
+
+    it('sends a sprinkles.list on addFollower when getSprinkles is provided', () => {
+      const sprinkles = makeSprinkles();
+      const { manager } = createManager({ getSprinkles: () => sprinkles });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      const listMessages = channel.parseSent().filter((m) => m.type === 'sprinkles.list');
+      expect(listMessages).toHaveLength(1);
+      if (listMessages[0].type === 'sprinkles.list') {
+        expect(listMessages[0].sprinkles).toEqual(sprinkles);
+      }
+    });
+
+    it('omits sprinkles.list when getSprinkles is not provided', () => {
+      const { manager } = createManager();
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      const listMessages = channel.parseSent().filter((m) => m.type === 'sprinkles.list');
+      expect(listMessages).toHaveLength(0);
+    });
+
+    it('broadcastSprinklesList sends the current list to every follower', () => {
+      const sprinkles = makeSprinkles();
+      const { manager } = createManager({ getSprinkles: () => sprinkles });
+      const ch1 = new FakeChannel();
+      const ch2 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      manager.addFollower('b2', ch2);
+
+      // Reset to ignore the initial-attach broadcasts.
+      ch1.sent.length = 0;
+      ch2.sent.length = 0;
+
+      manager.broadcastSprinklesList();
+
+      expect(ch1.parseSent()).toEqual([{ type: 'sprinkles.list', sprinkles }]);
+      expect(ch2.parseSent()).toEqual([{ type: 'sprinkles.list', sprinkles }]);
+    });
+
+    it('broadcastSprinkleUpdate sends sprinkle.update to every follower', () => {
+      const { manager } = createManager({ getSprinkles: () => makeSprinkles() });
+      const ch1 = new FakeChannel();
+      const ch2 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      manager.addFollower('b2', ch2);
+      ch1.sent.length = 0;
+      ch2.sent.length = 0;
+
+      manager.broadcastSprinkleUpdate('welcome', { progress: 0.5 });
+
+      const expected = {
+        type: 'sprinkle.update',
+        sprinkleName: 'welcome',
+        data: { progress: 0.5 },
+      };
+      expect(ch1.parseSent()).toEqual([expected]);
+      expect(ch2.parseSent()).toEqual([expected]);
+    });
+
+    it('sprinkles.refresh from follower triggers a fresh sprinkles.list reply', () => {
+      const sprinkles = makeSprinkles();
+      const { manager } = createManager({ getSprinkles: () => sprinkles });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+      channel.sent.length = 0;
+
+      channel.simulateMessage({ type: 'sprinkles.refresh' });
+
+      const sent = channel.parseSent();
+      expect(sent).toEqual([{ type: 'sprinkles.list', sprinkles }]);
+    });
+
+    it('sprinkle.fetch with small content replies with a single sprinkle.content', async () => {
+      const readSprinkleContent = vi.fn(async (name: string) => `<p>${name}</p>`);
+      const { manager } = createManager({ readSprinkleContent });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+      channel.sent.length = 0;
+
+      channel.simulateMessage({
+        type: 'sprinkle.fetch',
+        requestId: 'req-1',
+        sprinkleName: 'welcome',
+      });
+
+      // Allow the async read + send to flush.
+      await new Promise((r) => setTimeout(r, 0));
+
+      const sent = channel.parseSent();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toEqual({
+        type: 'sprinkle.content',
+        requestId: 'req-1',
+        sprinkleName: 'welcome',
+        content: '<p>welcome</p>',
+      });
+      expect(readSprinkleContent).toHaveBeenCalledWith('welcome');
+    });
+
+    it('sprinkle.fetch with large content chunks the sprinkle.content reply', async () => {
+      // Threshold is 64KB; chunk size is 32KB. Build a 100KB payload to force chunking.
+      const largeContent = 'x'.repeat(100_000);
+      const readSprinkleContent = vi.fn(async () => largeContent);
+      const { manager } = createManager({ readSprinkleContent });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+      channel.sent.length = 0;
+
+      channel.simulateMessage({ type: 'sprinkle.fetch', requestId: 'req-1', sprinkleName: 'big' });
+      await new Promise((r) => setTimeout(r, 0));
+
+      const sent = channel.parseSent();
+      // ceil(100000 / 32768) = 4 chunks.
+      expect(sent).toHaveLength(4);
+      const reassembled = sent
+        .map((m) => {
+          if (m.type !== 'sprinkle.content') throw new Error('unexpected message type');
+          expect(m.totalChunks).toBe(4);
+          return m.content;
+        })
+        .join('');
+      expect(reassembled).toBe(largeContent);
+    });
+
+    it('sprinkle.fetch replies with error when reader returns null', async () => {
+      const readSprinkleContent = vi.fn(async () => null);
+      const { manager } = createManager({ readSprinkleContent });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+      channel.sent.length = 0;
+
+      channel.simulateMessage({ type: 'sprinkle.fetch', requestId: 'req-1', sprinkleName: 'gone' });
+      await new Promise((r) => setTimeout(r, 0));
+
+      const sent = channel.parseSent();
+      expect(sent).toHaveLength(1);
+      if (sent[0].type !== 'sprinkle.content') throw new Error('unexpected');
+      expect(sent[0].error).toMatch(/not found/i);
+    });
+
+    it('sprinkle.fetch replies with error when no readSprinkleContent is wired', async () => {
+      const { manager } = createManager(); // No reader.
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+      channel.sent.length = 0;
+
+      channel.simulateMessage({ type: 'sprinkle.fetch', requestId: 'req-1', sprinkleName: 'x' });
+      await new Promise((r) => setTimeout(r, 0));
+
+      const sent = channel.parseSent();
+      expect(sent).toHaveLength(1);
+      if (sent[0].type !== 'sprinkle.content') throw new Error('unexpected');
+      expect(sent[0].error).toMatch(/reader/i);
+    });
+
+    it('sprinkle.fetch replies with error when reader throws', async () => {
+      const readSprinkleContent = vi.fn(async () => {
+        throw new Error('disk full');
+      });
+      const { manager } = createManager({ readSprinkleContent });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+      channel.sent.length = 0;
+
+      channel.simulateMessage({ type: 'sprinkle.fetch', requestId: 'req-1', sprinkleName: 'x' });
+      await new Promise((r) => setTimeout(r, 0));
+
+      const sent = channel.parseSent();
+      expect(sent).toHaveLength(1);
+      if (sent[0].type !== 'sprinkle.content') throw new Error('unexpected');
+      expect(sent[0].error).toBe('disk full');
+    });
+
+    it('sprinkle.lick invokes onSprinkleLick with name, body, and targetScoop', () => {
+      const onSprinkleLick = vi.fn();
+      const { manager } = createManager({ onSprinkleLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      channel.simulateMessage({
+        type: 'sprinkle.lick',
+        sprinkleName: 'welcome',
+        body: { action: 'click', data: { x: 1 } },
+        targetScoop: 'scoop-1',
+      });
+
+      expect(onSprinkleLick).toHaveBeenCalledWith(
+        'welcome',
+        { action: 'click', data: { x: 1 } },
+        'scoop-1'
+      );
+    });
+
+    it('sprinkle.lick is safe when onSprinkleLick is not wired', () => {
+      const { manager } = createManager();
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      expect(() =>
+        channel.simulateMessage({
+          type: 'sprinkle.lick',
+          sprinkleName: 'welcome',
+          body: { action: 'click' },
+        })
+      ).not.toThrow();
+    });
+
+    it('onSprinkleLick throwing does not break the channel', () => {
+      const onSprinkleLick = vi.fn(() => {
+        throw new Error('handler bug');
+      });
+      const { manager } = createManager({ onSprinkleLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      expect(() =>
+        channel.simulateMessage({
+          type: 'sprinkle.lick',
+          sprinkleName: 'welcome',
+          body: { action: 'click' },
+        })
+      ).not.toThrow();
+
+      // Subsequent messages still route normally.
+      channel.simulateMessage({
+        type: 'sprinkle.lick',
+        sprinkleName: 'welcome',
+        body: { action: 'second' },
+      });
+      expect(onSprinkleLick).toHaveBeenCalledTimes(2);
+    });
+  });
 });
