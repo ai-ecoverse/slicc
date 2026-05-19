@@ -368,12 +368,16 @@ export class ChatPanel {
       | undefined
   ): void {
     if (this.onLocalUserMessage && !handler) {
-      // Audit a defined → undefined transition. A leader-to-follower
+      // Audit a defined → undefined transition at `error` level —
+      // prod log gate is ERROR, so `info` would be suppressed
+      // exactly when operators need this signal. A leader-to-follower
       // mode switch detaches this hook before the new follower agent
       // is wired; chat sends in that window route to the local agent
-      // with no broadcast to followers. Logging the transition makes
-      // the silent gap auditable.
-      log.info('ChatPanel onLocalUserMessage hook detached');
+      // with no broadcast to followers. The transition is expected on
+      // mode switch but rare (user-initiated), so error-level isn't
+      // noisy in practice; QA reports "follower can't see my chat
+      // after switching modes" map cleanly to this log entry.
+      log.error('ChatPanel onLocalUserMessage hook detached');
     }
     this.onLocalUserMessage = handler;
   }

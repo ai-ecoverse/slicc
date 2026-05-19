@@ -87,26 +87,34 @@ export class ThrottledErrorTracker {
     this.consecutiveSuccesses = 0;
     const now = this.now();
     if (now - this.lastErrorLogAt > this.throttleMs) {
-      // Attempt the log BEFORE committing the throttle counter. If the
-      // logger throws (broken transport, serialization failure, custom
-      // sink assertion), we still advance the counter — otherwise a
-      // tight retry loop would spam attempts — but we also fall back
-      // to `console.error` so the operator has at least one signal of
-      // both the underlying failure AND the logger fault. Without
-      // this, a transient logger problem could cause the throttle to
-      // suppress ALL subsequent failures for 60 s with zero log
-      // evidence the first one happened.
+      // Throttle counter commit goes in `finally` so a double-throw
+      // (logger AND fallback console both fail) still advances the
+      // counter — otherwise a permanently-broken log path would
+      // disarm the throttle indefinitely, and every subsequent
+      // failure would re-attempt the failing log on a tight loop.
       try {
-        this.logger.error(this.failureMessage, {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      } catch (logErr) {
-        console.error('[throttled-error-tracker] logger.error threw', logErr, {
-          originalMessage: this.failureMessage,
-          originalError: error instanceof Error ? error.message : String(error),
-        });
+        try {
+          this.logger.error(this.failureMessage, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } catch (logErr) {
+          // Fallback so the operator has at least one signal of the
+          // underlying failure AND the logger fault. Wrapped in its
+          // own try so a console.error throw (DOMException with
+          // cyclic detail, extension-context-invalidated) doesn't
+          // skip the throttle commit.
+          try {
+            console.error('[throttled-error-tracker] logger.error threw', logErr, {
+              originalMessage: this.failureMessage,
+              originalError: error instanceof Error ? error.message : String(error),
+            });
+          } catch {
+            // Both log paths failed; there is nothing more we can do.
+          }
+        }
+      } finally {
+        this.lastErrorLogAt = now;
       }
-      this.lastErrorLogAt = now;
     }
   }
 
@@ -114,22 +122,28 @@ export class ThrottledErrorTracker {
   reportSuccess(): void {
     if (!this.inFailingState) return;
     this.consecutiveSuccesses++;
-    if (this.consecutiveSuccesses >= this.recoveryDebounceTicks) {
-      // Same exception isolation as `reportFailure`: log first, then
-      // commit state. A logger throw on the recovery path would
-      // otherwise leave the tracker in a clean post-recovery state
-      // with the operator never seeing the recovery signal — the
-      // operator's MTTR signal vanishes silently.
+    if (this.consecutiveSuccesses < this.recoveryDebounceTicks) return;
+    // Reset state in `finally` so even a double-throw (logger AND
+    // fallback both fail) doesn't leave the tracker stuck in failing
+    // state. Without finally, the counter would keep incrementing on
+    // every reportSuccess (already incremented above) and the block
+    // would re-enter and re-attempt the failing log every tick.
+    try {
       try {
         // `error` (not `info`) because the prod log gate is ERROR. The
         // recovery signal is only useful if it actually reaches the
         // same operator surface as the failure signal.
         this.logger.error(this.recoveryMessage, { kind: 'recovery' });
       } catch (logErr) {
-        console.error('[throttled-error-tracker] logger.error (recovery) threw', logErr, {
-          originalMessage: this.recoveryMessage,
-        });
+        try {
+          console.error('[throttled-error-tracker] logger.error (recovery) threw', logErr, {
+            originalMessage: this.recoveryMessage,
+          });
+        } catch {
+          // Both log paths failed.
+        }
       }
+    } finally {
       this.inFailingState = false;
       this.consecutiveSuccesses = 0;
       this.lastErrorLogAt = Number.NEGATIVE_INFINITY;

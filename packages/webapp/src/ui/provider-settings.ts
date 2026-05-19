@@ -69,9 +69,14 @@ export function _testOnly_dispatchTrayJoinWithFailureFeedback(
 function dispatchTrayJoinWithFailureFeedback(joinUrl: string, statusEl: HTMLElement): () => void {
   const requestId = `tray-join-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   let removed = false;
+  let autoCleanupTimer: ReturnType<typeof setTimeout> | undefined;
   const remove = () => {
     if (removed) return;
     removed = true;
+    // Clear the auto-cleanup timer so a proactive cancel() releases
+    // the closure (joinUrl, statusEl, onFailure) instead of pinning
+    // it for up to 10s after the dialog dismisses.
+    if (autoCleanupTimer !== undefined) clearTimeout(autoCleanupTimer);
     window.removeEventListener('slicc:tray-join-failed', onFailure);
   };
   const onFailure = (e: Event) => {
@@ -109,7 +114,7 @@ function dispatchTrayJoinWithFailureFeedback(joinUrl: string, statusEl: HTMLElem
   // Auto-cleanup the listener after 10s — much longer than the 800ms
   // optimistic dismiss, but short enough that a stale listener doesn't
   // outlive the dialog if the user navigates away.
-  setTimeout(remove, 10_000);
+  autoCleanupTimer = setTimeout(remove, 10_000);
   window.dispatchEvent(new CustomEvent('slicc:tray-join', { detail: { joinUrl, requestId } }));
   return remove;
 }

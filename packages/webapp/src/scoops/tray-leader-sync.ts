@@ -219,6 +219,10 @@ export class LeaderSyncManager {
     follower.unsubscribe();
     follower.sync.close();
     this.followers.delete(bootstrapId);
+    // Clear the broadcast-error throttle entry so the map doesn't
+    // grow unbounded across reconnects (followers are keyed by
+    // bootstrapId; a reconnect mints a fresh one).
+    this.followerBroadcastErrorLogAt.delete(bootstrapId);
 
     // Remove this follower's targets from the registry
     // Find the runtimeId that maps to this bootstrapId
@@ -240,6 +244,17 @@ export class LeaderSyncManager {
   }
 
   /**
+   * Per-follower throttle for broadcast send failures. A stuck channel
+   * (closed/closing, full SCTP buffer) would otherwise log on every
+   * broadcast — and broadcasters include per-pi-event traffic during
+   * tool streaming, so a single bad follower could produce hundreds
+   * of identical error logs in a single turn before keepalive evicts
+   * it. Cleared on success and on `removeFollower`.
+   */
+  private readonly followerBroadcastErrorLogAt = new Map<string, number>();
+  private static readonly BROADCAST_ERROR_THROTTLE_MS = 60_000;
+
+  /**
    * Send a message to every connected follower. Each `follower.sync.send`
    * is wrapped in its own try/catch so a single dead/closing channel
    * doesn't abort the iteration and silently strand subsequent
@@ -247,23 +262,33 @@ export class LeaderSyncManager {
    * `InvalidStateError` for closed/closing channels and
    * `OperationError` when the SCTP send buffer overflows).
    *
-   * Logs at `error` level (prod gate is ERROR) with the failing
-   * follower's bootstrapId so an operator can diagnose which channel
-   * is stuck. Does NOT auto-remove the broken follower — keepalive
-   * timeout owns that decision; ripping a follower out mid-broadcast
-   * risks deadlocking the next iteration if it observes a partial
-   * `followers` map.
+   * Failures are throttled per-follower (~1 log per 60s) so a stuck
+   * channel can't flood logs during a high-event turn. Successful
+   * sends clear the throttle so a recovered channel logs immediately
+   * if it fails again. Does NOT auto-remove the broken follower —
+   * keepalive timeout owns that decision; ripping a follower out
+   * mid-broadcast risks deadlocking the next iteration if it
+   * observes a partial `followers` map.
    */
   private broadcastToAllFollowers(message: LeaderToFollowerMessage): void {
+    const now = performance.now();
     for (const [bootstrapId, follower] of this.followers) {
       try {
         follower.sync.send(message);
+        // Clear throttle on success so a follower that just recovered
+        // logs immediately if its channel fails again.
+        this.followerBroadcastErrorLogAt.delete(bootstrapId);
       } catch (err) {
-        log.error('Broadcast send to follower failed (channel may be stuck)', {
-          bootstrapId,
-          messageType: message.type,
-          error: err instanceof Error ? err.message : String(err),
-        });
+        const lastLogAt =
+          this.followerBroadcastErrorLogAt.get(bootstrapId) ?? Number.NEGATIVE_INFINITY;
+        if (now - lastLogAt > LeaderSyncManager.BROADCAST_ERROR_THROTTLE_MS) {
+          this.followerBroadcastErrorLogAt.set(bootstrapId, now);
+          log.error('Broadcast send to follower failed (channel may be stuck)', {
+            bootstrapId,
+            messageType: message.type,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
   }
