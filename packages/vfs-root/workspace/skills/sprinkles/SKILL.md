@@ -197,6 +197,7 @@ Available as `slicc` in `<script>` tags and `onclick` attributes:
 - `slicc.on('update', function(data) {...})` — receive data sent via `sprinkle send`.
 
 > **Payload shape:** the cone reads `event.data` as the payload — top-level extras outside `action` and `data` are silently dropped by the sprinkle bridge. Always use `slicc.lick({ action: 'deploy', data: { env: 'prod' } })`, not `slicc.lick({ action: 'deploy', env: 'prod' })`.
+
 - `slicc.name` — the sprinkle's name.
 - `slicc.close()` — close the sprinkle.
 - `slicc.stopCone()` — stop the cone agent.
