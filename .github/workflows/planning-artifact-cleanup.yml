@@ -87,4 +87,4 @@ jobs:
           PR_URL: ${{ steps.pr.outputs.url }}
         run: |
           set -euo pipefail
-          gh pr merge "$PR_URL" --auto --merge
+          gh pr merge "$PR_URL" --auto
