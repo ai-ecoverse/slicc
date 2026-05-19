@@ -108,6 +108,95 @@ final class GracefulShutdownHandlerTests: XCTestCase {
 
         XCTAssertFalse(process.isRunning)
     }
+
+    func testRunShutdownSequencePrefersBrowserKillPidOverProcessIdentifierWhenForcingKill() async throws {
+        // Mirror the LaunchServices spawn path: `process` is the long-lived
+        // `open -W` helper whose PID is NOT Chrome's. The SIGKILL fallback
+        // must target `browserKillPid` (the real Chrome PID) so we don't
+        // leave Chrome holding the user-data-dir and CDP port.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "sleep 30"]
+        try process.run()
+        XCTAssertTrue(process.isRunning)
+        defer {
+            if process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+            }
+        }
+
+        let openPid = process.processIdentifier
+        let fakeChromePid: pid_t = 424242
+        let killTargets = PidRecorder()
+        let exitRecorder = ExitRecorder()
+
+        let handler = GracefulShutdownHandler(
+            fetchBrowserWebSocketURL: { _ in throw GracefulShutdownError.cdpUnavailable(9555) },
+            sendBrowserCloseCommand: { _ in
+                XCTFail("CDP path should not run when fetchBrowserWebSocketURL throws")
+            },
+            killProcess: { pid, _ in
+                killTargets.record(pid)
+                return 0
+            },
+            exitHandler: { code in exitRecorder.record(code) },
+            browserExitTimeoutNanoseconds: 50_000_000,
+            browserExitPollNanoseconds: 10_000_000
+        )
+
+        await handler.runShutdownSequence(context: ShutdownContext(
+            browserProcess: process,
+            browserKillPid: fakeChromePid,
+            browserLabel: "Chrome",
+            cdpPort: 9555
+        ))
+
+        XCTAssertEqual(killTargets.snapshot(), [fakeChromePid])
+        XCTAssertNotEqual(killTargets.snapshot(), [openPid])
+        XCTAssertEqual(exitRecorder.codeSnapshot(), 0)
+    }
+
+    func testRunShutdownSequenceFallsBackToProcessIdentifierWhenBrowserKillPidIsNil() async throws {
+        // Direct-exec path: `process.processIdentifier` IS Chrome's PID,
+        // and we should still SIGKILL it when Browser.close can't be
+        // delivered. Verifies the LaunchServices change didn't regress
+        // the legacy code path.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "sleep 30"]
+        try process.run()
+        XCTAssertTrue(process.isRunning)
+        defer {
+            if process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+            }
+        }
+        let chromePid = process.processIdentifier
+
+        let killTargets = PidRecorder()
+        let exitRecorder = ExitRecorder()
+
+        let handler = GracefulShutdownHandler(
+            fetchBrowserWebSocketURL: { _ in throw GracefulShutdownError.cdpUnavailable(9556) },
+            sendBrowserCloseCommand: { _ in XCTFail("should not reach close") },
+            killProcess: { pid, _ in
+                killTargets.record(pid)
+                return 0
+            },
+            exitHandler: { code in exitRecorder.record(code) },
+            browserExitTimeoutNanoseconds: 50_000_000,
+            browserExitPollNanoseconds: 10_000_000
+        )
+
+        await handler.runShutdownSequence(context: ShutdownContext(
+            browserProcess: process,
+            browserLabel: "Chrome",
+            cdpPort: 9556
+        ))
+
+        XCTAssertEqual(killTargets.snapshot(), [chromePid])
+        XCTAssertEqual(exitRecorder.codeSnapshot(), 0)
+    }
 }
 
 private final class OverlayControllerSpy: @unchecked Sendable, GracefulShutdownOverlayControlling {
@@ -194,5 +283,22 @@ private final class EventRecorder: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return events
+    }
+}
+
+private final class PidRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pids: [pid_t] = []
+
+    func record(_ pid: pid_t) {
+        lock.lock()
+        pids.append(pid)
+        lock.unlock()
+    }
+
+    func snapshot() -> [pid_t] {
+        lock.lock()
+        defer { lock.unlock() }
+        return pids
     }
 }

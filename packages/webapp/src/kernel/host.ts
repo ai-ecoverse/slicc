@@ -275,6 +275,10 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   // supplemental command is constructed via
   // `createSupplementalCommands`.
   (globalThis as Record<string, unknown>).__slicc_pm = processManager;
+  // Expose the BrowserAPI so the OAuth intercept launcher
+  // (`providers/intercepted-oauth.ts`) can reach the active CDP
+  // transport without dragging in BrowserAPI as a constructor dep.
+  (globalThis as Record<string, unknown>).__slicc_browser = browser;
 
   // 2. Bind bridge — sets up the wire listener and persistence store.
   await bridge.bind(orchestrator, browser);
@@ -447,7 +451,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
           /* not mounted */
         }
       }
-      releaseHostGlobals({ processManager, lickManager });
+      releaseHostGlobals({ processManager, lickManager, browser });
     },
   };
 }
@@ -465,8 +469,10 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
 export function releaseHostGlobals(refs: {
   processManager: ProcessManager;
   lickManager: LickManager;
+  browser?: BrowserAPI;
 }): void {
   const g = globalThis as Record<string, unknown>;
   if (g.__slicc_pm === refs.processManager) delete g.__slicc_pm;
   if (g.__slicc_lickManager === refs.lickManager) delete g.__slicc_lickManager;
+  if (refs.browser && g.__slicc_browser === refs.browser) delete g.__slicc_browser;
 }

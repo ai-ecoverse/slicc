@@ -52,6 +52,8 @@ import { frozenSessionPath, parseFrozenArchive } from './session-freezer.js';
 import { BrowserAPI, NavigationWatcher } from '../cdp/index.js';
 import { type Orchestrator } from '../scoops/index.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
+import { clearAllMessages as clearOrchestratorMessages } from '../scoops/db.js';
+import { SessionStore as AgentSessionStore } from '../core/session.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import {
@@ -78,6 +80,10 @@ import {
 import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
 import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import { TabPersistenceGuard } from '../scoops/tab-persistence-guard.js';
+import { startPageLeaderTray } from './page-leader-tray.js';
+import type { PageLeaderTrayHandle } from './page-leader-tray.js';
+import { startPageFollowerTray } from './page-follower-tray.js';
+import type { PageFollowerTrayHandle } from './page-follower-tray.js';
 import {
   getElectronOverlayInitialTab,
   getLickWebSocketUrl,
@@ -1807,6 +1813,34 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   layout.setScoopSwitcherOrchestrator?.(client as unknown as Orchestrator);
   layout.onScoopSelect = selectScoop;
 
+  // Wire clear chat — must drive the IDB clears from the PAGE in
+  // standalone, because the kernel worker is a DedicatedWorker that
+  // `location.reload()` tears down moments after this handler returns —
+  // possibly before its own `clear-chat` handler has finished persisting.
+  // Mirrors what `orchestrator.clearAllMessages` does, minus the
+  // in-memory bits that the soon-to-respawn worker doesn't carry across
+  // the reload. Three same-origin IDBs to clear:
+  //  - `slicc-groups.messages` — inter-scoop ChannelMessage history
+  //  - `agent-sessions`        — per-scoop AgentMessage[] (the actual
+  //                              conversation memory the LLM resumes from)
+  //  - `browser-coding-agent`  — the panel's view cache
+  // The extension path doesn't need this — its offscreen document
+  // survives the side-panel reload, so its `clear-chat` handler has time
+  // to complete.
+  layout.onClearChat = async () => {
+    await clearOrchestratorMessages().catch(() => {});
+    await new AgentSessionStore().clearAll().catch(() => {});
+    const scoops = client.getScoops();
+    for (const scoop of scoops) {
+      const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+      await layout.panels.chat.deleteSessionById(sessionId);
+    }
+    // Fire-and-forget; the page-side IDB writes above are what survive
+    // the reload. This just keeps the worker's in-memory buffers tidy
+    // in case the reload races us.
+    client.clearAllMessages();
+  };
+
   // Brain-icon wiring (mirrors `mainExtension`).
   // - `onModelChange`: persist the user's choice locally so the worker's
   //   storage shim sees the same `selected-model` it would after reload,
@@ -2243,6 +2277,98 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   await sprinkleManager.restoreOpenSprinkles().catch((err) => {
     log.warn('Failed to restore open sprinkles', err);
   });
+
+  // ─── Multi-browser sync (tray) page-side restoration ──────────────────────
+  //
+  // Re-instate the leader and follower tray subsystems that commit 07cdce16
+  // deleted. Both halves live page-side (LeaderSyncManager and
+  // FollowerSyncManager depend on page state that can't follow into the
+  // kernel worker, and RTCDataChannel objects can't cross the boundary).
+  // The only worker-side dependency — LickManager — is reached via the new
+  // `lick-webhook-event` bridge message wired into client.sendWebhookEvent.
+  //
+  // Gated identically to pre-regression: a stored join URL means this
+  // instance is a follower; otherwise a configured worker base URL means
+  // it's a leader; if neither is set, the feature is dormant.
+  //
+  // See docs/superpowers/specs/2026-05-17-multi-browser-sync-page-side-restoration.md
+  let pageLeaderTray: PageLeaderTrayHandle | null = null;
+  let pageFollowerTray: PageFollowerTrayHandle | null = null;
+  {
+    const storedJoinUrl = window.localStorage.getItem(TRAY_JOIN_STORAGE_KEY);
+    const storedWorkerBaseUrl = window.localStorage.getItem(TRAY_WORKER_STORAGE_KEY);
+    if (storedJoinUrl) {
+      pageFollowerTray = startPageFollowerTray({
+        joinUrl: storedJoinUrl,
+        onSnapshot: (messages) => layout.panels.chat.loadMessages(messages),
+        onUserMessage: (text, _messageId, _scoopJid, attachments) =>
+          layout.panels.chat.addUserMessage(text, attachments),
+        onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
+        setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
+        browserAPI: browser,
+      });
+    } else if (storedWorkerBaseUrl) {
+      pageLeaderTray = startPageLeaderTray({
+        workerBaseUrl: storedWorkerBaseUrl,
+        getMessages: () => layout.panels.chat.getMessages(),
+        getScoopJid: () => selectedScoop?.jid ?? 'cone',
+        getScoops: () =>
+          client.getScoops().map((s) => ({
+            jid: s.jid,
+            name: s.name,
+            folder: s.folder,
+            isCone: s.isCone,
+            assistantLabel: s.assistantLabel,
+            trigger: s.trigger,
+          })),
+        getSprinkles: () => {
+          const opened = new Set(sprinkleManager.opened());
+          return sprinkleManager.available().map((p) => ({
+            name: p.name,
+            title: p.title,
+            path: p.path,
+            open: opened.has(p.name),
+            autoOpen: p.autoOpen,
+          }));
+        },
+        readSprinkleContent: async (sprinkleName) => {
+          const sprinkle = sprinkleManager.available().find((s) => s.name === sprinkleName);
+          if (!sprinkle) return null;
+          try {
+            const raw = await localFs.readFile(sprinkle.path, { encoding: 'utf-8' });
+            return typeof raw === 'string' ? raw : new TextDecoder('utf-8').decode(raw);
+          } catch {
+            return null;
+          }
+        },
+        onSprinkleLick: (sprinkleName, body, targetScoop) =>
+          client.sendSprinkleLick(sprinkleName, body, targetScoop),
+        onFollowerMessage: (text, messageId, attachments) => {
+          layout.panels.chat.addUserMessage(text, attachments);
+          agentHandle.sendMessage(text, messageId, attachments);
+        },
+        onFollowerAbort: () => agentHandle.stop(),
+        sendWebhookEvent: (id, headers, body) => client.sendWebhookEvent(id, headers, body),
+        onAgentEvent: (handler) => agentHandle.onEvent(handler),
+        browserAPI: browser,
+        browserTransport: realCdpTransport,
+        vfs: localFs,
+      });
+    }
+  }
+
+  // Tear down on page unload so the WebSocket and any open data channels
+  // close cleanly. Best-effort — beforeunload is not guaranteed to fire
+  // on every navigation, but the tray worker's session TTL handles the
+  // gap if it doesn't.
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      pageLeaderTray?.stop();
+      pageFollowerTray?.stop();
+    },
+    { once: true }
+  );
 
   // First-run detection. Mirrors the extension's logic at the bottom
   // of `mainExtension`: only fire when `/shared/.welcomed` is absent

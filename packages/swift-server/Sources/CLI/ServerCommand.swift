@@ -87,6 +87,11 @@ struct ServerCommand: AsyncParsableCommand {
         let serveOrigin = "http://localhost:\(servePort)"
 
         var browserProcess: Process?
+        // Real Chrome PID when we routed the spawn through `/usr/bin/open`
+        // (LaunchServices) for TCC attribution. `browserProcess` then wraps
+        // `open`, so the graceful-shutdown SIGKILL fallback needs this
+        // separate handle to actually target Chrome.
+        var browserKillPid: pid_t?
         var browserLabel = config.electron ? "Electron" : "Chrome"
         var overlayInjector: ElectronOverlayInjector?
 
@@ -175,6 +180,7 @@ struct ServerCommand: AsyncParsableCommand {
                 )
             )
             browserProcess = launchedChrome.process
+            browserKillPid = launchedChrome.chromePid
             browserLabel = "Chrome"
             cdpPort = launchedChrome.cdpPort
         }
@@ -280,6 +286,7 @@ struct ServerCommand: AsyncParsableCommand {
             await shutdownHandler.install(
                 context: ShutdownContext(
                     browserProcess: browserProcess,
+                    browserKillPid: browserKillPid,
                     browserLabel: browserLabel,
                     cdpPort: cdpPort,
                     fileLogger: fileLogger,

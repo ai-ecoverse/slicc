@@ -424,6 +424,18 @@ export class Orchestrator {
     };
   }
 
+  /**
+   * Relay a webhook event into the LickManager. Used by `OffscreenBridge`
+   * when the page-side `LeaderTrayManager` forwards a tray `webhook.event`
+   * across the bridge (see `lick-webhook-event` message type). Pre-regression
+   * this was a direct page-side call; post-refactor the tray sits on the
+   * page and the lick manager sits in the worker, so the page relays the
+   * event over the bridge and the orchestrator dispatches it locally.
+   */
+  handleWebhookEvent(webhookId: string, headers: Record<string, string>, body: unknown): void {
+    this.lickManager?.handleWebhookEvent(webhookId, headers, body);
+  }
+
   /** Register a new scoop and wait until its tab/context has been registered
    *  before returning. Does NOT guarantee successful initialization:
    *  `ScoopContext.init()` can handle failures internally and leave the tab

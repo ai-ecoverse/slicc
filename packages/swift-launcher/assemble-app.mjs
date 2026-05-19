@@ -128,6 +128,10 @@ const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <false/>
     <key>NSSupportsSuddenTermination</key>
     <false/>
+    <key>NSCameraUsageDescription</key>
+    <string>Slicc launches Google Chrome to host the assistant UI. Chrome — not Slicc — uses the camera for sites you visit (Google Meet, Zoom, etc.). Grant access if you want camera-enabled sites to work inside Slicc.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Slicc launches Google Chrome to host the assistant UI. Chrome — not Slicc — uses the microphone for sites you visit (Google Meet, Zoom, etc.). Grant access if you want microphone-enabled sites to work inside Slicc.</string>
 </dict>
 </plist>
 `;

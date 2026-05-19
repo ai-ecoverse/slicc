@@ -24,6 +24,13 @@ extension LickSystem: GracefulShutdownClientSocketControlling {}
 
 struct ShutdownContext: @unchecked Sendable {
     var browserProcess: Process?
+    /// Real Chrome browser-process PID when `browserProcess` wraps
+    /// `/usr/bin/open` instead of Chrome itself (the LaunchServices spawn
+    /// path used to make macOS TCC attribute camera/mic requests to Chrome
+    /// rather than the launcher). `nil` for the direct-exec path, where
+    /// `browserProcess.processIdentifier` is already Chrome's PID and the
+    /// SIGKILL fallback can use it directly.
+    var browserKillPid: pid_t?
     var browserLabel: String
     var cdpPort: Int
     var fileLogger: FileLogger?
@@ -34,6 +41,7 @@ struct ShutdownContext: @unchecked Sendable {
 
     init(
         browserProcess: Process? = nil,
+        browserKillPid: pid_t? = nil,
         browserLabel: String,
         cdpPort: Int,
         fileLogger: FileLogger? = nil,
@@ -43,6 +51,7 @@ struct ShutdownContext: @unchecked Sendable {
         server: (any GracefulShutdownServer)? = nil
     ) {
         self.browserProcess = browserProcess
+        self.browserKillPid = browserKillPid
         self.browserLabel = browserLabel
         self.cdpPort = cdpPort
         self.fileLogger = fileLogger
@@ -92,7 +101,10 @@ actor GracefulShutdownHandler {
 
     func install(context: ShutdownContext) {
         self.context = context
-        GracefulShutdownLastResortRegistry.register(browserProcess: context.browserProcess)
+        GracefulShutdownLastResortRegistry.register(
+            browserProcess: context.browserProcess,
+            browserKillPid: context.browserKillPid
+        )
 
         guard !installed else { return }
         installed = true
@@ -141,14 +153,24 @@ actor GracefulShutdownHandler {
         }
 
         if let browserProcess = context.browserProcess {
-            await closeBrowser(process: browserProcess, browserLabel: context.browserLabel, cdpPort: context.cdpPort)
+            await closeBrowser(
+                process: browserProcess,
+                browserKillPid: context.browserKillPid,
+                browserLabel: context.browserLabel,
+                cdpPort: context.cdpPort
+            )
         }
 
         GracefulShutdownLastResortRegistry.clearBrowserProcess()
         exitHandler(0)
     }
 
-    private func closeBrowser(process: Process, browserLabel: String, cdpPort: Int) async {
+    private func closeBrowser(
+        process: Process,
+        browserKillPid: pid_t?,
+        browserLabel: String,
+        cdpPort: Int
+    ) async {
         if process.isRunning {
             do {
                 let browserWebSocketURL = try await fetchBrowserWebSocketURL(cdpPort)
@@ -159,8 +181,20 @@ actor GracefulShutdownHandler {
 
             await waitForBrowserExit(process)
 
-            if process.isRunning, process.processIdentifier > 0 {
-                _ = killProcess(process.processIdentifier, SIGKILL)
+            if process.isRunning {
+                // SIGKILL Chrome itself when we know its real PID, not the
+                // `/usr/bin/open` helper wrapped by `process`. Without
+                // this, the fallback only killed `open` (which had
+                // already exited 0 in most cases anyway) and left a
+                // hung Chrome holding the user-data-dir and CDP port,
+                // breaking the next launch. Fall back to
+                // `process.processIdentifier` for the direct-exec path
+                // (Linux/Windows-equivalent test runs, bare-binary
+                // CHROME_PATH) where it really is Chrome's PID.
+                let killPid = (browserKillPid ?? process.processIdentifier)
+                if killPid > 0 {
+                    _ = killProcess(killPid, SIGKILL)
+                }
             }
         }
 
@@ -200,12 +234,16 @@ private struct BrowserVersionPayload: Decodable {
 enum GracefulShutdownLastResortRegistry {
     private static let lock = NSLock()
     private static var browserProcess: Process?
+    /// Real Chrome PID when `browserProcess` wraps `/usr/bin/open` —
+    /// see `ShutdownContext.browserKillPid` for the full rationale.
+    private static var browserKillPid: pid_t?
     private static var gracefulShutdownStarted = false
     private static var didRegisterExitHandler = false
 
-    static func register(browserProcess: Process?) {
+    static func register(browserProcess: Process?, browserKillPid: pid_t? = nil) {
         lock.lock()
         self.browserProcess = browserProcess
+        self.browserKillPid = browserKillPid
         if !didRegisterExitHandler {
             didRegisterExitHandler = true
             atexit(gracefulShutdownLastResortCleanup)
@@ -222,32 +260,37 @@ enum GracefulShutdownLastResortRegistry {
     static func clearBrowserProcess() {
         lock.lock()
         browserProcess = nil
+        browserKillPid = nil
         lock.unlock()
     }
 
     static func performCleanup() {
         let process: Process?
+        let killPid: pid_t?
         let shouldCleanup: Bool
 
         lock.lock()
         process = browserProcess
+        killPid = browserKillPid
         shouldCleanup = !gracefulShutdownStarted
         browserProcess = nil
+        browserKillPid = nil
         lock.unlock()
 
-        guard shouldCleanup,
-              let process,
-              process.isRunning,
-              process.processIdentifier > 0 else {
-            return
-        }
+        guard shouldCleanup, let process, process.isRunning else { return }
 
-        _ = Darwin.kill(process.processIdentifier, SIGKILL)
+        // Prefer Chrome's real PID (LaunchServices spawn path); fall back
+        // to the Process PID for the direct-exec path where they're the
+        // same thing.
+        let targetPid = killPid ?? process.processIdentifier
+        guard targetPid > 0 else { return }
+        _ = Darwin.kill(targetPid, SIGKILL)
     }
 
     static func resetForTesting() {
         lock.lock()
         browserProcess = nil
+        browserKillPid = nil
         gracefulShutdownStarted = false
         lock.unlock()
     }

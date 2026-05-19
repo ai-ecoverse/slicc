@@ -963,6 +963,15 @@ export class OffscreenBridge implements KernelFacade {
         break;
       }
 
+      case 'lick-webhook-event': {
+        // Page-side LeaderTrayManager received a `webhook.event` control
+        // message from the tray and relayed it here. Dispatch into the
+        // worker-side LickManager via the orchestrator. Fire-and-forget;
+        // matches the pre-regression direct-call semantics.
+        this.orchestrator.handleWebhookEvent(msg.webhookId, msg.headers, msg.body);
+        break;
+      }
+
       case 'reload-skills': {
         this.orchestrator.reloadAllSkills().catch((err) => {
           console.warn('[offscreen-bridge] Skill reload failed:', err);

@@ -12,19 +12,21 @@
  * accounts.x.ai rejects non-Grok-CLI loopback flows. `referrer=slicc` is
  * informational attribution.
  *
- * Default model: Grok Heavy (grok-4.20-multi-agent-0309).
+ * Model catalog, sanitizer, and typed errors are adapted from the
+ * actively-maintained stnly/pi-grok extension (MIT). The OAuth transport
+ * uses slicc's CDP interception since the webapp / extension floats can't
+ * bind 127.0.0.1.
  */
 
 import type {
   ProviderConfig,
   InterceptingOAuthLauncher,
   OAuthLoginOptions,
-  ModelMetadata,
 } from '../src/providers/types.js';
 import {
   registerApiProvider,
-  streamOpenAICompletions,
-  streamSimpleOpenAICompletions,
+  streamOpenAIResponses,
+  streamSimpleOpenAIResponses,
   createAssistantMessageEventStream,
 } from '@earendil-works/pi-ai';
 import type {
@@ -32,9 +34,13 @@ import type {
   Model,
   Context,
   SimpleStreamOptions,
-  OpenAICompletionsOptions,
+  StreamOptions,
+  ProviderStreamOptions,
 } from '@earendil-works/pi-ai';
 import { saveOAuthAccount, getAccounts } from '../src/ui/provider-settings.js';
+import { XaiOAuthError, XaiErrorCode } from './xai-grok-errors.js';
+import { resolveModels, toModelMetadata, type XaiModelConfig } from './xai-grok-models.js';
+import { sanitizePayload } from './xai-grok-sanitize.js';
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -49,49 +55,16 @@ const XAI_OAUTH_SCOPE = 'openid profile email offline_access grok-cli:access api
 const XAI_REDIRECT_URI = 'http://127.0.0.1:56121/callback';
 const XAI_REDIRECT_PATTERN = 'http://127.0.0.1:56121/*';
 const XAI_API_BASE_URL = 'https://api.x.ai/v1';
+const XAI_API: Api = 'openai-responses';
 
 // ── Models ─────────────────────────────────────────────────────────
 
-const XAI_MODELS: Array<{ id: string; name: string } & ModelMetadata> = [
-  {
-    // Grok Heavy — xAI's multi-agent reasoning SKU; the user pinned this
-    // dated id rather than relying on an undated alias.
-    id: 'grok-4.20-multi-agent-0309',
-    name: 'Grok Heavy',
-    api: 'openai',
-    context_window: 256_000,
-    max_tokens: 32_768,
-    reasoning: true,
-    input: ['text', 'image'],
-  },
-  {
-    id: 'grok-4.20-0309-reasoning',
-    name: 'Grok 4.20 (reasoning)',
-    api: 'openai',
-    context_window: 256_000,
-    max_tokens: 32_768,
-    reasoning: true,
-    input: ['text', 'image'],
-  },
-  {
-    id: 'grok-4.20-0309-non-reasoning',
-    name: 'Grok 4.20',
-    api: 'openai',
-    context_window: 256_000,
-    max_tokens: 32_768,
-    reasoning: false,
-    input: ['text', 'image'],
-  },
-  {
-    id: 'grok-4.3',
-    name: 'Grok 4.3',
-    api: 'openai',
-    context_window: 256_000,
-    max_tokens: 32_768,
-    reasoning: true,
-    input: ['text', 'image'],
-  },
-];
+function envModelFilter(): string | null {
+  if (typeof process === 'undefined') return null;
+  return process.env?.PI_XAI_OAUTH_MODELS ?? null;
+}
+
+const XAI_MODELS: XaiModelConfig[] = resolveModels(envModelFilter());
 
 // ── PKCE helpers ───────────────────────────────────────────────────
 
@@ -144,9 +117,19 @@ async function exchangeCode(code: string, codeVerifier: string): Promise<TokenRe
     body,
   });
   if (!res.ok) {
-    throw new Error(`xAI token exchange failed: ${res.status} ${await res.text()}`);
+    throw new XaiOAuthError(
+      `xAI token exchange failed: ${res.status} ${await res.text()}`,
+      XaiErrorCode.TOKEN_EXCHANGE_FAILED
+    );
   }
-  return (await res.json()) as TokenResponse;
+  const payload = (await res.json()) as TokenResponse;
+  if (!payload.access_token) {
+    throw new XaiOAuthError(
+      'xAI token exchange did not return access_token.',
+      XaiErrorCode.TOKEN_EXCHANGE_INVALID
+    );
+  }
+  return payload;
 }
 
 async function refreshToken(refresh: string): Promise<TokenResponse | null> {
@@ -181,7 +164,11 @@ function getXaiAccount() {
 async function getValidAccessToken(): Promise<string> {
   const account = getXaiAccount();
   if (!account?.accessToken) {
-    throw new Error('Not signed in to xAI Grok — run /login or `oauth-token xai-grok`');
+    throw new XaiOAuthError(
+      'Not signed in to xAI Grok — run /login or `oauth-token xai-grok`',
+      XaiErrorCode.AUTH_MISSING,
+      true
+    );
   }
   const expiresAt = account.tokenExpiresAt ?? 0;
   // Refresh 60s before expiry to keep streaming requests warm.
@@ -212,7 +199,7 @@ function makeErrorOutput(model: Model<Api>, error: unknown) {
     error: {
       role: 'assistant' as const,
       content: [],
-      api: 'xai-openai' as Api,
+      api: XAI_API,
       provider: PROVIDER_ID,
       model: model.id,
       usage: {
@@ -230,7 +217,19 @@ function makeErrorOutput(model: Model<Api>, error: unknown) {
   };
 }
 
-const streamXai = (model: Model<Api>, context: Context, options: OpenAICompletionsOptions = {}) => {
+/**
+ * Build the pi-ai onPayload hook that runs {@link sanitizePayload} just
+ * before the request is serialized. Mutates the payload in place so the
+ * change is invisible to the rest of the pipeline.
+ */
+function makePayloadSanitizer(modelId: string) {
+  return (payload: unknown): unknown => {
+    if (!payload || typeof payload !== 'object') return payload;
+    return sanitizePayload(payload as Record<string, unknown>, modelId);
+  };
+}
+
+const streamXai = (model: Model<Api>, context: Context, options: ProviderStreamOptions = {}) => {
   const stream = createAssistantMessageEventStream();
   (async () => {
     try {
@@ -238,17 +237,14 @@ const streamXai = (model: Model<Api>, context: Context, options: OpenAICompletio
       const proxyModel = {
         ...model,
         baseUrl: XAI_API_BASE_URL,
-        api: 'openai-completions' as Api,
-        compat: {
-          ...(model as any).compat,
-          maxTokensField: 'max_tokens',
-        },
-      };
-      const inner = streamOpenAICompletions(proxyModel as any, context, {
+        api: XAI_API,
+      } as Model<'openai-responses'>;
+      const inner = streamOpenAIResponses(proxyModel, context, {
         ...options,
         apiKey: accessToken,
-      } as any);
-      for await (const event of inner) stream.push(event as any);
+        onPayload: makePayloadSanitizer(model.id),
+      });
+      for await (const event of inner) stream.push(event);
       stream.end();
     } catch (error) {
       console.error(
@@ -270,14 +266,17 @@ const streamSimpleXai = (model: Model<Api>, context: Context, options?: SimpleSt
       const proxyModel = {
         ...model,
         baseUrl: XAI_API_BASE_URL,
-        api: 'openai-completions' as Api,
-        compat: { ...(model as any).compat, maxTokensField: 'max_tokens' },
-      };
-      const inner = streamSimpleOpenAICompletions(proxyModel as any, context, {
+        api: XAI_API,
+      } as Model<'openai-responses'>;
+      const innerOptions: SimpleStreamOptions & {
+        onPayload?: StreamOptions['onPayload'];
+      } = {
         ...options,
         apiKey: accessToken,
-      } as any);
-      for await (const event of inner) stream.push(event as any);
+        onPayload: makePayloadSanitizer(model.id),
+      };
+      const inner = streamSimpleOpenAIResponses(proxyModel, context, innerOptions);
+      for await (const event of inner) stream.push(event);
       stream.end();
     } catch (error) {
       console.error(
@@ -303,7 +302,14 @@ export const config: ProviderConfig = {
   isOAuth: true,
   defaultModelId: 'grok-4.20-multi-agent-0309',
   oauthTokenDomains: ['api.x.ai', '*.x.ai', 'auth.x.ai', 'accounts.x.ai'],
-  getModelIds: () => XAI_MODELS,
+  getModelIds: () =>
+    XAI_MODELS.map((m) => {
+      const meta = toModelMetadata(m);
+      // thinkingLevelMap is a Model<Api> field, but the metadata layer
+      // forwards arbitrary extra keys through to provider-settings.ts,
+      // which spreads them onto the model record.
+      return m.thinkingLevelMap ? { ...meta, thinkingLevelMap: m.thinkingLevelMap } : meta;
+    }),
 
   onOAuthLoginIntercepted: async (
     launcher: InterceptingOAuthLauncher,
@@ -335,15 +341,26 @@ export const config: ProviderConfig = {
       onCapture: 'close',
     });
     if (!captured) {
-      throw new Error('xAI OAuth login was cancelled or timed out');
+      throw new XaiOAuthError(
+        'xAI OAuth login was cancelled or timed out',
+        XaiErrorCode.CALLBACK_TIMEOUT
+      );
     }
 
     const parsed = new URL(captured);
     const code = parsed.searchParams.get('code');
     const returnedState = parsed.searchParams.get('state');
-    if (!code) throw new Error('xAI OAuth redirect did not include a code');
+    if (!code) {
+      throw new XaiOAuthError(
+        'xAI OAuth redirect did not include a code',
+        XaiErrorCode.CODE_MISSING
+      );
+    }
     if (returnedState !== state) {
-      throw new Error('xAI OAuth state mismatch — possible CSRF, aborting');
+      throw new XaiOAuthError(
+        'xAI OAuth state mismatch — possible CSRF, aborting',
+        XaiErrorCode.STATE_MISMATCH
+      );
     }
 
     const tokens = await exchangeCode(code, codeVerifier);
@@ -380,8 +397,10 @@ export const config: ProviderConfig = {
 
 export function register(): void {
   registerApiProvider({
-    api: 'xai-openai' as Api,
+    api: XAI_API,
     stream: streamXai as any,
     streamSimple: streamSimpleXai as any,
   });
 }
+
+export { XaiOAuthError, XaiErrorCode };

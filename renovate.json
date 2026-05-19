@@ -42,5 +42,15 @@
       "matchUpdateTypes": ["major"],
       "minimumReleaseAge": "14 days"
     }
+  ],
+  "customManagers": [
+    {
+      "description": "Track @ffmpeg/core version pinned in ffmpeg-wasm.ts (the wrapper does not declare it as a dependency, so renovate can't see it from package.json).",
+      "customType": "regex",
+      "managerFilePatterns": ["packages/webapp/src/shell/supplemental-commands/ffmpeg-wasm.ts"],
+      "matchStrings": [
+        "renovate: datasource=(?<datasource>.+?) depName=(?<depName>.+?)\\s+const\\s+FFMPEG_CORE_VERSION\\s*=\\s*'(?<currentValue>.+?)'"
+      ]
+    }
   ]
 }
