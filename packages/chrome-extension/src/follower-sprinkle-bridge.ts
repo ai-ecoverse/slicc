@@ -76,20 +76,24 @@ export interface PanelMessageSubscriber {
 const DEFAULT_FETCH_TIMEOUT_MS = 15_000;
 
 /**
- * Narrow an `unknown` runtime payload to a specific message variant by checking
- * its discriminator. Returns `null` for any payload that doesn't match — never
- * throws.
+ * Discriminate an `unknown` runtime payload by checking only its `type`
+ * tag. Returns `null` for any payload that doesn't match — never throws.
  *
- * **Trust boundary:** this is a shallow narrowing — only the `type` field is
- * verified at runtime. The rest of `T`'s shape is trusted. Safe for messages
- * crossing the intra-extension `chrome.runtime` channel, where both endpoints
- * are in the same build and the trust domain is the same. NOT sufficient for
- * messages crossing a real network/process boundary (e.g. the WebRTC tray
- * wire) — those need full shape validation. The bridge consumers narrow
- * further on the result (`result.ok === true | false | other`) when the
- * extra fields matter.
+ * **The cast is a type assertion, not a type guard.** Only the
+ * discriminator is verified at runtime; the rest of `T`'s shape is
+ * trusted. This is safe for messages crossing the intra-extension
+ * `chrome.runtime` channel — both endpoints are in the same build and
+ * the trust domain is the same. NOT sufficient for messages crossing a
+ * real network/process boundary (e.g. the WebRTC tray wire); those need
+ * full shape validation. Bridge consumers narrow further on the result
+ * (e.g. `result.ok === true | false | other`) when the extra fields
+ * matter.
+ *
+ * Name chosen to keep the contract honest — `narrowMsg` overpromised
+ * what this function checks; `discriminateMsg` says "checks the
+ * discriminator only".
  */
-function narrowMsg<T extends { type: string }>(payload: unknown, type: T['type']): T | null {
+function discriminateMsg<T extends { type: string }>(payload: unknown, type: T['type']): T | null {
   if (!payload || typeof payload !== 'object') return null;
   if ((payload as { type?: unknown }).type !== type) return null;
   return payload as T;
@@ -135,12 +139,15 @@ export class PanelFollowerSprinkleProxy implements SprinkleFollowerSync {
     this.fetchTimeoutMs = options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
     this.unsubscribe = subscriber.onMessage((envelope) => {
       if (envelope.source !== 'offscreen') return;
-      const list = narrowMsg<FollowerSprinklesListMsg>(envelope.payload, 'follower-sprinkles-list');
+      const list = discriminateMsg<FollowerSprinklesListMsg>(
+        envelope.payload,
+        'follower-sprinkles-list'
+      );
       if (list) {
         this.listeners.onSprinklesList?.(list.sprinkles);
         return;
       }
-      const update = narrowMsg<FollowerSprinkleUpdateMsg>(
+      const update = discriminateMsg<FollowerSprinkleUpdateMsg>(
         envelope.payload,
         'follower-sprinkle-update'
       );
@@ -148,7 +155,7 @@ export class PanelFollowerSprinkleProxy implements SprinkleFollowerSync {
         this.listeners.onSprinkleUpdate?.(update.sprinkleName, update.data);
         return;
       }
-      const result = narrowMsg<FollowerSprinkleFetchResultMsg>(
+      const result = discriminateMsg<FollowerSprinkleFetchResultMsg>(
         envelope.payload,
         'follower-sprinkle-fetch-result'
       );
@@ -157,8 +164,8 @@ export class PanelFollowerSprinkleProxy implements SprinkleFollowerSync {
         if (!entry) return;
         clearTimeout(entry.timer);
         this.pending.delete(result.id);
-        // Strict three-way branch — `narrowMsg` validates the discriminator
-        // only, so a malformed envelope with `ok: undefined` (or any
+        // Strict three-way branch — `discriminateMsg` validates the
+        // discriminator only, so a malformed envelope with `ok: undefined` (or any
         // non-boolean) hits the catch-all path and rejects with a real
         // diagnostic. Without this, `if (result.ok)` was falsy-true and
         // `new Error(result.error)` would produce `Error("")` — the
@@ -291,11 +298,11 @@ export function connectOffscreenFollowerSprinkleBridge(
   const off = hub.onPanelMessage((envelope) => {
     if (detached || envelope.source !== 'panel') return;
 
-    const fetchReq = narrowMsg<FollowerSprinkleFetchRequestMsg>(
+    const fetchReq = discriminateMsg<FollowerSprinkleFetchRequestMsg>(
       envelope.payload,
       'follower-sprinkle-fetch'
     );
-    const cancelReq = narrowMsg<FollowerSprinkleFetchCancelMsg>(
+    const cancelReq = discriminateMsg<FollowerSprinkleFetchCancelMsg>(
       envelope.payload,
       'follower-sprinkle-fetch-cancel'
     );
@@ -340,7 +347,10 @@ export function connectOffscreenFollowerSprinkleBridge(
       return;
     }
 
-    const lick = narrowMsg<FollowerSprinkleLickMsg>(envelope.payload, 'follower-sprinkle-lick');
+    const lick = discriminateMsg<FollowerSprinkleLickMsg>(
+      envelope.payload,
+      'follower-sprinkle-lick'
+    );
     if (lick) {
       sync.sendSprinkleLick(lick.sprinkleName, lick.body, lick.targetScoop);
     }

@@ -294,7 +294,7 @@ describe('PanelFollowerSprinkleProxy ↔ OffscreenFollowerSprinkleBridge', () =>
     ]);
   });
 
-  // R2-IMP-1: `narrowMsg`-guarded paths must drop malformed envelopes
+  // R2-IMP-1: `discriminateMsg`-guarded paths must drop malformed envelopes
   // silently, and the `FollowerSprinkleFetchResultMsg` consumer must
   // surface a meaningful error when `ok` is missing or non-boolean
   // (was previously rejecting with `Error("")` for any falsy `ok`).
