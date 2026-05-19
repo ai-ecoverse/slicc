@@ -222,11 +222,24 @@ function makeErrorOutput(model: Model<Api>, error: unknown) {
  * before the request is serialized. Mutates the payload in place so the
  * change is invisible to the rest of the pipeline.
  */
-function makePayloadSanitizer(modelId: string) {
+function makePayloadSanitizer(modelId: string, sessionId?: string) {
   return (payload: unknown): unknown => {
     if (!payload || typeof payload !== 'object') return payload;
-    return sanitizePayload(payload as Record<string, unknown>, modelId);
+    return sanitizePayload(payload as Record<string, unknown>, modelId, sessionId);
   };
+}
+
+/**
+ * xAI routes requests with the same `x-grok-conv-id` to the same backend
+ * shard for prompt-cache locality. Mirror stnly/pi-grok and tag every
+ * stream with the slicc session ID when one is available.
+ */
+function withGrokConvHeader(
+  base: Record<string, string> | undefined,
+  sessionId: string | undefined
+): Record<string, string> | undefined {
+  if (!sessionId) return base;
+  return { ...(base ?? {}), 'x-grok-conv-id': sessionId };
 }
 
 const streamXai = (model: Model<Api>, context: Context, options: ProviderStreamOptions = {}) => {
@@ -234,6 +247,7 @@ const streamXai = (model: Model<Api>, context: Context, options: ProviderStreamO
   (async () => {
     try {
       const accessToken = await getValidAccessToken();
+      const sessionId = (options as { sessionId?: string }).sessionId;
       const proxyModel = {
         ...model,
         baseUrl: XAI_API_BASE_URL,
@@ -242,7 +256,8 @@ const streamXai = (model: Model<Api>, context: Context, options: ProviderStreamO
       const inner = streamOpenAIResponses(proxyModel, context, {
         ...options,
         apiKey: accessToken,
-        onPayload: makePayloadSanitizer(model.id),
+        headers: withGrokConvHeader(options.headers, sessionId),
+        onPayload: makePayloadSanitizer(model.id, sessionId),
       });
       for await (const event of inner) stream.push(event);
       stream.end();
@@ -263,6 +278,7 @@ const streamSimpleXai = (model: Model<Api>, context: Context, options?: SimpleSt
   (async () => {
     try {
       const accessToken = await getValidAccessToken();
+      const sessionId = (options as { sessionId?: string } | undefined)?.sessionId;
       const proxyModel = {
         ...model,
         baseUrl: XAI_API_BASE_URL,
@@ -273,7 +289,8 @@ const streamSimpleXai = (model: Model<Api>, context: Context, options?: SimpleSt
       } = {
         ...options,
         apiKey: accessToken,
-        onPayload: makePayloadSanitizer(model.id),
+        headers: withGrokConvHeader(options?.headers, sessionId),
+        onPayload: makePayloadSanitizer(model.id, sessionId),
       };
       const inner = streamSimpleOpenAIResponses(proxyModel, context, innerOptions);
       for await (const event of inner) stream.push(event);
