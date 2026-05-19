@@ -37,7 +37,7 @@ This package is NOT an npm workspace. It is a Swift Package Manager project (`Pa
 - The leader→follower reply path for follower-originated CDP/tab.open requests (`cdp.response` / `cdp.event` / `tab.opened` / `tab.open.error` received by a follower that asked for it). Since iOS doesn't originate, it never has to consume the reply.
 - `tab.open.error` send-side — iOS embeds CDP errors in `cdp.response.error` and always sends `.tabOpened` for `tab.open`.
 
-The file headers at `SyncProtocol.swift:145` and `:334` declare the omission explicitly.
+The doc-comment headers above the `LeaderToFollowerMessage` and `FollowerToLeaderMessage` enum declarations in `SyncProtocol.swift` declare the omission explicitly — `// MARK: -` boundaries are the stable anchors; line numbers shift whenever the headers expand.
 
 When you change the protocol:
 

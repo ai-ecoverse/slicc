@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// Test the `onLocalUserMessage` hook that page-leader-tray uses to forward
-// the leader's own chat input over `user_message_echo` to followers.
-// Without this hook the follower only sees the leader's input after a
-// snapshot refresh — agent responses stream live but the prompt that
-// triggered them doesn't, leaving the follower's chat looking like the
-// assistant is talking to itself.
+// Test the `onLocalUserMessage` hook that the standalone-leader boot
+// path in `ui/main.ts:mainStandaloneWorker` wires to
+// `pageLeaderTray.sync.broadcastUserMessage` so the leader's own chat
+// input is forwarded over `user_message_echo` to followers. Without
+// this hook the follower only sees the leader's input after a snapshot
+// refresh — agent responses stream live but the prompt that triggered
+// them doesn't, leaving the follower's chat looking like the assistant
+// is talking to itself.
 
 describe('ChatPanel — onLocalUserMessage hook (leader-tray broadcast wiring)', () => {
   beforeEach(() => {
