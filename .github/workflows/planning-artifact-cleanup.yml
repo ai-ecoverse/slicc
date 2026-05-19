@@ -65,8 +65,32 @@ jobs:
               --head "$CLEANUP_BRANCH" \
               --title "chore: remove planning artifacts from main" \
               --body "Automated follow-up after a merge-queue landing to remove planning artifacts that should stay visible in the original PR but not remain on \`main\`. The cleanup branch is pushed with the repo deploy key so the normal CI workflow still runs before this PR is re-queued.")
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "created=false" >> "$GITHUB_OUTPUT"
           fi
           echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Kick required pull_request checks
+        if: steps.cleanup.outputs.has_changes == 'true' && steps.pr.outputs.created == 'true'
+        env:
+          CLEANUP_BRANCH: automation/planning-artifact-cleanup
+        # `gh pr create` above authenticates with GITHUB_TOKEN. GitHub's
+        # anti-recursion safeguard suppresses every workflow run that a
+        # `pull_request` event would otherwise trigger when the PR is
+        # opened by GITHUB_TOKEN, so required checks like CodeQL never
+        # run and the merge queue parks the PR in AWAITING_CHECKS forever.
+        #
+        # Push an empty commit using the deploy-key-authenticated remote
+        # so `pull_request: synchronize` fires under a real identity and
+        # all required workflows run on the cleanup PR. On subsequent
+        # workflow runs the PR already exists and the force-push of the
+        # cleanup commit itself fires synchronize, so this step is only
+        # needed on first creation.
+        run: |
+          set -euo pipefail
+          git commit --allow-empty -m "chore(ci): trigger required pull_request checks"
+          git push origin "HEAD:$CLEANUP_BRANCH"
 
       - name: Add cleanup PR to merge queue
         if: steps.cleanup.outputs.has_changes == 'true'
