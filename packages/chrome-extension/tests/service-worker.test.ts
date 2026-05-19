@@ -440,6 +440,41 @@ describe('extension service worker', () => {
     expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '' });
   });
 
+  it('focuses detached tab on notification click when in detached mode', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    chrome.tabs.get = vi.fn(async () => ({ id: 42, windowId: 7, title: 'Handoff Page' })) as never;
+    chrome.tabs.update = vi.fn(async () => ({})) as never;
+    chrome.sidePanel.open = vi.fn(async () => undefined) as never;
+    // Simulate detached mode — storage.session returns a stored tab ID
+    chrome.storage.session.get = vi.fn(async () => ({ 'slicc.detached.tabId': 99 })) as never;
+
+    let notificationClickListener: ((id: string) => void) | null = null;
+    chrome.notifications.onClicked.addListener = vi.fn((listener: (id: string) => void) => {
+      notificationClickListener = listener;
+    }) as never;
+
+    vi.resetModules();
+    await loadServiceWorker();
+
+    headersReceivedListener!({
+      url: 'https://www.sliccy.ai/handoff?msg=upskill%3Ahello',
+      tabId: 42,
+      responseHeaders: [{ name: 'x-slicc', value: 'upskill%3Ahello' }],
+    });
+    await flushAsync();
+
+    expect(chrome.notifications.create).toHaveBeenCalled();
+    const notificationId = (chrome.notifications.create as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+
+    notificationClickListener!(notificationId);
+    await flushAsync();
+
+    expect(chrome.tabs.update).toHaveBeenCalledWith(99, { active: true });
+  });
+
   it('handles DA sign-and-forward by attaching the IMS bearer token', async () => {
     let capturedUrl = '';
     let capturedAuth = '';

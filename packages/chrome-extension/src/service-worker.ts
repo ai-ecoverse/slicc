@@ -408,12 +408,13 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
   const windowId = handoffNotificationWindows.get(notificationId);
   handoffNotificationWindows.delete(notificationId);
   chrome.action.setBadgeText({ text: '' });
+  if (windowId !== undefined) {
+    chrome.sidePanel.open({ windowId }).catch(() => {});
+  }
   readStoredDetachedTabId()
     .then((detachedTabId) => {
       if (detachedTabId !== undefined) {
         chrome.tabs.update(detachedTabId, { active: true }).catch(() => {});
-      } else if (windowId !== undefined) {
-        chrome.sidePanel.open({ windowId }).catch(() => {});
       }
     })
     .catch(() => {});
