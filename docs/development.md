@@ -280,8 +280,8 @@ npm run dev:electron -- /Applications/Slack.app
 This launches:
 
 - The main CLI entrypoint in `--electron` mode
-- The target Electron app with remote debugging on port 9223
-- The same local UI server on port 5710 plus persistent overlay injection from `electron-overlay-entry.js`
+- The target Electron app with remote debugging on a hash-allocated CDP port (base 9223 + offset)
+- A local UI server on a hash-allocated serve port (base 5710 + offset) — both ports are printed to stdout as `Dynamic port allocation for Electron app: CDP=<X>, serve=<Y>`
 
 ### Viewing console output
 
