@@ -225,6 +225,15 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
 
   // Browser targets: poll local CDP for the leader's open pages and
   // push them into the sync manager as the leader's local targets.
+  //
+  // Throttled error logging — mirror of `page-follower-tray.ts`'s
+  // `refreshTargets`. A sustained CDP failure (browser crashed,
+  // permission revoked, transport closed) must not flood logs; once
+  // per ~minute is enough signal for an operator without spamming
+  // DevTools. `error` level matches the broadcast-failure outer catch
+  // in the periodic interval below — both share the "real bug, prod
+  // log gate must let it through" reasoning.
+  let lastTargetErrorLogAt = 0;
   const refreshLeaderTargets = async () => {
     try {
       const pages = await options.browserAPI.listPages();
@@ -234,8 +243,14 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
         url: p.url,
       }));
       sync.setLocalTargets(targets);
-    } catch {
-      /* ignore — browser may be unavailable transiently */
+    } catch (err) {
+      const now = Date.now();
+      if (now - lastTargetErrorLogAt > 60_000) {
+        lastTargetErrorLogAt = now;
+        log.error('Leader target refresh failed (best-effort, throttled)', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   };
   intervals.push(setInterval(refreshLeaderTargets, refreshIntervalMs));

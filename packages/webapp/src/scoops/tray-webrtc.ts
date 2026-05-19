@@ -749,7 +749,15 @@ export function startFollowerWithAutoReconnect(
     })
     .catch((error) => {
       if (cancelled) return;
-      log.warn('Initial follower connection failed', {
+      // `error`, not `warn` — the prod default log level is ERROR, so
+      // `warn` would be suppressed. An initial connect failure here
+      // means the follower never reaches the leader: the user pasted a
+      // join URL, the underlying RTCPeerConnection negotiation failed,
+      // and nothing else fires (the follower runtime status is set
+      // deeper inside `FollowerTrayManager.start`, but no UI watches
+      // it on this path). Without `error`-grade signal, on-call has
+      // no log entry to grep.
+      log.error('Initial follower connection failed', {
         error: error instanceof Error ? error.message : String(error),
       });
     });
