@@ -261,7 +261,9 @@ export class LeaderSyncManager {
    * originated path already scrubs in `handleFollowerMessage` (defense
    * in depth — that scrub stays), so the second pass here is idempotent.
    * The leader-originated path (the panel chat `setOnLocalUserMessage`
-   * hook) was the gap: leader paths like `/workspace/foo.png` would have
+   * hook) was the gap: leader paths like
+   * `/tmp/attachment-<stamp>-<seq>-<rand>-<name>` (the off-load shape
+   * produced by `attachment-vfs.ts:makeAttachmentPath`) would have
    * shipped raw to every follower, where they're meaningless.
    */
   broadcastUserMessage(text: string, messageId: string, attachments?: MessageAttachment[]): void {

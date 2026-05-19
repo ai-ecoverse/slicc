@@ -442,9 +442,11 @@ describe('LeaderSyncManager', () => {
   it('broadcastUserMessage strips leader-local VFS paths before sending', () => {
     // CR-1: without this scrub, the standalone-leader chat hook
     // (`ui/main.ts:mainStandaloneWorker` `setOnLocalUserMessage` →
-    // `broadcastUserMessage`) would ship `/workspace/foo.png` over the
-    // WebRTC wire to every follower — meaningless on the receiver.
-    // Inline content still arrives; path-only attachments demote to
+    // `broadcastUserMessage`) would ship the real off-loaded paths
+    // produced by `attachment-vfs.ts:makeAttachmentPath` (shape:
+    // `/tmp/attachment-<stamp>-<seq>-<rand>-<name>`) over the WebRTC
+    // wire to every follower — meaningless on the receiver. Inline
+    // content still arrives; path-only attachments demote to
     // `not-included` placeholders.
     const { manager } = createManager();
     const ch = new FakeChannel();
@@ -460,7 +462,7 @@ describe('LeaderSyncManager', () => {
         size: 3,
         kind: 'image',
         data: 'AAA',
-        path: '/workspace/foo.png',
+        path: '/tmp/attachment-1716045123456-1-abc123-foo.png',
       },
       // Path-only attachment — no inline `data`/`text` — should
       // demote to `not-included` with an explanatory `error`.
@@ -470,7 +472,7 @@ describe('LeaderSyncManager', () => {
         mimeType: 'image/png',
         size: 0,
         kind: 'image',
-        path: '/workspace/no-data.png',
+        path: '/tmp/attachment-1716045123456-2-def456-no-data.png',
       },
     ]);
 

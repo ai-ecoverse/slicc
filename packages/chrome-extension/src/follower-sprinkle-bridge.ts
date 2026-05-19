@@ -88,10 +88,6 @@ const DEFAULT_FETCH_TIMEOUT_MS = 15_000;
  * full shape validation. Bridge consumers narrow further on the result
  * (e.g. `result.ok === true | false | other`) when the extra fields
  * matter.
- *
- * Name chosen to keep the contract honest — `narrowMsg` overpromised
- * what this function checks; `discriminateMsg` says "checks the
- * discriminator only".
  */
 function discriminateMsg<T extends { type: string }>(payload: unknown, type: T['type']): T | null {
   if (!payload || typeof payload !== 'object') return null;
