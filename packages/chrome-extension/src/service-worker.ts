@@ -387,7 +387,13 @@ async function addToSliccGroup(tabId: number): Promise<void> {
 /** Maps notification ID → windowId so the click handler can open the right panel. */
 const handoffNotificationWindows = new Map<string, number>();
 
-function showHandoffNotification(windowId: number): void {
+async function showHandoffNotification(windowId: number): Promise<void> {
+  const [contexts, detachedTabId] = await Promise.all([
+    chrome.runtime.getContexts({ contextTypes: ['SIDE_PANEL'] }),
+    readStoredDetachedTabId(),
+  ]);
+  if (contexts.length > 0 || detachedTabId !== undefined) return;
+
   const notificationId = `slicc-handoff-${Date.now()}`;
   handoffNotificationWindows.set(notificationId, windowId);
   chrome.action.setBadgeText({ text: '!' });

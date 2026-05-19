@@ -91,6 +91,7 @@ function createChromeMock() {
           runtimeMessageListeners.push(listener);
         }),
       },
+      getContexts: vi.fn(async () => []),
       onConnect: {
         addListener: vi.fn(),
       },
@@ -381,6 +382,26 @@ describe('extension service worker', () => {
     );
     expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '!' });
     expect(chrome.action.setBadgeBackgroundColor).toHaveBeenCalledWith({ color: '#ff5f72' });
+  });
+
+  it('skips notification when side panel is already open', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    chrome.tabs.get = vi.fn(async () => ({ id: 42, windowId: 1, title: 'Handoff Page' })) as never;
+    chrome.runtime.getContexts = vi.fn(async () => [
+      { contextType: 'SIDE_PANEL', documentUrl: 'chrome-extension://abc/index.html' },
+    ]) as never;
+
+    headersReceivedListener!({
+      url: 'https://www.sliccy.ai/handoff?msg=upskill%3Ahello',
+      tabId: 42,
+      responseHeaders: [{ name: 'x-slicc', value: 'upskill%3Ahello' }],
+    });
+    await flushAsync();
+
+    expect(chrome.notifications.create).not.toHaveBeenCalled();
+    expect(chrome.action.setBadgeText).not.toHaveBeenCalled();
   });
 
   it('opens the side panel and clears badge when handoff notification is clicked', async () => {

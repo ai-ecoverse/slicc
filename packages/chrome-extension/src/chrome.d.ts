@@ -87,6 +87,9 @@ interface ChromeAPI {
     sendMessage(message: unknown, callback?: (response: unknown) => void): Promise<void>;
     /** Open the manifest's options_ui page in a new tab (or popup). */
     openOptionsPage(): Promise<void>;
+    getContexts(filter: {
+      contextTypes?: string[];
+    }): Promise<Array<{ contextType: string; documentUrl?: string }>>;
     onInstalled: {
       addListener(callback: () => void): void;
     };
