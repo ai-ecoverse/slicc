@@ -153,7 +153,11 @@ export class SprinkleManager {
    * `readSprinkleContent`) into its options. The manager therefore
    * has to exist first, but the hook back into the tray's sync can
    * only be installed once `pageLeaderTray.sync` is available.
-   * Calling this with `undefined` detaches the hook (e.g., on `host reset`).
+   * Calling this with `undefined` detaches the hook — currently invoked
+   * by the `slicc:tray-join` listener in `ui/main.ts` when the standalone
+   * runtime switches from leader to follower mode. (`host reset` does
+   * NOT detach: it calls `pageLeaderTray.reset()` which keeps the same
+   * `sync` instance alive so the hook stays functional.)
    */
   setSendToSprinkleHook(hook: ((name: string, data: unknown) => void) | undefined): void {
     this.onSendToSprinkle = hook;

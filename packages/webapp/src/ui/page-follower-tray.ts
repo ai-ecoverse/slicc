@@ -3,7 +3,8 @@
  * sync follower role.
  *
  * Mirror of {@link startPageLeaderTray} for the joining browser. When the
- * user opens a join URL (or has one stored in `tray-join-storage-key`
+ * user opens a join URL (or has one stored under the
+ * `TRAY_JOIN_STORAGE_KEY` constant — `slicc.trayJoinUrl` — in
  * localStorage), this helper:
  *
  *   1. Starts a `FollowerTrayManager` with automatic reconnect (via
