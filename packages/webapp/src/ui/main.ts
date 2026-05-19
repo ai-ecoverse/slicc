@@ -60,6 +60,7 @@ import {
   LeaderTrayManager,
   createTrayFetch,
   getLeaderTrayRuntimeStatus,
+  subscribeToLeaderTrayRuntimeStatus,
 } from '../scoops/tray-leader.js';
 import {
   DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
@@ -2255,16 +2256,37 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     instanceId,
   });
 
+  // Hoisted forward-declaration of the page-side tray handles. They
+  // are populated by the tray init block below, but several earlier
+  // wirings (panel-RPC `tray-reset` handler) need to close over them.
+  // The closures read the current value at call time, so the
+  // assignment happening later is fine.
+  let pageLeaderTray: PageLeaderTrayHandle | null = null;
+  let pageFollowerTray: PageFollowerTrayHandle | null = null;
+
   // Install the panel-RPC handler so DOM-bound shell commands run by
   // the kernel worker (screencapture / say / afplay / clipboard /
   // open, plus the playwright app-origin lookup) can reach the page.
   // `imgcat` is intentionally terminal-only and stays out of the
   // bridge — it's meant for the in-panel terminal, not the agent.
+  //
+  // `tray-reset` is the special case: the leader tray subsystem runs
+  // on the page (`RTCDataChannel` non-transferability), so `host reset`
+  // typed in the worker terminal has to bridge here to reach
+  // `pageLeaderTray.reset()`. The callback reads the current value of
+  // `pageLeaderTray` so it picks up assignments made after install.
   const { installPanelRpcHandler } = await import('../kernel/panel-rpc.js');
   const { createStandalonePanelRpcHandlers } = await import('./panel-rpc-handlers.js');
   const stopPanelRpcHandler = installPanelRpcHandler({
     instanceId,
-    handlers: createStandalonePanelRpcHandlers(),
+    handlers: createStandalonePanelRpcHandlers({
+      resetTray: async () => {
+        if (!pageLeaderTray) {
+          throw new Error('no active tray session to reset');
+        }
+        return await pageLeaderTray.reset();
+      },
+    }),
   });
   // Tear down on session reload so the handler doesn't outlive its
   // page (the channel would still receive requests and try to call
@@ -2292,8 +2314,8 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   // it's a leader; if neither is set, the feature is dormant.
   //
   // See docs/superpowers/specs/2026-05-17-multi-browser-sync-page-side-restoration.md
-  let pageLeaderTray: PageLeaderTrayHandle | null = null;
-  let pageFollowerTray: PageFollowerTrayHandle | null = null;
+  // (pageLeaderTray / pageFollowerTray are forward-declared above so the
+  // panel-RPC handler can close over them.)
   {
     const storedJoinUrl = window.localStorage.getItem(TRAY_JOIN_STORAGE_KEY);
     const storedWorkerBaseUrl = window.localStorage.getItem(TRAY_WORKER_STORAGE_KEY);
@@ -2348,14 +2370,89 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
           agentHandle.sendMessage(text, messageId, attachments);
         },
         onFollowerAbort: () => agentHandle.stop(),
+        onFollowerCountChanged: (_count) => {
+          const followerPeers = pageLeaderTray?.peers.getPeers() ?? [];
+          window.localStorage.setItem(
+            'slicc.leaderTrayFollowers',
+            JSON.stringify(
+              followerPeers.map((p) => ({
+                runtimeId: p.bootstrapId,
+                runtime: p.runtime,
+                connectedAt: p.connectedAt ?? undefined,
+              }))
+            )
+          );
+        },
         sendWebhookEvent: (id, headers, body) => client.sendWebhookEvent(id, headers, body),
         onAgentEvent: (handler) => agentHandle.onEvent(handler),
         browserAPI: browser,
         browserTransport: realCdpTransport,
         vfs: localFs,
       });
+      layout.panels.chat.setLeaderBroadcast((text, id, att) =>
+        pageLeaderTray?.sync.broadcastUserMessage(text, id, att)
+      );
     }
   }
+
+  // Wire host-command setters so `host` in the terminal shows connected
+  // followers and `host reset` works. These module-level setters are read
+  // by the host shell command (which runs in the kernel worker's shell
+  // context, where the tray manager singletons are not live — the page
+  // owns them post-refactor, so the shell command reads them via these
+  // injected callbacks instead).
+  if (pageLeaderTray) {
+    setConnectedFollowersGetter(() =>
+      pageLeaderTray!.peers.getPeers().map((p) => ({
+        runtimeId: p.bootstrapId,
+        runtime: p.runtime,
+        connectedAt: p.connectedAt ?? undefined,
+      }))
+    );
+    setTrayResetter(() => pageLeaderTray!.reset());
+  }
+
+  // Propagate page-side leader status into the worker's localStorage shim so
+  // `host` in the terminal (running in the kernel worker) can read the live
+  // state. `installPageStorageSync` forwards page-side localStorage writes to
+  // the worker via `local-storage-set` messages that update its Map-backed shim.
+  subscribeToLeaderTrayRuntimeStatus((status) => {
+    window.localStorage.setItem('slicc.leaderTrayStatus', JSON.stringify(status));
+  });
+  window.localStorage.setItem(
+    'slicc.leaderTrayStatus',
+    JSON.stringify(getLeaderTrayRuntimeStatus())
+  );
+
+  // Runtime tray-join: the settings dialog dispatches this event when the
+  // user pastes a join URL and clicks "Connect". Wire a listener so the
+  // follower tray starts immediately without requiring a page reload.
+  // (The extension path uses chrome.runtime.sendMessage → `refresh-tray-runtime`
+  // instead; this is the standalone equivalent.)
+  window.addEventListener('slicc:tray-join', (rawEvent: Event) => {
+    const event = rawEvent as CustomEvent<{ joinUrl: string }>;
+    const joinUrl = event.detail?.joinUrl;
+    if (!joinUrl) return;
+
+    pageLeaderTray?.stop();
+    pageLeaderTray = null;
+    setConnectedFollowersGetter(null);
+    setTrayResetter(null);
+    layout.panels.chat.setLeaderBroadcast(null);
+
+    pageFollowerTray?.stop();
+    pageFollowerTray = null;
+
+    pageFollowerTray = startPageFollowerTray({
+      joinUrl,
+      onSnapshot: (messages) => layout.panels.chat.loadMessages(messages),
+      onUserMessage: (text, _messageId, _scoopJid, attachments) =>
+        layout.panels.chat.addUserMessage(text, attachments),
+      onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
+      setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
+      browserAPI: browser,
+    });
+  });
 
   // Tear down on page unload so the WebSocket and any open data channels
   // close cleanly. Best-effort — beforeunload is not guaranteed to fire
