@@ -498,6 +498,7 @@ chrome.runtime.onMessage.addListener(
     const msg = message as ExtensionMessage;
 
     if (msg.source === 'panel') {
+      chrome.action.setBadgeText({ text: '' });
       const panelPayload = msg.payload;
 
       // Handle OAuth requests — service worker has chrome.identity access
