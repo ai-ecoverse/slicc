@@ -9,6 +9,7 @@ import {
   createUpskillCommand,
   _resetGlobalFsCache,
   installRecommendedSkills,
+  parseGitHubRef,
   scoreSkills,
 } from '../../../src/shell/supplemental-commands/upskill-command.js';
 
@@ -40,6 +41,89 @@ function response(
 }
 
 let dbCounter = 0;
+describe('parseGitHubRef', () => {
+  it('parses bare owner/repo', () => {
+    expect(parseGitHubRef('owner/repo')).toEqual({
+      owner: 'owner',
+      repo: 'repo',
+      branch: undefined,
+    });
+  });
+
+  it('parses owner/repo@branch', () => {
+    expect(parseGitHubRef('owner/repo@dev')).toEqual({
+      owner: 'owner',
+      repo: 'repo',
+      branch: 'dev',
+    });
+  });
+
+  it('parses plain GitHub URL', () => {
+    expect(parseGitHubRef('https://github.com/owner/repo')).toEqual({
+      owner: 'owner',
+      repo: 'repo',
+      branch: undefined,
+      path: undefined,
+    });
+  });
+
+  it('parses GitHub URL with .git suffix', () => {
+    expect(parseGitHubRef('https://github.com/owner/repo.git')).toEqual({
+      owner: 'owner',
+      repo: 'repo',
+      branch: undefined,
+      path: undefined,
+    });
+  });
+
+  it('parses GitHub URL with /tree/<branch>', () => {
+    expect(parseGitHubRef('https://github.com/owner/repo/tree/main')).toEqual({
+      owner: 'owner',
+      repo: 'repo',
+      branch: 'main',
+      path: undefined,
+    });
+  });
+
+  it('parses GitHub URL with /tree/<branch>/<deep/sub/path>', () => {
+    expect(parseGitHubRef('https://github.com/owner/repo/tree/main/skills/foo/bar')).toEqual({
+      owner: 'owner',
+      repo: 'repo',
+      branch: 'main',
+      path: 'skills/foo/bar',
+    });
+  });
+
+  it('parses GitHub URL with trailing slash', () => {
+    expect(parseGitHubRef('https://github.com/owner/repo/tree/main/skills/foo/')).toEqual({
+      owner: 'owner',
+      repo: 'repo',
+      branch: 'main',
+      path: 'skills/foo',
+    });
+  });
+
+  it('returns null for invalid input', () => {
+    expect(parseGitHubRef('not a ref')).toBeNull();
+    expect(parseGitHubRef('https://example.com/owner/repo')).toBeNull();
+    expect(parseGitHubRef('')).toBeNull();
+  });
+
+  it('rejects http:// (https-only)', () => {
+    // Wave 6 follow-up: avoid silently installing a skill fetched over
+    // plaintext where a network attacker could substitute the response.
+    expect(parseGitHubRef('http://github.com/owner/repo')).toBeNull();
+  });
+
+  it('rejects typosquat hosts (locks in security invariant)', () => {
+    // Path-segment squat: github.com appears as a path segment, not the host.
+    expect(parseGitHubRef('https://evil.com/github.com/owner/repo')).toBeNull();
+    // Suffix squat: host starts with github.com but has extra TLD labels.
+    expect(parseGitHubRef('https://github.com.evil.com/owner/repo')).toBeNull();
+    // Adjacent-TLD squat: github.co is a different host from github.com.
+    expect(parseGitHubRef('https://github.co/owner/repo')).toBeNull();
+  });
+});
 
 describe('skill/upskill command compatibility discovery', () => {
   let fs: VirtualFS;
@@ -534,6 +618,35 @@ describe('upskill Tessl registry integration', () => {
     for (const [url] of fetchMock.mock.calls) {
       expect(url).not.toContain('api.github.com');
     }
+  });
+
+  it('--path flag overrides URL-implicit /tree/<branch>/<path> sub-path at dispatch', async () => {
+    // Wave 6 follow-up: code reading confirmed `effectiveSubPath = subPath ?? githubRef.path`,
+    // i.e. an explicit --path wins over the implicit path baked into the URL.
+    // This test locks that precedence in end-to-end through the command dispatcher:
+    // the URL would naturally scope discovery to "implicit/", but --path "explicit"
+    // must redirect it to the "explicit/" subtree.
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'skills-main/explicit/wanted/SKILL.md': encoder.encode('---\nname: wanted\n---\n# Wanted\n'),
+      'skills-main/implicit/unwanted/SKILL.md': encoder.encode(
+        '---\nname: unwanted\n---\n# Unwanted\n'
+      ),
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(200, zipBytes);
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['https://github.com/acme/skills/tree/main/implicit', '--path', 'explicit', '--list'],
+      createMockCtx() as any
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('wanted');
+    expect(result.stdout).not.toContain('unwanted');
   });
 
   it('calls __slicc_reloadSkills hook after successful install', async () => {
@@ -1202,5 +1315,104 @@ describe('installRecommendedSkills helper (no-shell entry point)', () => {
     await expect(fs.readTextFile('/workspace/skills/migrate-block/SKILL.md')).resolves.toContain(
       'pre-existing'
     );
+  });
+});
+
+// Shell-injection defense (defense-in-depth at the receiver).
+//
+// `handoff-link.ts` drops unsafe branch/path Link params at extraction
+// so the cone never sees them in the navigate-lick body. These tests
+// pin the second gate: even if a future dispatch path bypassed the
+// extractor and handed the upskill command a literal injection
+// payload, the command itself refuses the value with a clear error
+// and never reaches the GitHub flow. Fetch is asserted untouched so
+// any code path that bypassed validation would visibly regress the
+// "no network call on rejection" assertion.
+describe('upskill command — shell-injection defense', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({ dbName: `upskill-injection-${dbCounter++}`, wipe: true });
+  });
+
+  afterEach(async () => {
+    _resetGlobalFsCache();
+    await (fs.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.();
+    vi.restoreAllMocks();
+  });
+
+  // Adversarial branch values. Each one should be rejected before any
+  // network call, with a clear stderr message and exitCode 1.
+  const BRANCH_VECTORS: Array<[label: string, value: string]> = [
+    ['semicolon', 'main;rm -rf /'],
+    ['backtick', 'main`whoami`'],
+    ['command-substitution', 'main$(whoami)'],
+    ['trailing-newline', 'main\necho PWNED'],
+    ['leading-dash', '-rf'],
+    ['double-dot-traversal', '../etc/passwd'],
+    ['space', 'main release'],
+    ['pipe', 'main|cat /etc/passwd'],
+  ];
+
+  for (const [label, value] of BRANCH_VECTORS) {
+    it(`rejects --branch with ${label} (no network call)`, async () => {
+      const fetchMock = vi.fn();
+      const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+      const result = await cmd.execute(['--branch', value, 'owner/repo'], createMockCtx() as never);
+      expect(result.exitCode).toBe(1);
+      // The pre-existing "starts with -" check fires first for the
+      // leading-dash vector ("--branch requires a value"); the new
+      // allowlist check fires for everything else. Both are valid
+      // rejections — the contract under test is "rejected with no
+      // network call", not which message wins. Assert at least one of
+      // the two known rejection messages is present.
+      expect(result.stderr).toMatch(/--branch (must be a git ref|requires a value)/);
+      // The whole point: no GitHub fetch fired with adversarial input.
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  }
+
+  // Adversarial path values. Same shape as the branch vectors.
+  const PATH_VECTORS: Array<[label: string, value: string]> = [
+    ['semicolon', 'skills/foo;rm -rf /'],
+    ['backtick', 'skills/`id`'],
+    ['command-substitution', 'skills/$(id)'],
+    ['trailing-newline', 'skills/foo\necho PWNED'],
+    ['leading-dash', '-rf'],
+    ['absolute-path', '/etc/passwd'],
+    ['double-dot-traversal', '../etc/passwd'],
+    ['embedded-double-dot', 'skills/../etc/passwd'],
+    ['space', 'skills/foo bar'],
+  ];
+
+  for (const [label, value] of PATH_VECTORS) {
+    it(`rejects --path with ${label} (no network call)`, async () => {
+      const fetchMock = vi.fn();
+      const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+      const result = await cmd.execute(['--path', value, 'owner/repo'], createMockCtx() as never);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('--path must be a repo-relative sub-path');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  }
+
+  it('accepts a normal --branch and --path combination', async () => {
+    // Stub the GitHub flow with a 404 so we exercise the validation path
+    // without standing up a full GitHub fixture. The point of this test
+    // is that the validation gate did NOT short-circuit before the GitHub
+    // call — i.e. benign inputs flow through unchanged.
+    const fetchMock = vi.fn(async () =>
+      response(404, JSON.stringify({ message: 'Not Found' }), {}, 'Not Found')
+    );
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['--branch', 'release/v1.2_hotfix-3', '--path', 'skills/foo_bar', 'owner/repo'],
+      createMockCtx() as never
+    );
+    // Exit code is non-zero because the stub returns 404, but the
+    // validation gate accepted the inputs and the GitHub fetch fired.
+    expect(fetchMock).toHaveBeenCalled();
+    expect(result.stderr).not.toContain('--branch must be a git ref');
+    expect(result.stderr).not.toContain('--path must be a repo-relative sub-path');
   });
 });

@@ -2008,3 +2008,212 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     expect(incoming[1].id.startsWith('scoop-wait-')).toBe(true);
   });
 });
+
+describe('Orchestrator handleMessage external-lick visibility', () => {
+  // Confirms the regression fix: when an external lick event (webhook /
+  // cron / sprinkle / fswatch / session-reload / navigate / upgrade)
+  // reaches `handleMessage`, the orchestrator fires `onIncomingMessage`
+  // so the chat panel renders a chip live (not just after reload). The
+  // scoop-lifecycle channels keep their existing upstream fires and
+  // must NOT double-fire from inside `handleMessage`.
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    await clearAllMessages();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+    await saveScoop(cone);
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  async function makeOrch(
+    capture: (scoopJid: string, msg: ChannelMessage) => void
+  ): Promise<Orchestrator> {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    const o = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+      onIncomingMessage: capture,
+    });
+    await o.init();
+    return o;
+  }
+
+  it('fires onIncomingMessage exactly once for a navigate lick routed via handleMessage', async () => {
+    const incoming: Array<{ jid: string; msg: ChannelMessage }> = [];
+    orch = await makeOrch((jid, msg) => incoming.push({ jid, msg }));
+
+    const navigateMsg: ChannelMessage = {
+      id: 'navigate-test-1',
+      chatJid: cone.jid,
+      senderId: 'navigate',
+      senderName: 'navigate:https://example.com/',
+      content: '[Navigate Event: https://example.com/]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'navigate',
+    };
+
+    await orch.handleMessage(navigateMsg);
+
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0].jid).toBe(cone.jid);
+    expect(incoming[0].msg.channel).toBe('navigate');
+    expect(incoming[0].msg.id).toBe('navigate-test-1');
+  });
+
+  it('fires onIncomingMessage exactly once for a webhook lick routed via handleMessage', async () => {
+    const incoming: Array<{ jid: string; msg: ChannelMessage }> = [];
+    orch = await makeOrch((jid, msg) => incoming.push({ jid, msg }));
+
+    const webhookMsg: ChannelMessage = {
+      id: 'webhook-test-1',
+      chatJid: cone.jid,
+      senderId: 'webhook',
+      senderName: 'webhook:demo',
+      content: '[Webhook Event: demo]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'webhook',
+    };
+
+    await orch.handleMessage(webhookMsg);
+
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0].msg.channel).toBe('webhook');
+  });
+
+  it.each([['cron'], ['sprinkle'], ['fswatch'], ['session-reload'], ['upgrade']] as const)(
+    'fires onIncomingMessage once for %s channel',
+    async (channel) => {
+      const incoming: ChannelMessage[] = [];
+      orch = await makeOrch((_jid, msg) => incoming.push(msg));
+
+      const msg: ChannelMessage = {
+        id: `${channel}-test-1`,
+        chatJid: cone.jid,
+        senderId: channel,
+        senderName: `${channel}:demo`,
+        content: `[${channel}]`,
+        timestamp: new Date().toISOString(),
+        fromAssistant: false,
+        channel: channel as ChannelMessage['channel'],
+      };
+
+      await orch.handleMessage(msg);
+
+      expect(incoming).toHaveLength(1);
+      expect(incoming[0].channel).toBe(channel);
+    }
+  );
+
+  it('does NOT fire onIncomingMessage from inside handleMessage for scoop-notify (avoids double-fire with upstream)', async () => {
+    const incoming: ChannelMessage[] = [];
+    orch = await makeOrch((_jid, msg) => incoming.push(msg));
+
+    const notifyMsg: ChannelMessage = {
+      id: 'scoop-notify-test-1',
+      chatJid: cone.jid,
+      senderId: 'some-scoop',
+      senderName: 'some-scoop',
+      content: '[@some-scoop completed]',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'scoop-notify',
+    };
+
+    await orch.handleMessage(notifyMsg);
+
+    // handleMessage must NOT fire onIncomingMessage for scoop-notify —
+    // `maybeNotifyConeOnScoopComplete` already fires it manually just
+    // before calling handleMessage. Firing again here would render a
+    // duplicate chip in the chat panel.
+    expect(incoming).toHaveLength(0);
+  });
+
+  it('does NOT fire onIncomingMessage from inside handleMessage for scoop-idle / scoop-wait / scoop-error / delegation / web', async () => {
+    const incoming: ChannelMessage[] = [];
+    orch = await makeOrch((_jid, msg) => incoming.push(msg));
+
+    for (const channel of [
+      'scoop-idle',
+      'scoop-wait',
+      'scoop-error',
+      'delegation',
+      'web',
+    ] as const) {
+      await orch.handleMessage({
+        id: `${channel}-test`,
+        chatJid: cone.jid,
+        senderId: 'x',
+        senderName: 'x',
+        content: 'noop',
+        timestamp: new Date().toISOString(),
+        fromAssistant: false,
+        channel: channel as ChannelMessage['channel'],
+      });
+    }
+
+    expect(incoming).toHaveLength(0);
+  });
+
+  it('catches handler exceptions so message routing is not broken', async () => {
+    const incoming: ChannelMessage[] = [];
+    orch = await makeOrch((_jid, msg) => {
+      incoming.push(msg);
+      throw new Error('handler boom');
+    });
+
+    const navigateMsg: ChannelMessage = {
+      id: 'navigate-throws',
+      chatJid: cone.jid,
+      senderId: 'navigate',
+      senderName: 'navigate:demo',
+      content: 'boom',
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'navigate',
+    };
+
+    // Must resolve, not reject — the try/catch around the fire site
+    // prevents a UI handler exception from breaking message routing.
+    await expect(orch.handleMessage(navigateMsg)).resolves.toBeUndefined();
+    expect(incoming).toHaveLength(1);
+  });
+});

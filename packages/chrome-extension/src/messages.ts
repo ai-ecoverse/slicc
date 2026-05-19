@@ -491,12 +491,30 @@ export interface OAuthResultMsg {
 
 /**
  * Service worker → offscreen: a main-frame document response in some tab
- * carried an `x-slicc` header. Emitted by the webRequest observer.
+ * advertised a SLICC handoff `Link` rel. Emitted by the webRequest observer.
  */
 export interface NavigateLickMsg {
   type: 'navigate-lick';
+  /** The URL of the document whose response advertised the handoff. */
   url: string;
-  sliccHeader: string;
+  /** Verb identified by the link's rel: `handoff` (prose) | `upskill` (URL). */
+  verb: 'handoff' | 'upskill';
+  /** Resolved absolute URL of the link target. */
+  target: string;
+  /** Free-form prose instruction (handoff verb). */
+  instruction?: string;
+  /**
+   * Optional branch carried by the upskill rel's `branch` Link param
+   * (upskill verb only — handoff rel never sets these).
+   */
+  branch?: string;
+  /**
+   * Optional sub-path under the upskill repo carried by the `path` Link
+   * param (upskill verb only). Canonical directory form — a trailing
+   * `/SKILL.md` has already been stripped by the extractor.
+   */
+  path?: string;
+  /** Page title at the time of the response, if available. */
   title?: string;
   tabId?: number;
 }

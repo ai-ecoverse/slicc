@@ -55,9 +55,9 @@ For runtime-specific commands, use the nearest guide:
 In this repo, phrases like `handoff to slicc` or `move this to slicc` mean:
 
 - compose a verb-prefixed instruction: `handoff:<free text>` or `upskill:<github url>`
-- open `https://www.sliccy.ai/handoff?msg=<urlencoded>` in the local browser
-- the cloudflare-worker serves that URL with an `x-slicc: <msg>` response header
-- SLICC observes the header on main-frame navigations via a `navigate` lick and shows an approval prompt to the user
+- open `https://www.sliccy.ai/handoff?handoff=<text>` (or `?upskill=<url>`) in the local browser
+- the cloudflare-worker serves that URL with an RFC 8288 `Link` header carrying the SLICC handoff or upskill rel
+- SLICC observes the `Link` header on main-frame navigations via a `navigate` lick and shows an approval prompt to the user
 
 Prefer the helper in `.agents/skills/slicc-handoff/scripts/slicc-handoff` when it exists.
 

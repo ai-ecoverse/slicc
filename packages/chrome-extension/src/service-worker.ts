@@ -25,6 +25,7 @@ import type {
   OAuthRequestMsg,
   OAuthResultMsg,
 } from './messages.js';
+import { extractHandoffFromWebRequest } from '../../webapp/src/net/handoff-link.js';
 import {
   isExtensionMessage,
   DETACHED_RUNTIME_QUERY_NAME,
@@ -381,8 +382,9 @@ async function addToSliccGroup(tabId: number): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Handoff notifications — alert the user when an x-slicc header is received
-// and open the side panel on notification click (user gesture required).
+// Handoff notifications — alert the user when a main-frame document response
+// advertises a SLICC handoff via RFC 8288 `Link` header, and open the side
+// panel on notification click (user gesture required).
 // ---------------------------------------------------------------------------
 
 /** Maps notification ID → windowId so the click handler can open the right panel. */
@@ -425,38 +427,24 @@ chrome.notifications.onClicked.addListener((notificationId: string) => {
 });
 
 // ---------------------------------------------------------------------------
-// x-slicc header observer — emit a navigate lick when a main-frame document
-// response carries the x-slicc header.
+// Handoff `Link` header observer — emits a navigate lick when a main-frame
+// document response advertises a SLICC handoff rel via RFC 8288 Link.
 // ---------------------------------------------------------------------------
-
-function findSliccHeader(
-  headers: Array<{ name: string; value?: string }> | undefined
-): string | null {
-  if (!headers) return null;
-  for (const h of headers) {
-    if (h.name.toLowerCase() === 'x-slicc' && typeof h.value === 'string' && h.value.length > 0) {
-      // Producers percent-encode the value so non-Latin1 input survives
-      // transport. Decode on read; fall back to raw if malformed.
-      try {
-        return decodeURIComponent(h.value);
-      } catch {
-        return h.value;
-      }
-    }
-  }
-  return null;
-}
 
 chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
-    const sliccHeader = findSliccHeader(details.responseHeaders);
-    if (!sliccHeader) return;
+    const { match } = extractHandoffFromWebRequest(details.responseHeaders, details.url);
+    if (!match) return;
     const payload: NavigateLickMsg = {
       type: 'navigate-lick',
       url: details.url,
-      sliccHeader,
+      verb: match.verb,
+      target: match.target,
       tabId: details.tabId >= 0 ? details.tabId : undefined,
     };
+    if (match.instruction) payload.instruction = match.instruction;
+    if (match.branch) payload.branch = match.branch;
+    if (match.path) payload.path = match.path;
     const tabId = details.tabId;
     const dispatch = (title?: string) => {
       if (title) payload.title = title;

@@ -17,6 +17,32 @@ export interface FormattedLick {
 }
 
 /**
+ * Channels emitted by `LickManager.emitEvent` — the "external" lick
+ * types as enumerated by `LickEvent['type']`. The Orchestrator uses
+ * this set to fire `callbacks.onIncomingMessage` from `handleMessage`
+ * so external events render as chat chips live (not just on session
+ * reload). The synthetic scoop-lifecycle channels (`scoop-notify`,
+ * `scoop-idle`, `scoop-wait`, `scoop-error`, `delegation`) are
+ * intentionally excluded — they already have explicit upstream
+ * `onIncomingMessage` fires next to the points that build them.
+ */
+export const EXTERNAL_LICK_CHANNELS: ReadonlySet<LickEvent['type']> = new Set<LickEvent['type']>([
+  'webhook',
+  'cron',
+  'sprinkle',
+  'fswatch',
+  'session-reload',
+  'navigate',
+  'upgrade',
+]);
+
+export function isExternalLickChannel(
+  channel: string | null | undefined
+): channel is LickEvent['type'] {
+  return channel != null && EXTERNAL_LICK_CHANNELS.has(channel as LickEvent['type']);
+}
+
+/**
  * Build the human-readable label and message body the cone receives for a
  * given lick event. Returns `null` when the event should be silently
  * dropped (empty `mount-recovery` payload).

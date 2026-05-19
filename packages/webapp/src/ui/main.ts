@@ -49,7 +49,7 @@ import { registerProviders } from '../providers/index.js';
 import { flushCredentialsToWorker, resolveDefaultModel } from './onboarding-helpers.js';
 import { runNewSessionFreeze } from './new-session.js';
 import { frozenSessionPath, parseFrozenArchive } from './session-freezer.js';
-import { BrowserAPI, NavigationWatcher } from '../cdp/index.js';
+import { BrowserAPI } from '../cdp/index.js';
 import { type Orchestrator } from '../scoops/index.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
 import { clearAllMessages as clearOrchestratorMessages } from '../scoops/db.js';

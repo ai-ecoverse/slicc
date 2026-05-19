@@ -16,6 +16,7 @@ import type { DiscoveredSkill } from '../../skills/types.js';
 import { unzipSync } from 'fflate';
 import { consumeCachedBinaryByUrl } from '../binary-cache.js';
 import { decodeFetchBody, getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
+import { isSafeUpskillBranch, isSafeUpskillPath } from '../../net/handoff-link.js';
 
 // ClawHub uses a Convex backend - this is the actual API endpoint
 const CLAWHUB_API = 'https://wry-manatee-359.convex.site/api/v1';
@@ -1308,9 +1309,31 @@ async function reloadSkillsAfterInstall(): Promise<void> {
 }
 
 /**
- * Parse GitHub repo reference
+ * Parse GitHub repo reference.
+ *
+ * Accepts either:
+ * - bare `owner/repo` or `owner/repo@branch`
+ * - full URL `https://github.com/owner/repo[.git][/tree/<branch>[/<subpath>]][/]`
+ *
+ * For URL form, `/tree/<branch>/<path>` decomposes into `branch` plus an
+ * implicit `path`. The caller decides precedence with any explicit `--branch`
+ * / `--path` flags.
+ *
+ * URL form is **https-only and host-anchored** — `http://`, hosts that merely
+ * contain `github.com` as a path segment (`evil.com/github.com/...`), and
+ * suffix typosquats (`github.com.evil.com`, `github.co`) are rejected.
  */
-function parseGitHubRef(ref: string): { owner: string; repo: string; branch?: string } | null {
+export function parseGitHubRef(
+  ref: string
+): { owner: string; repo: string; branch?: string; path?: string } | null {
+  // URL form: https://github.com/owner/repo[.git][/tree/<branch>[/<subpath>]][/]
+  // Anchored: scheme MUST be https; host MUST be exactly `github.com`.
+  const url = ref.match(
+    /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/tree\/([^/]+?)(?:\/(.+?))?)?\/?$/
+  );
+  if (url) {
+    return { owner: url[1], repo: url[2], branch: url[3], path: url[4] };
+  }
   // Handle owner/repo or owner/repo@branch format
   const match = ref.match(/^([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+)(?:@([a-zA-Z0-9_./\-]+))?$/);
   if (match) {
@@ -1880,7 +1903,22 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
       } else if (arg === '--skill') {
         selectedSkills.push(args[++i]);
       } else if (arg === '--path' || arg === '-p') {
-        subPath = args[++i];
+        const val = args[++i];
+        // Defense-in-depth: even though `handoff-link.ts` already drops
+        // unsafe Link-param values before they reach the cone, re-validate
+        // here so a future dispatch path (or a hand-typed CLI invocation
+        // that splices unsanitized input) still cannot smuggle shell
+        // metachars past argv. The allowlist matches the one in
+        // `handoff-link.ts` — keep them in sync.
+        if (typeof val !== 'string' || !isSafeUpskillPath(val)) {
+          return {
+            stdout: '',
+            stderr:
+              'upskill: --path must be a repo-relative sub-path of [A-Za-z0-9._/-]+ with no "..", leading "-"/"/", or shell metacharacters\n',
+            exitCode: 1,
+          };
+        }
+        subPath = val;
       } else if (arg === '--list') {
         listOnly = true;
       } else if (arg === '--all') {
@@ -1891,6 +1929,17 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
         const val = args[i + 1];
         if (!val || val.startsWith('-')) {
           return { stdout: '', stderr: 'upskill: --branch requires a value\n', exitCode: 1 };
+        }
+        // Defense-in-depth: see comment on --path above. Branch names
+        // must satisfy `git check-ref-format`-style allowlist so a
+        // mis-quoted splice from a Link header cannot inject commands.
+        if (!isSafeUpskillBranch(val)) {
+          return {
+            stdout: '',
+            stderr:
+              'upskill: --branch must be a git ref of [A-Za-z0-9._/-]+ with no "..", leading "-"/"/", trailing "/" or ".lock", or shell metacharacters\n',
+            exitCode: 1,
+          };
         }
         branch = args[++i];
       } else if (!arg.startsWith('-')) {
@@ -1942,12 +1991,21 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
     const githubRef = parseGitHubRef(sourceRef);
     if (githubRef) {
       const { owner, repo } = githubRef;
-      // --branch flag takes precedence over @branch in the ref
+      // --branch flag takes precedence over @branch / URL /tree/<branch>
       const effectiveBranch = branch ?? githubRef.branch;
+      // --path/-p takes precedence over implicit subpath from URL /tree/<branch>/<path>
+      const effectiveSubPath = subPath ?? githubRef.path;
       const github = await createGitHubRequestContext(fetchFn);
 
       // List skills in the repository
-      const result = await listGitHubSkills(owner, repo, github, subPath, fetchFn, effectiveBranch);
+      const result = await listGitHubSkills(
+        owner,
+        repo,
+        github,
+        effectiveSubPath,
+        fetchFn,
+        effectiveBranch
+      );
 
       if (result.error) {
         return {
@@ -1959,7 +2017,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
 
       if (result.skills.length === 0) {
         return {
-          stdout: `No skills found in ${owner}/${repo}${subPath ? '/' + subPath : ''}\n`,
+          stdout: `No skills found in ${owner}/${repo}${effectiveSubPath ? '/' + effectiveSubPath : ''}\n`,
           stderr: '',
           exitCode: 0,
         };

@@ -40,6 +40,7 @@ import { createModelsCommand } from './models-command.js';
 import { createCostCommand } from './cost-command.js';
 import { createNukeCommand } from './nuke-command.js';
 import { createAgentCommand } from './agent-command.js';
+import { createDiscoverCommand } from './discover-command.js';
 import { createPsCommand } from './ps-command.js';
 import { createKillCommand } from './kill-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
@@ -120,6 +121,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createCostCommand(),
     createNukeCommand(),
     createAgentCommand({ getParentJid: options.getParentJid }),
+    createDiscoverCommand(),
     createPsCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
   ];

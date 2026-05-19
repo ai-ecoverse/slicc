@@ -60,6 +60,7 @@ import type {
 } from '../scoops/orchestrator.js';
 import { Orchestrator } from '../scoops/orchestrator.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
+import { NavigationWatcher } from '../cdp/navigation-watcher.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { LickEvent, LickManager } from '../scoops/lick-manager.js';
 import type { ChannelMessage, RegisteredScoop } from '../scoops/types.js';
@@ -120,6 +121,16 @@ export interface KernelHostConfig {
    * API key would dead-end.
    */
   skipConeBootstrap?: boolean;
+
+  /**
+   * If true, the caller is the extension float. The kernel host then
+   * skips constructing a CDP-level `NavigationWatcher` because the
+   * extension observes main-frame `Link` headers via `chrome.webRequest`
+   * in the service worker and emits `navigate-lick` messages directly
+   * (see `offscreen.ts`). Leaving this falsy in standalone / kernel-
+   * worker boots is what makes navigate-licks fire end-to-end there.
+   */
+  isExtension?: boolean;
 
   /**
    * Override the lick-event handler. Default: route to the named
@@ -255,7 +266,14 @@ export function defaultLickEventHandler(
 // ---------------------------------------------------------------------------
 
 export async function createKernelHost(config: KernelHostConfig): Promise<KernelHost> {
-  const { container, browser, bridge, callbacks, skipConeBootstrap = false } = config;
+  const {
+    container,
+    browser,
+    bridge,
+    callbacks,
+    skipConeBootstrap = false,
+    isExtension = false,
+  } = config;
   const log: KernelHostLogger = config.logger ?? console;
 
   // 1. Construct orchestrator + process manager. The manager is the
@@ -327,6 +345,42 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   // 8. Expose lickManager on globalThis for the `crontask` / `webhook`
   //    shell commands. globalThis is identical in worker + page.
   (globalThis as Record<string, unknown>).__slicc_lickManager = lickManager;
+
+  // 8b. CDP-level NavigationWatcher (standalone / kernel-worker only).
+  //     The extension float observes main-frame `Link` headers via
+  //     `chrome.webRequest` in the service worker and forwards them as
+  //     `navigate-lick` chrome.runtime messages directly into
+  //     `lickManager.emitEvent` (see `offscreen.ts`); booting a CDP
+  //     watcher there would double-fire. Standalone (CLI / Electron)
+  //     and kernel-worker boots have no `chrome.webRequest`, so the
+  //     watcher is what makes navigate-licks fire at all.
+  let navigationWatcherStop: (() => Promise<void>) | null = null;
+  if (!isExtension) {
+    try {
+      const navWatcher = new NavigationWatcher(browser.getTransport(), (event) => {
+        const body: Record<string, unknown> = {
+          url: event.url,
+          verb: event.verb,
+          target: event.target,
+        };
+        if (event.instruction != null) body.instruction = event.instruction;
+        if (event.branch != null) body.branch = event.branch;
+        if (event.path != null) body.path = event.path;
+        if (event.title != null) body.title = event.title;
+        lickManager.emitEvent({
+          type: 'navigate',
+          navigateUrl: event.url,
+          targetScoop: undefined,
+          timestamp: new Date().toISOString(),
+          body,
+        });
+      });
+      void navWatcher.start();
+      navigationWatcherStop = () => navWatcher.stop();
+    } catch (err) {
+      log.warn('Failed to start NavigationWatcher', err);
+    }
+  }
 
   // 9. Restore persisted mounts. MUST run AFTER setEventHandler so the
   //    `session-reload` lick we may emit below routes through the
@@ -437,6 +491,16 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
       unsubFollower?.();
       bshWatchdogStop?.();
       scriptCatalogDispose?.();
+      // Tear down the NavigationWatcher's CDP subscriptions so a
+      // new-session reload doesn't leave a stray observer attached to
+      // every page target.
+      if (navigationWatcherStop) {
+        try {
+          await navigationWatcherStop();
+        } catch (err) {
+          log.warn('NavigationWatcher.stop() failed', err);
+        }
+      }
       // Tear down /proc. Best-effort: a missing entry (sharedFs
       // unavailable at boot, or mountInternal failed) throws ENOENT
       // we swallow.

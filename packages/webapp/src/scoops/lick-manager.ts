@@ -43,7 +43,7 @@ export interface LickEvent {
   fswatchId?: string;
   fswatchName?: string;
   changes?: Array<{ type: string; path: string }>;
-  /** For navigate events: the URL whose response carried the x-slicc header. */
+  /** For navigate events: the URL whose response advertised a SLICC handoff `Link` rel. */
   navigateUrl?: string;
   /** For upgrade events: the previously-seen and current bundled SLICC versions. */
   upgradeFromVersion?: string;

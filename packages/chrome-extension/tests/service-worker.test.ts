@@ -363,16 +363,21 @@ describe('extension service worker', () => {
     }
   });
 
-  it('shows a notification and sets badge when x-slicc header is received', async () => {
+  it('shows a notification and sets badge when a SLICC handoff Link header is received', async () => {
     const chrome = (
       globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
     ).chrome;
     chrome.tabs.get = vi.fn(async () => ({ id: 42, windowId: 1, title: 'Handoff Page' })) as never;
 
     headersReceivedListener!({
-      url: 'https://www.sliccy.ai/handoff?msg=upskill%3Ahello',
+      url: 'https://www.sliccy.ai/handoff',
       tabId: 42,
-      responseHeaders: [{ name: 'x-slicc', value: 'upskill%3Ahello' }],
+      responseHeaders: [
+        {
+          name: 'Link',
+          value: '<https://github.com/o/r>; rel="https://www.sliccy.ai/rel/upskill"',
+        },
+      ],
     });
     await flushAsync();
 
@@ -394,9 +399,14 @@ describe('extension service worker', () => {
     ]) as never;
 
     headersReceivedListener!({
-      url: 'https://www.sliccy.ai/handoff?msg=upskill%3Ahello',
+      url: 'https://www.sliccy.ai/handoff',
       tabId: 42,
-      responseHeaders: [{ name: 'x-slicc', value: 'upskill%3Ahello' }],
+      responseHeaders: [
+        {
+          name: 'Link',
+          value: '<https://github.com/o/r>; rel="https://www.sliccy.ai/rel/upskill"',
+        },
+      ],
     });
     await flushAsync();
 
@@ -422,9 +432,14 @@ describe('extension service worker', () => {
     await loadServiceWorker();
 
     headersReceivedListener!({
-      url: 'https://www.sliccy.ai/handoff?msg=upskill%3Ahello',
+      url: 'https://www.sliccy.ai/handoff',
       tabId: 42,
-      responseHeaders: [{ name: 'x-slicc', value: 'upskill%3Ahello' }],
+      responseHeaders: [
+        {
+          name: 'Link',
+          value: '<https://github.com/o/r>; rel="https://www.sliccy.ai/rel/upskill"',
+        },
+      ],
     });
     await flushAsync();
 
@@ -459,9 +474,14 @@ describe('extension service worker', () => {
     await loadServiceWorker();
 
     headersReceivedListener!({
-      url: 'https://www.sliccy.ai/handoff?msg=upskill%3Ahello',
+      url: 'https://www.sliccy.ai/handoff',
       tabId: 42,
-      responseHeaders: [{ name: 'x-slicc', value: 'upskill%3Ahello' }],
+      responseHeaders: [
+        {
+          name: 'Link',
+          value: '<https://github.com/o/r>; rel="https://www.sliccy.ai/rel/upskill"',
+        },
+      ],
     });
     await flushAsync();
 

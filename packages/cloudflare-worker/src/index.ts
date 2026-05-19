@@ -14,6 +14,10 @@ import {
   handleOAuthPreflight,
   handleOAuthMethodNotAllowed,
 } from './oauth-exchange.js';
+import { applySliccLinks } from './links.js';
+import { buildApiCatalogResponse } from './api-catalog.js';
+import { buildLlmsTxtResponse } from './llms-txt.js';
+import { buildRelResponse } from './rel-docs.js';
 
 export interface WorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
@@ -157,6 +161,40 @@ export async function handleWorkerRequest(
     return buildHandoffResponse(request);
   }
 
+  if (
+    url.pathname === '/.well-known/api-catalog' &&
+    (request.method === 'GET' || request.method === 'HEAD')
+  ) {
+    return buildApiCatalogResponse(request);
+  }
+
+  if (url.pathname === '/llms.txt' && (request.method === 'GET' || request.method === 'HEAD')) {
+    return buildLlmsTxtResponse(request);
+  }
+
+  // Public health endpoint. Advertised via the `status` rel (RFC 8631) in the
+  // standard Link header set, so any consumer that walks the rels can probe
+  // liveness without hard-coding a path.
+  if (url.pathname === '/status' && (request.method === 'GET' || request.method === 'HEAD')) {
+    return jsonResponse(
+      {
+        status: 'ok',
+        service: 'slicc-tray-hub',
+        timestamp: new Date().toISOString(),
+      },
+      200,
+      { 'Cache-Control': 'no-store' }
+    );
+  }
+
+  // Documentation pages for the SLICC custom rel URIs (per RFC 8288 §2.1.2,
+  // extension rels SHOULD be dereferenceable). Match `/rel/<name>` only —
+  // not `/rel/<name>/sub` — so we don't intercept future nested routes.
+  const relMatch = url.pathname.match(/^\/rel\/([a-z0-9-]+)$/);
+  if (relMatch && (request.method === 'GET' || request.method === 'HEAD')) {
+    return buildRelResponse(relMatch[1]);
+  }
+
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
   if (tokenMatch) {
     const route = tokenMatch[1];
@@ -204,6 +242,10 @@ export async function handleWorkerRequest(
         'POST /tray',
         'GET /download/slicc.dmg',
         'GET /handoff',
+        'GET /.well-known/api-catalog',
+        'GET /llms.txt',
+        'GET /status',
+        'GET /rel/:name',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
@@ -307,7 +349,9 @@ const worker = {
     if (response.status === 101) {
       return response;
     }
-    const mutable = new Response(response.body, response);
+    // Apply SLICC's standard `Link` set, then attach the noindex tag.
+    const withLinks = applySliccLinks(response, request);
+    const mutable = new Response(withLinks.body, withLinks);
     mutable.headers.set('X-Robots-Tag', 'noindex');
     return mutable;
   },

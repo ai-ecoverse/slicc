@@ -36,6 +36,7 @@ import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-a
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 
 import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
+import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
@@ -642,6 +643,8 @@ async function main() {
 
   const app = express();
   app.use(requestLogger);
+  // Append SLICC's standard RFC 8288 Link header set on every /api/* response.
+  app.use(sliccLinksMiddleware());
 
   // ---------------------------------------------------------------------------
   // Lick system — WebSocket bridge for webhooks/crontasks (all logic in browser)
@@ -819,6 +822,26 @@ async function main() {
     });
   });
 
+  // Localhost API descriptor — the discoverable surface advertised by the
+  // `service-desc` Link rel. Matches the cloudflare-worker's
+  // `/.well-known/api-catalog` in shape but is scoped to the local CLI.
+  app.get('/api', (req, res) => {
+    const host = req.headers.host ?? `localhost:${SERVE_PORT}`;
+    res.json(buildLocalApiDescriptor(host));
+  });
+
+  // Public health document — advertised via the `status` rel (RFC 8631) in
+  // the standard Link header set so any consumer that walks the rels can
+  // probe liveness without hard-coding a path.
+  app.get('/api/status', (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      status: 'ok',
+      service: 'slicc-node-server',
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   // Tray status API — forwards to browser to get leader tray join info
   app.get('/api/tray-status', async (_req, res) => {
     try {
@@ -953,22 +976,70 @@ async function main() {
   // is installed. External tools (e.g. the slicc-handoff helper) post here
   // so a handoff reaches the cone regardless of which browser profile the
   // user is currently driving.
+  //
+  // The payload mirrors the parsed RFC 8288 `Link` form used by the
+  // observers: `verb` ∈ {handoff, upskill}, `target` is the resolved URL,
+  // `instruction` is optional free-form prose (handoff verb).
   app.post('/api/handoff', (req, res) => {
     const payload = req.body as {
-      sliccHeader?: unknown;
+      verb?: unknown;
+      target?: unknown;
+      instruction?: unknown;
       url?: unknown;
       title?: unknown;
+      branch?: unknown;
+      path?: unknown;
+      // Detect legacy x-slicc-style payloads for a clear error message.
+      sliccHeader?: unknown;
     };
-    if (typeof payload?.sliccHeader !== 'string' || payload.sliccHeader.length === 0) {
-      res.status(400).json({ error: 'sliccHeader is required (non-empty string)' });
+    if (typeof payload?.sliccHeader === 'string') {
+      res.status(400).json({
+        error:
+          'The legacy `sliccHeader` payload was removed; post `{ verb, target, instruction? }` instead. See docs/slicc-handoff.md.',
+      });
+      return;
+    }
+    if (payload?.verb !== 'handoff' && payload?.verb !== 'upskill') {
+      res.status(400).json({ error: 'verb must be "handoff" or "upskill"' });
+      return;
+    }
+    if (typeof payload.target !== 'string' || payload.target.length === 0) {
+      res.status(400).json({ error: 'target is required (non-empty string)' });
+      return;
+    }
+    if (payload.instruction != null && typeof payload.instruction !== 'string') {
+      res.status(400).json({ error: 'instruction must be a string when provided' });
+      return;
+    }
+    // `branch` / `path` mirror the upskill rel's Link params and are
+    // ignored on the handoff verb (its target is the page itself, not a
+    // repo). Reject the wrong-shape combo loudly so emitters notice
+    // rather than silently dropping the scope.
+    if (payload.branch != null && typeof payload.branch !== 'string') {
+      res.status(400).json({ error: 'branch must be a string when provided' });
+      return;
+    }
+    if (payload.path != null && typeof payload.path !== 'string') {
+      res.status(400).json({ error: 'path must be a string when provided' });
+      return;
+    }
+    if (payload.verb === 'handoff' && (payload.branch != null || payload.path != null)) {
+      res.status(400).json({ error: 'branch and path are only valid with verb="upskill"' });
       return;
     }
     broadcastLickEvent({
       type: 'navigate_event',
-      sliccHeader: payload.sliccHeader,
+      verb: payload.verb,
+      target: payload.target,
+      instruction: typeof payload.instruction === 'string' ? payload.instruction : undefined,
       url:
         typeof payload.url === 'string' && payload.url.length > 0 ? payload.url : 'about:handoff',
       title: typeof payload.title === 'string' ? payload.title : undefined,
+      branch:
+        typeof payload.branch === 'string' && payload.branch.length > 0
+          ? payload.branch
+          : undefined,
+      path: typeof payload.path === 'string' && payload.path.length > 0 ? payload.path : undefined,
       timestamp: new Date().toISOString(),
     });
     res.json({ ok: true });

@@ -114,6 +114,7 @@ async function init(): Promise<void> {
     bridge,
     callbacks,
     skipConeBootstrap: allowProviderlessTrayJoin,
+    isExtension: true,
     logger: log,
   });
   const { orchestrator, lickManager } = host;
@@ -229,16 +230,21 @@ async function init(): Promise<void> {
     const payload = message.payload as { type?: string };
     if (payload?.type !== 'navigate-lick') return false;
     const navMsg = payload as import('./messages.js').NavigateLickMsg;
+    const body: Record<string, unknown> = {
+      url: navMsg.url,
+      verb: navMsg.verb,
+      target: navMsg.target,
+    };
+    if (navMsg.instruction != null) body.instruction = navMsg.instruction;
+    if (navMsg.branch != null) body.branch = navMsg.branch;
+    if (navMsg.path != null) body.path = navMsg.path;
+    if (navMsg.title != null) body.title = navMsg.title;
     lickManager.emitEvent({
       type: 'navigate',
       navigateUrl: navMsg.url,
       targetScoop: undefined,
       timestamp: new Date().toISOString(),
-      body: {
-        url: navMsg.url,
-        sliccHeader: navMsg.sliccHeader,
-        title: navMsg.title,
-      },
+      body,
     });
     return false;
   });

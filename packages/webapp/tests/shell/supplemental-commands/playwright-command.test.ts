@@ -3516,3 +3516,196 @@ describeIntegration('iframe integration', { timeout: 60_000 }, () => {
     });
   });
 });
+
+describe('playwright-cli fetch (link discovery)', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+  let originalFetch: typeof globalThis.fetch | undefined;
+
+  /**
+   * Build a fake `fetch()` that recognises:
+   *   - `/api/fetch-proxy` requests for the primary discover URL — returns
+   *     a JSON body and a Link header carrying SLICC handoff + api-catalog
+   *     rels.
+   *   - `/api/fetch-proxy` requests for follow-up capability URLs — returns
+   *     stubbed catalog / llms.txt payloads.
+   *   - Direct (non-proxy) requests as the same handler — discoverLinks
+   *     calls go through `asWebFetch(createProxiedFetch())`, so the
+   *     follow-up fetches also land on `/api/fetch-proxy`.
+   *
+   * Returning a `Response` whose `headers` includes a comma-separated
+   * `Link:` value exercises `parseLinkHeader`'s merged-value path.
+   */
+  function makeProxyFetch(opts: { withDiscoveryDoc?: boolean } = {}): ReturnType<typeof vi.fn> {
+    return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const target = (init?.headers as Record<string, string> | undefined)?.['X-Target-URL'];
+
+      // Follow-up discovery fetches land on /api/fetch-proxy with the
+      // target rewritten into X-Target-URL.
+      if (url === '/api/fetch-proxy' && target?.endsWith('/api-catalog')) {
+        return new Response(JSON.stringify({ linkset: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/linkset+json' },
+        });
+      }
+      if (url === '/api/fetch-proxy' && target?.endsWith('/llms.txt')) {
+        return new Response('# Hello LLMs', {
+          status: 200,
+          headers: { 'content-type': 'text/markdown' },
+        });
+      }
+
+      // Primary fetch through the proxy.
+      const linkHeader = opts.withDiscoveryDoc
+        ? '<https://www.sliccy.ai/handoff?handoff=test>; rel="https://www.sliccy.ai/rel/handoff"; title*=UTF-8\'\'Continue%20demo, </api-catalog>; rel="api-catalog", </llms.txt>; rel="https://llmstxt.org/rel/llms-txt"'
+        : '<https://www.sliccy.ai/handoff?handoff=test>; rel="https://www.sliccy.ai/rel/handoff"';
+      return new Response('ok', {
+        status: 200,
+        headers: { 'content-type': 'text/plain', link: linkHeader },
+      });
+    });
+  }
+
+  beforeEach(() => {
+    browser = createMockBrowser();
+    fs = createMockFS();
+    originalFetch = globalThis.fetch;
+    fetchSpy = makeProxyFetch({ withDiscoveryDoc: true });
+    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('returns JSON with parsed links and handoff for fetch <url>', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['fetch', 'https://example.com/handoff?handoff=test'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.url).toBe('https://example.com/handoff?handoff=test');
+    expect(payload.status).toBe(200);
+    expect(Array.isArray(payload.links)).toBe(true);
+    expect(payload.links.length).toBeGreaterThan(0);
+    expect(payload.handoff).toMatchObject({
+      verb: 'handoff',
+      target: 'https://www.sliccy.ai/handoff?handoff=test',
+    });
+    // Default fetch does not run P0 discovery.
+    expect(payload.discovery).toBeUndefined();
+  });
+
+  it('includes discovery.catalog and llmsTxt when --discover is set', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['fetch', 'https://example.com/handoff?handoff=test', '--discover'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.discovery).toBeDefined();
+    expect(payload.discovery.catalog).toEqual({ linkset: [] });
+    expect(payload.discovery.llmsTxt).toBe('# Hello LLMs');
+    expect(Array.isArray(payload.discovery.failures)).toBe(true);
+    expect(payload.discovery.failures.length).toBe(0);
+  });
+
+  it('surfaces primary fetch failure as JSON error without throwing', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('network down');
+    }) as unknown as typeof globalThis.fetch;
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['fetch', 'https://example.com'], {} as any);
+    expect(result.exitCode).toBe(1);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.url).toBe('https://example.com');
+    expect(payload.links).toEqual([]);
+    expect(payload.handoff).toBeNull();
+    expect(payload.error).toContain('network down');
+  });
+
+  it('collects discoverLinks failures rather than throwing', async () => {
+    // Stub fetch so the primary returns a Link to a P0 capability that 500s.
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const target = (init?.headers as Record<string, string> | undefined)?.['X-Target-URL'];
+      if (url === '/api/fetch-proxy' && target?.endsWith('/api-catalog')) {
+        return new Response('boom', { status: 500 });
+      }
+      return new Response('ok', {
+        status: 200,
+        headers: { link: '</api-catalog>; rel="api-catalog"' },
+      });
+    }) as unknown as typeof globalThis.fetch;
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['fetch', 'https://example.com', '--discover'], {} as any);
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.discovery.failures.length).toBeGreaterThan(0);
+    expect(payload.discovery.failures[0].rel).toBe('api-catalog');
+  });
+
+  it('errors out when fetch is called without a URL', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['fetch'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('fetch requires a URL');
+  });
+
+  it('goto --discover emits JSON with links + handoff and still navigates', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['goto', 'https://example.com/handoff', '--tab=tab-1', '--discover'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.action).toBe('navigate');
+    expect(payload.targetId).toBe('tab-1');
+    expect(payload.url).toBe('https://example.com/handoff');
+    expect(payload.handoff).toMatchObject({ verb: 'handoff' });
+    expect(browser.navigate).toHaveBeenCalledWith('https://example.com/handoff');
+  });
+
+  it('open --discover emits JSON with links + handoff and still opens the tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['open', 'https://example.com/handoff', '--discover'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.action).toBe('open');
+    expect(payload.targetId).toBeTruthy();
+    expect(payload.url).toBe('https://example.com/handoff');
+    expect(payload.handoff).toMatchObject({ verb: 'handoff' });
+    expect(browser.createPage).toHaveBeenCalledWith('https://example.com/handoff');
+  });
+
+  it('goto/open --discover payloads carry source="auxiliary-fetch" discriminator', async () => {
+    // Locks in that scoops can tell "headers from the navigation" (not
+    // currently exposed) apart from "headers from an auxiliary proxied
+    // fetch" (these). See docs/link-discovery.md → playwright-cli integration.
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const gotoResult = await cmd.execute(
+      ['goto', 'https://example.com/handoff', '--tab=tab-1', '--discover'],
+      {} as any
+    );
+    expect(gotoResult.exitCode).toBe(0);
+    expect(JSON.parse(gotoResult.stdout).source).toBe('auxiliary-fetch');
+
+    const openResult = await cmd.execute(
+      ['open', 'https://example.com/handoff', '--discover'],
+      {} as any
+    );
+    expect(openResult.exitCode).toBe(0);
+    expect(JSON.parse(openResult.stdout).source).toBe('auxiliary-fetch');
+  });
+});

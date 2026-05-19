@@ -27,6 +27,7 @@ import type { BrowserAPI } from '../cdp/index.js';
 import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
 import { buildActiveLicksError, type LickManager } from './lick-manager.js';
+import { isExternalLickChannel } from './lick-formatting.js';
 import { SessionStore } from '../core/session.js';
 import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
 import {
@@ -1284,6 +1285,25 @@ export class Orchestrator {
       channel: message.channel,
       contentPreview: message.content.slice(0, 80),
     });
+
+    // Surface external lick events (webhook / cron / sprinkle / fswatch /
+    // session-reload / navigate / upgrade) to the UI as a chat chip the
+    // moment they arrive. Without this fire the lick persists to IDB and
+    // queues for the agent, but the chat panel only learns about it on
+    // session reload. Scoop-lifecycle channels (scoop-notify, scoop-idle,
+    // scoop-wait, scoop-error, delegation) are intentionally excluded —
+    // their builders fire `onIncomingMessage` explicitly next to the
+    // point they create the message, so they would double-fire here.
+    if (isExternalLickChannel(message.channel)) {
+      try {
+        this.callbacks.onIncomingMessage?.(message.chatJid, message);
+      } catch (err) {
+        log.warn('onIncomingMessage for external lick channel threw', {
+          channel: message.channel,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
 
     // Store the message
     await db.saveMessage(message);

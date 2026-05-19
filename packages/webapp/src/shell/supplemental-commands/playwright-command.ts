@@ -6,7 +6,7 @@
  */
 
 import { defineCommand } from 'just-bash';
-import type { Command } from 'just-bash';
+import type { Command, SecureFetch } from 'just-bash';
 import type { BrowserAPI, PageInfo } from '../../cdp/index.js';
 import { HarRecorder } from '../../cdp/index.js';
 import { normalizeAccessibilityText } from '../../cdp/normalize-accessibility-text.js';
@@ -15,6 +15,10 @@ import { createLogger } from '../../core/logger.js';
 import { FsError, type VirtualFS } from '../../fs/index.js';
 import type { FloatType } from '../../scoops/tray-leader-sync.js';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
+import { discoverLinks } from '../../net/discover-links.js';
+import { extractHandoff, type HandoffMatch } from '../../net/handoff-link.js';
+import { parseLinkHeader, type ParsedLink } from '../../net/link-header.js';
+import { createProxiedFetch } from '../proxied-fetch.js';
 const log = createLogger('playwright-teleport');
 
 // ---------------------------------------------------------------------------
@@ -1507,13 +1511,21 @@ function formatHelp(commandName: string): string {
   return `Usage: ${commandName} <command> [args...]
 
 Commands:
-  open [url|/vfs/path] [--foreground|--fg] [--runtime=<id>]
+  open [url|/vfs/path] [--foreground|--fg] [--runtime=<id>] [--discover]
        [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
                          Open a new tab (default: background). VFS paths are served via preview service worker.
                          Use --runtime to open the tab on a remote tray runtime (e.g. --runtime=follower-abc).
                          Use --teleport-start/--teleport-return to arm auth-state teleport.
-  goto|navigate <url> [--teleport-start=<regex>] [--teleport-return=<regex>]
+                         With --discover, also fetches the URL via the proxied fetch and emits JSON
+                         with parsed RFC 8288 Link headers + P0 discovery (api-catalog, llms.txt, ...).
+  goto|navigate <url> [--discover] [--teleport-start=<regex>] [--teleport-return=<regex>]
                          Navigate current tab to URL. Supports teleport flags.
+                         With --discover, emits JSON with parsed Link headers, any SLICC handoff
+                         match, and P0 capability documents (api-catalog, llms.txt, ...).
+  fetch <url> [--method=<verb>] [--discover]
+                         Fetch a URL through the proxied fetch and emit JSON containing
+                         parsed RFC 8288 Link headers (always) and, with --discover, the
+                         resolved P0 capability documents.
   teleport --start <regex> --return <regex> [--timeout=<s>] [--runtime=<id>]
                          Arm a teleport watcher on the current tab. Triggers when the
                          leader tab URL matches --start, opens the URL on a follower
@@ -1599,6 +1611,7 @@ const VALUE_FLAGS = new Set([
   'domain',
   'path',
   'expires',
+  'method',
 ]);
 
 /** Parse --key=value and --key value flags from args, returning remaining positional args + flags.
@@ -1641,6 +1654,106 @@ function requireTab(flags: Record<string, string>): { targetId: string } | { err
     };
   }
   return { targetId: tabId };
+}
+
+/**
+ * Adapter that lets `discoverLinks` (Web Fetch shape) ride on our
+ * `SecureFetch`, inheriting CORS bypass and forbidden-header bridging.
+ * Mirrors the helper used by the standalone `discover` command.
+ */
+function asWebFetch(secureFetch: SecureFetch): typeof fetch {
+  const adapter = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url =
+      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const result = await secureFetch(url, { method: init?.method ?? 'GET' });
+    return new Response(result.body as BodyInit, {
+      status: result.status,
+      statusText: result.statusText,
+      headers: result.headers,
+    });
+  };
+  return adapter as typeof fetch;
+}
+
+/** Shape returned to scoops when a fetch/navigation surfaces Link headers. */
+export interface PlaywrightDiscoveryResult {
+  url: string;
+  status?: number;
+  links: ParsedLink[];
+  handoff: HandoffMatch | null;
+  discovery?: {
+    catalog?: unknown;
+    serviceDesc?: unknown;
+    serviceMeta?: unknown;
+    status?: unknown;
+    llmsTxt?: string;
+    failures: Array<{ rel: string; href: string; error: string }>;
+  };
+  /**
+   * Populated when the primary fetch itself failed but the command still
+   * needs to surface a structured result (so `links: []` is meaningful).
+   */
+  error?: string;
+}
+
+/**
+ * Fetch a URL through the proxied fetch, parse RFC 8288 `Link` headers,
+ * and (optionally) run P0 discovery. Failures in the primary fetch are
+ * surfaced as `error` rather than thrown so callers can still emit a
+ * structured payload. Discovery failures are collected per-link by
+ * `discoverLinks` and never throw.
+ */
+async function fetchAndDiscover(
+  url: string,
+  options: { discover?: boolean; method?: string; fetchImpl?: SecureFetch } = {}
+): Promise<PlaywrightDiscoveryResult> {
+  const fetchImpl = options.fetchImpl ?? createProxiedFetch();
+  let response: Awaited<ReturnType<typeof fetchImpl>>;
+  try {
+    response = await fetchImpl(url, { method: options.method ?? 'GET' });
+  } catch (err) {
+    return {
+      url,
+      links: [],
+      handoff: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  const linkValues: string[] = [];
+  for (const [name, value] of Object.entries(response.headers)) {
+    if (name.toLowerCase() === 'link' && typeof value === 'string' && value.length > 0) {
+      linkValues.push(value);
+    }
+  }
+  const links = parseLinkHeader(linkValues, url);
+  const handoff = extractHandoff(links);
+
+  const result: PlaywrightDiscoveryResult = {
+    url,
+    status: response.status,
+    links,
+    handoff,
+  };
+
+  if (options.discover && links.length > 0) {
+    const discovery = await discoverLinks(links, { fetchImpl: asWebFetch(fetchImpl) });
+    result.discovery = {
+      catalog: discovery.catalog,
+      serviceDesc: discovery.serviceDesc,
+      serviceMeta: discovery.serviceMeta,
+      status: discovery.status,
+      llmsTxt: discovery.llmsTxt,
+      failures: discovery.failures,
+    };
+  } else if (options.discover) {
+    // Always emit a discovery slot when the caller asked for one, so
+    // downstream parsers can distinguish "no follow-up needed" from
+    // "follow-up not requested".
+    result.discovery = { failures: [] };
+  }
+
+  return result;
 }
 
 export function createPlaywrightCommand(
@@ -1889,10 +2002,52 @@ export function createPlaywrightCommand(
             );
           }
 
+          // --discover triggers an auxiliary proxied fetch on the URL so we
+          // can parse RFC 8288 Link headers and (optionally) run P0 discovery.
+          // Default off — the navigation itself doesn't carry headers we can
+          // see from CDP without extra plumbing, and the extra fetch is
+          // multi-request overhead the caller has to opt into.
+          if (flags['discover'] === 'true') {
+            const discoveryResult = await fetchAndDiscover(url, { discover: true });
+            const payload = {
+              action: 'open',
+              targetId,
+              // Marks `links[]`/`handoff`/`discovery` as coming from an
+              // auxiliary proxied fetch separate from the CDP navigation —
+              // may differ in auth state, cookies, redirects.
+              source: 'auxiliary-fetch' as const,
+              ...discoveryResult,
+            };
+            result = {
+              stdout: JSON.stringify(payload, null, 2) + '\n',
+              stderr: '',
+              exitCode: 0,
+            };
+            break;
+          }
+
           result = {
             stdout: `Opened ${url} in new tab [targetId: ${targetId}]\n`,
             stderr: '',
             exitCode: 0,
+          };
+          break;
+        }
+
+        case 'fetch': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'fetch requires a URL\n', exitCode: 1 };
+            break;
+          }
+          const targetUrl = positional[0];
+          const discover = flags['discover'] === 'true';
+          const method = flags['method'] ?? 'GET';
+          const payload = await fetchAndDiscover(targetUrl, { discover, method });
+          // Always JSON; non-zero exit only when the primary fetch failed.
+          result = {
+            stdout: JSON.stringify(payload, null, 2) + '\n',
+            stderr: '',
+            exitCode: payload.error ? 1 : 0,
           };
           break;
         }
@@ -1962,6 +2117,28 @@ export function createPlaywrightCommand(
               positional[0],
               tab.targetId
             );
+          }
+
+          // --discover triggers an auxiliary proxied fetch on the navigated
+          // URL so the scoop can see RFC 8288 Link headers + P0 discovery.
+          // Default off; see the open/tab-new comment for rationale.
+          if (flags['discover'] === 'true') {
+            const discoveryResult = await fetchAndDiscover(positional[0], { discover: true });
+            const payload = {
+              action: 'navigate',
+              targetId: tab.targetId,
+              // Marks `links[]`/`handoff`/`discovery` as coming from an
+              // auxiliary proxied fetch separate from the CDP navigation —
+              // may differ in auth state, cookies, redirects.
+              source: 'auxiliary-fetch' as const,
+              ...discoveryResult,
+            };
+            result = {
+              stdout: JSON.stringify(payload, null, 2) + '\n',
+              stderr: '',
+              exitCode: 0,
+            };
+            break;
           }
 
           result = { stdout: `Navigated to ${positional[0]}\n`, stderr: '', exitCode: 0 };
