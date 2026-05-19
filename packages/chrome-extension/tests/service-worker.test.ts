@@ -11,9 +11,15 @@ type DebuggerEventListener = (
   params?: Record<string, unknown>
 ) => void;
 type DebuggerDetachListener = (source: { tabId: number }, reason: string) => void;
+type HeadersReceivedListener = (details: {
+  url: string;
+  tabId: number;
+  responseHeaders?: Array<{ name: string; value?: string }>;
+}) => void;
 
 const runtimeMessageListeners: OnMessageListener[] = [];
 const runtimeSentMessages: unknown[] = [];
+let headersReceivedListener: HeadersReceivedListener | null = null;
 const debuggerEventListeners: DebuggerEventListener[] = [];
 const debuggerDetachListeners: DebuggerDetachListener[] = [];
 
@@ -132,9 +138,17 @@ function createChromeMock() {
       launchWebAuthFlow: vi.fn(),
       getRedirectURL: vi.fn(),
     },
+    notifications: {
+      create: vi.fn(),
+      onClicked: {
+        addListener: vi.fn(),
+      },
+    },
     webRequest: {
       onHeadersReceived: {
-        addListener: vi.fn(),
+        addListener: vi.fn((listener: HeadersReceivedListener) => {
+          headersReceivedListener = listener;
+        }),
       },
     },
   };
@@ -186,6 +200,7 @@ describe('extension service worker', () => {
     debuggerEventListeners.length = 0;
     debuggerDetachListeners.length = 0;
     MockWebSocket.instances.length = 0;
+    headersReceivedListener = null;
     vi.clearAllMocks();
     vi.resetModules();
 
@@ -345,6 +360,60 @@ describe('extension service worker', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it('shows a notification when x-slicc header is received on a known tab', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    chrome.tabs.get = vi.fn(async () => ({ id: 42, windowId: 1, title: 'Handoff Page' })) as never;
+
+    headersReceivedListener!({
+      url: 'https://www.sliccy.ai/handoff?msg=upskill%3Ahello',
+      tabId: 42,
+      responseHeaders: [{ name: 'x-slicc', value: 'upskill%3Ahello' }],
+    });
+    await flushAsync();
+
+    expect(chrome.notifications.create).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ type: 'basic', message: expect.any(String) })
+    );
+  });
+
+  it('opens the side panel when the handoff notification is clicked', async () => {
+    const chrome = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    chrome.tabs.get = vi.fn(async () => ({ id: 42, windowId: 7, title: 'Handoff Page' })) as never;
+    chrome.sidePanel.open = vi.fn(async () => undefined) as never;
+
+    // Capture the notifications.onClicked listener
+    let notificationClickListener: ((id: string) => void) | null = null;
+    chrome.notifications.onClicked.addListener = vi.fn((listener: (id: string) => void) => {
+      notificationClickListener = listener;
+    }) as never;
+
+    // Re-load the service worker so it picks up our onClicked mock
+    vi.resetModules();
+    await loadServiceWorker();
+
+    headersReceivedListener!({
+      url: 'https://www.sliccy.ai/handoff?msg=upskill%3Ahello',
+      tabId: 42,
+      responseHeaders: [{ name: 'x-slicc', value: 'upskill%3Ahello' }],
+    });
+    await flushAsync();
+
+    expect(chrome.notifications.create).toHaveBeenCalled();
+    const notificationId = (chrome.notifications.create as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as string;
+
+    // Simulate user clicking the notification
+    notificationClickListener!(notificationId);
+    await flushAsync();
+
+    expect(chrome.sidePanel.open).toHaveBeenCalledWith({ windowId: 7 });
   });
 
   it('handles DA sign-and-forward by attaching the IMS bearer token', async () => {

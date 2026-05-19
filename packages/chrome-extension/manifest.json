@@ -12,7 +12,8 @@
     "offscreen",
     "identity",
     "storage",
-    "webRequest"
+    "webRequest",
+    "notifications"
   ],
   "host_permissions": ["<all_urls>"],
   "side_panel": {
