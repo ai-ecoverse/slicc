@@ -226,17 +226,28 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
   // Browser targets: poll local CDP for the leader's open pages and
   // push them into the sync manager as the leader's local targets.
   //
-  // Throttled error logging — mirror of `page-follower-tray.ts`'s
-  // `refreshTargets`. A sustained CDP failure (browser crashed,
-  // permission revoked, transport closed) must not flood logs; once
-  // per ~minute is enough signal for an operator without spamming
-  // DevTools. `error` level matches the broadcast-failure outer catch
-  // in the periodic interval below — both share the "real bug, prod
-  // log gate must let it through" reasoning.
-  let lastTargetErrorLogAt = 0;
+  // Throttled error logging — same shape as `page-follower-tray.ts`'s
+  // `refreshTargets` (60s gate, `error` level so prod log gate
+  // doesn't suppress). Uses `performance.now()` not `Date.now()` so
+  // NTP backward jumps can't cause indefinite suppression. Symmetric
+  // recovery log fires on the first success after a failing streak so
+  // an operator can see MTTR rather than guessing whether silence =
+  // recovery or = suppression.
+  // `lastTargetErrorLogAt = -Infinity` (NOT 0): we use `performance.now()`
+  // which starts small (~ms since process boot), so an initial value
+  // of 0 would make the first `now - last > 60_000` check FALSE and
+  // suppress the very first error log — the opposite of what we want.
+  // -Infinity guarantees the first failure passes through.
+  let lastTargetErrorLogAt = Number.NEGATIVE_INFINITY;
+  let leaderTargetsInFailingState = false;
   const refreshLeaderTargets = async () => {
     try {
       const pages = await options.browserAPI.listPages();
+      if (leaderTargetsInFailingState) {
+        leaderTargetsInFailingState = false;
+        lastTargetErrorLogAt = Number.NEGATIVE_INFINITY;
+        log.info('Leader target refresh recovered');
+      }
       const targets: RemoteTargetInfo[] = pages.map((p) => ({
         targetId: p.targetId,
         title: p.title,
@@ -244,7 +255,8 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
       }));
       sync.setLocalTargets(targets);
     } catch (err) {
-      const now = Date.now();
+      const now = performance.now();
+      leaderTargetsInFailingState = true;
       if (now - lastTargetErrorLogAt > 60_000) {
         lastTargetErrorLogAt = now;
         log.error('Leader target refresh failed (best-effort, throttled)', {
