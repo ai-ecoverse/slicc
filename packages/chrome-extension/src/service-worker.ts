@@ -271,6 +271,7 @@ async function handleActionClick(clickedTab: ChromeTab): Promise<void> {
 }
 
 chrome.action.onClicked.addListener((tab) => {
+  chrome.action.setBadgeText({ text: '' });
   handleActionClick(tab).catch((err) => {
     console.error('[slicc-sw] handleActionClick failed', err);
   });
@@ -409,9 +410,7 @@ async function showHandoffNotification(windowId: number): Promise<void> {
 chrome.notifications.onClicked.addListener((notificationId: string) => {
   const windowId = handoffNotificationWindows.get(notificationId);
   handoffNotificationWindows.delete(notificationId);
-  if (handoffNotificationWindows.size === 0) {
-    chrome.action.setBadgeText({ text: '' });
-  }
+  chrome.action.setBadgeText({ text: '' });
   if (windowId !== undefined) {
     chrome.sidePanel.open({ windowId }).catch(() => {});
   }
