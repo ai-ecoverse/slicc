@@ -1426,8 +1426,9 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // callbacks with the local `SprinkleManager` above — leader-pushed
   // sprinkles surface in the same rail as local ones. If the offscreen is
   // not in follower mode, no `follower-sprinkles-list` envelopes arrive
-  // and the controller stays idle; pending fetches reject with a timeout
-  // after 15 s so the controller doesn't pin `opening` forever.
+  // and the controller stays idle; pending fetches reject via the proxy's
+  // bounded `DEFAULT_FETCH_TIMEOUT_MS` so the controller doesn't pin the
+  // `opening` set forever.
   const { PanelFollowerSprinkleProxy } =
     await import('../../../chrome-extension/src/follower-sprinkle-bridge.js');
   const { SprinkleFollowerController } = await import('./sprinkle-follower-controller.js');

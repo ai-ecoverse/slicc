@@ -28,10 +28,15 @@ const log = createLogger('sprinkle-follower');
 /**
  * Subset of `FollowerSyncManager` that the controller relies on. Kept narrow
  * to make the controller trivially testable with a hand-rolled fake.
+ *
+ * `cancelSprinkleFetch` is optional: only the real `FollowerSyncManager`
+ * (offscreen bridge surface) implements it. The controller itself never
+ * calls cancel — the bridge does, when the panel-side proxy times out.
  */
 export interface SprinkleFollowerSync {
   fetchSprinkleContent(sprinkleName: string): Promise<string>;
   sendSprinkleLick(sprinkleName: string, body: unknown, targetScoop?: string): void;
+  cancelSprinkleFetch?(sprinkleName: string, reason?: string): void;
 }
 
 export interface SprinkleFollowerControllerOptions {
@@ -219,12 +224,16 @@ export class SprinkleFollowerController {
 
     const api = this.createBridge(name);
     const renderer = new SprinkleRenderer(container, api);
-    this.open.set(name, { renderer, container });
-    this.opening.delete(name);
 
     // Surface in the layout BEFORE render so the (possible) sandbox iframe
     // gets attached to a live DOM subtree — iframes in detached subtrees
     // don't fire `load`. Matches `SprinkleManager.open` ordering.
+    //
+    // We do NOT publish into `this.open` yet — keeping the sprinkle in
+    // `opening` until render completes ensures any `sprinkle.update`
+    // arriving during render continues to buffer (latest wins), instead
+    // of taking the live `pushUpdate` path and then getting overwritten
+    // by a stale buffered replay (R2-CRIT-1: order inversion).
     this.addSprinkle(name, summary.title, container, this.zone);
     try {
       await renderer.render(content, name);
@@ -237,9 +246,38 @@ export class SprinkleFollowerController {
       // user's next reconcile will tear it down if the leader closes it.
     }
 
-    // Replay any update payload that arrived during the fetch await. The
-    // leader has no signal that the follower is still loading, so without
-    // this the first update post-open would be silently lost.
+    // The controller may have been disposed (or the leader may have closed
+    // this sprinkle) while render was running. Tear down rather than
+    // attach.
+    if (this.disposed || !this.latestDesiredOpen.has(name)) {
+      try {
+        renderer.dispose();
+      } catch (err) {
+        log.warn('Sprinkle dispose threw during post-render cleanup', {
+          sprinkleName: name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      container.remove();
+      try {
+        this.removeSprinkle(name);
+      } catch (err) {
+        log.warn('removeSprinkle callback threw during post-render cleanup', {
+          sprinkleName: name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      this.opening.delete(name);
+      this.pendingUpdates.delete(name);
+      return;
+    }
+
+    // Transition opening → open AND drain any buffered update in a single
+    // synchronous block. Updates arriving from this point flow through the
+    // live `handleSprinkleUpdate` → `pushUpdate` path with no risk of
+    // interleaving the buffered replay against them.
+    this.open.set(name, { renderer, container });
+    this.opening.delete(name);
     const buffered = this.pendingUpdates.get(name);
     if (buffered !== undefined) {
       this.pendingUpdates.delete(name);

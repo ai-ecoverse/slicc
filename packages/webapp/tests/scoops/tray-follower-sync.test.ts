@@ -1689,6 +1689,172 @@ describe('FollowerSyncManager', () => {
   // Default case + last-error replay (suggestions S2 / I5 from the PR review).
   // ---------------------------------------------------------------------------
 
+  // ---------------------------------------------------------------------------
+  // R2-IMP-2: cancelSprinkleFetch — rejects pending waiters so a stuck
+  // leader doesn't accumulate them across panel retries.
+  // R2-IMP-3: sprinkles.list invalidates `sprinkleContentCache` so a
+  // late-arriving content reply (after the panel timed out) can't poison
+  // the cache permanently.
+  // ---------------------------------------------------------------------------
+
+  describe('R2-IMP-2: cancelSprinkleFetch', () => {
+    it('rejects every pending waiter for the named sprinkle', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const first = follower.fetchSprinkleContent('x');
+      const second = follower.fetchSprinkleContent('x'); // shares the same waiter list
+
+      follower.cancelSprinkleFetch('x', 'panel timeout');
+
+      await expect(first).rejects.toThrow(/panel timeout/);
+      await expect(second).rejects.toThrow(/panel timeout/);
+    });
+
+    it('does not affect waiters for other sprinkles', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const x = follower.fetchSprinkleContent('x');
+      const y = follower.fetchSprinkleContent('y');
+
+      follower.cancelSprinkleFetch('x');
+
+      const ySent = channel
+        .parseSent()
+        .find((m) => m.type === 'sprinkle.fetch' && m.sprinkleName === 'y');
+      if (!ySent || ySent.type !== 'sprinkle.fetch') throw new Error('unreachable');
+
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId: ySent.requestId,
+        sprinkleName: 'y',
+        content: 'y-ok',
+      });
+
+      await expect(x).rejects.toThrow(/cancelled/);
+      await expect(y).resolves.toBe('y-ok');
+    });
+
+    it('subsequent fetch for the cancelled sprinkle goes back on the wire', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const first = follower.fetchSprinkleContent('x');
+      follower.cancelSprinkleFetch('x');
+      const second = follower.fetchSprinkleContent('x');
+
+      const fetches = channel.parseSent().filter((m) => m.type === 'sprinkle.fetch');
+      expect(fetches).toHaveLength(2); // cancel did NOT issue a wire fetch — only the two real calls did
+      await expect(first).rejects.toThrow();
+      // Second fetch is still pending — we don't have to resolve it for this test.
+      void second;
+    });
+
+    it('a late sprinkle.content for a cancelled requestId is dropped (does not poison cache)', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const first = follower.fetchSprinkleContent('x');
+      const firstSent = channel.parseSent()[0];
+      if (firstSent.type !== 'sprinkle.fetch') throw new Error('unreachable');
+      follower.cancelSprinkleFetch('x');
+      await expect(first).rejects.toThrow();
+
+      // Leader is still trying to reply. The unknown-requestId guard
+      // (R2-CRIT C4 fix) drops the late content.
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId: firstSent.requestId,
+        sprinkleName: 'x',
+        content: 'stale',
+      });
+
+      // A fresh fetch must go back on the wire — not return cached stale.
+      const second = follower.fetchSprinkleContent('x');
+      const sent = channel.parseSent().filter((m) => m.type === 'sprinkle.fetch');
+      expect(sent).toHaveLength(2);
+      if (sent[1].type !== 'sprinkle.fetch') throw new Error('unreachable');
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId: sent[1].requestId,
+        sprinkleName: 'x',
+        content: 'fresh',
+      });
+      await expect(second).resolves.toBe('fresh');
+    });
+  });
+
+  describe('R2-IMP-3: sprinkles.list invalidates sprinkleContentCache', () => {
+    it('drops cached content for sprinkles named in the new list', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      // Prime the cache with a successful fetch.
+      const first = follower.fetchSprinkleContent('welcome');
+      const sent1 = channel.parseSent()[0];
+      if (sent1.type !== 'sprinkle.fetch') throw new Error('unreachable');
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId: sent1.requestId,
+        sprinkleName: 'welcome',
+        content: 'v1',
+      });
+      await expect(first).resolves.toBe('v1');
+
+      // Confirm the cache hit by issuing another fetch with no new wire.
+      await expect(follower.fetchSprinkleContent('welcome')).resolves.toBe('v1');
+      expect(channel.parseSent().filter((m) => m.type === 'sprinkle.fetch')).toHaveLength(1);
+
+      // Leader broadcasts a new list including 'welcome' — cache MUST drop.
+      channel.simulateLeaderMessage({
+        type: 'sprinkles.list',
+        sprinkles: [{ name: 'welcome', title: 'W', path: '/w.shtml', open: true, autoOpen: false }],
+      });
+
+      // Next fetch goes back on the wire.
+      const second = follower.fetchSprinkleContent('welcome');
+      const sent2 = channel.parseSent().filter((m) => m.type === 'sprinkle.fetch');
+      expect(sent2).toHaveLength(2);
+      if (sent2[1].type !== 'sprinkle.fetch') throw new Error('unreachable');
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId: sent2[1].requestId,
+        sprinkleName: 'welcome',
+        content: 'v2',
+      });
+      await expect(second).resolves.toBe('v2');
+    });
+
+    it('also drops cache entries for sprinkles that disappeared from the list', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const first = follower.fetchSprinkleContent('gone');
+      const sent = channel.parseSent()[0];
+      if (sent.type !== 'sprinkle.fetch') throw new Error('unreachable');
+      channel.simulateLeaderMessage({
+        type: 'sprinkle.content',
+        requestId: sent.requestId,
+        sprinkleName: 'gone',
+        content: 'cached',
+      });
+      await first;
+
+      // Leader broadcasts a list that does NOT include 'gone'.
+      channel.simulateLeaderMessage({
+        type: 'sprinkles.list',
+        sprinkles: [{ name: 'other', title: 'O', path: '/o.shtml', open: false, autoOpen: false }],
+      });
+
+      // A future fetch for 'gone' must NOT return the stale cached value.
+      const second = follower.fetchSprinkleContent('gone');
+      const fetches = channel.parseSent().filter((m) => m.type === 'sprinkle.fetch');
+      expect(fetches).toHaveLength(2);
+      void second;
+    });
+  });
+
   describe('protocol drift safety', () => {
     it('logs but does not throw on an unknown leader message type', () => {
       const channel = new FakeChannel();

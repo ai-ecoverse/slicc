@@ -24,6 +24,7 @@
  */
 
 import type {
+  FollowerSprinkleFetchCancelMsg,
   FollowerSprinkleFetchRequestMsg,
   FollowerSprinkleFetchResultMsg,
   FollowerSprinkleLickMsg,
@@ -45,7 +46,7 @@ type _AssertSprinkleSummaryEnvelopeMatches =
       ? true
       : never
     : never;
- 
+
 const _sprinkleSummaryEnvelopeMatches: _AssertSprinkleSummaryEnvelopeMatches = true;
 
 /**
@@ -77,8 +78,16 @@ const DEFAULT_FETCH_TIMEOUT_MS = 15_000;
 /**
  * Narrow an `unknown` runtime payload to a specific message variant by checking
  * its discriminator. Returns `null` for any payload that doesn't match — never
- * throws. Replaces the prior pattern of `payload as { type?: string }` followed
- * by an unchecked `payload as TSpecific`, which the compiler couldn't validate.
+ * throws.
+ *
+ * **Trust boundary:** this is a shallow narrowing — only the `type` field is
+ * verified at runtime. The rest of `T`'s shape is trusted. Safe for messages
+ * crossing the intra-extension `chrome.runtime` channel, where both endpoints
+ * are in the same build and the trust domain is the same. NOT sufficient for
+ * messages crossing a real network/process boundary (e.g. the WebRTC tray
+ * wire) — those need full shape validation. The bridge consumers narrow
+ * further on the result (`result.ok === true | false | other`) when the
+ * extra fields matter.
  */
 function narrowMsg<T extends { type: string }>(payload: unknown, type: T['type']): T | null {
   if (!payload || typeof payload !== 'object') return null;
@@ -148,8 +157,22 @@ export class PanelFollowerSprinkleProxy implements SprinkleFollowerSync {
         if (!entry) return;
         clearTimeout(entry.timer);
         this.pending.delete(result.id);
-        if (result.ok) entry.resolve(result.content);
-        else entry.reject(new Error(result.error));
+        // Strict three-way branch — `narrowMsg` validates the discriminator
+        // only, so a malformed envelope with `ok: undefined` (or any
+        // non-boolean) hits the catch-all path and rejects with a real
+        // diagnostic. Without this, `if (result.ok)` was falsy-true and
+        // `new Error(result.error)` would produce `Error("")` — the
+        // controller would log a content-less "Failed to fetch sprinkle
+        // content" with no diagnostic text.
+        if (result.ok === true) {
+          entry.resolve(result.content);
+        } else if (result.ok === false) {
+          entry.reject(new Error(result.error));
+        } else {
+          entry.reject(
+            new Error('Malformed follower-sprinkle-fetch-result: missing or non-boolean `ok`')
+          );
+        }
       }
     });
   }
@@ -162,6 +185,16 @@ export class PanelFollowerSprinkleProxy implements SprinkleFollowerSync {
     return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        // Tell the offscreen its corresponding waiter is no longer
+        // needed, so a stuck leader doesn't accumulate waiters across
+        // panel retries (R2-IMP-2). The offscreen still tracks the
+        // requestId in case a late `sprinkle.content` arrives — the
+        // unknown-requestId guard in `handleSprinkleContent` will drop it.
+        const cancel: FollowerSprinkleFetchCancelMsg = {
+          type: 'follower-sprinkle-fetch-cancel',
+          sprinkleName,
+        };
+        this.sender.send({ source: 'panel', payload: cancel });
         reject(
           new Error(
             `follower-sprinkle-fetch for "${sprinkleName}" timed out after ${this.fetchTimeoutMs}ms — offscreen document may not be in follower mode`
@@ -245,6 +278,18 @@ export function connectOffscreenFollowerSprinkleBridge(
       envelope.payload,
       'follower-sprinkle-fetch'
     );
+    const cancelReq = narrowMsg<FollowerSprinkleFetchCancelMsg>(
+      envelope.payload,
+      'follower-sprinkle-fetch-cancel'
+    );
+    if (cancelReq) {
+      sync.cancelSprinkleFetch?.(
+        cancelReq.sprinkleName,
+        'panel-side fetch timed out — offscreen waiter cancelled'
+      );
+      return;
+    }
+
     if (fetchReq) {
       sync
         .fetchSprinkleContent(fetchReq.sprinkleName)

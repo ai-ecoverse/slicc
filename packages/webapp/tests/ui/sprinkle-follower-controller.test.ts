@@ -8,6 +8,14 @@ import type { SprinkleSummary } from '../../src/scoops/tray-sync-protocol.js';
 
 // SprinkleRenderer is stubbed so the controller can be exercised without DOM.
 vi.mock('../../src/ui/sprinkle-renderer.js', () => {
+  /**
+   * Manual-render gate for a sprinkle. When set via
+   * `FakeRenderer.installManualRender(name)`, the next `render()` call for
+   * that name returns a pending Promise that the test resolves via the
+   * returned handle. Used to drive the C1-replay-order race.
+   */
+  const manualRenderGate = new Map<string, { resolve: () => void; reject: (err: Error) => void }>();
+
   class FakeRenderer {
     container: HTMLElement;
     api: unknown;
@@ -20,8 +28,16 @@ vi.mock('../../src/ui/sprinkle-renderer.js', () => {
       this.api = api;
       FakeRenderer.instances.push(this);
     }
-    async render(content: string): Promise<void> {
+    async render(content: string, sprinkleName?: string): Promise<void> {
       this.rendered = content;
+      const gate = sprinkleName ? manualRenderGate.get(sprinkleName) : undefined;
+      if (gate) {
+        manualRenderGate.delete(sprinkleName!);
+        return new Promise<void>((resolve, reject) => {
+          gate.resolve = resolve;
+          gate.reject = reject;
+        });
+      }
     }
     dispose(): void {
       this.disposed = true;
@@ -33,6 +49,18 @@ vi.mock('../../src/ui/sprinkle-renderer.js', () => {
     static instances: FakeRenderer[] = [];
     static reset(): void {
       FakeRenderer.instances = [];
+      manualRenderGate.clear();
+    }
+    static installManualRender(name: string): {
+      resolve: () => void;
+      reject: (err: Error) => void;
+    } {
+      const handle = {
+        resolve: () => {},
+        reject: (() => {}) as (err: Error) => void,
+      };
+      manualRenderGate.set(name, handle);
+      return handle;
     }
   }
   return { SprinkleRenderer: FakeRenderer };
@@ -54,6 +82,7 @@ const FakeRenderer = SprinkleRenderer as unknown as {
     };
   }>;
   reset(): void;
+  installManualRender(name: string): { resolve: () => void; reject: (err: Error) => void };
 };
 
 function makeSprinkle(name: string, opts: Partial<SprinkleSummary> = {}): SprinkleSummary {
@@ -354,6 +383,56 @@ describe('SprinkleFollowerController', () => {
   });
 
   describe('C1: sprinkle.update during in-flight open', () => {
+    it('preserves arrival order across the fetch+render boundary (no live-replay inversion)', async () => {
+      // R2-CRIT-1: previously the controller would set `this.open` BEFORE
+      // awaiting `renderer.render()`. Updates arriving during render took
+      // the live `pushUpdate` path, while a *pre-fetch* buffered update
+      // was replayed AFTER render — inverting their arrival order.
+      //
+      // Scenario:
+      //   U1 arrives before fetch resolves → buffered
+      //   U2 arrives after fetch resolves but during render
+      //   Correct delivery order: U1 then U2 (arrival order)
+      //   Buggy delivery: U2 (live during render) then U1 (replayed after)
+      const fetchGate = sync.installManualFetch('x');
+      const renderGate = FakeRenderer.installManualRender('x');
+
+      const reconcile = controller.updateAvailable([makeSprinkle('x', { open: true })]);
+      // openLocally is now awaiting the fetch. Update U1 lands while
+      // opening — must be buffered.
+      controller.handleSprinkleUpdate('x', { step: 'U1-before-render' });
+
+      // Resolve the fetch → openLocally proceeds toward render. With the
+      // fix this transitions opening→open only AFTER render finishes; the
+      // sprinkle is therefore still considered "opening" while render
+      // runs, so U2 also buffers (latest wins).
+      fetchGate.resolve('<p>ok</p>');
+      // Flush enough microtasks for openLocally to: (a) unwrap the async
+      // fetch result, (b) synchronously construct the renderer + container,
+      // (c) begin awaiting `renderer.render()`. Three Promise.resolve()
+      // hops covers it on every runtime we care about.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(FakeRenderer.instances).toHaveLength(1);
+      const renderer = FakeRenderer.instances[0];
+      expect(renderer.pushed).toEqual([]); // No update delivered yet — buffered.
+
+      // U2 arrives during render. With the buggy code this would take the
+      // live path (open is set early); with the fix it stays buffered and
+      // overwrites U1.
+      controller.handleSprinkleUpdate('x', { step: 'U2-during-render' });
+
+      // Resolve render → openLocally drains buffer in arrival-correct
+      // order (latest wins, mirroring iOS `AppState.sprinkleUpdates[name]`).
+      renderGate.resolve();
+      await reconcile;
+
+      // Final state: exactly one delivery, and it's the latest update. No
+      // inverted-order replay can overwrite it.
+      expect(renderer.pushed).toEqual([{ step: 'U2-during-render' }]);
+    });
+
     it('buffers a sprinkle.update arriving before the open finishes and replays it', async () => {
       const gate = sync.installManualFetch('x');
 

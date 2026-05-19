@@ -15,13 +15,17 @@ import type {
 /**
  * Local mirror of `SprinkleSummary` from
  * `packages/webapp/src/scoops/tray-sync-protocol.ts`. Mirrored (not imported)
- * because `tray-sync-protocol.ts` transitively pulls `tray-webrtc.ts`
- * (`RTCPeerConnection`) and `logger.ts` (`__DEV__`), which are not available
- * under the webapp-worker tsconfig that consumes this module via
- * `transport-message-channel.ts`. The `follower-sprinkle-bridge` re-imports
- * the canonical `SprinkleSummary` and uses it across the API boundary; this
- * inline shape only governs the wire envelope and stays in lockstep via the
- * compile-time check below.
+ * because `tray-sync-protocol.ts` has a value import of `logger.ts`, which
+ * depends on the ambient `__DEV__` global. That global is not declared
+ * under the webapp-worker tsconfig (which only lists `["ES2022", "WebWorker"]`
+ * libs + `"types": []`) and the worker tsconfig pulls this file in via
+ * `transport-message-channel.ts`. The `TrayDataChannelLike` reference in
+ * `tray-sync-protocol.ts` is an `import type` and would erase at compile
+ * time — it's not what breaks the webapp-worker build, only the value
+ * import of `createLogger` does. The `follower-sprinkle-bridge` re-imports
+ * the canonical `SprinkleSummary` and uses it across the API boundary;
+ * this inline shape only governs the wire envelope and stays in lockstep
+ * via the compile-time assertion in the bridge.
  */
 interface SprinkleSummaryEnvelope {
   name: string;
@@ -187,6 +191,21 @@ export interface FollowerSprinkleFetchRequestMsg {
 }
 
 /**
+ * Side panel → offscreen: panel-side proxy timed out on a fetch (default
+ * 15 s); ask the offscreen to drop the corresponding waiter so it doesn't
+ * accumulate across retries. The panel may have already issued a follow-up
+ * fetch for the same sprinkle name (R2-IMP-2: without this, repeated
+ * retries grow `sprinkleContentWaiters` unboundedly while the leader
+ * stays mute).
+ *
+ * Intra-extension only — never crosses the WebRTC wire.
+ */
+export interface FollowerSprinkleFetchCancelMsg {
+  type: 'follower-sprinkle-fetch-cancel';
+  sprinkleName: string;
+}
+
+/**
  * Side panel → offscreen: in extension follower mode, forward a sprinkle lick
  * to the leader (`sprinkle.lick` on the wire). Distinct from `sprinkle-lick`,
  * which would route the lick to a local scoop instead of the remote leader.
@@ -303,6 +322,7 @@ export type PanelToOffscreenMessage =
   | OAuthRequestMsg
   | SprinkleLickMsg
   | FollowerSprinkleFetchRequestMsg
+  | FollowerSprinkleFetchCancelMsg
   | FollowerSprinkleLickMsg
   | WebhookEventMsg
   | ReloadSkillsMsg

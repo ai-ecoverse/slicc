@@ -69,9 +69,9 @@ export interface FollowerSyncManagerOptions {
 }
 
 /** Internal buffer for chunked sprinkle.content reassembly. Mirrors the
- *  private `SprinkleFetchBuffer` struct in `packages/ios-app/SliccFollower/
- *  App/AppState.swift` (defined as a fileprivate type inside the `AppState`
- *  class). */
+ *  `SprinkleFetchBuffer` Swift struct nested inside the `AppState` class in
+ *  `packages/ios-app/SliccFollower/App/AppState.swift` (declared with the
+ *  `private` access modifier, i.e. type-scoped to `AppState`). */
 interface SprinkleFetchBuffer {
   sprinkleName: string;
   chunks: Map<number, string>;
@@ -284,6 +284,29 @@ export class FollowerSyncManager implements AgentHandle {
     else this.sprinkleContentCache.delete(sprinkleName);
   }
 
+  /**
+   * Cancel any in-flight `sprinkle.fetch` for the named sprinkle. Rejects
+   * all current waiters so callers don't accumulate across retries when
+   * the panel-side proxy gave up on the original fetch (R2-IMP-2).
+   *
+   * The offscreen still tracks the requestId in `pendingSprinkleFetches`
+   * because a late `sprinkle.content` reply might still arrive and we want
+   * the chunked-content guard to drop it cleanly (matches the
+   * unknown-requestId path in `handleSprinkleContent`).
+   */
+  cancelSprinkleFetch(sprinkleName: string, reason = 'fetch cancelled'): void {
+    const waiters = this.sprinkleContentWaiters.get(sprinkleName) ?? [];
+    this.sprinkleContentWaiters.delete(sprinkleName);
+    const requestId = this.inflightSprinkleByName.get(sprinkleName);
+    if (requestId !== undefined) {
+      this.inflightSprinkleByName.delete(sprinkleName);
+      this.pendingSprinkleFetches.delete(requestId);
+    }
+    if (waiters.length === 0) return;
+    const err = new Error(reason);
+    for (const waiter of waiters) waiter.reject(err);
+  }
+
   // ---------------------------------------------------------------------------
   // Internal
   // ---------------------------------------------------------------------------
@@ -428,13 +451,31 @@ export class FollowerSyncManager implements AgentHandle {
         this.routeFsResponse(message.requestId, message.response);
         break;
       }
-      case 'sprinkles.list':
+      case 'sprinkles.list': {
         log.info('Sprinkles list received from leader', {
           sprinkleCount: message.sprinkles.length,
         });
+        // Invalidate cached `.shtml` content for every named sprinkle in
+        // the new list (R2-IMP-3). A `sprinkles.list` broadcast is the
+        // leader's natural cache-barrier signal — the .shtml file may
+        // have changed on the leader between broadcasts. Without this,
+        // a fetch that timed out panel-side but resolved late on the
+        // offscreen could poison the cache permanently. Sprinkles
+        // dropped from the list have their entries removed too so a
+        // re-add later doesn't surface stale content.
+        for (const summary of message.sprinkles) {
+          this.sprinkleContentCache.delete(summary.name);
+        }
+        // Also drop cache entries for sprinkles that disappeared from the
+        // leader's list entirely.
+        const presentNames = new Set(message.sprinkles.map((s) => s.name));
+        for (const cachedName of [...this.sprinkleContentCache.keys()]) {
+          if (!presentNames.has(cachedName)) this.sprinkleContentCache.delete(cachedName);
+        }
         this.latestSprinkles = message.sprinkles;
         this.options.onSprinklesList?.(message.sprinkles);
         break;
+      }
 
       case 'sprinkle.content':
         this.handleSprinkleContent(message);

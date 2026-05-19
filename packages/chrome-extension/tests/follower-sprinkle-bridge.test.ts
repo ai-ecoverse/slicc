@@ -247,4 +247,86 @@ describe('PanelFollowerSprinkleProxy ↔ OffscreenFollowerSprinkleBridge', () =>
     proxy.dispose();
     await expect(proxy.fetchSprinkleContent('x')).rejects.toThrow(/disposed/);
   });
+
+  // R2-IMP-1: `narrowMsg`-guarded paths must drop malformed envelopes
+  // silently, and the `FollowerSprinkleFetchResultMsg` consumer must
+  // surface a meaningful error when `ok` is missing or non-boolean
+  // (was previously rejecting with `Error("")` for any falsy `ok`).
+  describe('malformed envelopes', () => {
+    function pump(envelope: { source: string; payload: unknown }) {
+      // Push directly through the offscreen hub so the panel proxy's
+      // subscriber fires. Bypasses the typed bridge intentionally — that's
+      // the whole point of "malformed".
+      bus.offscreenHub.sendToPanel(envelope as { source: 'offscreen'; payload: unknown });
+    }
+
+    it('drops null payload silently', () => {
+      const onSprinklesList = vi.fn();
+      new PanelFollowerSprinkleProxy(bus.panelSender, bus.panelSubscriber, { onSprinklesList });
+      expect(() => pump({ source: 'offscreen', payload: null })).not.toThrow();
+      expect(onSprinklesList).not.toHaveBeenCalled();
+    });
+
+    it('drops payload with missing type silently', () => {
+      const onSprinklesList = vi.fn();
+      const onSprinkleUpdate = vi.fn();
+      new PanelFollowerSprinkleProxy(bus.panelSender, bus.panelSubscriber, {
+        onSprinklesList,
+        onSprinkleUpdate,
+      });
+      expect(() => pump({ source: 'offscreen', payload: { sprinkles: [] } })).not.toThrow();
+      expect(onSprinklesList).not.toHaveBeenCalled();
+      expect(onSprinkleUpdate).not.toHaveBeenCalled();
+    });
+
+    it('drops payload with non-string type silently', () => {
+      const onSprinklesList = vi.fn();
+      new PanelFollowerSprinkleProxy(bus.panelSender, bus.panelSubscriber, { onSprinklesList });
+      expect(() =>
+        pump({ source: 'offscreen', payload: { type: 123, sprinkles: [] } })
+      ).not.toThrow();
+      expect(onSprinklesList).not.toHaveBeenCalled();
+    });
+
+    it('rejects a fetch with a meaningful error when `ok` is undefined', async () => {
+      const proxy = new PanelFollowerSprinkleProxy(bus.panelSender, bus.panelSubscriber);
+      const pending = proxy.fetchSprinkleContent('x');
+      await Promise.resolve();
+      const pendingFetchId = (proxy as unknown as { pending: Map<string, unknown> }).pending
+        .keys()
+        .next().value as string;
+
+      pump({
+        source: 'offscreen',
+        payload: {
+          type: 'follower-sprinkle-fetch-result',
+          id: pendingFetchId,
+          // `ok` intentionally omitted
+        },
+      });
+
+      await expect(pending).rejects.toThrow(/missing or non-boolean `ok`/);
+    });
+
+    it('rejects a fetch with a meaningful error when `ok` is a truthy non-boolean', async () => {
+      const proxy = new PanelFollowerSprinkleProxy(bus.panelSender, bus.panelSubscriber);
+      const pending = proxy.fetchSprinkleContent('x');
+      await Promise.resolve();
+      const pendingFetchId = (proxy as unknown as { pending: Map<string, unknown> }).pending
+        .keys()
+        .next().value as string;
+
+      pump({
+        source: 'offscreen',
+        payload: {
+          type: 'follower-sprinkle-fetch-result',
+          id: pendingFetchId,
+          ok: 'yes',
+          content: 'should-not-resolve',
+        },
+      });
+
+      await expect(pending).rejects.toThrow(/missing or non-boolean `ok`/);
+    });
+  });
 });

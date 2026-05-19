@@ -361,8 +361,16 @@ async function init(): Promise<void> {
               fetchSprinkleContent: (name: string) => sync.fetchSprinkleContent(name),
               sendSprinkleLick: (name: string, body: unknown, targetScoop?: string) =>
                 sync.sendSprinkleLick(name, body, targetScoop),
+              cancelSprinkleFetch: (name: string, reason?: string) =>
+                sync.cancelSprinkleFetch(name, reason),
             });
             activeSprinkleBridge = sprinkleBridgeRef;
+            // Throttled error logging — matches `page-follower-tray.ts`.
+            // Without this a sustained CDP failure (browser crashed,
+            // permission revoked) silently stops target advertisement for
+            // the entire session. Once-per-minute is enough signal for
+            // DevTools without flooding logs on every 5 s interval.
+            let lastTargetErrorLogAt = 0;
             const refreshTargets = async () => {
               try {
                 const pages = await browser.listPages();
@@ -374,8 +382,14 @@ async function init(): Promise<void> {
                   pages.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url })),
                   runtimeId
                 );
-              } catch {
-                /* ignore — best-effort target advertisement */
+              } catch (err) {
+                const now = Date.now();
+                if (now - lastTargetErrorLogAt > 60_000) {
+                  lastTargetErrorLogAt = now;
+                  log.warn('Follower target advertisement failed (best-effort)', {
+                    error: err instanceof Error ? err.message : String(err),
+                  });
+                }
               }
             };
             sync.onEvent((event) => bridge.emitFollowerAgentEvent(event));

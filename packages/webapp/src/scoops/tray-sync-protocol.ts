@@ -12,10 +12,13 @@
  *   federated FS (request + response), ping/pong.
  *
  * The iOS follower (`packages/ios-app/SliccFollower/Models/SyncProtocol.swift`)
- * mirrors a **subset** of this file — federated FS, CDP responses/events, and
- * follower-initiated tab.open/cdp.request are TS-only. See
- * `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture" for the
- * exact matrix and `packages/ios-app/CLAUDE.md` for the mirror-update checklist.
+ * mirrors a **subset** of this file: federated `fs.*` in both directions is
+ * TS-only; iOS responds to leader-initiated `cdp.request` / `tab.open` (and
+ * sends back `cdp.response` / `cdp.event` / `tab.opened`) but does NOT
+ * originate either, so the follower-initiated CDP/tab.open paths are also
+ * TS-only. See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture"
+ * for the exact matrix and `packages/ios-app/CLAUDE.md` for the mirror-update
+ * checklist.
  */
 
 import type { AgentEvent, ChatMessage } from '../ui/types.js';

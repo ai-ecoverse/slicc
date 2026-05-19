@@ -94,8 +94,12 @@ class AppState: ObservableObject {
 
     // MARK: - Streaming Bridge
 
-    /// Closure the view layer can set to receive streaming deltas
-    /// (e.g. MessageWebView coordinator calls evaluateJavaScript).
+    /// Closure the view layer can set to receive streaming deltas. Originally
+    /// consumed by the now-retired `MessageWebView` coordinator (which called
+    /// `evaluateJavaScript` per event); the current `MessageListView` reads
+    /// from `messages` instead, so no live subscriber is wired today. Kept on
+    /// `AppState` for potential future re-use; remove together with
+    /// `MessageWebView.swift` when that file is deleted.
     /// Parameters: (eventName, messageId, payload)
     var onStreamingEvent: ((_ event: StreamingEvent) -> Void)?
 
