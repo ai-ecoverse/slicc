@@ -2547,11 +2547,14 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
       return;
     }
 
-    // Null the leader ref BEFORE calling `.stop()` so that if `.stop()`
-    // throws, the catch block sees a consistent post-teardown state
-    // (leader logically gone). The hook detaches and follower-stop
-    // each get their own inner try so one throw doesn't leak past the
-    // failed step. This is the multi-source-throw fix R10 flagged.
+    // Null the leader ref BEFORE calling `.stop()` so any reentrant
+    // code path triggered during teardown (cached getter consumers
+    // like `getConnectedFollowers`, microtasks already scheduled
+    // against the leader's sync, follower-stop side-effects) sees the
+    // post-teardown state rather than a still-pointed-but-destroying
+    // leader. Each `.stop()` and `startPageFollowerTray` then gets
+    // its own try block so a throw at one step doesn't skip the
+    // teardown of later steps.
     const leaderToStop = pageLeaderTray;
     pageLeaderTray = null;
     setConnectedFollowersGetter(null);
@@ -2564,16 +2567,25 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     try {
       leaderToStop?.stop();
     } catch (err) {
-      log.warn('Leader stop threw during tray-join switch (continuing teardown)', {
+      // `error`, not `warn` — `LeaderTrayHandle.stop()` is not
+      // internally guarded, so a throw mid-sequence (e.g. `sync.stop()`
+      // failing during a follower send) leaves the inner sub-stops
+      // un-run. The user could end up with a zombie WebSocket /
+      // RTCPeerConnection / ping timer. Prod log gate is ERROR so
+      // `warn` would silently absorb this leak.
+      log.error('Leader stop threw during tray-join switch — runtime resources may have leaked', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
     try {
       previousFollower?.stop();
     } catch (err) {
-      log.warn('Previous follower stop threw during tray-join switch (continuing teardown)', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      log.error(
+        'Previous follower stop threw during tray-join switch — runtime resources may have leaked',
+        {
+          error: err instanceof Error ? err.message : String(err),
+        }
+      );
     }
 
     try {
