@@ -389,11 +389,8 @@ async function addToSliccGroup(tabId: number): Promise<void> {
 const handoffNotificationWindows = new Map<string, number>();
 
 async function showHandoffNotification(windowId: number): Promise<void> {
-  const [contexts, detachedTabId] = await Promise.all([
-    chrome.runtime.getContexts({ contextTypes: ['SIDE_PANEL'] }),
-    readStoredDetachedTabId(),
-  ]);
-  if (contexts.length > 0 || detachedTabId !== undefined) return;
+  const contexts = await chrome.runtime.getContexts({ contextTypes: ['SIDE_PANEL'] });
+  if (contexts.length > 0) return;
 
   const notificationId = `slicc-handoff-${Date.now()}`;
   handoffNotificationWindows.set(notificationId, windowId);
