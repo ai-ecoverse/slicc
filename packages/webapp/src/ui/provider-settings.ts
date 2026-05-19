@@ -520,6 +520,13 @@ export function setExtraOAuthDomains(providerId: string, domains: string[]): voi
  * resolving so a same-session `getExtraOAuthDomains` read sees the
  * new value without waiting for the cross-channel
  * `local-storage-set` forward to land.
+ *
+ * If the mirror-back itself throws (e.g., a future shim variant
+ * rejecting writes), the durable page-side write has ALREADY
+ * succeeded — degrade to a logged warning rather than propagating
+ * up. Surfacing the throw would inverted truth: the user would see
+ * "oauth-domain add failed" while the persistent state actually
+ * holds the new value, recoverable on reload.
  */
 export async function setExtraOAuthDomainsAsync(
   providerId: string,
@@ -535,8 +542,15 @@ export async function setExtraOAuthDomainsAsync(
       'setExtraOAuthDomainsAsync: no DOM and no panel-rpc client — cannot persist to page localStorage'
     );
   }
-  const { store } = await rpc.call('oauth-extras-set', { providerId, domains });
-  sharedWriteOAuthExtras(localStorage, store);
+  const { storeAfter } = await rpc.call('oauth-extras-set', { providerId, domains });
+  try {
+    sharedWriteOAuthExtras(localStorage, storeAfter);
+  } catch (err) {
+    log.warn('worker-shim mirror failed after successful page write — reload to refresh', {
+      providerId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export function getAllExtraOAuthDomains(): OAuthExtraDomainsStore {

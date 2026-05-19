@@ -219,4 +219,79 @@ describe('panel-rpc', () => {
     client.dispose();
     stop();
   });
+
+  /**
+   * `oauth-extras-set` is the op that fixes issue #701: worker-side
+   * `oauth-domain` writes route through here to reach real page
+   * localStorage. Unit tests cover each side in isolation; this case
+   * locks the wire contract by exercising the REAL page handler from
+   * `panel-rpc-handlers.ts` against the REAL worker client. If the
+   * variant's name, payload shape, or `storeAfter` field is renamed
+   * on only one side, this assertion fails.
+   */
+  it('oauth-extras-set: real page handler ↔ worker client round-trip', async () => {
+    const { createStandalonePanelRpcHandlers } = await import('../../src/ui/panel-rpc-handlers.js');
+    const originalLocalStorage = globalThis.localStorage;
+    const lsData: Record<string, string> = {};
+    (globalThis as { localStorage: Storage }).localStorage = {
+      get length(): number {
+        return Object.keys(lsData).length;
+      },
+      key: (i: number) => Object.keys(lsData)[i] ?? null,
+      getItem: (k: string) => lsData[k] ?? null,
+      setItem: (k: string, v: string) => {
+        lsData[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete lsData[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(lsData)) delete lsData[k];
+      },
+    };
+    try {
+      const stop = installPanelRpcHandler({
+        instanceId: 'oauth-rt',
+        handlers: createStandalonePanelRpcHandlers({}),
+      });
+      const client = createPanelRpcClient({ instanceId: 'oauth-rt' });
+
+      // 1. First write.
+      const r1 = await client.call('oauth-extras-set', {
+        providerId: 'adobe',
+        domains: ['admin.hlx.page', '*.aem.page'],
+      });
+      expect(r1).toEqual({ storeAfter: { adobe: ['admin.hlx.page', '*.aem.page'] } });
+      expect(lsData.slicc_oauth_extra_domains).toBe(
+        JSON.stringify({ adobe: ['admin.hlx.page', '*.aem.page'] })
+      );
+
+      // 2. Second write on a different provider — the response carries
+      // the FULL post-write store so the worker can mirror correctly,
+      // not just the touched provider's slice.
+      const r2 = await client.call('oauth-extras-set', {
+        providerId: 'github',
+        domains: ['hub.example.com'],
+      });
+      expect(r2.storeAfter).toEqual({
+        adobe: ['admin.hlx.page', '*.aem.page'],
+        github: ['hub.example.com'],
+      });
+
+      // 3. Empty domains drops the provider entry.
+      const r3 = await client.call('oauth-extras-set', {
+        providerId: 'adobe',
+        domains: [],
+      });
+      expect(r3.storeAfter).toEqual({ github: ['hub.example.com'] });
+      expect(lsData.slicc_oauth_extra_domains).toBe(
+        JSON.stringify({ github: ['hub.example.com'] })
+      );
+
+      client.dispose();
+      stop();
+    } finally {
+      (globalThis as { localStorage: Storage }).localStorage = originalLocalStorage;
+    }
+  });
 });

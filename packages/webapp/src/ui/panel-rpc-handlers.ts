@@ -262,12 +262,12 @@ export function createStandalonePanelRpcHandlers(
       // `installPageStorageSync` patches `Storage.prototype.setItem`
       // so this write also fans out to the worker shim — but on a
       // different channel than the panel-rpc response, with no
-      // ordering guarantee. Returning the full store lets the worker
-      // mirror it into its shim before resolving so a follow-up
-      // `oauth-domain list` in the same session sees the new value
-      // without waiting for the cross-channel forward.
+      // ordering guarantee. Returning the full post-write store lets
+      // the worker mirror it into its shim before resolving so a
+      // follow-up `oauth-domain list` in the same session sees the
+      // new value without waiting for the cross-channel forward.
       setExtraOAuthDomains(providerId, domains);
-      return { store: getAllExtraOAuthDomains() };
+      return { storeAfter: getAllExtraOAuthDomains() };
     },
   };
 }

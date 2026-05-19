@@ -110,7 +110,7 @@ describe('createStandalonePanelRpcHandlers — oauth-extras-set', () => {
       providerId: 'adobe',
       domains: ['admin.hlx.page', '*.aem.page'],
     });
-    expect(result).toEqual({ store: { adobe: ['admin.hlx.page', '*.aem.page'] } });
+    expect(result).toEqual({ storeAfter: { adobe: ['admin.hlx.page', '*.aem.page'] } });
     // Real-localStorage write fired through to the underlying map —
     // this is the assertion that the bug at issue #701 (writes
     // never leaving the worker's shim) is fixed.
@@ -129,7 +129,7 @@ describe('createStandalonePanelRpcHandlers — oauth-extras-set', () => {
       providerId: 'adobe',
       domains: ['new.example.com'],
     });
-    expect(result.store).toEqual({
+    expect(result.storeAfter).toEqual({
       adobe: ['new.example.com'],
       github: ['hub.example.com'],
     });
@@ -145,6 +145,6 @@ describe('createStandalonePanelRpcHandlers — oauth-extras-set', () => {
       providerId: 'adobe',
       domains: [],
     });
-    expect(result.store).toEqual({ github: ['hub.example.com'] });
+    expect(result.storeAfter).toEqual({ github: ['hub.example.com'] });
   });
 });

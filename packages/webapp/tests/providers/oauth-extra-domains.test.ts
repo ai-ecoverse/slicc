@@ -185,7 +185,7 @@ describe('setExtraOAuthDomainsAsync — DOM vs worker path', () => {
         } else {
           bridgeStore = { ...bridgeStore, [providerId]: domains };
         }
-        return { store: bridgeStore };
+        return { storeAfter: bridgeStore };
       },
       dispose: () => {},
     };
@@ -208,6 +208,42 @@ describe('setExtraOAuthDomainsAsync — DOM vs worker path', () => {
     await expect(setExtraOAuthDomainsAsync('adobe', ['x.example.com'])).rejects.toThrow(
       /no DOM and no panel-rpc client/i
     );
+  });
+
+  it('worker-shim mirror failure does NOT propagate — page write is durable', async () => {
+    // The page-side write succeeded (bridge returned a storeAfter
+    // snapshot). If the worker-shim mirror then throws, surfacing
+    // that would inverted-truth the user: command exits non-zero
+    // even though the persistent state correctly holds the new
+    // value. Verify we degrade to a warning + return success.
+    (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = {
+      call: async () => ({ storeAfter: { adobe: ['mirrored.example.com'] } }),
+      dispose: () => {},
+    };
+    // Wrap the shim's setItem so the mirror-back write throws while
+    // the durable page side already succeeded (modeled by the
+    // bridge's resolved response above).
+    const originalSetItem = globalThis.localStorage.setItem.bind(globalThis.localStorage);
+    Object.defineProperty(globalThis.localStorage, 'setItem', {
+      configurable: true,
+      writable: true,
+      value: () => {
+        throw new Error('simulated worker-shim quota');
+      },
+    });
+    try {
+      const { setExtraOAuthDomainsAsync } = await import('../../src/ui/provider-settings.js');
+      // Must NOT reject; the failure is recoverable on reload.
+      await expect(
+        setExtraOAuthDomainsAsync('adobe', ['mirrored.example.com'])
+      ).resolves.toBeUndefined();
+    } finally {
+      Object.defineProperty(globalThis.localStorage, 'setItem', {
+        configurable: true,
+        writable: true,
+        value: originalSetItem,
+      });
+    }
   });
 });
 

@@ -171,7 +171,7 @@ export interface PanelRpcResults {
     audioinputs: Array<{ deviceId: string; label: string; groupId?: string }>;
   };
   'tray-reset': LeaderTrayRuntimeStatus;
-  'oauth-extras-set': { store: OAuthExtraDomainsStore };
+  'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
 }
 
 export type PanelRpcOp = PanelRpcRequest['op'];
