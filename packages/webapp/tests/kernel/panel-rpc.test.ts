@@ -164,4 +164,59 @@ describe('panel-rpc', () => {
       /BroadcastChannel is unavailable/
     );
   });
+
+  it('round-trips tray-reset and returns the new LeaderTrayRuntimeStatus', async () => {
+    // Worker → page handler → worker. Verifies that the typed result
+    // (LeaderTrayRuntimeStatus, not a generic record) survives the
+    // bridge serialization (BroadcastChannel uses structured clone) and
+    // that the worker-side proxy returns it intact.
+    const newStatus = {
+      state: 'leader' as const,
+      session: {
+        workerBaseUrl: 'https://tray.example.com',
+        trayId: 'tray-after-reset',
+        createdAt: '2026-05-17T00:00:00.000Z',
+        controllerId: 'controller-1',
+        controllerUrl: 'https://tray.example.com/controller/controller-1',
+        joinUrl: 'https://tray.example.com/join/tray-after-reset',
+        webhookUrl: 'https://tray.example.com/webhooks/tray-after-reset',
+        leaderKey: 'leader-key',
+        leaderWebSocketUrl: 'wss://tray.example.com/ws',
+        runtime: 'slicc-standalone',
+      },
+      error: null,
+    };
+    let invocations = 0;
+    const stop = installPanelRpcHandler({
+      instanceId: 'tray-reset-rt',
+      handlers: {
+        'tray-reset': async () => {
+          invocations += 1;
+          return newStatus;
+        },
+      },
+    });
+    const client = createPanelRpcClient({ instanceId: 'tray-reset-rt' });
+    const result = await client.call('tray-reset', undefined);
+    expect(invocations).toBe(1);
+    expect(result.state).toBe('leader');
+    expect(result.session?.joinUrl).toBe('https://tray.example.com/join/tray-after-reset');
+    client.dispose();
+    stop();
+  });
+
+  it('propagates page-side tray-reset failure as a rejection on the worker side', async () => {
+    const stop = installPanelRpcHandler({
+      instanceId: 'tray-reset-err',
+      handlers: {
+        'tray-reset': async () => {
+          throw new Error('no active tray session to reset');
+        },
+      },
+    });
+    const client = createPanelRpcClient({ instanceId: 'tray-reset-err' });
+    await expect(client.call('tray-reset', undefined)).rejects.toThrow(/no active tray session/);
+    client.dispose();
+    stop();
+  });
 });

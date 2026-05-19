@@ -120,6 +120,7 @@ const mockChrome = {
       },
     },
     sendMessage: vi.fn(async () => {}),
+    getContexts: vi.fn(async () => []),
     onConnect: { addListener: vi.fn() },
     lastError: undefined,
   },
@@ -137,6 +138,10 @@ const mockChrome = {
   identity: {
     launchWebAuthFlow: vi.fn(),
     getRedirectURL: vi.fn(),
+  },
+  notifications: {
+    create: vi.fn(),
+    onClicked: { addListener: vi.fn() },
   },
   webRequest: {
     onHeadersReceived: { addListener: vi.fn() },

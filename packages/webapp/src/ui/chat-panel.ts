@@ -356,7 +356,9 @@ export class ChatPanel {
    * triggered them doesn't, leaving the follower chat looking like the
    * assistant is talking to itself.
    *
-   * Pass `undefined` to detach (e.g. when the leader tray stops).
+   * Pass `undefined` to detach (e.g. when the leader tray stops or
+   * when the standalone runtime switches from leader to follower mode
+   * via the `slicc:tray-join` event).
    * Hook exceptions are caught and logged — a broken broadcaster must
    * not skip the local `agent.sendMessage` path or break the panel.
    */

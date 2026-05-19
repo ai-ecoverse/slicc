@@ -87,6 +87,9 @@ interface ChromeAPI {
     sendMessage(message: unknown, callback?: (response: unknown) => void): Promise<void>;
     /** Open the manifest's options_ui page in a new tab (or popup). */
     openOptionsPage(): Promise<void>;
+    getContexts(filter: {
+      contextTypes?: string[];
+    }): Promise<Array<{ contextType: string; documentUrl?: string }>>;
     onInstalled: {
       addListener(callback: () => void): void;
     };
@@ -134,6 +137,20 @@ interface ChromeAPI {
     open(options: { tabId?: number; windowId?: number }): Promise<void>;
     close(options: { tabId?: number; windowId?: number }): Promise<void>;
   };
+  notifications: {
+    create(
+      notificationId: string,
+      options: {
+        type: 'basic' | 'image' | 'list' | 'progress';
+        iconUrl: string;
+        title: string;
+        message: string;
+      }
+    ): Promise<string>;
+    onClicked: {
+      addListener(callback: (notificationId: string) => void): void;
+    };
+  };
   windows: {
     create(options: {
       url?: string;
@@ -145,6 +162,7 @@ interface ChromeAPI {
     update(windowId: number, properties: { focused?: boolean }): Promise<{ id?: number }>;
     remove(windowId: number): Promise<void>;
     getAll(): Promise<Array<{ id: number }>>;
+    getCurrent(): Promise<{ id: number }>;
   };
   identity: {
     launchWebAuthFlow(options: { url: string; interactive: boolean }): Promise<string | undefined>;

@@ -25,6 +25,7 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
         onMessage: { addListener: (fn: any) => messageListeners.push(fn) },
         onInstalled: { addListener: vi.fn() },
         onStartup: { addListener: vi.fn() },
+        getContexts: vi.fn(async () => []),
         id: 'test-id',
       },
       storage: {
@@ -75,6 +76,10 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
       identity: {
         launchWebAuthFlow: vi.fn(),
         getRedirectURL: vi.fn(),
+      },
+      notifications: {
+        create: vi.fn(),
+        onClicked: { addListener: vi.fn() },
       },
       webRequest: {
         onHeadersReceived: { addListener: vi.fn() },

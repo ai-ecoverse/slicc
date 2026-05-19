@@ -271,6 +271,7 @@ async function handleActionClick(clickedTab: ChromeTab): Promise<void> {
 }
 
 chrome.action.onClicked.addListener((tab) => {
+  chrome.action.setBadgeText({ text: '' });
   handleActionClick(tab).catch((err) => {
     console.error('[slicc-sw] handleActionClick failed', err);
   });
@@ -380,6 +381,50 @@ async function addToSliccGroup(tabId: number): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Handoff notifications — alert the user when an x-slicc header is received
+// and open the side panel on notification click (user gesture required).
+// ---------------------------------------------------------------------------
+
+/** Maps notification ID → windowId so the click handler can open the right panel. */
+const handoffNotificationWindows = new Map<string, number>();
+
+async function showHandoffNotification(windowId: number): Promise<void> {
+  const contexts = await chrome.runtime.getContexts({ contextTypes: ['SIDE_PANEL'] });
+  if (contexts.length > 0) return;
+
+  const notificationId = `slicc-handoff-${Date.now()}`;
+  handoffNotificationWindows.set(notificationId, windowId);
+  chrome.action.setBadgeText({ text: '!' });
+  chrome.action.setBadgeBackgroundColor({ color: '#ff5f72' });
+  chrome.notifications.create(notificationId, {
+    type: 'basic',
+    iconUrl: 'logos/sliccy-color-1scoops-128x128.png',
+    title: 'Slicc handoff received',
+    message: 'Click to open the Slicc side panel and process the handoff.',
+  });
+}
+
+chrome.notifications.onClicked.addListener((notificationId: string) => {
+  const windowId = handoffNotificationWindows.get(notificationId);
+  handoffNotificationWindows.delete(notificationId);
+  chrome.action.setBadgeText({ text: '' });
+  if (windowId !== undefined) {
+    chrome.sidePanel.open({ windowId }).catch(() => {});
+  }
+  readStoredDetachedTabId()
+    .then(async (detachedTabId) => {
+      if (detachedTabId !== undefined) {
+        const tab = await chrome.tabs.get(detachedTabId);
+        await chrome.tabs.update(detachedTabId, { active: true });
+        if (tab.windowId !== undefined) {
+          await chrome.windows.update(tab.windowId, { focused: true });
+        }
+      }
+    })
+    .catch(() => {});
+});
+
+// ---------------------------------------------------------------------------
 // x-slicc header observer — emit a navigate lick when a main-frame document
 // response carries the x-slicc header.
 // ---------------------------------------------------------------------------
@@ -422,9 +467,16 @@ chrome.webRequest.onHeadersReceived.addListener(
     if (tabId >= 0) {
       chrome.tabs
         .get(tabId)
-        .then((tab) => dispatch(tab.title))
+        .then((tab) => {
+          if (tab.windowId !== undefined) showHandoffNotification(tab.windowId);
+          dispatch(tab.title);
+        })
         .catch(() => dispatch());
     } else {
+      chrome.windows
+        .getCurrent()
+        .then((w) => showHandoffNotification(w.id!))
+        .catch(() => {});
       dispatch();
     }
   },
@@ -454,6 +506,7 @@ chrome.runtime.onMessage.addListener(
     const msg = message as ExtensionMessage;
 
     if (msg.source === 'panel') {
+      chrome.action.setBadgeText({ text: '' });
       const panelPayload = msg.payload;
 
       // Handle OAuth requests — service worker has chrome.identity access
