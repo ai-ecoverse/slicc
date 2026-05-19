@@ -362,7 +362,7 @@ describe('extension service worker', () => {
     }
   });
 
-  it('shows a notification when x-slicc header is received on a known tab', async () => {
+  it('shows a notification and sets badge when x-slicc header is received', async () => {
     const chrome = (
       globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
     ).chrome;
@@ -379,9 +379,11 @@ describe('extension service worker', () => {
       expect.any(String),
       expect.objectContaining({ type: 'basic', message: expect.any(String) })
     );
+    expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '!' });
+    expect(chrome.action.setBadgeBackgroundColor).toHaveBeenCalledWith({ color: '#ff5f72' });
   });
 
-  it('opens the side panel when the handoff notification is clicked', async () => {
+  it('opens the side panel and clears badge when handoff notification is clicked', async () => {
     const chrome = (
       globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
     ).chrome;
@@ -414,6 +416,7 @@ describe('extension service worker', () => {
     await flushAsync();
 
     expect(chrome.sidePanel.open).toHaveBeenCalledWith({ windowId: 7 });
+    expect(chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '' });
   });
 
   it('handles DA sign-and-forward by attaching the IMS bearer token', async () => {
