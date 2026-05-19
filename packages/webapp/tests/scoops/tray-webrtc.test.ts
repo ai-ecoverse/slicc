@@ -900,6 +900,85 @@ describe('startFollowerWithAutoReconnect', () => {
     handle.cancel();
   });
 
+  it('initial connect failure logs at error level (not warn) when not cancelled', async () => {
+    // T-2: pins the R9 → R10 escalation. The prod default log level is
+    // ERROR, so a regression to `log.warn` would silently suppress
+    // initial-connect failures in production. Spy on `console.error`
+    // (the logger forwards to it via `createLogger`) and verify the
+    // error-grade signal fires.
+    const harness = createAutoReconnectHarness();
+    harness.initLeader();
+    // Make the very first fetch fail so the initial-connect catch path
+    // runs immediately.
+    harness.setFailConnect(true);
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const handle = startFollowerWithAutoReconnect(
+        {
+          joinUrl: 'https://tray.example.com/join/tray-1.secret',
+          runtime: 'slicc-standalone',
+          fetchImpl: harness.fetchImpl,
+          peerConnectionFactory: harness.peerConnectionFactory,
+          controllerIdFactory: () => 'follower-1',
+          sleep: harness.sleep,
+          pollIntervalMs: 0,
+        },
+        { onConnected: vi.fn(), sleep: harness.sleep, maxAttempts: 1 }
+      );
+
+      // Wait until the initial-connect failure flows through.
+      await vi.waitFor(() => {
+        const matched = errorSpy.mock.calls.some((args) =>
+          String(args[1] ?? '').includes('Initial follower connection failed')
+        );
+        expect(matched).toBe(true);
+      });
+
+      handle.cancel();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('initial connect failure is suppressed when cancelled before resolution', async () => {
+    // T-2: companion test — the `if (cancelled) return;` guard at the
+    // top of the catch block must short-circuit the error log so a
+    // deliberate `cancel()` race doesn't surface as a fake failure.
+    const harness = createAutoReconnectHarness();
+    harness.initLeader();
+    harness.setFailConnect(true);
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const handle = startFollowerWithAutoReconnect(
+        {
+          joinUrl: 'https://tray.example.com/join/tray-1.secret',
+          runtime: 'slicc-standalone',
+          fetchImpl: harness.fetchImpl,
+          peerConnectionFactory: harness.peerConnectionFactory,
+          controllerIdFactory: () => 'follower-1',
+          sleep: harness.sleep,
+          pollIntervalMs: 0,
+        },
+        { onConnected: vi.fn(), sleep: harness.sleep, maxAttempts: 1 }
+      );
+      // Cancel BEFORE the fetch failure microtask resolves.
+      handle.cancel();
+
+      // Wait long enough that the rejection would have surfaced if the
+      // guard were absent.
+      await new Promise((r) => setTimeout(r, 30));
+
+      const matched = errorSpy.mock.calls.some((args) =>
+        String(args[1] ?? '').includes('Initial follower connection failed')
+      );
+      expect(matched).toBe(false);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('reconnects after disconnect with exponential backoff', async () => {
     const harness = createAutoReconnectHarness();
     harness.initLeader();

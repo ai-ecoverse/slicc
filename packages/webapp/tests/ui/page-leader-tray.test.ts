@@ -262,6 +262,61 @@ describe('startPageLeaderTray', () => {
     expect(capturedHandler).toBeUndefined();
   });
 
+  it('refreshLeaderTargets logs at error level (not warn) and throttles to ~1/min when listPages rejects', async () => {
+    // T-1: covers `page-leader-tray.ts`'s `refreshLeaderTargets`
+    // throttle (`lastTargetErrorLogAt`, `performance.now()`, recovery
+    // signal). Without this test, a future cleanup that lowers the
+    // log level back to `warn` (suppressed in prod) or removes the
+    // throttle would slip through silently.
+    //
+    // Uses real timers + a small refresh interval — `vi.fakeTimers`
+    // mixes badly with `vi.waitFor` and the async fetch harness this
+    // test file relies on.
+    const { fetchImpl, webSocketFactory, sockets } = makeLeaderFetch();
+    const listPages = vi.fn().mockRejectedValue(new Error('CDP closed'));
+    const browserAPI = {
+      setTrayTargetProvider: vi.fn(),
+      listPages,
+    } as unknown as Parameters<typeof startPageLeaderTray>[0]['browserAPI'];
+
+    const baseOpts = makeBaseOptions({ fetchImpl, webSocketFactory, store });
+    const opts = {
+      ...baseOpts,
+      browserAPI,
+      _refreshIntervalMs: 25, // ~40 ticks per second, plenty within a sub-second test window
+    };
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const handle = startPageLeaderTray(opts);
+
+      // Wait until listPages has fired at least 5 times (5 intervals = ~125ms).
+      await vi.waitFor(() => expect(listPages.mock.calls.length).toBeGreaterThanOrEqual(5), {
+        timeout: 1000,
+      });
+
+      sockets[0]?.dispatch('open', {});
+
+      // Of all those failures, log.error should have fired AT MOST once
+      // (the 60s throttle would suppress everything after the first).
+      // No `log.warn` should have fired for refresh-targets at all.
+      const errorCalls = errorSpy.mock.calls.filter((args) =>
+        String(args[1] ?? '').includes('Leader target refresh failed')
+      );
+      const warnCalls = warnSpy.mock.calls.filter((args) =>
+        String(args[1] ?? '').includes('Leader target refresh failed')
+      );
+      expect(errorCalls.length).toBe(1);
+      expect(warnCalls.length).toBe(0);
+
+      handle.stop();
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
   it('stop() calls leader.stop(), peers.stop(), and sync.stop()', async () => {
     const { fetchImpl, webSocketFactory, sockets } = makeLeaderFetch();
     const handle = startPageLeaderTray(makeBaseOptions({ fetchImpl, webSocketFactory, store }));
