@@ -492,6 +492,7 @@ import {
   writeOAuthExtras as sharedWriteOAuthExtras,
   type OAuthExtraDomainsStore,
 } from '@slicc/shared-ts';
+import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 
 export function getExtraOAuthDomains(providerId: string): string[] {
   return sharedReadOAuthExtras(localStorage)[providerId] ?? [];
@@ -505,6 +506,36 @@ export function setExtraOAuthDomains(providerId: string, domains: string[]): voi
   } else {
     store[providerId] = cleaned;
   }
+  sharedWriteOAuthExtras(localStorage, store);
+}
+
+/**
+ * Worker-safe variant of `setExtraOAuthDomains`. In page context it
+ * just calls the sync helper. In the kernel worker (no DOM, only a
+ * Map-backed `localStorage` shim that doesn't echo back to the page —
+ * see `kernel-worker.ts:installLocalStorageShim`) it routes the write
+ * through `panel-rpc` so the page handler can mutate real
+ * `window.localStorage`. The bridge response carries the full
+ * post-write store; we mirror it into the worker shim before
+ * resolving so a same-session `getExtraOAuthDomains` read sees the
+ * new value without waiting for the cross-channel
+ * `local-storage-set` forward to land.
+ */
+export async function setExtraOAuthDomainsAsync(
+  providerId: string,
+  domains: string[]
+): Promise<void> {
+  if (hasLocalDom()) {
+    setExtraOAuthDomains(providerId, domains);
+    return;
+  }
+  const rpc = getPanelRpcClient();
+  if (!rpc) {
+    throw new Error(
+      'setExtraOAuthDomainsAsync: no DOM and no panel-rpc client — cannot persist to page localStorage'
+    );
+  }
+  const { store } = await rpc.call('oauth-extras-set', { providerId, domains });
   sharedWriteOAuthExtras(localStorage, store);
 }
 

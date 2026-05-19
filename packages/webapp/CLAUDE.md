@@ -190,9 +190,10 @@ The webapp consumes `@slicc/shared-ts` for secret masking primitives. `createPro
 Provider `oauthTokenDomains` is an immutable safe default; users can layer additional allowed domains per-provider:
 
 - Storage: `localStorage["slicc_oauth_extra_domains"]` → `{[providerId]: [domain, ...]}`
-- Helpers: `getExtraOAuthDomains(id)` / `setExtraOAuthDomains(id, domains)` / `getAllExtraOAuthDomains()` in `provider-settings.ts`
-- Surfaces: panel terminal `oauth-domain` command, extension options page "OAuth domains" tab
+- Helpers: `getExtraOAuthDomains(id)` / `setExtraOAuthDomains(id, domains)` / `getAllExtraOAuthDomains()` (sync, page-only) and `setExtraOAuthDomainsAsync(id, domains)` (worker-safe — routes through `panel-rpc` when no DOM, then mirrors the post-write store into the worker shim so same-session reads stay consistent) in `provider-settings.ts`
+- Surfaces: panel terminal `oauth-domain` command (worker float — uses the async setter), extension options page "OAuth domains" tab (page float — uses the sync helpers directly)
 - Merge: `saveOAuthAccount` concatenates defaults + extras, dedupes case-insensitively (defaults-first order), then pushes the merged list to the fetch-proxy / SW.
+- Worker-side write path: the kernel-worker shim's `localStorage.setItem` is page→worker only (no echo-back). Writes from the worker MUST go via `setExtraOAuthDomainsAsync` / the `oauth-extras-set` panel-rpc op, otherwise they're swallowed by the shim Map and lost on reload — see issue #701.
 
 ### Shell-env masked secret population
 

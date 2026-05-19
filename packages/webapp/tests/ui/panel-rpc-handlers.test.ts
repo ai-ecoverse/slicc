@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { createStandalonePanelRpcHandlers } from '../../src/ui/panel-rpc-handlers.js';
 import type { LeaderTrayRuntimeStatus } from '../../src/scoops/tray-leader.js';
@@ -61,5 +61,90 @@ describe('createStandalonePanelRpcHandlers — tray-reset', () => {
       },
     });
     await expect(handlers['tray-reset']!(undefined)).rejects.toThrow(/tray worker unreachable/);
+  });
+});
+
+/**
+ * `oauth-extras-set` is the panel-RPC op that lets a worker-side
+ * `oauth-domain` write reach real page `localStorage`. The handler
+ * delegates to `setExtraOAuthDomains` (which writes through
+ * `sharedWriteOAuthExtras`) and echoes the post-write store back so
+ * the worker can mirror it into its shim before resolving — the
+ * page→worker storage forward runs on a different channel and offers
+ * no ordering guarantee against the panel-rpc response.
+ */
+describe('createStandalonePanelRpcHandlers — oauth-extras-set', () => {
+  let lsData: Record<string, string>;
+  let originalLocalStorage: Storage;
+
+  beforeEach(() => {
+    originalLocalStorage = globalThis.localStorage;
+    lsData = {};
+    (globalThis as { localStorage: Storage }).localStorage = {
+      get length(): number {
+        return Object.keys(lsData).length;
+      },
+      key: (i: number) => Object.keys(lsData)[i] ?? null,
+      getItem: (k: string) => lsData[k] ?? null,
+      setItem: (k: string, v: string) => {
+        lsData[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete lsData[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(lsData)) delete lsData[k];
+      },
+    };
+  });
+
+  afterEach(() => {
+    (globalThis as { localStorage: Storage }).localStorage = originalLocalStorage;
+  });
+
+  it('writes the extras through to localStorage and returns the merged store', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    const handler = handlers['oauth-extras-set'];
+    expect(handler).toBeTypeOf('function');
+    const result = await handler!({
+      providerId: 'adobe',
+      domains: ['admin.hlx.page', '*.aem.page'],
+    });
+    expect(result).toEqual({ store: { adobe: ['admin.hlx.page', '*.aem.page'] } });
+    // Real-localStorage write fired through to the underlying map —
+    // this is the assertion that the bug at issue #701 (writes
+    // never leaving the worker's shim) is fixed.
+    expect(lsData.slicc_oauth_extra_domains).toBe(
+      JSON.stringify({ adobe: ['admin.hlx.page', '*.aem.page'] })
+    );
+  });
+
+  it('preserves other providers and overwrites the targeted one', async () => {
+    lsData.slicc_oauth_extra_domains = JSON.stringify({
+      adobe: ['old.example.com'],
+      github: ['hub.example.com'],
+    });
+    const handlers = createStandalonePanelRpcHandlers({});
+    const result = await handlers['oauth-extras-set']!({
+      providerId: 'adobe',
+      domains: ['new.example.com'],
+    });
+    expect(result.store).toEqual({
+      adobe: ['new.example.com'],
+      github: ['hub.example.com'],
+    });
+  });
+
+  it('empty domains array drops the provider entry', async () => {
+    lsData.slicc_oauth_extra_domains = JSON.stringify({
+      adobe: ['admin.hlx.page'],
+      github: ['hub.example.com'],
+    });
+    const handlers = createStandalonePanelRpcHandlers({});
+    const result = await handlers['oauth-extras-set']!({
+      providerId: 'adobe',
+      domains: [],
+    });
+    expect(result.store).toEqual({ github: ['hub.example.com'] });
   });
 });

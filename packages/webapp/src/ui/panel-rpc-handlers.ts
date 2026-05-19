@@ -12,6 +12,7 @@
 
 import type { PanelRpcHandlers } from '../kernel/panel-rpc.js';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import { getAllExtraOAuthDomains, setExtraOAuthDomains } from './provider-settings.js';
 
 /**
  * Options threaded into the handler factory. Each callback is optional
@@ -253,6 +254,20 @@ export function createStandalonePanelRpcHandlers(
         throw new Error('host reset: no active tray session to reset');
       }
       return await options.resetTray();
+    },
+
+    'oauth-extras-set': ({ providerId, domains }) => {
+      // Page-side write to real `window.localStorage` for the
+      // `oauth-domain` shell command running in the kernel worker.
+      // `installPageStorageSync` patches `Storage.prototype.setItem`
+      // so this write also fans out to the worker shim — but on a
+      // different channel than the panel-rpc response, with no
+      // ordering guarantee. Returning the full store lets the worker
+      // mirror it into its shim before resolving so a follow-up
+      // `oauth-domain list` in the same session sees the new value
+      // without waiting for the cross-channel forward.
+      setExtraOAuthDomains(providerId, domains);
+      return { store: getAllExtraOAuthDomains() };
     },
   };
 }

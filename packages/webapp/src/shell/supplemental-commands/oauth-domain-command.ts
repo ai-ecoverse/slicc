@@ -36,7 +36,7 @@ export function createOAuthDomainCommand(): Command {
       return { stdout: helpText(), stderr: '', exitCode: 0 };
     }
 
-    const { getExtraOAuthDomains, setExtraOAuthDomains, getAllExtraOAuthDomains } =
+    const { getExtraOAuthDomains, setExtraOAuthDomainsAsync, getAllExtraOAuthDomains } =
       await import('../../ui/provider-settings.js');
 
     const [subcommand, providerId, domain] = args;
@@ -81,7 +81,7 @@ export function createOAuthDomainCommand(): Command {
               exitCode: 0,
             };
           }
-          setExtraOAuthDomains(providerId, [...current, domain]);
+          await setExtraOAuthDomainsAsync(providerId, [...current, domain]);
           return {
             stdout: `Added ${domain} to ${providerId}. Reload the page to apply.\n`,
             stderr: '',
@@ -107,7 +107,7 @@ export function createOAuthDomainCommand(): Command {
               exitCode: 0,
             };
           }
-          setExtraOAuthDomains(providerId, next);
+          await setExtraOAuthDomainsAsync(providerId, next);
           return {
             stdout: `Removed ${domain} from ${providerId}. Reload the page to apply.\n`,
             stderr: '',
@@ -123,7 +123,7 @@ export function createOAuthDomainCommand(): Command {
               exitCode: 1,
             };
           }
-          setExtraOAuthDomains(providerId, []);
+          await setExtraOAuthDomainsAsync(providerId, []);
           return {
             stdout: `Cleared extra domains for ${providerId}. Reload the page to apply.\n`,
             stderr: '',

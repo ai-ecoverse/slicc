@@ -38,6 +38,7 @@
  * commands run directly there.
  */
 
+import type { OAuthExtraDomainsStore } from '@slicc/shared-ts';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 
 const PANEL_RPC_CHANNEL = 'slicc-panel-rpc';
@@ -132,6 +133,18 @@ export type PanelRpcRequest =
       // Handler throws when no leader tray is active.
       op: 'tray-reset';
       payload?: undefined;
+    }
+  | {
+      // Write the user-configured extra-OAuth-domains store for a
+      // single provider. Worker writes can't reach page localStorage
+      // directly (the kernel-worker shim is page→worker only — see
+      // `kernel-worker.ts:installLocalStorageShim`), so the
+      // `oauth-domain` command routes writes through the page handler
+      // which mutates real `localStorage`. Response carries the full
+      // post-write store so the worker can mirror it into its shim
+      // before resolving, avoiding the page→worker forward race.
+      op: 'oauth-extras-set';
+      payload: { providerId: string; domains: string[] };
     };
 
 export interface PanelRpcResults {
@@ -158,6 +171,7 @@ export interface PanelRpcResults {
     audioinputs: Array<{ deviceId: string; label: string; groupId?: string }>;
   };
   'tray-reset': LeaderTrayRuntimeStatus;
+  'oauth-extras-set': { store: OAuthExtraDomainsStore };
 }
 
 export type PanelRpcOp = PanelRpcRequest['op'];
