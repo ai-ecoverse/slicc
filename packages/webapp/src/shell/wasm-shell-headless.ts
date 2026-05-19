@@ -247,7 +247,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
       gitCommand,
       mountCommand,
       createSkillCommand(options.fs),
-      createUpskillCommand(options.fs, fetchFn),
+      createUpskillCommand(options.fs, fetchFn, options.browserAPI),
       ...supplementalCommands,
     ];
     const customCommands = allCustomCommands.filter((c) => this.isCommandAllowed(c.name));

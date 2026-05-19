@@ -167,7 +167,7 @@ The kernel host is the off-main-thread home for the agent engine. In standalone,
 | `shared.ts`              | Shared utilities: `toPreviewUrl()` (dual-mode preview SW URL), `isLikelyUrl()`, `basename()`, `dirname()`, NodeExitError, nodeRuntimeState, formatConsoleArg                |
 | `sqlite-command.ts`      | `sqlite3` — SQLite database operations (in-memory or VFS-backed)                                                                                                            |
 | `unzip-command.ts`       | `unzip` — extract archives                                                                                                                                                  |
-| `upskill-command.ts`     | `upskill` — install skills from GitHub/ClawHub                                                                                                                              |
+| `upskill-command.ts`     | `upskill` — install skills from GitHub, the Tessl registry, or browse.sh; `upskill tabs` suggests skills for open browser tabs                                              |
 | `uname-command.ts`       | `uname` — print the current browser user agent                                                                                                                              |
 | `webhook-command.ts`     | `webhook` — manage webhooks for event-driven automation                                                                                                                     |
 | `which-command.ts`       | `which` — resolve command to path (built-ins: `/usr/bin/<name>`, `.jsh` scripts: actual VFS path)                                                                           |
@@ -607,11 +607,11 @@ See [docs/secrets.md](secrets.md) for user-facing setup instructions.
 
 ### Skills & Package Management
 
-| I need to...                          | Modify                                                               |
-| ------------------------------------- | -------------------------------------------------------------------- |
-| Change skill discovery                | `packages/webapp/src/skills/discover.ts`                             |
-| Change `.skill` drop archive handling | `packages/webapp/src/skills/install-from-drop.ts`                    |
-| Change install via GitHub/Tessl/etc.  | `packages/webapp/src/shell/supplemental-commands/upskill-command.ts` |
+| I need to...                              | Modify                                                               |
+| ----------------------------------------- | -------------------------------------------------------------------- |
+| Change skill discovery                    | `packages/webapp/src/skills/discover.ts`                             |
+| Change `.skill` drop archive handling     | `packages/webapp/src/skills/install-from-drop.ts`                    |
+| Change install via GitHub/Tessl/browse.sh | `packages/webapp/src/shell/supplemental-commands/upskill-command.ts` |
 
 ### Sprinkles System
 

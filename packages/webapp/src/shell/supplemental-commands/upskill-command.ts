@@ -16,29 +16,22 @@ import type { DiscoveredSkill } from '../../skills/types.js';
 import { unzipSync } from 'fflate';
 import { consumeCachedBinaryByUrl } from '../binary-cache.js';
 import { decodeFetchBody, getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
-import { isSafeUpskillBranch, isSafeUpskillPath } from '../../net/handoff-link.js';
+import {
+  extractHandoff,
+  isSafeUpskillBranch,
+  isSafeUpskillPath,
+  UPSKILL_REL,
+} from '../../net/handoff-link.js';
+import { parseLinkHeader } from '../../net/link-header.js';
+import type { BrowserAPI, PageInfo } from '../../cdp/index.js';
 
-// ClawHub uses a Convex backend - this is the actual API endpoint
-const CLAWHUB_API = 'https://wry-manatee-359.convex.site/api/v1';
 const TESSL_API = 'https://api.tessl.io';
+const BROWSE_SH_API = 'https://browse.sh/api/skills';
 const SKILLS_DIR = '/workspace/skills';
 const GITHUB_GLOBAL_DB = GLOBAL_FS_DB_NAME;
 const GITHUB_TOKEN_PATH = '/workspace/.git/github-token';
 const GITHUB_API_ACCEPT = 'application/vnd.github.v3+json';
 const SKILL_CATALOG_URL = 'https://www.sliccy.com/skills/catalog.json';
-
-interface ClawHubSearchResult {
-  slug: string;
-  displayName: string;
-  summary: string;
-  version: string | null;
-  updatedAt: number;
-  score?: number;
-}
-
-interface ClawHubSearchResponse {
-  results: ClawHubSearchResult[];
-}
 
 interface TesslSkillAttributes {
   name: string;
@@ -69,11 +62,33 @@ interface UnifiedSearchResult {
   name: string;
   displayName: string;
   summary: string;
-  source: 'clawhub' | 'tessl';
+  source: 'tessl' | 'browseSh';
   qualityScore: number | null;
   installHint: string;
   featured?: boolean;
   sourceRepo?: string;
+}
+
+// ── browse.sh types ──
+
+export interface BrowseShSkillSummary {
+  slug: string;
+  hostname: string;
+  task: string;
+  name?: string;
+  title?: string;
+  description?: string;
+  category?: string;
+  tags?: string[];
+  recommendedMethod?: string;
+  verified?: boolean;
+  installCount?: number;
+  updated?: string;
+}
+
+interface BrowseShDetail extends BrowseShSkillSummary {
+  skillMd?: string;
+  skillMdUrl?: string;
 }
 
 // ── Skill Catalog types ──
@@ -458,16 +473,17 @@ function upskillHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: `usage: upskill <command> [options]
 
-Install skills from GitHub repositories, ClawHub, or Tessl registry.
+Install skills from GitHub repositories, the Tessl registry, or browse.sh.
 
 Commands:
-  search <query>           Search ClawHub + Tessl for skills
-  list                     List discoverable local skills
-  info <name>              Show details about a discoverable local skill
-  read <name>              Read the SKILL.md instructions
-  <owner/repo>             Install skill(s) from GitHub repository
-  <clawhub-url>            Install skill from ClawHub URL
-  tessl:<name>             Install skill from Tessl registry
+  search <query>             Search registries for skills
+  list                       List discoverable local skills
+  tabs [--json]              Suggest skills for open browser tabs
+  info <name>                Show details about a discoverable local skill
+  read <name>                Read the SKILL.md instructions
+  <owner/repo>               Install skill(s) from GitHub repository
+  tessl:<name>               Install skill from Tessl registry
+  browse:<hostname>/<task>   Install site-specific skill from browse.sh
 
 ${formatDiscoveryScope()}
 GitHub Installation:
@@ -483,10 +499,12 @@ Recommendations:
   upskill recommendations --install      Install all recommended skills
 
 Registry Search:
-  upskill search "pdf conversion"        Search all registries
-  upskill https://clawhub.ai/user/skill  Install from ClawHub URL
-  upskill clawhub:user/skill             Install from ClawHub shorthand
+  upskill search "pdf conversion"        Search registries
   upskill tessl:postgres-pro             Install from Tessl (via GitHub)
+  upskill browse:weather.gov/get-forecast-1uezib
+                                         Install from browse.sh by slug
+  upskill https://browse.sh/skills/weather.gov/get-forecast-1uezib
+                                         Same, using the URL form
 
 Options:
   --skill <name>           Install specific skill (repeatable)
@@ -507,36 +525,12 @@ Examples:
   upskill anthropics/skills --skill pdf --skill xlsx
   upskill adobe/skills --path skills/aem --all
   upskill aemcoder/skills@fix/stateless-tab-targeting --all
-  upskill https://clawhub.ai/arun-8687/tavily-search
   upskill tessl:postgres-pro
+  upskill browse:weather.gov/get-forecast-1uezib
 `,
     stderr: '',
     exitCode: 0,
   };
-}
-
-/**
- * Search ClawHub registry for skills, returning unified results.
- */
-async function fetchClawHubResults(
-  query: string,
-  fetch: SecureFetch
-): Promise<UnifiedSearchResult[]> {
-  const url = `${CLAWHUB_API}/search?q=${encodeURIComponent(query)}`;
-  const response = await fetch(url, {
-    headers: { Accept: 'application/json' },
-  });
-  if (response.status !== 200) throw new Error(`ClawHub returned HTTP ${response.status}`);
-  const data = parseFetchJson<ClawHubSearchResponse>(response.body);
-  if (!data.results) return [];
-  return data.results.map((r) => ({
-    name: r.slug,
-    displayName: r.displayName || r.slug,
-    summary: r.summary || '',
-    source: 'clawhub' as const,
-    qualityScore: null,
-    installHint: `upskill clawhub:${r.slug}`,
-  }));
 }
 
 /**
@@ -601,50 +595,317 @@ async function fetchTesslResults(
   return Array.from(seen.values());
 }
 
+// ── browse.sh registry ──
+
+let cachedBrowseShCatalog: BrowseShSkillSummary[] | undefined;
+let cachedBrowseShCatalogPromise: Promise<BrowseShSkillSummary[]> | undefined;
+
+/** @internal Exported only for test cleanup. */
+export function _resetBrowseShCatalogCache(): void {
+  cachedBrowseShCatalog = undefined;
+  cachedBrowseShCatalogPromise = undefined;
+}
+
 /**
- * Search both ClawHub and Tessl registries, interleave results.
+ * Fetch the full browse.sh catalog. The list is ~200KB and CORS-open, so a
+ * single fetch per shell session is fine — the result is cached in-module
+ * for the lifetime of the process. Failures clear the cache so the next call
+ * retries.
+ */
+export async function fetchBrowseShCatalog(fetch: SecureFetch): Promise<BrowseShSkillSummary[]> {
+  if (cachedBrowseShCatalog) return cachedBrowseShCatalog;
+  if (cachedBrowseShCatalogPromise) return cachedBrowseShCatalogPromise;
+  cachedBrowseShCatalogPromise = (async () => {
+    const response = await fetch(BROWSE_SH_API, { headers: { Accept: 'application/json' } });
+    if (response.status !== 200) {
+      throw new Error(`browse.sh returned HTTP ${response.status}`);
+    }
+    const data = parseFetchJson<{ skills?: BrowseShSkillSummary[] } | BrowseShSkillSummary[]>(
+      response.body
+    );
+    const skills = Array.isArray(data) ? data : (data.skills ?? []);
+    cachedBrowseShCatalog = skills;
+    return skills;
+  })();
+  try {
+    return await cachedBrowseShCatalogPromise;
+  } catch (err) {
+    cachedBrowseShCatalogPromise = undefined;
+    throw err;
+  }
+}
+
+/**
+ * Search the cached browse.sh catalog and return unified results. Filters
+ * client-side against `title`, `name`, `description`, `hostname`, and `tags`.
+ */
+async function fetchBrowseShResults(
+  query: string,
+  fetch: SecureFetch
+): Promise<UnifiedSearchResult[]> {
+  const catalog = await fetchBrowseShCatalog(fetch);
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+
+  const matches = catalog.filter((s) => {
+    const haystack = [
+      s.title ?? '',
+      s.name ?? '',
+      s.description ?? '',
+      s.hostname ?? '',
+      ...(s.tags ?? []),
+    ]
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(q);
+  });
+
+  return matches.map((s) => ({
+    name: s.slug,
+    displayName: s.title || s.name || s.task || s.slug,
+    summary: s.description || '',
+    source: 'browseSh' as const,
+    qualityScore: null,
+    installHint: `upskill browse:${s.hostname}/${s.task}`,
+    sourceRepo: s.hostname,
+  }));
+}
+
+const BROWSE_SH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * Parse a browse.sh reference.
+ *
+ * Accepts:
+ * - `browse:{hostname}/{task}` (shorthand)
+ * - `https://browse.sh/skills/{hostname}/{task}` (URL form, trailing slash ok)
+ *
+ * Each segment must satisfy `[A-Za-z0-9._-]+` (no path traversal, no shell
+ * metachars). Returns null for anything else.
+ */
+export function parseBrowseShRef(ref: string): { hostname: string; task: string } | null {
+  let hostnameTask: string | undefined;
+
+  if (ref.startsWith('browse:')) {
+    hostnameTask = ref.slice('browse:'.length);
+  } else {
+    const url = ref.match(/^https:\/\/browse\.sh\/skills\/([^/?#]+)\/([^/?#]+?)\/?$/);
+    if (url) hostnameTask = `${url[1]}/${url[2]}`;
+  }
+  if (!hostnameTask) return null;
+
+  const slash = hostnameTask.indexOf('/');
+  if (slash < 0) return null;
+  const hostname = hostnameTask.slice(0, slash);
+  const task = hostnameTask.slice(slash + 1);
+  if (!hostname || !task) return null;
+  if (task.includes('/')) return null;
+  if (!BROWSE_SH_SEGMENT_RE.test(hostname) || !BROWSE_SH_SEGMENT_RE.test(task)) return null;
+  return { hostname, task };
+}
+
+/**
+ * Extract a top-level scalar field from minimal YAML frontmatter. Only handles
+ * plain `key: value` lines (quoted or unquoted) — arrays / block scalars are
+ * not parsed. Returns undefined when missing.
+ */
+function extractFrontmatterField(skillMd: string, field: string): string | undefined {
+  const fmMatch = skillMd.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!fmMatch) return undefined;
+  for (const line of fmMatch[1].split(/\r?\n/)) {
+    const m = line.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
+    if (!m || m[1] !== field) continue;
+    let value = m[2].trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    return value || undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Build the SLICC adapter preamble inserted below the upstream frontmatter.
+ * Same wording for every browse.sh skill regardless of `recommendedMethod` —
+ * only the slug and `updated` date vary per skill.
+ */
+function buildBrowseShPreamble(detail: BrowseShDetail, slug: string): string {
+  const updated = detail.updated ? ` · updated ${detail.updated}` : '';
+  return [
+    `> [!NOTE] **Imported from browse.sh** — original slug: \`${slug}\``,
+    `>`,
+    `> **SLICC adaptation:** use \`playwright-cli\` — you are running inside the user's real browser session, so the bot-detection workarounds the upstream skill assumes are usually unnecessary.`,
+    `>`,
+    `> Source: <https://browse.sh/skills/${slug}>${updated}`,
+  ].join('\n');
+}
+
+/**
+ * Insert the SLICC adapter preamble immediately below the upstream YAML
+ * frontmatter. The upstream frontmatter and body MUST round-trip byte-identical
+ * around the preamble — we splice `\n<preamble>\n\n` between the closing `---`
+ * fence and whatever bytes followed it.
+ */
+function insertBrowseShPreamble(skillMd: string, preamble: string): string {
+  const fmMatch = skillMd.match(/^(---\r?\n[\s\S]*?\r?\n---)(\r?\n|$)/);
+  if (!fmMatch) {
+    // No frontmatter — emit the preamble as the file header so downstream
+    // skill loading still sees the SLICC adaptation note.
+    return `${preamble}\n\n${skillMd}`;
+  }
+  const frontmatter = fmMatch[1];
+  const afterFence = fmMatch[2] || '\n';
+  const rest = skillMd.slice(fmMatch[0].length);
+  return `${frontmatter}${afterFence}\n${preamble}\n\n${rest}`;
+}
+
+/**
+ * Install a single browse.sh skill into `/workspace/skills/browse-{hostname}-{name}/`.
+ *
+ * - GETs the detail endpoint for `skillMd`/`skillMdUrl`.
+ * - Prefers the Vercel Blob URL (CORS-safe) for the raw markdown body; falls
+ *   back to the inline `skillMd` field if the blob fetch fails or is absent.
+ * - Honors `force` for collision overwrites.
+ * - Writes a single `SKILL.md` with the SLICC adapter preamble inserted below
+ *   the upstream YAML frontmatter.
+ */
+async function installFromBrowseSh(
+  hostname: string,
+  task: string,
+  fs: VirtualFS,
+  fetch: SecureFetch,
+  force: boolean = false
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const slug = `${hostname}/${task}`;
+  const detailUrl = `${BROWSE_SH_API}/${hostname}/${task}`;
+
+  let detail: BrowseShDetail;
+  try {
+    const response = await fetch(detailUrl, { headers: { Accept: 'application/json' } });
+    if (response.status === 404) {
+      return {
+        stdout: '',
+        stderr: `upskill: browse.sh skill "${slug}" not found\n`,
+        exitCode: 1,
+      };
+    }
+    if (response.status !== 200) {
+      return {
+        stdout: '',
+        stderr: `upskill: browse.sh returned HTTP ${response.status} for "${slug}"\n`,
+        exitCode: 1,
+      };
+    }
+    detail = parseFetchJson<BrowseShDetail>(response.body);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      stdout: '',
+      stderr: `upskill: failed to fetch browse.sh skill "${slug}": ${msg}\n`,
+      exitCode: 1,
+    };
+  }
+
+  let skillMd: string | undefined;
+  if (detail.skillMdUrl) {
+    try {
+      const blobResponse = await fetch(detail.skillMdUrl, { headers: { Accept: 'text/plain' } });
+      if (blobResponse.status === 200) {
+        skillMd = decodeFetchBody(blobResponse.body);
+      }
+    } catch {
+      // fall through to inline
+    }
+  }
+  if (!skillMd && detail.skillMd) {
+    skillMd = detail.skillMd;
+  }
+  if (!skillMd) {
+    return {
+      stdout: '',
+      stderr: `upskill: browse.sh skill "${slug}" has no SKILL.md content\n`,
+      exitCode: 1,
+    };
+  }
+
+  // Derive install dir name. Prefer `name` parsed from the upstream
+  // frontmatter; fall back to `task` with a trailing `-xxxxxx` suffix
+  // stripped (browse.sh appends a short hash to disambiguate variants).
+  const frontmatterName = extractFrontmatterField(skillMd, 'name');
+  const fallbackName = task.replace(/-[A-Za-z0-9]{4,8}$/, '');
+  const skillName = frontmatterName || fallbackName || task;
+  const dirName = `browse-${hostname}-${skillName}`;
+  const destDir = `${SKILLS_DIR}/${dirName}`;
+
+  try {
+    await fs.stat(destDir);
+    if (!force) {
+      return {
+        stdout: '',
+        stderr: `upskill: skill "${dirName}" already exists (use --force to overwrite)\n`,
+        exitCode: 1,
+      };
+    }
+    await fs.rm(destDir, { recursive: true });
+  } catch {
+    // doesn't exist, continue
+  }
+
+  const preamble = buildBrowseShPreamble(detail, slug);
+  const fileContent = insertBrowseShPreamble(skillMd, preamble);
+
+  await fs.mkdir(destDir, { recursive: true });
+  await fs.writeFile(`${destDir}/SKILL.md`, fileContent);
+
+  await runPostInstallHooks();
+
+  return {
+    stdout: `Installed skill "${dirName}" from browse.sh (${slug})\n`,
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+/**
+ * Search registries for skills, merge and paginate results.
+ *
+ * Structured as a list of registry fetchers so additional backends (e.g.
+ * browse.sh) can plug in alongside Tessl without restructuring the merge,
+ * pagination, or error-handling logic below.
  */
 const SEARCH_PAGE_SIZE = 10;
+
+interface RegistrySource {
+  label: string;
+  fetch: (query: string, fetch: SecureFetch) => Promise<UnifiedSearchResult[]>;
+}
+
+const REGISTRY_SOURCES: RegistrySource[] = [
+  { label: 'Tessl', fetch: fetchTesslResults },
+  { label: 'browse.sh', fetch: fetchBrowseShResults },
+];
 
 async function searchRegistries(
   query: string,
   fetch: SecureFetch,
   page: number = 1
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const [clawHubResult, tesslResult] = await Promise.allSettled([
-    fetchClawHubResults(query, fetch),
-    fetchTesslResults(query, fetch),
-  ]);
+  const settled = await Promise.allSettled(REGISTRY_SOURCES.map((src) => src.fetch(query, fetch)));
 
-  const clawHub = clawHubResult.status === 'fulfilled' ? clawHubResult.value : [];
-  const tessl = tesslResult.status === 'fulfilled' ? tesslResult.value : [];
+  const perSource = settled.map((s) => (s.status === 'fulfilled' ? s.value : []));
+  const allFailed = settled.every((s) => s.status === 'rejected');
+  const merged: UnifiedSearchResult[] = perSource.flat();
 
-  if (clawHub.length === 0 && tessl.length === 0) {
-    let stderr = '';
-    if (clawHubResult.status === 'rejected' && tesslResult.status === 'rejected') {
-      stderr = 'upskill: both registries failed to respond\n';
-    }
+  if (merged.length === 0) {
+    const stderr = allFailed ? 'upskill: registries failed to respond\n' : '';
     return {
-      stdout: `No skills found for "${query}"\n\nTry a different search term or browse https://clawhub.ai or https://tessl.io/registry\n`,
+      stdout: `No skills found for "${query}"\n\nTry a different search term or browse https://tessl.io/registry\n`,
       stderr,
       exitCode: stderr ? 1 : 0,
     };
-  }
-
-  // Merge: lead with up to 3 Tessl results, then interleave
-  const merged: UnifiedSearchResult[] = [];
-  let ti = 0;
-  let ci = 0;
-
-  // Lead with Tessl (scored, higher signal)
-  while (ti < tessl.length && ti < 3) {
-    merged.push(tessl[ti++]);
-  }
-
-  // Interleave remaining
-  while (ci < clawHub.length || ti < tessl.length) {
-    if (ci < clawHub.length) merged.push(clawHub[ci++]);
-    if (ti < tessl.length) merged.push(tessl[ti++]);
   }
 
   const totalResults = merged.length;
@@ -672,205 +933,10 @@ async function searchRegistries(
   }
 
   output += `To install:\n`;
-  if (clawHub.length > 0) output += `  From ClawHub:  upskill clawhub:<slug>\n`;
-  if (tessl.length > 0) output += `  From Tessl:    upskill <owner/repo> --skill <name>\n`;
+  output += `  From Tessl:    upskill <owner/repo> --skill <name>\n`;
+  output += `  From browse.sh: upskill browse:<hostname>/<task>\n`;
 
   return { stdout: output, stderr: '', exitCode: 0 };
-}
-
-/**
- * Install a skill from ClawHub (downloads as ZIP)
- */
-async function installFromClawHub(
-  slug: string,
-  fs: VirtualFS,
-  fetch: SecureFetch,
-  force: boolean = false,
-  registeredCommands?: string[]
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  try {
-    // Check if skill already exists
-    const skillDir = `${SKILLS_DIR}/${slug}`;
-    try {
-      await fs.stat(skillDir);
-      if (!force) {
-        return {
-          stdout: '',
-          stderr: `upskill: skill "${slug}" already exists (use --force to overwrite)\n`,
-          exitCode: 1,
-        };
-      }
-      // Remove existing skill
-      await fs.rm(skillDir, { recursive: true });
-    } catch {
-      // Skill doesn't exist, good to proceed
-    }
-
-    // Download skill ZIP bundle from ClawHub
-    const downloadUrl = `${CLAWHUB_API}/download?slug=${encodeURIComponent(slug)}`;
-    const downloadResponse = await fetch(downloadUrl, {});
-
-    if (downloadResponse.status === 404) {
-      return {
-        stdout: '',
-        stderr: `upskill: skill "${slug}" not found on ClawHub\n`,
-        exitCode: 1,
-      };
-    }
-
-    if (downloadResponse.status !== 200) {
-      return {
-        stdout: '',
-        stderr: `upskill: failed to download skill (HTTP ${downloadResponse.status})\n`,
-        exitCode: 1,
-      };
-    }
-
-    // The response body should be latin1-encoded by the fetch proxy for binary content.
-    // Try to get the raw binary from the cache first (bypasses string encoding issues).
-    const contentType = downloadResponse.headers['content-type'] || '';
-
-    // Try to get cached binary data by URL first (most reliable - bypasses string encoding issues)
-    let zipBytes = consumeCachedBinaryByUrl(downloadUrl);
-    if (!zipBytes) {
-      zipBytes = getFetchBodyBytes(downloadResponse.body);
-    }
-
-    // Unzip the bundle
-    let files: ReturnType<typeof unzipSync>;
-    try {
-      files = unzipSync(zipBytes);
-    } catch (unzipErr) {
-      const msg = unzipErr instanceof Error ? unzipErr.message : String(unzipErr);
-      // Debug info
-      const hexPreview = Array.from(zipBytes.slice(0, 20))
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join(' ');
-      return {
-        stdout: '',
-        stderr: `upskill: failed to unzip: ${msg}\nContent-Type: ${contentType}\nBody: ${zipBytes.length} bytes\nHex: ${hexPreview}\n`,
-        exitCode: 1,
-      };
-    }
-
-    // Create skill directory
-    await fs.mkdir(skillDir, { recursive: true });
-
-    // Extract files
-    let fileCount = 0;
-    for (const [entryPath, content] of Object.entries(files)) {
-      const normalized = entryPath.replace(/\\/g, '/');
-      if (!normalized || normalized.endsWith('/')) continue;
-
-      // Skip _meta.json if present (ClawHub metadata)
-      if (normalized === '_meta.json') continue;
-
-      const filePath = `${skillDir}/${normalized}`;
-      const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
-      if (parentDir !== skillDir) {
-        await fs.mkdir(parentDir, { recursive: true });
-      }
-
-      // Write file content (Uint8Array)
-      await fs.writeFile(filePath, content);
-      fileCount++;
-    }
-
-    // Check for required bins in SKILL.md frontmatter
-    const binsWarning = checkRequiredBins(files, registeredCommands);
-
-    await runPostInstallHooks();
-    return {
-      stdout: `Installed skill "${slug}" from ClawHub (${fileCount} files)\n${binsWarning}`,
-      stderr: '',
-      exitCode: 0,
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return {
-      stdout: '',
-      stderr: `upskill: failed to install from ClawHub: ${msg}\n`,
-      exitCode: 1,
-    };
-  }
-}
-
-/**
- * Parse SKILL.md frontmatter for openclaw/clawdis requires.bins and check availability.
- */
-function checkRequiredBins(
-  files: Record<string, Uint8Array>,
-  registeredCommands?: string[]
-): string {
-  // Find SKILL.md in the extracted files
-  let skillMdContent: string | undefined;
-  for (const [path, content] of Object.entries(files)) {
-    const basename = path.split('/').pop() || '';
-    if (basename.toLowerCase() === 'skill.md') {
-      skillMdContent = new TextDecoder().decode(content);
-      break;
-    }
-  }
-  if (!skillMdContent) return '';
-
-  // Extract frontmatter
-  const fmMatch = skillMdContent.match(/^---\s*\n([\s\S]*?)\n---/);
-  if (!fmMatch) return '';
-
-  // Look for requires.bins in the metadata JSON block
-  const frontmatter = fmMatch[1];
-  const bins = extractRequiredBins(frontmatter);
-  if (bins.length === 0) return '';
-
-  if (!registeredCommands || registeredCommands.length === 0) {
-    return `  Requires: ${bins.join(', ')}\n`;
-  }
-
-  const available = new Set(registeredCommands);
-  const missing = bins.filter((b) => !available.has(b));
-
-  if (missing.length === 0) {
-    return `  Requires: ${bins.join(', ')} (all available)\n`;
-  }
-
-  return `  Requires: ${bins.join(', ')}\n  Missing: ${missing.join(', ')} -- this skill may not work in the SLICC shell\n`;
-}
-
-/**
- * Extract bins array from SKILL.md frontmatter metadata block.
- * Handles both JSON metadata blocks and YAML-ish patterns.
- */
-function extractRequiredBins(frontmatter: string): string[] {
-  // Try to find a JSON metadata block
-  const metaMatch = frontmatter.match(/metadata:\s*\n\s*(\{[\s\S]*\})/);
-  if (metaMatch) {
-    try {
-      const meta = JSON.parse(metaMatch[1]) as Record<string, unknown>;
-      // Check openclaw.requires.bins or clawdis.requires.bins
-      for (const key of ['openclaw', 'clawdis', 'clawdbot']) {
-        const section = meta[key] as Record<string, unknown> | undefined;
-        if (section?.requires && typeof section.requires === 'object') {
-          const req = section.requires as Record<string, unknown>;
-          if (Array.isArray(req.bins)) {
-            return req.bins.filter((b): b is string => typeof b === 'string');
-          }
-        }
-      }
-    } catch {
-      // JSON parse failed, try regex fallback
-    }
-  }
-
-  // Regex fallback: look for "bins": ["python3", ...] anywhere in frontmatter
-  const binsMatch = frontmatter.match(/"bins"\s*:\s*\[([^\]]*)\]/);
-  if (binsMatch) {
-    return binsMatch[1]
-      .split(',')
-      .map((s) => s.trim().replace(/^["']|["']$/g, ''))
-      .filter(Boolean);
-  }
-
-  return [];
 }
 
 /**
@@ -1187,32 +1253,6 @@ async function installFromGitHub(
       exitCode: 1,
     };
   }
-}
-
-/**
- * Parse ClawHub URL or shorthand into a slug.
- * ClawHub URLs are: https://clawhub.ai/{owner}/{slug}
- * But the API only needs the slug (e.g., "tavily-search")
- */
-function parseClawHubRef(ref: string): string | null {
-  // Handle full URL: https://clawhub.ai/user/skill-slug
-  const urlMatch = ref.match(/^https?:\/\/clawhub\.ai\/[^\/]+\/([^\/]+)/);
-  if (urlMatch) {
-    return urlMatch[1]; // Return just the slug, not owner/slug
-  }
-
-  // Handle shorthand: clawhub:slug or clawhub:owner/slug
-  if (ref.startsWith('clawhub:')) {
-    const rest = ref.slice(8);
-    // If it contains a slash, take the second part (the slug)
-    if (rest.includes('/')) {
-      return rest.split('/')[1];
-    }
-    // Otherwise it's just the slug
-    return rest;
-  }
-
-  return null;
 }
 
 /** Run all post-install hooks: refresh sprinkles + reload skills. */
@@ -1693,6 +1733,267 @@ export async function installRecommendedSkills(
   };
 }
 
+// ── upskill tabs ──
+
+/**
+ * Normalize a hostname for catalog matching: lowercases and strips a single
+ * leading `www.`. Exported so Wave 4 (browse.sh skill install dispatch) can
+ * reuse the exact same matching contract this subcommand surfaces to users.
+ */
+export function normalizeHostname(host: string): string {
+  const lower = host.toLowerCase();
+  return lower.startsWith('www.') ? lower.slice(4) : lower;
+}
+
+/** Origin-advertised upskill link surfaced from a tab's Link header. */
+export interface TabUpskillLink {
+  target: string;
+  branch?: string;
+  path?: string;
+  instruction?: string;
+  installHint: string;
+}
+
+/** Browse.sh catalog match for a tab's hostname. */
+export interface TabCatalogMatch {
+  slug: string;
+  hostname: string;
+  task: string;
+  title: string;
+  description?: string;
+  installed: boolean;
+  installHint: string;
+}
+
+/** Per-tab result emitted by `upskill tabs`. */
+export interface TabUpskillResult {
+  targetId: string;
+  title: string;
+  url: string;
+  hostname: string;
+  active?: boolean;
+  origin: TabUpskillLink[];
+  catalog: TabCatalogMatch[];
+  failures: Array<{ rel: string; href: string; error: string }>;
+}
+
+/**
+ * Build the install-hint shell line for an origin-advertised upskill rel.
+ * Mirrors the dispatch contract the cone's handoff SKILL renders, so the
+ * line we print to the terminal is exactly what the user (or the cone, if
+ * they pipe it) should run.
+ */
+function buildOriginInstallHint(target: string, branch?: string, path?: string): string {
+  let cmd = `upskill ${target}`;
+  if (branch) cmd += ` --branch ${branch}`;
+  if (path) cmd += ` --path ${path}`;
+  return cmd;
+}
+
+/**
+ * Fetch a single tab's URL, parse Link headers, and surface every
+ * origin-advertised `upskill` rel. Failures are returned in the result's
+ * `failures` array (matches `discoverLinks`' contract) rather than thrown
+ * so one bad tab doesn't sink the whole listing.
+ */
+async function discoverTabUpskill(
+  url: string,
+  fetchFn: SecureFetch
+): Promise<{ links: TabUpskillLink[]; failures: TabUpskillResult['failures'] }> {
+  const failures: TabUpskillResult['failures'] = [];
+  let response: Awaited<ReturnType<SecureFetch>>;
+  try {
+    response = await fetchFn(url, { method: 'GET' });
+  } catch (err) {
+    failures.push({
+      rel: UPSKILL_REL,
+      href: url,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { links: [], failures };
+  }
+
+  const linkValues: string[] = [];
+  for (const [name, value] of Object.entries(response.headers || {})) {
+    if (name.toLowerCase() === 'link' && typeof value === 'string' && value.length > 0) {
+      linkValues.push(value);
+    }
+  }
+  if (linkValues.length === 0) return { links: [], failures };
+
+  const parsed = parseLinkHeader(linkValues, url);
+  const links: TabUpskillLink[] = [];
+  // Surface every upskill rel on the page (extractHandoff returns only the
+  // first match — for the tabs listing we want each one so users can choose).
+  for (const link of parsed) {
+    if (!link.rel.includes(UPSKILL_REL)) continue;
+    const single = extractHandoff([link]);
+    if (!single || single.verb !== 'upskill') continue;
+    links.push({
+      target: single.target,
+      branch: single.branch,
+      path: single.path,
+      instruction: single.instruction,
+      installHint: buildOriginInstallHint(single.target, single.branch, single.path),
+    });
+  }
+  return { links, failures };
+}
+
+/**
+ * Handle the `upskill tabs` subcommand.
+ */
+async function handleTabs(
+  fs: VirtualFS,
+  fetchFn: SecureFetch,
+  browser: BrowserAPI | undefined,
+  jsonMode: boolean
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  if (!browser) {
+    return {
+      stdout: '',
+      stderr: 'upskill: browser APIs unavailable in this environment\n',
+      exitCode: 1,
+    };
+  }
+
+  let pages: PageInfo[];
+  try {
+    pages = await browser.listPages();
+  } catch {
+    try {
+      pages = await browser.listAllTargets();
+    } catch (err) {
+      return {
+        stdout: '',
+        stderr: `upskill: failed to list browser tabs: ${err instanceof Error ? err.message : String(err)}\n`,
+        exitCode: 1,
+      };
+    }
+  }
+
+  if (pages.length === 0) {
+    if (jsonMode) {
+      return { stdout: JSON.stringify({ tabs: [] }, null, 2) + '\n', stderr: '', exitCode: 0 };
+    }
+    return {
+      stdout: 'No open browser tabs.\n',
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+
+  // Browse.sh catalog fetch — non-fatal. If it fails, we still surface
+  // origin-advertised rels and log a warning to stderr.
+  let catalog: BrowseShSkillSummary[] = [];
+  let catalogWarning = '';
+  try {
+    catalog = await fetchBrowseShCatalog(fetchFn);
+  } catch (err) {
+    catalogWarning = `upskill: warning: browse.sh catalog unavailable: ${err instanceof Error ? err.message : String(err)}\n`;
+  }
+
+  const installed = await getInstalledSkillNames(fs);
+
+  const results: TabUpskillResult[] = [];
+  for (const page of pages) {
+    let host = '';
+    try {
+      host = new URL(page.url).hostname;
+    } catch {
+      // Non-HTTP URLs (chrome://, about:, etc.) — skip discovery/catalog match.
+    }
+    const normalized = host ? normalizeHostname(host) : '';
+
+    let origin: TabUpskillLink[] = [];
+    let failures: TabUpskillResult['failures'] = [];
+    if (host && /^https?:/i.test(page.url)) {
+      const discovered = await discoverTabUpskill(page.url, fetchFn);
+      origin = discovered.links;
+      failures = discovered.failures;
+    }
+
+    const catalogMatches: TabCatalogMatch[] = [];
+    if (normalized && catalog.length > 0) {
+      for (const s of catalog) {
+        if (!s.hostname) continue;
+        if (normalizeHostname(s.hostname) !== normalized) continue;
+        // Mirror `installFromBrowseSh`'s dirname rule: prefer the catalog's
+        // `name` (parsed from upstream frontmatter at publish time) and
+        // only strip the trailing `-xxxxxx` disambiguation hash when we
+        // have to fall back to `task`.
+        const skillName = s.name || s.task.replace(/-[A-Za-z0-9]{4,8}$/, '') || s.task;
+        const dirName = `browse-${s.hostname}-${skillName}`;
+        catalogMatches.push({
+          slug: s.slug,
+          hostname: s.hostname,
+          task: s.task,
+          title: s.title || s.name || s.task,
+          description: s.description,
+          installed: installed.has(dirName),
+          installHint: `upskill browse:${s.hostname}/${s.task}`,
+        });
+      }
+    }
+
+    results.push({
+      targetId: page.targetId,
+      title: page.title,
+      url: page.url,
+      hostname: normalized,
+      active: page.active,
+      origin,
+      catalog: catalogMatches,
+      failures,
+    });
+  }
+
+  if (jsonMode) {
+    return {
+      stdout: JSON.stringify({ tabs: results }, null, 2) + '\n',
+      stderr: catalogWarning,
+      exitCode: 0,
+    };
+  }
+
+  let output = '';
+  for (const tab of results) {
+    const activeMark = tab.active ? ' [active]' : '';
+    output += `${tab.title || '(untitled)'}${activeMark}\n`;
+    output += `  ${tab.url}\n`;
+
+    if (tab.origin.length > 0) {
+      output += `  Origin-advertised:\n`;
+      for (const link of tab.origin) {
+        output += `    ${link.installHint}`;
+        if (link.instruction) output += `   # ${link.instruction}`;
+        output += '\n';
+      }
+    }
+
+    if (tab.catalog.length > 0) {
+      output += `  Browse.sh catalog:\n`;
+      for (const match of tab.catalog) {
+        const marker = match.installed ? '✓' : ' ';
+        output += `    ${marker} ${match.title.padEnd(40)} ${match.installHint}\n`;
+      }
+    }
+
+    if (tab.origin.length === 0 && tab.catalog.length === 0 && !tab.failures.length) {
+      output += `  No skill suggestions for this tab.\n`;
+    }
+
+    if (tab.failures.length > 0) {
+      for (const f of tab.failures) {
+        output += `  (discovery failed: ${f.error})\n`;
+      }
+    }
+    output += '\n';
+  }
+
+  return { stdout: output, stderr: catalogWarning, exitCode: 0 };
+}
+
 /**
  * Handle the `upskill recommendations` subcommand.
  */
@@ -1813,11 +2114,27 @@ async function handleRecommendations(
 
 /**
  * Create the upskill command with access to the virtual filesystem.
+ *
+ * @param browser Optional BrowserAPI used by the `tabs` subcommand. When
+ *   omitted (e.g. headless tests or pre-CDP boot), `upskill tabs` exits
+ *   non-zero with a clear "browser APIs unavailable" message.
  */
-export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Command {
+export function createUpskillCommand(
+  fs: VirtualFS,
+  fetchFn: SecureFetch,
+  browser?: BrowserAPI
+): Command {
   return defineCommand('upskill', async (args, _ctx: CommandContext) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
       return upskillHelp();
+    }
+
+    // `upskill tabs [--json]` — surface skill suggestions for open browser
+    // tabs. Handled up-front so the rest of the arg parser doesn't try to
+    // interpret `tabs` as a GitHub `owner/repo` ref.
+    if (args[0] === 'tabs') {
+      const jsonMode = args.includes('--json');
+      return handleTabs(fs, fetchFn, browser, jsonMode);
     }
 
     // Parse arguments
@@ -1957,13 +2274,6 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
       return upskillHelp();
     }
 
-    // Check if it's a ClawHub reference
-    const clawHubSlug = parseClawHubRef(sourceRef);
-    if (clawHubSlug) {
-      const registeredCommands = _ctx.getRegisteredCommands?.() ?? [];
-      return installFromClawHub(clawHubSlug, fs, fetchFn, force, registeredCommands);
-    }
-
     // Check if it's a Tessl reference (tessl:name)
     if (sourceRef.startsWith('tessl:')) {
       const tesslName = sourceRef.slice(6);
@@ -1985,6 +2295,12 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
         force,
         fetchFn
       );
+    }
+
+    // Check if it's a browse.sh reference (browse:<hostname>/<task> or URL form)
+    const browseShRef = parseBrowseShRef(sourceRef);
+    if (browseShRef) {
+      return installFromBrowseSh(browseShRef.hostname, browseShRef.task, fs, fetchFn, force);
     }
 
     // Check if it's a GitHub reference
@@ -2147,7 +2463,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
     // Unknown source format
     return {
       stdout: '',
-      stderr: `upskill: unrecognized source "${sourceRef}"\n\nExpected: owner/repo, clawhub:<slug>, tessl:<name>, or https://clawhub.ai/user/skill\n`,
+      stderr: `upskill: unrecognized source "${sourceRef}"\n\nExpected: owner/repo, tessl:<name>, or browse:<hostname>/<task>\n`,
       exitCode: 1,
     };
   });
@@ -2169,7 +2485,7 @@ Commands:
 
 ${formatDiscoveryScope()}
 For installing skills from registries or GitHub, use 'upskill':
-  upskill search "query"           Search ClawHub + Tessl
+  upskill search "query"           Search Tessl
   upskill owner/repo --list        List skills in GitHub repo
   upskill owner/repo --all         Install from GitHub
   upskill tessl:<name>             Install from Tessl registry
