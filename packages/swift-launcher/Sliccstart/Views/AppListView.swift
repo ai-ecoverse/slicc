@@ -22,8 +22,7 @@ struct AppListView: View {
                 ForEach(browsers) { target in
                     AppRow(
                         target: target,
-                        isRunning: sliccProcess.isRunning(target),
-                        statusDot: .running,
+                        runtimeState: sliccProcess.runtimeState(for: target),
                         onLaunch: { onLaunchStandalone(target) },
                         onCreateDebugBuild: nil
                     )
@@ -33,26 +32,21 @@ struct AppListView: View {
             if !electronApps.isEmpty {
                 SectionHeader("Desktop Apps")
                 ForEach(electronApps) { target in
-                    let statusDot: AppRowStatusDot = {
-                        if target.debugSupport == .disabled {
-                            return .needsDebugBuild
-                        } else if !appManagementPermission.isGranted {
-                            return .needsPermission
-                        }
-                        return .running
-                    }()
+                    let runtimeState = sliccProcess.runtimeState(
+                        for: target,
+                        hasAppManagementPermission: appManagementPermission.isGranted
+                    )
 
                     AppRow(
                         target: target,
-                        isRunning: sliccProcess.isRunning(target),
-                        statusDot: statusDot,
+                        runtimeState: runtimeState,
                         onLaunch: {
-                            if target.debugSupport == .disabled {
+                            if runtimeState == .cannotStart(.needsDebugBuild) {
                                 onCreateDebugBuild(target)
-                            } else if appManagementPermission.isGranted {
-                                onLaunchElectron(target)
-                            } else {
+                            } else if runtimeState == .cannotStart(.needsPermission) {
                                 appManagementPermission.openSystemSettings()
+                            } else {
+                                onLaunchElectron(target)
                             }
                         },
                         onCreateDebugBuild: target.debugSupport == .disabled ? { onCreateDebugBuild(target) } : nil
@@ -141,15 +135,16 @@ struct SectionHeader: View {
 }
 
 enum AppRowStatusDot {
-    case running
+    case runningWithDebug
+    case runningWithoutDebug
     case needsPermission
     case needsDebugBuild
+    case failed
 }
 
 struct AppRow: View {
     let target: AppTarget
-    let isRunning: Bool
-    let statusDot: AppRowStatusDot
+    let runtimeState: AppRuntimeState
     let onLaunch: () -> Void
     let onCreateDebugBuild: (() -> Void)?
 
@@ -171,21 +166,16 @@ struct AppRow: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(target.name)
                         .font(.system(size: 13))
-                    if target.isDebugBuild {
-                        Text("Debug Build")
+                    if let subtitle {
+                        Text(subtitle)
                             .font(.system(size: 9))
                             .foregroundStyle(.secondary)
                     }
                 }
                 Spacer()
-                if isRunning {
-                    Circle().fill(.green).frame(width: 7, height: 7)
-                } else if statusDot == .needsDebugBuild {
-                    Circle().fill(.red).frame(width: 7, height: 7)
-                        .help("Remote debugging disabled. Click to create a debug build.")
-                } else if statusDot == .needsPermission {
-                    Circle().fill(.yellow).frame(width: 7, height: 7)
-                        .help("App Management permission required. Click to open System Settings.")
+                if let dot = statusDot {
+                    Circle().fill(dot.color).frame(width: 7, height: 7)
+                        .help(dot.help)
                 }
             }
             .padding(.horizontal, 12)
@@ -199,6 +189,71 @@ struct AppRow: View {
             } else {
                 NSCursor.pop()
             }
+        }
+    }
+
+    private var statusDot: AppRowStatusDot? {
+        switch runtimeState {
+        case .notRunning:
+            return nil
+        case .runningWithoutDebug:
+            return .runningWithoutDebug
+        case .runningWithDebug:
+            return .runningWithDebug
+        case .startFailed:
+            return .failed
+        case .cannotStart(.needsDebugBuild):
+            return .needsDebugBuild
+        case .cannotStart(.needsPermission):
+            return .needsPermission
+        }
+    }
+
+    private var subtitle: String? {
+        switch runtimeState {
+        case .notRunning:
+            return target.isDebugBuild ? "Debug Build" : nil
+        case .runningWithoutDebug:
+            return "Running without SLICC"
+        case .runningWithDebug(let cdpPort):
+            if let cdpPort {
+                return "Running with SLICC on \(cdpPort)"
+            }
+            return "Running with SLICC"
+        case .startFailed:
+            return "Start failed"
+        case .cannotStart(.needsDebugBuild):
+            return "Needs Debug Build"
+        case .cannotStart(.needsPermission):
+            return "Needs Permission"
+        }
+    }
+}
+
+private extension AppRowStatusDot {
+    var color: Color {
+        switch self {
+        case .runningWithDebug:
+            return .green
+        case .runningWithoutDebug, .needsPermission:
+            return .yellow
+        case .needsDebugBuild, .failed:
+            return .red
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .runningWithDebug:
+            return "Running with SLICC."
+        case .runningWithoutDebug:
+            return "Running without a known SLICC debug port. Click to restart."
+        case .needsDebugBuild:
+            return "Remote debugging disabled. Click to create a debug build."
+        case .needsPermission:
+            return "App Management permission required. Click to open System Settings."
+        case .failed:
+            return "The last start attempt failed. Click to retry."
         }
     }
 }

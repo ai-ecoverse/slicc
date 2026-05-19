@@ -1,8 +1,60 @@
 import Foundation
 import AppKit
+import Darwin
 import os
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "SliccProcess")
+
+enum AppStartBlocker: Equatable {
+    case needsPermission
+    case needsDebugBuild
+}
+
+enum AppRuntimeState: Equatable {
+    case notRunning
+    case runningWithoutDebug
+    case runningWithDebug(cdpPort: UInt16?)
+    case startFailed(message: String)
+    case cannotStart(AppStartBlocker)
+
+    var isRunning: Bool {
+        switch self {
+        case .runningWithoutDebug, .runningWithDebug:
+            return true
+        case .notRunning, .startFailed, .cannotStart:
+            return false
+        }
+    }
+
+    static func resolve(
+        targetType: AppTargetType,
+        debugSupport: ElectronDebugSupport = .supported,
+        hasAppManagementPermission: Bool = true,
+        debugPort: UInt16? = nil,
+        launchFailure: String? = nil,
+        appIsRunning: Bool = false
+    ) -> AppRuntimeState {
+        if targetType == .electronApp {
+            if !hasAppManagementPermission {
+                return .cannotStart(.needsPermission)
+            }
+            if debugSupport == .disabled {
+                return .cannotStart(.needsDebugBuild)
+            }
+        }
+
+        if debugPort != nil {
+            return .runningWithDebug(cdpPort: debugPort)
+        }
+        if targetType == .electronApp && appIsRunning {
+            return .runningWithoutDebug
+        }
+        if let launchFailure {
+            return .startFailed(message: launchFailure)
+        }
+        return .notRunning
+    }
+}
 
 @Observable
 final class SliccProcess {
@@ -12,11 +64,19 @@ final class SliccProcess {
         let logLabel: String
     }
 
-    /// All running instances keyed by AppTarget.id
-    private var processes: [String: Process] = [:]
-    /// App paths launched via --electron, keyed by AppTarget.id
-    private var launchedAppPaths: [String: String] = [:]
-    private(set) var runningTargets: Set<String> = []
+    private struct LaunchRecord {
+        let process: Process
+        let targetType: AppTargetType
+        let launchedAppPaths: [String]
+        let cdpPort: UInt16
+        let startedAt: Date
+        var observedAppPID: pid_t?
+    }
+
+    /// SLICC helper/server processes keyed by AppTarget.id.
+    private var launchRecords: [String: LaunchRecord] = [:]
+    private var startFailures: [String: String] = [:]
+    private var intentionallyStoppingTargets: Set<String> = []
 
     var resolvedSliccDir: String { sliccDir }
     private var sliccDir: String {
@@ -51,47 +111,98 @@ final class SliccProcess {
     private static let browserCdpPort: UInt16 = 9222
     private static let electronBasePort: UInt16 = 5711
     private static let electronBaseCdpPort: UInt16 = 9223
+    private static let electronLaunchStaleTimeout: TimeInterval = 30
 
     func isRunning(_ target: AppTarget) -> Bool {
-        runningTargets.contains(target.id)
+        runtimeState(for: target).isRunning
+    }
+
+    func runtimeState(
+        for target: AppTarget,
+        hasAppManagementPermission: Bool = true
+    ) -> AppRuntimeState {
+        let debugPort = activeDebugPort(for: target)
+        let appIsRunning = target.type == .electronApp && isElectronAppRunning(target)
+        return AppRuntimeState.resolve(
+            targetType: target.type,
+            debugSupport: target.debugSupport,
+            hasAppManagementPermission: hasAppManagementPermission,
+            debugPort: debugPort,
+            launchFailure: startFailures[target.id],
+            appIsRunning: appIsRunning
+        )
+    }
+
+    func refreshRuntimeStates(for targets: [AppTarget]) {
+        for target in targets {
+            refreshRuntimeState(for: target)
+        }
     }
 
     // MARK: - Browser mode
 
     func launchStandalone(_ browser: AppTarget) throws {
+        refreshRuntimeState(for: browser)
         if isRunning(browser) {
             log.info("launchStandalone: \(browser.name) already running")
             return
         }
+        startFailures.removeValue(forKey: browser.id)
         guard !Self.isPortInUse(Self.browserPort) else { throw LaunchError.portInUse(Self.browserPort) }
         log.info("launchStandalone: \(browser.name, privacy: .public) on port \(Self.browserPort)")
-        try spawn(target: browser, extraArgs: ["--cdp-port=\(Self.browserCdpPort)"], env: [
-            "CHROME_PATH": browser.executablePath,
-            "PORT": "\(Self.browserPort)",
-        ])
+        do {
+            try spawn(
+                target: browser,
+                extraArgs: ["--cdp-port=\(Self.browserCdpPort)"],
+                env: [
+                    "CHROME_PATH": browser.executablePath,
+                    "PORT": "\(Self.browserPort)",
+                ],
+                cdpPort: Self.browserCdpPort
+            )
+        } catch {
+            recordStartFailure(for: browser, message: error.localizedDescription)
+            throw error
+        }
     }
 
     // MARK: - Electron mode (each app gets its own port)
 
-    func launchWithElectronApp(_ app: AppTarget) throws {
+    func launchWithElectronApp(_ app: AppTarget, forceRestartExistingApp: Bool = false) throws {
+        refreshRuntimeState(for: app)
         if isRunning(app) {
-            log.info("launchWithElectronApp: \(app.name) already running")
-            return
+            if case .runningWithDebug = runtimeState(for: app) {
+                log.info("launchWithElectronApp: \(app.name) already running with SLICC")
+                return
+            }
         }
+        if forceRestartExistingApp {
+            terminateElectronApplications(atAppPaths: Self.relatedAppPaths(for: app))
+        }
+        startFailures.removeValue(forKey: app.id)
         let (port, cdpPort) = nextElectronPorts()
         guard !Self.isPortInUse(port) else { throw LaunchError.portInUse(port) }
         log.info("launchWithElectronApp: \(app.name, privacy: .public) on port \(port), cdp \(cdpPort)")
-        launchedAppPaths[app.id] = app.path
-        try spawn(target: app, extraArgs: [
-            "--electron-app=\(app.path)",
-            "--kill",
-            "--cdp-port=\(cdpPort)",
-        ], env: ["PORT": "\(port)"])
+        do {
+            try spawn(
+                target: app,
+                extraArgs: [
+                    "--electron-app=\(app.path)",
+                    "--kill",
+                    "--cdp-port=\(cdpPort)",
+                ],
+                env: ["PORT": "\(port)"],
+                cdpPort: cdpPort
+            )
+        } catch {
+            recordStartFailure(for: app, message: error.localizedDescription)
+            throw error
+        }
     }
 
     /// Find the next available port pair for an Electron app.
     private func nextElectronPorts() -> (port: UInt16, cdpPort: UInt16) {
-        let electronCount = UInt16(processes.count) // offset from base
+        let electronCount = UInt16(launchRecords.count) // offset from base
         for i: UInt16 in 0...20 {
             let port = Self.electronBasePort + electronCount + i
             let cdpPort = Self.electronBaseCdpPort + electronCount + i
@@ -123,31 +234,16 @@ final class SliccProcess {
 
     func stop(_ target: AppTarget) {
         log.info("stop: \(target.name)")
-        processes[target.id]?.terminate()
-        processes.removeValue(forKey: target.id)
-        terminateLaunchedApp(id: target.id)
-        runningTargets.remove(target.id)
+        stopLaunchRecord(id: target.id, terminateApps: true)
+        startFailures.removeValue(forKey: target.id)
     }
 
     func stopAll() {
-        log.info("stopAll: terminating \(self.processes.count) processes")
-        for (_, proc) in processes { proc.terminate() }
-        processes.removeAll()
-        for (id, _) in launchedAppPaths {
-            terminateLaunchedApp(id: id)
+        log.info("stopAll: terminating \(self.launchRecords.count) processes")
+        for id in Array(launchRecords.keys) {
+            stopLaunchRecord(id: id, terminateApps: true)
         }
-        runningTargets.removeAll()
-    }
-
-    /// Terminate a launched Electron/WebView2 app by its bundle path.
-    private func terminateLaunchedApp(id: String) {
-        guard let appPath = launchedAppPaths.removeValue(forKey: id) else { return }
-        let appURL = URL(fileURLWithPath: appPath)
-        let running = NSWorkspace.shared.runningApplications.filter { $0.bundleURL == appURL }
-        for app in running {
-            log.info("terminating app: \(app.localizedName ?? appPath, privacy: .public)")
-            app.terminate()
-        }
+        startFailures.removeAll()
     }
 
     // MARK: - Private
@@ -172,7 +268,12 @@ final class SliccProcess {
         throw LaunchError.serverBinaryNotFound
     }
 
-    private func spawn(target: AppTarget, extraArgs: [String], env: [String: String]) throws {
+    private func spawn(
+        target: AppTarget,
+        extraArgs: [String],
+        env: [String: String],
+        cdpPort: UInt16
+    ) throws {
         let launchConfig = try Self.resolveLaunchConfiguration(sliccDir: sliccDir, extraArgs: extraArgs)
         log.info("spawn: \(launchConfig.executablePath, privacy: .public) \(launchConfig.arguments.joined(separator: " "), privacy: .public)")
         log.info("spawn: cwd = \(self.sliccDir, privacy: .public)")
@@ -210,14 +311,160 @@ final class SliccProcess {
             stdoutPipe.fileHandleForReading.readabilityHandler = nil
             stderrPipe.fileHandleForReading.readabilityHandler = nil
             DispatchQueue.main.async {
-                self?.processes.removeValue(forKey: target.id)
-                self?.runningTargets.remove(target.id)
+                guard let self else { return }
+                let wasIntentional = self.intentionallyStoppingTargets.remove(target.id) != nil
+                let isCurrentRecord = self.launchRecords[target.id]?.process === p
+                if isCurrentRecord {
+                    self.launchRecords.removeValue(forKey: target.id)
+                }
+                if !wasIntentional && p.terminationStatus != 0 && isCurrentRecord {
+                    self.recordStartFailure(
+                        for: target,
+                        message: "SLICC exited with code \(p.terminationStatus)."
+                    )
+                }
             }
         }
         try proc.run()
         log.info("spawn: pid=\(proc.processIdentifier) for \(target.name, privacy: .public)")
-        processes[target.id] = proc
-        runningTargets.insert(target.id)
+        launchRecords[target.id] = LaunchRecord(
+            process: proc,
+            targetType: target.type,
+            launchedAppPaths: target.type == .electronApp ? Self.launchedAppPaths(for: target) : [],
+            cdpPort: cdpPort,
+            startedAt: Date(),
+            observedAppPID: nil
+        )
+    }
+
+    private func refreshRuntimeState(for target: AppTarget) {
+        guard var record = launchRecords[target.id] else { return }
+        guard record.process.isRunning else {
+            launchRecords.removeValue(forKey: target.id)
+            return
+        }
+
+        guard record.targetType == .electronApp else {
+            return
+        }
+
+        let runningApps = runningElectronApplications(for: target)
+        if let app = runningApps.first {
+            record.observedAppPID = app.processIdentifier
+            launchRecords[target.id] = record
+            return
+        }
+
+        guard let observedAppPID = record.observedAppPID else {
+            if Date().timeIntervalSince(record.startedAt) > Self.electronLaunchStaleTimeout,
+               !Self.isPortInUse(record.cdpPort) {
+                log.info("refreshRuntimeState: \(target.name, privacy: .public) has no app pid or CDP listener; stopping stale helper")
+                stopLaunchRecord(id: target.id, terminateApps: false)
+                return
+            }
+            return
+        }
+
+        if !Self.isPIDRunning(observedAppPID) {
+            log.info("refreshRuntimeState: \(target.name, privacy: .public) app pid \(observedAppPID) exited; stopping helper")
+            stopLaunchRecord(id: target.id, terminateApps: false)
+        }
+    }
+
+    private func activeDebugPort(for target: AppTarget) -> UInt16? {
+        guard let record = launchRecords[target.id], record.process.isRunning else {
+            return nil
+        }
+        if record.targetType == .electronApp,
+           !Self.isPortInUse(record.cdpPort) {
+            return nil
+        }
+        if record.targetType == .electronApp,
+           let observedAppPID = record.observedAppPID,
+           !Self.isPIDRunning(observedAppPID),
+           !isElectronAppRunning(target) {
+            return nil
+        }
+        return record.cdpPort
+    }
+
+    private func stopLaunchRecord(id: String, terminateApps: Bool) {
+        guard let record = launchRecords.removeValue(forKey: id) else {
+            intentionallyStoppingTargets.remove(id)
+            return
+        }
+
+        intentionallyStoppingTargets.insert(id)
+        if terminateApps {
+            terminateElectronApplications(atAppPaths: record.launchedAppPaths)
+        }
+        if record.process.isRunning {
+            record.process.terminate()
+        } else {
+            intentionallyStoppingTargets.remove(id)
+        }
+    }
+
+    private func recordStartFailure(for target: AppTarget, message: String) {
+        startFailures[target.id] = message
+    }
+
+    private func isElectronAppRunning(_ target: AppTarget) -> Bool {
+        !runningElectronApplications(for: target).isEmpty
+    }
+
+    private func runningElectronApplications(for target: AppTarget) -> [NSRunningApplication] {
+        Self.runningElectronApplications(atAppPaths: Self.relatedAppPaths(for: target))
+    }
+
+    private func terminateElectronApplications(atAppPaths appPaths: [String]) {
+        for app in Self.runningElectronApplications(atAppPaths: appPaths) {
+            log.info("terminating app: \(app.localizedName ?? app.bundleURL?.path ?? "unknown", privacy: .public)")
+            app.terminate()
+        }
+    }
+
+    static func launchedAppPaths(for target: AppTarget) -> [String] {
+        [target.path]
+    }
+
+    static func relatedAppPaths(for target: AppTarget) -> [String] {
+        var paths = [target.path]
+        if let originalAppPath = target.originalAppPath, originalAppPath != target.path {
+            paths.append(originalAppPath)
+        }
+        return paths
+    }
+
+    private static func runningElectronApplications(atAppPaths appPaths: [String]) -> [NSRunningApplication] {
+        let appURLs = Set(appPaths.map { standardizedFileURL(path: $0) })
+        return NSWorkspace.shared.runningApplications.filter { app in
+            guard !app.isTerminated else { return false }
+            if let bundleURL = app.bundleURL.map({ standardizedFileURL(path: $0.path) }),
+               appURLs.contains(bundleURL) {
+                return true
+            }
+            if let executableURL = app.executableURL?.standardizedFileURL.resolvingSymlinksInPath() {
+                return appURLs.contains { appURL in
+                    executableURL.path.hasPrefix(appURL.appendingPathComponent("Contents/MacOS").path)
+                }
+            }
+            return false
+        }
+    }
+
+    private static func standardizedFileURL(path: String) -> URL {
+        URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+    }
+
+    private static func isPIDRunning(_ pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
+        if kill(pid, 0) == 0 {
+            return true
+        }
+        return errno == EPERM
     }
 
     private static func isPortInUse(_ port: UInt16) -> Bool {

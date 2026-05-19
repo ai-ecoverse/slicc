@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import os
 import AppUpdater
 
@@ -27,9 +28,12 @@ struct SliccstartApp: App {
     @State private var showAlert = false
     @State private var showDebugBuildDialog = false
     @State private var debugBuildTarget: AppTarget?
+    @State private var showElectronRestartDialog = false
+    @State private var electronRestartTarget: AppTarget?
     @State private var isCreatingDebugBuild = false
     @State private var debugBuildProgress: String = ""
     @StateObject private var appUpdater = AppUpdater(owner: "ai-ecoverse", repo: "slicc", releasePrefix: "Sliccstart", provider: TolerantGithubReleaseProvider())
+    private let runtimeRefreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
@@ -72,12 +76,7 @@ struct SliccstartApp: App {
                         },
                         onLaunchElectron: { target in
                             log.info("onLaunchElectron: \(target.name, privacy: .public)")
-                            do {
-                                try sliccProcess.launchWithElectronApp(target)
-                            } catch {
-                                log.error("onLaunchElectron failed: \(error.localizedDescription, privacy: .public)")
-                                showError(error.localizedDescription)
-                            }
+                            handleElectronLaunch(target)
                         },
                         onCreateDebugBuild: { target in
                             debugBuildTarget = target
@@ -104,6 +103,10 @@ struct SliccstartApp: App {
             .task { await initialize() }
             .onAppear { appManagementPermission.startWatchingForGrant() }
             .onDisappear { appManagementPermission.stopWatchingForGrant() }
+            .onReceive(runtimeRefreshTimer) { _ in
+                guard isReady else { return }
+                sliccProcess.refreshRuntimeStates(for: targets)
+            }
             .onChange(of: appManagementPermission.isGranted) {
                 // Re-scan when permission is granted so Electron apps appear
                 if isReady {
@@ -129,6 +132,21 @@ struct SliccstartApp: App {
             } message: {
                 if let target = debugBuildTarget {
                     Text("\(target.name) has remote debugging disabled.\n\nCreate a debug build in ~/Applications that enables SLICC to connect?\n\nThis will:\n• Copy the app to ~/Applications/\(target.name) Debug.app\n• Patch Electron fuses\n• Bypass CDP auth checks\n• Ad-hoc sign the result")
+                }
+            }
+            .alert("Restart App for SLICC?", isPresented: $showElectronRestartDialog) {
+                Button("Cancel", role: .cancel) {
+                    electronRestartTarget = nil
+                }
+                Button("Restart") {
+                    if let target = electronRestartTarget {
+                        launchElectron(target, forceRestartExistingApp: true)
+                    }
+                    electronRestartTarget = nil
+                }
+            } message: {
+                if let target = electronRestartTarget {
+                    Text("\(target.name) is already running without a known SLICC debug port.\n\nSliccstart can quit and reopen it with remote debugging enabled.")
                 }
             }
         }
@@ -208,6 +226,41 @@ struct SliccstartApp: App {
 
         isCreatingDebugBuild = false
         debugBuildTarget = nil
+    }
+
+    private func handleElectronLaunch(_ target: AppTarget) {
+        sliccProcess.refreshRuntimeStates(for: [target])
+        let state = sliccProcess.runtimeState(
+            for: target,
+            hasAppManagementPermission: appManagementPermission.isGranted
+        )
+
+        switch state {
+        case .runningWithDebug:
+            return
+        case .runningWithoutDebug:
+            electronRestartTarget = target
+            showElectronRestartDialog = true
+        case .cannotStart(.needsDebugBuild):
+            debugBuildTarget = target
+            showDebugBuildDialog = true
+        case .cannotStart(.needsPermission):
+            appManagementPermission.openSystemSettings()
+        case .notRunning, .startFailed:
+            launchElectron(target)
+        }
+    }
+
+    private func launchElectron(_ target: AppTarget, forceRestartExistingApp: Bool = false) {
+        do {
+            try sliccProcess.launchWithElectronApp(
+                target,
+                forceRestartExistingApp: forceRestartExistingApp
+            )
+        } catch {
+            log.error("onLaunchElectron failed: \(error.localizedDescription, privacy: .public)")
+            showError(error.localizedDescription)
+        }
     }
 
     private func showError(_ message: String) {
