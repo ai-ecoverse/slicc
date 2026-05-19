@@ -413,6 +413,146 @@ describe('LeaderSyncManager', () => {
     manager.broadcastUserMessage('lonely message', 'msg-99');
   });
 
+  it('broadcastUserMessage forwards inline attachments unchanged', () => {
+    // Attachments without a `path` (inline `data`/`text`) carry no
+    // leader-local state — they must arrive verbatim on every follower
+    // channel so images/text remain visible after the wire trip.
+    const { manager } = createManager();
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    const inlineAtt = {
+      id: 'a1',
+      name: 'inline.png',
+      mimeType: 'image/png',
+      size: 3,
+      kind: 'image' as const,
+      data: 'AAA',
+    };
+    manager.broadcastUserMessage('look here', 'msg-att-1', [inlineAtt]);
+
+    const sent = ch.parseSent();
+    // snapshot + user_message_echo
+    expect(sent).toHaveLength(2);
+    const echo = sent[1];
+    if (echo.type !== 'user_message_echo') throw new Error('expected user_message_echo');
+    expect(echo.attachments).toEqual([inlineAtt]);
+  });
+
+  it('broadcastUserMessage strips leader-local VFS paths before sending', () => {
+    // CR-1: without this scrub, the standalone-leader chat hook
+    // (`ui/main.ts:mainStandaloneWorker` `setOnLocalUserMessage` →
+    // `broadcastUserMessage`) would ship `/workspace/foo.png` over the
+    // WebRTC wire to every follower — meaningless on the receiver.
+    // Inline content still arrives; path-only attachments demote to
+    // `not-included` placeholders.
+    const { manager } = createManager();
+    const ch = new FakeChannel();
+    manager.addFollower('b1', ch);
+
+    manager.broadcastUserMessage('see this', 'msg-att-2', [
+      // Mixed: an image with inline data + a path; the path should be
+      // dropped but the data should survive.
+      {
+        id: 'a2',
+        name: 'foo.png',
+        mimeType: 'image/png',
+        size: 3,
+        kind: 'image',
+        data: 'AAA',
+        path: '/workspace/foo.png',
+      },
+      // Path-only attachment — no inline `data`/`text` — should
+      // demote to `not-included` with an explanatory `error`.
+      {
+        id: 'a3',
+        name: 'no-data.png',
+        mimeType: 'image/png',
+        size: 0,
+        kind: 'image',
+        path: '/workspace/no-data.png',
+      },
+    ]);
+
+    const sent = ch.parseSent();
+    const echo = sent[1];
+    if (echo.type !== 'user_message_echo') throw new Error('expected user_message_echo');
+    expect(echo.attachments).toBeDefined();
+    expect(echo.attachments).toHaveLength(2);
+    // First: inline data survives, `path` dropped.
+    expect(echo.attachments![0]).not.toHaveProperty('path');
+    expect((echo.attachments![0] as { data?: string }).data).toBe('AAA');
+    // Second: path-only demoted with `error` reason.
+    expect(echo.attachments![1]).not.toHaveProperty('path');
+    expect((echo.attachments![1] as { error?: string }).error).toMatch(/remote runtime/i);
+  });
+
+  it('multi-follower re-broadcast: a follower-originated message reaches sibling followers and dedupes on the sender', () => {
+    // F-3: this is the load-bearing behavior of the
+    // `ui/main.ts:onFollowerMessage` re-broadcast — without it,
+    // sibling followers stay invisible to each other. The actual
+    // re-broadcast wiring lives in main.ts (out of unit-test reach),
+    // but the LeaderSyncManager surfaces that must hold up under it
+    // are: (a) `broadcastUserMessage` forwarding the message to every
+    // follower channel, and (b) the originating follower's
+    // `sentMessageIds` dedup catching the echo when it comes back.
+    // We simulate the main.ts wiring inline here.
+    const onFollowerMessageMock =
+      vi.fn<(text: string, messageId: string, attachments?: unknown) => void>();
+    const { manager } = createManager({
+      onFollowerMessage: (text, messageId, attachments) => {
+        onFollowerMessageMock(text, messageId, attachments);
+        // Mirror the `main.ts:2428` wiring: re-broadcast to OTHER
+        // followers so siblings see this peer's message.
+        manager.broadcastUserMessage(text, messageId, attachments as never);
+      },
+    });
+    const sender = new FakeChannel();
+    const sibling = new FakeChannel();
+    manager.addFollower('sender', sender);
+    manager.addFollower('sibling', sibling);
+
+    // Discard the initial snapshots from both channels so the slice
+    // below reflects only the re-broadcast.
+    sender.sent.length = 0;
+    sibling.sent.length = 0;
+
+    sender.simulateMessage({
+      type: 'user_message',
+      text: 'hi from peer',
+      messageId: 'peer-msg-1',
+    });
+
+    // The leader callback got the follower's message exactly once.
+    expect(onFollowerMessageMock).toHaveBeenCalledTimes(1);
+    expect(onFollowerMessageMock).toHaveBeenCalledWith('hi from peer', 'peer-msg-1', undefined);
+
+    // Both channels received the re-broadcast `user_message_echo`.
+    // The sender's `FollowerSyncManager.sentMessageIds` is what drops
+    // the echo on the sender — that lives in the follower-sync tests
+    // (`tray-follower-sync.test.ts: only deduplicates each message ID
+    // once`). Here we verify only the leader-side: the message went
+    // out on every channel, exactly once.
+    const senderEchoes = sender
+      .parseSent()
+      .filter(
+        (m): m is LeaderToFollowerMessage & { type: 'user_message_echo' } =>
+          m.type === 'user_message_echo'
+      );
+    const siblingEchoes = sibling
+      .parseSent()
+      .filter(
+        (m): m is LeaderToFollowerMessage & { type: 'user_message_echo' } =>
+          m.type === 'user_message_echo'
+      );
+    expect(senderEchoes).toHaveLength(1);
+    expect(siblingEchoes).toHaveLength(1);
+    expect(senderEchoes[0].messageId).toBe('peer-msg-1');
+    expect(siblingEchoes[0].messageId).toBe('peer-msg-1');
+    expect(senderEchoes[0].text).toBe('hi from peer');
+    expect(siblingEchoes[0].text).toBe('hi from peer');
+  });
+
   describe('target registry', () => {
     it('receives targets.advertise from follower and broadcasts targets.registry', () => {
       const { manager } = createManager();

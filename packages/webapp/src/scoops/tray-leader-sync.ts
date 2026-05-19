@@ -255,16 +255,27 @@ export class LeaderSyncManager {
   /**
    * Broadcast a user message to all connected followers.
    * Called when any user message enters the leader (local or from a follower).
+   *
+   * Attachments are scrubbed of leader-local VFS paths via
+   * `stripLocalPathsForRemote` before going on the wire. The follower-
+   * originated path already scrubs in `handleFollowerMessage` (defense
+   * in depth — that scrub stays), so the second pass here is idempotent.
+   * The leader-originated path (the panel chat `setOnLocalUserMessage`
+   * hook) was the gap: leader paths like `/workspace/foo.png` would have
+   * shipped raw to every follower, where they're meaningless.
    */
   broadcastUserMessage(text: string, messageId: string, attachments?: MessageAttachment[]): void {
     if (this.followers.size === 0) return;
     const scoopJid = this.options.getScoopJid();
+    const safeAttachments = attachments?.length
+      ? stripLocalPathsForRemote(attachments)
+      : attachments;
     const message: LeaderToFollowerMessage = {
       type: 'user_message_echo',
       text,
       messageId,
       scoopJid,
-      attachments,
+      attachments: safeAttachments,
     };
     for (const follower of this.followers.values()) {
       follower.sync.send(message);
