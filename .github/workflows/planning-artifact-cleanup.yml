@@ -78,11 +78,25 @@ jobs:
         # mergeable (CI green) and then explicitly enqueue via the
         # `enqueuePullRequest` GraphQL mutation, which is what the
         # "Merge when ready" button calls.
+        #
+        # NOTE: `gh pr view --json isInMergeQueue` is not supported by the
+        # gh CLI shipped on ubuntu-latest runners — the field is missing
+        # from its known set and the command exits non-zero. Query the
+        # GraphQL API directly instead so this step does not regress with
+        # CLI version drift.
         run: |
           set -euo pipefail
           PR_ID=$(gh pr view "$PR_URL" --json id --jq '.id')
 
-          already_queued=$(gh pr view "$PR_URL" --json isInMergeQueue --jq '.isInMergeQueue')
+          pr_state() {
+            gh api graphql \
+              -f query='query($id:ID!){ node(id:$id){ ... on PullRequest { mergeable mergeStateStatus isInMergeQueue } } }' \
+              -F id="$PR_ID" \
+              --jq '"\(.data.node.mergeable)|\(.data.node.mergeStateStatus)|\(.data.node.isInMergeQueue)"'
+          }
+
+          initial=$(pr_state)
+          already_queued=${initial##*|}
           if [ "$already_queued" = "true" ]; then
             echo "PR already in merge queue; nothing to do."
             exit 0
@@ -91,9 +105,7 @@ jobs:
           attempts=60
           sleep_seconds=30
           for i in $(seq 1 "$attempts"); do
-            state=$(gh pr view "$PR_URL" \
-              --json mergeable,mergeStateStatus,isInMergeQueue \
-              --jq '"\(.mergeable)|\(.mergeStateStatus)|\(.isInMergeQueue)"')
+            state=$(pr_state)
             mergeable=${state%%|*}
             rest=${state#*|}
             merge_state=${rest%%|*}
