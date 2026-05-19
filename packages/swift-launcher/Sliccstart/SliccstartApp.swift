@@ -107,6 +107,10 @@ struct SliccstartApp: App {
                 guard isReady else { return }
                 sliccProcess.refreshRuntimeStates(for: targets)
             }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                guard isReady else { return }
+                sliccProcess.refreshRuntimeStates(for: targets)
+            }
             .onChange(of: appManagementPermission.isGranted) {
                 // Re-scan when permission is granted so Electron apps appear
                 if isReady {
