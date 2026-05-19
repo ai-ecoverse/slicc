@@ -1644,6 +1644,124 @@ describe('FollowerSyncManager', () => {
       expect(result.err.message).toMatch(/closed|disconnect/i);
     });
 
+    it('manual close() is idempotent and does not trigger handleDisconnect side effects (status flip, onDisconnect)', () => {
+      // B-1: prior to gating `close()` with the same `disconnected`
+      // flag `handleDisconnect` uses, a channel-close event after a
+      // manual close would re-run handleDisconnect — flipping global
+      // follower status to `error`, emitting an `error` event, and
+      // firing the `onDisconnect` callback that drives reconnect
+      // logic. Verify the gate.
+      const channel = new FakeChannel();
+      const onDisconnect = vi.fn();
+      const onDeadFn = vi.fn();
+      const follower = new FollowerSyncManager(channel, {
+        onDisconnect,
+        onDead: onDeadFn,
+      });
+
+      follower.close();
+      // Simulate the underlying RTCDataChannel firing its `close` event
+      // shortly after our explicit teardown — the gate should swallow
+      // the re-entry into handleDisconnect.
+      channel.simulateClose();
+
+      expect(onDisconnect).not.toHaveBeenCalled();
+
+      // A second manual close is also a no-op.
+      expect(() => follower.close()).not.toThrow();
+    });
+
+    it('FollowerSyncManager throws when constructed with a negative or non-finite sprinkleFetchTimeoutMs', () => {
+      // F-validate-timeout: `0` is the explicit "disabled" sentinel,
+      // but anything else (NaN, Infinity, negative) used to silently
+      // disable via the `timeoutMs > 0` runtime guard. Validate at
+      // construction so the contract is honest.
+      const channel = new FakeChannel();
+      expect(() => new FollowerSyncManager(channel, { sprinkleFetchTimeoutMs: -1 })).toThrow(
+        RangeError
+      );
+      expect(
+        () => new FollowerSyncManager(channel, { sprinkleFetchTimeoutMs: Number.NaN })
+      ).toThrow(RangeError);
+      expect(
+        () => new FollowerSyncManager(channel, { sprinkleFetchTimeoutMs: Number.POSITIVE_INFINITY })
+      ).toThrow(RangeError);
+      // `0` is the explicit disable sentinel — accepted.
+      expect(() => new FollowerSyncManager(channel, { sprinkleFetchTimeoutMs: 0 })).not.toThrow();
+      // Positive values pass.
+      expect(
+        () => new FollowerSyncManager(channel, { sprinkleFetchTimeoutMs: 1000 })
+      ).not.toThrow();
+    });
+
+    it('sprinkleFetchTimeoutMs: 0 disables the timer (fetchSprinkleContent never rejects on time)', async () => {
+      vi.useFakeTimers();
+      try {
+        const channel = new FakeChannel();
+        const follower = new FollowerSyncManager(channel, { sprinkleFetchTimeoutMs: 0 });
+        let state: 'pending' | 'resolved' | 'rejected' = 'pending';
+        let value: string | undefined;
+        let error: Error | undefined;
+        const pending = follower.fetchSprinkleContent('forever').then(
+          (c) => {
+            state = 'resolved';
+            value = c;
+          },
+          (err: Error) => {
+            state = 'rejected';
+            error = err;
+          }
+        );
+
+        // Advance by 25 s — past the default 15 s sprinkle timeout but
+        // safely under the 30 s keepalive-dead threshold (10 s interval
+        // × 3 missed pongs). The promise must still be pending.
+        await vi.advanceTimersByTimeAsync(25_000);
+        expect(state).toBe('pending');
+
+        // Resolve via leader reply so the test exits cleanly.
+        const sent = channel.parseSent();
+        const fetchMsg = sent.find((m) => m.type === 'sprinkle.fetch');
+        if (!fetchMsg || fetchMsg.type !== 'sprinkle.fetch') {
+          throw new Error('expected sprinkle.fetch');
+        }
+        channel.simulateLeaderMessage({
+          type: 'sprinkle.content',
+          requestId: fetchMsg.requestId,
+          sprinkleName: 'forever',
+          content: '<p>resolved</p>',
+        });
+        await pending;
+        // Make the failure mode explicit if the timeout did fire after all.
+        expect({ state, error: error?.message }).toEqual({ state: 'resolved', error: undefined });
+        expect(value).toBe('<p>resolved</p>');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('close rejects in-flight RemoteCDPTransport.send() calls (federated CDP cleanup)', async () => {
+      // The F-1 cleanup docstring claims `transport.disconnect()` is
+      // walked on close. Verify the wiring end-to-end: a CDP request
+      // through a transport created via `createRemoteTransport` must
+      // reject when the FollowerSyncManager closes, with no pending
+      // resolver left dangling.
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+      const transport = follower.createRemoteTransport('follower-1', 'tab-1');
+      const pending = transport
+        .send('Page.navigate', { url: 'https://example.test' })
+        .then((r) => ({ ok: true as const, r }))
+        .catch((err: Error) => ({ ok: false as const, err }));
+      follower.close();
+      const result = await pending;
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('unreachable');
+      expect(result.err.message).toMatch(/transport disconnected/i);
+      // State assertion: the transport itself reports disconnected.
+      expect(transport.state).toBe('disconnected');
+    });
+
     it('handleDisconnect rejects pending sendFsRequest callers symmetrically', async () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);

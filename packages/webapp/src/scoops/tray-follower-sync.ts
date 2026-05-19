@@ -70,11 +70,21 @@ export interface FollowerSyncManagerOptions {
    * Bound on every `fetchSprinkleContent` call. If the leader never
    * answers a `sprinkle.fetch` (deadlocked agent, partial chunked
    * transfer abandoned, leader still connected but stuck), the
-   * standalone follower would otherwise hang the controller's `opening`
-   * lock forever. The extension panel proxy bounds the same call
-   * separately at its own layer; this option covers the standalone
-   * flow that has no intermediary. Defaults to 15 s — matches
+   * standalone follower would otherwise hang the controller's
+   * `opening` lock forever. Defaults to 15 s — matches
    * `DEFAULT_FETCH_TIMEOUT_MS` in `follower-sprinkle-bridge.ts`.
+   *
+   * In extension mode, the panel-side `PanelFollowerSprinkleProxy`
+   * also bounds the same call at its own layer (panel → offscreen
+   * round-trip), so BOTH timers fire when the offscreen
+   * `FollowerSyncManager` uses the default. That's intentional
+   * defense-in-depth: whichever fires first cancels via
+   * `cancelSprinkleFetch` (offscreen) or sends
+   * `follower-sprinkle-fetch-cancel` (panel) and the other becomes a
+   * no-op. Pass `0` to disable this timer entirely (the panel proxy
+   * is still active in extension mode), or any positive value to
+   * override the default; non-positive / non-finite inputs throw at
+   * construction.
    */
   sprinkleFetchTimeoutMs?: number;
 }
@@ -140,10 +150,18 @@ export class FollowerSyncManager implements AgentHandle {
   private readonly pendingSprinkleFetches = new Map<string, SprinkleFetchBuffer>();
   /** Map of sprinkleName → requestId for the in-flight fetch (used to dedupe concurrent calls). */
   private readonly inflightSprinkleByName = new Map<string, string>();
-  /** Waiters awaiting a sprinkle.content reply, keyed by sprinkleName. */
+  /** Waiters awaiting a sprinkle.content reply, keyed by sprinkleName.
+   *  Each waiter carries a fresh `symbol` id so the timeout path can
+   *  identify exactly one entry to splice out without relying on
+   *  reference equality on a closure (which a future refactor that
+   *  wraps `resolve`/`reject` once more would silently break). */
   private readonly sprinkleContentWaiters = new Map<
     string,
-    Array<{ resolve: (content: string) => void; reject: (err: Error) => void }>
+    Array<{
+      readonly id: symbol;
+      resolve: (content: string) => void;
+      reject: (err: Error) => void;
+    }>
   >();
   /**
    * Monotonic counter incremented on every `sprinkles.list` arrival.
@@ -160,6 +178,18 @@ export class FollowerSyncManager implements AgentHandle {
     channel: TrayDataChannelLike,
     private readonly options: FollowerSyncManagerOptions = {}
   ) {
+    // Validate the fetch timeout at construction. Without this, a
+    // negative / NaN / Infinity value collapses onto the same code
+    // path as `0` (disabled) because the runtime guard is
+    // `timeoutMs > 0`. Callers expect non-positive to mean either
+    // "use the default" or "disabled"; we treat exactly `0` as the
+    // explicit disable sentinel and reject everything else.
+    const t = options.sprinkleFetchTimeoutMs;
+    if (t !== undefined && (!Number.isFinite(t) || t < 0)) {
+      throw new RangeError(
+        `sprinkleFetchTimeoutMs must be a non-negative finite number (0 disables the timer); got ${t}`
+      );
+    }
     this.sync = createFollowerSyncChannel(channel);
     this.unsubscribe = this.sync.onMessage((message: LeaderToFollowerMessage) => {
       this.handleLeaderMessage(message);
@@ -230,8 +260,18 @@ export class FollowerSyncManager implements AgentHandle {
     return this.latestSnapshot;
   }
 
-  /** Close the sync channel and clean up. */
+  /**
+   * Close the sync channel and clean up. Idempotent — once called, the
+   * channel-close event that follows will short-circuit in
+   * `handleDisconnect`, so a caller-initiated teardown can't trigger
+   * the error-state side effects (red-error follower status, `error`
+   * event emission, `onDisconnect` callback that drives reconnect
+   * logic) that `handleDisconnect` is designed to fire only on an
+   * unexpected channel drop.
+   */
   close(): void {
+    if (this.disconnected) return;
+    this.disconnected = true;
     this.keepalive.stop();
     this.unsubscribe();
     this.sync.close();
@@ -254,9 +294,10 @@ export class FollowerSyncManager implements AgentHandle {
    * because a fresh `FollowerSyncManager` is constructed on reconnect
    * and the original resolvers never resolve.
    *
-   * `RemoteCDPTransport.disconnect()` rejects its own pending CDP
-   * promises and clears them, so we don't need to walk into each
-   * transport's internals.
+   * `RemoteCDPTransport.disconnect()` rejects its own pending
+   * request/response promises and clears them, so we don't need to
+   * walk into each transport's internals. (Per-event `once()` waiters
+   * fall back to their individual timeouts; they're not drained here.)
    */
   private rejectPendingRequests(reason: string): void {
     this.rejectPendingSprinkleFetches(reason);
@@ -313,6 +354,7 @@ export class FollowerSyncManager implements AgentHandle {
       // waiter rejects; siblings that joined the same in-flight request
       // keep waiting (or get cancelled together when the LAST waiter
       // gives up, since `cancelSprinkleFetch` drains them all).
+      const waiterId = Symbol('sprinkle-waiter');
       let timer: ReturnType<typeof setTimeout> | undefined;
       const wrapResolve = (content: string) => {
         if (timer !== undefined) clearTimeout(timer);
@@ -324,17 +366,20 @@ export class FollowerSyncManager implements AgentHandle {
       };
 
       const waiters = this.sprinkleContentWaiters.get(sprinkleName) ?? [];
-      waiters.push({ resolve: wrapResolve, reject: wrapReject });
+      waiters.push({ id: waiterId, resolve: wrapResolve, reject: wrapReject });
       this.sprinkleContentWaiters.set(sprinkleName, waiters);
 
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
           // Drop just this caller's waiter; the in-flight fetch lives
           // on for the others. If we were the last waiter, cancel the
-          // whole fetch so the three lockstep maps don't leak.
+          // whole fetch so the three lockstep maps don't leak. The
+          // symbol id (not the closure reference) is what identifies
+          // us — a future refactor that wraps `wrapResolve` once more
+          // would otherwise silently miss the match.
           const list = this.sprinkleContentWaiters.get(sprinkleName);
           if (list) {
-            const idx = list.findIndex((w) => w.resolve === wrapResolve);
+            const idx = list.findIndex((w) => w.id === waiterId);
             if (idx >= 0) list.splice(idx, 1);
             if (list.length === 0) {
               this.sprinkleContentWaiters.delete(sprinkleName);
