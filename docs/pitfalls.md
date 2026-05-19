@@ -774,18 +774,31 @@ without going through the agent loop or the compaction transformer
 will silently bypass it — and the resulting events can't be re-grouped
 after the fact.
 
-**The Two Enforcement Points**
+**The Enforcement Points**
 
 | Code path                                     | Wiring                                           | Where                                                               |
 | --------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------- |
 | Agent loop (cone, scoops, tool turns)         | `streamFn` wrapper passed to `Agent` constructor | `packages/webapp/src/scoops/scoop-context.ts` `streamWithSessionId` |
 | Compaction summaries (Pi packed-conversation) | `headers` config on `createCompactContext`       | `packages/webapp/src/scoops/scoop-context.ts` `compactionHeaders`   |
+| Ad-hoc UI quick-LLM calls                     | Inline `getQuickLlmAdobeSessionId()` header set  | `packages/webapp/src/ui/quick-llm.ts`                               |
+| Session freezer (new-session flow)            | Inline `getDailyAdobeUuid(...)` header set       | `packages/webapp/src/ui/new-session.ts`                             |
+| Provider-level fallback (defense-in-depth)    | `ensureSessionIdHeader` in Adobe stream funcs    | `packages/webapp/providers/adobe.ts`                                |
 
-Both paths attach the same identifier from `getAdobeSessionId(scoop,
-coneJid)` in `packages/webapp/src/scoops/llm-session-id.ts` (a
-daily-rotating UUID for the cone, `<uuid>/<hash(folder, uuid)>` for
-scoops), gated on `model.provider === 'adobe'`. Other providers
-receive no header.
+The first four paths attach a meaningful identifier from
+`getAdobeSessionId(scoop, coneJid)` in
+`packages/webapp/src/scoops/llm-session-id.ts` (a daily-rotating UUID
+for the cone, `<uuid>/<hash(folder, uuid)>` for scoops) or a
+purpose-anchored variant. Other providers receive no header.
+
+The last row is the defense-in-depth net: `streamAdobe` and
+`streamSimpleAdobe` both run `ensureSessionIdHeader` before forwarding
+to pi-ai, so any future call site that forgets to attach a header
+still gets a daily-rotated fallback UUID anchored on the sentinel
+`'adobe-provider-fallback'`. The fallback collides across all unwrapped
+paths within a browser-day — that is intentional. It tells the proxy
+"the dev forgot the wrapper" rather than legitimizing the call.
+`ensureSessionIdHeader` also emits a deduped `console.warn` per call
+site identifier so the missing wrapper surfaces in development.
 
 **Adding a New LLM Call Site**
 
@@ -796,7 +809,10 @@ attach `X-Session-Id` for the Adobe provider. The cleanest pattern is
 to take a `headers: Record<string, string>` parameter and let the
 caller inject it the same way `createCompactContext` does. Don't
 replicate the Adobe-provider check at every site — push it up to
-whoever owns the call.
+whoever owns the call. If you skip the wiring, the provider-level
+fallback prevents the proxy from falling back to content hashing, but
+your call site will land in a generic "unwrapped" bucket rather than
+the cone's session.
 
 **The pi-coding-agent Stub Tripwire**
 
@@ -841,11 +857,13 @@ that touched LLM call paths, a new code path is bypassing the wiring.
 **Related**
 
 - Bug fix: PR #600 attached `X-Session-Id` to compaction; PR #378
-  attached it to the agent loop.
+  attached it to the agent loop. Provider-level fallback added after
+  the 2026-05-19 cron/standalone-Pi-chat residual report.
 - Tripwire: PR #600 added the positional contract.
 - Coverage: `tests/scoops/scoop-context.session-id.test.ts` asserts
   both wiring points use the same identifier; gates against future
-  reverts.
+  reverts. `tests/providers/adobe-provider.test.ts` covers the
+  provider-level `ensureSessionIdHeader` fallback behavior.
 
 ## Detached popout: boot is the lock event
 

@@ -43,6 +43,7 @@ import {
   getBaseUrlForProvider,
 } from '../src/ui/provider-settings.js';
 import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
+import { getDailyAdobeUuid } from '../src/scoops/llm-session-id.js';
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -626,6 +627,63 @@ function withSliccVersionHeader<T extends { headers?: Record<string, string> }>(
   return { ...options, headers: merged };
 }
 
+// ── X-Session-Id defense-in-depth ───────────────────────────────────
+
+/**
+ * Sentinel anchor for the daily-rotated UUID used when a caller didn't
+ * attach `X-Session-Id`. Shared with the other purpose-anchored
+ * fallbacks (`'ui-quick-llm'`, `'ui-new-session'`) — same shape, same
+ * rotation cadence, no per-user info encoded.
+ */
+const ADOBE_PROVIDER_FALLBACK_ANCHOR = 'adobe-provider-fallback';
+
+/** Dedup developer warnings per call site so hot paths don't spam the console. */
+const warnedCallSites = new Set<string>();
+
+/**
+ * Defense-in-depth: every Adobe-bound LLM call MUST carry `X-Session-Id`.
+ * The intended wiring attaches an anchor-specific id at the call site —
+ * `scoop-context.ts` for cone/scoop traffic, `quick-llm.ts` for ad-hoc UI
+ * labels, `new-session.ts` for the freezer, etc. If a new call site
+ * slips through without one, fall back to a daily-rotated sentinel UUID
+ * so the proxy can still group requests, rather than letting it hash
+ * the content into an opaque hex id. The fallback intentionally collides
+ * across all unwrapped paths within a browser-day — the value is "the
+ * dev forgot the wrapper, fix it" not "this is a legitimate session."
+ *
+ * Caller-supplied values (any case variant) are always preserved.
+ */
+function ensureSessionIdHeader<T extends { headers?: Record<string, string> }>(
+  options: T,
+  callSite: string
+): T {
+  if (options.headers) {
+    for (const key of Object.keys(options.headers)) {
+      if (key.toLowerCase() === 'x-session-id') return options;
+    }
+  }
+  if (!warnedCallSites.has(callSite)) {
+    warnedCallSites.add(callSite);
+    console.warn(
+      `[adobe] Missing X-Session-Id from ${callSite} — using daily fallback. ` +
+        `Attach an X-Session-Id header at the call site (see scoop-context.ts ` +
+        `streamWithSessionId or docs/pitfalls.md).`
+    );
+  }
+  return {
+    ...options,
+    headers: {
+      ...(options.headers ?? {}),
+      'X-Session-Id': getDailyAdobeUuid(ADOBE_PROVIDER_FALLBACK_ANCHOR),
+    },
+  };
+}
+
+/** Test-only: clear the dedup set so warning-emission tests stay independent. */
+export function __resetAdobeSessionIdWarningCacheForTests(): void {
+  warnedCallSites.clear();
+}
+
 // ── Stream functions (reuse pi-ai's Anthropic provider) ─────────────
 
 function makeErrorOutput(model: Model<Api>, error: unknown) {
@@ -678,7 +736,9 @@ const streamAdobe = (
         const inner = streamOpenAICompletions(
           proxyModel as any,
           context,
-          withSliccVersionHeader({ ...options, apiKey: accessToken }) as any
+          withSliccVersionHeader(
+            ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamAdobe[openai]')
+          ) as any
         );
         for await (const event of inner) stream.push(event as any);
       } else {
@@ -691,7 +751,9 @@ const streamAdobe = (
         const inner = streamAnthropic(
           proxyModel as any,
           context,
-          withSliccVersionHeader({ ...options, apiKey: accessToken })
+          withSliccVersionHeader(
+            ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamAdobe[anthropic]')
+          )
         );
         for await (const event of inner) stream.push(event as any);
       }
@@ -725,7 +787,9 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
         const inner = streamSimpleOpenAICompletions(
           proxyModel as any,
           context,
-          withSliccVersionHeader({ ...options, apiKey: accessToken }) as any
+          withSliccVersionHeader(
+            ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamSimpleAdobe[openai]')
+          ) as any
         );
         for await (const event of inner) stream.push(event as any);
       } else {
@@ -738,7 +802,12 @@ const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: Simple
         const inner = streamSimpleAnthropic(
           proxyModel as any,
           context,
-          withSliccVersionHeader({ ...options, apiKey: accessToken }) as any
+          withSliccVersionHeader(
+            ensureSessionIdHeader(
+              { ...options, apiKey: accessToken },
+              'streamSimpleAdobe[anthropic]'
+            )
+          ) as any
         );
         for await (const event of inner) stream.push(event as any);
       }
