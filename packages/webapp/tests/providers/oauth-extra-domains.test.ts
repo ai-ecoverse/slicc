@@ -213,36 +213,60 @@ describe('setExtraOAuthDomainsAsync — DOM vs worker path', () => {
   it('worker-shim mirror failure does NOT propagate — page write is durable', async () => {
     // The page-side write succeeded (bridge returned a storeAfter
     // snapshot). If the worker-shim mirror then throws, surfacing
-    // that would inverted-truth the user: command exits non-zero
-    // even though the persistent state correctly holds the new
-    // value. Verify we degrade to a warning + return success.
+    // that would make the command exit non-zero even though the
+    // persistent state correctly holds the new value. Verify we
+    // degrade to a warning + return success.
     (globalThis as { __slicc_panelRpc?: unknown }).__slicc_panelRpc = {
       call: async () => ({ storeAfter: { adobe: ['mirrored.example.com'] } }),
       dispose: () => {},
     };
-    // Wrap the shim's setItem so the mirror-back write throws while
-    // the durable page side already succeeded (modeled by the
-    // bridge's resolved response above).
-    const originalSetItem = globalThis.localStorage.setItem.bind(globalThis.localStorage);
-    Object.defineProperty(globalThis.localStorage, 'setItem', {
-      configurable: true,
-      writable: true,
-      value: () => {
-        throw new Error('simulated worker-shim quota');
-      },
-    });
+    // `bind` is inside the try so a (theoretical) throw doesn't leak
+    // an undefined `originalSetItem` past the finally. The outer
+    // afterEach swaps the whole localStorage stub back, so this
+    // restoration is defense-in-depth — but keeping the swap atomic
+    // costs nothing.
+    let originalSetItem: ((k: string, v: string) => void) | null = null;
+    // Log the warn through `console.warn` (createLogger's transport
+    // for WARN level). Bump the runtime level so the message isn't
+    // filtered out by the test-env default (ERROR).
+    const { setLogLevel, getLogLevel, LogLevel } = await import('../../src/core/logger.js');
+    const priorLevel = getLogLevel();
+    setLogLevel(LogLevel.WARN);
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
+      originalSetItem = globalThis.localStorage.setItem.bind(globalThis.localStorage);
+      Object.defineProperty(globalThis.localStorage, 'setItem', {
+        configurable: true,
+        writable: true,
+        value: () => {
+          throw new Error('simulated worker-shim quota');
+        },
+      });
       const { setExtraOAuthDomainsAsync } = await import('../../src/ui/provider-settings.js');
       // Must NOT reject; the failure is recoverable on reload.
       await expect(
         setExtraOAuthDomainsAsync('adobe', ['mirrored.example.com'])
       ).resolves.toBeUndefined();
+      // Operator visibility — locks the log-message contract so a
+      // future refactor can't silently demote the level (warn →
+      // debug) without test signal.
+      expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
+      const call = consoleWarnSpy.mock.calls[0]!;
+      // createLogger emits as: console.warn(prefix, message, ...data)
+      expect(call[0]).toBe('[provider-settings]');
+      expect(call[1]).toMatch(/worker-shim mirror failed/i);
+      expect(call[1]).toMatch(/reload to refresh/i);
+      expect(call[2]).toMatchObject({ providerId: 'adobe' });
     } finally {
-      Object.defineProperty(globalThis.localStorage, 'setItem', {
-        configurable: true,
-        writable: true,
-        value: originalSetItem,
-      });
+      if (originalSetItem) {
+        Object.defineProperty(globalThis.localStorage, 'setItem', {
+          configurable: true,
+          writable: true,
+          value: originalSetItem,
+        });
+      }
+      consoleWarnSpy.mockRestore();
+      setLogLevel(priorLevel);
     }
   });
 });

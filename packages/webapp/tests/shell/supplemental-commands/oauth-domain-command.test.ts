@@ -152,6 +152,20 @@ describe('oauth-domain command', () => {
       expect(mockSetExtraOAuthDomainsAsync).not.toHaveBeenCalled();
     });
 
+    it('remove propagates async-setter failure to stderr + exit 1', async () => {
+      // Dropped-`await` regression guard: without `await`, the
+      // rejection becomes an unhandled promise and the command
+      // returns exitCode: 0 — this assertion would then fail.
+      mockGetExtraOAuthDomains.mockReturnValue(['admin.hlx.page']);
+      mockSetExtraOAuthDomainsAsync.mockRejectedValue(new Error('panel-rpc unreachable'));
+      const result = await createOAuthDomainCommand().execute(
+        ['remove', 'adobe', 'admin.hlx.page'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('panel-rpc unreachable');
+    });
+
     it('remove requires both provider and domain', async () => {
       const result = await createOAuthDomainCommand().execute(['remove', 'adobe'], createMockCtx());
       expect(result.exitCode).toBe(1);
@@ -165,6 +179,15 @@ describe('oauth-domain command', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Cleared');
       expect(mockSetExtraOAuthDomainsAsync).toHaveBeenCalledWith('adobe', []);
+    });
+
+    it('clear propagates async-setter failure to stderr + exit 1', async () => {
+      // Dropped-`await` regression guard — see the `remove` variant
+      // above for rationale.
+      mockSetExtraOAuthDomainsAsync.mockRejectedValue(new Error('panel-rpc unreachable'));
+      const result = await createOAuthDomainCommand().execute(['clear', 'adobe'], createMockCtx());
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('panel-rpc unreachable');
     });
 
     it('clear requires a provider', async () => {

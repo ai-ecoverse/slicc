@@ -524,9 +524,10 @@ export function setExtraOAuthDomains(providerId: string, domains: string[]): voi
  * If the mirror-back itself throws (e.g., a future shim variant
  * rejecting writes), the durable page-side write has ALREADY
  * succeeded — degrade to a logged warning rather than propagating
- * up. Surfacing the throw would inverted truth: the user would see
- * "oauth-domain add failed" while the persistent state actually
- * holds the new value, recoverable on reload.
+ * up. The persistent state already holds the new value; surfacing
+ * the throw would make `oauth-domain add` report failure on a write
+ * that actually succeeded, with reload as the recovery path the
+ * help text already promises.
  */
 export async function setExtraOAuthDomainsAsync(
   providerId: string,
