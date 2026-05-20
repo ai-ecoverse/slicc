@@ -69,14 +69,47 @@ final class SliccProcess {
         let targetType: AppTargetType
         let launchedAppPaths: [String]
         let cdpPort: UInt16
+        let servePort: UInt16
+        let electronAppPath: String?
+        let targetName: String
         let startedAt: Date
         var observedAppPID: pid_t?
+        var staticRoot: String?
     }
 
     /// SLICC helper/server processes keyed by AppTarget.id.
     private var launchRecords: [String: LaunchRecord] = [:]
     private var startFailures: [String: String] = [:]
     private var intentionallyStoppingTargets: Set<String> = []
+
+    /// Optional UI overlay root applied to every spawn. Set by the Phase-C
+    /// webapp-only update path so newly-launched slicc-servers serve the
+    /// downloaded `dist/ui` instead of the bundle's copy.
+    var uiOverlayRoot: String?
+
+    /// Set by the AppUpdater install flow so `applicationWillTerminate`
+    /// takes the detach path (browsers survive, records persisted) instead
+    /// of the legacy stopAll() path.
+    var isPreparingForUpdate = false
+
+    /// One-shot latch tracking whether `detachAll()` already ran. The
+    /// full-app update path calls it from `onBeginUpdate` and the
+    /// delegate calls it again from `applicationWillTerminate`; without
+    /// this guard the second call would persist an empty snapshot
+    /// (because the first call cleared `launchRecords`) and erase the
+    /// reattach data the next launch needs.
+    private var hasDetached = false
+
+    let recordStore: LaunchRecordStore
+    let cdpLiveProbe: CDPLiveProbe
+
+    init(
+        recordStore: LaunchRecordStore = LaunchRecordStore(),
+        cdpLiveProbe: CDPLiveProbe = .default
+    ) {
+        self.recordStore = recordStore
+        self.cdpLiveProbe = cdpLiveProbe
+    }
 
     var resolvedSliccDir: String { sliccDir }
     private var sliccDir: String {
@@ -153,12 +186,14 @@ final class SliccProcess {
         do {
             try spawn(
                 target: browser,
-                extraArgs: ["--cdp-port=\(Self.browserCdpPort)"],
+                extraArgs: Self.applyOverlay(["--cdp-port=\(Self.browserCdpPort)"], overlay: uiOverlayRoot),
                 env: [
                     "CHROME_PATH": browser.executablePath,
                     "PORT": "\(Self.browserPort)",
                 ],
-                cdpPort: Self.browserCdpPort
+                cdpPort: Self.browserCdpPort,
+                servePort: Self.browserPort,
+                electronAppPath: nil
             )
         } catch {
             recordStartFailure(for: browser, message: error.localizedDescription)
@@ -186,18 +221,28 @@ final class SliccProcess {
         do {
             try spawn(
                 target: app,
-                extraArgs: [
-                    "--electron-app=\(app.path)",
-                    "--kill",
-                    "--cdp-port=\(cdpPort)",
-                ],
+                extraArgs: Self.applyOverlay(
+                    [
+                        "--electron-app=\(app.path)",
+                        "--kill",
+                        "--cdp-port=\(cdpPort)",
+                    ],
+                    overlay: uiOverlayRoot
+                ),
                 env: ["PORT": "\(port)"],
-                cdpPort: cdpPort
+                cdpPort: cdpPort,
+                servePort: port,
+                electronAppPath: app.path
             )
         } catch {
             recordStartFailure(for: app, message: error.localizedDescription)
             throw error
         }
+    }
+
+    private static func applyOverlay(_ args: [String], overlay: String?) -> [String] {
+        guard let overlay, !overlay.isEmpty else { return args }
+        return args + ["--static-root=\(overlay)"]
     }
 
     /// Find the next available port pair for an Electron app.
@@ -246,6 +291,191 @@ final class SliccProcess {
         startFailures.removeAll()
     }
 
+    /// Live respawn every running slicc-server with the current
+    /// `uiOverlayRoot`. Used by the webapp-only update path: the caller
+    /// updates the overlay pointer, calls this, and the browsers see the
+    /// new UI on next page load (or on slicc-server reconnect). Browsers
+    /// and Electron apps are NOT touched.
+    func respawnAllForOverlayChange() async {
+        let snapshot = launchRecords.map { id, record -> (String, AppTarget?, PersistedLaunchRecord) in
+            let persisted = PersistedLaunchRecord(
+                targetId: id,
+                targetName: record.targetName,
+                targetType: record.targetType,
+                electronAppPath: record.electronAppPath,
+                servePort: record.servePort,
+                cdpPort: record.cdpPort,
+                staticRoot: uiOverlayRoot
+            )
+            return (id, nil as AppTarget?, persisted)
+        }
+        guard !snapshot.isEmpty else { return }
+        // Detach each existing server (SIGUSR1) so browsers/Electron stay alive.
+        for id in Array(launchRecords.keys) {
+            detachLaunchRecord(id: id)
+        }
+        // Re-spawn in serve-only mode against the same CDP port.
+        for (_, _, persisted) in snapshot {
+            guard await cdpLiveProbe.isAlive(cdpPort: persisted.cdpPort) else {
+                log.info("respawnAllForOverlayChange: skipping \(persisted.targetName, privacy: .public) — CDP \(persisted.cdpPort) is gone")
+                continue
+            }
+            // Reconstruct a minimal AppTarget surface from the snapshot.
+            let target = AppTarget(
+                id: persisted.targetId,
+                name: persisted.targetName,
+                path: persisted.electronAppPath ?? persisted.targetId,
+                executablePath: persisted.electronAppPath.map { "\($0)/Contents/MacOS/\(persisted.targetName)" } ?? "",
+                type: persisted.targetType,
+                icon: NSImage(size: NSSize(width: 1, height: 1)),
+                debugSupport: .supported,
+                isDebugBuild: false,
+                originalAppPath: nil
+            )
+            do {
+                try reattach(target: target, record: persisted)
+            } catch {
+                log.error("respawnAllForOverlayChange: failed for \(persisted.targetName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    // MARK: - Detach / reattach (smooth-upgrade path)
+
+    /// Snapshot every live launch record to disk and shut every slicc-server
+    /// child down in *detach* mode (SIGUSR1) so the browsers/Electron apps
+    /// keep running. Called immediately before AppUpdater swaps the .app
+    /// bundle and relaunches Sliccstart.
+    @discardableResult
+    /// Test-only seam — inserts a synthetic `LaunchRecord` into the
+    /// in-memory map so `detachAll()` has something to snapshot in unit
+    /// tests. Underscored to make the intent obvious at call sites.
+    func _testing_seedLaunchRecord(
+        id: String,
+        process: Process,
+        targetType: AppTargetType,
+        launchedAppPaths: [String] = [],
+        cdpPort: UInt16,
+        servePort: UInt16,
+        electronAppPath: String? = nil,
+        targetName: String,
+        staticRoot: String? = nil
+    ) {
+        launchRecords[id] = LaunchRecord(
+            process: process,
+            targetType: targetType,
+            launchedAppPaths: launchedAppPaths,
+            cdpPort: cdpPort,
+            servePort: servePort,
+            electronAppPath: electronAppPath,
+            targetName: targetName,
+            startedAt: Date(),
+            observedAppPID: nil,
+            staticRoot: staticRoot
+        )
+    }
+
+    @discardableResult
+    func detachAll() -> [PersistedLaunchRecord] {
+        // Idempotency latch — `applicationWillTerminate` re-invokes this
+        // after `onBeginUpdate` already did, and the second pass would
+        // otherwise overwrite the persisted JSON with an empty array
+        // (because the first pass cleared `launchRecords`).
+        if hasDetached {
+            log.info("detachAll: already detached; returning persisted snapshot")
+            return recordStore.load()
+        }
+        hasDetached = true
+        let snapshot = launchRecords.compactMap { id, record -> PersistedLaunchRecord? in
+            guard record.process.isRunning else { return nil }
+            return PersistedLaunchRecord(
+                targetId: id,
+                targetName: record.targetName,
+                targetType: record.targetType,
+                electronAppPath: record.electronAppPath,
+                servePort: record.servePort,
+                cdpPort: record.cdpPort,
+                staticRoot: record.staticRoot
+            )
+        }
+        do {
+            try recordStore.save(snapshot)
+        } catch {
+            log.error("detachAll: failed to persist records: \(error.localizedDescription, privacy: .public)")
+        }
+
+        log.info("detachAll: detaching \(self.launchRecords.count) processes")
+        for id in Array(launchRecords.keys) {
+            detachLaunchRecord(id: id)
+        }
+        startFailures.removeAll()
+        return snapshot
+    }
+
+    /// Re-spawn slicc-server children for every persisted record whose CDP
+    /// port still answers. Records whose browser died during the update are
+    /// dropped silently. Returns the targetIds that were reattached so the
+    /// caller can decide what to refresh in the UI.
+    @discardableResult
+    func reattachPersistedRecords(targets: [AppTarget]) async -> [String] {
+        let records = recordStore.load()
+        guard !records.isEmpty else { return [] }
+        let targetsById = Dictionary(uniqueKeysWithValues: targets.map { ($0.id, $0) })
+
+        var reattached: [String] = []
+        for record in records {
+            guard let target = targetsById[record.targetId] else {
+                log.info("reattach: skipping \(record.targetName, privacy: .public) — target no longer present in scan")
+                continue
+            }
+            let isAlive = await cdpLiveProbe.isAlive(cdpPort: record.cdpPort)
+            guard isAlive else {
+                log.info("reattach: skipping \(record.targetName, privacy: .public) — CDP \(record.cdpPort) not responding")
+                continue
+            }
+            do {
+                try reattach(target: target, record: record)
+                reattached.append(record.targetId)
+            } catch {
+                log.error("reattach: failed for \(record.targetName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        recordStore.clear()
+        return reattached
+    }
+
+    private func reattach(target: AppTarget, record: PersistedLaunchRecord) throws {
+        // Re-spawn slicc-server in --serve-only mode so it reuses the
+        // existing browser/Electron without re-launching it. Same ports
+        // as before so the UI's bookmarked URL still works.
+        guard !Self.isPortInUse(record.servePort) else {
+            throw LaunchError.portInUse(record.servePort)
+        }
+        var extraArgs: [String] = [
+            "--serve-only",
+            "--cdp-port=\(record.cdpPort)",
+        ]
+        if target.type == .electronApp {
+            extraArgs.append("--electron-app=\(target.path)")
+            extraArgs.append("--electron")
+        }
+        if let staticRoot = record.staticRoot ?? uiOverlayRoot, !staticRoot.isEmpty {
+            extraArgs.append("--static-root=\(staticRoot)")
+        }
+        var env: [String: String] = ["PORT": "\(record.servePort)"]
+        if target.type == .chromiumBrowser {
+            env["CHROME_PATH"] = target.executablePath
+        }
+        try spawn(
+            target: target,
+            extraArgs: extraArgs,
+            env: env,
+            cdpPort: record.cdpPort,
+            servePort: record.servePort,
+            electronAppPath: record.electronAppPath
+        )
+    }
+
     // MARK: - Private
 
     static func resolveLaunchConfiguration(
@@ -272,7 +502,9 @@ final class SliccProcess {
         target: AppTarget,
         extraArgs: [String],
         env: [String: String],
-        cdpPort: UInt16
+        cdpPort: UInt16,
+        servePort: UInt16,
+        electronAppPath: String?
     ) throws {
         let launchConfig = try Self.resolveLaunchConfiguration(sliccDir: sliccDir, extraArgs: extraArgs)
         log.info("spawn: \(launchConfig.executablePath, privacy: .public) \(launchConfig.arguments.joined(separator: " "), privacy: .public)")
@@ -332,8 +564,12 @@ final class SliccProcess {
             targetType: target.type,
             launchedAppPaths: target.type == .electronApp ? Self.launchedAppPaths(for: target) : [],
             cdpPort: cdpPort,
+            servePort: servePort,
+            electronAppPath: electronAppPath,
+            targetName: target.name,
             startedAt: Date(),
-            observedAppPID: nil
+            observedAppPID: nil,
+            staticRoot: uiOverlayRoot
         )
     }
 
@@ -400,6 +636,39 @@ final class SliccProcess {
         }
         if record.process.isRunning {
             record.process.terminate()
+        } else {
+            intentionallyStoppingTargets.remove(id)
+        }
+    }
+
+    /// Detach a single record: SIGUSR1 to slicc-server (graceful shutdown
+    /// that skips Browser.close) and explicitly do NOT terminate the
+    /// Electron app. The slicc-server child has up to a few seconds to
+    /// exit; if it ignores SIGUSR1 we fall back to SIGTERM to avoid
+    /// leaking processes across the update.
+    private func detachLaunchRecord(id: String) {
+        guard let record = launchRecords.removeValue(forKey: id) else {
+            intentionallyStoppingTargets.remove(id)
+            return
+        }
+
+        intentionallyStoppingTargets.insert(id)
+        if record.process.isRunning {
+            let pid = record.process.processIdentifier
+            if pid > 0 {
+                _ = Darwin.kill(pid, SIGUSR1)
+            }
+            // Best-effort wait for the detach path to land before AppUpdater
+            // swaps the .app from under us. 1.5s mirrors the
+            // browserExitTimeoutNanoseconds budget on the server side.
+            let deadline = Date().addingTimeInterval(1.5)
+            while record.process.isRunning && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if record.process.isRunning {
+                log.info("detachLaunchRecord: SIGUSR1 ignored, falling back to terminate() for \(record.targetName, privacy: .public)")
+                record.process.terminate()
+            }
         } else {
             intentionallyStoppingTargets.remove(id)
         }

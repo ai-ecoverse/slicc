@@ -94,6 +94,119 @@ final class GracefulShutdownHandlerTests: XCTestCase {
         XCTAssertEqual(exitRecorder.codeSnapshot(), 0)
     }
 
+    func testDetachShutsDownDependenciesWithoutClosingBrowser() async throws {
+        // Detach mode: same teardown, but the browser process survives so
+        // Sliccstart can reattach a fresh slicc-server after the update.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "sleep 30"]
+        try process.run()
+        XCTAssertTrue(process.isRunning)
+        defer {
+            if process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+            }
+        }
+
+        let overlay = OverlayControllerSpy()
+        let cdpProxy = ChromeProxySpy()
+        let clientSockets = ClientSocketSpy()
+        let server = ServerSpy()
+        let killTargets = PidRecorder()
+        let exitRecorder = ExitRecorder()
+
+        let handler = GracefulShutdownHandler(
+            fetchBrowserWebSocketURL: { _ in
+                XCTFail("browser discovery must not run in detach mode")
+                return ""
+            },
+            sendBrowserCloseCommand: { _ in
+                XCTFail("Browser.close must not run in detach mode")
+            },
+            killProcess: { pid, signal in
+                killTargets.record(pid)
+                return Darwin.kill(pid, signal)
+            },
+            exitHandler: { code in exitRecorder.record(code) },
+            browserExitTimeoutNanoseconds: 50_000_000,
+            browserExitPollNanoseconds: 10_000_000
+        )
+
+        await handler.runShutdownSequence(
+            context: ShutdownContext(
+                browserProcess: process,
+                browserLabel: "Chrome",
+                cdpPort: 9777,
+                overlayInjector: overlay,
+                cdpProxy: cdpProxy,
+                clientSockets: clientSockets,
+                server: server
+            ),
+            closeBrowser: false
+        )
+
+        let cdpShutdownCount = await cdpProxy.shutdownCount()
+        let clientShutdownCount = await clientSockets.shutdownCount()
+        let serverStopCount = await server.stopCount()
+        XCTAssertEqual(overlay.stopCountSnapshot(), 1)
+        XCTAssertEqual(cdpShutdownCount, 1)
+        XCTAssertEqual(clientShutdownCount, 1)
+        XCTAssertEqual(serverStopCount, 1)
+        XCTAssertTrue(process.isRunning, "browser process must survive detach")
+        XCTAssertEqual(killTargets.snapshot(), [], "no killProcess call in detach mode")
+        XCTAssertEqual(exitRecorder.codeSnapshot(), 0)
+    }
+
+    func testDetachIsIdempotentWithSubsequentShutdown() async throws {
+        // After a SIGUSR1 detach, an incoming SIGTERM (e.g. AppUpdater
+        // sending its own teardown sequence) must not re-run the shutdown
+        // path and accidentally close the browser via the legacy code.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "sleep 30"]
+        try process.run()
+        defer {
+            if process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+            }
+        }
+
+        let killTargets = PidRecorder()
+        let exitRecorder = ExitRecorder()
+        let handler = GracefulShutdownHandler(
+            fetchBrowserWebSocketURL: { _ in throw GracefulShutdownError.cdpUnavailable(9778) },
+            sendBrowserCloseCommand: { _ in XCTFail("should not run") },
+            killProcess: { pid, signal in
+                killTargets.record(pid)
+                return Darwin.kill(pid, signal)
+            },
+            exitHandler: { code in exitRecorder.record(code) },
+            browserExitTimeoutNanoseconds: 50_000_000,
+            browserExitPollNanoseconds: 10_000_000
+        )
+
+        await handler.runShutdownSequence(
+            context: ShutdownContext(
+                browserProcess: process,
+                browserLabel: "Chrome",
+                cdpPort: 9778
+            ),
+            closeBrowser: false
+        )
+        // Second call must be a no-op thanks to the `shuttingDown` latch.
+        await handler.runShutdownSequence(
+            context: ShutdownContext(
+                browserProcess: process,
+                browserLabel: "Chrome",
+                cdpPort: 9778
+            ),
+            closeBrowser: true
+        )
+
+        XCTAssertTrue(process.isRunning, "second call must not close browser")
+        XCTAssertEqual(killTargets.snapshot(), [])
+    }
+
     func testLastResortCleanupKillsRunningBrowserSynchronously() throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")

@@ -19,18 +19,23 @@ import Version
 struct TolerantGithubReleaseProvider: ReleaseProvider {
     private let github = GithubReleaseProvider()
     private let authToken: String?
+    private let host: UpdateHostConfiguration
 
-    init(authToken: String? = nil) {
+    init(
+        authToken: String? = nil,
+        host: UpdateHostConfiguration = UpdateHostConfiguration.resolve()
+    ) {
         // Treat an empty `GH_TOKEN` (e.g. `export GH_TOKEN=` from a script
         // that forgot to populate it) as no token. Otherwise we would emit
         // `Authorization: Bearer ` and GitHub would 401 with a misleading
         // `URLError(.badServerResponse)` at the call site.
         let resolved = authToken ?? ProcessInfo.processInfo.environment["GH_TOKEN"]
         self.authToken = resolved.flatMap { $0.isEmpty ? nil : $0 }
+        self.host = host
     }
 
     func fetchReleases(owner: String, repo: String, proxy: URLRequestProxy?) async throws -> [Release] {
-        let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases")!
+        let url = host.releasesURL(owner: owner, repo: repo)
         var request = URLRequest(url: url)
         if let authToken {
             request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")

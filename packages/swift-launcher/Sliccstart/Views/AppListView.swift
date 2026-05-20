@@ -6,10 +6,14 @@ struct AppListView: View {
     @Bindable var sliccProcess: SliccProcess
     @Bindable var appManagementPermission: AppManagementPermission
     @ObservedObject var appUpdater: AppUpdater
+    @Bindable var smoothUpdater: SmoothUpdateCoordinator
     let onLaunchStandalone: (AppTarget) -> Void
     let onLaunchElectron: (AppTarget) -> Void
     let onCreateDebugBuild: (AppTarget) -> Void
     let onUpdate: () -> Void
+    let onBeginUpdate: () -> Void
+    let onCheckSmoothUpdate: () -> Void
+    let onApplySmoothUpdate: (_ version: String, _ assetURL: URL, _ hash: String) -> Void
     let onRescan: () -> Void
 
     var body: some View {
@@ -80,31 +84,7 @@ struct AppListView: View {
 
             Divider()
             HStack {
-                if SliccBootstrapper.isBundled {
-                    if let bundle = appUpdater.downloadedAppBundle {
-                        if let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String, !version.isEmpty {
-                            Button("Restart to Update to v\(version)") {
-                                appUpdater.install(bundle)
-                            }
-                            .buttonStyle(.borderless).font(.caption)
-                            .foregroundStyle(.green)
-                        } else {
-                            Button("Restart to Update") {
-                                appUpdater.install(bundle)
-                            }
-                            .buttonStyle(.borderless).font(.caption)
-                            .foregroundStyle(.green)
-                        }
-                    } else {
-                        Button("Check for Updates") {
-                            appUpdater.check()
-                        }
-                        .buttonStyle(.borderless).font(.caption)
-                    }
-                } else {
-                    Button("Update") { onUpdate() }
-                        .buttonStyle(.borderless).font(.caption)
-                }
+                updateButton
                 if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
                     Text("v\(version)")
                         .font(.caption2)
@@ -115,6 +95,64 @@ struct AppListView: View {
                     .buttonStyle(.borderless).font(.caption)
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
+        }
+    }
+
+    @ViewBuilder
+    private var updateButton: some View {
+        if SliccBootstrapper.isBundled {
+            // Phase C: live UI-only updates take priority over the
+            // full-app restart path because they're non-disruptive.
+            switch smoothUpdater.state {
+            case .webappOnlyAvailable(let version, let assetURL, let hash):
+                Button("Apply UI Update to v\(version)") {
+                    onApplySmoothUpdate(version, assetURL, hash)
+                }
+                .buttonStyle(.borderless).font(.caption)
+                .foregroundStyle(.green)
+                .help("Webapp-only update — applies live, no restart.")
+
+            case .applying(let version, let progress):
+                Text("Updating v\(version): \(progress)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+            case .applied(let version):
+                Text("UI v\(version) active").font(.caption).foregroundStyle(.green)
+
+            default:
+                fullUpdateButton
+            }
+        } else {
+            Button("Update") { onUpdate() }
+                .buttonStyle(.borderless).font(.caption)
+        }
+    }
+
+    @ViewBuilder
+    private var fullUpdateButton: some View {
+        if let bundle = appUpdater.downloadedAppBundle {
+            if let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String, !version.isEmpty {
+                Button("Restart to Update to v\(version)") {
+                    onBeginUpdate()
+                    appUpdater.install(bundle)
+                }
+                .buttonStyle(.borderless).font(.caption)
+                .foregroundStyle(.green)
+            } else {
+                Button("Restart to Update") {
+                    onBeginUpdate()
+                    appUpdater.install(bundle)
+                }
+                .buttonStyle(.borderless).font(.caption)
+                .foregroundStyle(.green)
+            }
+        } else {
+            Button("Check for Updates") {
+                appUpdater.check()
+                onCheckSmoothUpdate()
+            }
+            .buttonStyle(.borderless).font(.caption)
         }
     }
 }

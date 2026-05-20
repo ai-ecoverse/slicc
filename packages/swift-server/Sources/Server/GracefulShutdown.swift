@@ -111,6 +111,7 @@ actor GracefulShutdownHandler {
 
         signal(SIGINT, SIG_IGN)
         signal(SIGTERM, SIG_IGN)
+        signal(SIGUSR1, SIG_IGN)
 
         self.signalSources = [SIGINT, SIGTERM].map { signalNumber in
             let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: signalQueue)
@@ -123,6 +124,16 @@ actor GracefulShutdownHandler {
             source.resume()
             return source
         }
+
+        let detachSource = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: signalQueue)
+        detachSource.setEventHandler { [weak self] in
+            guard let self else { return }
+            Task {
+                await self.detach()
+            }
+        }
+        detachSource.resume()
+        self.signalSources.append(detachSource)
     }
 
     func shutdown() async {
@@ -130,15 +141,28 @@ actor GracefulShutdownHandler {
             exitHandler(0)
             return
         }
-        await self.runShutdownSequence(context: context)
+        await self.runShutdownSequence(context: context, closeBrowser: true)
     }
 
-    func runShutdownSequence(context: ShutdownContext) async {
+    /// Detach: shut everything down EXCEPT the browser. Used when Sliccstart
+    /// is quitting to install an update and wants the user's browser/Electron
+    /// session to keep running. The launcher reattaches on next start by
+    /// spawning a fresh slicc-server in --serve-only mode pointed at the
+    /// still-live CDP port.
+    func detach() async {
+        guard let context else {
+            exitHandler(0)
+            return
+        }
+        await self.runShutdownSequence(context: context, closeBrowser: false)
+    }
+
+    func runShutdownSequence(context: ShutdownContext, closeBrowser: Bool = true) async {
         guard !shuttingDown else { return }
         shuttingDown = true
         GracefulShutdownLastResortRegistry.markGracefulShutdownStarted()
 
-        print("\nShutting down...")
+        print(closeBrowser ? "\nShutting down..." : "\nDetaching (browser stays open)...")
         context.fileLogger?.close()
         context.overlayInjector?.stop()
 
@@ -152,8 +176,8 @@ actor GracefulShutdownHandler {
             await server.stop()
         }
 
-        if let browserProcess = context.browserProcess {
-            await closeBrowser(
+        if closeBrowser, let browserProcess = context.browserProcess {
+            await self.closeBrowser(
                 process: browserProcess,
                 browserKillPid: context.browserKillPid,
                 browserLabel: context.browserLabel,
