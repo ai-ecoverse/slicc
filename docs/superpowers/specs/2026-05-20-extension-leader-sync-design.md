@@ -3,7 +3,7 @@
 **Issue:** [#682](https://github.com/ai-ecoverse/slicc/issues/682)
 **Branch:** `fix/extension-leader-sync-682`
 **Date:** 2026-05-20
-**Revision:** 4 (third-review corrections — see "Revision history" below)
+**Revision:** 5 (fourth-review doc-drift fixes — see "Revision history" below)
 
 ## Problem
 
@@ -38,8 +38,8 @@ request/response carries `host reset`. No broadcast-cycle RPC is required.
 
 | `LeaderSyncManagerOptions` field                                 | Source in extension mode                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `getMessages()`                                                  | `OffscreenBridge.getBuffer(activeScoopJid)` cast to `ChatMessage[]` — `BufferedChatMessage` is structurally compatible per the existing cast at `offscreen-bridge.ts:671`                                                                                                                                                                                                                                                                                                     |
-| `getMessagesForScoop(jid)`                                       | `OffscreenBridge.getBuffer(jid)` (same cast). Required for `request_snapshot` against non-active scoops (`tray-leader-sync.ts:354-371`)                                                                                                                                                                                                                                                                                                                                       |
+| `getMessages()`                                                  | `OffscreenBridge.getMessagesForJid(activeScoopJid)` — wrapper over the existing `getBuffer(jid)` that performs the `BufferedChatMessage → ChatMessage[]` cast (the same cast used at `offscreen-bridge.ts:671`)                                                                                                                                                                                                                                                               |
+| `getMessagesForScoop(jid)`                                       | `OffscreenBridge.getMessagesForJid(jid)`. Required for `request_snapshot` against non-active scoops (`tray-leader-sync.ts:354-371`)                                                                                                                                                                                                                                                                                                                                           |
 | `getScoopJid()`                                                  | new field on the bridge fed by a new panel→offscreen `active-scoop` message (see §5)                                                                                                                                                                                                                                                                                                                                                                                          |
 | `getScoops()`                                                    | `orchestrator.getScoops().map(…)` — inline summary projection (no `toScoopSummary` helper exists today)                                                                                                                                                                                                                                                                                                                                                                       |
 | `getSprinkles()`                                                 | **panel-only** — `SprinkleManager.available() + opened()`; pushed snapshot                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -112,8 +112,12 @@ than A.
 │    routeSprinkleLick(...)        extracted helper           │
 │    notifyPanelIncomingMessage()  extracted helper           │
 │    onAgentEvent(handler)         fan-out tap                │
+│                                                             │
+│  extension-leader-tray factory (separate listener)          │
 │    handles 'leader-tray-reset' envelope: run reset sequence │
 │      → reply 'leader-tray-reset-response'                   │
+│    (factory holds sync/peers/trayLeader; reset isn't a      │
+│     LeaderSyncManager concern → not on the sprinkle hub)    │
 │                                                             │
 │  LeaderSyncManager (constructed here)                       │
 │    getMessages       → bridge.getMessagesForJid(activeJid)  │
@@ -271,19 +275,30 @@ export interface OffscreenLeaderSyncBridgeHandle {
   getSprinkles(): SprinkleSummary[];
   /** Resolve sprinkle name → VFS path from the cached snapshot. */
   resolveSprinklePath(name: string): string | null;
-  /** Return the panel's current scoop selection, or null if none received. */
-  getActiveScoopJid(): string | null;
   /** Send a one-shot activation/deactivation signal to the panel. */
   signalLeaderMode(active: boolean): void;
   /** Stop listening. Idempotent. */
   detach(): void;
 }
 
+/** Narrow surface the leader bridge needs on `OffscreenBridge` — kept slim
+ *  so unit tests can pass a hand-built stub instead of a real bridge. */
+export interface ActiveScoopSink {
+  setActiveScoopJid(jid: string | null): void;
+}
+
 export function connectOffscreenLeaderSyncBridge(
   hub: OffscreenMessageHub,
-  syncRef: () => LeaderSyncManager | null
+  syncRef: () => LeaderSyncManager | null,
+  bridge: ActiveScoopSink
 ): OffscreenLeaderSyncBridgeHandle;
 ```
+
+Note: `getActiveScoopJid()` is intentionally **not** on this handle —
+`OffscreenBridge` owns the cache (see §5). The leader bridge's inbound
+`leader-active-scoop` handler writes through to `bridge.setActiveScoopJid(jid)`
+and never keeps its own copy. Readers (the factory in §4) call
+`bridge.getActiveScoopJid()` directly.
 
 The factory takes a `syncRef` getter (not a direct sync reference) to avoid
 the circular-init problem from revision 1: the bridge is created before
@@ -345,15 +360,36 @@ export interface LeaderRequestLeaderModeStateMsg {
   type: 'leader-request-mode-state';
 }
 
-// Offscreen → panel (single envelope)
+/** Panel → offscreen: request a tray reset (panel terminal `host reset`).
+ *  Round-trip; the factory listener replies with `leader-tray-reset-response`
+ *  carrying the same `requestId`. NOT routed through the leader-sync hub —
+ *  the factory's listener owns the sync/peers/trayLeader handles needed for
+ *  the reset sequence. */
+export interface LeaderTrayResetRequestMsg {
+  type: 'leader-tray-reset';
+  requestId: string;
+}
+
+// Offscreen → panel
 export interface LeaderModeChangedMsg {
   type: 'leader-mode-changed';
   active: boolean;
 }
+
+/** Offscreen → panel: reply to `leader-tray-reset`. */
+export interface LeaderTrayResetResponseMsg {
+  type: 'leader-tray-reset-response';
+  requestId: string;
+  ok: boolean;
+  status?: LeaderTrayRuntimeStatus;
+  error?: string;
+}
 ```
 
-Add the panel→offscreen **five** to `PanelToOffscreenMessage` and the
-offscreen→panel one to `OffscreenToPanelMessage`. `OffscreenClient.handleOffscreenMessage`
+Add the panel→offscreen **six** to `PanelToOffscreenMessage` (the five
+fire-and-forget pushes plus `leader-tray-reset`) and the offscreen→panel
+**two** to `OffscreenToPanelMessage` (`leader-mode-changed` and
+`leader-tray-reset-response`). `OffscreenClient.handleOffscreenMessage`
 (or the bridge's panel-side equivalent) must route `leader-mode-changed` to
 the `PanelLeaderSyncProxy` listener. Mirror the compile-time assertion
 `_AssertSprinkleSummaryEnvelopeMatches` from `follower-sprinkle-bridge.ts` for
@@ -374,9 +410,10 @@ if (trayRuntimeConfig?.workerBaseUrl) {
   let trayPeers!: LeaderTrayPeerManager;
 
   // The leader bridge resolves `sync` lazily via a getter, breaking the
-  // circular-init chain.
+  // circular-init chain. `bridge` (OffscreenBridge) is passed so the
+  // bridge owns the single activeScoopJid cache (see §2, §5).
   const hub: OffscreenMessageHub = /* same hub shape as the follower path uses */;
-  const leaderBridge = connectOffscreenLeaderSyncBridge(hub, () => sync ?? null);
+  const leaderBridge = connectOffscreenLeaderSyncBridge(hub, () => sync ?? null, bridge);
   leaderBridge.signalLeaderMode(true);
 
   // Map orchestrator scoops to wire summaries (no helper exists; inline it).
@@ -391,15 +428,14 @@ if (trayRuntimeConfig?.workerBaseUrl) {
     }));
 
   // Cone-jid fallback (extension defaults the active scoop to the cone until
-  // the panel pushes a `leader-active-scoop` selection).
+  // the panel pushes a `leader-active-scoop` selection). `bridge` owns the
+  // cache — the leader bridge is write-through only (see §2, §5).
   const getActiveJid = () =>
-    leaderBridge.getActiveScoopJid() ?? bridge.getConeJid() ?? '';
+    bridge.getActiveScoopJid() ?? bridge.getConeJid() ?? '';
 
   sync = new LeaderSyncManager({
-    getMessages: () =>
-      bridge.getBuffer(getActiveJid()) as unknown as ChatMessage[],
-    getMessagesForScoop: (jid) =>
-      bridge.getBuffer(jid) as unknown as ChatMessage[],
+    getMessages: () => bridge.getMessagesForJid(getActiveJid()),
+    getMessagesForScoop: (jid) => bridge.getMessagesForJid(jid),
     getScoopJid: () => getActiveJid(),
     getScoops: toScoopSummaries,
     getSprinkles: () => leaderBridge.getSprinkles(),
@@ -773,29 +809,68 @@ offscreen, and `host-command.ts:222` falls back to `buildPanelRpcResetter()`
 Result today: panel `host reset` in extension hits the "no active tray
 session" message even when a tray is active.
 
-Wire it via a new panel→offscreen RPC envelope (request/response — one of
-the few round-trips this design has):
+Wire it via the new panel→offscreen RPC envelope (request/response — the
+only round-trip this design has). Types are defined in §3
+(`LeaderTrayResetRequestMsg` / `LeaderTrayResetResponseMsg`).
+
+The **listener for `leader-tray-reset` lives in `extension-leader-tray.ts`**,
+not in `connectOffscreenLeaderSyncBridge`, because the reset sequence touches
+the factory-local `sync` / `peers` / `trayLeader` handles which are not
+visible to `LeaderSyncManager` (the only thing the leader bridge knows
+about). Concretely:
 
 ```ts
-export interface LeaderTrayResetRequestMsg {
-  type: 'leader-tray-reset';
-  requestId: string;
-}
-export interface LeaderTrayResetResponseMsg {
-  type: 'leader-tray-reset-response';
-  requestId: string;
-  ok: boolean;
-  status?: LeaderTrayRuntimeStatus;
-  error?: string;
-}
+// Inside the workerBaseUrl branch in extension-leader-tray.ts, after
+// constructing sync / peers / trayLeader:
+const resetListener = (msg: unknown) => {
+  if (!isExtensionMessage(msg)) return;
+  if (msg.source !== 'panel') return;
+  if (msg.payload?.type !== 'leader-tray-reset') return;
+  const { requestId } = msg.payload as LeaderTrayResetRequestMsg;
+  void (async () => {
+    try {
+      sync.stop();
+      trayPeers.stop();
+      trayLeader.stop();
+      await trayLeader.clearSession();
+      await trayLeader.start();
+      chrome.runtime
+        .sendMessage({
+          source: 'offscreen',
+          payload: {
+            type: 'leader-tray-reset-response',
+            requestId,
+            ok: true,
+            status: getLeaderTrayRuntimeStatus(),
+          } satisfies LeaderTrayResetResponseMsg,
+        })
+        .catch(() => {});
+    } catch (err) {
+      chrome.runtime
+        .sendMessage({
+          source: 'offscreen',
+          payload: {
+            type: 'leader-tray-reset-response',
+            requestId,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          } satisfies LeaderTrayResetResponseMsg,
+        })
+        .catch(() => {});
+    }
+  })();
+};
+chrome.runtime.onMessage.addListener(resetListener);
+// Removed inside stopTrayRuntime: chrome.runtime.onMessage.removeListener(resetListener)
 ```
 
-The offscreen handler runs the same reset path `setTrayResetter` is wired to
-in §4 — `sync.stop() → peers.stop() → leader.stop() → leader.clearSession()
-→ leader.start()` — and returns the new status. The panel-side
-`setTrayResetter` sends this RPC and awaits the response, then surfaces
-errors the same way the standalone path does. ~30 LoC of wire glue plus the
-existing handler; in scope for this PR.
+`PanelLeaderSyncProxy.resetTray(timeoutMs)` keeps a **requestId → resolver
+waiter map** (same pattern as `PanelFollowerSprinkleProxy.fetchSprinkleContent`
+at follower-sprinkle-bridge.ts:112-218). Each call mints a fresh
+`requestId`, registers `{ resolve, reject, timer }`, sends the RPC, and
+resolves/rejects when the matching `leader-tray-reset-response` arrives or
+the timer expires. Default timeout 30s — tray reconnect can take a few
+seconds end-to-end. ~30 LoC of wire glue plus the listener above.
 
 ### 7. `SprinkleManager.onChange`
 
@@ -980,6 +1055,41 @@ body is extracted into a testable helper.
 - Architecture: `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture"
 
 ## Revision history
+
+**Revision 5 (2026-05-20):** Internal-consistency pass after fourth review.
+All changes are documentation-drift fixes — no architectural shift. Verified
+each spot against current `main`.
+
+1. **Active-scoop read path unified on `OffscreenBridge`** (§4 skeleton).
+   Revision 4's §2/§5 said the bridge owns the cache, but the §4 code still
+   read `leaderBridge.getActiveScoopJid()`. Fixed to
+   `bridge.getActiveScoopJid()`. Dropped `getActiveScoopJid()` from
+   `OffscreenLeaderSyncBridgeHandle` entirely so there's no API surface
+   for a second cache.
+2. **`leader-tray-reset` listener relocated** (architecture diagram +
+   §6a). The ASCII diagram and §2 used to imply the leader bridge or
+   `OffscreenBridge` handled the reset envelope; in fact it must live in
+   `extension-leader-tray.ts` because the reset sequence touches the
+   factory-local `sync` / `peers` / `trayLeader` handles. Added a concrete
+   listener skeleton to §6a.
+3. **§3 message union completed.** Revision 4's §3 listed five
+   panel→offscreen types but the LoC table claimed six. Added
+   `LeaderTrayResetRequestMsg` (panel→offscreen) and
+   `LeaderTrayResetResponseMsg` (offscreen→panel). Union-add note updated to
+   say "six panel→offscreen + two offscreen→panel".
+4. **`connectOffscreenLeaderSyncBridge` factory takes a `bridge`
+   parameter** (§2). The `leader-active-scoop` inbound handler must call
+   `bridge.setActiveScoopJid(jid)`, but revision 4's factory signature only
+   accepted `hub` and `syncRef`. Added a narrow `ActiveScoopSink` type
+   (`{ setActiveScoopJid(jid: string | null): void }`) so tests can stub it.
+5. **`getMessagesForJid` used consistently** (§4, key-insight table).
+   The architecture diagram and §5 already said `bridge.getMessagesForJid(...)`,
+   but the §4 skeleton still cast `bridge.getBuffer(jid) as unknown as
+ChatMessage[]`. Aligned to use the wrapper throughout.
+6. **`PanelLeaderSyncProxy.resetTray` waiter-map noted explicitly** (§6a).
+   Pattern is identical to `PanelFollowerSprinkleProxy.fetchSprinkleContent`
+   at follower-sprinkle-bridge.ts:112-218; default timeout 30s for tray
+   reconnect headroom.
 
 **Revision 4 (2026-05-20):** Applied corrections from third review. Verified
 each claim against current `main` HEAD. Changes:
