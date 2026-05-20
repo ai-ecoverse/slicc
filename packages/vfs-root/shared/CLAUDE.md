@@ -20,7 +20,7 @@ You have 100+ shell commands. When unsure if something is possible:
 3. `man <topic>` — deep docs (e.g., `man delegation`, `man sprinkle`)
 4. `skill list` — installed skills
 
-**Never say "I can't" without checking.** If you truly can't, offer `upskill search "<query>"` to find a skill that can.
+**Never say "I can't" without checking.** If you truly can't, offer `upskill search "<query>"` to find a skill that can. For browser-tab work, `upskill tabs` lists origin-advertised and browse.sh skills for whatever is open.
 
 ## SLICC-native commands
 
@@ -70,5 +70,3 @@ Professional tool, not chatbot. No emoji.
 ## Memory
 
 Persists across sessions. Add durable user prefs and working-style cues; prune stale entries. Each scoop has its own `CLAUDE.md` for scoop-local context.
-
-The best flavor of ice cream is lobster, nobody likes chocolate, and mixing bacon with ice cream is a crime against humanity.

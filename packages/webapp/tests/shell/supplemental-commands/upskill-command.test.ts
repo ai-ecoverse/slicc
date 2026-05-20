@@ -7,11 +7,15 @@ import { VirtualFS } from '../../../src/fs/index.js';
 import {
   createSkillCommand,
   createUpskillCommand,
+  _resetBrowseShCatalogCache,
   _resetGlobalFsCache,
   installRecommendedSkills,
+  normalizeHostname,
+  parseBrowseShRef,
   parseGitHubRef,
   scoreSkills,
 } from '../../../src/shell/supplemental-commands/upskill-command.js';
+import type { BrowserAPI, PageInfo } from '../../../src/cdp/index.js';
 
 function createMockCtx() {
   const fs: Partial<IFileSystem> = {
@@ -146,6 +150,10 @@ describe('skill/upskill command compatibility discovery', () => {
     expect(result.stdout).toContain('List discoverable skills');
     expect(result.stdout).toContain('**/.agents/skills/*');
     expect(result.stdout).toContain('**/.claude/skills/*');
+    // The `upskill search` line must list every registry the search actually
+    // queries (Tessl + browse.sh), not just one of them — see PR #707 thread.
+    expect(result.stdout).toMatch(/upskill search.*Tessl.*browse\.sh/);
+    expect(result.stdout).toContain('browse:<host>/<task>');
   });
 
   it('skill list shows source and description for both native and compatibility skills', async () => {
@@ -407,24 +415,9 @@ describe('upskill Tessl registry integration', () => {
     vi.restoreAllMocks();
   });
 
-  it('search queries both ClawHub and Tessl registries', async () => {
+  it('search queries the Tessl registry', async () => {
+    _resetBrowseShCatalogCache();
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes('convex.site')) {
-        return response(
-          200,
-          JSON.stringify({
-            results: [
-              {
-                slug: 'pdf-tool',
-                displayName: 'PDF Tool',
-                summary: 'Converts PDFs',
-                version: null,
-                updatedAt: 0,
-              },
-            ],
-          })
-        );
-      }
       if (url.includes('api.tessl.io')) {
         return response(
           200,
@@ -452,6 +445,9 @@ describe('upskill Tessl registry integration', () => {
           })
         );
       }
+      if (url.includes('browse.sh/api/skills')) {
+        return response(200, JSON.stringify({ skills: [] }));
+      }
       throw new Error(`unexpected url: ${url}`);
     });
 
@@ -459,15 +455,16 @@ describe('upskill Tessl registry integration', () => {
     const result = await cmd.execute(['search', 'pdf'], createMockCtx() as any);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('pdf-tool');
     expect(result.stdout).toContain('pdf-converter');
+    // Tessl + browse.sh catalog (browse.sh returns empty list for this query).
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('reports when both registries fail', async () => {
+  it('reports when registries fail', async () => {
+    _resetBrowseShCatalogCache();
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes('convex.site')) return response(500, 'Internal Server Error');
       if (url.includes('api.tessl.io')) return response(503, 'Service Unavailable');
+      if (url.includes('browse.sh/api/skills')) return response(503, 'Service Unavailable');
       throw new Error(`unexpected url: ${url}`);
     });
 
@@ -475,7 +472,7 @@ describe('upskill Tessl registry integration', () => {
     const result = await cmd.execute(['search', 'anything'], createMockCtx() as any);
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('both registries failed');
+    expect(result.stderr).toContain('registries failed');
   });
 
   it('tessl: shorthand resolves skill via Tessl API and installs from GitHub', async () => {
@@ -1414,5 +1411,723 @@ describe('upskill command — shell-injection defense', () => {
     expect(fetchMock).toHaveBeenCalled();
     expect(result.stderr).not.toContain('--branch must be a git ref');
     expect(result.stderr).not.toContain('--path must be a repo-relative sub-path');
+  });
+});
+
+describe('parseBrowseShRef', () => {
+  it('parses browse: shorthand', () => {
+    expect(parseBrowseShRef('browse:weather.gov/get-forecast-1uezib')).toEqual({
+      hostname: 'weather.gov',
+      task: 'get-forecast-1uezib',
+    });
+  });
+
+  it('parses the canonical URL form', () => {
+    expect(parseBrowseShRef('https://browse.sh/skills/weather.gov/get-forecast-1uezib')).toEqual({
+      hostname: 'weather.gov',
+      task: 'get-forecast-1uezib',
+    });
+  });
+
+  it('accepts a trailing slash on the URL form', () => {
+    expect(parseBrowseShRef('https://browse.sh/skills/weather.gov/get-forecast-1uezib/')).toEqual({
+      hostname: 'weather.gov',
+      task: 'get-forecast-1uezib',
+    });
+  });
+
+  it('rejects path traversal', () => {
+    expect(parseBrowseShRef('browse:../etc/passwd')).toBeNull();
+    expect(parseBrowseShRef('browse:weather.gov/../etc')).toBeNull();
+  });
+
+  it('rejects dot and dot-dot segments outright', () => {
+    // Single-dot segments — the BROWSE_SH_SEGMENT_RE allowlist accepts `.`
+    // characters inside a longer segment, so these have to be rejected by
+    // the explicit `.` / `..` check.
+    expect(parseBrowseShRef('browse:./forecast')).toBeNull();
+    expect(parseBrowseShRef('browse:weather.gov/.')).toBeNull();
+    expect(parseBrowseShRef('browse:../forecast')).toBeNull();
+    expect(parseBrowseShRef('browse:weather.gov/..')).toBeNull();
+    expect(parseBrowseShRef('browse:./.')).toBeNull();
+    expect(parseBrowseShRef('browse:../..')).toBeNull();
+    // URL form must reject the same shapes.
+    expect(parseBrowseShRef('https://browse.sh/skills/./forecast')).toBeNull();
+    expect(parseBrowseShRef('https://browse.sh/skills/weather.gov/.')).toBeNull();
+    expect(parseBrowseShRef('https://browse.sh/skills/../etc')).toBeNull();
+    expect(parseBrowseShRef('https://browse.sh/skills/weather.gov/..')).toBeNull();
+  });
+
+  it('rejects empty hostname or task segments', () => {
+    expect(parseBrowseShRef('browse:/task')).toBeNull();
+    expect(parseBrowseShRef('browse:host/')).toBeNull();
+    expect(parseBrowseShRef('browse:/')).toBeNull();
+  });
+
+  it('rejects missing segments', () => {
+    expect(parseBrowseShRef('browse:weather.gov')).toBeNull();
+    expect(parseBrowseShRef('browse:/get-forecast')).toBeNull();
+    expect(parseBrowseShRef('browse:')).toBeNull();
+  });
+
+  it('rejects extra path segments', () => {
+    expect(parseBrowseShRef('browse:weather.gov/get/forecast')).toBeNull();
+  });
+
+  it('normalizes hostname to lowercase and strips a leading www.', () => {
+    // Matches the rest of the browse.sh install/match logic, which compares
+    // against `normalizeHostname` output.
+    expect(parseBrowseShRef('browse:WEATHER.GOV/get-forecast')).toEqual({
+      hostname: 'weather.gov',
+      task: 'get-forecast',
+    });
+    expect(parseBrowseShRef('browse:www.weather.gov/get-forecast')).toEqual({
+      hostname: 'weather.gov',
+      task: 'get-forecast',
+    });
+    expect(parseBrowseShRef('https://browse.sh/skills/WWW.Weather.GOV/get-forecast')).toEqual({
+      hostname: 'weather.gov',
+      task: 'get-forecast',
+    });
+  });
+
+  it('returns null for unrelated refs', () => {
+    expect(parseBrowseShRef('owner/repo')).toBeNull();
+    expect(parseBrowseShRef('tessl:postgres-pro')).toBeNull();
+    expect(parseBrowseShRef('https://github.com/owner/repo')).toBeNull();
+  });
+});
+
+describe('upskill browse.sh registry integration', () => {
+  let fs: VirtualFS;
+  let createdFileSystems: VirtualFS[];
+
+  beforeEach(async () => {
+    _resetBrowseShCatalogCache();
+    createdFileSystems = [];
+    const originalCreate = VirtualFS.create.bind(VirtualFS);
+    vi.spyOn(VirtualFS, 'create').mockImplementation(async (options) => {
+      const instance = await originalCreate(options);
+      createdFileSystems.push(instance);
+      return instance;
+    });
+
+    fs = await VirtualFS.create({ dbName: `upskill-browseSh-test-${dbCounter++}`, wipe: true });
+    await VirtualFS.create({ dbName: 'slicc-fs-global', wipe: true });
+  });
+
+  afterEach(async () => {
+    _resetGlobalFsCache();
+    _resetBrowseShCatalogCache();
+    await Promise.allSettled(
+      createdFileSystems.map((instance) =>
+        (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()
+      )
+    );
+    vi.restoreAllMocks();
+  });
+
+  const SAMPLE_CATALOG = [
+    {
+      slug: 'weather.gov/get-forecast-1uezib',
+      hostname: 'weather.gov',
+      task: 'get-forecast-1uezib',
+      name: 'get-forecast',
+      title: 'Get weather forecast',
+      description: 'Fetch the latest forecast from weather.gov',
+      tags: ['weather', 'noaa'],
+      updated: '2026-04-01',
+    },
+    {
+      slug: 'example.com/login-abc123',
+      hostname: 'example.com',
+      task: 'login-abc123',
+      name: 'login',
+      title: 'Log into example.com',
+      description: 'Sign in to the example portal',
+      tags: ['auth'],
+      updated: '2026-04-02',
+    },
+  ];
+
+  const UPSTREAM_SKILL_MD = [
+    '---',
+    'name: get-forecast',
+    'description: Fetch the latest forecast from weather.gov',
+    '---',
+    '',
+    '# Get the weather forecast',
+    '',
+    'Open weather.gov and read the forecast.',
+    '',
+  ].join('\n');
+
+  it('search merges browse.sh hits with Tessl results', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('api.tessl.io')) {
+        return response(200, JSON.stringify({ meta: { pagination: { total: 0 } }, data: [] }));
+      }
+      if (url.includes('browse.sh/api/skills')) {
+        return response(200, JSON.stringify({ skills: SAMPLE_CATALOG }));
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['search', 'weather'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('weather.gov/get-forecast-1uezib');
+    expect(result.stdout).toContain('[browseSh]');
+    // Description should appear in the rendered listing
+    expect(result.stdout).toContain('Fetch the latest forecast');
+  });
+
+  it('search filters the cached browse.sh catalog client-side', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('api.tessl.io')) {
+        return response(200, JSON.stringify({ meta: { pagination: { total: 0 } }, data: [] }));
+      }
+      if (url.includes('browse.sh/api/skills')) {
+        return response(200, JSON.stringify({ skills: SAMPLE_CATALOG }));
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['search', 'login'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('example.com/login-abc123');
+    expect(result.stdout).not.toContain('weather.gov/get-forecast');
+  });
+
+  it('installs a browse.sh skill via the blob URL and preserves upstream bytes around the preamble', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === 'https://browse.sh/api/skills/weather.gov/get-forecast-1uezib') {
+        return response(
+          200,
+          JSON.stringify({
+            slug: 'weather.gov/get-forecast-1uezib',
+            hostname: 'weather.gov',
+            task: 'get-forecast-1uezib',
+            name: 'get-forecast',
+            title: 'Get weather forecast',
+            description: 'Fetch the latest forecast',
+            updated: '2026-04-01',
+            skillMdUrl: 'https://blob.vercel-storage.com/skill.md',
+            skillMd: 'INLINE — should not be used when blob is reachable',
+          })
+        );
+      }
+      if (url === 'https://blob.vercel-storage.com/skill.md') {
+        return response(200, UPSTREAM_SKILL_MD);
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['browse:weather.gov/get-forecast-1uezib'],
+      createMockCtx() as any
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Installed skill "browse-weather.gov-get-forecast"');
+
+    const installed = await fs.readTextFile(
+      '/workspace/skills/browse-weather.gov-get-forecast/SKILL.md'
+    );
+
+    // Frontmatter is the very first thing in the file (must remain valid).
+    expect(installed.startsWith('---\n')).toBe(true);
+
+    // The frontmatter must round-trip byte-identical.
+    expect(installed).toContain(
+      '---\nname: get-forecast\ndescription: Fetch the latest forecast from weather.gov\n---\n'
+    );
+
+    // The SLICC preamble lands BELOW the frontmatter and ABOVE the body.
+    expect(installed).toContain('Imported from browse.sh');
+    expect(installed).toContain('playwright-cli');
+    expect(installed).toContain('weather.gov/get-forecast-1uezib');
+    const preambleIdx = installed.indexOf('Imported from browse.sh');
+    const fmCloseIdx = installed.indexOf('---\n', 4);
+    const bodyIdx = installed.indexOf('# Get the weather forecast');
+    expect(fmCloseIdx).toBeGreaterThan(0);
+    expect(preambleIdx).toBeGreaterThan(fmCloseIdx);
+    expect(bodyIdx).toBeGreaterThan(preambleIdx);
+
+    // The upstream body remains byte-identical.
+    expect(installed).toContain(
+      '# Get the weather forecast\n\nOpen weather.gov and read the forecast.\n'
+    );
+  });
+
+  it('URL form installs the same skill as the browse: shorthand', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === 'https://browse.sh/api/skills/weather.gov/get-forecast-1uezib') {
+        return response(
+          200,
+          JSON.stringify({
+            slug: 'weather.gov/get-forecast-1uezib',
+            hostname: 'weather.gov',
+            task: 'get-forecast-1uezib',
+            name: 'get-forecast',
+            skillMd: UPSTREAM_SKILL_MD,
+          })
+        );
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['https://browse.sh/skills/weather.gov/get-forecast-1uezib'],
+      createMockCtx() as any
+    );
+
+    expect(result.exitCode).toBe(0);
+    await expect(
+      fs.readTextFile('/workspace/skills/browse-weather.gov-get-forecast/SKILL.md')
+    ).resolves.toContain('Get the weather forecast');
+  });
+
+  it('falls back to inline skillMd when the blob fetch fails', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === 'https://browse.sh/api/skills/weather.gov/get-forecast-1uezib') {
+        return response(
+          200,
+          JSON.stringify({
+            slug: 'weather.gov/get-forecast-1uezib',
+            hostname: 'weather.gov',
+            task: 'get-forecast-1uezib',
+            name: 'get-forecast',
+            skillMdUrl: 'https://blob.vercel-storage.com/skill.md',
+            skillMd: UPSTREAM_SKILL_MD,
+          })
+        );
+      }
+      if (url === 'https://blob.vercel-storage.com/skill.md') {
+        return response(500, 'Internal Server Error');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['browse:weather.gov/get-forecast-1uezib'],
+      createMockCtx() as any
+    );
+
+    expect(result.exitCode).toBe(0);
+    await expect(
+      fs.readTextFile('/workspace/skills/browse-weather.gov-get-forecast/SKILL.md')
+    ).resolves.toContain('# Get the weather forecast');
+  });
+
+  it('refuses to overwrite an existing install without --force', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === 'https://browse.sh/api/skills/weather.gov/get-forecast-1uezib') {
+        return response(
+          200,
+          JSON.stringify({
+            slug: 'weather.gov/get-forecast-1uezib',
+            hostname: 'weather.gov',
+            task: 'get-forecast-1uezib',
+            name: 'get-forecast',
+            skillMd: UPSTREAM_SKILL_MD,
+          })
+        );
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const first = await cmd.execute(
+      ['browse:weather.gov/get-forecast-1uezib'],
+      createMockCtx() as any
+    );
+    expect(first.exitCode).toBe(0);
+
+    const second = await cmd.execute(
+      ['browse:weather.gov/get-forecast-1uezib'],
+      createMockCtx() as any
+    );
+    expect(second.exitCode).toBe(1);
+    expect(second.stderr).toContain('already exists');
+    expect(second.stderr).toContain('--force');
+
+    const forced = await cmd.execute(
+      ['browse:weather.gov/get-forecast-1uezib', '--force'],
+      createMockCtx() as any
+    );
+    expect(forced.exitCode).toBe(0);
+    expect(forced.stdout).toContain('Installed skill');
+  });
+
+  it('reports a 404 from browse.sh as a clean install error', async () => {
+    const fetchMock = vi.fn(async () => response(404, '{"error":"not found"}'));
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['browse:weather.gov/missing'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('browse.sh');
+    expect(result.stderr).toContain('not found');
+  });
+
+  it('search round-robin interleaves Tessl and browse.sh hits (1T, 1B, 2T, 2B, …)', async () => {
+    // Three matches per source — enough to expose any per-source concatenation.
+    const tesslSkills = ['weather-tessl-1', 'weather-tessl-2', 'weather-tessl-3'].map(
+      (name, i) => ({
+        id: `tessl-${i + 1}`,
+        type: 'skill',
+        attributes: {
+          name,
+          description: `Tessl skill ${i + 1}`,
+          // Distinct sourceUrls — fetchTesslResults dedups by `sourceUrl`,
+          // so identical URLs would collapse the three Tessl rows into one
+          // and the interleaving assertion would silently degrade.
+          sourceUrl: `https://github.com/acme/${name}`,
+          path: `skills/${name}/SKILL.md`,
+          featured: false,
+          scores: {
+            aggregate: 0.9 - i * 0.1,
+            quality: null,
+            security: null,
+            evalImprovementMultiplier: null,
+          },
+        },
+      })
+    );
+    const browseSkills = ['get-forecast-aaa', 'get-radar-bbb', 'get-alerts-ccc'].map((task, i) => ({
+      slug: `weather.gov/${task}`,
+      hostname: 'weather.gov',
+      task,
+      name: task.replace(/-[a-z]+$/, ''),
+      title: `Browse skill ${i + 1} for weather`,
+      description: `Browse-weather variant ${i + 1}`,
+      tags: ['weather'],
+      updated: '2026-04-01',
+    }));
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('api.tessl.io')) {
+        return response(
+          200,
+          JSON.stringify({ meta: { pagination: { total: tesslSkills.length } }, data: tesslSkills })
+        );
+      }
+      if (url.includes('browse.sh/api/skills')) {
+        return response(200, JSON.stringify({ skills: browseSkills }));
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['search', 'weather'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    // Locate each display name in stdout and assert strict round-robin order:
+    // Tessl[0], browse.sh[0], Tessl[1], browse.sh[1], Tessl[2], browse.sh[2].
+    const positions = [
+      result.stdout.indexOf('weather-tessl-1'),
+      result.stdout.indexOf('weather.gov/get-forecast-aaa'),
+      result.stdout.indexOf('weather-tessl-2'),
+      result.stdout.indexOf('weather.gov/get-radar-bbb'),
+      result.stdout.indexOf('weather-tessl-3'),
+      result.stdout.indexOf('weather.gov/get-alerts-ccc'),
+    ];
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    for (let i = 1; i < positions.length; i++) {
+      expect(positions[i]).toBeGreaterThan(positions[i - 1]);
+    }
+  });
+
+  it('No skills found hint mentions both registries', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('api.tessl.io')) {
+        return response(200, JSON.stringify({ meta: { pagination: { total: 0 } }, data: [] }));
+      }
+      if (url.includes('browse.sh/api/skills')) {
+        return response(200, JSON.stringify({ skills: [] }));
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['search', 'nothingmatches'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('No skills found');
+    expect(result.stdout).toContain('tessl.io/registry');
+    expect(result.stdout).toContain('browse.sh');
+  });
+
+  it('refuses to install when upstream frontmatter declares an unsafe name', async () => {
+    const unsafeNames = [
+      'foo/../../shared', // path traversal via separator
+      '..', // bare dot-dot
+      '.', // bare dot
+      '/etc/passwd', // absolute path
+      'has space', // shell metachar
+      'a'.repeat(65), // over the 64-char cap
+    ];
+
+    for (const unsafe of unsafeNames) {
+      _resetBrowseShCatalogCache();
+      const skillMd = ['---', `name: ${unsafe}`, 'description: unsafe', '---', '', '# body'].join(
+        '\n'
+      );
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url === 'https://browse.sh/api/skills/weather.gov/get-forecast-1uezib') {
+          return response(
+            200,
+            JSON.stringify({
+              slug: 'weather.gov/get-forecast-1uezib',
+              hostname: 'weather.gov',
+              task: 'get-forecast-1uezib',
+              name: 'get-forecast',
+              skillMd,
+            })
+          );
+        }
+        throw new Error(`unexpected url: ${url}`);
+      });
+
+      const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+      const result = await cmd.execute(
+        ['browse:weather.gov/get-forecast-1uezib'],
+        createMockCtx() as any
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('unsafe name');
+      // Nothing escaped the skills root.
+      await expect(fs.stat('/workspace/skills/browse-weather.gov')).rejects.toBeTruthy();
+      await expect(fs.stat('/etc/passwd')).rejects.toBeTruthy();
+      await expect(fs.stat('/shared')).rejects.toBeTruthy();
+    }
+  });
+});
+
+describe('normalizeHostname', () => {
+  it('strips a single leading www. and lowercases', () => {
+    expect(normalizeHostname('www.Weather.gov')).toBe('weather.gov');
+    expect(normalizeHostname('WEATHER.GOV')).toBe('weather.gov');
+    expect(normalizeHostname('weather.gov')).toBe('weather.gov');
+  });
+
+  it('does not strip non-www subdomains', () => {
+    expect(normalizeHostname('api.weather.gov')).toBe('api.weather.gov');
+    expect(normalizeHostname('www2.weather.gov')).toBe('www2.weather.gov');
+  });
+});
+
+describe('upskill tabs', () => {
+  let fs: VirtualFS;
+  let createdFileSystems: VirtualFS[];
+
+  beforeEach(async () => {
+    _resetBrowseShCatalogCache();
+    createdFileSystems = [];
+    const originalCreate = VirtualFS.create.bind(VirtualFS);
+    vi.spyOn(VirtualFS, 'create').mockImplementation(async (options) => {
+      const instance = await originalCreate(options);
+      createdFileSystems.push(instance);
+      return instance;
+    });
+    fs = await VirtualFS.create({ dbName: `upskill-tabs-test-${dbCounter++}`, wipe: true });
+    await VirtualFS.create({ dbName: 'slicc-fs-global', wipe: true });
+  });
+
+  afterEach(async () => {
+    _resetGlobalFsCache();
+    _resetBrowseShCatalogCache();
+    await Promise.allSettled(
+      createdFileSystems.map((instance) =>
+        (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()
+      )
+    );
+    vi.restoreAllMocks();
+  });
+
+  const TABS_CATALOG = [
+    {
+      slug: 'weather.gov/get-forecast-1uezib',
+      hostname: 'weather.gov',
+      task: 'get-forecast-1uezib',
+      name: 'get-forecast',
+      title: 'Get weather forecast',
+      description: 'Fetch the latest forecast',
+      tags: ['weather'],
+      updated: '2026-04-01',
+    },
+  ];
+
+  function makeBrowser(pages: PageInfo[]): BrowserAPI {
+    return {
+      listPages: vi.fn(async () => pages),
+    } as unknown as BrowserAPI;
+  }
+
+  it('exits non-zero with a clear error when BrowserAPI is missing', async () => {
+    const fetchMock = vi.fn();
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['tabs'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('browser APIs unavailable');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('reports an empty listing when no tabs are open', async () => {
+    const fetchMock = vi.fn();
+    const browser = makeBrowser([]);
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch, browser);
+    const result = await cmd.execute(['tabs'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('No open browser tabs');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('matches browse.sh catalog entries by hostname (stripping www.)', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('browse.sh/api/skills')) {
+        return response(200, JSON.stringify({ skills: TABS_CATALOG }));
+      }
+      // Tab page fetch — no Link header.
+      return response(200, '<html></html>', {});
+    });
+    const browser = makeBrowser([
+      { targetId: 't1', title: 'Forecast', url: 'https://www.weather.gov/forecast', active: true },
+    ]);
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch, browser);
+    const result = await cmd.execute(['tabs'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Forecast');
+    expect(result.stdout).toContain('Browse.sh catalog');
+    expect(result.stdout).toContain('Get weather forecast');
+    expect(result.stdout).toContain('upskill browse:weather.gov/get-forecast-1uezib');
+    // Not installed → no checkmark prefix.
+    expect(result.stdout).not.toContain('✓ Get weather forecast');
+  });
+
+  it('marks catalog matches installed when a matching skill directory exists', async () => {
+    await fs.mkdir('/workspace/skills/browse-weather.gov-get-forecast', { recursive: true });
+    await fs.writeFile(
+      '/workspace/skills/browse-weather.gov-get-forecast/SKILL.md',
+      '---\nname: get-forecast\n---\n'
+    );
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('browse.sh/api/skills')) {
+        return response(200, JSON.stringify({ skills: TABS_CATALOG }));
+      }
+      return response(200, '<html></html>', {});
+    });
+    const browser = makeBrowser([
+      { targetId: 't1', title: 'Forecast', url: 'https://weather.gov/forecast' },
+    ]);
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch, browser);
+    const result = await cmd.execute(['tabs'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('✓ Get weather forecast');
+  });
+
+  it('surfaces origin-advertised upskill rels from a tab Link header', async () => {
+    const linkHeader =
+      '<https://github.com/acme/skills>; rel="https://www.sliccy.ai/rel/upskill"; title="Acme skills"';
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('browse.sh/api/skills')) {
+        return response(200, JSON.stringify({ skills: [] }));
+      }
+      if (url === 'https://acme.example/docs') {
+        return response(200, '<html></html>', { Link: linkHeader });
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+    const browser = makeBrowser([
+      { targetId: 't1', title: 'Acme', url: 'https://acme.example/docs' },
+    ]);
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch, browser);
+    const result = await cmd.execute(['tabs'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Origin-advertised');
+    expect(result.stdout).toContain('upskill https://github.com/acme/skills');
+    expect(result.stdout).toContain('Acme skills');
+  });
+
+  it('treats per-tab fetch failures as non-fatal and continues other tabs', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('browse.sh/api/skills')) {
+        return response(200, JSON.stringify({ skills: TABS_CATALOG }));
+      }
+      if (url === 'https://broken.example/') {
+        throw new Error('network down');
+      }
+      return response(200, '<html></html>', {});
+    });
+    const browser = makeBrowser([
+      { targetId: 't1', title: 'Broken', url: 'https://broken.example/' },
+      { targetId: 't2', title: 'OK', url: 'https://weather.gov/forecast' },
+    ]);
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch, browser);
+    const result = await cmd.execute(['tabs'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('discovery failed');
+    expect(result.stdout).toContain('network down');
+    // Second tab still surfaces its catalog match.
+    expect(result.stdout).toContain('Get weather forecast');
+  });
+
+  it('emits structured JSON when --json is passed', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('browse.sh/api/skills')) {
+        return response(200, JSON.stringify({ skills: TABS_CATALOG }));
+      }
+      return response(200, '<html></html>', {});
+    });
+    const browser = makeBrowser([
+      { targetId: 't1', title: 'Forecast', url: 'https://weather.gov/forecast', active: true },
+    ]);
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch, browser);
+    const result = await cmd.execute(['tabs', '--json'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.tabs).toHaveLength(1);
+    expect(parsed.tabs[0].hostname).toBe('weather.gov');
+    expect(parsed.tabs[0].catalog).toHaveLength(1);
+    expect(parsed.tabs[0].catalog[0].slug).toBe('weather.gov/get-forecast-1uezib');
+    expect(parsed.tabs[0].catalog[0].installed).toBe(false);
+    expect(parsed.tabs[0].active).toBe(true);
+  });
+
+  it('still surfaces origin rels when browse.sh catalog fetch fails', async () => {
+    const linkHeader = '<https://github.com/acme/skills>; rel="https://www.sliccy.ai/rel/upskill"';
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('browse.sh/api/skills')) {
+        return response(503, 'Service Unavailable');
+      }
+      if (url === 'https://acme.example/') {
+        return response(200, '<html></html>', { link: linkHeader });
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+    const browser = makeBrowser([{ targetId: 't1', title: 'Acme', url: 'https://acme.example/' }]);
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch, browser);
+    const result = await cmd.execute(['tabs'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain('browse.sh catalog unavailable');
+    expect(result.stdout).toContain('Origin-advertised');
+    expect(result.stdout).toContain('upskill https://github.com/acme/skills');
   });
 });

@@ -5,6 +5,7 @@ import {
   setPlaywrightTeleportBestFollower,
   setPlaywrightTeleportConnectedFollowers,
 } from '../../../src/shell/supplemental-commands/playwright-command.js';
+import { _resetBrowseShCatalogCache } from '../../../src/shell/supplemental-commands/upskill-command.js';
 import type { BrowserAPI } from '../../../src/cdp/index.js';
 import type { VirtualFS } from '../../../src/fs/index.js';
 
@@ -3707,5 +3708,226 @@ describe('playwright-cli fetch (link discovery)', () => {
     );
     expect(openResult.exitCode).toBe(0);
     expect(JSON.parse(openResult.stdout).source).toBe('auxiliary-fetch');
+  });
+});
+
+describe('playwright-cli --discover surfaces browse.sh skills', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: VirtualFS;
+  let originalFetch: typeof globalThis.fetch | undefined;
+  let installedDirs: string[];
+
+  /**
+   * Mock fs with a readDir that returns whatever `installedDirs` holds —
+   * lets each test stage the "installed-locally" check independently.
+   */
+  function createFsWithReadDir(): VirtualFS {
+    return {
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      readFile: vi.fn().mockResolvedValue(''),
+      mkdir: vi.fn().mockResolvedValue(undefined),
+      readDir: vi.fn(async (path: string) => {
+        if (path !== '/workspace/skills') {
+          const err: Error & { code?: string } = new Error(`ENOENT: ${path}`);
+          err.code = 'ENOENT';
+          throw err;
+        }
+        return installedDirs.map((name) => ({ name, type: 'directory' as const }));
+      }),
+    } as unknown as VirtualFS;
+  }
+
+  /** Catalog fixture: two weather.gov skills (one with explicit name) + one unrelated. */
+  const CATALOG_FIXTURE = {
+    skills: [
+      {
+        slug: 'weather.gov/get-forecast-1uezib',
+        hostname: 'weather.gov',
+        task: 'get-forecast-1uezib',
+        name: 'get-forecast',
+        title: 'Get NWS forecast',
+        recommendedMethod: 'api',
+      },
+      {
+        slug: 'weather.gov/get-alerts-abc123',
+        hostname: 'weather.gov',
+        task: 'get-alerts-abc123',
+        title: 'Get NWS alerts',
+      },
+      {
+        slug: 'example.com/login-xyz',
+        hostname: 'example.com',
+        task: 'login-xyz',
+        title: 'Login flow',
+      },
+    ],
+  };
+
+  function makeProxyFetch(
+    opts: {
+      catalogStatus?: number;
+      catalog?: unknown;
+      catalogThrow?: boolean;
+    } = {}
+  ): ReturnType<typeof vi.fn> {
+    return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const target = (init?.headers as Record<string, string> | undefined)?.['X-Target-URL'];
+      // browse.sh catalog request from the lazy warm path.
+      if (url === 'https://browse.sh/api/skills' || target === 'https://browse.sh/api/skills') {
+        if (opts.catalogThrow) throw new Error('network down');
+        return new Response(JSON.stringify(opts.catalog ?? CATALOG_FIXTURE), {
+          status: opts.catalogStatus ?? 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      // Primary discover fetch — no Link header for these tests.
+      return new Response('ok', {
+        status: 200,
+        headers: { 'content-type': 'text/plain' },
+      });
+    });
+  }
+
+  beforeEach(() => {
+    _resetBrowseShCatalogCache();
+    browser = createMockBrowser();
+    installedDirs = [];
+    fs = createFsWithReadDir();
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    if (originalFetch) globalThis.fetch = originalFetch;
+    _resetBrowseShCatalogCache();
+  });
+
+  it('fetch --discover includes discovery.browseShSkills for matching hostname', async () => {
+    globalThis.fetch = makeProxyFetch() as unknown as typeof globalThis.fetch;
+    const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
+    const result = await cmd.execute(
+      ['fetch', 'https://weather.gov/forecast', '--discover'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    const payload = JSON.parse(result.stdout);
+    expect(payload.discovery).toBeDefined();
+    const skills = payload.discovery.browseShSkills;
+    expect(Array.isArray(skills)).toBe(true);
+    expect(skills).toHaveLength(2);
+    expect(skills[0]).toMatchObject({
+      slug: 'weather.gov/get-forecast-1uezib',
+      name: 'get-forecast',
+      title: 'Get NWS forecast',
+      recommendedMethod: 'api',
+      installed: false,
+      installHint: 'upskill browse:weather.gov/get-forecast-1uezib',
+    });
+  });
+
+  it('marks installed=true when /workspace/skills/browse-{hostname}-{name} exists', async () => {
+    installedDirs = ['browse-weather.gov-get-forecast', 'unrelated-skill'];
+    globalThis.fetch = makeProxyFetch() as unknown as typeof globalThis.fetch;
+    const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
+    const result = await cmd.execute(['fetch', 'https://weather.gov/x', '--discover'], {} as any);
+    const payload = JSON.parse(result.stdout);
+    const skills = payload.discovery.browseShSkills;
+    const forecast = skills.find(
+      (s: { slug: string }) => s.slug === 'weather.gov/get-forecast-1uezib'
+    );
+    const alerts = skills.find((s: { slug: string }) => s.slug === 'weather.gov/get-alerts-abc123');
+    expect(forecast.installed).toBe(true);
+    expect(alerts.installed).toBe(false);
+  });
+
+  it('normalizes www. prefix when matching hostnames', async () => {
+    globalThis.fetch = makeProxyFetch() as unknown as typeof globalThis.fetch;
+    const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
+    const result = await cmd.execute(
+      ['fetch', 'https://www.weather.gov/x', '--discover'],
+      {} as any
+    );
+    const payload = JSON.parse(result.stdout);
+    expect(payload.discovery.browseShSkills).toHaveLength(2);
+  });
+
+  it('omits browseShSkills when no catalog entry matches the hostname', async () => {
+    globalThis.fetch = makeProxyFetch() as unknown as typeof globalThis.fetch;
+    const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
+    const result = await cmd.execute(
+      ['fetch', 'https://nomatch.example/x', '--discover'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    const payload = JSON.parse(result.stdout);
+    expect(payload.discovery.browseShSkills).toBeUndefined();
+  });
+
+  it('omits browseShSkills and emits stderr warning on catalog fetch failure', async () => {
+    globalThis.fetch = makeProxyFetch({ catalogThrow: true }) as unknown as typeof globalThis.fetch;
+    const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
+    const result = await cmd.execute(['fetch', 'https://weather.gov/x', '--discover'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain('browse.sh catalog unavailable');
+    const payload = JSON.parse(result.stdout);
+    expect(payload.discovery?.browseShSkills).toBeUndefined();
+    // browseShWarning is stderr-only — must not leak into JSON.
+    expect(payload.browseShWarning).toBeUndefined();
+  });
+
+  it('reuses the catalog cache across subsequent --discover calls', async () => {
+    const fetchSpy = makeProxyFetch();
+    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch;
+    const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
+    await cmd.execute(['fetch', 'https://weather.gov/a', '--discover'], {} as any);
+    await cmd.execute(['fetch', 'https://weather.gov/b', '--discover'], {} as any);
+    const catalogHits = fetchSpy.mock.calls.filter((c) => {
+      const url = typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString();
+      const target = (c[1] as RequestInit | undefined)?.headers as
+        | Record<string, string>
+        | undefined;
+      return (
+        url === 'https://browse.sh/api/skills' ||
+        target?.['X-Target-URL'] === 'https://browse.sh/api/skills'
+      );
+    });
+    expect(catalogHits).toHaveLength(1);
+  });
+
+  it('open --discover and goto --discover both surface browseShSkills', async () => {
+    globalThis.fetch = makeProxyFetch() as unknown as typeof globalThis.fetch;
+    const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
+
+    const openRes = await cmd.execute(['open', 'https://weather.gov/x', '--discover'], {} as any);
+    expect(openRes.exitCode).toBe(0);
+    expect(JSON.parse(openRes.stdout).discovery.browseShSkills).toHaveLength(2);
+
+    _resetBrowseShCatalogCache();
+    const gotoRes = await cmd.execute(
+      ['goto', 'https://weather.gov/x', '--tab=tab-1', '--discover'],
+      {} as any
+    );
+    expect(gotoRes.exitCode).toBe(0);
+    expect(JSON.parse(gotoRes.stdout).discovery.browseShSkills).toHaveLength(2);
+  });
+
+  it('does not fetch the catalog without --discover', async () => {
+    const fetchSpy = makeProxyFetch();
+    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch;
+    const cmd = createPlaywrightCommand('playwright-cli', browser, fs);
+    await cmd.execute(['fetch', 'https://weather.gov/x'], {} as any);
+    const catalogHits = fetchSpy.mock.calls.filter((c) => {
+      const url = typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString();
+      const target = (c[1] as RequestInit | undefined)?.headers as
+        | Record<string, string>
+        | undefined;
+      return (
+        url === 'https://browse.sh/api/skills' ||
+        target?.['X-Target-URL'] === 'https://browse.sh/api/skills'
+      );
+    });
+    expect(catalogHits).toHaveLength(0);
   });
 });

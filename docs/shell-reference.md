@@ -40,7 +40,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **convert / magick**                        | `convert-command.ts`       | Image conversion (ImageMagick style)                                                                                                                                                                                                                        | `convert -resize 800x600 input.jpg output.jpg`                                                                                              |
 | **playwright-cli / playwright / puppeteer** | `playwright-command.ts`    | Browser automation shell CLI                                                                                                                                                                                                                                | `snapshot`, `click <ref>`, `cookie-set`, `tab-list`                                                                                         |
 | **screencapture**                           | `screencapture-command.ts` | Capture user's screen via browser screen sharing API                                                                                                                                                                                                        | `<output.png>`, `-c` (clipboard), `-v` / `--view` (agent vision)                                                                            |
-| **upskill**                                 | `upskill-command.ts`       | Install skills from GitHub/ClawHub                                                                                                                                                                                                                          | `upskill owner/repo`, `upskill clawhub:name`, `upskill search "query"`                                                                      |
+| **upskill**                                 | `upskill-command.ts`       | Install skills from GitHub, the Tessl registry, or browse.sh; suggest skills for open browser tabs                                                                                                                                                          | `upskill owner/repo`, `upskill tessl:<name>`, `upskill browse:<host>/<task>`, `upskill search "query"`, `upskill tabs [--json]`             |
 | **sprinkle**                                | `sprinkle-command.ts`      | Manage `.shtml` sprinkle panels and inline chat UI                                                                                                                                                                                                          | `sprinkle list`, `sprinkle open <name>`, `sprinkle chat '<html>'`                                                                           |
 | **cost**                                    | `cost-command.ts`          | Show session cost breakdown per scoop/cone                                                                                                                                                                                                                  | `--json`, `-h`                                                                                                                              |
 | **models**                                  | `models-command.ts`        | List available LLM models with pricing and benchmarks                                                                                                                                                                                                       | `--all`, `--json`, `--provider <id>`, `--refresh`                                                                                           |
@@ -126,7 +126,7 @@ Browser automation is also exposed as shell commands: `playwright-cli`, `playwri
 - **Cookie convenience forms**: `cookie-set <name> <value>` and `cookie-delete <name>` use the current page URL when `--domain` and `--path` are omitted.
 - **Teleport restores auth state**: arm it explicitly with `playwright teleport --start=<regex> --return=<regex>` or implicitly with `--teleport-start` / `--teleport-return` on `open`, `tab-new`, or `goto` / `navigate`. When the leader hits `--start`, the intercepted auth URL opens on a follower for the human to finish login; when the follower hits `--return`, teleport restores both cookies and page storage (`localStorage` + `sessionStorage`) back to the leader. For cross-origin SSO flows, teleport hydrates the captured app origin first, then lands on the best matching app URL.
 - **Unexpected dialogs**: attached pages auto-dismiss unexpected JavaScript dialogs so a stray `alert()` or similar modal does not stall automation indefinitely.
-- **Link-header discovery**: `playwright-cli fetch <url>` always emits JSON with parsed RFC 8288 `links[]` and any SLICC handoff match; pass `--discover` to also fetch P0 capability docs (`api-catalog`, `service-desc`, `llms.txt`, …). The same `--discover` flag on `goto` / `navigate` / `open` / `tab-new` performs an auxiliary proxied fetch and switches output to the same JSON payload. See [link-discovery.md](link-discovery.md) for the full module map.
+- **Link-header discovery**: `playwright-cli fetch <url>` always emits JSON with parsed RFC 8288 `links[]` and any SLICC handoff match; pass `--discover` to also fetch P0 capability docs (`api-catalog`, `service-desc`, `llms.txt`, …) and to populate `discovery.browseShSkills[]` with any browse.sh catalog entries whose hostname matches the destination URL (cold-cache call triggers one lazy fetch per shell). The same `--discover` flag on `goto` / `navigate` / `open` / `tab-new` performs an auxiliary proxied fetch and switches output to the same JSON payload. See [link-discovery.md](link-discovery.md) for the full module map.
 
 ### Common flow
 
@@ -145,6 +145,41 @@ playwright-cli cookie-set theme dark
 - `/.playwright/screenshots/` — saved screenshots
 
 Use the skill doc at `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md` for the full command list and operating guidance.
+
+---
+
+## upskill
+
+Skill package manager. Installs into `/workspace/skills/<name>/` from three registries:
+
+| Install ref                        | Registry                                                                                                                                                                                     |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `upskill <owner>/<repo>[@branch]`  | GitHub. Supports `--skill <name>` (repeatable), `--all`, `--path <subfolder>`, `--branch/-b`, `--list`, `--force`.                                                                           |
+| `upskill tessl:<name>`             | Tessl registry (resolves to a GitHub source under the hood).                                                                                                                                 |
+| `upskill browse:<hostname>/<task>` | [browse.sh](https://browse.sh) site-specific skills. Equivalent URL form: `upskill https://browse.sh/skills/<hostname>/<task>`. Installs into `/workspace/skills/browse-<hostname>-<name>/`. |
+
+`upskill search "<query>"` round-robin interleaves results from Tessl and the browse.sh catalog (first hit from each source, then second from each, …) so both registries get visibility in the top page. `upskill recommendations` matches your profile; add `--install` to write the matches.
+
+### browse.sh: SLICC adapter preamble
+
+Installed browse.sh `SKILL.md` files get a fixed preamble inserted **immediately below the upstream YAML frontmatter** (the frontmatter remains the first thing in the file; the upstream body round-trips byte-identical below the preamble). The preamble is the same for every browse.sh skill regardless of `recommendedMethod`:
+
+```markdown
+> [!NOTE] **Imported from browse.sh** — original slug: `<hostname>/<task>`
+>
+> **SLICC adaptation:** use `playwright-cli` — you are running inside the user's real browser session, so the bot-detection workarounds the upstream skill assumes are usually unnecessary.
+>
+> Source: <https://browse.sh/skills/<hostname>/<task>> · updated <date>
+```
+
+### `upskill tabs [--json]`
+
+Suggests skills for each open browser tab. For every tab `upskill tabs` lists:
+
+- **Origin-advertised upskill rels** — for each tab URL, fetches it through the same proxied fetch the rest of the shell uses, parses the response's `Link` header (same `parseLinkHeader` helper as `discover` / PR #602), and surfaces any `Link: <…>; rel="https://www.sliccy.ai/rel/upskill"` the site emits. Distinct from `discoverLinks`, which follows P0 capability rels (`api-catalog`, `service-desc`, `llms-txt`, …) — `upskill tabs` only looks at the `upskill` rel.
+- **Browse.sh catalog matches** — hostname-exact after stripping leading `www.` (so `https://www.weather.gov/` matches `weather.gov` but `https://forecast.weather.gov/` does not). Each match prints `installHint` and a `✓` marker for skills already installed under `/workspace/skills/browse-<host>-<name>/`.
+
+`--json` emits the same data as a `{ tabs: TabUpskillResult[] }` envelope (one entry per tab with `targetId`, `url`, `hostname`, `active`, `origin[]`, `catalog[]`, `failures[]`). Per-tab discovery failures are collected non-fatally; a catalog fetch failure becomes a stderr warning but the command still exits 0. Without a browser API attached the command prints `browser APIs unavailable in this environment` and exits 1.
 
 ---
 

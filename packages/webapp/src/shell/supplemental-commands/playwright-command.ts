@@ -19,6 +19,11 @@ import { discoverLinks } from '../../net/discover-links.js';
 import { extractHandoff, type HandoffMatch } from '../../net/handoff-link.js';
 import { parseLinkHeader, type ParsedLink } from '../../net/link-header.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
+import {
+  fetchBrowseShCatalog,
+  normalizeHostname,
+  type BrowseShSkillSummary,
+} from './upskill-command.js';
 const log = createLogger('playwright-teleport');
 
 // ---------------------------------------------------------------------------
@@ -1675,6 +1680,18 @@ function asWebFetch(secureFetch: SecureFetch): typeof fetch {
   return adapter as typeof fetch;
 }
 
+/** One browse.sh catalog match for the destination hostname. */
+export interface BrowseShSkillMatch {
+  slug: string;
+  /** Skill name as published in browse.sh's catalog (frontmatter `name`). */
+  name?: string;
+  title: string;
+  recommendedMethod?: string;
+  /** True when `/workspace/skills/browse-{hostname}-{name}` already exists. */
+  installed: boolean;
+  installHint: string;
+}
+
 /** Shape returned to scoops when a fetch/navigation surfaces Link headers. */
 export interface PlaywrightDiscoveryResult {
   url: string;
@@ -1688,12 +1705,100 @@ export interface PlaywrightDiscoveryResult {
     status?: unknown;
     llmsTxt?: string;
     failures: Array<{ rel: string; href: string; error: string }>;
+    /**
+     * browse.sh skills whose hostname matches the destination URL. Omitted
+     * when the catalog fetch fails (a warning is surfaced on stderr instead)
+     * or when no catalog entry matches the destination's hostname.
+     */
+    browseShSkills?: BrowseShSkillMatch[];
   };
   /**
    * Populated when the primary fetch itself failed but the command still
    * needs to surface a structured result (so `links: []` is meaningful).
    */
   error?: string;
+  /**
+   * Non-fatal warning string surfaced when the browse.sh catalog fetch
+   * itself failed during `--discover`. Callers should pipe this to stderr;
+   * it never blocks navigation.
+   * @internal — not part of the JSON payload emitted to scoops.
+   */
+  browseShWarning?: string;
+}
+
+/**
+ * List installed browse.sh skill directories under `/workspace/skills/`.
+ * Returns a Set of directory names (e.g. `browse-weather.gov-get-forecast`).
+ * Best-effort: a missing or unreadable dir yields an empty Set so the
+ * discovery result still reports `installed: false` instead of failing.
+ */
+async function listInstalledBrowseShSkills(fs: VirtualFS): Promise<Set<string>> {
+  const names = new Set<string>();
+  try {
+    const entries = await fs.readDir('/workspace/skills');
+    for (const e of entries) {
+      if (e.type === 'directory' && e.name.startsWith('browse-')) {
+        names.add(e.name);
+      }
+    }
+  } catch {
+    // /workspace/skills may not exist yet — treat as no installs.
+  }
+  return names;
+}
+
+/**
+ * Match the destination URL's hostname against the browse.sh catalog.
+ *
+ * Lazy-warms the in-module catalog cache (one ~200KB CORS-open fetch per
+ * shell session, acceptable because `--discover` is opt-in). Reuses the
+ * cache on subsequent calls. On catalog fetch failure, returns a warning
+ * and omits the skills field — never blocks the surrounding navigation.
+ */
+async function matchBrowseShSkillsForUrl(
+  url: string,
+  fs: VirtualFS,
+  fetchImpl: SecureFetch
+): Promise<{ skills?: BrowseShSkillMatch[]; warning?: string }> {
+  let host = '';
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return {};
+  }
+  const normalized = host ? normalizeHostname(host) : '';
+  if (!normalized) return {};
+
+  let catalog: BrowseShSkillSummary[];
+  try {
+    catalog = await fetchBrowseShCatalog(fetchImpl);
+  } catch (err) {
+    return {
+      warning: `playwright-cli: warning: browse.sh catalog unavailable: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  const installed = await listInstalledBrowseShSkills(fs);
+  const matches: BrowseShSkillMatch[] = [];
+  for (const s of catalog) {
+    if (!s.hostname) continue;
+    if (normalizeHostname(s.hostname) !== normalized) continue;
+    // Mirror `installFromBrowseSh`'s dirname rule (used by `upskill tabs`
+    // as well — single source of truth): prefer the catalog's `name` and
+    // only strip the trailing `-xxxxxx` disambiguation hash when falling
+    // back to `task`.
+    const skillName = s.name || s.task.replace(/-[A-Za-z0-9]{4,8}$/, '') || s.task;
+    const dirName = `browse-${s.hostname}-${skillName}`;
+    matches.push({
+      slug: s.slug,
+      name: s.name,
+      title: s.title || s.name || s.task,
+      recommendedMethod: s.recommendedMethod,
+      installed: installed.has(dirName),
+      installHint: `upskill browse:${s.hostname}/${s.task}`,
+    });
+  }
+  return { skills: matches };
 }
 
 /**
@@ -1705,7 +1810,12 @@ export interface PlaywrightDiscoveryResult {
  */
 async function fetchAndDiscover(
   url: string,
-  options: { discover?: boolean; method?: string; fetchImpl?: SecureFetch } = {}
+  options: {
+    discover?: boolean;
+    method?: string;
+    fetchImpl?: SecureFetch;
+    fs?: VirtualFS;
+  } = {}
 ): Promise<PlaywrightDiscoveryResult> {
   const fetchImpl = options.fetchImpl ?? createProxiedFetch();
   let response: Awaited<ReturnType<typeof fetchImpl>>;
@@ -1751,6 +1861,22 @@ async function fetchAndDiscover(
     // downstream parsers can distinguish "no follow-up needed" from
     // "follow-up not requested".
     result.discovery = { failures: [] };
+  }
+
+  // Hostname → browse.sh skills lookup. Lazy-warms the catalog cache on
+  // cold shells; reuses it on subsequent --discover calls. Catalog fetch
+  // failures surface as `browseShWarning` (piped to stderr by the caller)
+  // and the field is omitted — discovery proceeds either way.
+  if (options.discover && options.fs) {
+    const match = await matchBrowseShSkillsForUrl(url, options.fs, fetchImpl);
+    if (match.warning) {
+      result.browseShWarning = match.warning;
+    } else if (match.skills && match.skills.length > 0) {
+      result.discovery = {
+        ...(result.discovery ?? { failures: [] }),
+        browseShSkills: match.skills,
+      };
+    }
   }
 
   return result;
@@ -2008,7 +2134,10 @@ export function createPlaywrightCommand(
           // see from CDP without extra plumbing, and the extra fetch is
           // multi-request overhead the caller has to opt into.
           if (flags['discover'] === 'true') {
-            const discoveryResult = await fetchAndDiscover(url, { discover: true });
+            const discoveryResult = await fetchAndDiscover(url, { discover: true, fs });
+            // Strip browseShWarning before serializing — it's a stderr-only
+            // signal, not part of the JSON payload scoops parse.
+            const { browseShWarning, ...payloadFields } = discoveryResult;
             const payload = {
               action: 'open',
               targetId,
@@ -2016,11 +2145,11 @@ export function createPlaywrightCommand(
               // auxiliary proxied fetch separate from the CDP navigation —
               // may differ in auth state, cookies, redirects.
               source: 'auxiliary-fetch' as const,
-              ...discoveryResult,
+              ...payloadFields,
             };
             result = {
               stdout: JSON.stringify(payload, null, 2) + '\n',
-              stderr: '',
+              stderr: browseShWarning ? `${browseShWarning}\n` : '',
               exitCode: 0,
             };
             break;
@@ -2042,11 +2171,14 @@ export function createPlaywrightCommand(
           const targetUrl = positional[0];
           const discover = flags['discover'] === 'true';
           const method = flags['method'] ?? 'GET';
-          const payload = await fetchAndDiscover(targetUrl, { discover, method });
+          const fullResult = await fetchAndDiscover(targetUrl, { discover, method, fs });
+          // Strip browseShWarning before serializing — it's a stderr-only
+          // signal, not part of the JSON payload scoops parse.
+          const { browseShWarning, ...payload } = fullResult;
           // Always JSON; non-zero exit only when the primary fetch failed.
           result = {
             stdout: JSON.stringify(payload, null, 2) + '\n',
-            stderr: '',
+            stderr: browseShWarning ? `${browseShWarning}\n` : '',
             exitCode: payload.error ? 1 : 0,
           };
           break;
@@ -2123,7 +2255,13 @@ export function createPlaywrightCommand(
           // URL so the scoop can see RFC 8288 Link headers + P0 discovery.
           // Default off; see the open/tab-new comment for rationale.
           if (flags['discover'] === 'true') {
-            const discoveryResult = await fetchAndDiscover(positional[0], { discover: true });
+            const discoveryResult = await fetchAndDiscover(positional[0], {
+              discover: true,
+              fs,
+            });
+            // Strip browseShWarning before serializing — it's a stderr-only
+            // signal, not part of the JSON payload scoops parse.
+            const { browseShWarning, ...payloadFields } = discoveryResult;
             const payload = {
               action: 'navigate',
               targetId: tab.targetId,
@@ -2131,11 +2269,11 @@ export function createPlaywrightCommand(
               // auxiliary proxied fetch separate from the CDP navigation —
               // may differ in auth state, cookies, redirects.
               source: 'auxiliary-fetch' as const,
-              ...discoveryResult,
+              ...payloadFields,
             };
             result = {
               stdout: JSON.stringify(payload, null, 2) + '\n',
-              stderr: '',
+              stderr: browseShWarning ? `${browseShWarning}\n` : '',
               exitCode: 0,
             };
             break;
