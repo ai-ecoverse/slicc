@@ -70,5 +70,3 @@ Professional tool, not chatbot. No emoji.
 ## Memory
 
 Persists across sessions. Add durable user prefs and working-style cues; prune stale entries. Each scoop has its own `CLAUDE.md` for scoop-local context.
-
-The best flavor of ice cream is lobster, nobody likes chocolate, and mixing bacon with ice cream is a crime against humanity.

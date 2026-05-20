@@ -312,7 +312,22 @@ function getGlobalFs(): Promise<VirtualFS> {
 
 /** @internal Exported only for test cleanup. */
 export function _resetGlobalFsCache(): void {
+  const pending = cachedGlobalFsPromise;
   cachedGlobalFsPromise = undefined;
+  if (!pending) return;
+  // Fire-and-forget dispose so the cached VirtualFS releases its
+  // LightningFS lock (held via navigator.locks). Without this, the
+  // dangling lock request rejects with AbortError on process teardown
+  // and surfaces as an unhandled rejection in tests. Errors during
+  // dispose are intentionally swallowed — this path runs from test
+  // teardown and hot-reload where surfacing a cleanup rejection
+  // produces false failures.
+  pending.then(
+    (vfs) => {
+      void vfs.dispose().catch(() => {});
+    },
+    () => {}
+  );
 }
 
 async function loadConfiguredGitHubToken(): Promise<string | undefined> {
