@@ -214,4 +214,60 @@ describe('PanelLeaderSyncProxy.resetTray', () => {
     expect(a.state).toBe('first');
     expect(b.state).toBe('second');
   });
+
+  it('dispose() rejects pending resetTray promises with "disposed"', async () => {
+    const bus = createBus();
+    const proxy = new PanelLeaderSyncProxy(bus.panelSender, bus.panelSubscriber, {});
+    // No offscreen handler — the request hangs until dispose.
+    const pending = proxy.resetTray(60_000);
+    // Microtask so the proxy's resetTray has time to mint a request and register the waiter.
+    await Promise.resolve();
+    proxy.dispose();
+    await expect(pending).rejects.toThrow(/disposed/i);
+  });
+
+  it('dispose() clears the pending timeout so dispose itself does not hang or leak', async () => {
+    vi.useFakeTimers();
+    try {
+      const bus = createBus();
+      const proxy = new PanelLeaderSyncProxy(bus.panelSender, bus.panelSubscriber, {});
+      // No offscreen handler.
+      const pending = proxy.resetTray(60_000);
+      // Catch the rejection up front so we can advance timers safely.
+      const caught = pending.catch((err: unknown) => err);
+      await Promise.resolve();
+      proxy.dispose();
+      // If dispose didn't clear the timer, advancing past 60s would re-fire the
+      // timeout reject and produce an unhandled rejection in Node.
+      vi.advanceTimersByTime(60_001);
+      const err = await caught;
+      expect((err as Error).message).toMatch(/disposed/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('PanelLeaderSyncProxy post-dispose behavior', () => {
+  it('push methods become no-ops after dispose()', () => {
+    const bus = createBus();
+    const proxy = new PanelLeaderSyncProxy(bus.panelSender, bus.panelSubscriber, {});
+    proxy.dispose();
+    // Capture any outgoing envelope (via the bus's panel→offscreen path).
+    const sent: Array<{ source: string; payload: unknown }> = [];
+    bus.offscreenHub.onPanelMessage((env) => sent.push(env));
+    proxy.pushSprinklesSnapshot([]);
+    proxy.pushSprinkleUpdate('x', null);
+    proxy.pushUserMessageEcho('hi', 'm1');
+    proxy.pushActiveScoop('cone-1');
+    proxy.requestModeState();
+    expect(sent).toEqual([]);
+  });
+
+  it('resetTray() rejects synchronously when called after dispose', async () => {
+    const bus = createBus();
+    const proxy = new PanelLeaderSyncProxy(bus.panelSender, bus.panelSubscriber, {});
+    proxy.dispose();
+    await expect(proxy.resetTray(1000)).rejects.toThrow(/disposed/i);
+  });
 });

@@ -245,8 +245,8 @@ describe('createExtensionLeaderHooks', () => {
   });
 
   it('disposed → leader-mode-changed: true is a no-op (does not re-install)', () => {
-    // The disposed-gate at extension-leader-hooks.ts:118 prevents a
-    // late offscreen activation from re-installing hooks after teardown.
+    // Pins the `installed || disposed` gate inside installLeaderHooks() —
+    // late activation after teardown must NOT re-install hooks.
     // Without that gate, an offscreen-side late `leader-mode-changed: true`
     // (e.g., a delayed reply from a previous session) would reach a
     // disposed handle and re-attach listeners against now-dead bus

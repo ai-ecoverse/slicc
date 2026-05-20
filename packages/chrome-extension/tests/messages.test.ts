@@ -138,7 +138,8 @@ describe('leader-sync message types', () => {
   });
 
   it('sprinkles snapshot envelope is assignable to SprinkleSummary[]', () => {
-    // From spec §3 compile-time invariant.
+    // Compile-time invariant: the leader-sprinkles-snapshot envelope shape
+    // must remain structurally assignable to SprinkleSummary[].
     const msg: LeaderSprinklesSnapshotMsg = {
       type: 'leader-sprinkles-snapshot',
       sprinkles: [{ name: 'a', title: 'A', path: '/a.shtml', open: false, autoOpen: false }],

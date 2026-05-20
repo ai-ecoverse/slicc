@@ -299,7 +299,11 @@ describe('startExtensionLeaderTray onFollowerMessage', () => {
   }
 
   it('emits panel echo, persists, rebroadcasts synchronously', () => {
-    const bridge = makeMockBridge({ coneJid: 'cone-1' });
+    // Pass a stable buffer through the messages map so getBuffer('cone-1')
+    // returns the same array on every call — needed to inspect what the
+    // BufferLike.push payload actually looks like.
+    const coneBuffer: any[] = [];
+    const bridge = makeMockBridge({ coneJid: 'cone-1', messages: { 'cone-1': coneBuffer } });
     const { handle, options } = startWithCapture({ bridge: bridge as any });
     // Spy BEFORE invoking — otherwise the synchronous broadcast call
     // happens before the spy is installed and the assertion can't catch it.
@@ -311,6 +315,19 @@ describe('startExtensionLeaderTray onFollowerMessage', () => {
     );
     expect(bridge.persistScoop).toHaveBeenCalledWith('cone-1');
     expect(broadcastSpy).toHaveBeenCalledWith('hi', 'm-99', undefined);
+
+    // The push payload shape must match BufferLike — single source of truth
+    // at the leader-factory boundary. Regression guard: if the shape drifts
+    // (e.g., a field gets dropped or renamed), the panel-side chat persistence
+    // breaks silently.
+    expect(bridge.getBuffer).toHaveBeenCalledWith('cone-1');
+    const pushedEntry = coneBuffer.find((m: any) => m.id === 'm-99');
+    expect(pushedEntry).toMatchObject({
+      id: 'm-99',
+      role: 'user',
+      content: 'hi',
+      timestamp: expect.any(Number),
+    });
     handle.stop();
   });
 
@@ -539,7 +556,12 @@ describe('startExtensionLeaderTray webhook routing', () => {
       orchestrator: orchestrator as any,
       _trayLeaderFactory: trayLeaderFactoryFn as any,
     });
-    const capturedCfg = trayLeaderFactoryFn.mock.calls[0]![0] as any;
+    // No `as any` on the captured config: this proves the contextual typing
+    // path through `_trayLeaderFactory: ConstructorParameters<typeof
+    // LeaderTrayManager>[0]` is still alive. If a future change re-adds an
+    // explicit `(cfg: any) => …` annotation on the factory and breaks the
+    // narrowing, this line stops compiling.
+    const capturedCfg = trayLeaderFactoryFn.mock.calls[0]![0];
     capturedCfg.onControlMessage({
       type: 'webhook.event',
       webhookId: 'wh-1',
