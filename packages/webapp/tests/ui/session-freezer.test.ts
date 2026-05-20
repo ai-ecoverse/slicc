@@ -20,7 +20,9 @@ vi.mock('../../src/ui/chat-panel.js', () => ({
 }));
 
 import {
+  enrichPendingSession,
   freezeConeSession,
+  listPendingEnrichments,
   parseFrozenArchive,
   readSessionsIndex,
 } from '../../src/ui/session-freezer.js';
@@ -51,6 +53,14 @@ function makeFakeVfs() {
     },
     async flush(): Promise<void> {
       // no-op
+    },
+    async rm(path: string, _opts?: unknown): Promise<void> {
+      if (!files.has(path)) {
+        const err = new Error(`ENOENT: ${path}`);
+        (err as unknown as { code: string }).code = 'ENOENT';
+        throw err;
+      }
+      files.delete(path);
     },
   };
 }
@@ -445,5 +455,258 @@ describe('parseFrozenArchive', () => {
     expect(messages).toHaveLength(2);
     expect(messages[0].content).toBe('hi');
     expect(messages[1].content).toBe('hello');
+  });
+});
+
+describe('freezeConeSession quick mode', () => {
+  beforeEach(() => {
+    mockRunOneOffCompactionCall.mockReset();
+  });
+
+  it('writes a pending-named archive and pendingEnrichment index entry without LLM calls', async () => {
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [
+        userMessage('refactor the auth flow'),
+        assistantMessage('a'),
+        userMessage('b'),
+        assistantMessage('c'),
+      ],
+      createdAt: 100,
+      updatedAt: 200,
+    });
+    const vfs = makeFakeVfs();
+
+    const result = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      mode: 'quick',
+    });
+
+    expect(result).not.toBeNull();
+    expect(mockRunOneOffCompactionCall).not.toHaveBeenCalled();
+    expect(result!.pendingEnrichment).toBe(true);
+    // Synthetic filename — `pending-<short-id>.md` shape.
+    expect(result!.filename).toMatch(/^pending-[a-z0-9-]+\.md$/);
+    // Heuristic title only — first user message, lightly truncated.
+    expect(result!.title).toContain('refactor the auth flow');
+
+    // Archive landed under /sessions/.
+    expect(vfs.files.has(`/sessions/${result!.filename}`)).toBe(true);
+    // No memory append in quick mode.
+    expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
+
+    // Index entry carries the pendingEnrichment flag for the boot scanner.
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index).toHaveLength(1);
+    expect(index[0].pendingEnrichment).toBe(true);
+    expect(index[0].filename).toBe(result!.filename);
+  });
+});
+
+describe('listPendingEnrichments', () => {
+  it('returns [] when the index is missing', async () => {
+    const vfs = makeFakeVfs();
+    const out = await listPendingEnrichments(
+      vfs as unknown as Parameters<typeof listPendingEnrichments>[0]
+    );
+    expect(out).toEqual([]);
+  });
+
+  it('returns [] when the index is malformed', async () => {
+    const vfs = makeFakeVfs();
+    vfs.files.set('/sessions/index.json', '{not json');
+    const out = await listPendingEnrichments(
+      vfs as unknown as Parameters<typeof listPendingEnrichments>[0]
+    );
+    expect(out).toEqual([]);
+  });
+
+  it('returns only the pendingEnrichment=true subset of the index', async () => {
+    const vfs = makeFakeVfs();
+    vfs.files.set(
+      '/sessions/index.json',
+      JSON.stringify([
+        {
+          filename: 'pending-abc.md',
+          title: 'rough',
+          frozenAt: '2026-05-13T19:00:00.000Z',
+          messageCount: 4,
+          pendingEnrichment: true,
+        },
+        {
+          filename: '2026-05-12T10-00-00-000Z-done.md',
+          title: 'done',
+          frozenAt: '2026-05-12T10:00:00.000Z',
+          messageCount: 6,
+        },
+      ])
+    );
+    const out = await listPendingEnrichments(
+      vfs as unknown as Parameters<typeof listPendingEnrichments>[0]
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].filename).toBe('pending-abc.md');
+    expect(out[0].pendingEnrichment).toBe(true);
+  });
+});
+
+describe('enrichPendingSession', () => {
+  beforeEach(() => {
+    mockRunOneOffCompactionCall.mockReset();
+  });
+
+  /** Build a fully-populated fake VFS with one quick-frozen pending entry. */
+  async function seedPending(vfs: ReturnType<typeof makeFakeVfs>): Promise<{
+    pendingFilename: string;
+    frozenAt: string;
+  }> {
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [
+        userMessage('debug the build pipeline'),
+        assistantMessage('looking'),
+        userMessage('thanks'),
+        assistantMessage('np'),
+      ],
+      createdAt: 100,
+      updatedAt: 200,
+    });
+    const result = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      mode: 'quick',
+    });
+    return { pendingFilename: result!.filename, frozenAt: result!.frozenAt };
+  }
+
+  it('rewrites the title, renames the file, drops the pending flag, and appends memory', async () => {
+    const vfs = makeFakeVfs();
+    const { pendingFilename, frozenAt } = await seedPending(vfs);
+
+    // Memory first, then title — same order the freezer uses.
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('- prefers vitest\n- uses esm only')
+      .mockResolvedValueOnce('Build pipeline debug');
+
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'debug the build pipeline',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+      },
+      { model: fakeModel!, apiKey: 'k' }
+    );
+
+    expect(updated).not.toBeNull();
+    expect(updated!.pendingEnrichment).toBeUndefined();
+    expect(updated!.title).toBe('Build pipeline debug');
+    expect(updated!.filename).toMatch(/build-pipeline-debug\.md$/);
+
+    // Old pending file is gone, new file is present with the LLM title.
+    expect(vfs.files.has(`/sessions/${pendingFilename}`)).toBe(false);
+    const newContent = vfs.files.get(`/sessions/${updated!.filename}`);
+    expect(newContent).toBeDefined();
+    expect(newContent).toContain('title: "Build pipeline debug"');
+    expect(newContent).toContain('# Build pipeline debug');
+
+    // Memory landed under /shared/CLAUDE.md with the pending-enrichment source tag.
+    const memory = vfs.files.get('/shared/CLAUDE.md');
+    expect(memory).toBeTruthy();
+    expect(memory).toMatch(/Auto-extracted.*pending-enrichment/);
+    expect(memory).toContain('prefers vitest');
+
+    // Index now points to the renamed file and drops the pending flag.
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index).toHaveLength(1);
+    expect(index[0].filename).toBe(updated!.filename);
+    expect(index[0].pendingEnrichment).toBeUndefined();
+    expect(index[0].title).toBe('Build pipeline debug');
+  });
+
+  it('is a no-op when the archive file is missing (already renamed)', async () => {
+    const vfs = makeFakeVfs();
+    const result = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: 'pending-gone.md',
+        title: 'phantom',
+        frozenAt: '2026-05-13T19:00:00.000Z',
+        messageCount: 4,
+        pendingEnrichment: true,
+      },
+      { model: fakeModel!, apiKey: 'k' }
+    );
+    expect(result).toBeNull();
+    expect(mockRunOneOffCompactionCall).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the entry is not flagged pendingEnrichment', async () => {
+    const vfs = makeFakeVfs();
+    // Even if the file exists, an entry without the flag must not be enriched.
+    vfs.files.set('/sessions/foo.md', '---\ntitle: "foo"\n---\n\n# foo\n');
+    const result = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: 'foo.md',
+        title: 'foo',
+        frozenAt: '2026-05-13T19:00:00.000Z',
+        messageCount: 4,
+      },
+      { model: fakeModel!, apiKey: 'k' }
+    );
+    expect(result).toBeNull();
+    expect(mockRunOneOffCompactionCall).not.toHaveBeenCalled();
+    // File untouched.
+    expect(vfs.files.get('/sessions/foo.md')).toContain('# foo');
+  });
+
+  it('leaves the pending entry intact when the title LLM call fails', async () => {
+    const vfs = makeFakeVfs();
+    const { pendingFilename, frozenAt } = await seedPending(vfs);
+
+    // Memory succeeds, title throws — pending entry must stay put and the
+    // archive file must not be renamed or rewritten so the next boot can
+    // retry from a clean slate.
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('- bullet')
+      .mockRejectedValueOnce(new Error('rate limited'));
+
+    const result = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'heuristic title',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+      },
+      { model: fakeModel!, apiKey: 'k' }
+    );
+
+    expect(result).toBeNull();
+    // Pending file still on disk; no renamed file in its place.
+    expect(vfs.files.has(`/sessions/${pendingFilename}`)).toBe(true);
+    // No memory was appended either — we abort BEFORE the memory append
+    // so retries don't accumulate duplicate bullets.
+    expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
+    // Index unchanged — entry is still pending so the next boot retries.
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index).toHaveLength(1);
+    expect(index[0].pendingEnrichment).toBe(true);
+    expect(index[0].filename).toBe(pendingFilename);
   });
 });

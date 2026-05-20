@@ -18,7 +18,10 @@
  */
 
 import type { ZoneId } from './panel-types.js';
-import { LONG_PRESS_MS, attachLongPressGesture } from './long-press.js';
+import { LONG_PRESS_MS } from './long-press.js';
+// Side-effect import: registers the `<slicc-press-button>` custom element.
+import './press-button.js';
+import type { SliccPressButton } from './press-button.js';
 
 export interface RailItem {
   id: string;
@@ -60,7 +63,7 @@ export interface RailZoneOptions {
 }
 
 interface RailEntry {
-  btn: HTMLButtonElement;
+  btn: SliccPressButton;
   container: HTMLElement;
   item: RailItem;
 }
@@ -155,22 +158,16 @@ export class RailZone {
   }
 
   /**
-   * Replace the icon SVG/HTML for an existing rail item. Preserves
-   * the press-ripple layer so the click-and-hold animation still
+   * Replace the icon SVG/HTML for an existing rail item. The press-
+   * ripple layer is owned by `<slicc-press-button>`, which preserves
+   * it across `setIcon` calls — so the click-and-hold animation still
    * works after the swap. Used when a sprinkle's icon spec is
    * resolved asynchronously (Lucide lookup, VFS read).
    */
   setItemIcon(id: string, iconHtml: string): void {
     const entry = this.entries.get(id);
     if (!entry) return;
-    const press = entry.btn.querySelector('.rail__item-press-layer');
-    entry.btn.innerHTML = iconHtml;
-    if (press) entry.btn.insertBefore(press, entry.btn.firstChild);
-    else {
-      const layer = document.createElement('span');
-      layer.className = 'rail__item-press-layer';
-      entry.btn.insertBefore(layer, entry.btn.firstChild);
-    }
+    entry.btn.setIcon(iconHtml);
   }
 
   /**
@@ -314,87 +311,35 @@ export class RailZone {
   }
 
   /** Create the rail button for an item with click + long-press wiring. */
-  private createItemButton(item: RailItem): HTMLButtonElement {
-    const btn = document.createElement('button');
+  private createItemButton(item: RailItem): SliccPressButton {
+    const btn = document.createElement('slicc-press-button') as SliccPressButton;
     btn.className = 'rail__item';
     btn.dataset.itemId = item.id;
-    btn.dataset.tooltip = item.label;
-    btn.dataset.tooltipPos = 'left';
-    btn.setAttribute('aria-label', item.label);
+    btn.setAttribute('label', item.label);
+    btn.setAttribute('tooltip', item.label);
+    btn.setAttribute('tooltip-pos', 'left');
+    // Rail items have no double-click semantics — keep clicks instant.
+    btn.setAttribute('disable-double-click', '');
     btn.innerHTML = item.icon;
-
-    // Press-ripple layer: a clipped overlay that hosts the growing
-    // circle drawn during a long-press. Inserted as the first child
-    // so the icon renders on top of the ripple.
-    const pressLayer = document.createElement('span');
-    pressLayer.className = 'rail__item-press-layer';
-    btn.insertBefore(pressLayer, btn.firstChild);
 
     this.attachActivationHandlers(btn, item.id);
     return btn;
   }
 
   /** Wire click + long-press + modifier-click activation. */
-  private attachActivationHandlers(btn: HTMLButtonElement, id: string): void {
-    let pressEl: HTMLSpanElement | null = null;
-
-    const removePressVisual = () => {
-      if (pressEl) {
-        pressEl.remove();
-        pressEl = null;
+  private attachActivationHandlers(btn: SliccPressButton, id: string): void {
+    btn.addEventListener('long-press', () => this.activateItem(id, { fullpage: true }));
+    btn.addEventListener('short-click', () => {
+      // Plain click: toggle. In `defaultFullpage` mode (extension
+      // side panel) the active rail item already covers the panel,
+      // so collapsing on a second click on the same icon takes the
+      // user back to chat naturally.
+      const wantsFullpage = this.defaultFullpage;
+      if (this.activeId === id && (wantsFullpage ? this.fullpage : !this.fullpage)) {
+        this.collapse();
+      } else {
+        this.activateItem(id, { fullpage: wantsFullpage });
       }
-    };
-
-    /**
-     * Build the growing-circle ripple. The element starts as a tiny
-     * dot at the cursor, animates outward via CSS transitions, and
-     * fully covers the button right at the long-press threshold.
-     */
-    const startPressVisual = (e: MouseEvent) => {
-      removePressVisual();
-      const layer = btn.querySelector<HTMLElement>('.rail__item-press-layer');
-      if (!layer) return;
-      const rect = btn.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      // Cover the whole button no matter where the click landed:
-      // diagonal from the press point to the farthest corner.
-      const farthestX = Math.max(x, rect.width - x);
-      const farthestY = Math.max(y, rect.height - y);
-      const radius = Math.ceil(Math.hypot(farthestX, farthestY)) + 2;
-      const span = document.createElement('span');
-      span.className = 'rail__item-press';
-      span.style.left = `${x}px`;
-      span.style.top = `${y}px`;
-      span.style.width = '0px';
-      span.style.height = '0px';
-      span.style.transitionDuration = `${LONG_PRESS_MS}ms`;
-      layer.appendChild(span);
-      pressEl = span;
-      // Force layout, then expand to full button cover.
-      requestAnimationFrame(() => {
-        if (!pressEl) return;
-        pressEl.style.width = `${radius * 2}px`;
-        pressEl.style.height = `${radius * 2}px`;
-      });
-    };
-
-    attachLongPressGesture(btn, {
-      onPressStart: startPressVisual,
-      onPressEnd: removePressVisual,
-      onLongPress: () => this.activateItem(id, { fullpage: true }),
-      onShortClick: () => {
-        // Plain click: toggle. In `defaultFullpage` mode (extension
-        // side panel) the active rail item already covers the panel,
-        // so collapsing on a second click on the same icon takes the
-        // user back to chat naturally.
-        const wantsFullpage = this.defaultFullpage;
-        if (this.activeId === id && (wantsFullpage ? this.fullpage : !this.fullpage)) {
-          this.collapse();
-        } else {
-          this.activateItem(id, { fullpage: wantsFullpage });
-        }
-      },
     });
   }
 

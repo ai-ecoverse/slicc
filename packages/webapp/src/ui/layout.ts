@@ -32,7 +32,9 @@ import { MemoryPanel } from './memory-panel.js';
 import { ScoopsPanel } from './scoops-panel.js';
 import type { FrozenSessionIndexEntry } from './session-freezer.js';
 import { ScoopSwitcher } from './scoop-switcher.js';
-import { attachLongPressGesture } from './long-press.js';
+// Side-effect import: registers the `<slicc-press-button>` custom element.
+import './press-button.js';
+import type { SliccPressButton } from './press-button.js';
 import {
   getApiKey,
   clearAllSettings,
@@ -93,7 +95,7 @@ export class Layout {
   private threadHeaderEl!: HTMLElement;
   private threadHeaderName!: HTMLElement;
   /** Thread-header "New session" button — populated by `setupChatHeader`. */
-  private newSessionBtn: HTMLButtonElement | null = null;
+  private newSessionBtn: SliccPressButton | null = null;
 
   // Right side — always-visible vertical icon rail + collapsible
   // content panel beside it. Replaces the old horizontal mini-tabs.
@@ -149,12 +151,17 @@ export class Layout {
   public onModelsRefreshed?: () => void;
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
   /**
-   * Fired by the "New session" button. When `freeze` is true (default), the
-   * handler archives the cone session before clearing. The long-press
-   * gesture passes `freeze: false` to discard the conversation without
-   * adding it to /sessions/.
+   * Fired by the "New session" button. Three gestures map to three modes:
+   *   - short click → `freeze: true`  (full freeze, blocks reload while
+   *     the LLM call runs — historical default).
+   *   - long press  → `freeze: false` (discard the conversation; no
+   *     archive entry is written).
+   *   - double click → `freeze: 'quick'` (impatient mode: write a
+   *     pending-enrichment archive immediately and reload; memory
+   *     extraction + title generation finish in the background on the
+   *     next boot via `enrichPendingSessions`).
    */
-  public onClearChat?: (opts?: { freeze?: boolean }) => Promise<void>;
+  public onClearChat?: (opts?: { freeze?: boolean | 'quick' }) => Promise<void>;
   public onClearFilesystem?: () => Promise<void>;
   /**
    * Fired when the user clicks an entry in the frozen-sessions sidebar
@@ -941,16 +948,19 @@ export class Layout {
 
     // Clear chat button — the rail now owns panel toggling, so the
     // chat header drops the panel-toggle button entirely.
-    const clearChatBtn = document.createElement('button');
+    const clearChatBtn = document.createElement('slicc-press-button') as SliccPressButton;
     clearChatBtn.className = 'thread-header__panel-toggle thread-header__new-session';
     // Long, explanatory tooltip — the action is non-obvious enough that
     // a 1-word label would mislead users into thinking it's a destructive
-    // "clear" button. Long-press is the only secondary affordance.
-    clearChatBtn.dataset.tooltip =
-      'New session for faster responses — history and memories will be kept. Long press to discard this session without saving memory.';
+    // "clear" button. All three gestures are documented so power users
+    // can discover the impatient double-click without reading docs.
     clearChatBtn.setAttribute(
-      'aria-label',
-      'New session — keeps memory and history. Hold to discard without saving memory.'
+      'tooltip',
+      'New session for faster responses — history and memories will be kept. Double-click for fastest reset — memories extract in the background. Long press to discard this session without saving memory.'
+    );
+    clearChatBtn.setAttribute(
+      'label',
+      'New session — keeps memory and history. Double-click for fastest reset (memories extract in the background). Hold to discard without saving memory.'
     );
     this.newSessionBtn = clearChatBtn;
     // "Compose new" — square with a pencil, matches the universal
@@ -960,7 +970,7 @@ export class Layout {
       '<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>' +
       '<path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/>' +
       '</svg>';
-    const runNewSession = async (opts?: { freeze?: boolean }) => {
+    const runNewSession = async (opts?: { freeze?: boolean | 'quick' }) => {
       if (this.onClearChat) {
         await this.onClearChat(opts);
       } else {
@@ -968,11 +978,14 @@ export class Layout {
       }
       location.reload();
     };
-    // Short click → freeze + clear. Long press / modifier-click → discard.
-    attachLongPressGesture(clearChatBtn, {
-      onShortClick: () => void runNewSession({ freeze: true }),
-      onLongPress: () => void runNewSession({ freeze: false }),
-    });
+    // Short click → full freeze (blocks reload while the LLM call runs).
+    // Long press / modifier-click → discard without archiving.
+    // Double click → quick freeze (writes a pending-enrichment archive
+    // and reloads immediately; the next boot finishes the work in the
+    // background via `enrichPendingSessions`).
+    clearChatBtn.addEventListener('short-click', () => void runNewSession({ freeze: true }));
+    clearChatBtn.addEventListener('long-press', () => void runNewSession({ freeze: false }));
+    clearChatBtn.addEventListener('double-click', () => void runNewSession({ freeze: 'quick' }));
 
     const threadActions = document.createElement('div');
     threadActions.className = 'thread-header__actions';

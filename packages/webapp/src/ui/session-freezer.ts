@@ -57,6 +57,14 @@ export interface FrozenSessionIndexEntry {
   frozenAt: string;
   /** Count of messages in the frozen session. */
   messageCount: number;
+  /**
+   * Quick-freeze marker. When true, the archive was written with a
+   * heuristic title under a synthetic `pending-<short-id>.md` filename
+   * and still needs the two LLM calls (memory extraction + title) to
+   * finish. Boot-time enrichment picks these up and rewrites the title
+   * + renames the file to the canonical `<timestamp>-<slug>.md` form.
+   */
+  pendingEnrichment?: boolean;
 }
 
 export interface FrozenSession extends FrozenSessionIndexEntry {
@@ -90,6 +98,15 @@ export interface FreezeConeSessionOptions {
   apiKey?: string;
   /** Adobe X-Session-Id and friends — forwarded to both LLM calls. */
   headers?: Record<string, string>;
+  /**
+   * Freeze mode. `'full'` (default) runs the memory + title LLM calls
+   * synchronously before writing. `'quick'` skips both calls, writes the
+   * archive under a synthetic `pending-<short-id>.md` filename with the
+   * heuristic title, and marks the index entry `pendingEnrichment: true`
+   * so a boot-time scanner can finish the enrichment in the background
+   * after the next reload.
+   */
+  mode?: 'full' | 'quick';
 }
 
 /**
@@ -110,7 +127,10 @@ export async function freezeConeSession(
   }
 
   const agentMessages = toAgentMessages(session.messages);
-  const llmEnabled = Boolean(opts.apiKey && opts.model);
+  const mode = opts.mode ?? 'full';
+  // Quick mode skips both LLM calls outright — same effect as `llmEnabled=false`
+  // but additionally marks the index entry as needing later enrichment.
+  const llmEnabled = mode === 'full' && Boolean(opts.apiKey && opts.model);
 
   // 1. Memory extraction (best-effort).
   if (llmEnabled) {
@@ -168,8 +188,15 @@ export async function freezeConeSession(
   // 3. Write the archive and update the index. Archive is markdown — same
   //    format the chat-panel uses for the "copy chat history" long-press,
   //    plus a small YAML-style header for the freezer's own metadata.
+  //
+  //    Quick mode uses a synthetic `pending-<short-id>.md` filename so a
+  //    later enrichment pass can rename to the canonical
+  //    `<timestamp>-<slug>.md` form once the LLM-derived title is known.
   const frozenAt = new Date().toISOString();
-  const filename = `${frozenAt.replace(/[:.]/g, '-')}-${slugify(title)}.md`;
+  const filename =
+    mode === 'quick'
+      ? `pending-${pendingShortId()}.md`
+      : `${frozenAt.replace(/[:.]/g, '-')}-${slugify(title)}.md`;
   const archive: FrozenSessionArchive = {
     id: session.id,
     title,
@@ -185,6 +212,7 @@ export async function freezeConeSession(
     title,
     frozenAt,
     messageCount: session.messages.length,
+    ...(mode === 'quick' ? { pendingEnrichment: true } : {}),
   };
   try {
     await ensureDir(opts.vfs, SESSIONS_DIR);
@@ -319,6 +347,17 @@ function slugify(text: string): string {
   return slug || 'session';
 }
 
+/**
+ * Short, unique-enough id used in quick-mode pending filenames. Pairs a
+ * base-36 timestamp with a few random characters so multiple pending
+ * freezes within the same millisecond still collide-free.
+ */
+function pendingShortId(): string {
+  const time = Date.now().toString(36);
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `${time}-${rand}`;
+}
+
 async function ensureDir(vfs: VirtualFS, path: string): Promise<void> {
   try {
     await vfs.mkdir(path, { recursive: true });
@@ -381,6 +420,259 @@ export async function readSessionsIndex(vfs: VirtualFS): Promise<FrozenSessionIn
 /** Path to the archive markdown for a given index entry. */
 export function frozenSessionPath(entry: FrozenSessionIndexEntry): string {
   return `${SESSIONS_DIR}/${entry.filename}`;
+}
+
+/**
+ * Subset of the sessions index that still needs the LLM-driven enrichment
+ * pass (memory extraction + title rewrite). Returns `[]` when the index
+ * is missing, empty, or malformed — never throws.
+ */
+export async function listPendingEnrichments(vfs: VirtualFS): Promise<FrozenSessionIndexEntry[]> {
+  const all = await readSessionsIndex(vfs);
+  return all.filter((e) => e.pendingEnrichment === true);
+}
+
+export interface EnrichPendingSessionOptions {
+  /** Active LLM model — required for both LLM calls. */
+  model: Model<Api>;
+  /** API key for the active provider. */
+  apiKey: string;
+  /** Adobe X-Session-Id and friends — forwarded to both LLM calls. */
+  headers?: Record<string, string>;
+}
+
+/**
+ * Finish a quick-frozen archive: re-run the two compaction calls over
+ * the archived messages, append extracted memories to /shared/CLAUDE.md,
+ * rewrite the archive's frontmatter + heading with the LLM title, then
+ * rename the file from `pending-…md` to the canonical
+ * `<timestamp>-<slug>.md` form. The matching index entry has its
+ * `pendingEnrichment` flag dropped and `title` + `filename` updated.
+ *
+ * Best-effort end to end: every step is wrapped in try/catch and a
+ * failure leaves the pending entry intact so the next boot retries.
+ * Idempotent: running twice on the same entry (e.g. after the rename
+ * already happened, or against a missing file) is a silent no-op.
+ *
+ * Returns the updated index entry on success, `null` on no-op / failure.
+ */
+export async function enrichPendingSession(
+  vfs: VirtualFS,
+  entry: FrozenSessionIndexEntry,
+  opts: EnrichPendingSessionOptions
+): Promise<FrozenSessionIndexEntry | null> {
+  // 1. Idempotency guard — entry no longer pending, nothing to do.
+  if (!entry.pendingEnrichment) {
+    return null;
+  }
+
+  // 2. Load the archive. Missing file → already renamed (or wiped) → no-op.
+  const oldPath = frozenSessionPath(entry);
+  let archiveContent = '';
+  try {
+    const raw = await vfs.readFile(oldPath, { encoding: 'utf-8' });
+    archiveContent = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+  } catch {
+    log.info('Pending archive missing — treating as already enriched', {
+      filename: entry.filename,
+    });
+    return null;
+  }
+
+  // 3. Recover the messages so we can re-run the LLM calls.
+  let messages: ChatMessage[];
+  try {
+    const parsed = parseFrozenArchive(archiveContent);
+    messages = parsed.messages;
+  } catch (err) {
+    log.warn('Failed to parse pending archive — leaving entry intact', {
+      filename: entry.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+  if (messages.length === 0) {
+    log.info('Pending archive has no messages — skipping enrichment', {
+      filename: entry.filename,
+    });
+    return null;
+  }
+  const agentMessages = toAgentMessages(messages);
+
+  // 4. Run BOTH LLM calls before mutating anything. If either fails the
+  //    pending entry stays put for the next retry; if memory succeeded
+  //    but title failed we'd otherwise duplicate memory bullets on every
+  //    boot, which is worse than waiting one more retry.
+  let bullets = '';
+  try {
+    bullets = await runOneOffCompactionCall({
+      messages: agentMessages,
+      instruction: COMPACTION_MEMORY_INSTRUCTION,
+      model: opts.model,
+      apiKey: opts.apiKey,
+      maxTokens: MEMORY_MAX_TOKENS,
+      headers: opts.headers,
+    });
+  } catch (err) {
+    log.warn('Enrichment memory call failed (entry stays pending)', {
+      filename: entry.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+  let newTitle = '';
+  try {
+    const raw = await runOneOffCompactionCall({
+      messages: agentMessages,
+      instruction: COMPACTION_TITLE_INSTRUCTION,
+      model: opts.model,
+      apiKey: opts.apiKey,
+      maxTokens: TITLE_MAX_TOKENS,
+      headers: opts.headers,
+    });
+    newTitle = cleanTitle(raw);
+  } catch (err) {
+    log.warn('Enrichment title call failed (entry stays pending)', {
+      filename: entry.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+  if (!newTitle) {
+    log.info('Enrichment title call returned empty — entry stays pending', {
+      filename: entry.filename,
+    });
+    return null;
+  }
+
+  // 5. Append memory bullets (best-effort — failure doesn't abort the rename).
+  const trimmedBullets = bullets.trim();
+  if (trimmedBullets && trimmedBullets !== 'NONE') {
+    try {
+      await appendGlobalMemoryViaVfs(vfs, trimmedBullets, 'pending-enrichment');
+    } catch (err) {
+      log.warn('Enrichment memory append failed (continuing with title rewrite)', {
+        filename: entry.filename,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // 6. Rewrite the title in the archive's YAML frontmatter and the `# title`
+  //    body heading. Everything else — including the slicc:session-data
+  //    block — stays byte-identical, so the chat-panel re-render path is
+  //    unaffected.
+  const newContent = rewriteArchiveTitle(archiveContent, newTitle);
+  const newFilename = `${entry.frozenAt.replace(/[:.]/g, '-')}-${slugify(newTitle)}.md`;
+  const newPath = `${SESSIONS_DIR}/${newFilename}`;
+
+  // 7. Write under new name, update the index, then drop the old file last.
+  //    This ordering keeps the index consistent with what's on disk even if
+  //    the final unlink fails — at worst we leak a stale pending-… file,
+  //    no data loss.
+  try {
+    await ensureDir(vfs, SESSIONS_DIR);
+    await vfs.writeFile(newPath, newContent);
+  } catch (err) {
+    log.warn('Enrichment write failed (entry stays pending)', {
+      filename: entry.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+
+  const updatedEntry: FrozenSessionIndexEntry = {
+    filename: newFilename,
+    title: newTitle,
+    frozenAt: entry.frozenAt,
+    messageCount: entry.messageCount,
+  };
+  try {
+    await replaceIndexEntry(vfs, entry.filename, updatedEntry);
+  } catch (err) {
+    log.warn('Enrichment index update failed (entry may stay pending)', {
+      filename: entry.filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+
+  // 8. Best-effort cleanup of the old pending file. Don't surface the
+  //    failure — the index already points at the new name.
+  if (newPath !== oldPath) {
+    try {
+      const fsMaybe = vfs as VirtualFS & {
+        rm?: (path: string, opts?: { recursive?: boolean }) => Promise<void>;
+      };
+      if (typeof fsMaybe.rm === 'function') {
+        await fsMaybe.rm(oldPath);
+      }
+    } catch (err) {
+      log.info('Stale pending archive cleanup failed (harmless)', {
+        oldPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  try {
+    await vfs.flush();
+  } catch {
+    // flush is best-effort — IDB will persist on its own debounce.
+  }
+
+  log.info('Pending session enriched', {
+    oldFilename: entry.filename,
+    newFilename,
+    title: newTitle,
+  });
+  return updatedEntry;
+}
+
+/**
+ * Replace the `title:` value in the frontmatter (and the leading `# title`
+ * heading in the body) of a freezer-shaped archive markdown string with
+ * the LLM-derived title. Falls back to a string concat if the frontmatter
+ * regex doesn't match — the worst case is a stale heading, never data loss.
+ */
+function rewriteArchiveTitle(content: string, newTitle: string): string {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!fmMatch) return content;
+  const fm = fmMatch[1].replace(/^title:\s*.+$/m, `title: ${JSON.stringify(newTitle)}`);
+  let body = fmMatch[2];
+  body = body.replace(/^#\s+[^\n]*$/m, `# ${newTitle}`);
+  return `---\n${fm}\n---\n${body}`;
+}
+
+/**
+ * Swap one entry in the sessions index by filename. Used by the
+ * enrichment pass to flip a `pending-…` entry over to its renamed
+ * canonical form. No-op when the entry isn't found.
+ */
+async function replaceIndexEntry(
+  vfs: VirtualFS,
+  oldFilename: string,
+  replacement: FrozenSessionIndexEntry
+): Promise<void> {
+  let existing: FrozenSessionIndexEntry[] = [];
+  try {
+    const raw = await vfs.readFile(SESSIONS_INDEX_PATH, { encoding: 'utf-8' });
+    const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) existing = parsed as FrozenSessionIndexEntry[];
+  } catch {
+    // No index — nothing to replace; write the entry as the only row so
+    // the rename is still visible to the panel on next reload.
+  }
+  const idx = existing.findIndex((e) => e.filename === oldFilename);
+  let updated: FrozenSessionIndexEntry[];
+  if (idx === -1) {
+    updated = [replacement, ...existing];
+  } else {
+    updated = existing.slice();
+    updated[idx] = replacement;
+  }
+  await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
 }
 
 /**
