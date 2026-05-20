@@ -1203,6 +1203,81 @@ describe('OffscreenBridge.routeSprinkleLick', () => {
   });
 });
 
+describe('OffscreenBridge.onAgentEvent tap', () => {
+  function captureEvents(bridge: InstanceType<typeof OffscreenBridge>) {
+    const events: Array<{ scoopJid: string; event: any }> = [];
+    const off = bridge.onAgentEvent((scoopJid: string, event: any) =>
+      events.push({ scoopJid, event })
+    );
+    return { events, off };
+  }
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('text_delta with no current messageId emits message_start + content_delta', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const { events } = captureEvents(bridge);
+    callbacks.onResponse?.('scoop-1', 'hello', true);
+    expect(events.map((e) => e.event.type)).toEqual(['message_start', 'content_delta']);
+    expect(events[1].event.text).toBe('hello');
+    expect(events.every((e) => e.scoopJid === 'scoop-1')).toBe(true);
+  });
+
+  it('subsequent text_delta with same messageId emits only content_delta', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    callbacks.onResponse?.('scoop-1', 'hello', true);
+    const { events } = captureEvents(bridge);
+    callbacks.onResponse?.('scoop-1', ' world', true);
+    expect(events).toHaveLength(1);
+    expect(events[0].event.type).toBe('content_delta');
+    expect(events[0].event.text).toBe(' world');
+  });
+
+  it('onResponseDone emits content_done', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    callbacks.onResponse?.('scoop-1', 'hello', true);
+    const { events } = captureEvents(bridge);
+    callbacks.onResponseDone?.('scoop-1');
+    expect(events).toHaveLength(1);
+    expect(events[0].event.type).toBe('content_done');
+  });
+
+  it('onToolStart conditional message_start + tool_use_start', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const { events } = captureEvents(bridge);
+    callbacks.onToolStart?.('scoop-1', 'bash', { command: 'ls' });
+    expect(events.map((e) => e.event.type)).toEqual(['message_start', 'tool_use_start']);
+    expect(events[1].event.toolName).toBe('bash');
+  });
+
+  it('onToolEnd emits tool_result only when messageId exists', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    callbacks.onToolStart?.('scoop-1', 'bash', {});
+    const { events } = captureEvents(bridge);
+    callbacks.onToolEnd?.('scoop-1', 'bash', 'output', false);
+    expect(events).toHaveLength(1);
+    expect(events[0].event).toMatchObject({ type: 'tool_result', toolName: 'bash' });
+  });
+
+  it('unsubscribe stops further events', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const { events, off } = captureEvents(bridge);
+    off();
+    callbacks.onResponse?.('scoop-1', 'hello', true);
+    expect(events).toEqual([]);
+  });
+});
+
 describe('OffscreenBridge.notifyPanelIncomingMessage', () => {
   it('emits an incoming-message envelope with the canonical wire shape', () => {
     const bridge = new OffscreenBridge();

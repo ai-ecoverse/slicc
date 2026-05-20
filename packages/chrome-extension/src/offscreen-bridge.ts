@@ -18,6 +18,7 @@ import type {
   ScoopTabState,
 } from '../../../packages/webapp/src/scoops/types.js';
 import type {
+  AgentEventMsg,
   ExtensionMessage,
   PanelToOffscreenMessage,
   PanelCdpResponseMsg,
@@ -34,12 +35,13 @@ import type {
   TrayRuntimeStatusMsg,
   OffscreenToPanelMessage,
 } from './messages.js';
+import { createLogger } from '../../../packages/webapp/src/core/logger.js';
 import { getLeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
 import { getFollowerTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-follower-status.js';
 import { HIDDEN_TOOL_NAMES } from '../../../packages/webapp/src/scoops/hidden-tools.js';
 import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
 import { toolUIRegistry } from '../../../packages/webapp/src/tools/tool-ui.js';
-import type { ChatMessage } from '../../../packages/webapp/src/ui/types.js';
+import type { AgentEvent, ChatMessage } from '../../../packages/webapp/src/ui/types.js';
 import type { MessageAttachment } from '../../../packages/webapp/src/core/attachments.js';
 import type { BrowserAPI } from '../../../packages/webapp/src/cdp/index.js';
 import type { FollowerSyncManager } from '../../../packages/webapp/src/scoops/tray-follower-sync.js';
@@ -49,6 +51,8 @@ import type {
   FollowerAgentEvent,
 } from '../../../packages/webapp/src/kernel/types.js';
 import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
+
+const log = createLogger('offscreen-bridge');
 
 /** Buffered message for state sync */
 interface BufferedChatMessage {
@@ -115,6 +119,27 @@ export class OffscreenBridge implements KernelFacade {
    * is the single inbound route).
    */
   private activeScoopJid: string | null = null;
+  /**
+   * Subscribers to the post-emit `agent-event` fan-out. Each handler
+   * receives the same `AgentEvent` shape the panel sees (`ui/types.ts`),
+   * not the wire envelope — the bridge does the same wire→UI translation
+   * server-side that `offscreen-client.ts:handleAgentEvent` does. Reused
+   * by the leader factory (Task 15) to forward synchronized agent
+   * events to followers without re-implementing the `message_start`
+   * gating.
+   */
+  private readonly agentEventListeners = new Set<(scoopJid: string, event: AgentEvent) => void>();
+  /**
+   * Per-scoop "current message id" tracking for the fan-out's
+   * `message_start` gating. Held separately from the bridge's
+   * buffer-keyed `currentMessageId` because the callbacks that produce
+   * wire `agent-event` envelopes mutate `currentMessageId` BEFORE
+   * `emit()` runs (e.g. `getOrCreateAssistantMsg` in `onResponse`),
+   * which would short-circuit the fan-out's `message_start` emission.
+   * Mirrors the panel-side `currentMessageId` in
+   * `offscreen-client.ts:handleAgentEvent` exactly.
+   */
+  private readonly fanOutMessageId = new Map<string, string>();
 
   /**
    * Optional transport injection. If omitted (today's extension
@@ -474,6 +499,134 @@ export class OffscreenBridge implements KernelFacade {
    */
   getActiveScoopJid(): string | null {
     return this.activeScoopJid;
+  }
+
+  /**
+   * Subscribe to the bridge's `agent-event` stream as translated UI
+   * `AgentEvent`s. Mirrors `offscreen-client.ts:handleAgentEvent`
+   * server-side so callers don't have to re-implement the wire→UI
+   * mapping or the `message_start` gating against `currentMessageId`.
+   * Returns an unsubscribe function.
+   *
+   * Used by the leader factory (Task 15) to broadcast synchronized
+   * agent events to followers — the active-scoop filter lives in the
+   * caller, not here.
+   *
+   * The fan-out runs AFTER the panel-bound `chrome.runtime.sendMessage`
+   * in `emit()`, so a slow/throwing listener can't gate panel delivery.
+   * Per-listener errors are caught and logged.
+   *
+   * NB: `turn_end` synthesis is intentionally NOT emitted — the wire
+   * envelope only carries `response_done`, and adding a synthesized
+   * `turn_end` here is the subject of spec open question #1 (defer
+   * until the standalone wire diff confirms the desired behavior).
+   */
+  onAgentEvent(handler: (scoopJid: string, event: AgentEvent) => void): () => void {
+    this.agentEventListeners.add(handler);
+    return () => {
+      this.agentEventListeners.delete(handler);
+    };
+  }
+
+  /**
+   * @internal — called from `emit()` whenever a wire `agent-event`
+   * envelope flows out to the panel. Translates the envelope to the
+   * matching `AgentEvent` (or pair of events when `message_start`
+   * needs to be synthesized) and notifies each registered listener.
+   * Uses its own `fanOutMessageId` map (instead of the bridge's
+   * buffer-keyed `currentMessageId`) so the gating matches the
+   * panel's `handleAgentEvent` step for step — the callbacks that
+   * produce wire envelopes pre-populate `currentMessageId` BEFORE
+   * `emit()` runs, which would otherwise suppress every synthesized
+   * `message_start`.
+   */
+  private fanOutAgentEvent(msg: AgentEventMsg): void {
+    // Don't early-return on `agentEventListeners.size === 0`: the
+    // gating state (`fanOutMessageId`) must track every wire envelope
+    // even when nobody is subscribed, so a listener that subscribes
+    // mid-stream sees a consistent view (e.g. a subsequent `text_delta`
+    // continues the existing message instead of synthesizing a stray
+    // `message_start`).
+    const { scoopJid, eventType } = msg;
+    const events: AgentEvent[] = [];
+    const ensureMessageStart = (): string => {
+      let msgId = this.fanOutMessageId.get(scoopJid);
+      if (!msgId) {
+        msgId = `scoop-${scoopJid}-${uid()}`;
+        this.fanOutMessageId.set(scoopJid, msgId);
+        events.push({ type: 'message_start', messageId: msgId });
+      }
+      return msgId;
+    };
+
+    switch (eventType) {
+      case 'text_delta': {
+        const messageId = ensureMessageStart();
+        events.push({ type: 'content_delta', messageId, text: msg.text ?? '' });
+        break;
+      }
+      case 'tool_start': {
+        const messageId = ensureMessageStart();
+        events.push({
+          type: 'tool_use_start',
+          messageId,
+          toolName: msg.toolName ?? '',
+          toolInput: msg.toolInput,
+        });
+        break;
+      }
+      case 'tool_end': {
+        const messageId = this.fanOutMessageId.get(scoopJid);
+        if (!messageId) return;
+        events.push({
+          type: 'tool_result',
+          messageId,
+          toolName: msg.toolName ?? '',
+          result: msg.toolResult ?? '',
+          isError: msg.isError,
+        });
+        break;
+      }
+      case 'tool_ui': {
+        const messageId = ensureMessageStart();
+        events.push({
+          type: 'tool_ui',
+          messageId,
+          toolName: msg.toolName ?? '',
+          requestId: msg.requestId ?? '',
+          html: msg.html ?? '',
+        });
+        break;
+      }
+      case 'tool_ui_done': {
+        const messageId = this.fanOutMessageId.get(scoopJid);
+        if (!messageId) return;
+        events.push({ type: 'tool_ui_done', messageId, requestId: msg.requestId ?? '' });
+        break;
+      }
+      case 'response_done': {
+        const messageId = this.fanOutMessageId.get(scoopJid);
+        if (!messageId) return;
+        events.push({ type: 'content_done', messageId });
+        this.fanOutMessageId.delete(scoopJid);
+        // NB: revision 4 of the spec left turn_end synthesis as an open
+        // question. Do NOT synthesize turn_end here; verify with the
+        // standalone wire diff (open question #1) before adding it.
+        break;
+      }
+    }
+
+    for (const event of events) {
+      for (const fn of this.agentEventListeners) {
+        try {
+          fn(scoopJid, event);
+        } catch (err) {
+          log.warn('onAgentEvent listener threw', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
   }
 
   /**
@@ -1144,6 +1297,12 @@ export class OffscreenBridge implements KernelFacade {
   /** Send a message to all panels via the kernel transport. */
   private emit(payload: OffscreenToPanelMessage): void {
     this.transport.send(payload);
+    // Fan-out AFTER the panel-bound send so a slow/throwing
+    // `onAgentEvent` listener can't gate panel delivery. Cheap when the
+    // payload isn't an agent-event (no listeners → early return).
+    if ((payload as { type?: string }).type === 'agent-event') {
+      this.fanOutAgentEvent(payload as AgentEventMsg);
+    }
   }
 }
 
