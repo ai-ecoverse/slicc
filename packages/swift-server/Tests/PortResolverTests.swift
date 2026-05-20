@@ -57,6 +57,59 @@ final class PortResolverTests: XCTestCase {
         XCTAssertEqual(resolvedPort, ipv6Reserved.port)
     }
 
+    func testStrictModeSucceedsAcrossTimeWaitResidueFromPreviousListener() async throws {
+        // Regression for the 3.0.0 → 3.0.1 smooth-update bug. The old
+        // slicc-server detaches on SIGUSR1 and the new one tries to bind
+        // 127.0.0.1:5710 ~1s later. Any HTTP/WebSocket connections the
+        // old server had to its clients linger in TIME_WAIT and trip the
+        // probe with EADDRINUSE unless SO_REUSEADDR is set. Hummingbird's
+        // real listen socket sets it; the probe must too.
+        let listener = try makeListeningSocket(port: 0)
+        let port = listener.port
+
+        let client = socket(AF_INET, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(client, 0)
+        defer { close(client) }
+
+        var clientAddr = sockaddr_in()
+        clientAddr.sin_len = UInt8(MemoryLayout<sockaddr_in>.stride)
+        clientAddr.sin_family = sa_family_t(AF_INET)
+        clientAddr.sin_port = in_port_t(UInt16(port).bigEndian)
+        let clientConversion = withUnsafeMutablePointer(to: &clientAddr.sin_addr) {
+            inet_pton(AF_INET, "127.0.0.1", $0)
+        }
+        XCTAssertEqual(clientConversion, 1)
+        let connectResult = withUnsafePointer(to: &clientAddr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.stride))
+            }
+        }
+        XCTAssertEqual(connectResult, 0)
+
+        var acceptedAddr = sockaddr_storage()
+        var acceptedLen = socklen_t(MemoryLayout<sockaddr_storage>.stride)
+        let accepted = withUnsafeMutablePointer(to: &acceptedAddr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.accept(listener.fd, $0, &acceptedLen)
+            }
+        }
+        guard accepted >= 0 else {
+            close(listener.fd)
+            XCTFail("accept() failed: errno=\(errno)")
+            return
+        }
+
+        // Close the active (server) side first so it ends up in TIME_WAIT.
+        close(accepted)
+        close(listener.fd)
+
+        // Give the kernel a beat to move the socket into TIME_WAIT.
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let resolved = try await findAvailablePort(startingFrom: port, strict: true)
+        XCTAssertEqual(resolved, port)
+    }
+
     func testPreferredPortUnavailableErrorSurfacesAsHelpfulDescription() {
         let error = PortResolverError.preferredPortUnavailable(port: 5710)
         let description = error.localizedDescription

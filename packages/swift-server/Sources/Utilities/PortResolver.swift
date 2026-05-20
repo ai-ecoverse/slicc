@@ -115,6 +115,24 @@ private func tryListenOnPort(_ port: Int, host: LoopbackAddress) throws -> Int {
     }
     defer { _ = close(fd) }
 
+    // Match Hummingbird's real listen socket, which sets SO_REUSEADDR by
+    // default (`ServerConfiguration.reuseAddress = true`). Without this,
+    // the probe bind fails with EADDRINUSE while TIME_WAIT entries from a
+    // previous slicc-server's client connections are still draining on
+    // 127.0.0.1:<port>, even though the actual Hummingbird bind that
+    // follows would have succeeded. This is the smooth-update path:
+    // SIGUSR1 → old server exits → ~1s later new server probes 5710
+    // → TIME_WAIT residue from the now-dead HTTP connections trips the
+    // probe and the new server bails before Hummingbird even gets a
+    // chance to bind.
+    var enableReuseAddr: Int32 = 1
+    let reuseAddrResult = withUnsafePointer(to: &enableReuseAddr) {
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, $0, socklen_t(MemoryLayout<Int32>.size))
+    }
+    guard reuseAddrResult == 0 else {
+        throw socketFailure(host: host.host, port: port)
+    }
+
     if host.family == AF_INET6 {
         var enableV6Only: Int32 = 1
         _ = withUnsafePointer(to: &enableV6Only) {
