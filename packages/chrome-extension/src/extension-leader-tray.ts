@@ -19,6 +19,7 @@ import type { BrowserAPI } from '../../webapp/src/cdp/browser-api.js';
 import type { VirtualFS } from '../../webapp/src/fs/virtual-fs.js';
 import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
 import type { OffscreenLeaderSyncBridgeHandle } from './leader-sync-bridge.js';
+import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
 
 export interface ExtensionLeaderTrayHandle {
   stop(): void;
@@ -182,10 +183,24 @@ export function startExtensionLeaderTray(
   trayLeader = leaderFactory({
     workerBaseUrl,
     runtime: 'slicc-extension-offscreen',
-    onControlMessage: () => {},
-    onReconnecting: () => {},
-    onReconnected: () => {},
-    onReconnectGaveUp: () => {},
+    webSocketFactory: (url: string) => new ServiceWorkerLeaderTraySocket(url),
+    onControlMessage: (message: any) => {
+      if (message.type === 'webhook.event') {
+        orchestrator.handleWebhookEvent(message.webhookId, message.headers, message.body);
+        return;
+      }
+      void trayPeers.handleControlMessage(message).catch((err) => {
+        options.log.warn('Tray leader bootstrap handling failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    },
+    onReconnecting: (attempt: number, lastError: any) =>
+      options.log.info('Extension leader tray reconnecting', { attempt, lastError }),
+    onReconnected: (session: any) =>
+      options.log.info('Extension leader tray reconnected', { trayId: session.trayId }),
+    onReconnectGaveUp: (lastError: any, attempts: number) =>
+      options.log.warn('Extension leader tray reconnect gave up', { lastError, attempts }),
   });
 
   return {

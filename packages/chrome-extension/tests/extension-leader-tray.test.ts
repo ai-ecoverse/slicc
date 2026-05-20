@@ -359,3 +359,103 @@ describe('startExtensionLeaderTray peer connection', () => {
     handle.stop();
   });
 });
+
+describe('startExtensionLeaderTray webhook routing', () => {
+  function startWithCapture(
+    overrides: Partial<Parameters<typeof startExtensionLeaderTray>[0]> = {}
+  ) {
+    const orchestrator =
+      overrides.orchestrator ??
+      makeMockOrchestrator([{ jid: 'cone-1', name: 'cone', isCone: true, folder: 'cone' }]);
+    const bridge = overrides.bridge ?? makeMockBridge({ coneJid: 'cone-1' });
+    const handle = startExtensionLeaderTray({
+      workerBaseUrl: 'wss://test',
+      bridge: bridge as any,
+      orchestrator: orchestrator as any,
+      sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
+      browser: overrides.browser ?? makeStubBrowser(),
+      log: console as any,
+      leaderBridge:
+        overrides.leaderBridge ??
+        ({
+          getSprinkles: () => [],
+          resolveSprinklePath: () => null,
+          signalLeaderMode: vi.fn(),
+          detach: vi.fn(),
+        } as any),
+      _trayLeaderFactory:
+        overrides._trayLeaderFactory ??
+        ((() =>
+          ({
+            start: vi.fn().mockResolvedValue({}),
+            stop: vi.fn(),
+            clearSession: vi.fn().mockResolvedValue(undefined),
+            sendControlMessage: vi.fn(),
+          }) as any) as any),
+      _peerManagerFactory:
+        overrides._peerManagerFactory ??
+        ((() =>
+          ({
+            stop: vi.fn(),
+            getPeers: vi.fn(() => []),
+            handleControlMessage: vi.fn().mockResolvedValue(undefined),
+          }) as any) as any),
+      ...overrides,
+    });
+    return { handle, orchestrator, bridge };
+  }
+
+  it('webhook.event control message routes to orchestrator.handleWebhookEvent', () => {
+    const trayLeaderFactoryFn = vi.fn(() => ({
+      start: vi.fn().mockResolvedValue({}),
+      stop: vi.fn(),
+      clearSession: vi.fn().mockResolvedValue(undefined),
+      sendControlMessage: vi.fn(),
+    }));
+    const orchestrator = makeMockOrchestrator([
+      { jid: 'cone-1', isCone: true, name: 'cone', folder: 'cone' },
+    ]);
+    const { handle } = startWithCapture({
+      orchestrator: orchestrator as any,
+      _trayLeaderFactory: trayLeaderFactoryFn as any,
+    });
+    const capturedCfg = trayLeaderFactoryFn.mock.calls[0]![0] as any;
+    capturedCfg.onControlMessage({
+      type: 'webhook.event',
+      webhookId: 'wh-1',
+      headers: { 'x-test': '1' },
+      body: { ok: true },
+    });
+    expect(orchestrator.handleWebhookEvent).toHaveBeenCalledWith(
+      'wh-1',
+      { 'x-test': '1' },
+      { ok: true }
+    );
+    handle.stop();
+  });
+
+  it('non-webhook control messages route to trayPeers.handleControlMessage', async () => {
+    const trayLeaderFactoryFn = vi.fn(() => ({
+      start: vi.fn().mockResolvedValue({}),
+      stop: vi.fn(),
+      clearSession: vi.fn().mockResolvedValue(undefined),
+      sendControlMessage: vi.fn(),
+    }));
+    const peerHandleSpy = vi.fn().mockResolvedValue(undefined);
+    const peerFactoryFn = vi.fn(() => ({
+      stop: vi.fn(),
+      getPeers: vi.fn(() => []),
+      handleControlMessage: peerHandleSpy,
+    }));
+    const { handle, orchestrator } = startWithCapture({
+      _trayLeaderFactory: trayLeaderFactoryFn as any,
+      _peerManagerFactory: peerFactoryFn as any,
+    });
+    const trayCfg = trayLeaderFactoryFn.mock.calls[0]![0] as any;
+    const offer = { type: 'webrtc.offer', bootstrapId: 'b1', sdp: 'sdp-payload' };
+    trayCfg.onControlMessage(offer);
+    expect(peerHandleSpy).toHaveBeenCalledWith(offer);
+    expect(orchestrator.handleWebhookEvent).not.toHaveBeenCalled();
+    handle.stop();
+  });
+});
