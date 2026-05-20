@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import { createServer as createNetServer } from 'net';
 import { spawn, type ChildProcess } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { join, resolve, dirname } from 'path';
+import { join, resolve, dirname, sep } from 'path';
 import { homedir } from 'os';
 import { Readable, Transform } from 'stream';
 import { StringDecoder } from 'string_decoder';
@@ -1532,19 +1532,63 @@ async function main() {
     app.use(
       express.static(uiDir, {
         setHeaders: (res, path) => {
-          // Service workers must declare a maximum scope; without
-          // `Service-Worker-Allowed: /`, the browser refuses to register
-          // a root-scoped SW served from `/llm-proxy-sw.js`.
-          if (path.endsWith('llm-proxy-sw.js')) {
+          // Default Cache-Control for anything not classified below:
+          // HTML, manifest, sprinkle-sandbox.html, publicDir fonts/logos,
+          // favicon, etc. None of these are content-hashed and they
+          // reference hashed asset URLs that change on rebuild. If the
+          // browser serves a stale `index.html` out of its heuristic
+          // cache, the referenced `/assets/*` chunks 404 after an update
+          // — the user sees
+          //   "Failed to fetch dynamically imported module: …/assets/<old-hash>.js"
+          // on every cone bootstrap until they hard-refresh.
+          // `no-cache` forces a conditional revalidation on every load
+          // (cheap — `serve-static`'s default ETag yields a 304 when
+          // unchanged) so the tab picks up a freshly-built `index.html`
+          // after `npm run build`.
+          //
+          // The single `setHeader` at the end is intentional: each
+          // branch overrides the default by assigning to `cacheControl`.
+          // To add a fourth bucket, add an `else if` ABOVE the final
+          // assignment — never a separate `setHeader` after, or the
+          // catch-all silently wins.
+          let cacheControl = 'no-cache';
+          if (path.endsWith('llm-proxy-sw.js') || path.endsWith('preview-sw.js')) {
+            // Service workers need `Service-Worker-Allowed: /` for the
+            // root-scoped registration `llm-proxy-sw.js` does (the
+            // `preview-sw.js` SW registers at scope `/preview/`, which
+            // is narrower than `/` so the broader allowance is harmless).
+            //
+            // `no-store`, not `no-cache`: the browser only re-checks
+            // the SW script on navigation/registration, so the safest
+            // signal is "always pull the latest bytes." A stale SW
+            // pinned in cache would intercept fetch / dispatch
+            // `preview/*` with outdated logic (e.g. an outdated
+            // forbidden-header encoding scheme that no longer matches
+            // the server-side restoration in `index.ts`, or a stale
+            // `preview-sw` VFS handler) — that's a worse failure mode
+            // than the `no-cache` revalidation cost.
             res.setHeader('Service-Worker-Allowed', '/');
-            res.setHeader('Cache-Control', 'no-store');
+            cacheControl = 'no-store';
+          } else if (path.includes(`${sep}assets${sep}`)) {
+            // Vite emits content-hashed filenames into `/assets/` —
+            // the hash changes when content changes, so the file at a
+            // given URL is byte-for-byte immutable. Cache forever to
+            // avoid revalidation round-trips. The `path` parameter is
+            // a filesystem path (uses `sep` on Windows, `/` elsewhere),
+            // hence the platform-aware match.
+            cacheControl = 'public, max-age=31536000, immutable';
           }
+          res.setHeader('Cache-Control', cacheControl);
         },
       })
     );
 
-    // SPA fallback — serve index.html for all non-file routes
+    // SPA fallback — serve index.html for all non-file routes. Same
+    // `no-cache` reasoning as above: the served `index.html` carries
+    // references to the current asset hashes, and stale-cached HTML
+    // is the canonical post-update breakage.
     app.get('/{*path}', (_req, res) => {
+      res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(join(uiDir, 'index.html'));
     });
   }
