@@ -78,10 +78,13 @@ extension StaticFileMiddleware {
     ///
     /// Three buckets:
     /// - `/llm-proxy-sw.js`, `/preview-sw.js`: `no-store` so the browser
-    ///   always pulls the latest SW bytes on navigation/registration.
-    ///   `llm-proxy-sw.js` additionally needs `Service-Worker-Allowed: /`
-    ///   for its root-scope registration; `preview-sw.js` registers at
-    ///   `/preview/` (narrower) so the broader allowance is unnecessary.
+    ///   always pulls the latest SW bytes on navigation/registration,
+    ///   plus `Service-Worker-Allowed: /` so the SW can claim a wider
+    ///   scope than its serve path. `llm-proxy-sw.js` actually needs
+    ///   the root scope; `preview-sw.js` registers at `/preview/`
+    ///   (narrower), but Node sends the header for both — matching here
+    ///   keeps the two implementations byte-for-byte identical and the
+    ///   broader allowance is harmless.
     /// - `/assets/*`: Vite emits content-hashed filenames here, so each
     ///   URL is byte-for-byte immutable — cache forever to avoid
     ///   revalidation round-trips.
@@ -90,7 +93,7 @@ extension StaticFileMiddleware {
     ///   on every load. Cheap (304 on unchanged) and guarantees tabs pick
     ///   up the new asset references after a rebuild.
     static func applyCacheHeaders(path: String, response: inout Response) {
-        if path == "/llm-proxy-sw.js" {
+        if path == "/llm-proxy-sw.js" || path == "/preview-sw.js" {
             response.headers[HTTPField.Name("Service-Worker-Allowed")!] = "/"
         }
         response.headers[HTTPField.Name.cacheControl] = cacheControlValue(forPath: path)

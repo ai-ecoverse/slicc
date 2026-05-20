@@ -78,7 +78,7 @@ final class StaticFileMiddlewareTests: XCTestCase {
         )
     }
 
-    func testApplyCacheHeadersServiceWorkerAllowedOnlyOnLlmProxy() {
+    func testApplyCacheHeadersServiceWorkerAllowedOnBothSWPaths() {
         var response = Response(status: .ok)
         StaticFileMiddleware<BasicRequestContext>.applyCacheHeaders(path: "/llm-proxy-sw.js", response: &response)
         XCTAssertEqual(response.headers[HTTPField.Name.cacheControl], "no-store")
@@ -87,7 +87,7 @@ final class StaticFileMiddlewareTests: XCTestCase {
         var previewResponse = Response(status: .ok)
         StaticFileMiddleware<BasicRequestContext>.applyCacheHeaders(path: "/preview-sw.js", response: &previewResponse)
         XCTAssertEqual(previewResponse.headers[HTTPField.Name.cacheControl], "no-store")
-        XCTAssertNil(previewResponse.headers[HTTPField.Name("Service-Worker-Allowed")!])
+        XCTAssertEqual(previewResponse.headers[HTTPField.Name("Service-Worker-Allowed")!], "/")
 
         var assetResponse = Response(status: .ok)
         StaticFileMiddleware<BasicRequestContext>.applyCacheHeaders(path: "/assets/x.js", response: &assetResponse)
