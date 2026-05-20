@@ -542,3 +542,82 @@ describe('startExtensionLeaderTray agent-event tap', () => {
     expect(unsubAgent).toHaveBeenCalled();
   });
 });
+
+describe('startExtensionLeaderTray intervals', () => {
+  function startWithCapture(
+    overrides: Partial<Parameters<typeof startExtensionLeaderTray>[0]> = {}
+  ) {
+    const orchestrator =
+      overrides.orchestrator ??
+      makeMockOrchestrator([{ jid: 'cone-1', name: 'cone', isCone: true, folder: 'cone' }]);
+    const bridge = overrides.bridge ?? makeMockBridge({ coneJid: 'cone-1' });
+    const handle = startExtensionLeaderTray({
+      workerBaseUrl: 'wss://test',
+      bridge: bridge as any,
+      orchestrator: orchestrator as any,
+      sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
+      browser: overrides.browser ?? makeStubBrowser(),
+      log: console as any,
+      leaderBridge:
+        overrides.leaderBridge ??
+        ({
+          getSprinkles: () => [],
+          resolveSprinklePath: () => null,
+          signalLeaderMode: vi.fn(),
+          detach: vi.fn(),
+        } as any),
+      _trayLeaderFactory: () =>
+        ({
+          start: vi.fn().mockResolvedValue({}),
+          stop: vi.fn(),
+          clearSession: vi.fn().mockResolvedValue(undefined),
+          sendControlMessage: vi.fn(),
+        }) as any,
+      _peerManagerFactory: () =>
+        ({
+          stop: vi.fn(),
+          getPeers: vi.fn(() => []),
+          handleControlMessage: vi.fn().mockResolvedValue(undefined),
+        }) as any,
+      ...overrides,
+    });
+    return { handle, orchestrator, bridge };
+  }
+
+  it('refreshLeaderTargets calls sync.setLocalTargets (NOT advertiseTargets)', async () => {
+    const browser = makeStubBrowser();
+    browser.listPages = vi
+      .fn()
+      .mockResolvedValue([{ targetId: 't1', title: 'A', url: 'about:blank' }]);
+    const { handle } = startWithCapture({
+      browser,
+      _refreshIntervalMs: 50,
+    } as any);
+    const setLocalSpy = vi.spyOn(handle.sync, 'setLocalTargets').mockImplementation(() => {});
+    // The factory calls refreshLeaderTargets immediately at startup.
+    // Yield a microtask + a tick for the awaited listPages to resolve.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(setLocalSpy).toHaveBeenCalledWith([{ targetId: 't1', title: 'A', url: 'about:blank' }]);
+    handle.stop();
+  });
+
+  it('broadcasts scoops + sprinkles lists on interval', async () => {
+    const { handle } = startWithCapture({ _refreshIntervalMs: 30 } as any);
+    const scoopsSpy = vi.spyOn(handle.sync, 'broadcastScoopsList').mockImplementation(() => {});
+    const sprinklesSpy = vi
+      .spyOn(handle.sync, 'broadcastSprinklesList')
+      .mockImplementation(() => {});
+    await new Promise((r) => setTimeout(r, 100));
+    expect(scoopsSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(sprinklesSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    handle.stop();
+  });
+
+  it('teardown clears intervals', async () => {
+    const { handle } = startWithCapture({ _refreshIntervalMs: 20 } as any);
+    handle.stop();
+    const scoopsSpy = vi.spyOn(handle.sync, 'broadcastScoopsList').mockImplementation(() => {});
+    await new Promise((r) => setTimeout(r, 80));
+    expect(scoopsSpy).not.toHaveBeenCalled();
+  });
+});

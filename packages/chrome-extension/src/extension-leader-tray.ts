@@ -18,6 +18,7 @@ import type { Orchestrator } from '../../webapp/src/scoops/orchestrator.js';
 import type { BrowserAPI } from '../../webapp/src/cdp/browser-api.js';
 import type { VirtualFS } from '../../webapp/src/fs/virtual-fs.js';
 import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
+import { ThrottledErrorTracker } from '../../webapp/src/scoops/throttled-error-tracker.js';
 import type { OffscreenLeaderSyncBridgeHandle } from './leader-sync-bridge.js';
 import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
 
@@ -66,6 +67,7 @@ export function startExtensionLeaderTray(
   options: StartExtensionLeaderTrayOptions
 ): ExtensionLeaderTrayHandle {
   const { workerBaseUrl, bridge, orchestrator, sharedFs, browser, leaderBridge } = options;
+  const refreshIntervalMs = options._refreshIntervalMs ?? 5000;
 
   let sync!: LeaderSyncManager;
   let trayLeader!: LeaderTrayManager;
@@ -174,6 +176,53 @@ export function startExtensionLeaderTray(
     sync.broadcastEvent(event);
   });
 
+  // Periodic refreshes mirror page-leader-tray.ts:234-285. setLocalTargets
+  // is the LEADER API (tray-leader-sync.ts:725) — do NOT confuse with
+  // advertiseTargets, which is the follower API (tray-follower-sync.ts:315).
+  // CDP errors are throttled via ThrottledErrorTracker so a flapping CDP
+  // transport doesn't spam the log.
+  const cdpThrottle = new ThrottledErrorTracker(options.log as any, {
+    failureMessage: 'Extension leader CDP target refresh failed (best-effort, throttled)',
+    recoveryMessage: 'Extension leader CDP target refresh recovered',
+  });
+
+  const refreshLeaderTargets = async () => {
+    let pages: Awaited<ReturnType<BrowserAPI['listPages']>>;
+    try {
+      pages = await browser.listPages();
+    } catch (err) {
+      cdpThrottle.reportFailure(err);
+      return;
+    }
+    cdpThrottle.reportSuccess();
+    try {
+      sync.setLocalTargets(
+        pages.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url }))
+      );
+    } catch (err) {
+      options.log.error('Extension leader target broadcast failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  const intervals: ReturnType<typeof setInterval>[] = [
+    setInterval(refreshLeaderTargets, refreshIntervalMs),
+    setInterval(() => {
+      try {
+        sync.broadcastScoopsList();
+        sync.broadcastSprinklesList();
+      } catch (err) {
+        options.log.error('Failed to broadcast follower lists', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }, refreshIntervalMs),
+  ];
+  // Immediate first refresh so followers don't wait a full interval for
+  // their first target snapshot after leader boot.
+  void refreshLeaderTargets();
+
   const peerFactory = options._peerManagerFactory ?? ((cfg) => new LeaderTrayPeerManager(cfg));
   trayPeers = peerFactory({
     sendControlMessage: (m: any) => trayLeader.sendControlMessage(m),
@@ -218,9 +267,11 @@ export function startExtensionLeaderTray(
   return {
     stop() {
       // Unsubscribe the agent tap FIRST so no late events reach the
-      // now-stopping sync. Matches standalone teardown order at
-      // page-leader-tray.ts:316-323.
+      // now-stopping sync. Then clear intervals so no late refresh /
+      // broadcast tick runs after sync.stop(). Matches standalone
+      // teardown order at page-leader-tray.ts:316-323.
       unsubAgent();
+      for (const id of intervals) clearInterval(id);
       sync.stop();
       trayPeers.stop();
       trayLeader.stop();
