@@ -104,6 +104,17 @@ export class OffscreenBridge implements KernelFacade {
    * a second `bind()` doesn't double-register the listener.
    */
   private transportUnsubscribe: (() => void) | null = null;
+  /**
+   * The panel's currently-viewed scoop jid. Single source of truth for
+   * the leader-sync hub adapter (Task 9), which writes this via
+   * `setActiveScoopJid()` whenever a `leader-active-scoop` envelope
+   * arrives from the panel. Read by snapshot/leader-broadcast paths to
+   * replace the always-cone behavior previously baked into
+   * `state-snapshot.activeScoopJid`. The bridge owns only the cache; no
+   * envelope handler lives on the panel-message switch (the hub adapter
+   * is the single inbound route).
+   */
+  private activeScoopJid: string | null = null;
 
   /**
    * Optional transport injection. If omitted (today's extension
@@ -429,6 +440,23 @@ export class OffscreenBridge implements KernelFacade {
    */
   setFollowerSync(sync: FollowerSyncManager | null): void {
     this.followerSync = sync;
+  }
+
+  /**
+   * Update the cached active-scoop jid. Called by the leader-sync hub
+   * adapter (Task 9) when a `leader-active-scoop` envelope arrives from
+   * the panel. Pass `null` to clear.
+   */
+  setActiveScoopJid(jid: string | null): void {
+    this.activeScoopJid = jid;
+  }
+
+  /**
+   * Read the cached active-scoop jid. Returns `null` if no panel signal
+   * has been observed yet.
+   */
+  getActiveScoopJid(): string | null {
+    return this.activeScoopJid;
   }
 
   /**

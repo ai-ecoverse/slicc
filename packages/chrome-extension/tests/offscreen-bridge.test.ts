@@ -1071,3 +1071,23 @@ describe('OffscreenBridge follower mode', () => {
     expect(typeof m.payload.message.timestamp).toBe('string');
   });
 });
+
+describe('OffscreenBridge active-scoop tracking', () => {
+  it('defaults to null before any panel signal', () => {
+    const bridge = new OffscreenBridge();
+    expect(bridge.getActiveScoopJid()).toBeNull();
+  });
+
+  it('setActiveScoopJid updates the cached value', () => {
+    const bridge = new OffscreenBridge();
+    bridge.setActiveScoopJid('scoop-1');
+    expect(bridge.getActiveScoopJid()).toBe('scoop-1');
+  });
+
+  it('null clears the cache', () => {
+    const bridge = new OffscreenBridge();
+    bridge.setActiveScoopJid('scoop-1');
+    bridge.setActiveScoopJid(null);
+    expect(bridge.getActiveScoopJid()).toBeNull();
+  });
+});
