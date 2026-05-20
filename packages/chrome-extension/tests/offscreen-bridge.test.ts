@@ -1091,3 +1091,20 @@ describe('OffscreenBridge active-scoop tracking', () => {
     expect(bridge.getActiveScoopJid()).toBeNull();
   });
 });
+
+describe('OffscreenBridge.getMessagesForJid', () => {
+  it('returns the buffered messages cast to ChatMessage[]', () => {
+    const bridge = new OffscreenBridge();
+    // Seed via the @internal getBuffer (test only).
+    const buf = (bridge as any).getBuffer('scoop-1') as Array<any>;
+    buf.push({ id: 'm1', role: 'user', content: 'hi', timestamp: 1 });
+    const msgs = bridge.getMessagesForJid('scoop-1');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].id).toBe('m1');
+  });
+
+  it('returns an empty array for an unknown jid', () => {
+    const bridge = new OffscreenBridge();
+    expect(bridge.getMessagesForJid('nope')).toEqual([]);
+  });
+});

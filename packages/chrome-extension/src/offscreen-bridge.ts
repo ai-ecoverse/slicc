@@ -460,6 +460,17 @@ export class OffscreenBridge implements KernelFacade {
   }
 
   /**
+   * Public wrapper over the `@internal getBuffer(jid)` that casts the
+   * structurally-compatible `BufferedChatMessage[]` to `ChatMessage[]`.
+   * Used by the leader-sync factory (Tasks 11+) to read chat state
+   * without reaching for `@internal` helpers. Same cast pattern as
+   * `persistScoop` (this file).
+   */
+  getMessagesForJid(jid: string): ChatMessage[] {
+    return this.getBuffer(jid) as unknown as ChatMessage[];
+  }
+
+  /**
    * Replace the local cone scoop's chat history with `messages` (typically
    * from a leader snapshot), persist them to IndexedDB so panel reloads
    * see them, and notify the panel to update its open chat.
