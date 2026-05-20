@@ -31,7 +31,6 @@ import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
-import type { MessageAttachment } from '../core/attachments.js';
 import { isLickChannel, type LickChannel } from './lick-channels.js';
 import { createLogger } from '../core/index.js';
 import type { VirtualFS } from '../fs/index.js';
@@ -129,7 +128,11 @@ import {
 // circular module-evaluation order.
 import { broadcastToDips } from './dip.js';
 import { isExtensionMessage } from '../../../chrome-extension/src/messages.js';
-import { PanelLeaderSyncProxy } from '../../../chrome-extension/src/leader-sync-bridge.js';
+import type {
+  PanelMessageSender,
+  PanelMessageSubscriber,
+} from '../../../chrome-extension/src/bridge-transport.js';
+import { createExtensionLeaderHooks } from './extension-leader-hooks.js';
 import { enterDetachedActiveState } from './detached-active.js';
 
 const log = createLogger('main');
@@ -1484,15 +1487,12 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 
   // ── Extension-leader-mode panel hooks ──────────────────────────────
   // Activation/deactivation is driven by offscreen via
-  // `leader-mode-changed`; the proxy sends the four panel-only pushes
-  // (active scoop, sprinkles snapshot, sprinkle update, local user
-  // echo) and the leader-sync hub adapter on offscreen does the heavy
-  // lifting. `setTrayResetter` is NOT wired here — the extension panel
-  // terminal runs in offscreen via `RemoteTerminalView` (see lines
-  // 622-624 + 869-879), so `host reset` consults the offscreen-side
-  // host-command singletons that Task 17 wires there.
-  const leaderSyncSender = {
-    send(envelope: { source: 'panel'; payload: unknown }): void {
+  // `leader-mode-changed`; the helper (see `extension-leader-hooks.ts`)
+  // holds the four panel-only push handlers and the install/remove
+  // lifecycle. This block just stands up the production transports —
+  // chrome.runtime in, chrome.runtime out — and hands them off.
+  const leaderSyncSender: PanelMessageSender = {
+    send(envelope) {
       chrome.runtime.sendMessage(envelope).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         if (/receiving end does not exist/i.test(msg)) return;
@@ -1500,8 +1500,8 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
       });
     },
   };
-  const leaderSyncSubscriber = {
-    onMessage(handler: (envelope: { source: string; payload: unknown }) => void): () => void {
+  const leaderSyncSubscriber: PanelMessageSubscriber = {
+    onMessage(handler) {
       const listener = (msg: unknown): boolean => {
         if (!msg || typeof msg !== 'object' || !('source' in msg) || !('payload' in msg)) {
           return false;
@@ -1513,84 +1513,18 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
       return () => chrome.runtime.onMessage.removeListener(listener);
     },
   };
-
-  const leaderSyncProxy = new PanelLeaderSyncProxy(leaderSyncSender, leaderSyncSubscriber, {
-    onLeaderModeChange: (active) => {
-      if (active) installLeaderHooks();
-      else removeLeaderHooks();
-    },
+  const leaderHooks = createExtensionLeaderHooks({
+    sender: leaderSyncSender,
+    subscriber: leaderSyncSubscriber,
+    sprinkleManager,
+    client,
+    chat: layout.panels.chat,
+    log,
   });
-
-  // Dispose the proxy on unload — mirrors offscreen.ts:155-163's
-  // host.dispose() pattern. Without this the chrome.runtime listener
-  // leaks across HMR cycles, and any in-flight resetTray timers float.
-  window.addEventListener(
-    'beforeunload',
-    () => {
-      leaderSyncProxy.dispose();
-    },
-    { once: true }
-  );
-
-  const handleScoopSelected = (jid: string) => leaderSyncProxy.pushActiveScoop(jid);
-  const handleSprinklesChanged = () => {
-    const opened = new Set(sprinkleManager.opened());
-    leaderSyncProxy.pushSprinklesSnapshot(
-      sprinkleManager.available().map((p) => ({
-        name: p.name,
-        title: p.title,
-        path: p.path,
-        open: opened.has(p.name),
-        autoOpen: p.autoOpen,
-      }))
-    );
-  };
-  const handleSprinkleUpdate = (name: string, data: unknown) =>
-    leaderSyncProxy.pushSprinkleUpdate(name, data);
-  const handleLocalUserMessage = (
-    text: string,
-    messageId: string,
-    attachments?: MessageAttachment[]
-  ) => leaderSyncProxy.pushUserMessageEcho(text, messageId, attachments);
-
-  let leaderHooksInstalled = false;
-  let offScoopSelected: (() => void) | null = null;
-  let offSprinklesChanged: (() => void) | null = null;
-
-  function installLeaderHooks() {
-    if (leaderHooksInstalled) return;
-    leaderHooksInstalled = true;
-
-    offScoopSelected = client.onScoopSelected(handleScoopSelected);
-    if (client.selectedScoopJid) handleScoopSelected(client.selectedScoopJid);
-
-    offSprinklesChanged = sprinkleManager.onChange(handleSprinklesChanged);
-    void sprinkleManager.refresh().then(handleSprinklesChanged);
-
-    sprinkleManager.setSendToSprinkleHook(handleSprinkleUpdate);
-    layout.panels.chat.setOnLocalUserMessage(handleLocalUserMessage);
-
-    // NOTE: do NOT wire setTrayResetter here. The extension panel
-    // terminal executes in offscreen via RemoteTerminalView (see
-    // main.ts:622-624, 869-879), so `host reset` runs the
-    // offscreen-side host-command singletons — Task 17 already wires
-    // setTrayResetter there.
-  }
-
-  function removeLeaderHooks() {
-    if (!leaderHooksInstalled) return;
-    leaderHooksInstalled = false;
-    offScoopSelected?.();
-    offScoopSelected = null;
-    offSprinklesChanged?.();
-    offSprinklesChanged = null;
-    sprinkleManager.setSendToSprinkleHook(undefined);
-    layout.panels.chat.setOnLocalUserMessage(undefined);
-  }
-
-  // Boot-time: ask offscreen to re-emit its current state so popouts
-  // opening AFTER offscreen activated still install hooks.
-  leaderSyncProxy.requestModeState();
+  // Dispose on unload — mirrors offscreen.ts:155-163's host.dispose()
+  // pattern. Without this the chrome.runtime listener leaks across HMR
+  // cycles, and any in-flight resetTray timers float.
+  window.addEventListener('beforeunload', () => leaderHooks.dispose(), { once: true });
 
   // Auto-surface newly-added .shtml files in the rail. The panel's
   // `localFs` doesn't have the orchestrator's watcher (that lives in

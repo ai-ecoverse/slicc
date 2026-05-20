@@ -293,6 +293,33 @@ describe('startExtensionLeaderTray onFollowerMessage', () => {
     expect(orchestrator.handleMessage).not.toHaveBeenCalled();
     handle.stop();
   });
+
+  it('IIFE rejection logs at error level and does not throw out of the sync caller', async () => {
+    const bridge = makeMockBridge({ coneJid: 'cone-1' });
+    const orchestrator = makeMockOrchestrator([
+      { jid: 'cone-1', name: 'cone', isCone: true, folder: 'cone' },
+    ]);
+    orchestrator.handleMessage = vi.fn().mockRejectedValue(new Error('orchestrator bork'));
+    const errorSpy = vi.fn();
+    const { handle, options } = startWithCapture({
+      bridge: bridge as any,
+      orchestrator: orchestrator as any,
+      log: { info: vi.fn(), warn: vi.fn(), error: errorSpy } as any,
+    });
+    // Sync return is undefined even though dispatch rejects.
+    expect(options.onFollowerMessage('hi', 'm-99', undefined)).toBeUndefined();
+    // Microtask drain for the IIFE's reject path.
+    await Promise.resolve();
+    await Promise.resolve();
+    // The error was logged at error level (not just warn).
+    expect(errorSpy).toHaveBeenCalledWith(
+      'Follower message dispatch failed',
+      expect.objectContaining({ error: expect.stringContaining('orchestrator bork') })
+    );
+    // createScoopTab was not called because handleMessage rejected.
+    expect(orchestrator.createScoopTab).not.toHaveBeenCalled();
+    handle.stop();
+  });
 });
 
 describe('startExtensionLeaderTray peer connection', () => {

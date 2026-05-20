@@ -114,6 +114,23 @@ describe('PanelLeaderSyncProxy → offscreen adapter', () => {
     const proxy = new PanelLeaderSyncProxy(bus.panelSender, bus.panelSubscriber, {});
     expect(() => proxy.pushSprinkleUpdate('welcome', null)).not.toThrow();
   });
+
+  it('snapshot pushed before signalLeaderMode(true) is preserved', () => {
+    const bus = createBus();
+    const sync = makeMockSync();
+    const bridge = makeMockBridge();
+    const adapter = connectOffscreenLeaderSyncBridge(bus.offscreenHub, () => sync, bridge);
+    const proxy = new PanelLeaderSyncProxy(bus.panelSender, bus.panelSubscriber, {});
+    // Snapshot delivered BEFORE leader-mode activation.
+    proxy.pushSprinklesSnapshot([
+      { name: 'early', title: 'E', path: '/early.shtml', open: false, autoOpen: false },
+    ]);
+    // Then activate.
+    adapter.signalLeaderMode(true);
+    // Cache should still hold the pre-activation snapshot.
+    expect(adapter.getSprinkles()).toHaveLength(1);
+    expect(adapter.resolveSprinklePath('early')).toBe('/early.shtml');
+  });
 });
 
 describe('PanelLeaderSyncProxy.resetTray', () => {
