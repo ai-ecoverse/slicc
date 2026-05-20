@@ -98,11 +98,11 @@ export class ThrottledErrorTracker {
 
   /**
    * Called on each refresh failure. Emits `log.error` on entry to a
-   * failing run, then again every `throttleMs` while the failure
-   * persists. Subsequent logs within a single failure run are tagged
-   * `(sustained)` so an operator can distinguish a fresh outage from a
-   * still-ongoing one, and so persistent failures don't read as new
-   * incidents in a tailed log.
+   * failing run (`throttleMs` cadence), then again every
+   * `sustainedRelogMs` while the failure persists. Subsequent logs
+   * within a single failure run are tagged `(sustained)` so an operator
+   * can distinguish a fresh outage from a still-ongoing one, and so
+   * persistent failures don't read as new incidents in a tailed log.
    */
   reportFailure(error: unknown): void {
     // Snapshot BEFORE we mutate state. `wasAlreadyFailing` distinguishes
@@ -113,7 +113,14 @@ export class ThrottledErrorTracker {
     this.consecutiveSuccesses = 0;
     const now = this.now();
     const elapsed = now - this.lastErrorLogAt;
-    if (elapsed > this.throttleMs) {
+    // Cadence gate: a fresh failure (first one in a new failing run)
+    // uses `throttleMs` so the operator sees the outage promptly. A
+    // sustained failure (already failing, no recovery) uses the wider
+    // `sustainedRelogMs` so a permanent outage doesn't spam at 60s
+    // cadence — operators get a clear "fresh incident" signal followed
+    // by a slower heartbeat once the outage is established.
+    const cadence = wasAlreadyFailing ? this.sustainedRelogMs : this.throttleMs;
+    if (elapsed > cadence) {
       // Throttle counter commit goes in `finally` so a double-throw
       // (logger AND fallback console both fail) still advances the
       // counter — otherwise a permanently-broken log path would

@@ -68,18 +68,29 @@ describe('ThrottledErrorTracker', () => {
     expect(calls[0].data).toMatchObject({ error: 'boom-1' });
   });
 
-  it('failure AFTER the throttle window logs again', () => {
+  it('failure AFTER the sustained window logs again with sustained suffix', () => {
+    // After the FIRST failure (fresh), the sustained-failure cadence
+    // takes over. Crossing `sustainedRelogMs` should produce a new log
+    // tagged `(sustained)`. (Pre-fix, this re-logged at 60s on the
+    // fresh-incident cadence — that was the dead-code bug.)
     const { logger, calls } = makeFakeLogger();
     let now = 0;
     const tracker = new ThrottledErrorTracker(logger, {
       failureMessage: 'failed',
       recoveryMessage: 'recovered',
+      sustainedRelogMs: 100_000,
       now: () => now,
     });
     tracker.reportFailure(new Error('boom-1'));
+    // 61s later: past throttleMs but still inside sustainedRelogMs — no log.
     now = 61_000;
+    tracker.reportFailure(new Error('mid'));
+    expect(calls).toHaveLength(1);
+    // 101s later: past sustainedRelogMs — sustained heartbeat fires.
+    now = 101_000;
     tracker.reportFailure(new Error('boom-2'));
     expect(calls).toHaveLength(2);
+    expect(calls[1].msg).toMatch(/sustained/);
     expect(calls[1].data).toMatchObject({ error: 'boom-2' });
   });
 
@@ -206,18 +217,18 @@ describe('ThrottledErrorTracker', () => {
     expect(calls[0].data).toMatchObject({ error: 'a plain string rejection' });
   });
 
-  it('emits a sustained-failure heartbeat after the throttle window during continuous failures', () => {
-    // Heartbeat contract: a permanent outage would otherwise emit one
-    // log (fresh) then go silent inside the 60s throttle window.
-    // Once the throttle elapses, subsequent failures within the same
-    // failure run re-log with a `(sustained)` suffix so long-running
-    // outages stay observable to operators and don't read as a new
-    // incident in a tailed log.
+  it('emits a sustained-failure heartbeat on the sustainedRelogMs cadence, not throttleMs', () => {
+    // Heartbeat contract: a permanent outage emits one fresh log on
+    // entry, then re-logs every `sustainedRelogMs` (NOT `throttleMs`).
+    // The point is that a permanent outage shouldn't spam at the 60s
+    // fresh-incident cadence; the wider 5-min heartbeat keeps the
+    // outage visible without flooding the log.
     const { logger, calls } = makeFakeLogger();
     let now = 0;
     const tracker = new ThrottledErrorTracker(logger, {
       failureMessage: 'failed',
       recoveryMessage: 'recovered',
+      sustainedRelogMs: 300_000,
       now: () => now,
     });
     // First failure: logs as fresh.
@@ -225,27 +236,57 @@ describe('ThrottledErrorTracker', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].msg).toBe('failed');
 
-    // Within the throttle window: silent.
+    // At t=60_000: past throttleMs but well within sustainedRelogMs.
+    // Under the old (broken) gate this would have re-logged at 60s;
+    // under the corrected cadence, this MUST stay silent.
     now = 60_000;
     tracker.reportFailure(new Error('boom'));
     expect(calls).toHaveLength(1);
 
-    // Past the throttle window with no recovery: emits a sustained
-    // heartbeat (different message, still error level, still carries
-    // the error context plus elapsedMs).
-    now = 300_000;
+    // At t=120_000: still within the 5-min sustained window — silent.
+    now = 120_000;
+    tracker.reportFailure(new Error('boom'));
+    expect(calls).toHaveLength(1);
+
+    // At t=300_001: crossed the sustained window — emits a sustained
+    // heartbeat (suffixed, still error level, carries elapsedMs).
+    now = 300_001;
     tracker.reportFailure(new Error('boom'));
     expect(calls).toHaveLength(2);
     expect(calls[1].msg).toMatch(/sustained/);
     expect(calls[1].level).toBe('error');
     expect(calls[1].data).toMatchObject({ error: 'boom' });
-    expect((calls[1].data as { elapsedMs?: number }).elapsedMs).toBe(300_000);
+    expect((calls[1].data as { elapsedMs?: number }).elapsedMs).toBe(300_001);
 
-    // Another throttle window passes — another sustained log.
-    now = 361_000;
+    // Another sustained window passes — another heartbeat.
+    now = 600_002;
     tracker.reportFailure(new Error('boom'));
     expect(calls).toHaveLength(3);
     expect(calls[2].msg).toMatch(/sustained/);
+  });
+
+  it('uses the default sustainedRelogMs (5min) when not configured — 60s heartbeat does NOT fire', () => {
+    // Regression-pin: the default sustainedRelogMs is 300_000 ms.
+    // A sustained failure inside that window must NOT log again.
+    const { logger, calls } = makeFakeLogger();
+    let now = 0;
+    const tracker = new ThrottledErrorTracker(logger, {
+      failureMessage: 'failed',
+      recoveryMessage: 'recovered',
+      // No sustainedRelogMs override — falls back to 300_000.
+      now: () => now,
+    });
+    tracker.reportFailure(new Error('boom'));
+    expect(calls).toHaveLength(1);
+    // 60_001 ms later: past throttleMs but well inside default sustained window.
+    now = 60_001;
+    tracker.reportFailure(new Error('boom'));
+    expect(calls).toHaveLength(1);
+    // Crosses the default 5-min window — heartbeat fires.
+    now = 300_002;
+    tracker.reportFailure(new Error('boom'));
+    expect(calls).toHaveLength(2);
+    expect(calls[1].msg).toMatch(/sustained/);
   });
 
   it('clears the sustained suffix after recovery — next failure is fresh again', () => {
@@ -257,6 +298,9 @@ describe('ThrottledErrorTracker', () => {
       failureMessage: 'failed',
       recoveryMessage: 'recovered',
       recoveryDebounceTicks: 3,
+      // Tighten the sustained window so the test stays compact while
+      // still exercising the sustained → recovery → fresh transition.
+      sustainedRelogMs: 100_000,
       now: () => now,
     });
     // Build a sustained run.

@@ -22,6 +22,7 @@ import type { BrowserAPI } from '../../webapp/src/cdp/browser-api.js';
 import type { VirtualFS } from '../../webapp/src/fs/virtual-fs.js';
 import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
 import type { ChatMessage, AgentEvent } from '../../webapp/src/ui/types.js';
+import type { Logger } from '../../webapp/src/core/logger.js';
 import { ThrottledErrorTracker } from '../../webapp/src/scoops/throttled-error-tracker.js';
 import {
   setConnectedFollowersGetter,
@@ -82,12 +83,7 @@ export interface StartExtensionLeaderTrayOptions {
   orchestrator: Orchestrator;
   sharedFs: VirtualFS | null;
   browser: BrowserAPI;
-  log: {
-    info: (msg: string, ctx?: any) => void;
-    warn: (msg: string, ctx?: any) => void;
-    error: (msg: string, ctx?: any) => void;
-    debug?: (msg: string, ctx?: any) => void;
-  };
+  log: Logger;
   leaderBridge: OffscreenLeaderSyncBridgeHandle;
 
   /** @internal */ _trayLeaderFactory?: (
@@ -236,7 +232,7 @@ export function startExtensionLeaderTray(
   // is the follower API on `FollowerSyncManager`. CDP errors are
   // throttled via `ThrottledErrorTracker` so a flapping CDP transport
   // doesn't spam the log.
-  const cdpThrottle = new ThrottledErrorTracker(options.log as any, {
+  const cdpThrottle = new ThrottledErrorTracker(options.log, {
     failureMessage: 'Extension leader CDP target refresh failed (best-effort, throttled)',
     recoveryMessage: 'Extension leader CDP target refresh recovered',
   });
