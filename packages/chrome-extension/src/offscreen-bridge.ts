@@ -471,6 +471,61 @@ export class OffscreenBridge implements KernelFacade {
   }
 
   /**
+   * Route a sprinkle-lick event into the orchestrator. Resolves
+   * `targetScoop` by name/folder/`${folder}-scoop`, falling back to the
+   * cone when no match is found (or `targetScoop` is omitted). Builds a
+   * `ChannelMessage`, appends a buffered lick entry, persists, and
+   * dispatches via `orchestrator.handleMessage`.
+   *
+   * Extracted from the `sprinkle-lick` envelope handler so the future
+   * leader factory (Tasks 11+) can reuse the same routing in its
+   * `onSprinkleLick` callback without duplicating channel-message
+   * construction. No-op if no orchestrator is bound.
+   */
+  async routeSprinkleLick(
+    sprinkleName: string,
+    body: unknown,
+    targetScoop?: string
+  ): Promise<void> {
+    if (!this.orchestrator) return;
+    const scoops = this.orchestrator.getScoops();
+    let target = targetScoop
+      ? scoops.find(
+          (s) =>
+            s.name === targetScoop ||
+            s.folder === targetScoop ||
+            s.folder === `${targetScoop}-scoop`
+        )
+      : undefined;
+    if (!target) {
+      target = scoops.find((s) => s.isCone);
+    }
+    if (!target) return;
+    const msgId = `sprinkle-${sprinkleName}-${Date.now()}`;
+    const content = `[Sprinkle Event: ${sprinkleName}]\n\`\`\`json\n${JSON.stringify(body, null, 2)}\n\`\`\``;
+    const channelMsg: ChannelMessage = {
+      id: msgId,
+      chatJid: target.jid,
+      senderId: 'sprinkle',
+      senderName: `sprinkle:${sprinkleName}`,
+      content,
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'sprinkle',
+    };
+    this.getBuffer(target.jid).push({
+      id: msgId,
+      role: 'user',
+      content,
+      timestamp: Date.now(),
+      source: 'lick',
+      channel: 'sprinkle',
+    } as any);
+    this.persistScoop(target.jid);
+    await this.orchestrator.handleMessage(channelMsg);
+  }
+
+  /**
    * Replace the local cone scoop's chat history with `messages` (typically
    * from a leader snapshot), persist them to IndexedDB so panel reloads
    * see them, and notify the panel to update its open chat.
@@ -961,44 +1016,12 @@ export class OffscreenBridge implements KernelFacade {
       }
 
       case 'sprinkle-lick': {
-        // Sprinkle lick event from the side panel — route to targetScoop or fall back to cone
-        const scoops = this.orchestrator.getScoops();
+        // Sprinkle lick event from the side panel — route through the
+        // shared `routeSprinkleLick` so the future leader factory
+        // (Tasks 11+) can reuse the same routing in its
+        // `onSprinkleLick` callback.
         const lickMsg = msg as any;
-        let target = lickMsg.targetScoop
-          ? scoops.find(
-              (s) =>
-                s.name === lickMsg.targetScoop ||
-                s.folder === lickMsg.targetScoop ||
-                s.folder === `${lickMsg.targetScoop}-scoop`
-            )
-          : undefined;
-        if (!target) {
-          target = scoops.find((s) => s.isCone);
-        }
-        if (target) {
-          const msgId = `sprinkle-${lickMsg.sprinkleName}-${Date.now()}`;
-          const content = `[Sprinkle Event: ${lickMsg.sprinkleName}]\n\`\`\`json\n${JSON.stringify(lickMsg.body, null, 2)}\n\`\`\``;
-          const channelMsg: ChannelMessage = {
-            id: msgId,
-            chatJid: target.jid,
-            senderId: 'sprinkle',
-            senderName: `sprinkle:${lickMsg.sprinkleName}`,
-            content,
-            timestamp: new Date().toISOString(),
-            fromAssistant: false,
-            channel: 'sprinkle',
-          };
-          this.getBuffer(target.jid).push({
-            id: msgId,
-            role: 'user',
-            content,
-            timestamp: Date.now(),
-            source: 'lick',
-            channel: 'sprinkle',
-          } as any);
-          this.persistScoop(target.jid);
-          await this.orchestrator.handleMessage(channelMsg);
-        }
+        await this.routeSprinkleLick(lickMsg.sprinkleName, lickMsg.body, lickMsg.targetScoop);
         break;
       }
 

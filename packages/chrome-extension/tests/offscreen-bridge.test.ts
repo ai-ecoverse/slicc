@@ -1108,3 +1108,96 @@ describe('OffscreenBridge.getMessagesForJid', () => {
     expect(bridge.getMessagesForJid('nope')).toEqual([]);
   });
 });
+
+describe('OffscreenBridge.routeSprinkleLick', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+  let mockOrchestrator: any;
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+
+    bridge = new OffscreenBridge();
+    mockOrchestrator = {
+      getScoops: vi.fn(() => [
+        { jid: 'cone-1', name: 'cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'scoop-2',
+          name: 'helper',
+          folder: 'helper',
+          isCone: false,
+          assistantLabel: 'helper',
+        },
+      ]),
+      handleMessage: vi.fn().mockResolvedValue(undefined),
+      createScoopTab: vi.fn().mockResolvedValue(undefined),
+      registerScoop: vi.fn().mockResolvedValue(undefined),
+      unregisterScoop: vi.fn().mockResolvedValue(undefined),
+      stopScoop: vi.fn(),
+      clearQueuedMessages: vi.fn().mockResolvedValue(undefined),
+      clearAllMessages: vi.fn().mockResolvedValue(undefined),
+      clearScoopMessages: vi.fn().mockResolvedValue(undefined),
+      delegateToScoop: vi.fn().mockResolvedValue(undefined),
+      updateModel: vi.fn(),
+    };
+
+    await bridge.bind(mockOrchestrator);
+  });
+
+  it('handles a sprinkle lick targeted at a specific scoop', async () => {
+    await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'helper');
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatJid: 'scoop-2',
+        channel: 'sprinkle',
+        senderName: 'sprinkle:welcome',
+        senderId: 'sprinkle',
+        fromAssistant: false,
+      })
+    );
+    // Buffer should have received a corresponding lick entry.
+    const buf = (bridge as any).getBuffer('scoop-2') as Array<any>;
+    expect(buf).toHaveLength(1);
+    expect(buf[0].source).toBe('lick');
+    expect(buf[0].channel).toBe('sprinkle');
+  });
+
+  it('falls back to the cone when no targetScoop is given', async () => {
+    await bridge.routeSprinkleLick('welcome', { action: 'go' });
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ chatJid: 'cone-1', channel: 'sprinkle' })
+    );
+  });
+
+  it('falls back to the cone when targetScoop does not match any scoop', async () => {
+    await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'unknown');
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ chatJid: 'cone-1' })
+    );
+  });
+
+  it('matches targetScoop by folder with a "-scoop" suffix', async () => {
+    mockOrchestrator.getScoops = vi.fn(() => [
+      { jid: 'cone-1', name: 'cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+      {
+        jid: 'scoop-3',
+        name: 'Helper',
+        folder: 'helper-scoop',
+        isCone: false,
+        assistantLabel: 'helper-scoop',
+      },
+    ]);
+    await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'helper');
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ chatJid: 'scoop-3' })
+    );
+  });
+
+  it('is a no-op when no orchestrator is bound', async () => {
+    const unboundBridge = new OffscreenBridge();
+    await unboundBridge.routeSprinkleLick('welcome', { action: 'go' });
+    // Nothing throws; mock orchestrator on the bound bridge is unaffected.
+    expect(mockOrchestrator.handleMessage).not.toHaveBeenCalled();
+  });
+});
