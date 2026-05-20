@@ -150,6 +150,10 @@ describe('skill/upskill command compatibility discovery', () => {
     expect(result.stdout).toContain('List discoverable skills');
     expect(result.stdout).toContain('**/.agents/skills/*');
     expect(result.stdout).toContain('**/.claude/skills/*');
+    // The `upskill search` line must list every registry the search actually
+    // queries (Tessl + browse.sh), not just one of them — see PR #707 thread.
+    expect(result.stdout).toMatch(/upskill search.*Tessl.*browse\.sh/);
+    expect(result.stdout).toContain('browse:<host>/<task>');
   });
 
   it('skill list shows source and description for both native and compatibility skills', async () => {
@@ -1437,6 +1441,29 @@ describe('parseBrowseShRef', () => {
     expect(parseBrowseShRef('browse:weather.gov/../etc')).toBeNull();
   });
 
+  it('rejects dot and dot-dot segments outright', () => {
+    // Single-dot segments — the BROWSE_SH_SEGMENT_RE allowlist accepts `.`
+    // characters inside a longer segment, so these have to be rejected by
+    // the explicit `.` / `..` check.
+    expect(parseBrowseShRef('browse:./forecast')).toBeNull();
+    expect(parseBrowseShRef('browse:weather.gov/.')).toBeNull();
+    expect(parseBrowseShRef('browse:../forecast')).toBeNull();
+    expect(parseBrowseShRef('browse:weather.gov/..')).toBeNull();
+    expect(parseBrowseShRef('browse:./.')).toBeNull();
+    expect(parseBrowseShRef('browse:../..')).toBeNull();
+    // URL form must reject the same shapes.
+    expect(parseBrowseShRef('https://browse.sh/skills/./forecast')).toBeNull();
+    expect(parseBrowseShRef('https://browse.sh/skills/weather.gov/.')).toBeNull();
+    expect(parseBrowseShRef('https://browse.sh/skills/../etc')).toBeNull();
+    expect(parseBrowseShRef('https://browse.sh/skills/weather.gov/..')).toBeNull();
+  });
+
+  it('rejects empty hostname or task segments', () => {
+    expect(parseBrowseShRef('browse:/task')).toBeNull();
+    expect(parseBrowseShRef('browse:host/')).toBeNull();
+    expect(parseBrowseShRef('browse:/')).toBeNull();
+  });
+
   it('rejects missing segments', () => {
     expect(parseBrowseShRef('browse:weather.gov')).toBeNull();
     expect(parseBrowseShRef('browse:/get-forecast')).toBeNull();
@@ -1445,6 +1472,23 @@ describe('parseBrowseShRef', () => {
 
   it('rejects extra path segments', () => {
     expect(parseBrowseShRef('browse:weather.gov/get/forecast')).toBeNull();
+  });
+
+  it('normalizes hostname to lowercase and strips a leading www.', () => {
+    // Matches the rest of the browse.sh install/match logic, which compares
+    // against `normalizeHostname` output.
+    expect(parseBrowseShRef('browse:WEATHER.GOV/get-forecast')).toEqual({
+      hostname: 'weather.gov',
+      task: 'get-forecast',
+    });
+    expect(parseBrowseShRef('browse:www.weather.gov/get-forecast')).toEqual({
+      hostname: 'weather.gov',
+      task: 'get-forecast',
+    });
+    expect(parseBrowseShRef('https://browse.sh/skills/WWW.Weather.GOV/get-forecast')).toEqual({
+      hostname: 'weather.gov',
+      task: 'get-forecast',
+    });
   });
 
   it('returns null for unrelated refs', () => {
@@ -1731,6 +1775,140 @@ describe('upskill browse.sh registry integration', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('browse.sh');
     expect(result.stderr).toContain('not found');
+  });
+
+  it('search round-robin interleaves Tessl and browse.sh hits (1T, 1B, 2T, 2B, …)', async () => {
+    // Three matches per source — enough to expose any per-source concatenation.
+    const tesslSkills = ['weather-tessl-1', 'weather-tessl-2', 'weather-tessl-3'].map(
+      (name, i) => ({
+        id: `tessl-${i + 1}`,
+        type: 'skill',
+        attributes: {
+          name,
+          description: `Tessl skill ${i + 1}`,
+          // Distinct sourceUrls — fetchTesslResults dedups by `sourceUrl`,
+          // so identical URLs would collapse the three Tessl rows into one
+          // and the interleaving assertion would silently degrade.
+          sourceUrl: `https://github.com/acme/${name}`,
+          path: `skills/${name}/SKILL.md`,
+          featured: false,
+          scores: {
+            aggregate: 0.9 - i * 0.1,
+            quality: null,
+            security: null,
+            evalImprovementMultiplier: null,
+          },
+        },
+      })
+    );
+    const browseSkills = ['get-forecast-aaa', 'get-radar-bbb', 'get-alerts-ccc'].map((task, i) => ({
+      slug: `weather.gov/${task}`,
+      hostname: 'weather.gov',
+      task,
+      name: task.replace(/-[a-z]+$/, ''),
+      title: `Browse skill ${i + 1} for weather`,
+      description: `Browse-weather variant ${i + 1}`,
+      tags: ['weather'],
+      updated: '2026-04-01',
+    }));
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('api.tessl.io')) {
+        return response(
+          200,
+          JSON.stringify({ meta: { pagination: { total: tesslSkills.length } }, data: tesslSkills })
+        );
+      }
+      if (url.includes('browse.sh/api/skills')) {
+        return response(200, JSON.stringify({ skills: browseSkills }));
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['search', 'weather'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    // Locate each display name in stdout and assert strict round-robin order:
+    // Tessl[0], browse.sh[0], Tessl[1], browse.sh[1], Tessl[2], browse.sh[2].
+    const positions = [
+      result.stdout.indexOf('weather-tessl-1'),
+      result.stdout.indexOf('weather.gov/get-forecast-aaa'),
+      result.stdout.indexOf('weather-tessl-2'),
+      result.stdout.indexOf('weather.gov/get-radar-bbb'),
+      result.stdout.indexOf('weather-tessl-3'),
+      result.stdout.indexOf('weather.gov/get-alerts-ccc'),
+    ];
+    expect(positions.every((p) => p >= 0)).toBe(true);
+    for (let i = 1; i < positions.length; i++) {
+      expect(positions[i]).toBeGreaterThan(positions[i - 1]);
+    }
+  });
+
+  it('No skills found hint mentions both registries', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('api.tessl.io')) {
+        return response(200, JSON.stringify({ meta: { pagination: { total: 0 } }, data: [] }));
+      }
+      if (url.includes('browse.sh/api/skills')) {
+        return response(200, JSON.stringify({ skills: [] }));
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['search', 'nothingmatches'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('No skills found');
+    expect(result.stdout).toContain('tessl.io/registry');
+    expect(result.stdout).toContain('browse.sh');
+  });
+
+  it('refuses to install when upstream frontmatter declares an unsafe name', async () => {
+    const unsafeNames = [
+      'foo/../../shared', // path traversal via separator
+      '..', // bare dot-dot
+      '.', // bare dot
+      '/etc/passwd', // absolute path
+      'has space', // shell metachar
+      'a'.repeat(65), // over the 64-char cap
+    ];
+
+    for (const unsafe of unsafeNames) {
+      _resetBrowseShCatalogCache();
+      const skillMd = ['---', `name: ${unsafe}`, 'description: unsafe', '---', '', '# body'].join(
+        '\n'
+      );
+      const fetchMock = vi.fn(async (url: string) => {
+        if (url === 'https://browse.sh/api/skills/weather.gov/get-forecast-1uezib') {
+          return response(
+            200,
+            JSON.stringify({
+              slug: 'weather.gov/get-forecast-1uezib',
+              hostname: 'weather.gov',
+              task: 'get-forecast-1uezib',
+              name: 'get-forecast',
+              skillMd,
+            })
+          );
+        }
+        throw new Error(`unexpected url: ${url}`);
+      });
+
+      const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+      const result = await cmd.execute(
+        ['browse:weather.gov/get-forecast-1uezib'],
+        createMockCtx() as any
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('unsafe name');
+      // Nothing escaped the skills root.
+      await expect(fs.stat('/workspace/skills/browse-weather.gov')).rejects.toBeTruthy();
+      await expect(fs.stat('/etc/passwd')).rejects.toBeTruthy();
+      await expect(fs.stat('/shared')).rejects.toBeTruthy();
+    }
   });
 });
 

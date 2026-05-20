@@ -689,14 +689,29 @@ async function fetchBrowseShResults(
 const BROWSE_SH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
 
 /**
+ * Reject path-traversal-shaped segments (`.`, `..`) and empty strings. The
+ * `BROWSE_SH_SEGMENT_RE` allowlist on its own accepts `.` and `..` as full
+ * segments because `.` and `-` are in the character class; this helper closes
+ * that gap so neither shorthand refs nor frontmatter-derived names can produce
+ * `/workspace/skills/browse-./..-..` style targets.
+ */
+function isSafeBrowseShSegment(seg: string): boolean {
+  if (!seg) return false;
+  if (seg === '.' || seg === '..') return false;
+  return BROWSE_SH_SEGMENT_RE.test(seg);
+}
+
+/**
  * Parse a browse.sh reference.
  *
  * Accepts:
  * - `browse:{hostname}/{task}` (shorthand)
  * - `https://browse.sh/skills/{hostname}/{task}` (URL form, trailing slash ok)
  *
- * Each segment must satisfy `[A-Za-z0-9._-]+` (no path traversal, no shell
- * metachars). Returns null for anything else.
+ * Each segment must satisfy `[A-Za-z0-9._-]+` AND must not be `.` or `..`
+ * (no path traversal, no shell metachars). Hostname is normalized to lowercase
+ * with a leading `www.` stripped so refs match the install/match logic
+ * elsewhere in this file. Returns null for anything else.
  */
 export function parseBrowseShRef(ref: string): { hostname: string; task: string } | null {
   let hostnameTask: string | undefined;
@@ -711,11 +726,16 @@ export function parseBrowseShRef(ref: string): { hostname: string; task: string 
 
   const slash = hostnameTask.indexOf('/');
   if (slash < 0) return null;
-  const hostname = hostnameTask.slice(0, slash);
+  const rawHostname = hostnameTask.slice(0, slash);
   const task = hostnameTask.slice(slash + 1);
-  if (!hostname || !task) return null;
+  if (!rawHostname || !task) return null;
   if (task.includes('/')) return null;
-  if (!BROWSE_SH_SEGMENT_RE.test(hostname) || !BROWSE_SH_SEGMENT_RE.test(task)) return null;
+  if (!isSafeBrowseShSegment(rawHostname) || !isSafeBrowseShSegment(task)) return null;
+  const hostname = normalizeHostname(rawHostname);
+  // normalizeHostname only lowercases + strips a leading `www.`; re-verify the
+  // result still satisfies the segment allowlist so a hostname like `www..`
+  // (which normalizes to `.`) is still rejected.
+  if (!isSafeBrowseShSegment(hostname)) return null;
   return { hostname, task };
 }
 
@@ -852,6 +872,28 @@ async function installFromBrowseSh(
   const frontmatterName = extractFrontmatterField(skillMd, 'name');
   const fallbackName = task.replace(/-[A-Za-z0-9]{4,8}$/, '');
   const skillName = frontmatterName || fallbackName || task;
+  // `hostname` and `task` here came through `parseBrowseShRef`, but `skillName`
+  // can be sourced from untrusted upstream frontmatter — constrain it to the
+  // same safe-segment allowlist before composing the install path. Reject
+  // anything that could escape `/workspace/skills/` (path separators, `.` /
+  // `..` segments, NUL, shell metachars).
+  if (!isSafeBrowseShSegment(skillName) || skillName.length > 64) {
+    return {
+      stdout: '',
+      stderr: `upskill: refusing to install browse.sh skill with unsafe name "${skillName}"\n`,
+      exitCode: 1,
+    };
+  }
+  // Defense in depth: re-validate the hostname segment too. parseBrowseShRef
+  // already guarantees this, but install paths are sensitive enough that we
+  // shouldn't trust the call site.
+  if (!isSafeBrowseShSegment(hostname)) {
+    return {
+      stdout: '',
+      stderr: `upskill: refusing to install browse.sh skill with unsafe hostname "${hostname}"\n`,
+      exitCode: 1,
+    };
+  }
   const dirName = `browse-${hostname}-${skillName}`;
   const destDir = `${SKILLS_DIR}/${dirName}`;
 
@@ -903,6 +945,24 @@ const REGISTRY_SOURCES: RegistrySource[] = [
   { label: 'browse.sh', fetch: fetchBrowseShResults },
 ];
 
+/**
+ * Round-robin interleave per-source result lists, preserving within-source
+ * order. Take the first hit from each source in order, then the second from
+ * each, etc., skipping any source that has been exhausted. This gives each
+ * registry visibility in the top page of results rather than burying browse.sh
+ * behind Tessl (or vice versa).
+ */
+function interleaveResults(perSource: UnifiedSearchResult[][]): UnifiedSearchResult[] {
+  const merged: UnifiedSearchResult[] = [];
+  const maxLen = perSource.reduce((m, list) => Math.max(m, list.length), 0);
+  for (let i = 0; i < maxLen; i++) {
+    for (const list of perSource) {
+      if (i < list.length) merged.push(list[i]);
+    }
+  }
+  return merged;
+}
+
 async function searchRegistries(
   query: string,
   fetch: SecureFetch,
@@ -912,12 +972,12 @@ async function searchRegistries(
 
   const perSource = settled.map((s) => (s.status === 'fulfilled' ? s.value : []));
   const allFailed = settled.every((s) => s.status === 'rejected');
-  const merged: UnifiedSearchResult[] = perSource.flat();
+  const merged: UnifiedSearchResult[] = interleaveResults(perSource);
 
   if (merged.length === 0) {
     const stderr = allFailed ? 'upskill: registries failed to respond\n' : '';
     return {
-      stdout: `No skills found for "${query}"\n\nTry a different search term or browse https://tessl.io/registry\n`,
+      stdout: `No skills found for "${query}"\n\nTry a different search term or browse the registries at https://tessl.io/registry or https://browse.sh\n`,
       stderr,
       exitCode: stderr ? 1 : 0,
     };
@@ -2500,10 +2560,11 @@ Commands:
 
 ${formatDiscoveryScope()}
 For installing skills from registries or GitHub, use 'upskill':
-  upskill search "query"           Search Tessl
+  upskill search "query"           Search registries (Tessl + browse.sh)
   upskill owner/repo --list        List skills in GitHub repo
   upskill owner/repo --all         Install from GitHub
   upskill tessl:<name>             Install from Tessl registry
+  upskill browse:<host>/<task>     Install from browse.sh catalog
 
 Examples:
   skill list

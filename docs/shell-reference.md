@@ -158,7 +158,7 @@ Skill package manager. Installs into `/workspace/skills/<name>/` from three regi
 | `upskill tessl:<name>`             | Tessl registry (resolves to a GitHub source under the hood).                                                                                                                                 |
 | `upskill browse:<hostname>/<task>` | [browse.sh](https://browse.sh) site-specific skills. Equivalent URL form: `upskill https://browse.sh/skills/<hostname>/<task>`. Installs into `/workspace/skills/browse-<hostname>-<name>/`. |
 
-`upskill search "<query>"` interleaves results from Tessl and the browse.sh catalog. `upskill recommendations` matches your profile; add `--install` to write the matches.
+`upskill search "<query>"` round-robin interleaves results from Tessl and the browse.sh catalog (first hit from each source, then second from each, …) so both registries get visibility in the top page. `upskill recommendations` matches your profile; add `--install` to write the matches.
 
 ### browse.sh: SLICC adapter preamble
 
@@ -176,7 +176,7 @@ Installed browse.sh `SKILL.md` files get a fixed preamble inserted **immediately
 
 Suggests skills for each open browser tab. For every tab `upskill tabs` lists:
 
-- **Origin-advertised upskill rels** — reuses the per-tab `discoverLinks` proxied fetch from PR #602, so any `Link: <…>; rel="https://www.sliccy.ai/rel/upskill"` the site emits surfaces here without extra setup.
+- **Origin-advertised upskill rels** — for each tab URL, fetches it through the same proxied fetch the rest of the shell uses, parses the response's `Link` header (same `parseLinkHeader` helper as `discover` / PR #602), and surfaces any `Link: <…>; rel="https://www.sliccy.ai/rel/upskill"` the site emits. Distinct from `discoverLinks`, which follows P0 capability rels (`api-catalog`, `service-desc`, `llms-txt`, …) — `upskill tabs` only looks at the `upskill` rel.
 - **Browse.sh catalog matches** — hostname-exact after stripping leading `www.` (so `https://www.weather.gov/` matches `weather.gov` but `https://forecast.weather.gov/` does not). Each match prints `installHint` and a `✓` marker for skills already installed under `/workspace/skills/browse-<host>-<name>/`.
 
 `--json` emits the same data as a `{ tabs: TabUpskillResult[] }` envelope (one entry per tab with `targetId`, `url`, `hostname`, `active`, `origin[]`, `catalog[]`, `failures[]`). Per-tab discovery failures are collected non-fatally; a catalog fetch failure becomes a stderr warning but the command still exits 0. Without a browser API attached the command prints `browser APIs unavailable in this environment` and exits 1.
