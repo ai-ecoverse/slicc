@@ -67,7 +67,11 @@ export interface ExtensionLeaderHooksOptions {
 }
 
 export interface ExtensionLeaderHooksHandle {
-  /** Proxy is exposed for tests; production code shouldn't call this. */
+  /** @internal Exposed for inspection and tests only. Do NOT call
+   *  `.dispose()` on this — use {@link ExtensionLeaderHooksHandle.dispose}
+   *  so the hooks are removed in the right order before the proxy goes
+   *  away. Matches the `@internal` convention `ExtensionLeaderTrayHandle`
+   *  uses for its `sync` / `peers` / `leader` fields. */
   readonly proxy: PanelLeaderSyncProxy;
   /** Hooks state — true while installed, false otherwise. */
   isInstalled(): boolean;

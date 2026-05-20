@@ -647,9 +647,9 @@ export class OffscreenBridge implements KernelFacade {
   /**
    * Public wrapper over the `@internal getBuffer(jid)` that casts the
    * structurally-compatible `BufferedChatMessage[]` to `ChatMessage[]`.
-   * Used by the leader-sync factory (Tasks 11+) to read chat state
-   * without reaching for `@internal` helpers. Same cast pattern as
-   * `persistScoop` (this file).
+   * Used by `startExtensionLeaderTray` in `extension-leader-tray.ts` to
+   * read chat state without reaching for `@internal` helpers. Same cast
+   * pattern as `persistScoop` (this file).
    */
   getMessagesForJid(jid: string): ChatMessage[] {
     return this.getBuffer(jid) as unknown as ChatMessage[];
@@ -662,10 +662,10 @@ export class OffscreenBridge implements KernelFacade {
    * `ChannelMessage`, appends a buffered lick entry, persists, and
    * dispatches via `orchestrator.handleMessage`.
    *
-   * Extracted from the `sprinkle-lick` envelope handler so the future
-   * leader factory (Tasks 11+) can reuse the same routing in its
-   * `onSprinkleLick` callback without duplicating channel-message
-   * construction. No-op if no orchestrator is bound.
+   * Extracted from the `sprinkle-lick` envelope handler so
+   * `startExtensionLeaderTray`'s `onSprinkleLick` callback can share the
+   * same routing logic without duplicating channel-message construction.
+   * No-op if no orchestrator is bound.
    */
   async routeSprinkleLick(
     sprinkleName: string,
@@ -1219,9 +1219,8 @@ export class OffscreenBridge implements KernelFacade {
 
       case 'sprinkle-lick': {
         // Sprinkle lick event from the side panel — route through the
-        // shared `routeSprinkleLick` so the future leader factory
-        // (Tasks 11+) can reuse the same routing in its
-        // `onSprinkleLick` callback.
+        // shared `routeSprinkleLick` so `startExtensionLeaderTray`'s
+        // `onSprinkleLick` callback can share the same routing.
         const lickMsg = msg as any;
         await this.routeSprinkleLick(lickMsg.sprinkleName, lickMsg.body, lickMsg.targetScoop);
         break;
