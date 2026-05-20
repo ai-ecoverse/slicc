@@ -37,7 +37,7 @@ struct StaticFileMiddleware<Context: RequestContext>: RouterMiddleware {
 
         do {
             var response = try await self.fileMiddleware.handle(request, context: context, next: next)
-            Self.applyServiceWorkerHeaders(path: request.uri.path, response: &response)
+            Self.applyCacheHeaders(path: request.uri.path, response: &response)
             return response
         } catch {
             guard Self.shouldServeSPAFallback(method: request.method, path: request.uri.path, error: error) else {
@@ -45,9 +45,11 @@ struct StaticFileMiddleware<Context: RequestContext>: RouterMiddleware {
             }
 
             let fallbackRequest = self.rewritingRequestPath(request, to: self.fallbackFilePath)
-            return try await self.fileMiddleware.handle(fallbackRequest, context: context) { _, _ in
+            var fallbackResponse = try await self.fileMiddleware.handle(fallbackRequest, context: context) { _, _ in
                 throw HTTPError(.notFound)
             }
+            Self.applyCacheHeaders(path: self.fallbackFilePath, response: &fallbackResponse)
+            return fallbackResponse
         }
     }
 
@@ -67,14 +69,44 @@ extension StaticFileMiddleware {
         return responseError.status == .notFound
     }
 
-    /// The root-scope LLM-proxy SW must declare its maximum scope via the
-    /// `Service-Worker-Allowed: /` response header; without it the browser
-    /// refuses to register a SW with a wider scope than its serve path.
-    /// Also disable caching so dev rebuilds always reach the page.
-    static func applyServiceWorkerHeaders(path: String, response: inout Response) {
-        guard path == "/llm-proxy-sw.js" else { return }
-        response.headers[HTTPField.Name("Service-Worker-Allowed")!] = "/"
-        response.headers[HTTPField.Name.cacheControl] = "no-store"
+    /// Mirrors the Express middleware in `packages/node-server/src/index.ts`
+    /// (PR #710). Without these headers, browsers apply heuristic freshness
+    /// to `index.html` and the unhashed shells based on `Last-Modified`, so
+    /// a long-running tab keeps using cached HTML after a server rebuild
+    /// and every dynamic `import()` of `/assets/<old-hash>.js` 404s until
+    /// the user hard-refreshes.
+    ///
+    /// Three buckets:
+    /// - `/llm-proxy-sw.js`, `/preview-sw.js`: `no-store` so the browser
+    ///   always pulls the latest SW bytes on navigation/registration,
+    ///   plus `Service-Worker-Allowed: /` so the SW can claim a wider
+    ///   scope than its serve path. `llm-proxy-sw.js` actually needs
+    ///   the root scope; `preview-sw.js` registers at `/preview/`
+    ///   (narrower), but Node sends the header for both — matching here
+    ///   keeps the two implementations byte-for-byte identical and the
+    ///   broader allowance is harmless.
+    /// - `/assets/*`: Vite emits content-hashed filenames here, so each
+    ///   URL is byte-for-byte immutable — cache forever to avoid
+    ///   revalidation round-trips.
+    /// - Everything else (`index.html`, manifest, `sprinkle-sandbox.html`,
+    ///   favicon, fonts, ...): `no-cache` forces a conditional revalidation
+    ///   on every load. Cheap (304 on unchanged) and guarantees tabs pick
+    ///   up the new asset references after a rebuild.
+    static func applyCacheHeaders(path: String, response: inout Response) {
+        if path == "/llm-proxy-sw.js" || path == "/preview-sw.js" {
+            response.headers[HTTPField.Name("Service-Worker-Allowed")!] = "/"
+        }
+        response.headers[HTTPField.Name.cacheControl] = cacheControlValue(forPath: path)
+    }
+
+    static func cacheControlValue(forPath path: String) -> String {
+        if path == "/llm-proxy-sw.js" || path == "/preview-sw.js" {
+            return "no-store"
+        }
+        if path.hasPrefix("/assets/") {
+            return "public, max-age=31536000, immutable"
+        }
+        return "no-cache"
     }
 
     static func isReservedPath(_ path: String) -> Bool {
