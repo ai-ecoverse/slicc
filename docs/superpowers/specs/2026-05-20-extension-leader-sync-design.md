@@ -3,6 +3,7 @@
 **Issue:** [#682](https://github.com/ai-ecoverse/slicc/issues/682)
 **Branch:** `fix/extension-leader-sync-682`
 **Date:** 2026-05-20
+**Revision:** 2 (corrections from first review applied — see "Revision history" below)
 
 ## Problem
 
@@ -32,29 +33,32 @@ threaded across the panel↔offscreen boundary. After mapping data sources,
 three pieces of state are panel-only, and all three are one-way panel→offscreen
 pushes. No request/response RPC is required.
 
-| `LeaderSyncManagerOptions` field                                 | Source in extension mode                                                                                                                               |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `getMessages()`                                                  | `OffscreenBridge.getBuffer(activeScoopJid)` — the bridge is the canonical chat store in extension mode; `ChatPanel.getMessages()` is a downstream view |
-| `getMessagesForScoop(jid)`                                       | `OffscreenBridge.getBuffer(jid)`                                                                                                                       |
-| `getScoopJid()`                                                  | bridge tracks `activeScoopJid` via the existing scoop-selection wire                                                                                   |
-| `getScoops()`                                                    | `orchestrator.getScoops().map(...)`                                                                                                                    |
-| `getSprinkles()`                                                 | **panel-only** — `SprinkleManager.available() + opened()`; pushed snapshot                                                                             |
-| `readSprinkleContent(name)`                                      | `sharedFs.readFile(path)` after name→path lookup from the cached sprinkle snapshot                                                                     |
-| `onSprinkleLick`                                                 | `lickManager.emitEvent({ type: 'sprinkle', ... })` — same routing the follower path already uses at `offscreen.ts:247`                                 |
-| `onFollowerMessage`                                              | dispatch a synthetic `user-message` envelope through the existing offscreen path                                                                       |
-| `onFollowerAbort`                                                | `orchestrator.stopScoop(activeJid)`                                                                                                                    |
-| AgentEvent subscription                                          | tap inside `OffscreenBridge.createCallbacks` — the same callbacks that already emit `agent-event` envelopes to the panel                               |
-| `browserAPI` / `browserTransport` / `vfs`                        | already in `offscreen.ts:init()`                                                                                                                       |
-| `sprinkleManager.setSendToSprinkleHook` (local update broadcast) | **panel-only** — pushed                                                                                                                                |
-| `chat.setOnLocalUserMessage` (local echo)                        | **panel-only** — pushed                                                                                                                                |
+| `LeaderSyncManagerOptions` field                                 | Source in extension mode                                                                                                                                                                                                                                 |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getMessages()`                                                  | `OffscreenBridge.getBuffer(activeScoopJid)` cast to `ChatMessage[]` — `BufferedChatMessage` is structurally compatible per the existing cast at `offscreen-bridge.ts:671`                                                                                |
+| `getMessagesForScoop(jid)`                                       | `OffscreenBridge.getBuffer(jid)` (same cast). Required for `request_snapshot` against non-active scoops (`tray-leader-sync.ts:354-371`)                                                                                                                  |
+| `getScoopJid()`                                                  | new field on the bridge fed by a new panel→offscreen `active-scoop` message (see §5)                                                                                                                                                                     |
+| `getScoops()`                                                    | `orchestrator.getScoops().map(…)` — inline summary projection (no `toScoopSummary` helper exists today)                                                                                                                                                  |
+| `getSprinkles()`                                                 | **panel-only** — `SprinkleManager.available() + opened()`; pushed snapshot                                                                                                                                                                               |
+| `readSprinkleContent(name)`                                      | `sharedFs.readFile(path)` after name→path lookup from the cached sprinkle snapshot                                                                                                                                                                       |
+| `onSprinkleLick`                                                 | reuse the existing `sprinkle-lick` handler at `offscreen-bridge.ts:924-962` (refactored into a method `OffscreenBridge.routeSprinkleLick(sprinkleName, body, targetScoop)`)                                                                              |
+| `onFollowerMessage`                                              | three things: (a) `orchestrator.handleMessage(channelMsg)` — fires the existing `onIncomingMessage` callback which produces the panel UI echo for free; (b) `sync.broadcastUserMessage(text, msgId, atts)` to re-broadcast to sibling followers          |
+| `onFollowerAbort`                                                | `orchestrator.stopScoop(activeJid)`                                                                                                                                                                                                                      |
+| AgentEvent subscription                                          | tap at the bridge's wire-emit layer; reuse `handleAgentEvent` translation logic from `offscreen-client.ts:495-585`. Details in §1.                                                                                                                       |
+| `browserAPI` / `browserTransport` / `vfs`                        | already in `offscreen.ts:init()`                                                                                                                                                                                                                         |
+| `sprinkleManager.setSendToSprinkleHook` (local update broadcast) | **panel-only** — pushed                                                                                                                                                                                                                                  |
+| `chat.setOnLocalUserMessage` (local echo)                        | **panel-only** — pushed                                                                                                                                                                                                                                  |
+| `webhook.event` control message                                  | new — extension `lickManager` is in-process; call `orchestrator.handleWebhookEvent(id, headers, body)` directly from `LeaderTrayManager.onControlMessage` (standalone hops through the worker via `lick-webhook-event`; extension doesn't need that hop) |
 
 ## Approach
 
 ### Option A (chosen): offscreen-local sync + 3-message panel push bridge
 
 `LeaderSyncManager` is constructed in offscreen. Its callbacks resolve from
-offscreen-local state directly. A narrow panel→offscreen bridge handles the
-three panel-only pieces, all fire-and-forget (no waiter maps, no timeouts).
+offscreen-local state directly. A narrow panel↔offscreen bridge handles the
+three panel-only pieces (sprinkle snapshot, sprinkle update, user echo, all
+fire-and-forget — no waiter maps, no timeouts) plus two activation signals
+(offscreen→panel) so the panel knows when to install/remove hooks.
 
 ### Rejected alternatives
 
@@ -75,38 +79,52 @@ than A.
 │  SprinkleManager                                            │
 │    .setSendToSprinkleHook(name, data)                       │
 │    .available() / .opened()  ← refresh/open/close events    │
+│  ScoopSwitcher                                              │
+│    on selection change → leaderSyncProxy.pushActiveScoop()  │
 │                                                             │
 │  PanelLeaderSyncProxy (new)                                 │
-│    pushSprinklesSnapshot(SprinkleSummary[])                 │
-│    pushSprinkleUpdate(name, data)                           │
-│    pushUserMessageEcho(text, msgId, atts)                   │
-└────────┬─────────────────────────────────── chrome.runtime ─┘
-         │                                          (panel→offscreen, fire-and-forget)
+│    pushSprinklesSnapshot(SprinkleSummary[])  panel→offscreen│
+│    pushSprinkleUpdate(name, data)             panel→offscreen│
+│    pushUserMessageEcho(text, msgId, atts)     panel→offscreen│
+│    pushActiveScoop(jid)                       panel→offscreen│
+│    onLeaderModeChange(active: boolean)        offscreen→panel│
+└────────┬──────────────────── chrome.runtime, fire-and-forget┘
+         │
          ▼
 ┌─ Offscreen document ────────────────────────────────────────┐
-│  connectOffscreenLeaderSyncBridge(hub) (new)                │
+│  connectOffscreenLeaderSyncBridge(hub, syncRef) (new)       │
 │    caches latest SprinkleSummary[]                          │
+│    caches latest activeScoopJid                             │
 │    fans:                                                    │
-│      sprinkle.update → sync.broadcastSprinkleUpdate         │
-│      user.echo       → sync.broadcastUserMessage            │
+│      sprinkle.update → syncRef().broadcastSprinkleUpdate    │
+│      user.echo       → syncRef().broadcastUserMessage       │
 │                                                             │
 │  LeaderSyncManager (constructed here)                       │
-│    getMessages       → bridge.getBuffer(activeJid)          │
-│    getMessagesForScoop→ bridge.getBuffer(jid)               │
-│    getScoopJid       → bridge.getActiveScoopJid()           │
-│    getScoops         → orchestrator.getScoops()             │
-│    getSprinkles      → bridge.getCachedSprinkles()          │
+│    getMessages       → bridge.getBuffer(activeJid) as CM[]  │
+│    getMessagesForScoop→ bridge.getBuffer(jid)   as CM[]     │
+│    getScoopJid       → bridge.getActiveScoopJid() ?? coneJid│
+│    getScoops         → orchestrator.getScoops().map(…)      │
+│    getSprinkles      → leaderBridge.getSprinkles()          │
 │    readSprinkleContent → sharedFs.readFile(name→path)       │
-│    onSprinkleLick    → lickManager.emitEvent('sprinkle',…)  │
-│    onFollowerMessage → orchestrator user-message dispatch   │
+│    onSprinkleLick    → bridge.routeSprinkleLick(name,body,…)│
+│    onFollowerMessage → orchestrator.handleMessage          │
+│                        + sync.broadcastUserMessage          │
 │    onFollowerAbort   → orchestrator.stopScoop(activeJid)    │
 │    browserAPI/transport/vfs → already in init()             │
 │                                                             │
 │  OffscreenBridge.onAgentEvent(handler) (new)                │
 │    sync.broadcastEvent ← handler (AgentEvent)               │
 │                                                             │
+│  LeaderTrayManager.onControlMessage (extended)              │
+│    'webhook.event' → orchestrator.handleWebhookEvent(...)   │
+│    else → trayPeers.handleControlMessage(...)               │
+│                                                             │
 │  LeaderTrayPeerManager.onPeerConnected (fixed)              │
 │    sync.addFollower(bootstrapId, channel, {runtime, …})     │
+│                                                             │
+│  host-command setters (wired)                               │
+│    setConnectedFollowersGetter(() => trayPeers.getPeers())  │
+│    setTrayResetter(() => /* extension reset */)             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -116,30 +134,33 @@ than A.
 
 **File:** `packages/chrome-extension/src/offscreen-bridge.ts`
 
-Adds a fan-out tap at the `OrchestratorCallbacks` layer (NOT at the wire-emit
-layer, because the wire envelope shape is a flat `{ type: 'agent-event',
-scoopJid, eventType, … }` that diverges from `AgentEvent` in `ui/types.ts`).
+Adds a fan-out tap. The cleanest implementation point is the existing
+`bridge.emit(...)` method — when `msg.type === 'agent-event'`, also translate
+the wire envelope into a `ui/types.ts AgentEvent` and call every registered
+listener. This reuses the bridge's already-correct `currentMessageId` state
+and guarantees the leader stream stays in lockstep with what the panel sees.
 
-Implementation: keep a `Set<(event: AgentEvent) => void>` on the bridge.
-Inside `createCallbacks`, wrap each callback so it (a) does its existing
-panel-emit work AND (b) constructs an `AgentEvent` and calls every registered
-listener with try/catch. The mapping:
+**Wire→AgentEvent translation must mirror `offscreen-client.ts:495-585`**
+(the panel's `handleAgentEvent`). Reproducing the actual logic, not the
+synthesized one from revision 1:
 
-| Orchestrator callback                    | Resulting `AgentEvent`                                                                                  |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `onResponse(jid, text, isPartial=true)`  | `{ type: 'content_delta', messageId, text }`                                                            |
-| `onResponse(jid, text, isPartial=false)` | `{ type: 'content_delta', messageId, text }` + treat as full                                            |
-| `onResponseDone(jid)`                    | `{ type: 'content_done', messageId }` + `{ type: 'turn_end', messageId }`                               |
-| `onToolStart(jid, name, input)`          | `{ type: 'tool_use_start', messageId, toolName, toolInput }`                                            |
-| `onToolEnd(jid, name, result, isError)`  | `{ type: 'tool_result', messageId, toolName, result, isError }`                                         |
-| `onToolUI(jid, name, requestId, html)`   | `{ type: 'tool_ui', messageId, toolName, requestId, html }`                                             |
-| `onToolUIDone(jid, requestId)`           | `{ type: 'tool_ui_done', messageId, requestId }`                                                        |
-| `onError(jid, error)`                    | `{ type: 'error', error }`                                                                              |
-| `onSendMessage(jid, text)`               | `{ type: 'message_start', messageId }` + `{ type: 'content_delta', text }` + `{ type: 'content_done' }` |
+| Bridge wire envelope (in `agent-event`)                          | Resulting `AgentEvent`(s) for the leader-side listener                                                                                                                                          |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `eventType: 'text_delta', scoopJid, text`                        | if no `currentMessageId.get(jid)`: emit `{ type: 'message_start', messageId }` then `{ type: 'content_delta', messageId, text }`. Otherwise: just `{ type: 'content_delta', messageId, text }`. |
+| `eventType: 'tool_start', scoopJid, toolName, toolInput`         | conditional `message_start` (same gating); then `{ type: 'tool_use_start', messageId, toolName, toolInput }`                                                                                    |
+| `eventType: 'tool_end', scoopJid, toolName, toolResult, isError` | `{ type: 'tool_result', messageId, toolName, result, isError }` (no `message_start` — only fired when a `messageId` already exists)                                                             |
+| `eventType: 'tool_ui', scoopJid, toolName, requestId, html`      | conditional `message_start`; then `{ type: 'tool_ui', messageId, toolName, requestId, html }`                                                                                                   |
+| `eventType: 'tool_ui_done', scoopJid, requestId`                 | `{ type: 'tool_ui_done', messageId, requestId }` when a `messageId` exists                                                                                                                      |
+| `eventType: 'response_done', scoopJid`                           | `{ type: 'content_done', messageId }` when a `messageId` exists                                                                                                                                 |
 
-`messageId` comes from `bridge.currentMessageId.get(scoopJid)` (the same id the
-bridge uses for its buffered message); `message_start` may need to be emitted
-when a new message is created (see `getOrCreateAssistantMsg`).
+The bridge does NOT emit a `turn_end` envelope today — `offscreen-client.ts:578`
+synthesizes one on the panel side. The leader tap will mirror that synthesis
+where appropriate (or omit if the follower protocol tolerates its absence —
+verify by diffing standalone broadcast captures).
+
+For the `onSendMessage` callback (used by `send_message` between scoops) the
+bridge emits `text_delta` + `response_done` (offscreen-bridge.ts:188-199),
+which already maps cleanly via the table above. No special-casing needed.
 
 API:
 
@@ -148,31 +169,41 @@ onAgentEvent(handler: (event: AgentEvent) => void): () => void;
 ```
 
 Returns an unsubscribe function. Used by the offscreen leader branch to wire
-`sync.broadcastEvent`.
+`sync.broadcastEvent`. The tap does NOT filter by `selectedScoopJid` (unlike
+`handleAgentEvent` at `offscreen-client.ts:496`) — the leader broadcasts every
+scoop's events; followers filter by their `activeScoopJid` themselves.
 
-**Open verification step before coding:** confirm the protocol consumer
-(`tray-leader-sync.ts` → `agent.event` wire payload → `FollowerSyncManager`
-fan-out) tolerates the synthesized `messageId`s and the `onSendMessage`
-3-event split. The standalone path goes through `pi-agent-core` which emits
-real `message_start` events upstream; we're synthesizing here. If the follower
-breaks on duplicate `message_start` or missing fields, switch to passing the
-raw orchestrator-callback signal as a custom event shape.
+**Verification step before coding:** capture standalone-leader's `agent.event`
+payloads under a 3-turn scenario (text reply, tool call, error) and diff
+against the events this synthesizer produces for the same orchestrator
+callbacks. The fallback if the protocol consumer breaks: add a new
+non-`AgentEvent`-shaped wire payload to `tray-sync-protocol.ts` and have the
+follower handle both shapes.
 
 ### 2. `leader-sync-bridge.ts` — new file
 
 **File:** `packages/chrome-extension/src/leader-sync-bridge.ts`
 
-Symmetrical bridge halves modeled on `follower-sprinkle-bridge.ts`. All three
-message flows are panel→offscreen, fire-and-forget.
+Symmetrical bridge halves modeled on `follower-sprinkle-bridge.ts`. All
+panel→offscreen flows are fire-and-forget; offscreen→panel is a single
+activation envelope.
 
 #### Panel-side
 
 ```ts
 export class PanelLeaderSyncProxy {
-  constructor(sender: PanelMessageSender);
+  constructor(
+    sender: PanelMessageSender,
+    subscriber: PanelMessageSubscriber,
+    listeners: {
+      onLeaderModeChange?: (active: boolean) => void;
+    }
+  );
 
-  /** Push latest sprinkle availability + open state. Idempotent; call after every
-   *  SprinkleManager.refresh() / open / close. */
+  /** Push latest sprinkle availability + open state. Idempotent; call after
+   *  every SprinkleManager.refresh() / open / close (and eagerly on leader
+   *  activation so the offscreen cache isn't empty when the first follower
+   *  connects). */
   pushSprinklesSnapshot(sprinkles: SprinkleSummary[]): void;
 
   /** Forward a local SprinkleManager.sendToSprinkle call to the leader. */
@@ -180,6 +211,10 @@ export class PanelLeaderSyncProxy {
 
   /** Forward the leader's locally-typed user message so followers see it. */
   pushUserMessageEcho(text: string, messageId: string, attachments?: MessageAttachment[]): void;
+
+  /** Tell offscreen which scoop the panel is currently viewing — drives
+   *  `LeaderSyncManager.getScoopJid()` and `getMessages()`. */
+  pushActiveScoop(jid: string): void;
 
   /** Tear down. Idempotent. */
   dispose(): void;
@@ -192,22 +227,27 @@ export class PanelLeaderSyncProxy {
 export interface OffscreenLeaderSyncBridgeHandle {
   /** Return the cached sprinkle snapshot (or [] if none received yet). */
   getSprinkles(): SprinkleSummary[];
-  /** Resolve sprinkle name → VFS path from the cached snapshot. Returns null when unknown. */
+  /** Resolve sprinkle name → VFS path from the cached snapshot. */
   resolveSprinklePath(name: string): string | null;
+  /** Return the panel's current scoop selection, or null if none received. */
+  getActiveScoopJid(): string | null;
+  /** Send a one-shot activation/deactivation signal to the panel. */
+  signalLeaderMode(active: boolean): void;
   /** Stop listening. Idempotent. */
   detach(): void;
 }
 
 export function connectOffscreenLeaderSyncBridge(
   hub: OffscreenMessageHub,
-  sync: LeaderSyncManager
+  syncRef: () => LeaderSyncManager | null
 ): OffscreenLeaderSyncBridgeHandle;
 ```
 
-The offscreen adapter holds a private `SprinkleSummary[]` cache. Inbound
-`leader-sprinkle-update` calls `sync.broadcastSprinkleUpdate(name, data)`.
-Inbound `leader-user-message-echo` calls `sync.broadcastUserMessage(text, id,
-atts)`. Inbound `leader-sprinkles-snapshot` replaces the cached array.
+The factory takes a `syncRef` getter (not a direct sync reference) to avoid
+the circular-init problem from revision 1: the bridge is created before
+`LeaderSyncManager` is constructed, but its inbound message handlers don't
+fire until peers connect, so by then the closure resolves to a live sync.
+Mirrors how `page-leader-tray.ts:141-143` uses forward-declared `let` bindings.
 
 `OffscreenMessageHub` is the same interface already used by
 `follower-sprinkle-bridge.ts` — reuse it for symmetry.
@@ -215,6 +255,7 @@ atts)`. Inbound `leader-sprinkles-snapshot` replaces the cached array.
 ### 3. New message types in `messages.ts`
 
 ```ts
+// Panel → offscreen (fire-and-forget)
 export interface LeaderSprinklesSnapshotMsg {
   type: 'leader-sprinkles-snapshot';
   sprinkles: SprinkleSummaryEnvelope[]; // shape-compatible with SprinkleSummary
@@ -232,28 +273,69 @@ export interface LeaderUserMessageEchoMsg {
   messageId: string;
   attachments?: MessageAttachment[];
 }
+
+export interface LeaderActiveScoopMsg {
+  type: 'leader-active-scoop';
+  scoopJid: string;
+}
+
+// Offscreen → panel (single envelope, both directions)
+export interface LeaderModeChangedMsg {
+  type: 'leader-mode-changed';
+  active: boolean;
+}
 ```
 
-Add each to the `PanelToOffscreenMessage` union. Mirror the compile-time
-assertion `_AssertSprinkleSummaryEnvelopeMatches` from
-`follower-sprinkle-bridge.ts` so the envelope type stays assignable to
-`SprinkleSummary[]`.
+Add the panel→offscreen four to `PanelToOffscreenMessage` and the offscreen→panel
+one to `OffscreenToPanelMessage`. `OffscreenClient.handleOffscreenMessage` (or
+the bridge's panel-side equivalent) must route `leader-mode-changed` to the
+`PanelLeaderSyncProxy` listener. Mirror the compile-time assertion
+`_AssertSprinkleSummaryEnvelopeMatches` from `follower-sprinkle-bridge.ts` for
+the sprinkle envelope.
 
 ### 4. `offscreen.ts:438-480` rewrite (the `workerBaseUrl` branch)
 
 Replace the existing logging-only stub with a full mirror of
-`page-leader-tray.ts:134-336`:
+`page-leader-tray.ts:134-336`. The skeleton below uses forward declarations
+(matching the standalone reference) and refers only to symbols verified to
+exist in the codebase:
 
 ```ts
 if (trayRuntimeConfig?.workerBaseUrl) {
-  // 1. Construct LeaderSyncManager with offscreen-local callbacks.
-  const leaderBridge = connectOffscreenLeaderSyncBridge(hub, /* sync set below */);
+  // Forward declarations so closures capture by reference.
+  let sync!: LeaderSyncManager;
+  let trayLeader!: LeaderTrayManager;
+  let trayPeers!: LeaderTrayPeerManager;
 
-  const sync = new LeaderSyncManager({
-    getMessages: () => bridge.getBuffer(bridge.getActiveScoopJid() ?? CONE_JID),
-    getMessagesForScoop: (jid) => bridge.getBuffer(jid),
-    getScoopJid: () => bridge.getActiveScoopJid() ?? CONE_JID,
-    getScoops: () => orchestrator.getScoops().map(toScoopSummary),
+  // The leader bridge resolves `sync` lazily via a getter, breaking the
+  // circular-init chain.
+  const hub: OffscreenMessageHub = /* same hub shape as the follower path uses */;
+  const leaderBridge = connectOffscreenLeaderSyncBridge(hub, () => sync ?? null);
+  leaderBridge.signalLeaderMode(true);
+
+  // Map orchestrator scoops to wire summaries (no helper exists; inline it).
+  const toScoopSummaries = () =>
+    orchestrator.getScoops().map((s) => ({
+      jid: s.jid,
+      name: s.name,
+      folder: s.folder,
+      isCone: s.isCone,
+      assistantLabel: s.assistantLabel,
+      trigger: s.trigger,
+    }));
+
+  // Cone-jid fallback (extension defaults the active scoop to the cone until
+  // the panel pushes a `leader-active-scoop` selection).
+  const getActiveJid = () =>
+    leaderBridge.getActiveScoopJid() ?? bridge.getConeJid() ?? '';
+
+  sync = new LeaderSyncManager({
+    getMessages: () =>
+      bridge.getBuffer(getActiveJid()) as unknown as ChatMessage[],
+    getMessagesForScoop: (jid) =>
+      bridge.getBuffer(jid) as unknown as ChatMessage[],
+    getScoopJid: () => getActiveJid(),
+    getScoops: toScoopSummaries,
     getSprinkles: () => leaderBridge.getSprinkles(),
     readSprinkleContent: async (name) => {
       const path = leaderBridge.resolveSprinklePath(name);
@@ -261,22 +343,65 @@ if (trayRuntimeConfig?.workerBaseUrl) {
       try {
         const raw = await host.sharedFs.readFile(path, { encoding: 'utf-8' });
         return typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      } catch { return null; }
+      } catch {
+        return null;
+      }
     },
-    onSprinkleLick: (name, body, targetScoop) =>
-      lickManager.emitEvent({ type: 'sprinkle', sprinkleName: name, body, targetScoop, … }),
+    onSprinkleLick: (name, body, targetScoop) => {
+      // Reuse the same handler the panel's `sprinkle-lick` envelope drives.
+      // Implementation: extract offscreen-bridge.ts:924-962 into a public
+      // method `bridge.routeSprinkleLick(name, body, targetScoop)` and call
+      // it from both sites.
+      void bridge.routeSprinkleLick(name, body, targetScoop);
+    },
     onFollowerMessage: (text, messageId, attachments) => {
-      // Surface the message to the active scoop. The orchestrator's
-      // user-message handling path is private — dispatch a synthetic
-      // 'user-message' envelope through the bridge's transport so it
-      // hits the exact same code path the panel uses.
-      // … (see Open Questions: confirm method signature)
+      // Step 1: dispatch as a regular user message — this fires the bridge's
+      // existing `onIncomingMessage` callback, which produces the leader's
+      // panel chat-echo for free (no separate `chat.addUserMessage` needed
+      // in extension mode, unlike standalone).
+      const activeJid = getActiveJid();
+      if (!activeJid) return;
+      const channelMsg: ChannelMessage = {
+        id: messageId,
+        chatJid: activeJid,
+        senderId: 'user',
+        senderName: 'User',
+        content: text,
+        attachments,
+        timestamp: new Date().toISOString(),
+        fromAssistant: false,
+        channel: 'web',
+      };
+      bridge.getBuffer(activeJid).push({
+        id: messageId,
+        role: 'user',
+        content: text,
+        attachments,
+        timestamp: Date.now(),
+      });
+      bridge.persistScoop(activeJid);
+      void orchestrator.handleMessage(channelMsg);
+      orchestrator.createScoopTab(activeJid);
+
+      // Step 2: rebroadcast to sibling followers so multi-follower setups
+      // are not silently single-direction. Mirrors main.ts:2462.
+      sync.broadcastUserMessage(text, messageId, attachments);
     },
     onFollowerAbort: () => {
-      const jid = bridge.getActiveScoopJid();
+      const jid = getActiveJid();
       if (jid) orchestrator.stopScoop(jid);
     },
-    onFollowerCountChanged: (_count) => { /* persist follower list, optional */ },
+    onFollowerCountChanged: (_count) => {
+      // Persist follower list into a localStorage shim so `host` in the
+      // terminal can read it. Extension-flavored equivalent of
+      // main.ts:2466-2476.
+      const peers = trayPeers.getPeers().map((p) => ({
+        runtimeId: p.bootstrapId,
+        runtime: p.runtime,
+        connectedAt: p.connectedAt ?? undefined,
+      }));
+      window.localStorage.setItem('slicc.leaderTrayFollowers', JSON.stringify(peers));
+    },
     browserAPI: browser,
     browserTransport: browser.getTransport(),
     vfs: host.sharedFs ?? undefined,
@@ -284,72 +409,184 @@ if (trayRuntimeConfig?.workerBaseUrl) {
 
   browser.setTrayTargetProvider(sync);
 
-  // 2. Peer manager: route open channels to sync.addFollower.
-  let trayLeader!: LeaderTrayManager;
-  const trayPeers = new LeaderTrayPeerManager({
+  trayPeers = new LeaderTrayPeerManager({
     sendControlMessage: (m) => trayLeader.sendControlMessage(m),
     onPeerConnected: (peer, channel) => {
-      log.info('Tray follower data channel opened (extension leader)', { … });
+      log.info('Extension tray follower connected', {
+        bootstrapId: peer.bootstrapId,
+        runtime: peer.runtime,
+      });
       sync.addFollower(peer.bootstrapId, channel, {
         runtime: peer.runtime,
         connectedAt: peer.connectedAt ?? undefined,
       });
     },
-    onPeerDisconnected: (bootstrapId, reason) => log.info(…),
+    onPeerDisconnected: (bootstrapId, reason) =>
+      log.info('Extension tray follower disconnected', { bootstrapId, reason }),
   });
 
-  // 3. Tray manager (existing).
-  trayLeader = new LeaderTrayManager({ … });
+  trayLeader = new LeaderTrayManager({
+    workerBaseUrl: trayRuntimeConfig.workerBaseUrl,
+    runtime: 'slicc-extension-offscreen',
+    webSocketFactory: (url) => new ServiceWorkerLeaderTraySocket(url),
+    onControlMessage: (message) => {
+      // Extension owns lickManager in-process, so webhook.event can fire
+      // directly into the orchestrator (no `lick-webhook-event` hop needed
+      // — that's a standalone-only bridge).
+      if (message.type === 'webhook.event') {
+        orchestrator.handleWebhookEvent(message.webhookId, message.headers, message.body);
+        return;
+      }
+      void trayPeers.handleControlMessage(message).catch((err) => {
+        log.warn('Tray leader bootstrap handling failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    },
+    onReconnecting: (attempt, lastError) =>
+      log.info('Extension leader tray reconnecting', { attempt, lastError }),
+    onReconnected: (session) =>
+      log.info('Extension leader tray reconnected', { trayId: session.trayId }),
+    onReconnectGaveUp: (lastError, attempts) =>
+      log.warn('Extension leader tray reconnect gave up', { lastError, attempts }),
+  });
 
-  // 4. Agent event tap.
+  // Agent event tap.
   const unsubAgent = bridge.onAgentEvent((event) => sync.broadcastEvent(event));
 
-  // 5. Periodic broadcasts (5s) — exactly mirrors page-leader-tray.ts.
-  const cdpThrottle = new ThrottledErrorTracker(log, { … });
-  const refreshLeaderTargets = async () => { /* same as standalone */ };
-  const intervals = [
+  // CDP target refresh (throttled, mirrors standalone).
+  const cdpThrottle = new ThrottledErrorTracker(log, {
+    failureMessage: 'Extension leader CDP target refresh failed (best-effort, throttled)',
+    recoveryMessage: 'Extension leader CDP target refresh recovered',
+  });
+  const refreshLeaderTargets = async () => {
+    let pages;
+    try {
+      pages = await browser.listPages();
+    } catch (err) {
+      cdpThrottle.reportFailure(err);
+      return;
+    }
+    cdpThrottle.reportSuccess();
+    try {
+      // setLocalTargets (LeaderSyncManager:725), NOT advertiseTargets (that's
+      // the follower API at tray-follower-sync.ts:315).
+      sync.setLocalTargets(
+        pages.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url }))
+      );
+    } catch (err) {
+      log.error('Extension leader target broadcast failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  const intervals: ReturnType<typeof setInterval>[] = [
     setInterval(refreshLeaderTargets, 5000),
-    setInterval(() => { sync.broadcastScoopsList(); sync.broadcastSprinklesList(); }, 5000),
+    setInterval(() => {
+      try {
+        sync.broadcastScoopsList();
+        sync.broadcastSprinklesList();
+      } catch (err) {
+        log.error('Failed to broadcast follower lists', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }, 5000),
   ];
   void refreshLeaderTargets();
-  void trayLeader.start().catch(…);
 
-  stopTrayRuntime = () => {
-    for (const id of intervals) clearInterval(id);
-    unsubAgent();
-    leaderBridge.detach();
+  void trayLeader.start().catch((err) => {
+    log.warn('Extension leader tray start failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+
+  // Wire host-command surfaces so `host` in the panel terminal shows
+  // follower count + supports `host reset`. Equivalent of main.ts:2513-2522
+  // but for the extension. (The setters are module-level singletons in
+  // `host-command.ts` — usable from offscreen the same way they're used
+  // from the page in standalone.)
+  setConnectedFollowersGetter(() =>
+    trayPeers.getPeers().map((p) => ({
+      runtimeId: p.bootstrapId,
+      runtime: p.runtime,
+      connectedAt: p.connectedAt ?? undefined,
+    }))
+  );
+  setTrayResetter(async () => {
+    sync.stop();
     trayPeers.stop();
     trayLeader.stop();
+    await trayLeader.clearSession();
+    const session = await trayLeader.start();
+    return getLeaderTrayRuntimeStatus();
+  });
+
+  // Teardown order matches standalone (page-leader-tray.ts:316-323):
+  // unsubAgent → intervals → sync → peers → leader → bridge.
+  stopTrayRuntime = () => {
+    unsubAgent();
+    for (const id of intervals) clearInterval(id);
     sync.stop();
+    trayPeers.stop();
+    trayLeader.stop();
+    leaderBridge.signalLeaderMode(false);
+    leaderBridge.detach();
+    setConnectedFollowersGetter(null);
+    setTrayResetter(null);
   };
   return;
 }
 ```
 
-`CONE_JID` and `toScoopSummary` are pulled from the same helpers the bridge
-uses.
-
 ### 5. `OffscreenBridge` additions
 
-Tracks the active scoop JID for `getMessages`. The bridge already receives
-panel `scoop-select` envelopes — store the selected JID on a field and expose
-`getActiveScoopJid(): string | null`.
+- `onAgentEvent(handler): () => void` — see §1.
+- `getConeJid()` — already exists at offscreen-bridge.ts:476; no new method.
+- `routeSprinkleLick(name, body, targetScoop): Promise<void>` — extracted from
+  the existing `sprinkle-lick` envelope handler at offscreen-bridge.ts:924-962
+  into a public method. The envelope handler then calls this method (no
+  behavior change to the existing path; just a refactor).
+- `getBuffer(jid)` is currently `@internal` — drop the marker or expose a
+  thin `getMessagesForJid(jid): ChatMessage[]` wrapper that does the cast.
+- `persistScoop(jid)` likewise — needed by `onFollowerMessage` to persist the
+  inserted user message. Drop `@internal` or expose a public alias.
 
-Also expose `getBuffer(jid)` and `currentMessageId.get(jid)` (or equivalents)
-if not already public; the bridge keeps these internal today and the leader
-branch needs them.
+There is **no scoop-select envelope today** (verified: not in `messages.ts`,
+not in the bridge). The new `leader-active-scoop` message is the single
+source of truth for the bridge's tracked active scoop in extension-leader
+mode. In follower mode and stand-alone-extension mode the cone is the only
+active surface, so the absence of a selection signal is fine.
 
 ### 6. Panel-side wiring in `main.ts`
 
 Mirror the standalone wiring at `main.ts:2418-2503` for extension-leader mode.
-In `mainExtension` (the side-panel boot path), inside the existing tray
-configuration block:
+In `mainExtension` (the side-panel boot path), install a long-lived
+`PanelLeaderSyncProxy` that listens for the `leader-mode-changed` signal and
+installs/removes hooks accordingly:
 
 ```ts
-if (extensionLeaderActive) {
-  const leaderSyncProxy = new PanelLeaderSyncProxy(panelSender);
+const leaderSyncProxy = new PanelLeaderSyncProxy(panelSender, panelSubscriber, {
+  onLeaderModeChange: (active) => {
+    if (active) installLeaderHooks();
+    else removeLeaderHooks();
+  },
+});
 
-  // Snapshot pushes
+let leaderHooksInstalled = false;
+function installLeaderHooks() {
+  if (leaderHooksInstalled) return;
+  leaderHooksInstalled = true;
+
+  // Active scoop tracking — push whenever the panel switches scoops.
+  // (Scoop selection in extension panel mutates OffscreenClient.selectedScoopJid
+  // in main.ts:655-672; hook into that flow.)
+  const pushActive = (jid: string) => leaderSyncProxy.pushActiveScoop(jid);
+  client.onScoopSelected(pushActive);
+  if (client.selectedScoopJid) pushActive(client.selectedScoopJid);
+
+  // Sprinkle snapshot push: eager on activation + on every change.
   const pushSprinkles = () => {
     const opened = new Set(sprinkleManager.opened());
     leaderSyncProxy.pushSprinklesSnapshot(
@@ -362,132 +599,188 @@ if (extensionLeaderActive) {
       }))
     );
   };
-  // After refresh/open/close via SprinkleManager event hooks.
   sprinkleManager.onChange(pushSprinkles);
   void sprinkleManager.refresh().then(pushSprinkles);
 
-  // Sprinkle updates
+  // Local sprinkle updates.
   sprinkleManager.setSendToSprinkleHook((name, data) =>
     leaderSyncProxy.pushSprinkleUpdate(name, data)
   );
 
-  // Local user message echo
+  // Local user message echo.
   layout.panels.chat.setOnLocalUserMessage((text, messageId, attachments) =>
     leaderSyncProxy.pushUserMessageEcho(text, messageId, attachments)
   );
 }
+
+function removeLeaderHooks() {
+  if (!leaderHooksInstalled) return;
+  leaderHooksInstalled = false;
+  client.offScoopSelected(/* same handler */);
+  sprinkleManager.offChange(/* same handler */);
+  sprinkleManager.setSendToSprinkleHook(undefined);
+  layout.panels.chat.setOnLocalUserMessage(undefined);
+}
 ```
 
-**Detection of extension-leader mode:** the panel doesn't directly know
-whether the offscreen document picked the leader or follower branch. Two
-options:
+`client.onScoopSelected` is a new tiny event hook on `OffscreenClient` — it
+fires when `selectScoop` sets `selectedScoopJid`. Required so we don't poll.
 
-- Read `tray-worker-base-url` + `tray-join-url` from `chrome.storage.local`
-  (the values the user typed). Leader = worker URL set, no join URL. This
-  matches what `resolveTrayRuntimeConfig` does on the offscreen side.
-- Have the bridge emit a `leader-mode-ready` envelope on activation. The
-  panel turns its hooks on/off based on that signal.
+**Detached popout:** because the panel boot path runs every time the side
+panel or detached tab opens, and the `leader-mode-changed` envelope is emitted
+by offscreen on activation (and re-emitted when a new panel asks for state),
+the hooks attach correctly in both UI surfaces. Add to the spec: the bridge
+must re-emit `leader-mode-changed: active=true` in response to a panel-side
+`request-leader-mode-state` envelope sent on panel boot, so a popout that
+opens _after_ offscreen activated still installs hooks.
 
-**Decision:** start with the second option — the offscreen document is
-authoritative about which branch it took, and the lifecycle hand-off (e.g.,
-user pastes a join URL → switches from leader to follower) needs to flip the
-panel hooks. Single source of truth, no race window where the panel pushes
-sprinkle updates the offscreen has already torn down.
+### 7. `SprinkleManager.onChange`
 
-### 7. Lifecycle and gating
+`SprinkleManager` exposes `setupWatcher` (FsWatcher-driven `refresh()`) but no
+`onChange` event today. Add:
 
-- Activation: when offscreen takes the `workerBaseUrl` branch, send
-  `leader-mode-active` to the panel. Panel installs hooks.
-- Deactivation: when `stopTrayRuntime` runs (because the user pasted a join
-  URL via `refresh-tray-runtime`, or unloaded), send `leader-mode-inactive`.
-  Panel removes hooks (`setSendToSprinkleHook(undefined)`,
-  `setOnLocalUserMessage(undefined)`, `sprinkleManager.offChange(...)`,
-  `leaderSyncProxy.dispose()`).
-- The existing `syncTrayRuntime` already handles the join-URL switch (drops
-  current branch, evaluates new config). We extend its `stopTrayRuntime`
-  closure to include the leader teardown.
+```ts
+onChange(handler: () => void): () => void;
+```
+
+Fires once _after_ every successful `refresh()` and after `open()` / `close()`
+state changes. Internally coalesces — multiple `refresh()` invocations within
+one tick fire `onChange` once. Used by the panel leader hook to push sprinkle
+snapshots without duplicating logic at every callsite.
+
+### 8. Lifecycle and gating
+
+- **Activation:** offscreen takes the `workerBaseUrl` branch → emits
+  `leader-mode-changed: active=true` → panel installs hooks.
+- **Deactivation:** `stopTrayRuntime` runs (user pasted a join URL via
+  `refresh-tray-runtime`, or document unloaded) → emits
+  `leader-mode-changed: active=false` → panel removes hooks.
+- **Panel late-attach (detached popout):** when a new panel boots, it sends
+  `request-leader-mode-state` on connect; offscreen responds with the current
+  state.
+- **Re-entrancy:** `installLeaderHooks` / `removeLeaderHooks` are idempotent.
 
 ## Wire protocol invariants
 
-We add no new tray-protocol messages — every wire payload is one that
-`LeaderSyncManager.broadcast*` already emits. Followers (standalone webapp,
-extension-as-follower, iOS native) already understand them; this fix only
-makes the extension-leader produce them. The protocol file
-(`tray-sync-protocol.ts`) is not touched.
+We add no new tray-protocol messages — every wire payload sent over the data
+channel is one that `LeaderSyncManager.broadcast*` already emits. Followers
+(standalone webapp, extension-as-follower, iOS native) already understand
+them; this fix only makes the extension-leader produce them. The protocol
+file (`tray-sync-protocol.ts`) is not touched.
+
+The new envelopes in §3 are intra-extension `chrome.runtime` messages only,
+not tray-wire.
 
 ## Tests
 
-| Layer                   | Test file                                                           | Coverage                                                                                                                                                                                                                                         |
-| ----------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Bridge unit             | `packages/chrome-extension/tests/leader-sync-bridge.test.ts` (new)  | proxy↔adapter in-memory pipe: sprinkles snapshot caching + `getSprinkles`, `resolveSprinklePath` hit/miss, sprinkle update → `sync.broadcastSprinkleUpdate` mock, user echo → `sync.broadcastUserMessage` mock, `detach()` stops both directions |
-| AgentEvent tap          | `packages/chrome-extension/tests/offscreen-bridge.test.ts` (extend) | each `OrchestratorCallbacks` invocation produces the expected `AgentEvent` shape for registered listeners; unsubscribe stops emission                                                                                                            |
-| Offscreen leader branch | `packages/chrome-extension/tests/offscreen-leader.test.ts` (new)    | with a stubbed `LeaderTrayPeerManager` and a mock `RTCDataChannel`, assert: `sync.addFollower` is called on `onPeerConnected`, broadcast intervals fire, `unsubAgent` stops the tap, `stopTrayRuntime` tears everything down once                |
-| Standalone-leader smoke | `packages/webapp/tests/ui/page-leader-tray.test.ts` (existing)      | no changes needed; the standalone reference path is unchanged                                                                                                                                                                                    |
-| Manual integration      | (no automation)                                                     | Boot extension as leader, standalone webapp as follower; verify the test plan below                                                                                                                                                              |
+| Layer                   | Test file                                                           | Coverage                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bridge unit             | `packages/chrome-extension/tests/leader-sync-bridge.test.ts` (new)  | proxy↔adapter in-memory pipe: sprinkles snapshot caching + `getSprinkles`, `resolveSprinklePath` hit/miss, active-scoop caching, sprinkle update → mock `sync.broadcastSprinkleUpdate`, user echo → mock `sync.broadcastUserMessage`, leader-mode-changed signal round-trips, `detach()` stops both directions                                                                                                                                                        |
+| AgentEvent tap          | `packages/chrome-extension/tests/offscreen-bridge.test.ts` (extend) | each `OrchestratorCallbacks` invocation produces the expected `AgentEvent` sequence (matching `offscreen-client.ts:handleAgentEvent`); message_start gating; unsubscribe stops emission                                                                                                                                                                                                                                                                               |
+| Sprinkle-lick refactor  | `packages/chrome-extension/tests/offscreen-bridge.test.ts` (extend) | `routeSprinkleLick` produces identical orchestrator state to the existing `sprinkle-lick` envelope path                                                                                                                                                                                                                                                                                                                                                               |
+| Leader factory          | `packages/chrome-extension/tests/leader-factory.test.ts` (new)      | requires extracting `startExtensionLeaderTray(...)` helper (see "Refactoring for testability" below); covers: peer connected → `sync.addFollower`, agent-event tap forwards `broadcastEvent`, broadcast intervals tick scoops + sprinkles, CDP refresh calls `setLocalTargets`, webhook.event routes to `orchestrator.handleWebhookEvent`, follower-message routes orchestrator + rebroadcasts, teardown order, `setConnectedFollowersGetter`/`setTrayResetter` wired |
+| Standalone-leader smoke | `packages/webapp/tests/ui/page-leader-tray.test.ts` (existing)      | no changes — reference path is unchanged                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Manual integration      | (no automation)                                                     | See "Manual test plan" below                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+
+### Refactoring for testability
+
+Extract the body of the `workerBaseUrl` branch (~200 LoC) into a new module
+`packages/chrome-extension/src/extension-leader-tray.ts` exposing
+`startExtensionLeaderTray(options)` — same pattern as `startPageLeaderTray`.
+The integration test then targets that helper with stubbed transports and a
+mock `RTCDataChannel`, avoiding the need to bootstrap `createKernelHost` or
+real Chrome APIs.
 
 ## Manual test plan
 
 1. `SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension`. Load
-   `dist/extension` in Chrome for Testing per
-   `packages/chrome-extension/CLAUDE.md` "Local QA" recipe.
-2. In the extension side panel, paste a tray worker URL (no join URL). Confirm
-   `host` in the panel terminal shows leader status active.
+   `dist/extension` in Chrome for Testing per `packages/chrome-extension/CLAUDE.md`
+   "Local QA" recipe.
+2. In the extension side panel, paste a tray worker URL (no join URL).
+   Confirm: panel terminal `host` shows leader status active and reports the
+   tray join URL.
 3. In a separate window, run `npm run dev` and open the standalone webapp.
-   Paste the same tray join URL (read from the extension's URL bar / `host`
-   output).
+   Paste the same tray join URL.
 4. Standalone follower must show: initial snapshot (any pre-existing
    conversation), full scoops list, sprinkles list.
 5. Type in the **leader** chat → follower sees the user message live + agent
    stream tokens.
-6. Trigger leader-side `sprinkle send welcome '{"action":"test"}'` → follower's
-   welcome sprinkle receives the update.
-7. Click a sprinkle on the **follower** → leader's lick router fires (verify
-   via cone receiving a `sprinkle` channel message).
-8. Type a message on the **follower** → leader's cone receives it as a user
-   message and responds.
+6. Trigger leader-side `sprinkle send welcome '{"action":"test"}'` from the
+   **panel terminal** → follower's welcome sprinkle receives the update.
+7. Trigger leader-side `sprinkle send welcome '{...}'` via the **agent bash
+   tool** (different code path through the sprinkle proxy) → follower's
+   sprinkle still receives the update.
+8. Click a sprinkle on the **follower** → leader's lick router fires (verify
+   via cone receiving a `sprinkle` channel message in the leader chat).
+9. Type a message on the **follower** → leader's cone receives it as a user
+   message AND a second standalone follower (open another browser) ALSO sees
+   the message (multi-follower rebroadcast).
+10. Switch the **leader** to a sub-scoop in the panel; verify the follower's
+    visible scoop list updates and that subsequent agent events for the
+    selected scoop reach the follower with the correct `scoopJid`.
+11. Fire a tray webhook event against the leader's session (use `curl` against
+    the worker's `/webhook/<trayId>/<webhookId>` endpoint) → cone receives the
+    webhook lick (proves `webhook.event` control routing works).
+12. Paste a join URL into the leader's settings while connected → leader mode
+    deactivates, follower mode activates, no zombie WebSocket / data channel
+    / interval / agent-event subscription.
 
 ## Open questions to resolve during implementation
 
-1. **`onFollowerMessage` plumbing.** The standalone path calls
-   `agentHandle.sendMessage(text, messageId, attachments)` which routes
-   through the worker bridge. In offscreen there's no `agentHandle` — the
-   orchestrator is local. The simplest path is to dispatch a synthetic
-   `user-message` envelope through the bridge transport so the existing
-   panel-message handling code runs unchanged. Confirm during implementation
-   that the bridge transport has a public injection seam, or expose a
-   `bridge.dispatchUserMessage(jid, text, msgId, atts)` helper that mirrors
-   what the wire listener does.
+1. **AgentEvent fidelity diff against standalone.** Before merging, capture
+   the standalone-leader's wire payloads for the same 3-turn scenario and
+   diff against the extension-leader's. If the synthesized stream omits a
+   field the protocol consumer relies on, either (a) extend the synthesis
+   or (b) bypass the `AgentEvent` shape and emit a custom event type on the
+   wire.
 
-2. **AgentEvent synthesis fidelity.** The mapping table above synthesizes
-   `messageId` and splits `onSendMessage` into three events. If the follower
-   protocol consumer breaks on this (e.g., duplicate `message_start`, missing
-   fields the orchestrator-callback layer doesn't carry), fall back to a
-   non-`AgentEvent`-shaped tap and add a new wire payload to
-   `tray-sync-protocol.ts`. Verify by capturing standalone-leader's
-   `agent.event` payloads under the same scenarios and diffing against the
-   synthesized ones.
+2. **`SprinkleManager.onChange` and watcher coalescing.** The FsWatcher
+   already triggers `refresh()` on `.shtml` changes (sprinkle-manager.ts:469).
+   Confirm that wiring `onChange` to fire after `refresh()` completes (rather
+   than per-file) doesn't deduplicate event-driven panel pushes. Test by
+   installing two sprinkles via the agent in one bash invocation and asserting
+   exactly one snapshot push fires.
 
-3. **Sprinkle snapshot push trigger.** `SprinkleManager` doesn't expose an
-   `onChange` event today. Either add one (preferred — small, reusable), or
-   wrap `refresh()` / `open()` / `close()` at the call sites in `main.ts`.
-   Decision: add `SprinkleManager.onChange(handler): () => void` (a few LoC,
-   no behavior change for the standalone path).
+3. **`onScoopSelected` hook on `OffscreenClient`.** Confirm `selectScoop`
+   (main.ts:655-672) is the single panel-side mutation point for
+   `selectedScoopJid`; if not, hook earlier.
+
+4. **`request-leader-mode-state` panel→offscreen envelope.** Add to `messages.ts`
+   alongside the others. Panel sends on `offscreen-ready` / on its own boot;
+   offscreen responds with the current `leader-mode-changed`.
 
 ## LoC estimate
 
-| File                                                     |   Source |    Tests |
-| -------------------------------------------------------- | -------: | -------: |
-| `leader-sync-bridge.ts`                                  |     ~150 |     ~150 |
-| `messages.ts` additions                                  |      ~30 |        — |
-| `offscreen-bridge.ts` AgentEvent tap + active-jid getter |      ~60 |      ~60 |
-| `offscreen.ts` `workerBaseUrl` branch rewrite            |     ~120 |      ~80 |
-| `main.ts` panel-side wiring + activation listener        |      ~40 |        — |
-| `SprinkleManager.onChange`                               |      ~10 |      ~20 |
-| **Total**                                                | **~410** | **~310** |
+| File                                                                                         |   Source |    Tests |
+| -------------------------------------------------------------------------------------------- | -------: | -------: |
+| `leader-sync-bridge.ts`                                                                      |     ~180 |     ~180 |
+| `messages.ts` additions (5 panel→offscreen + 1 offscreen→panel)                              |      ~40 |        — |
+| `offscreen-bridge.ts` AgentEvent tap + `routeSprinkleLick` extract + getMessagesForJid alias |      ~90 |      ~80 |
+| `extension-leader-tray.ts` (extracted helper)                                                |     ~220 |     ~150 |
+| `offscreen.ts` (delegation to the helper)                                                    |      ~30 |        — |
+| `main.ts` panel-side wiring + activation listener                                            |      ~70 |        — |
+| `SprinkleManager.onChange`                                                                   |      ~20 |      ~30 |
+| `OffscreenClient.onScoopSelected`                                                            |      ~10 |      ~10 |
+| `architecture.md` update                                                                     |      ~10 |        — |
+| **Total**                                                                                    | **~670** | **~450** |
 
-Wider than the issue's ~150-200 estimate because (a) test coverage targets the
-existing webapp coverage floors and (b) the AgentEvent tap is a real piece of
-plumbing the issue didn't itemize.
+Wider than the issue's ~150-200 estimate because: (a) coverage targets the
+existing extension-package coverage floors; (b) the AgentEvent tap, webhook
+routing, multi-follower rebroadcast, active-scoop tracking, and host-command
+parity are each real plumbing the issue didn't itemize; (c) the leader-branch
+body is extracted into a testable helper.
+
+## Documentation updates
+
+- `docs/architecture.md:370-371` — extension leader row currently describes it
+  as functional. Update to reflect that sync is now wired through
+  `extension-leader-tray.ts` and the panel↔offscreen leader bridge.
+- `packages/chrome-extension/CLAUDE.md` — add a "Tray leader" section under
+  "Three-Layer Architecture" describing the panel→offscreen push surface and
+  the offscreen→panel activation signal.
+- `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture" section —
+  remove the implicit asymmetry; standalone-leader and extension-leader now
+  both broadcast.
 
 ## Cross-references
 
@@ -496,6 +789,58 @@ plumbing the issue didn't itemize.
 - Gap site: `packages/chrome-extension/src/offscreen.ts:438-480`
 - Existing panel↔offscreen RPC patterns: `sprinkle-proxy.ts`,
   `follower-sprinkle-bridge.ts`, `OffscreenBridge.createCallbacks`
+- Existing wire→AgentEvent translation reference: `offscreen-client.ts:495-585`
+- Existing sprinkle-lick handler to refactor: `offscreen-bridge.ts:924-962`
+- Existing webhook handler the standalone path hops to:
+  `orchestrator.handleWebhookEvent`
 - Protocol: `packages/webapp/src/scoops/tray-sync-protocol.ts` (no changes)
-- Architecture: `docs/architecture.md` "Multi-Browser Sync (Tray)
-  Architecture" — add a note that the extension-leader path is now wired.
+- Architecture: `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture"
+
+## Revision history
+
+**Revision 2 (2026-05-20):** Applied corrections from first review.
+Verified against current `main` HEAD via direct code reads, not the review's
+assertions alone. Changes:
+
+1. **`setLocalTargets` not `advertiseTargets`** (§4). `LeaderSyncManager:725`
+   has `setLocalTargets`; `advertiseTargets` is `FollowerSyncManager:315`.
+2. **Webhook routing added** (§4 `onControlMessage` branch). Extension
+   `lickManager` is in-process via `createKernelHost`, so `webhook.event`
+   calls `orchestrator.handleWebhookEvent` directly (no `lick-webhook-event`
+   hop — that's a standalone artifact).
+3. **`onFollowerMessage` expanded** (§4). Now: (a) constructs `ChannelMessage`,
+   inserts into buffer, persists, calls `orchestrator.handleMessage` —
+   producing the panel chat-echo via the existing `onIncomingMessage`
+   callback; (b) calls `sync.broadcastUserMessage` to fan out to sibling
+   followers.
+4. **Active-scoop tracking** (§3, §5, §6). Added `leader-active-scoop`
+   message and `OffscreenClient.onScoopSelected` hook. Replaces revision 1's
+   reference to a nonexistent `scoop-select` envelope.
+5. **Circular-init fixed** (§4). Bridge factory now takes a `() =>
+LeaderSyncManager | null` getter; forward-declared `let sync!` matches
+   standalone's pattern.
+6. **`CONE_JID` / `toScoopSummary` removed** (§4). Use `bridge.getConeJid()`
+   (existing) and inline `orchestrator.getScoops().map(...)`.
+7. **AgentEvent mapping rewritten** (§1). Now mirrors
+   `offscreen-client.ts:handleAgentEvent` (wire types → UI `AgentEvent`)
+   instead of the pi-shaped table from revision 1. Tap point moves to the
+   bridge's `emit()` call so it reuses `currentMessageId` state.
+8. **Sprinkle-lick path corrected** (§5). Refactor `offscreen-bridge.ts:924-962`
+   into `OffscreenBridge.routeSprinkleLick(...)` and call it from both the
+   `sprinkle-lick` envelope handler and the leader's `onSprinkleLick`
+   callback. Revision 1's claim that follower path uses
+   `lickManager.emitEvent` at `offscreen.ts:247` was wrong (that line is
+   `navigate`).
+9. **`BufferedChatMessage` cast documented** (key-insight table, §4). The
+   bridge already uses `buf as unknown as ChatMessage[]` at offscreen-bridge.ts:671.
+10. **Teardown order matches standalone** (§4). unsubAgent → intervals →
+    sync → peers → leader → bridge.
+11. **Offscreen→panel envelopes defined** (§3). `leader-mode-changed` + a
+    `request-leader-mode-state` for popout late-attach.
+12. **Host / followers / reset wired** (§4). `setConnectedFollowersGetter`,
+    `setTrayResetter`, `slicc.leaderTrayFollowers` localStorage shim.
+13. **`offscreen.ts` body extracted to `extension-leader-tray.ts`** (§4, tests
+    section). Avoids 200-line integration tests against the real `init()`.
+14. **Manual test plan expanded** (tests). Added webhook, multi-follower
+    rebroadcast, agent-vs-terminal sprinkle send, sub-scoop selection.
+15. **architecture.md update tracked** (docs section).
