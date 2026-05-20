@@ -325,7 +325,7 @@ describe('Kernel facade parity', () => {
   it('text_delta deltas appear in order on the wire and reach the client agent handle in order', async () => {
     // Subscribe via the typed handle, capture events.
     const handle = client.createAgentHandle();
-    (client as { selectedScoopJid: string | null }).selectedScoopJid = 'cone_1';
+    client.setSelectedScoopJid('cone_1');
     const events: Array<{ type: string; text?: string }> = [];
     handle.onEvent((event) => {
       events.push({ type: event.type, text: 'text' in event ? event.text : undefined });

@@ -90,8 +90,45 @@ export class OffscreenClient implements KernelClientFacade {
    */
   private transport: KernelTransport<ExtensionMessage, PanelToOffscreenMessage>;
 
-  /** Currently selected scoop JID (set by the UI). */
-  selectedScoopJid: string | null = null;
+  /** Currently selected scoop JID (set by the UI via {@link setSelectedScoopJid}). */
+  private _selectedScoopJid: string | null = null;
+
+  get selectedScoopJid(): string | null {
+    return this._selectedScoopJid;
+  }
+
+  private readonly scoopSelectedListeners = new Set<(jid: string) => void>();
+
+  /**
+   * Subscribe to scoop-selection changes. The handler fires whenever
+   * the selected scoop JID changes to a non-null value. Returns an
+   * unsubscribe function. Used by the extension-leader path so the
+   * panel can push the active scoop to offscreen for tray sync.
+   */
+  onScoopSelected(handler: (jid: string) => void): () => void {
+    this.scoopSelectedListeners.add(handler);
+    return () => {
+      this.scoopSelectedListeners.delete(handler);
+    };
+  }
+
+  /**
+   * Set the currently selected scoop JID and notify listeners. No-op
+   * if the value is unchanged. Listeners only fire for non-null
+   * selections (a `null` clear is internal bookkeeping).
+   */
+  setSelectedScoopJid(jid: string | null): void {
+    if (this._selectedScoopJid === jid) return;
+    this._selectedScoopJid = jid;
+    if (jid === null) return;
+    for (const fn of this.scoopSelectedListeners) {
+      try {
+        fn(jid);
+      } catch (err) {
+        log.warn('onScoopSelected handler threw', err);
+      }
+    }
+  }
 
   private locked = false;
 

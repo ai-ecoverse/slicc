@@ -654,7 +654,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 
   const selectScoop = async (scoop: RegisteredScoop) => {
     selectedScoop = scoop;
-    client.selectedScoopJid = scoop.jid;
+    client.setSelectedScoopJid(scoop.jid);
     layout.panels.memory.setSelectedScoop(scoop.jid);
     layout.setScoopSwitcherSelected?.(scoop.jid);
     layout.panels.scoops.setSelectedJid(scoop.jid);
@@ -697,7 +697,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
       layout.refreshScoopSwitcher?.();
       if (!selectedScoop) {
         selectedScoop = scoop;
-        client.selectedScoopJid = scoop.jid;
+        client.setSelectedScoopJid(scoop.jid);
         layout.panels.memory.setSelectedScoop(scoop.jid);
       }
     },
@@ -720,7 +720,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
         const cone = scoops.find((s) => s.isCone);
         if (cone) {
           selectedScoop = cone;
-          client.selectedScoopJid = cone.jid;
+          client.setSelectedScoopJid(cone.jid);
           layout.panels.memory.setSelectedScoop(cone.jid);
         }
       }
@@ -799,7 +799,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
           selectedScoop ?? client.getScoops().find((s) => s.isCone) ?? client.getScoops()[0];
         if (target) {
           selectedScoop = target;
-          client.selectedScoopJid = target.jid;
+          client.setSelectedScoopJid(target.jid);
           await selectScoop(target);
         }
       } catch (err) {
@@ -1760,7 +1760,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
 
   const selectScoop = async (scoop: RegisteredScoop): Promise<void> => {
     selectedScoop = scoop;
-    client.selectedScoopJid = scoop.jid;
+    client.setSelectedScoopJid(scoop.jid);
     layout.panels.scoops.setSelectedJid(scoop.jid);
     layout.panels.memory.setSelectedScoop(scoop.jid);
     layout.setScoopSwitcherSelected?.(scoop.jid);
