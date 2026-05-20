@@ -343,12 +343,12 @@ export function startExtensionLeaderTray(
   });
 
   // Panel terminal `host` reads from host-command.ts module singletons.
-  // The host-command module is shared by panel and offscreen so wiring
-  // the offscreen-side getter here lets the panel terminal's `host`
-  // command surface the live follower list. (`host reset` cross-context
-  // routing goes via the chrome.runtime envelope below, NOT via
-  // setTrayResetter — but we still populate it for offscreen-local
-  // shell consumers.)
+  // The extension panel terminal runs in offscreen via RemoteTerminalView,
+  // so populating the offscreen-realm host-command singletons here is what
+  // `host` and `host reset` in the panel actually consult — the panel's
+  // own (different) host-command module instance is never reached. The
+  // `host reset` envelope below provides a cross-context path for any
+  // future panel-realm caller.
   setConnectedFollowersGetter(() =>
     trayPeers.getPeers().map((p) => ({
       runtimeId: p.bootstrapId,

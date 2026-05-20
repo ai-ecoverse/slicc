@@ -406,12 +406,30 @@ describe('OffscreenBridge buildStateSnapshot', () => {
     expect(snapshot.scoops[1].isCone).toBe(false);
   });
 
-  it('sets activeScoopJid to cone jid', () => {
+  it('falls back to cone jid when no leader-active-scoop has been pushed', () => {
+    // No setActiveScoopJid call — exercises the cone-as-default fallback
+    // path the JSDoc on `activeScoopJid` documents.
     const snapshot = bridge.buildStateSnapshot();
     expect(snapshot.activeScoopJid).toBe('cone_1');
   });
 
-  it('sets activeScoopJid to null when no cone', () => {
+  it('returns the leader-pushed active scoop when one has been set', () => {
+    // Simulates the panel's PanelLeaderSyncProxy pushing a sub-scoop
+    // selection via `leader-active-scoop`. Survives panel reload because
+    // the snapshot consults the cached value before defaulting to cone.
+    bridge.setActiveScoopJid('scoop_test');
+    const snapshot = bridge.buildStateSnapshot();
+    expect(snapshot.activeScoopJid).toBe('scoop_test');
+  });
+
+  it('falls back to cone when active scoop is explicitly cleared to null', () => {
+    bridge.setActiveScoopJid('scoop_test');
+    bridge.setActiveScoopJid(null);
+    const snapshot = bridge.buildStateSnapshot();
+    expect(snapshot.activeScoopJid).toBe('cone_1');
+  });
+
+  it('sets activeScoopJid to null when no cone and no active scoop is set', () => {
     mockOrchestrator.getScoops.mockReturnValue([
       {
         jid: 'scoop_1',

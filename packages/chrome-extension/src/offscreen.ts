@@ -478,6 +478,15 @@ async function init(): Promise<void> {
         leaderBridge,
       });
 
+      // REGRESSION-SENSITIVE SITE: clearing `activeTrayRuntimeKey` and
+      // `stopTrayRuntime` in the catch handler is load-bearing. Without
+      // them, a retry with the SAME `workerBaseUrl` (which produces the
+      // same `nextTrayRuntimeKey` JSON) would early-out at the
+      // `nextTrayRuntimeKey === activeTrayRuntimeKey` guard in
+      // `syncTrayRuntime` above — leaving leader mode permanently off
+      // for the user until they change config or reload the extension.
+      // Do NOT remove these resets without restoring an equivalent
+      // re-entry path.
       void activeHandle.leader.start().catch((err) => {
         log.error('Extension leader tray start failed — reverting leader mode', {
           error: err instanceof Error ? err.message : String(err),
@@ -487,6 +496,11 @@ async function init(): Promise<void> {
         // Tear down the now-dead handle so any user retry starts cleanly.
         activeHandle?.stop();
         activeHandle = null;
+        // Clear the runtime key + stopTrayRuntime so a retry with the SAME
+        // worker URL re-enters syncTrayRuntime instead of early-outing at
+        // the `nextTrayRuntimeKey === activeTrayRuntimeKey` guard.
+        activeTrayRuntimeKey = null;
+        stopTrayRuntime = null;
       });
 
       stopTrayRuntime = () => {

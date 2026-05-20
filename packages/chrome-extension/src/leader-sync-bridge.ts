@@ -81,7 +81,11 @@ export class PanelLeaderSyncProxy {
         this.pendingResets.delete(resp.requestId);
         clearTimeout(pending.timer);
         if (resp.ok) pending.resolve(resp.status);
-        else pending.reject(new Error(resp.error));
+        // `discriminateMsg` is a type assertion, not a runtime guard — a
+        // malformed wire payload with `ok: false` and a missing `error`
+        // would bypass the discriminated-union requirement and produce
+        // `Error: undefined`. Defence-in-depth fallback below.
+        else pending.reject(new Error(resp.error ?? 'leader-tray-reset failed (no error message)'));
         return;
       }
     });

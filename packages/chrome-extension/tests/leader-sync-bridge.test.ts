@@ -173,6 +173,26 @@ describe('PanelLeaderSyncProxy.resetTray', () => {
     await expect(proxy.resetTray(1000)).rejects.toThrow(/no active session/);
   });
 
+  it('rejects with a fallback message when ok: false arrives without an error string', async () => {
+    const bus = createBus();
+    const proxy = new PanelLeaderSyncProxy(bus.panelSender, bus.panelSubscriber, {});
+    bus.offscreenHub.onPanelMessage((env) => {
+      const msg = env.payload as any;
+      if (msg?.type !== 'leader-tray-reset') return;
+      bus.offscreenHub.sendToPanel({
+        source: 'offscreen',
+        payload: {
+          type: 'leader-tray-reset-response',
+          requestId: msg.requestId,
+          ok: false,
+          // error field deliberately omitted to simulate a malformed payload
+          // that bypassed the discriminated-union check at `discriminateMsg`.
+        },
+      });
+    });
+    await expect(proxy.resetTray(1000)).rejects.toThrow(/no error message/i);
+  });
+
   it('rejects on timeout', async () => {
     const bus = createBus();
     const proxy = new PanelLeaderSyncProxy(bus.panelSender, bus.panelSubscriber, {});

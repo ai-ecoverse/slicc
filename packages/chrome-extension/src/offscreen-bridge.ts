@@ -423,7 +423,10 @@ export class OffscreenBridge implements KernelFacade {
     return {
       type: 'state-snapshot',
       scoops,
-      activeScoopJid: cone?.jid ?? null,
+      // Honour the panel's leader-pushed selection when present so a
+      // sub-scoop survives panel reload; fall back to the cone for
+      // first-boot / pre-leader cases.
+      activeScoopJid: this.getActiveScoopJid() ?? cone?.jid ?? null,
       trayRuntimeStatus: this.buildTrayRuntimeStatus(),
     };
   }
