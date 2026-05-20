@@ -3,7 +3,7 @@
 **Issue:** [#682](https://github.com/ai-ecoverse/slicc/issues/682)
 **Branch:** `fix/extension-leader-sync-682`
 **Date:** 2026-05-20
-**Revision:** 6 (mirror plan revision 2 on scoop selection — see "Revision history" below)
+**Revision:** 7 (panel-side `setTrayResetter` removed from §6 to match as-shipped code — see "Revision history" below)
 
 ## Problem
 
@@ -762,13 +762,10 @@ function installLeaderHooks() {
   sprinkleManager.setSendToSprinkleHook(handleSprinkleUpdate);
   layout.panels.chat.setOnLocalUserMessage(handleLocalUserMessage);
 
-  // Wire `host reset` for the panel terminal — required because the panel
-  // realm has its own `host-command` module singleton and offscreen's
-  // setTrayResetter (§4) only covers the offscreen/agent shell. See §6a.
-  setTrayResetter(async () => {
-    const status = await leaderSyncProxy.resetTray();
-    return status;
-  });
+  // NOTE: setTrayResetter is intentionally NOT wired panel-side. The
+  // extension panel terminal runs in offscreen via RemoteTerminalView,
+  // so host reset consults the offscreen-realm host-command singletons
+  // — see the factory in §4 for the authoritative wiring.
 }
 
 function removeLeaderHooks() {
@@ -780,7 +777,7 @@ function removeLeaderHooks() {
   offSprinklesChanged = null;
   sprinkleManager.setSendToSprinkleHook(undefined);
   layout.panels.chat.setOnLocalUserMessage(undefined);
-  setTrayResetter(null);
+  // No setTrayResetter(null) needed — see install note above.
 }
 
 // Boot-time state request so popouts opening AFTER offscreen activated
@@ -1062,6 +1059,12 @@ body is extracted into a testable helper.
 - Architecture: `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture"
 
 ## Revision history
+
+**Revision 7 (2026-05-21):** Spec §6 pseudocode brought in line with
+the as-shipped `extension-leader-hooks.ts` — `setTrayResetter` is NOT
+wired panel-side; the panel terminal runs in offscreen via
+RemoteTerminalView (`RemoteTerminalView` in `packages/webapp/src/kernel`).
+Doc-only.
 
 **Revision 6 (2026-05-20):** Single-section update to mirror plan
 revision 2. Open question #3 (single mutation site for `selectedScoopJid`)

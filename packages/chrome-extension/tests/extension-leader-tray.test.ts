@@ -990,3 +990,107 @@ describe('startExtensionLeaderTray teardown', () => {
     expect(() => handle.stop()).not.toThrow();
   });
 });
+
+describe('startExtensionLeaderTray start failure retry contract', () => {
+  function startWithCapture(
+    overrides: Partial<Parameters<typeof startExtensionLeaderTray>[0]> = {}
+  ) {
+    const orchestrator =
+      overrides.orchestrator ??
+      makeMockOrchestrator([{ jid: 'cone-1', name: 'cone', isCone: true, folder: 'cone' }]);
+    const bridge = overrides.bridge ?? makeMockBridge({ coneJid: 'cone-1' });
+    const handle = startExtensionLeaderTray({
+      workerBaseUrl: 'wss://test',
+      bridge: bridge as any,
+      orchestrator: orchestrator as any,
+      sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
+      browser: overrides.browser ?? makeStubBrowser(),
+      log: console as any,
+      leaderBridge:
+        overrides.leaderBridge ??
+        ({
+          getSprinkles: () => [],
+          resolveSprinklePath: () => null,
+          signalLeaderMode: vi.fn(),
+          detach: vi.fn(),
+        } as any),
+      _trayLeaderFactory:
+        overrides._trayLeaderFactory ??
+        ((() =>
+          ({
+            start: vi.fn().mockResolvedValue({}),
+            stop: vi.fn(),
+            clearSession: vi.fn().mockResolvedValue(undefined),
+            sendControlMessage: vi.fn(),
+          }) as any) as any),
+      _peerManagerFactory: () =>
+        ({
+          stop: vi.fn(),
+          getPeers: vi.fn(() => []),
+          handleControlMessage: vi.fn().mockResolvedValue(undefined),
+        }) as any,
+      ...overrides,
+    });
+    return { handle, orchestrator, bridge };
+  }
+
+  it('handle.stop() is safe to call even before leader.start() resolves or rejects', () => {
+    let startRejected!: (err: Error) => void;
+    const trayLeaderFactoryFn = vi.fn(() => ({
+      start: vi.fn(
+        () =>
+          new Promise<unknown>((_, reject) => {
+            startRejected = reject;
+          })
+      ),
+      stop: vi.fn(),
+      clearSession: vi.fn().mockResolvedValue(undefined),
+      sendControlMessage: vi.fn(),
+    }));
+    const { handle } = startWithCapture({
+      _trayLeaderFactory: trayLeaderFactoryFn as any,
+    });
+    // offscreen.ts:490 fires `leader.start()` after the factory returns —
+    // mirror that here so the start() promise actually exists when we
+    // tear down. This is the precise path the catch handler exercises.
+    void handle.leader.start().catch(() => {
+      /* swallow — late rejection landing after stop must not bubble */
+    });
+    // Caller tears down the handle BEFORE leader.start() resolves/rejects.
+    expect(() => handle.stop()).not.toThrow();
+    // Even after stop, late-fired start() rejection must not throw.
+    expect(() => startRejected(new Error('hub unreachable'))).not.toThrow();
+  });
+
+  it('a second startExtensionLeaderTray after the first stops cleanly (parallel-instance contract)', () => {
+    // This pins the contract offscreen.ts:481-498 relies on: after the
+    // catch handler stops + nulls the dead handle, a new
+    // startExtensionLeaderTray with the same config must construct
+    // cleanly without colliding on any module-level singleton.
+    const { handle: handle1 } = startWithCapture();
+    handle1.stop();
+    const { handle: handle2 } = startWithCapture();
+    expect(handle2).toBeDefined();
+    expect(handle2.sync).toBeDefined();
+    handle2.stop();
+  });
+
+  it('handle.stop() is idempotent after a leader.start() rejection', async () => {
+    const trayLeaderFactoryFn = vi.fn(() => ({
+      start: vi.fn().mockRejectedValue(new Error('hub unreachable')),
+      stop: vi.fn(),
+      clearSession: vi.fn().mockResolvedValue(undefined),
+      sendControlMessage: vi.fn(),
+    }));
+    const { handle } = startWithCapture({
+      _trayLeaderFactory: trayLeaderFactoryFn as any,
+    });
+    // Wait for the start() rejection to actually fire.
+    await Promise.resolve();
+    await Promise.resolve();
+    // First stop tears down.
+    handle.stop();
+    // Second stop must not throw (idempotency contract).
+    expect(() => handle.stop()).not.toThrow();
+  });
+});
