@@ -75,9 +75,10 @@ final class PortResolverTests: XCTestCase {
         clientAddr.sin_len = UInt8(MemoryLayout<sockaddr_in>.stride)
         clientAddr.sin_family = sa_family_t(AF_INET)
         clientAddr.sin_port = in_port_t(UInt16(port).bigEndian)
-        _ = withUnsafeMutablePointer(to: &clientAddr.sin_addr) {
+        let clientConversion = withUnsafeMutablePointer(to: &clientAddr.sin_addr) {
             inet_pton(AF_INET, "127.0.0.1", $0)
         }
+        XCTAssertEqual(clientConversion, 1)
         let connectResult = withUnsafePointer(to: &clientAddr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 Darwin.connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.stride))
@@ -92,7 +93,11 @@ final class PortResolverTests: XCTestCase {
                 Darwin.accept(listener.fd, $0, &acceptedLen)
             }
         }
-        XCTAssertGreaterThanOrEqual(accepted, 0)
+        guard accepted >= 0 else {
+            close(listener.fd)
+            XCTFail("accept() failed: errno=\(errno)")
+            return
+        }
 
         // Close the active (server) side first so it ends up in TIME_WAIT.
         close(accepted)

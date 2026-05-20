@@ -126,8 +126,11 @@ private func tryListenOnPort(_ port: Int, host: LoopbackAddress) throws -> Int {
     // probe and the new server bails before Hummingbird even gets a
     // chance to bind.
     var enableReuseAddr: Int32 = 1
-    _ = withUnsafePointer(to: &enableReuseAddr) {
+    let reuseAddrResult = withUnsafePointer(to: &enableReuseAddr) {
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, $0, socklen_t(MemoryLayout<Int32>.size))
+    }
+    guard reuseAddrResult == 0 else {
+        throw socketFailure(host: host.host, port: port)
     }
 
     if host.family == AF_INET6 {
