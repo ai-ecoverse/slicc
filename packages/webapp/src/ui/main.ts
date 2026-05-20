@@ -1521,6 +1521,17 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
     },
   });
 
+  // Dispose the proxy on unload — mirrors offscreen.ts:155-163's
+  // host.dispose() pattern. Without this the chrome.runtime listener
+  // leaks across HMR cycles, and any in-flight resetTray timers float.
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      leaderSyncProxy.dispose();
+    },
+    { once: true }
+  );
+
   const handleScoopSelected = (jid: string) => leaderSyncProxy.pushActiveScoop(jid);
   const handleSprinklesChanged = () => {
     const opened = new Set(sprinkleManager.opened());

@@ -205,4 +205,77 @@ describe('ThrottledErrorTracker', () => {
     tracker.reportFailure('a plain string rejection');
     expect(calls[0].data).toMatchObject({ error: 'a plain string rejection' });
   });
+
+  it('emits a sustained-failure heartbeat after the throttle window during continuous failures', () => {
+    // Heartbeat contract: a permanent outage would otherwise emit one
+    // log (fresh) then go silent inside the 60s throttle window.
+    // Once the throttle elapses, subsequent failures within the same
+    // failure run re-log with a `(sustained)` suffix so long-running
+    // outages stay observable to operators and don't read as a new
+    // incident in a tailed log.
+    const { logger, calls } = makeFakeLogger();
+    let now = 0;
+    const tracker = new ThrottledErrorTracker(logger, {
+      failureMessage: 'failed',
+      recoveryMessage: 'recovered',
+      now: () => now,
+    });
+    // First failure: logs as fresh.
+    tracker.reportFailure(new Error('boom'));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].msg).toBe('failed');
+
+    // Within the throttle window: silent.
+    now = 60_000;
+    tracker.reportFailure(new Error('boom'));
+    expect(calls).toHaveLength(1);
+
+    // Past the throttle window with no recovery: emits a sustained
+    // heartbeat (different message, still error level, still carries
+    // the error context plus elapsedMs).
+    now = 300_000;
+    tracker.reportFailure(new Error('boom'));
+    expect(calls).toHaveLength(2);
+    expect(calls[1].msg).toMatch(/sustained/);
+    expect(calls[1].level).toBe('error');
+    expect(calls[1].data).toMatchObject({ error: 'boom' });
+    expect((calls[1].data as { elapsedMs?: number }).elapsedMs).toBe(300_000);
+
+    // Another throttle window passes — another sustained log.
+    now = 361_000;
+    tracker.reportFailure(new Error('boom'));
+    expect(calls).toHaveLength(3);
+    expect(calls[2].msg).toMatch(/sustained/);
+  });
+
+  it('clears the sustained suffix after recovery — next failure is fresh again', () => {
+    // Recovery resets the failing-run bookkeeping, so the failure that
+    // opens the NEXT outage must log as fresh (not sustained).
+    const { logger, calls } = makeFakeLogger();
+    let now = 0;
+    const tracker = new ThrottledErrorTracker(logger, {
+      failureMessage: 'failed',
+      recoveryMessage: 'recovered',
+      recoveryDebounceTicks: 3,
+      now: () => now,
+    });
+    // Build a sustained run.
+    tracker.reportFailure(new Error('boom-1'));
+    now = 120_000;
+    tracker.reportFailure(new Error('boom-2'));
+    expect(calls[1].msg).toMatch(/sustained/);
+
+    // Recover.
+    tracker.reportSuccess();
+    tracker.reportSuccess();
+    tracker.reportSuccess();
+    expect(calls.find((c) => c.msg === 'recovered')).toBeTruthy();
+
+    // Next failure: fresh again, no sustained suffix.
+    now = 121_000;
+    tracker.reportFailure(new Error('boom-3'));
+    const lastFailure = calls[calls.length - 1];
+    expect(lastFailure.msg).toBe('failed');
+    expect(lastFailure.data).toMatchObject({ error: 'boom-3' });
+  });
 });
