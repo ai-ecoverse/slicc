@@ -1532,37 +1532,51 @@ async function main() {
     app.use(
       express.static(uiDir, {
         setHeaders: (res, path) => {
-          // Service workers must declare a maximum scope; without
-          // `Service-Worker-Allowed: /`, the browser refuses to register
-          // a root-scoped SW served from `/llm-proxy-sw.js`. Also force
-          // `no-store` on SWs so a fresh registration always picks up
-          // the new bundle hashes the SW preloads/intercepts.
-          if (path.endsWith('llm-proxy-sw.js')) {
-            res.setHeader('Service-Worker-Allowed', '/');
-            res.setHeader('Cache-Control', 'no-store');
-            return;
-          }
-          // Vite emits content-hashed filenames into `/assets/` — the
-          // hash changes when content changes, so the file at a given
-          // URL is byte-for-byte immutable. Tell the browser to cache
-          // forever to avoid revalidation round-trips. The `path`
-          // parameter is a filesystem path (uses `sep` on Windows,
-          // `/` elsewhere), hence the platform-aware match.
-          if (path.includes(`${sep}assets${sep}`)) {
-            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-            return;
-          }
-          // Everything else (HTML, manifest, sprinkle-sandbox.html, etc.)
-          // is NOT content-hashed and references hashed asset URLs that
-          // change on rebuild. If the browser serves a stale `index.html`
-          // out of its heuristic cache, the referenced `/assets/*` chunks
-          // will 404 after an update — the user sees
+          // Default Cache-Control for anything not classified below:
+          // HTML, manifest, sprinkle-sandbox.html, publicDir fonts/logos,
+          // favicon, etc. None of these are content-hashed and they
+          // reference hashed asset URLs that change on rebuild. If the
+          // browser serves a stale `index.html` out of its heuristic
+          // cache, the referenced `/assets/*` chunks 404 after an update
+          // — the user sees
           //   "Failed to fetch dynamically imported module: …/assets/<old-hash>.js"
           // on every cone bootstrap until they hard-refresh.
           // `no-cache` forces a conditional revalidation on every load
-          // (cheap — `If-None-Match` returns 304 when unchanged) so the
-          // tab picks up a freshly-built `index.html` after `npm run build`.
-          res.setHeader('Cache-Control', 'no-cache');
+          // (cheap — `serve-static`'s default ETag yields a 304 when
+          // unchanged) so the tab picks up a freshly-built `index.html`
+          // after `npm run build`.
+          //
+          // The single `setHeader` at the end is intentional: each
+          // branch overrides the default by assigning to `cacheControl`.
+          // To add a fourth bucket, add an `else if` ABOVE the final
+          // assignment — never a separate `setHeader` after, or the
+          // catch-all silently wins.
+          let cacheControl = 'no-cache';
+          if (path.endsWith('llm-proxy-sw.js') || path.endsWith('preview-sw.js')) {
+            // Service workers need `Service-Worker-Allowed: /` for the
+            // root-scoped registration `llm-proxy-sw.js` does (the
+            // `preview-sw.js` SW registers at scope `/preview/`, which
+            // is narrower than `/` so the broader allowance is harmless).
+            //
+            // `no-store`, not `no-cache`: the browser only re-checks
+            // the SW script on navigation/registration, so the safest
+            // signal is "always pull the latest bytes." A stale SW
+            // pinned in cache would intercept fetch / dispatch
+            // `preview/*` with outdated logic (e.g. an old fetch-proxy
+            // domain list, missing a provider) — that's a worse
+            // failure mode than the `no-cache` revalidation cost.
+            res.setHeader('Service-Worker-Allowed', '/');
+            cacheControl = 'no-store';
+          } else if (path.includes(`${sep}assets${sep}`)) {
+            // Vite emits content-hashed filenames into `/assets/` —
+            // the hash changes when content changes, so the file at a
+            // given URL is byte-for-byte immutable. Cache forever to
+            // avoid revalidation round-trips. The `path` parameter is
+            // a filesystem path (uses `sep` on Windows, `/` elsewhere),
+            // hence the platform-aware match.
+            cacheControl = 'public, max-age=31536000, immutable';
+          }
+          res.setHeader('Cache-Control', cacheControl);
         },
       })
     );
