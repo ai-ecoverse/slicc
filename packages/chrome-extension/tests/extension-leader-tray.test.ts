@@ -262,3 +262,100 @@ describe('startExtensionLeaderTray onFollowerMessage', () => {
     handle.stop();
   });
 });
+
+describe('startExtensionLeaderTray peer connection', () => {
+  function startWithCapture(
+    overrides: Partial<Parameters<typeof startExtensionLeaderTray>[0]> = {}
+  ) {
+    const orchestrator =
+      overrides.orchestrator ??
+      makeMockOrchestrator([{ jid: 'cone-1', name: 'cone', isCone: true, folder: 'cone' }]);
+    const bridge = overrides.bridge ?? makeMockBridge({ coneJid: 'cone-1' });
+    const handle = startExtensionLeaderTray({
+      workerBaseUrl: 'wss://test',
+      bridge: bridge as any,
+      orchestrator: orchestrator as any,
+      sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
+      browser: overrides.browser ?? makeStubBrowser(),
+      log: console as any,
+      leaderBridge:
+        overrides.leaderBridge ??
+        ({
+          getSprinkles: () => [],
+          resolveSprinklePath: () => null,
+          signalLeaderMode: vi.fn(),
+          detach: vi.fn(),
+        } as any),
+      _trayLeaderFactory: () =>
+        ({
+          start: vi.fn().mockResolvedValue({}),
+          stop: vi.fn(),
+          clearSession: vi.fn().mockResolvedValue(undefined),
+          sendControlMessage: vi.fn(),
+        }) as any,
+      _peerManagerFactory: () =>
+        ({
+          stop: vi.fn(),
+          getPeers: vi.fn(() => []),
+          handleControlMessage: vi.fn().mockResolvedValue(undefined),
+        }) as any,
+      ...overrides,
+    });
+    return { handle, orchestrator, bridge };
+  }
+
+  it('peer connected → sync.addFollower called with bootstrapId, channel, runtime, connectedAt', () => {
+    const peerFactoryFn = vi.fn(() => ({
+      stop: vi.fn(),
+      getPeers: vi.fn(() => []),
+      handleControlMessage: vi.fn().mockResolvedValue(undefined),
+    }));
+    const { handle } = startWithCapture({
+      _peerManagerFactory: peerFactoryFn as any,
+    });
+    const addFollowerSpy = vi.spyOn(handle.sync, 'addFollower').mockImplementation(() => {});
+    // Grab the config the factory passed to the peer manager constructor.
+    const capturedCfg = peerFactoryFn.mock.calls[0]![0] as any;
+    const fakeChannel = { send: vi.fn(), readyState: 'open' } as any;
+    capturedCfg.onPeerConnected(
+      {
+        bootstrapId: 'boot-1',
+        controllerId: 'ctl-1',
+        attempt: 1,
+        runtime: 'slicc-standalone',
+        connectedAt: '2026-05-20T00:00:00Z',
+      },
+      fakeChannel
+    );
+    expect(addFollowerSpy).toHaveBeenCalledWith('boot-1', fakeChannel, {
+      runtime: 'slicc-standalone',
+      connectedAt: '2026-05-20T00:00:00Z',
+    });
+    handle.stop();
+  });
+
+  it('peer connected without connectedAt → addFollower receives undefined', () => {
+    const peerFactoryFn = vi.fn(() => ({
+      stop: vi.fn(),
+      getPeers: vi.fn(() => []),
+      handleControlMessage: vi.fn().mockResolvedValue(undefined),
+    }));
+    const { handle } = startWithCapture({ _peerManagerFactory: peerFactoryFn as any });
+    const addFollowerSpy = vi.spyOn(handle.sync, 'addFollower').mockImplementation(() => {});
+    const capturedCfg = peerFactoryFn.mock.calls[0]![0] as any;
+    capturedCfg.onPeerConnected(
+      {
+        bootstrapId: 'boot-2',
+        controllerId: 'ctl-2',
+        attempt: 1,
+        runtime: 'slicc-extension-offscreen',
+      },
+      { send: vi.fn(), readyState: 'open' } as any
+    );
+    expect(addFollowerSpy).toHaveBeenCalledWith('boot-2', expect.any(Object), {
+      runtime: 'slicc-extension-offscreen',
+      connectedAt: undefined,
+    });
+    handle.stop();
+  });
+});

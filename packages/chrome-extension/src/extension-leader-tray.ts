@@ -164,10 +164,18 @@ export function startExtensionLeaderTray(
   const peerFactory = options._peerManagerFactory ?? ((cfg) => new LeaderTrayPeerManager(cfg));
   trayPeers = peerFactory({
     sendControlMessage: (m: any) => trayLeader.sendControlMessage(m),
-    onPeerConnected: () => {
-      // Wired in Task 13.
+    onPeerConnected: (peer: any, channel: any) => {
+      options.log.info('Extension tray follower connected', {
+        bootstrapId: peer.bootstrapId,
+        runtime: peer.runtime,
+      });
+      sync.addFollower(peer.bootstrapId, channel, {
+        runtime: peer.runtime,
+        connectedAt: peer.connectedAt ?? undefined,
+      });
     },
-    onPeerDisconnected: () => {},
+    onPeerDisconnected: (bootstrapId: string, reason: string) =>
+      options.log.info('Extension tray follower disconnected', { bootstrapId, reason }),
   });
 
   const leaderFactory = options._trayLeaderFactory ?? ((cfg) => new LeaderTrayManager(cfg));
