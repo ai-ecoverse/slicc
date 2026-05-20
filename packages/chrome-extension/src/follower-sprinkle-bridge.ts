@@ -55,8 +55,10 @@ const _sprinkleSummaryEnvelopeMatches: _AssertSprinkleSummaryEnvelopeMatches = t
 // `LeaderTrayResetResponseMsg.status` — `messages.ts` mirrors the shape inline
 // to keep tray-leader.ts (which references `chrome`/`window`/`createLogger`)
 // out of the webapp-worker tsconfig surface. Asserted bidirectionally so
-// either side drifting breaks the build.
-type _LeaderTrayResetStatus = NonNullable<LeaderTrayResetResponseMsg['status']>;
+// either side drifting breaks the build. `LeaderTrayResetResponseMsg` is a
+// discriminated union (success/failure on `ok`); project the success branch
+// to read its `status` field.
+type _LeaderTrayResetStatus = Extract<LeaderTrayResetResponseMsg, { ok: true }>['status'];
 type _AssertLeaderTrayRuntimeStatusEnvelopeMatches =
   _LeaderTrayResetStatus extends LeaderTrayRuntimeStatus
     ? LeaderTrayRuntimeStatus extends _LeaderTrayResetStatus

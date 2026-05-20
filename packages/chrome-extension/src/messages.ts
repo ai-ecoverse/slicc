@@ -418,17 +418,25 @@ export interface LeaderModeChangedMsg {
 
 /**
  * Offscreen → panel: response to a `leader-tray-reset` request.
- * `requestId` echoes the original request so the panel can match it. On
- * success, `status` carries the fresh `LeaderTrayRuntimeStatus`; on
- * failure, `error` describes the reason.
+ * `requestId` echoes the original request so the panel can match it.
+ * Discriminated by `ok` — the success branch carries `status`; the
+ * failure branch carries `error`. Mirrors the pattern used by
+ * `FollowerSprinkleFetchResultMsg` below so consumers can narrow on
+ * `ok` without defensive `&& resp.status` guards.
  */
-export interface LeaderTrayResetResponseMsg {
-  type: 'leader-tray-reset-response';
-  requestId: string;
-  ok: boolean;
-  status?: LeaderTrayRuntimeStatusEnvelope;
-  error?: string;
-}
+export type LeaderTrayResetResponseMsg =
+  | {
+      type: 'leader-tray-reset-response';
+      requestId: string;
+      ok: true;
+      status: LeaderTrayRuntimeStatusEnvelope;
+    }
+  | {
+      type: 'leader-tray-reset-response';
+      requestId: string;
+      ok: false;
+      error: string;
+    };
 
 // NOTE: not every member of this union actually reaches the offscreen
 // document. Several (e.g., OAuthRequestMsg, DetachedPopoutRequestMsg,

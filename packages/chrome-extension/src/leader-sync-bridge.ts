@@ -87,8 +87,8 @@ export class PanelLeaderSyncProxy {
         if (!pending) return;
         this.pendingResets.delete(resp.requestId);
         clearTimeout(pending.timer);
-        if (resp.ok && resp.status) pending.resolve(resp.status);
-        else pending.reject(new Error(resp.error ?? 'tray reset failed'));
+        if (resp.ok) pending.resolve(resp.status);
+        else pending.reject(new Error(resp.error));
         return;
       }
     });

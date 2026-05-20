@@ -112,16 +112,29 @@ describe('leader-sync message types', () => {
   });
 
   it('every new offscreen→panel type is in the OffscreenToPanelMessage union', () => {
+    // Both branches of the LeaderTrayResetResponseMsg discriminated union
+    // must be assignable to the parent envelope union.
     const samples: OffscreenToPanelMessage[] = [
       { type: 'leader-mode-changed', active: true },
       {
         type: 'leader-tray-reset-response',
         requestId: 'r1',
         ok: true,
-        status: {} as any, // shape comes from LeaderTrayRuntimeStatus
+        status: {
+          state: 'inactive',
+          session: null,
+          error: null,
+          reconnectAttempts: 0,
+        } as any,
+      },
+      {
+        type: 'leader-tray-reset-response',
+        requestId: 'r2',
+        ok: false,
+        error: 'oops',
       },
     ];
-    expect(samples.length).toBe(2);
+    expect(samples.length).toBe(3);
   });
 
   it('sprinkles snapshot envelope is assignable to SprinkleSummary[]', () => {
@@ -158,6 +171,7 @@ describe('leader-sync message types', () => {
       type: 'leader-tray-reset-response',
       requestId: 'r1',
       ok: true,
+      status: {} as any,
     };
     expect([_a, _b, _c, _d, _e, _f, _g, _h].length).toBe(8);
   });

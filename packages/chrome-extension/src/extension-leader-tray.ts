@@ -21,6 +21,7 @@ import type { Orchestrator } from '../../webapp/src/scoops/orchestrator.js';
 import type { BrowserAPI } from '../../webapp/src/cdp/browser-api.js';
 import type { VirtualFS } from '../../webapp/src/fs/virtual-fs.js';
 import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
+import type { ChatMessage, AgentEvent } from '../../webapp/src/ui/types.js';
 import { ThrottledErrorTracker } from '../../webapp/src/scoops/throttled-error-tracker.js';
 import {
   setConnectedFollowersGetter,
@@ -31,10 +32,30 @@ import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
 import type { LeaderTrayResetRequestMsg, LeaderTrayResetResponseMsg } from './messages.js';
 
 export interface ExtensionLeaderTrayHandle {
+  /** Canonical teardown — runs the full sequence documented at
+   *  `extension-leader-tray.ts` `stop()` (unsubAgent → clearIntervals →
+   *  sync.stop → trayPeers.stop → trayLeader.stop → clear host-command
+   *  setters → removeListener → signalLeaderMode(false) →
+   *  leaderBridge.detach). Idempotent. ALL external callers must use
+   *  this — never call `.stop()` on the individual `sync` / `peers` /
+   *  `leader` fields below or the teardown order is broken. */
   stop(): void;
+
+  /** Reset the tray session by stopping + restarting the leader and
+   *  returning the fresh runtime status. */
   reset(): Promise<LeaderTrayRuntimeStatus>;
+
+  /** @internal Exposed for inspection and tests only. Do NOT call
+   *  `.stop()` on this — use {@link ExtensionLeaderTrayHandle.stop}
+   *  instead so the full teardown sequence runs in the documented
+   *  order. Matches the `@internal` convention `OffscreenBridge` uses
+   *  for `getBuffer`. */
   readonly sync: LeaderSyncManager;
+  /** @internal Same caveat as {@link sync}. */
   readonly peers: LeaderTrayPeerManager;
+  /** @internal Same caveat as {@link sync}. Production code calls
+   *  `.start()` here once at boot in `offscreen.ts`; otherwise treat
+   *  as inspection-only. */
   readonly leader: LeaderTrayManager;
 }
 
@@ -43,12 +64,16 @@ export interface ExtensionLeaderBridge {
   getConeJid(): string | null;
   getActiveScoopJid(): string | null;
   setActiveScoopJid(jid: string | null): void;
-  getMessagesForJid(jid: string): any[];
+  getMessagesForJid(jid: string): ChatMessage[];
+  /** @internal `BufferedChatMessage[]` per `offscreen-bridge.ts` — kept
+   *  as `any[]` here because the buffered shape is private to the
+   *  bridge. Callers only mutate via `.push(...)` so the loose type is
+   *  acceptable. */
   getBuffer(jid: string): any[];
   persistScoop(jid: string): void;
   routeSprinkleLick(name: string, body: unknown, targetScoop?: string): Promise<void>;
   notifyPanelIncomingMessage(jid: string, msg: ChannelMessage): void;
-  onAgentEvent(handler: (scoopJid: string, event: any) => void): () => void;
+  onAgentEvent(handler: (scoopJid: string, event: AgentEvent) => void): () => void;
 }
 
 export interface StartExtensionLeaderTrayOptions {
@@ -65,8 +90,12 @@ export interface StartExtensionLeaderTrayOptions {
   };
   leaderBridge: OffscreenLeaderSyncBridgeHandle;
 
-  /** @internal */ _trayLeaderFactory?: (cfg: any) => LeaderTrayManager;
-  /** @internal */ _peerManagerFactory?: (cfg: any) => LeaderTrayPeerManager;
+  /** @internal */ _trayLeaderFactory?: (
+    cfg: ConstructorParameters<typeof LeaderTrayManager>[0]
+  ) => LeaderTrayManager;
+  /** @internal */ _peerManagerFactory?: (
+    cfg: ConstructorParameters<typeof LeaderTrayPeerManager>[0]
+  ) => LeaderTrayPeerManager;
   /** @internal */ _refreshIntervalMs?: number;
   /** @internal */ _onSyncOptions?: (opts: LeaderSyncManagerOptions) => void;
 }
@@ -95,8 +124,8 @@ export function startExtensionLeaderTray(
     }));
 
   const syncOptions: LeaderSyncManagerOptions = {
-    getMessages: () => bridge.getMessagesForJid(getActiveJid()) as any,
-    getMessagesForScoop: (jid) => bridge.getMessagesForJid(jid) as any,
+    getMessages: () => bridge.getMessagesForJid(getActiveJid()),
+    getMessagesForScoop: (jid) => bridge.getMessagesForJid(jid),
     getScoopJid: () => getActiveJid(),
     getScoops: toScoopSummaries,
     getSprinkles: () => leaderBridge.getSprinkles() as any,
@@ -192,7 +221,7 @@ export function startExtensionLeaderTray(
   // content + wrong scope. Filter `eventScoopJid !== getActiveJid()` here so
   // only events from the currently-active scoop are forwarded, matching the
   // standalone path's implicit filter in offscreen-client.ts:496.
-  const unsubAgent = bridge.onAgentEvent((eventScoopJid: string, event: any) => {
+  const unsubAgent = bridge.onAgentEvent((eventScoopJid, event) => {
     if (eventScoopJid !== getActiveJid()) return;
     sync.broadcastEvent(event);
   });
