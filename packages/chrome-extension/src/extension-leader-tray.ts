@@ -101,8 +101,53 @@ export function startExtensionLeaderTray(
     onSprinkleLick: (name, body, targetScoop) => {
       void bridge.routeSprinkleLick(name, body, targetScoop);
     },
-    onFollowerMessage: () => {
-      // Wired in Task 12.
+    onFollowerMessage: (text, messageId, attachments) => {
+      const activeJid = getActiveJid();
+      if (!activeJid) return;
+      const channelMsg: ChannelMessage = {
+        id: messageId,
+        chatJid: activeJid,
+        senderId: 'user',
+        senderName: 'User',
+        content: text,
+        attachments,
+        timestamp: new Date().toISOString(),
+        fromAssistant: false,
+        channel: 'web',
+      };
+
+      // (1) Panel echo. `'web'` is NOT in EXTERNAL_LICK_CHANNELS
+      // (lick-formatting.ts:29-37), so orchestrator.handleMessage's gated
+      // onIncomingMessage call at orchestrator.ts:1297-1306 does NOT fire
+      // for this channel. Without the explicit emit below, the follower's
+      // typed message never reaches the leader's panel UI.
+      bridge.notifyPanelIncomingMessage(activeJid, channelMsg);
+
+      // (2) Buffer + persist (matches offscreen-bridge.ts:784-791).
+      bridge.getBuffer(activeJid).push({
+        id: messageId,
+        role: 'user',
+        content: text,
+        attachments,
+        timestamp: Date.now(),
+      });
+      bridge.persistScoop(activeJid);
+
+      // (3) Rebroadcast immediately — don't gate on the agent turn.
+      // Matches main.ts:2462 ordering for sibling followers.
+      sync.broadcastUserMessage(text, messageId, attachments);
+
+      // (4) Async orchestrator dispatch in fire-and-forget IIFE.
+      void (async () => {
+        try {
+          await orchestrator.handleMessage(channelMsg);
+          orchestrator.createScoopTab(activeJid);
+        } catch (err) {
+          options.log.error('Follower message dispatch failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
     },
     onFollowerAbort: () => {
       const jid = getActiveJid();

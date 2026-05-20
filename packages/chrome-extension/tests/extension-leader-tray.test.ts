@@ -159,3 +159,106 @@ describe('startExtensionLeaderTray — read-only callbacks', () => {
     handle.stop();
   });
 });
+
+describe('startExtensionLeaderTray onFollowerMessage', () => {
+  function startWithCapture(
+    overrides: Partial<Parameters<typeof startExtensionLeaderTray>[0]> = {}
+  ) {
+    let capturedOptions!: LeaderSyncManagerOptions;
+    const orchestrator =
+      overrides.orchestrator ??
+      makeMockOrchestrator([{ jid: 'cone-1', name: 'cone', isCone: true, folder: 'cone' }]);
+    const bridge = overrides.bridge ?? makeMockBridge({ coneJid: 'cone-1' });
+    const handle = startExtensionLeaderTray({
+      workerBaseUrl: 'wss://test',
+      bridge: bridge as any,
+      orchestrator: orchestrator as any,
+      sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
+      browser: overrides.browser ?? makeStubBrowser(),
+      log: console as any,
+      leaderBridge:
+        overrides.leaderBridge ??
+        ({
+          getSprinkles: () => [],
+          resolveSprinklePath: () => null,
+          signalLeaderMode: vi.fn(),
+          detach: vi.fn(),
+        } as any),
+      _trayLeaderFactory: () =>
+        ({
+          start: vi.fn().mockResolvedValue({}),
+          stop: vi.fn(),
+          clearSession: vi.fn().mockResolvedValue(undefined),
+          sendControlMessage: vi.fn(),
+        }) as any,
+      _peerManagerFactory: () =>
+        ({
+          stop: vi.fn(),
+          getPeers: vi.fn(() => []),
+          handleControlMessage: vi.fn().mockResolvedValue(undefined),
+        }) as any,
+      _onSyncOptions: (opts) => {
+        capturedOptions = opts;
+      },
+      ...overrides,
+    });
+    return { handle, options: capturedOptions, orchestrator, bridge };
+  }
+
+  it('emits panel echo, persists, rebroadcasts synchronously', () => {
+    const bridge = makeMockBridge({ coneJid: 'cone-1' });
+    const { handle, options } = startWithCapture({ bridge: bridge as any });
+    // Spy BEFORE invoking — otherwise the synchronous broadcast call
+    // happens before the spy is installed and the assertion can't catch it.
+    const broadcastSpy = vi.spyOn(handle.sync, 'broadcastUserMessage');
+    options.onFollowerMessage('hi', 'm-99', undefined);
+    expect(bridge.notifyPanelIncomingMessage).toHaveBeenCalledWith(
+      'cone-1',
+      expect.objectContaining({ id: 'm-99', channel: 'web' })
+    );
+    expect(bridge.persistScoop).toHaveBeenCalledWith('cone-1');
+    expect(broadcastSpy).toHaveBeenCalledWith('hi', 'm-99', undefined);
+    handle.stop();
+  });
+
+  it('orchestrator.handleMessage runs in fire-and-forget IIFE (no await)', async () => {
+    const bridge = makeMockBridge({ coneJid: 'cone-1' });
+    let dispatchResolve!: () => void;
+    const orchestrator = makeMockOrchestrator([
+      { jid: 'cone-1', name: 'cone', isCone: true, folder: 'cone' },
+    ]);
+    orchestrator.handleMessage = vi.fn(
+      () =>
+        new Promise<void>((res) => {
+          dispatchResolve = res;
+        })
+    );
+    const { handle, options } = startWithCapture({
+      bridge: bridge as any,
+      orchestrator: orchestrator as any,
+    });
+    // The callback returns undefined synchronously even though
+    // handleMessage hasn't resolved.
+    const returned = options.onFollowerMessage('hi', 'm-99', undefined);
+    expect(returned).toBeUndefined();
+    expect(orchestrator.handleMessage).toHaveBeenCalled();
+    expect(orchestrator.createScoopTab).not.toHaveBeenCalled();
+    dispatchResolve();
+    await Promise.resolve();
+    expect(orchestrator.createScoopTab).toHaveBeenCalledWith('cone-1');
+    handle.stop();
+  });
+
+  it('no active scoop → no-op', () => {
+    const bridge = makeMockBridge({ coneJid: null as any });
+    const orchestrator = makeMockOrchestrator([]);
+    const { handle, options } = startWithCapture({
+      bridge: bridge as any,
+      orchestrator: orchestrator as any,
+    });
+    options.onFollowerMessage('hi', 'm-99', undefined);
+    expect(bridge.notifyPanelIncomingMessage).not.toHaveBeenCalled();
+    expect(orchestrator.handleMessage).not.toHaveBeenCalled();
+    handle.stop();
+  });
+});
