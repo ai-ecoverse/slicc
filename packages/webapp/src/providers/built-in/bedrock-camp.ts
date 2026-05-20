@@ -6,6 +6,13 @@
  * transparently by `llm-proxy-sw.ts` (rewrites to /api/fetch-proxy at
  * the SW layer). Extension mode bypasses CORS via host_permissions.
  * Registers as api: "bedrock-camp-converse" via pi-ai's registerApiProvider().
+ *
+ * Tracks pi-ai's `amazon-bedrock` provider (currently 0.74.0) where the
+ * shapes overlap. The remaining intentional divergence is the transport:
+ * non-streaming `POST /converse` over `fetch` versus pi's
+ * `ConverseStreamCommand` over `@aws-sdk/client-bedrock-runtime`. Adopting
+ * streaming would require parsing the `vnd.amazon.eventstream` framing
+ * by hand; tracked as a follow-up.
  */
 
 import type { ProviderConfig } from '../types.js';
@@ -30,6 +37,8 @@ import type {
   AssistantMessage,
   ThinkingLevel,
   ThinkingBudgets,
+  CacheRetention,
+  ProviderResponse,
 } from '@earendil-works/pi-ai';
 
 export const config: ProviderConfig = {
@@ -59,11 +68,19 @@ export const config: ProviderConfig = {
 //    `global.*` works anywhere.
 const BEDROCK_CAMP_INFERENCE_PROFILE_RE = /^(us|eu|global|apac)\./;
 const BEDROCK_CAMP_CLAUDE_4_RE = /\.anthropic\.claude-(opus|sonnet|haiku)-4/;
-const BEDROCK_RUNTIME_HOST_RE = /bedrock-runtime\.([a-z0-9-]+)\.amazonaws\.com/i;
+// Matches standard (us-east-1), FIPS (us-east-1-fips) and China
+// (cn-north-1.amazonaws.com.cn) Bedrock runtime hosts.
+const BEDROCK_RUNTIME_HOST_RE =
+  /bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/i;
 
 export function bedrockCampRegionFromBaseUrl(baseUrl: string | null | undefined): string | null {
   if (!baseUrl) return null;
-  return baseUrl.match(BEDROCK_RUNTIME_HOST_RE)?.[1] ?? null;
+  try {
+    const { hostname } = new URL(baseUrl);
+    return hostname.toLowerCase().match(BEDROCK_RUNTIME_HOST_RE)?.[1] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function profileMatchesRegion(prefix: string, region: string): boolean {
@@ -82,58 +99,95 @@ export function isBedrockCampCompatible(model: { id: string }, region?: string |
   return profileMatchesRegion(prefix, region);
 }
 
-// Models not yet in pi-ai's amazon-bedrock registry that CAMP already serves.
-// Opus 4.7 shape mirrors 4.6 until pi-ai regenerates. Caller must dedupe
-// against the registry — once pi-ai ships these IDs, the dedup drops them
-// and this function becomes a no-op that can be removed.
-export function getBedrockCampExtraModels(): Model<Api>[] {
-  const shared: Omit<Model<Api>, 'id' | 'name'> = {
-    reasoning: true,
-    input: ['text', 'image'],
-    cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    contextWindow: 1_000_000,
-    maxTokens: 128_000,
-    baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
-    api: 'bedrock-converse-stream' as Api,
-    provider: 'amazon-bedrock' as Model<Api>['provider'],
-  };
-  return [
-    { ...shared, id: 'us.anthropic.claude-opus-4-7', name: 'Claude Opus 4.7 (US)' },
-    { ...shared, id: 'global.anthropic.claude-opus-4-7', name: 'Claude Opus 4.7 (Global)' },
-  ];
-}
-
 // Opus 4.7 returns 400 "temperature is deprecated for this model" when the
 // param is set. Keep temperature for every other model.
-function supportsTemperature(modelId: string): boolean {
-  return !modelId.includes('claude-opus-4-7');
+function supportsTemperature(modelId: string, modelName?: string): boolean {
+  return !matchesAny(modelId, modelName, ['claude-opus-4-7', 'opus-4-7']);
 }
 
-type BedrockCampOnPayload =
-  | ((payload: unknown) => void)
-  | ((payload: unknown, model: Model<Api>) => void);
+export type BedrockCampThinkingDisplay = 'summarized' | 'omitted';
 
-interface BedrockCampOptions extends Omit<StreamOptions, 'onPayload'> {
+type BedrockCampOnPayload = (
+  payload: unknown,
+  model: Model<Api>
+) => unknown | undefined | Promise<unknown | undefined>;
+
+type BedrockCampOnResponse = (
+  response: ProviderResponse,
+  model: Model<Api>
+) => void | Promise<void>;
+
+interface BedrockCampOptions extends Omit<StreamOptions, 'onPayload' | 'onResponse'> {
   onPayload?: BedrockCampOnPayload;
+  onResponse?: BedrockCampOnResponse;
   toolChoice?: 'auto' | 'any' | 'none' | { type: 'tool'; name: string };
   reasoning?: ThinkingLevel;
   thinkingBudgets?: ThinkingBudgets;
+  /**
+   * Controls how Claude's thinking content is returned (Opus 4.6+ / Mythos).
+   * Defaults to "summarized" for parity with pi-ai's `amazon-bedrock`.
+   */
+  thinkingDisplay?: BedrockCampThinkingDisplay;
+  /**
+   * Send `anthropic_beta: ["interleaved-thinking-2025-05-14"]` for
+   * non-adaptive Claude models that support extended thinking + tool use.
+   * Defaults to true (matches pi-ai).
+   */
+  interleavedThinking?: boolean;
+  /**
+   * Key-value pairs attached to the inference request for cost allocation.
+   * @see https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
+   */
+  requestMetadata?: Record<string, string>;
 }
 
-type BedrockCampSimpleOptions = Omit<SimpleStreamOptions, 'onPayload'> & {
+type BedrockCampSimpleOptions = Omit<SimpleStreamOptions, 'onPayload' | 'onResponse'> & {
   onPayload?: BedrockCampOnPayload;
+  onResponse?: BedrockCampOnResponse;
+  toolChoice?: BedrockCampOptions['toolChoice'];
+  thinkingDisplay?: BedrockCampThinkingDisplay;
+  interleavedThinking?: boolean;
+  requestMetadata?: Record<string, string>;
 };
 
-function notifyPayload(
-  onPayload: BedrockCampOnPayload | undefined,
-  payload: unknown,
-  model: Model<Api>
-): void {
-  if (!onPayload) return;
-  // Bedrock CAMP callers inspect both the serialized payload and the resolved
-  // model. Plain StreamOptions callbacks remain valid because extra arguments
-  // are ignored in JavaScript.
-  (onPayload as (payload: unknown, model: Model<Api>) => void)(payload, model);
+function pickCampExtras(
+  options: BedrockCampSimpleOptions
+): Pick<
+  BedrockCampOptions,
+  | 'onPayload'
+  | 'onResponse'
+  | 'toolChoice'
+  | 'thinkingDisplay'
+  | 'interleavedThinking'
+  | 'requestMetadata'
+> {
+  return {
+    onPayload: options.onPayload,
+    onResponse: options.onResponse,
+    toolChoice: options.toolChoice,
+    thinkingDisplay: options.thinkingDisplay,
+    interleavedThinking: options.interleavedThinking,
+    requestMetadata: options.requestMetadata,
+  };
+}
+
+// ── Model-name aware matching ───────────────────────────────────────
+// Application inference profiles use opaque ARNs whose id does not contain
+// the underlying model name. We check both `model.id` and `model.name`
+// (when present), normalizing separators so e.g. "Claude Opus 4.6" matches
+// "opus-4-6".
+
+function getModelMatchCandidates(modelId: string, modelName?: string): string[] {
+  const values = modelName ? [modelId, modelName] : [modelId];
+  return values.flatMap((value) => {
+    const lower = value.toLowerCase();
+    return [lower, lower.replace(/[\s_.:]+/g, '-')];
+  });
+}
+
+function matchesAny(modelId: string, modelName: string | undefined, needles: string[]): boolean {
+  const candidates = getModelMatchCandidates(modelId, modelName);
+  return candidates.some((s) => needles.some((n) => s.includes(n)));
 }
 
 // ── Message conversion ──────────────────────────────────────────────
@@ -151,7 +205,11 @@ function sanitize(text: string | undefined | null): string {
   );
 }
 
-function convertMessages(context: Context, model: Model<Api>): any[] {
+function convertMessages(
+  context: Context,
+  model: Model<Api>,
+  cacheRetention: CacheRetention
+): any[] {
   const result: any[] = [];
   const transformed = transformMessages(context.messages, model, normalizeToolCallId);
 
@@ -166,10 +224,7 @@ function convertMessages(context: Context, model: Model<Api>): any[] {
               ? [{ text: sanitize(m.content) }]
               : m.content.map((c: any) => {
                   if (c.type === 'text') return { text: sanitize(c.text) };
-                  if (c.type === 'image')
-                    return {
-                      image: { source: { bytes: c.data }, format: mimeToFormat(c.mimeType) },
-                    };
+                  if (c.type === 'image') return { image: createImageBlock(c.mimeType, c.data) };
                   throw new Error(`Unknown user content type: ${c.type}`);
                 }),
         });
@@ -190,11 +245,22 @@ function convertMessages(context: Context, model: Model<Api>): any[] {
             case 'thinking':
               if (c.thinking.trim().length === 0) continue;
               if (supportsThinkingSignature(model)) {
-                blocks.push({
-                  reasoningContent: {
-                    reasoningText: { text: sanitize(c.thinking), signature: c.thinkingSignature },
-                  },
-                });
+                // Signatures arrive after thinking deltas. If a partial or
+                // externally persisted message lacks a signature, Bedrock
+                // rejects the replayed reasoning block. Fall back to plain
+                // text — matches pi-ai's amazon-bedrock behavior.
+                if (!c.thinkingSignature || c.thinkingSignature.trim().length === 0) {
+                  blocks.push({ text: sanitize(c.thinking) });
+                } else {
+                  blocks.push({
+                    reasoningContent: {
+                      reasoningText: {
+                        text: sanitize(c.thinking),
+                        signature: c.thinkingSignature,
+                      },
+                    },
+                  });
+                }
               } else {
                 blocks.push({
                   reasoningContent: { reasoningText: { text: sanitize(c.thinking) } },
@@ -215,7 +281,7 @@ function convertMessages(context: Context, model: Model<Api>): any[] {
             toolUseId: m.toolCallId,
             content: m.content.map((c: any) =>
               c.type === 'image'
-                ? { image: { source: { bytes: c.data }, format: mimeToFormat(c.mimeType) } }
+                ? { image: createImageBlock(c.mimeType, c.data) }
                 : { text: sanitize(c.text ?? c.json ?? JSON.stringify(c)) }
             ),
             status: m.isError ? 'error' : 'success',
@@ -229,7 +295,7 @@ function convertMessages(context: Context, model: Model<Api>): any[] {
               toolUseId: next.toolCallId,
               content: next.content.map((c: any) =>
                 c.type === 'image'
-                  ? { image: { source: { bytes: c.data }, format: mimeToFormat(c.mimeType) } }
+                  ? { image: createImageBlock(c.mimeType, c.data) }
                   : { text: sanitize(c.text ?? c.json ?? JSON.stringify(c)) }
               ),
               status: next.isError ? 'error' : 'success',
@@ -244,14 +310,22 @@ function convertMessages(context: Context, model: Model<Api>): any[] {
     }
   }
   // Add cache point to the last user message for supported Claude models
-  if (supportsPromptCaching(model) && result.length > 0) {
+  // when caching is enabled.
+  if (cacheRetention !== 'none' && supportsPromptCaching(model) && result.length > 0) {
     const lastMessage = result[result.length - 1];
     if (lastMessage.role === 'user' && Array.isArray(lastMessage.content)) {
-      lastMessage.content.push({ cachePoint: { type: 'default' } });
+      lastMessage.content.push(buildCachePoint(cacheRetention));
     }
   }
 
   return result;
+}
+
+function createImageBlock(
+  mime: string,
+  data: string
+): { source: { bytes: string }; format: string } {
+  return { source: { bytes: data }, format: mimeToFormat(mime) };
 }
 
 function mimeToFormat(mime: string): string {
@@ -266,22 +340,30 @@ function mimeToFormat(mime: string): string {
     case 'image/webp':
       return 'webp';
     default:
-      return 'png';
+      throw new Error(`Unsupported image MIME type: ${mime}`);
   }
 }
 
 function supportsThinkingSignature(model: Model<Api>): boolean {
-  const id = model.id.toLowerCase();
-  return id.includes('anthropic.claude') || id.includes('anthropic/claude');
+  return isAnthropicClaudeModel(model);
 }
 
-function supportsAdaptiveThinking(modelId: string): boolean {
-  return (
-    modelId.includes('opus-4-6') ||
-    modelId.includes('opus-4.6') ||
-    modelId.includes('sonnet-4-6') ||
-    modelId.includes('sonnet-4.6')
-  );
+// Adaptive thinking is currently supported by Claude Opus 4.6, Opus 4.7,
+// and Sonnet 4.6 only. Other Claude 4.x models stay on legacy
+// `thinking.type=enabled` with a token budget. This list is kept in lockstep
+// with pi-ai's amazon-bedrock provider.
+function supportsAdaptiveThinking(modelId: string, modelName?: string): boolean {
+  return matchesAny(modelId, modelName, ['opus-4-6', 'opus-4-7', 'sonnet-4-6']);
+}
+
+// Opus 4.7 introduced a native `effort: "xhigh"` tier above `high`. Older
+// Opus 4.6 clamps xhigh to `"max"`. Anything else clamps to `"high"`.
+function supportsNativeXhighEffort(modelId: string, modelName?: string): boolean {
+  return matchesAny(modelId, modelName, ['opus-4-7']);
+}
+
+function supportsMaxEffort(modelId: string, modelName?: string): boolean {
+  return matchesAny(modelId, modelName, ['opus-4-6']);
 }
 
 // ── Tool config ─────────────────────────────────────────────────────
@@ -312,7 +394,12 @@ function convertToolConfig(
 
 // ── Thinking / reasoning fields ─────────────────────────────────────
 
-function mapThinkingLevelToEffort(level: ThinkingLevel | undefined, modelId: string): string {
+function mapThinkingLevelToEffort(
+  level: ThinkingLevel | undefined,
+  modelId: string,
+  modelName?: string
+): string {
+  if (level === 'xhigh' && supportsNativeXhighEffort(modelId, modelName)) return 'xhigh';
   switch (level) {
     case 'minimal':
     case 'low':
@@ -322,69 +409,104 @@ function mapThinkingLevelToEffort(level: ThinkingLevel | undefined, modelId: str
     case 'high':
       return 'high';
     case 'xhigh':
-      return modelId.includes('opus-4-6') || modelId.includes('opus-4.6') ? 'max' : 'high';
+      return supportsMaxEffort(modelId, modelName) ? 'max' : 'high';
     default:
       return 'high';
   }
 }
 
+// GovCloud Bedrock currently rejects the Claude `thinking.display` field
+// and is detected either by region (us-gov-*) or by model id prefix.
+function isGovCloudTarget(model: Model<Api>): boolean {
+  const region = bedrockCampRegionFromBaseUrl(model.baseUrl);
+  if (region?.toLowerCase().startsWith('us-gov-')) return true;
+  const id = model.id.toLowerCase();
+  return id.startsWith('us-gov.') || id.startsWith('arn:aws-us-gov:');
+}
+
 function buildAdditionalModelRequestFields(
   model: Model<Api>,
   options: BedrockCampOptions
-): any | undefined {
+): Record<string, unknown> | undefined {
   if (!options.reasoning || !model.reasoning) return undefined;
-  if (model.id.includes('anthropic.claude') || model.id.includes('anthropic/claude')) {
-    const result: any = supportsAdaptiveThinking(model.id)
-      ? {
-          thinking: { type: 'adaptive' },
-          output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model.id) },
-        }
-      : (() => {
-          const defaults: Record<string, number> = {
-            minimal: 1024,
-            low: 2048,
-            medium: 8192,
-            high: 16384,
-            xhigh: 16384,
-          };
-          const level = options.reasoning === 'xhigh' ? 'high' : options.reasoning!;
-          const budget =
-            options.thinkingBudgets?.[level as keyof ThinkingBudgets] ??
-            defaults[options.reasoning!];
-          return { thinking: { type: 'enabled', budget_tokens: budget } };
-        })();
-    return result;
+  if (!isAnthropicClaudeModel(model)) return undefined;
+
+  const display = isGovCloudTarget(model) ? undefined : (options.thinkingDisplay ?? 'summarized');
+
+  if (supportsAdaptiveThinking(model.id, model.name)) {
+    const adaptive: Record<string, unknown> = {
+      thinking: { type: 'adaptive', ...(display !== undefined ? { display } : {}) },
+      output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model.id, model.name) },
+    };
+    return adaptive;
   }
-  return undefined;
+
+  const defaults: Record<string, number> = {
+    minimal: 1024,
+    low: 2048,
+    medium: 8192,
+    high: 16384,
+    xhigh: 16384,
+  };
+  const level = options.reasoning === 'xhigh' ? 'high' : options.reasoning;
+  const budget =
+    options.thinkingBudgets?.[level as keyof ThinkingBudgets] ?? defaults[options.reasoning];
+  const legacy: Record<string, unknown> = {
+    thinking: {
+      type: 'enabled',
+      budget_tokens: budget,
+      ...(display !== undefined ? { display } : {}),
+    },
+  };
+  if (options.interleavedThinking ?? true) {
+    legacy.anthropic_beta = ['interleaved-thinking-2025-05-14'];
+  }
+  return legacy;
 }
 
 // ── Prompt caching ─────────────────────────────────────────────────
 
-/**
- * Check if the model supports prompt caching.
- * Matches pi-ai's built-in Bedrock provider logic.
- */
-function supportsPromptCaching(model: Model<Api>): boolean {
+function isAnthropicClaudeModel(model: Model<Api>): boolean {
   const id = model.id.toLowerCase();
-  if (!id.includes('claude')) {
-    return false;
-  }
-  // Claude 4.x models (opus-4, sonnet-4, haiku-4)
-  if (id.includes('-4-') || id.includes('-4.')) return true;
-  // Claude 3.7 Sonnet
-  if (id.includes('claude-3-7-sonnet')) return true;
-  // Claude 3.5 Haiku
-  if (id.includes('claude-3-5-haiku')) return true;
+  const name = model.name?.toLowerCase() ?? '';
+  return (
+    id.includes('anthropic.claude') ||
+    id.includes('anthropic/claude') ||
+    name.includes('anthropic.claude') ||
+    name.includes('anthropic/claude') ||
+    name.includes('claude')
+  );
+}
+
+function supportsPromptCaching(model: Model<Api>): boolean {
+  const candidates = getModelMatchCandidates(model.id, model.name);
+  if (!candidates.some((s) => s.includes('claude'))) return false;
+  if (candidates.some((s) => s.includes('-4-'))) return true;
+  if (candidates.some((s) => s.includes('claude-3-7-sonnet'))) return true;
+  if (candidates.some((s) => s.includes('claude-3-5-haiku'))) return true;
   return false;
+}
+
+function buildCachePoint(cacheRetention: CacheRetention): Record<string, unknown> {
+  return {
+    cachePoint: {
+      type: 'default',
+      ...(cacheRetention === 'long' ? { ttl: '1h' } : {}),
+    },
+  };
 }
 
 // ── System prompt ───────────────────────────────────────────────────
 
-function buildSystemPrompt(systemPrompt: string | undefined, model: Model<Api>): any[] | undefined {
+function buildSystemPrompt(
+  systemPrompt: string | undefined,
+  model: Model<Api>,
+  cacheRetention: CacheRetention
+): any[] | undefined {
   if (!systemPrompt) return undefined;
   const blocks: any[] = [{ text: sanitize(systemPrompt) }];
-  if (supportsPromptCaching(model)) {
-    blocks.push({ cachePoint: { type: 'default' } });
+  if (cacheRetention !== 'none' && supportsPromptCaching(model)) {
+    blocks.push(buildCachePoint(cacheRetention));
   }
   return blocks;
 }
@@ -404,6 +526,20 @@ function mapStopReason(reason: string): 'stop' | 'length' | 'toolUse' | 'error' 
     default:
       return 'error';
   }
+}
+
+// ── Error formatting ────────────────────────────────────────────────
+// Stable human-readable prefixes mirror pi-ai's BEDROCK_ERROR_PREFIXES so
+// downstream retry classification (`server.?error`, `service.?unavailable`,
+// `throttl(?:ing|e)`) keeps working over CAMP.
+function formatHttpError(status: number, body: string): string {
+  let prefix = `Bedrock CAMP API error (${status})`;
+  if (status === 429) prefix = `Throttling error: ${prefix}`;
+  else if (status === 503) prefix = `Service unavailable: ${prefix}`;
+  else if (status === 502 || status === 504) prefix = `Internal server error: ${prefix}`;
+  else if (status >= 500) prefix = `Internal server error: ${prefix}`;
+  else if (status === 400) prefix = `Validation error: ${prefix}`;
+  return `${prefix}: ${body}`;
 }
 
 // ── Response parsing (non-streaming /converse) ──────────────────────
@@ -482,6 +618,18 @@ function parseConverseResponse(
   output.stopReason = mapStopReason(body.stopReason || 'end_turn');
 }
 
+function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
+  return cacheRetention ?? 'short';
+}
+
+function extractResponseHeaders(response: Response): Record<string, string> {
+  const headers: Record<string, string> = {};
+  response.headers.forEach((value, key) => {
+    headers[key.toLowerCase()] = value;
+  });
+  return headers;
+}
+
 // ── Stream function ─────────────────────────────────────────────────
 
 export const streamBedrockCamp = (
@@ -517,18 +665,24 @@ export const streamBedrockCamp = (
       const baseUrl = model.baseUrl;
       if (!baseUrl) throw new Error('Base URL is required for Bedrock CAMP');
 
+      const cacheRetention = resolveCacheRetention(options.cacheRetention);
+
       // Build request body (Converse API format)
-      const inferenceConfig: Record<string, unknown> = { maxTokens: options.maxTokens };
-      if (supportsTemperature(model.id)) {
+      const inferenceConfig: Record<string, unknown> = {};
+      if (options.maxTokens !== undefined) inferenceConfig.maxTokens = options.maxTokens;
+      if (options.temperature !== undefined && supportsTemperature(model.id, model.name)) {
         inferenceConfig.temperature = options.temperature;
       }
-      const body: any = {
+      let body: Record<string, unknown> = {
         modelId: model.id,
-        messages: convertMessages(context, model),
-        system: buildSystemPrompt(context.systemPrompt, model),
+        messages: convertMessages(context, model, cacheRetention),
+        system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
         inferenceConfig,
         toolConfig: convertToolConfig(context.tools, options.toolChoice),
         additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
+        ...(options.requestMetadata !== undefined
+          ? { requestMetadata: options.requestMetadata }
+          : {}),
       };
 
       // Remove undefined fields
@@ -536,7 +690,12 @@ export const streamBedrockCamp = (
       if (!body.toolConfig) delete body.toolConfig;
       if (!body.additionalModelRequestFields) delete body.additionalModelRequestFields;
 
-      notifyPayload(options.onPayload, body, model);
+      if (options.onPayload) {
+        const replacement = await options.onPayload(body, model);
+        if (replacement !== undefined) {
+          body = replacement as Record<string, unknown>;
+        }
+      }
 
       // Build URL: POST {baseUrl}/model/{modelId}/converse
       const targetUrl = `${baseUrl.replace(/\/$/, '')}/model/${model.id}/converse`;
@@ -548,19 +707,28 @@ export const streamBedrockCamp = (
       // and never registers the SW, so a direct fetch works there too.
       // Either way, this provider issues a plain fetch and lets the
       // platform handle transport.
+      const requestHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        ...(options.headers ?? {}),
+      };
       const response = await fetch(targetUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers: requestHeaders,
         body: JSON.stringify(body),
         signal: options.signal,
       });
 
+      if (options.onResponse) {
+        await options.onResponse(
+          { status: response.status, headers: extractResponseHeaders(response) },
+          model
+        );
+      }
+
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Bedrock CAMP API error (${response.status}): ${errorText}`);
+        throw new Error(formatHttpError(response.status, errorText));
       }
 
       const responseBody = await response.json();
@@ -593,23 +761,16 @@ export const streamSimpleBedrockCamp = (
   context: Context,
   options?: BedrockCampSimpleOptions
 ): AssistantMessageEventStream => {
-  const base = buildBaseOptions(
-    model,
-    options && {
-      ...options,
-      onPayload: options.onPayload
-        ? (payload) => notifyPayload(options.onPayload, payload, model)
-        : undefined,
-    },
-    undefined
-  );
+  const base = buildBaseOptions(model, options, undefined);
+  const extras = options ? pickCampExtras(options) : {};
   if (!options?.reasoning) {
-    return streamBedrockCamp(model, context, { ...base, reasoning: undefined });
+    return streamBedrockCamp(model, context, { ...base, ...extras, reasoning: undefined });
   }
-  if (model.id.includes('anthropic.claude') || model.id.includes('anthropic/claude')) {
-    if (supportsAdaptiveThinking(model.id)) {
+  if (isAnthropicClaudeModel(model)) {
+    if (supportsAdaptiveThinking(model.id, model.name)) {
       return streamBedrockCamp(model, context, {
         ...base,
+        ...extras,
         reasoning: options.reasoning,
         thinkingBudgets: options.thinkingBudgets,
       });
@@ -622,6 +783,7 @@ export const streamSimpleBedrockCamp = (
     );
     return streamBedrockCamp(model, context, {
       ...base,
+      ...extras,
       maxTokens: adjusted.maxTokens,
       reasoning: options.reasoning,
       thinkingBudgets: {
@@ -632,6 +794,7 @@ export const streamSimpleBedrockCamp = (
   }
   return streamBedrockCamp(model, context, {
     ...base,
+    ...extras,
     reasoning: options.reasoning,
     thinkingBudgets: options.thinkingBudgets,
   });

@@ -22,7 +22,6 @@ import type { ProviderConfig } from '../providers/index.js';
 import type { CompatOverrides } from '../providers/types.js';
 import {
   isBedrockCampCompatible,
-  getBedrockCampExtraModels,
   bedrockCampRegionFromBaseUrl,
 } from '../providers/built-in/bedrock-camp.js';
 import { trackSettingsOpen } from './telemetry.js';
@@ -229,25 +228,20 @@ function applyModelMetadata(
 // Get models for a provider
 export function getProviderModels(providerId: string): Model<Api>[] {
   try {
-    // Bedrock CAMP uses Amazon Bedrock models with custom API.
-    // Filter to inference-profile-prefixed Claude 4.x whose region matches
-    // the configured endpoint (eu.* against us-* 400s "invalid model
-    // identifier"), and inject models missing from pi-ai's registry (e.g.
-    // opus-4.7). Dedupe by ID so extras auto-drop when pi-ai ships them.
+    // Bedrock CAMP uses Amazon Bedrock models with a custom API. Filter to
+    // inference-profile-prefixed Claude 4.x whose region matches the
+    // configured endpoint (eu.* against us-* 400s "invalid model
+    // identifier"). pi-ai's amazon-bedrock registry now ships every Opus 4.7
+    // profile variant; no manual extras list is needed.
     if (providerId === 'bedrock-camp') {
       const region = bedrockCampRegionFromBaseUrl(getBaseUrlForProvider('bedrock-camp'));
-      const bedrockModels = getModelsDynamic('amazon-bedrock').filter((m) =>
-        isBedrockCampCompatible(m, region)
-      );
-      const existingIds = new Set(bedrockModels.map((m) => m.id));
-      const extras = getBedrockCampExtraModels().filter(
-        (m) => isBedrockCampCompatible(m, region) && !existingIds.has(m.id)
-      );
-      return [...bedrockModels, ...extras].map((m) => ({
-        ...m,
-        api: 'bedrock-camp-converse' as Api,
-        provider: 'bedrock-camp',
-      }));
+      return getModelsDynamic('amazon-bedrock')
+        .filter((m) => isBedrockCampCompatible(m, region))
+        .map((m) => ({
+          ...m,
+          api: 'bedrock-camp-converse' as Api,
+          provider: 'bedrock-camp',
+        }));
     }
     // Providers that use Anthropic's model registry with custom API
     const providerConfig = getProviderConfig(providerId);
