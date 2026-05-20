@@ -1562,9 +1562,11 @@ async function main() {
             // the SW script on navigation/registration, so the safest
             // signal is "always pull the latest bytes." A stale SW
             // pinned in cache would intercept fetch / dispatch
-            // `preview/*` with outdated logic (e.g. an old fetch-proxy
-            // domain list, missing a provider) — that's a worse
-            // failure mode than the `no-cache` revalidation cost.
+            // `preview/*` with outdated logic (e.g. an outdated
+            // forbidden-header encoding scheme that no longer matches
+            // the server-side restoration in `index.ts`, or a stale
+            // `preview-sw` VFS handler) — that's a worse failure mode
+            // than the `no-cache` revalidation cost.
             res.setHeader('Service-Worker-Allowed', '/');
             cacheControl = 'no-store';
           } else if (path.includes(`${sep}assets${sep}`)) {
