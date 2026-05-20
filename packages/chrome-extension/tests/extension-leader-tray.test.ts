@@ -780,3 +780,103 @@ describe('startExtensionLeaderTray host-command + reset', () => {
     }
   });
 });
+
+describe('startExtensionLeaderTray teardown', () => {
+  function startWithCapture(
+    overrides: Partial<Parameters<typeof startExtensionLeaderTray>[0]> = {}
+  ) {
+    const orchestrator =
+      overrides.orchestrator ??
+      makeMockOrchestrator([{ jid: 'cone-1', name: 'cone', isCone: true, folder: 'cone' }]);
+    const bridge = overrides.bridge ?? makeMockBridge({ coneJid: 'cone-1' });
+    const handle = startExtensionLeaderTray({
+      workerBaseUrl: 'wss://test',
+      bridge: bridge as any,
+      orchestrator: orchestrator as any,
+      sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
+      browser: overrides.browser ?? makeStubBrowser(),
+      log: console as any,
+      leaderBridge:
+        overrides.leaderBridge ??
+        ({
+          getSprinkles: () => [],
+          resolveSprinklePath: () => null,
+          signalLeaderMode: vi.fn(),
+          detach: vi.fn(),
+        } as any),
+      _trayLeaderFactory: () =>
+        ({
+          start: vi.fn().mockResolvedValue({}),
+          stop: vi.fn(),
+          clearSession: vi.fn().mockResolvedValue(undefined),
+          sendControlMessage: vi.fn(),
+        }) as any,
+      _peerManagerFactory: () =>
+        ({
+          stop: vi.fn(),
+          getPeers: vi.fn(() => []),
+          handleControlMessage: vi.fn().mockResolvedValue(undefined),
+        }) as any,
+      ...overrides,
+    });
+    return { handle, orchestrator, bridge };
+  }
+
+  it('stop() tears down in the standalone order', () => {
+    const calls: string[] = [];
+    const unsubAgent = vi.fn(() => calls.push('unsubAgent'));
+    const bridge = makeMockBridge({ coneJid: 'cone-1' });
+    bridge.onAgentEvent.mockImplementation(() => unsubAgent);
+    const leaderBridge = {
+      getSprinkles: () => [],
+      resolveSprinklePath: () => null,
+      signalLeaderMode: vi.fn(() => calls.push('signalLeaderMode(false)')),
+      detach: vi.fn(() => calls.push('leaderBridge.detach')),
+    };
+    const removeListenerSpy = vi.fn(() => calls.push('removeListener'));
+    mockChrome.runtime.onMessage.removeListener = removeListenerSpy as any;
+
+    const { handle } = startWithCapture({
+      bridge: bridge as any,
+      leaderBridge: leaderBridge as any,
+    });
+    vi.spyOn(handle.sync, 'stop').mockImplementation(() => {
+      calls.push('sync');
+    });
+    vi.spyOn(handle.peers, 'stop').mockImplementation(() => {
+      calls.push('peers');
+    });
+    vi.spyOn(handle.leader, 'stop').mockImplementation(() => {
+      calls.push('leader');
+    });
+    handle.stop();
+    expect(calls).toEqual([
+      'unsubAgent',
+      'sync',
+      'peers',
+      'leader',
+      'removeListener',
+      'signalLeaderMode(false)',
+      'leaderBridge.detach',
+    ]);
+    // signalLeaderMode receives `false`.
+    expect(leaderBridge.signalLeaderMode).toHaveBeenCalledWith(false);
+  });
+
+  it('stop() also clears intervals + host-command setters', async () => {
+    const { getConnectedFollowers } =
+      await import('../../webapp/src/shell/supplemental-commands/host-command.js');
+    const clearSpy = vi.spyOn(global, 'clearInterval');
+    const { handle } = startWithCapture();
+    handle.stop();
+    expect(clearSpy).toHaveBeenCalled();
+    expect(getConnectedFollowers()).toEqual([]); // setter cleared
+    clearSpy.mockRestore();
+  });
+
+  it('stop() is idempotent', () => {
+    const { handle } = startWithCapture();
+    handle.stop();
+    expect(() => handle.stop()).not.toThrow();
+  });
+});

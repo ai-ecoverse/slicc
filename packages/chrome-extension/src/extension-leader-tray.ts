@@ -80,6 +80,7 @@ export function startExtensionLeaderTray(
   let sync!: LeaderSyncManager;
   let trayLeader!: LeaderTrayManager;
   let trayPeers!: LeaderTrayPeerManager;
+  let stopped = false;
 
   const getActiveJid = (): string => bridge.getActiveScoopJid() ?? bridge.getConeJid() ?? '';
 
@@ -351,18 +352,33 @@ export function startExtensionLeaderTray(
 
   return {
     stop() {
-      // Unsubscribe the agent tap FIRST so no late events reach the
-      // now-stopping sync. Then clear intervals so no late refresh /
-      // broadcast tick runs after sync.stop(). Matches standalone
-      // teardown order at page-leader-tray.ts:316-323.
+      // Canonical teardown order — mirrors page-leader-tray.ts:316-323
+      // and extends it with extension-only steps:
+      //   1. unsubAgent — stop new agent events before sync stops
+      //   2. clearInterval — stop new broadcasts
+      //   3. sync.stop — close follower data channels
+      //   4. trayPeers.stop — close peer manager
+      //   5. trayLeader.stop — close tray WebSocket
+      //   6. setConnectedFollowersGetter(null) — clear host-command singleton
+      //   7. setTrayResetter(null) — clear host-command singleton
+      //   8. removeListener — drop the reset RPC listener
+      //   9. signalLeaderMode(false) — tell panel leader-mode is OFF
+      //      (BEFORE detach, so the panel sees the deactivation signal
+      //      before the hub listener goes away)
+      //  10. leaderBridge.detach — stop hub listener
+      // Idempotent via the `stopped` flag — re-entry is a no-op.
+      if (stopped) return;
+      stopped = true;
       unsubAgent();
       for (const id of intervals) clearInterval(id);
-      setConnectedFollowersGetter(null);
-      setTrayResetter(null);
-      chrome.runtime.onMessage.removeListener(resetListener);
       sync.stop();
       trayPeers.stop();
       trayLeader.stop();
+      setConnectedFollowersGetter(null);
+      setTrayResetter(null);
+      chrome.runtime.onMessage.removeListener(resetListener);
+      leaderBridge.signalLeaderMode(false);
+      leaderBridge.detach();
     },
     async reset() {
       return resetSequence();
