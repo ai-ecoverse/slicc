@@ -21,30 +21,22 @@ import type {
 } from './messages.js';
 import type { LeaderSyncManager } from '../../webapp/src/scoops/tray-leader-sync.js';
 import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
+import {
+  type PanelMessageSender,
+  type PanelMessageSubscriber,
+  type OffscreenMessageHub,
+  discriminateMsg,
+} from './bridge-transport.js';
 
-export interface PanelMessageSender {
-  send(envelope: { source: 'panel'; payload: unknown }): void;
-}
-
-export interface PanelMessageSubscriber {
-  onMessage(handler: (envelope: { source: string; payload: unknown }) => void): () => void;
-}
-
-export interface OffscreenMessageHub {
-  sendToPanel(envelope: { source: 'offscreen'; payload: unknown }): void;
-  onPanelMessage(handler: (envelope: { source: string; payload: unknown }) => void): () => void;
-}
+// Re-export the shared transport interfaces so existing consumers
+// (offscreen.ts, leader-sync-bridge.test.ts, etc.) keep importing
+// them from this module's stable public surface.
+export type { PanelMessageSender, PanelMessageSubscriber, OffscreenMessageHub };
 
 /** Narrow surface the leader adapter needs on OffscreenBridge — kept slim
  *  so tests can pass a hand-built stub. */
 export interface ActiveScoopSink {
   setActiveScoopJid(jid: string | null): void;
-}
-
-function discriminateMsg<T extends { type: string }>(payload: unknown, type: T['type']): T | null {
-  if (!payload || typeof payload !== 'object') return null;
-  if ((payload as { type?: unknown }).type !== type) return null;
-  return payload as T;
 }
 
 // -----------------------------------------------------------------------------
