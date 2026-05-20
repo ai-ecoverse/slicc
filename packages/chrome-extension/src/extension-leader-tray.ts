@@ -22,6 +22,8 @@ import type { BrowserAPI } from '../../webapp/src/cdp/browser-api.js';
 import type { VirtualFS } from '../../webapp/src/fs/virtual-fs.js';
 import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
 import type { ChatMessage, AgentEvent } from '../../webapp/src/ui/types.js';
+import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
+import type { SprinkleSummary } from '../../webapp/src/scoops/tray-sync-protocol.js';
 import type { Logger } from '../../webapp/src/core/logger.js';
 import { ThrottledErrorTracker } from '../../webapp/src/scoops/throttled-error-tracker.js';
 import {
@@ -60,17 +62,36 @@ export interface ExtensionLeaderTrayHandle {
   readonly leader: LeaderTrayManager;
 }
 
+/**
+ * Narrow buffer view this factory needs on the bridge's per-scoop
+ * message buffer. The full `BufferedChatMessage` shape lives in
+ * `offscreen-bridge.ts` as a private interface — exposing only `push`
+ * here keeps that internal shape encapsulated AND lets the bridge's
+ * `getBuffer` return its private `BufferedChatMessage[]` (structurally
+ * assignable to `BufferLike` because `BufferedChatMessage` is a
+ * supertype of what we push).
+ */
+export interface BufferLike {
+  push(msg: {
+    id: string;
+    role: 'user' | 'assistant';
+    content: string;
+    attachments?: MessageAttachment[];
+    timestamp: number;
+  }): void;
+}
+
 /** Narrow surface the factory needs on OffscreenBridge. */
 export interface ExtensionLeaderBridge {
   getConeJid(): string | null;
   getActiveScoopJid(): string | null;
   setActiveScoopJid(jid: string | null): void;
   getMessagesForJid(jid: string): ChatMessage[];
-  /** @internal `BufferedChatMessage[]` per `offscreen-bridge.ts` — kept
-   *  as `any[]` here because the buffered shape is private to the
-   *  bridge. Callers only mutate via `.push(...)` so the loose type is
-   *  acceptable. */
-  getBuffer(jid: string): any[];
+  /** @internal The bridge's per-scoop message buffer. Returns the
+   *  private `BufferedChatMessage[]` widened to `BufferLike` so this
+   *  module doesn't import the bridge's internal shape — callers only
+   *  push new entries, which is all `BufferLike` exposes. */
+  getBuffer(jid: string): BufferLike;
   persistScoop(jid: string): void;
   routeSprinkleLick(name: string, body: unknown, targetScoop?: string): Promise<void>;
   notifyPanelIncomingMessage(jid: string, msg: ChannelMessage): void;
@@ -124,7 +145,13 @@ export function startExtensionLeaderTray(
     getMessagesForScoop: (jid) => bridge.getMessagesForJid(jid),
     getScoopJid: () => getActiveJid(),
     getScoops: toScoopSummaries,
-    getSprinkles: () => leaderBridge.getSprinkles() as any,
+    // Commit to the canonical `SprinkleSummary[]` here. The bridge handle
+    // returns `SprinkleSummaryEnvelope[]` (a structural mirror) because
+    // `messages.ts` cannot import from `tray-sync-protocol.ts` under the
+    // worker tsconfig; the two shapes are equivalent at the field level,
+    // and the leader-sync factory is the right boundary to commit to
+    // the canonical type the rest of the pipeline expects.
+    getSprinkles: () => leaderBridge.getSprinkles() as SprinkleSummary[],
     readSprinkleContent: async (name) => {
       const path = leaderBridge.resolveSprinklePath(name);
       if (!path || !sharedFs) return null;
@@ -276,8 +303,8 @@ export function startExtensionLeaderTray(
 
   const peerFactory = options._peerManagerFactory ?? ((cfg) => new LeaderTrayPeerManager(cfg));
   trayPeers = peerFactory({
-    sendControlMessage: (m: any) => trayLeader.sendControlMessage(m),
-    onPeerConnected: (peer: any, channel: any) => {
+    sendControlMessage: (m) => trayLeader.sendControlMessage(m),
+    onPeerConnected: (peer, channel) => {
       options.log.info('Extension tray follower connected', {
         bootstrapId: peer.bootstrapId,
         runtime: peer.runtime,
@@ -287,7 +314,7 @@ export function startExtensionLeaderTray(
         connectedAt: peer.connectedAt ?? undefined,
       });
     },
-    onPeerDisconnected: (bootstrapId: string, reason: string) =>
+    onPeerDisconnected: (bootstrapId, reason) =>
       options.log.info('Extension tray follower disconnected', { bootstrapId, reason }),
   });
 
@@ -296,7 +323,7 @@ export function startExtensionLeaderTray(
     workerBaseUrl,
     runtime: 'slicc-extension-offscreen',
     webSocketFactory: (url: string) => new ServiceWorkerLeaderTraySocket(url),
-    onControlMessage: (message: any) => {
+    onControlMessage: (message) => {
       if (message.type === 'webhook.event') {
         orchestrator.handleWebhookEvent(message.webhookId, message.headers, message.body);
         return;
@@ -307,11 +334,11 @@ export function startExtensionLeaderTray(
         });
       });
     },
-    onReconnecting: (attempt: number, lastError: any) =>
+    onReconnecting: (attempt, lastError) =>
       options.log.info('Extension leader tray reconnecting', { attempt, lastError }),
-    onReconnected: (session: any) =>
+    onReconnected: (session) =>
       options.log.info('Extension leader tray reconnected', { trayId: session.trayId }),
-    onReconnectGaveUp: (lastError: any, attempts: number) =>
+    onReconnectGaveUp: (lastError, attempts) =>
       options.log.error('Extension leader tray reconnect gave up', { lastError, attempts }),
   });
 
