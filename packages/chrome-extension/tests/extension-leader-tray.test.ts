@@ -459,3 +459,86 @@ describe('startExtensionLeaderTray webhook routing', () => {
     handle.stop();
   });
 });
+
+describe('startExtensionLeaderTray agent-event tap', () => {
+  function startWithCapture(
+    overrides: Partial<Parameters<typeof startExtensionLeaderTray>[0]> = {}
+  ) {
+    const orchestrator =
+      overrides.orchestrator ??
+      makeMockOrchestrator([{ jid: 'cone-1', name: 'cone', isCone: true, folder: 'cone' }]);
+    const bridge = overrides.bridge ?? makeMockBridge({ coneJid: 'cone-1' });
+    const handle = startExtensionLeaderTray({
+      workerBaseUrl: 'wss://test',
+      bridge: bridge as any,
+      orchestrator: orchestrator as any,
+      sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
+      browser: overrides.browser ?? makeStubBrowser(),
+      log: console as any,
+      leaderBridge:
+        overrides.leaderBridge ??
+        ({
+          getSprinkles: () => [],
+          resolveSprinklePath: () => null,
+          signalLeaderMode: vi.fn(),
+          detach: vi.fn(),
+        } as any),
+      _trayLeaderFactory: () =>
+        ({
+          start: vi.fn().mockResolvedValue({}),
+          stop: vi.fn(),
+          clearSession: vi.fn().mockResolvedValue(undefined),
+          sendControlMessage: vi.fn(),
+        }) as any,
+      _peerManagerFactory: () =>
+        ({
+          stop: vi.fn(),
+          getPeers: vi.fn(() => []),
+          handleControlMessage: vi.fn().mockResolvedValue(undefined),
+        }) as any,
+      ...overrides,
+    });
+    return { handle, orchestrator, bridge };
+  }
+
+  it('agent event for active scoop forwards to sync.broadcastEvent', () => {
+    const bridge = makeMockBridge({ coneJid: 'cone-1' });
+    let agentHandler!: (scoopJid: string, event: any) => void;
+    bridge.onAgentEvent.mockImplementation((h: any) => {
+      agentHandler = h;
+      return () => {};
+    });
+    const { handle } = startWithCapture({ bridge: bridge as any });
+    const broadcastSpy = vi.spyOn(handle.sync, 'broadcastEvent').mockImplementation(() => {});
+    agentHandler('cone-1', { type: 'content_delta', messageId: 'm', text: 'hi' });
+    expect(broadcastSpy).toHaveBeenCalledWith({
+      type: 'content_delta',
+      messageId: 'm',
+      text: 'hi',
+    });
+    handle.stop();
+  });
+
+  it('agent event for a background scoop is dropped', () => {
+    const bridge = makeMockBridge({ coneJid: 'cone-1' });
+    let agentHandler!: (scoopJid: string, event: any) => void;
+    bridge.onAgentEvent.mockImplementation((h: any) => {
+      agentHandler = h;
+      return () => {};
+    });
+    const { handle } = startWithCapture({ bridge: bridge as any });
+    const broadcastSpy = vi.spyOn(handle.sync, 'broadcastEvent').mockImplementation(() => {});
+    agentHandler('scoop-other', { type: 'content_delta', messageId: 'm', text: 'hi' });
+    expect(broadcastSpy).not.toHaveBeenCalled();
+    handle.stop();
+  });
+
+  it('teardown unsubscribes the tap', () => {
+    const bridge = makeMockBridge({ coneJid: 'cone-1' });
+    const unsubAgent = vi.fn();
+    bridge.onAgentEvent.mockImplementation(() => unsubAgent);
+    const { handle } = startWithCapture({ bridge: bridge as any });
+    handle.stop();
+    expect(unsubAgent).toHaveBeenCalled();
+  });
+});

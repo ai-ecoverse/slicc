@@ -162,6 +162,18 @@ export function startExtensionLeaderTray(
   options._onSyncOptions?.(syncOptions);
   browser.setTrayTargetProvider?.(sync);
 
+  // LeaderSyncManager.broadcastEvent (tray-leader-sync.ts:300-304) tags the
+  // wire payload with options.getScoopJid() (the active scoop) and ignores
+  // the event's own scoopJid. Without filtering at the tap, a background
+  // scoop's stream would be broadcast tagged as the active scoop — wrong
+  // content + wrong scope. Filter `eventScoopJid !== getActiveJid()` here so
+  // only events from the currently-active scoop are forwarded, matching the
+  // standalone path's implicit filter in offscreen-client.ts:496.
+  const unsubAgent = bridge.onAgentEvent((eventScoopJid: string, event: any) => {
+    if (eventScoopJid !== getActiveJid()) return;
+    sync.broadcastEvent(event);
+  });
+
   const peerFactory = options._peerManagerFactory ?? ((cfg) => new LeaderTrayPeerManager(cfg));
   trayPeers = peerFactory({
     sendControlMessage: (m: any) => trayLeader.sendControlMessage(m),
@@ -205,6 +217,10 @@ export function startExtensionLeaderTray(
 
   return {
     stop() {
+      // Unsubscribe the agent tap FIRST so no late events reach the
+      // now-stopping sync. Matches standalone teardown order at
+      // page-leader-tray.ts:316-323.
+      unsubAgent();
       sync.stop();
       trayPeers.stop();
       trayLeader.stop();
