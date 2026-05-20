@@ -1276,6 +1276,30 @@ describe('OffscreenBridge.onAgentEvent tap', () => {
     callbacks.onResponse?.('scoop-1', 'hello', true);
     expect(events).toEqual([]);
   });
+
+  it('turn_end clears the fan-out messageId gating state', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    // Prime the fan-out gating state with a text_delta envelope.
+    callbacks.onResponse?.('scoop-1', 'hello', true);
+    // Subscribe AFTER the priming so the captured events array only
+    // sees what happens after the turn_end + next text_delta.
+    const { events } = captureEvents(bridge);
+    // Simulate the bridge receiving a turn_end envelope. createCallbacks
+    // doesn't emit turn_end (only response_done), so drive it via
+    // bridge.emit directly — same pattern as the wire would deliver it.
+    (bridge as any).emit({
+      type: 'agent-event',
+      scoopJid: 'scoop-1',
+      eventType: 'turn_end',
+    });
+    // No event should be emitted to listeners (turn_end synthesis is deferred).
+    expect(events).toEqual([]);
+    // But the state should be cleared — next text_delta should re-emit
+    // message_start before content_delta.
+    callbacks.onResponse?.('scoop-1', 'next', true);
+    expect(events.map((e) => e.event.type)).toEqual(['message_start', 'content_delta']);
+  });
 });
 
 describe('OffscreenBridge.notifyPanelIncomingMessage', () => {

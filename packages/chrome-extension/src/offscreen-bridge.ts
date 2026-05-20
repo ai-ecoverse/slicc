@@ -614,6 +614,14 @@ export class OffscreenBridge implements KernelFacade {
         // standalone wire diff (open question #1) before adding it.
         break;
       }
+      case 'turn_end': {
+        // No emit — turn_end synthesis is deferred (see comment above +
+        // spec open question #1). But the gating-state still needs
+        // cleanup, mirroring the panel-side reference at
+        // offscreen-client.ts:615.
+        this.fanOutMessageId.delete(scoopJid);
+        break;
+      }
     }
 
     for (const event of events) {
@@ -723,6 +731,7 @@ export class OffscreenBridge implements KernelFacade {
     }));
     this.messageBuffers.set(cone.jid, buf);
     this.currentMessageId.delete(cone.jid);
+    this.fanOutMessageId.delete(cone.jid);
     if (this.sessionStore) {
       const sessionId = cone.isCone ? 'session-cone' : `session-${cone.folder}`;
       this.sessionStore.saveMessages(sessionId, messages).catch((err) => {
@@ -880,6 +889,7 @@ export class OffscreenBridge implements KernelFacade {
         }));
         this.messageBuffers.set(scoopJid, buf);
         this.currentMessageId.delete(scoopJid);
+        this.fanOutMessageId.delete(scoopJid);
         // Persist the rebuilt buffer back to the UI session store so
         // a subsequent panel reload (without further agent activity)
         // sees the canonical history instead of whatever truncated
@@ -908,6 +918,7 @@ export class OffscreenBridge implements KernelFacade {
         if (messages.length > 0) {
           this.messageBuffers.set(scoopJid, messages as unknown as BufferedChatMessage[]);
           this.currentMessageId.delete(scoopJid);
+          this.fanOutMessageId.delete(scoopJid);
           this.emit({
             type: 'scoop-messages-replaced',
             scoopJid,
@@ -1092,6 +1103,7 @@ export class OffscreenBridge implements KernelFacade {
         await this.orchestrator.unregisterScoop(msg.scoopJid);
         this.messageBuffers.delete(msg.scoopJid);
         this.currentMessageId.delete(msg.scoopJid);
+        this.fanOutMessageId.delete(msg.scoopJid);
         this.scoopStatuses.delete(msg.scoopJid);
         if (droppedScoop && this.sessionStore) {
           const sessionId = droppedScoop.isCone ? 'session-cone' : `session-${droppedScoop.folder}`;
@@ -1146,6 +1158,7 @@ export class OffscreenBridge implements KernelFacade {
         if (coneJid) {
           this.messageBuffers.delete(coneJid);
           this.currentMessageId.delete(coneJid);
+          this.fanOutMessageId.delete(coneJid);
         }
         // Acknowledge so the panel knows the clear completed before it
         // calls `location.reload()` — important in extension mode where
