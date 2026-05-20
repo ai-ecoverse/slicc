@@ -1,6 +1,38 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { startExtensionLeaderTray } from '../src/extension-leader-tray.js';
 import type { LeaderSyncManagerOptions } from '../../webapp/src/scoops/tray-leader-sync.js';
+
+const messageListeners: Array<
+  (message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void
+> = [];
+const sentMessages: unknown[] = [];
+const mockChrome = {
+  runtime: {
+    id: 'test-extension-id',
+    lastError: undefined as unknown,
+    sendMessage: vi.fn(async (msg: unknown) => {
+      sentMessages.push(msg);
+    }),
+    onMessage: {
+      addListener: vi.fn((cb: any) => {
+        messageListeners.push(cb);
+      }),
+      removeListener: vi.fn((cb: any) => {
+        const idx = messageListeners.indexOf(cb);
+        if (idx >= 0) messageListeners.splice(idx, 1);
+      }),
+    },
+  },
+};
+(globalThis as any).chrome = mockChrome;
+
+beforeEach(() => {
+  messageListeners.length = 0;
+  sentMessages.length = 0;
+  mockChrome.runtime.sendMessage.mockClear();
+  mockChrome.runtime.onMessage.addListener.mockClear();
+  mockChrome.runtime.onMessage.removeListener.mockClear();
+});
 
 function makeMockBridge(opts: { coneJid?: string; messages?: Record<string, any[]> } = {}) {
   const messages = opts.messages ?? {};
@@ -619,5 +651,132 @@ describe('startExtensionLeaderTray intervals', () => {
     const scoopsSpy = vi.spyOn(handle.sync, 'broadcastScoopsList').mockImplementation(() => {});
     await new Promise((r) => setTimeout(r, 80));
     expect(scoopsSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('startExtensionLeaderTray host-command + reset', () => {
+  function startWithCapture(
+    overrides: Partial<Parameters<typeof startExtensionLeaderTray>[0]> = {}
+  ) {
+    let capturedOptions!: LeaderSyncManagerOptions;
+    const orchestrator =
+      overrides.orchestrator ??
+      makeMockOrchestrator([{ jid: 'cone-1', name: 'cone', isCone: true, folder: 'cone' }]);
+    const bridge = overrides.bridge ?? makeMockBridge({ coneJid: 'cone-1' });
+    const leaderStub = {
+      start: vi.fn().mockResolvedValue({}),
+      stop: vi.fn(),
+      clearSession: vi.fn().mockResolvedValue(undefined),
+      sendControlMessage: vi.fn(),
+    };
+    const peersStub = {
+      stop: vi.fn(),
+      getPeers: vi.fn(() => []),
+      handleControlMessage: vi.fn().mockResolvedValue(undefined),
+    };
+    const handle = startExtensionLeaderTray({
+      workerBaseUrl: 'wss://test',
+      bridge: bridge as any,
+      orchestrator: orchestrator as any,
+      sharedFs: overrides.sharedFs ?? (makeMockSharedFs() as any),
+      browser: overrides.browser ?? makeStubBrowser(),
+      log: console as any,
+      leaderBridge:
+        overrides.leaderBridge ??
+        ({
+          getSprinkles: () => [],
+          resolveSprinklePath: () => null,
+          signalLeaderMode: vi.fn(),
+          detach: vi.fn(),
+        } as any),
+      _trayLeaderFactory: () => leaderStub as any,
+      _peerManagerFactory: () => peersStub as any,
+      _onSyncOptions: (opts) => {
+        capturedOptions = opts;
+      },
+      ...overrides,
+    });
+    return {
+      handle: handle as any,
+      options: capturedOptions,
+      orchestrator,
+      bridge,
+    };
+  }
+
+  it('setConnectedFollowersGetter exposes the peer list', async () => {
+    const { getConnectedFollowers } =
+      await import('../../webapp/src/shell/supplemental-commands/host-command.js');
+    const { handle } = startWithCapture();
+    handle.peers.getPeers = vi.fn(
+      () =>
+        [
+          {
+            bootstrapId: 'b1',
+            runtime: 'slicc-standalone',
+            connectedAt: '2026-05-20T00:00:00Z',
+          },
+        ] as any
+    );
+    const followers = getConnectedFollowers();
+    expect(followers).toEqual([
+      { runtimeId: 'b1', runtime: 'slicc-standalone', connectedAt: '2026-05-20T00:00:00Z' },
+    ]);
+    handle.stop();
+  });
+
+  it('leader-tray-reset envelope triggers reset + replies with status', async () => {
+    const { handle } = startWithCapture();
+    sentMessages.length = 0;
+    // Find the reset listener — it's installed in the constructor flow.
+    const listener = messageListeners[messageListeners.length - 1]!;
+    listener(
+      { source: 'panel', payload: { type: 'leader-tray-reset', requestId: 'r-1' } },
+      {},
+      () => {}
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    const reply = sentMessages.find(
+      (m: any) => m?.payload?.type === 'leader-tray-reset-response'
+    ) as any;
+    expect(reply).toBeDefined();
+    expect(reply.payload).toMatchObject({ requestId: 'r-1', ok: true });
+    expect(handle.leader.clearSession).toHaveBeenCalled();
+    // Factory doesn't call start() on boot — only reset's start fires.
+    expect(handle.leader.start).toHaveBeenCalledTimes(1);
+    handle.stop();
+  });
+
+  it('onFollowerCountChanged writes slicc.leaderTrayFollowers to localStorage', () => {
+    const setItem = vi.fn();
+    const originalWindow = (globalThis as any).window;
+    (globalThis as any).window = { localStorage: { setItem } };
+    try {
+      const { handle, options } = startWithCapture();
+      handle.peers.getPeers = vi.fn(
+        () =>
+          [
+            {
+              bootstrapId: 'b1',
+              runtime: 'slicc-standalone',
+              connectedAt: '2026-05-20T00:00:00Z',
+            },
+          ] as any
+      );
+      options.onFollowerCountChanged?.(1);
+      expect(setItem).toHaveBeenCalledWith(
+        'slicc.leaderTrayFollowers',
+        JSON.stringify([
+          { runtimeId: 'b1', runtime: 'slicc-standalone', connectedAt: '2026-05-20T00:00:00Z' },
+        ])
+      );
+      handle.stop();
+    } finally {
+      if (originalWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = originalWindow;
+      }
+    }
   });
 });

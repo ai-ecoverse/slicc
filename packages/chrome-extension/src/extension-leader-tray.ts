@@ -12,15 +12,23 @@
 import { LeaderSyncManager } from '../../webapp/src/scoops/tray-leader-sync.js';
 import type { LeaderSyncManagerOptions } from '../../webapp/src/scoops/tray-leader-sync.js';
 import { LeaderTrayManager } from '../../webapp/src/scoops/tray-leader.js';
-import type { LeaderTrayRuntimeStatus } from '../../webapp/src/scoops/tray-leader.js';
+import {
+  getLeaderTrayRuntimeStatus,
+  type LeaderTrayRuntimeStatus,
+} from '../../webapp/src/scoops/tray-leader.js';
 import { LeaderTrayPeerManager } from '../../webapp/src/scoops/tray-webrtc.js';
 import type { Orchestrator } from '../../webapp/src/scoops/orchestrator.js';
 import type { BrowserAPI } from '../../webapp/src/cdp/browser-api.js';
 import type { VirtualFS } from '../../webapp/src/fs/virtual-fs.js';
 import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
 import { ThrottledErrorTracker } from '../../webapp/src/scoops/throttled-error-tracker.js';
+import {
+  setConnectedFollowersGetter,
+  setTrayResetter,
+} from '../../webapp/src/shell/supplemental-commands/host-command.js';
 import type { OffscreenLeaderSyncBridgeHandle } from './leader-sync-bridge.js';
 import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
+import type { LeaderTrayResetRequestMsg, LeaderTrayResetResponseMsg } from './messages.js';
 
 export interface ExtensionLeaderTrayHandle {
   stop(): void;
@@ -264,6 +272,83 @@ export function startExtensionLeaderTray(
       options.log.warn('Extension leader tray reconnect gave up', { lastError, attempts }),
   });
 
+  // Panel terminal `host` reads from host-command.ts module singletons.
+  // The host-command module is shared by panel and offscreen so wiring
+  // the offscreen-side getter here lets the panel terminal's `host`
+  // command surface the live follower list. (`host reset` cross-context
+  // routing goes via the chrome.runtime envelope below, NOT via
+  // setTrayResetter — but we still populate it for offscreen-local
+  // shell consumers.)
+  setConnectedFollowersGetter(() =>
+    trayPeers.getPeers().map((p) => ({
+      runtimeId: p.bootstrapId,
+      runtime: p.runtime,
+      connectedAt: p.connectedAt ?? undefined,
+    }))
+  );
+
+  const resetSequence = async (): Promise<LeaderTrayRuntimeStatus> => {
+    sync.stop();
+    trayPeers.stop();
+    trayLeader.stop();
+    await trayLeader.clearSession();
+    await trayLeader.start();
+    return getLeaderTrayRuntimeStatus();
+  };
+  setTrayResetter(resetSequence);
+
+  // onFollowerCountChanged — parity with standalone main.ts:2465-2476.
+  // LeaderSyncManager stores options by reference (tray-leader-sync.ts:155),
+  // so assigning after construction mutates the live options.
+  syncOptions.onFollowerCountChanged = (_count: number) => {
+    const peers = trayPeers.getPeers().map((p) => ({
+      runtimeId: p.bootstrapId,
+      runtime: p.runtime,
+      connectedAt: p.connectedAt ?? undefined,
+    }));
+    try {
+      window.localStorage.setItem('slicc.leaderTrayFollowers', JSON.stringify(peers));
+    } catch (err) {
+      options.log.warn('Failed to persist leaderTrayFollowers', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  // leader-tray-reset RPC listener. Matches the envelope shape from
+  // PanelLeaderSyncProxy.resetTray (Task 10): `{ source: 'panel',
+  // payload: { type: 'leader-tray-reset', requestId } }`. Replies with
+  // `{ source: 'offscreen', payload: { type: 'leader-tray-reset-response', ... } }`.
+  const resetListener = (message: unknown): boolean => {
+    if (typeof message !== 'object' || message === null) return false;
+    const env = message as { source?: string; payload?: { type?: string } };
+    if (env.source !== 'panel') return false;
+    if (env.payload?.type !== 'leader-tray-reset') return false;
+    const req = env.payload as LeaderTrayResetRequestMsg;
+    void (async () => {
+      try {
+        const status = await resetSequence();
+        const reply: LeaderTrayResetResponseMsg = {
+          type: 'leader-tray-reset-response',
+          requestId: req.requestId,
+          ok: true,
+          status,
+        };
+        chrome.runtime.sendMessage({ source: 'offscreen', payload: reply }).catch(() => {});
+      } catch (err) {
+        const reply: LeaderTrayResetResponseMsg = {
+          type: 'leader-tray-reset-response',
+          requestId: req.requestId,
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+        chrome.runtime.sendMessage({ source: 'offscreen', payload: reply }).catch(() => {});
+      }
+    })();
+    return false;
+  };
+  chrome.runtime.onMessage.addListener(resetListener);
+
   return {
     stop() {
       // Unsubscribe the agent tap FIRST so no late events reach the
@@ -272,18 +357,15 @@ export function startExtensionLeaderTray(
       // teardown order at page-leader-tray.ts:316-323.
       unsubAgent();
       for (const id of intervals) clearInterval(id);
+      setConnectedFollowersGetter(null);
+      setTrayResetter(null);
+      chrome.runtime.onMessage.removeListener(resetListener);
       sync.stop();
       trayPeers.stop();
       trayLeader.stop();
     },
     async reset() {
-      sync.stop();
-      trayPeers.stop();
-      trayLeader.stop();
-      await trayLeader.clearSession();
-      await trayLeader.start();
-      const { getLeaderTrayRuntimeStatus } = await import('../../webapp/src/scoops/tray-leader.js');
-      return getLeaderTrayRuntimeStatus();
+      return resetSequence();
     },
     sync,
     peers: trayPeers,
