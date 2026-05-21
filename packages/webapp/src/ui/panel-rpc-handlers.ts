@@ -546,15 +546,22 @@ async function getStreamWithFallback(spec: StreamSpec): Promise<MediaStream> {
 // ── OAuth popup (page-side) ─────────────────────────────────────────
 
 /**
- * Open an OAuth popup and wait for the /auth/callback page to
- * postMessage the redirect URL back. Mirrors `launchOAuthCli` from
- * `oauth-service.ts` but runs inside a panel-RPC handler so worker-
- * side commands (e.g. `oauth-token adobe`, `silentRenewToken`) can
- * reach `window.open` through the bridge.
+ * Open an OAuth popup and wait for the /auth/callback page to deliver
+ * the redirect URL back. Mirrors `launchOAuthCli` from
+ * `oauth-service.ts` but runs inside a panel-RPC handler so worker-side
+ * commands (e.g. `oauth-token adobe`, `silentRenewToken`) can reach
+ * `window.open` through the bridge.
  *
- * Electron-overlay mode: window.opener is null (system browser opens),
- * so postMessage doesn't work. The callback POSTs to /api/oauth-result
- * and we poll until we get a result.
+ * Two parallel signals race to deliver the redirect URL:
+ *   1. postMessage from the /auth/callback page back to this window
+ *      (works when window.opener is intact).
+ *   2. Polling /api/oauth-result on the backing server (works even when
+ *      window.opener is severed — e.g. by a COOP `same-origin` provider
+ *      such as GitHub/Google/Microsoft, or in Electron overlay mode
+ *      where window.open spawns the system browser).
+ *
+ * Whichever signal arrives first wins; the other is cancelled in
+ * cleanup(). The 120 s timeout still applies.
  */
 function openOAuthPopup(authorizeUrl: string): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
@@ -592,29 +599,33 @@ function openOAuthPopup(authorizeUrl: string): Promise<string | null> {
 
     window.addEventListener('message', handler);
 
-    const isElectronOverlay =
-      location.pathname.startsWith('/electron') ||
-      new URLSearchParams(location.search).get('runtime') === 'electron-overlay';
-    if (isElectronOverlay) {
-      pollTimer = setInterval(async () => {
+    // Always poll the server for the OAuth result as a fallback to
+    // postMessage. The callback page POSTs the result to /api/oauth-result
+    // when window.opener is null; both node-server and swift-server stash
+    // it for GET retrieval. Whichever signal arrives first wins.
+    pollTimer = setInterval(async () => {
+      if (resolved) return;
+      try {
+        const res = await fetch('/api/oauth-result');
+        if (res.status === 204) return;
+        if (!res.ok) return; // server hiccup — keep polling
+        const data = (await res.json()) as { redirectUrl?: string; error?: string };
         if (resolved) return;
-        try {
-          const res = await fetch('/api/oauth-result');
-          if (res.status === 204) return;
-          const data = (await res.json()) as { redirectUrl?: string; error?: string };
-          if (resolved) return;
-          cleanup();
-          if (data.error) {
-            console.error('[panel-rpc:oauth-popup] Server relay OAuth error:', data.error);
-            resolve(null);
-            return;
-          }
-          resolve(data.redirectUrl ?? null);
-        } catch {
-          /* keep polling */
+        cleanup();
+        if (data.error) {
+          console.error('[panel-rpc:oauth-popup] Server relay OAuth error:', data.error);
+          resolve(null);
+          return;
         }
-      }, 1000);
-    }
+        resolve(data.redirectUrl ?? null);
+      } catch (err) {
+        // Network error or JSON parse failure — log and keep polling
+        console.warn(
+          '[panel-rpc:oauth-popup] Poll failed:',
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }, 1000);
 
     const timer = setTimeout(() => {
       cleanup();
