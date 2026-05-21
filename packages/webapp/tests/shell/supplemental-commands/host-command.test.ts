@@ -536,6 +536,328 @@ describe('host command', () => {
       expect(result.stderr).toContain('not available in this environment');
     });
   });
+
+  describe('host leave', () => {
+    it('calls leaveTray with workerBaseUrl=null and reports follower disconnect', async () => {
+      const calls: Array<{ workerBaseUrl: string | null }> = [];
+      const cmd = createHostCommand({
+        getStatus: () => ({ state: 'inactive', session: null, error: null }),
+        getFollowerStatus: () =>
+          followerStatus({
+            state: 'connected',
+            joinUrl: 'https://tray.example.com/join/abc',
+          }),
+        leaveTray: async (opts) => {
+          calls.push({ workerBaseUrl: opts.workerBaseUrl });
+          return { kind: 'left', previousMode: 'follower' };
+        },
+      });
+      const result = await cmd.execute(['leave'], {} as never);
+      expect(calls).toEqual([{ workerBaseUrl: null }]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Disconnected from leader.');
+      expect(result.stdout).toContain('Tray runtime is now dormant.');
+    });
+
+    it('calls leaveTray with workerBaseUrl and reports the new leader URL', async () => {
+      const calls: Array<{ workerBaseUrl: string | null }> = [];
+      const cmd = createHostCommand({
+        getStatus: () => ({ state: 'inactive', session: null, error: null }),
+        getFollowerStatus: () =>
+          followerStatus({
+            state: 'connected',
+            joinUrl: 'https://tray.example.com/join/abc',
+          }),
+        leaveTray: async (opts) => {
+          calls.push({ workerBaseUrl: opts.workerBaseUrl });
+          return {
+            kind: 'switched',
+            previousMode: 'follower',
+            workerBaseUrl: 'https://leader.example.com',
+          };
+        },
+      });
+      const result = await cmd.execute(
+        ['leave', '--leader', 'https://leader.example.com'],
+        {} as never
+      );
+      expect(calls).toEqual([{ workerBaseUrl: 'https://leader.example.com' }]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Disconnected from leader.');
+      expect(result.stdout).toContain('Now leader on https://leader.example.com');
+    });
+
+    it('reports "Stopped leader." when previous mode was leader', async () => {
+      const cmd = createHostCommand({
+        getStatus: () => ({
+          state: 'leader',
+          session: {
+            workerBaseUrl: 'https://x',
+            trayId: 't',
+            createdAt: 'now',
+            controllerId: 'c',
+            controllerUrl: 'https://x/c',
+            joinUrl: 'https://x/join/t',
+            webhookUrl: 'https://x/w/t',
+            runtime: 'slicc-standalone',
+          },
+          error: null,
+        }),
+        getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+        leaveTray: async () => ({ kind: 'left', previousMode: 'leader' }),
+      });
+      const result = await cmd.execute(['leave'], {} as never);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Stopped leader.');
+    });
+
+    it('reports "Stopped leader. Now leader on …" on a leader→leader role switch', async () => {
+      // The sixth of six `formatLeaveResult` branches — closes the
+      // discriminated-union exhaustiveness table.
+      const cmd = createHostCommand({
+        getStatus: () => ({
+          state: 'leader',
+          session: {
+            workerBaseUrl: 'https://old',
+            trayId: 't',
+            createdAt: 'now',
+            controllerId: 'c',
+            controllerUrl: 'https://old/c',
+            joinUrl: 'https://old/join/t',
+            webhookUrl: 'https://old/w/t',
+            runtime: 'slicc-standalone',
+          },
+          error: null,
+        }),
+        getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+        leaveTray: async () => ({
+          kind: 'switched',
+          previousMode: 'leader',
+          workerBaseUrl: 'https://new.example',
+        }),
+      });
+      const result = await cmd.execute(['leave', '--leader', 'https://new.example'], {} as never);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Stopped leader. Now leader on https://new.example');
+    });
+
+    it('exits 0 with informational stderr when nothing is active and no leader requested', async () => {
+      const cmd = createHostCommand({
+        getStatus: () => ({ state: 'inactive', session: null, error: null }),
+        getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+        leaveTray: async () => {
+          throw new Error('should not be called');
+        },
+      });
+      const result = await cmd.execute(['leave'], {} as never);
+      // Exit 0 so `host leave || something` doesn't trip on a dormant
+      // runtime; stderr keeps the noop visible to interactive users.
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain('no active tray session');
+      expect(result.stdout).toBe('');
+    });
+
+    it('still runs when nothing is active but --leader is provided (role-create)', async () => {
+      const calls: Array<{ workerBaseUrl: string | null }> = [];
+      const cmd = createHostCommand({
+        getStatus: () => ({ state: 'inactive', session: null, error: null }),
+        getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+        leaveTray: async (opts) => {
+          calls.push({ workerBaseUrl: opts.workerBaseUrl });
+          return {
+            kind: 'switched',
+            previousMode: 'inactive',
+            workerBaseUrl: 'https://leader.example.com',
+          };
+        },
+      });
+      const result = await cmd.execute(
+        ['leave', '--leader', 'https://leader.example.com'],
+        {} as never
+      );
+      expect(calls).toEqual([{ workerBaseUrl: 'https://leader.example.com' }]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Now leader on https://leader.example.com');
+    });
+
+    it('rejects --leader without a URL argument', async () => {
+      const cmd = createHostCommand({
+        leaveTray: async () => ({ kind: 'noop' }),
+      });
+      const result = await cmd.execute(['leave', '--leader'], {} as never);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('--leader requires a worker base URL');
+    });
+
+    it('rejects an invalid worker base URL', async () => {
+      const cmd = createHostCommand({
+        leaveTray: async () => ({ kind: 'noop' }),
+      });
+      const result = await cmd.execute(['leave', '--leader', 'not a url'], {} as never);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('invalid worker base URL');
+    });
+
+    it('rejects unknown subarguments', async () => {
+      const cmd = createHostCommand({
+        leaveTray: async () => ({ kind: 'noop' }),
+      });
+      const result = await cmd.execute(['leave', 'foo'], {} as never);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('unexpected argument: foo');
+    });
+
+    it('surfaces errors from the leave implementation (leave-entirely path)', async () => {
+      const cmd = createHostCommand({
+        getStatus: () => ({ state: 'inactive', session: null, error: null }),
+        getFollowerStatus: () =>
+          followerStatus({ state: 'connected', joinUrl: 'https://x/join/abc' }),
+        leaveTray: async () => {
+          throw new Error('stop refused');
+        },
+      });
+      const result = await cmd.execute(['leave'], {} as never);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('stop refused');
+    });
+
+    it('distinguishes "left but failed to become leader" on the --leader failure path', async () => {
+      // Mirrors the page-side contract: `performTrayLeave` only throws
+      // when `startLeader` rejects, at which point the previous tray is
+      // already stopped + storage rolled back. The shell formatter
+      // surfaces this distinct half-failure to the user.
+      const cmd = createHostCommand({
+        getStatus: () => ({ state: 'inactive', session: null, error: null }),
+        getFollowerStatus: () =>
+          followerStatus({ state: 'connected', joinUrl: 'https://x/join/abc' }),
+        leaveTray: async () => {
+          throw new Error('worker unreachable');
+        },
+      });
+      const result = await cmd.execute(
+        ['leave', '--leader', 'https://leader.example.com'],
+        {} as never
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('left the tray');
+      expect(result.stderr).toContain('failed to become leader on https://leader.example.com');
+      expect(result.stderr).toContain('worker unreachable');
+      expect(result.stderr).toContain('Tray runtime is now dormant.');
+    });
+
+    it('renders kind:"noop" with a clear "No active tray session" message', async () => {
+      // Direct check of the formatter — reachable from the role-create
+      // branch when the page is also dormant and the inactive→leader
+      // switch went through.
+      const cmd = createHostCommand({
+        getStatus: () => ({ state: 'inactive', session: null, error: null }),
+        getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+        leaveTray: async () => ({ kind: 'noop' }),
+      });
+      const result = await cmd.execute(
+        ['leave', '--leader', 'https://leader.example.com'],
+        {} as never
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('No active tray session');
+    });
+
+    it('help text mentions the leave subcommand', async () => {
+      const result = await createHostCommand().execute(['--help'], {} as never);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('leave');
+      expect(result.stdout).toContain('--leader');
+    });
+  });
+
+  describe('host leave — panel-RPC bridge (worker path)', () => {
+    // Mirrors the `host reset` panel-RPC tests. When the shell runs in
+    // the kernel worker (no `window`, no `chrome.runtime`), the default
+    // leaver routes through `globalThis.__slicc_panelRpc`.
+
+    afterEach(() => {
+      delete (globalThis as Record<string, unknown>).__slicc_panelRpc;
+    });
+
+    it('routes host leave through the panel-RPC client', async () => {
+      const calls: Array<{ op: string; payload: unknown }> = [];
+      (globalThis as Record<string, unknown>).__slicc_panelRpc = {
+        call: async (op: string, payload: unknown) => {
+          calls.push({ op, payload });
+          return { kind: 'left', previousMode: 'leader' };
+        },
+        dispose: () => {},
+      };
+
+      // No options.leaveTray override → buildDefaultLeaver runs → in a
+      // Node test environment with no `chrome.runtime`, `isNodeRuntime()
+      // && !isExtensionRuntime()` is true → panel-RPC path engaged.
+      const cmd = createHostCommand({
+        getStatus: () => ({
+          state: 'leader',
+          session: {
+            workerBaseUrl: 'https://x',
+            trayId: 't',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            controllerId: 'c',
+            controllerUrl: 'https://x/c',
+            joinUrl: 'https://x/join/t',
+            webhookUrl: 'https://x/w/t',
+            runtime: 'slicc-standalone',
+          },
+          error: null,
+        }),
+        getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+        getFollowers: () => [],
+      });
+
+      const result = await cmd.execute(['leave'], {} as never);
+      expect(calls).toHaveLength(1);
+      expect(calls[0].op).toBe('tray-leave');
+      // Payload includes a generated requestId for failure correlation.
+      const payload = calls[0].payload as { workerBaseUrl: string | null; requestId?: string };
+      expect(payload.workerBaseUrl).toBeNull();
+      expect(payload.requestId).toMatch(/^host-leave-/);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Stopped leader.');
+    });
+
+    it('forwards --leader URL through the panel-RPC payload', async () => {
+      const calls: Array<unknown> = [];
+      (globalThis as Record<string, unknown>).__slicc_panelRpc = {
+        call: async (_op: string, payload: unknown) => {
+          calls.push(payload);
+          return {
+            kind: 'switched',
+            previousMode: 'follower',
+            workerBaseUrl: 'https://leader.example.com',
+          };
+        },
+        dispose: () => {},
+      };
+
+      const cmd = createHostCommand({
+        getStatus: () => ({ state: 'inactive', session: null, error: null }),
+        getFollowerStatus: () =>
+          followerStatus({
+            state: 'connected',
+            joinUrl: 'https://x/join/abc',
+          }),
+        getFollowers: () => [],
+      });
+
+      const result = await cmd.execute(
+        ['leave', '--leader', 'https://leader.example.com'],
+        {} as never
+      );
+      expect(calls).toHaveLength(1);
+      expect((calls[0] as { workerBaseUrl: string }).workerBaseUrl).toBe(
+        'https://leader.example.com'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Now leader on https://leader.example.com');
+    });
+  });
 });
 
 describe('formatLeaderOutput', () => {

@@ -85,7 +85,8 @@ import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
 import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import { TabPersistenceGuard } from '../scoops/tab-persistence-guard.js';
 import { startPageLeaderTray } from './page-leader-tray.js';
-import type { PageLeaderTrayHandle } from './page-leader-tray.js';
+import type { PageLeaderTrayHandle, StartPageLeaderTrayOptions } from './page-leader-tray.js';
+import type { TrayLeaveResult } from '../scoops/tray-leave.js';
 import { startPageFollowerTray } from './page-follower-tray.js';
 import type { PageFollowerTrayHandle } from './page-follower-tray.js';
 import {
@@ -2453,6 +2454,145 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   let pageLeaderTray: PageLeaderTrayHandle | null = null;
   let pageFollowerTray: PageFollowerTrayHandle | null = null;
 
+  /**
+   * Build the full `StartPageLeaderTrayOptions` for the in-scope deps
+   * (layout, client, sprinkleManager, browser, etc.). Used by the boot
+   * block below AND by `performTrayLeave` during a follower → leader
+   * (or inactive → leader) switch — extracted to avoid duplicating ~85
+   * lines of option wiring across two call sites.
+   *
+   * Reads `pageLeaderTray` lazily in the broadcast callbacks because
+   * the handle is assigned by the caller *after* this function returns
+   * the options bag. Callers must `setLeader(newHandle)` immediately
+   * after `startPageLeaderTray(options)` resolves.
+   */
+  const buildLeaderTrayOptions = (workerBaseUrl: string): StartPageLeaderTrayOptions => ({
+    workerBaseUrl,
+    getMessages: () => layout.panels.chat.getMessages(),
+    getScoopJid: () => selectedScoop?.jid ?? 'cone',
+    getScoops: () =>
+      client.getScoops().map((s) => ({
+        jid: s.jid,
+        name: s.name,
+        folder: s.folder,
+        isCone: s.isCone,
+        assistantLabel: s.assistantLabel,
+        trigger: s.trigger,
+      })),
+    getSprinkles: () => {
+      const opened = new Set(sprinkleManager.opened());
+      return sprinkleManager.available().map((p) => ({
+        name: p.name,
+        title: p.title,
+        path: p.path,
+        open: opened.has(p.name),
+        autoOpen: p.autoOpen,
+      }));
+    },
+    readSprinkleContent: async (sprinkleName: string) => {
+      const sprinkle = sprinkleManager.available().find((s) => s.name === sprinkleName);
+      if (!sprinkle) return null;
+      try {
+        const raw = await localFs.readFile(sprinkle.path, { encoding: 'utf-8' });
+        return typeof raw === 'string' ? raw : new TextDecoder('utf-8').decode(raw);
+      } catch {
+        return null;
+      }
+    },
+    onSprinkleLick: (sprinkleName: string, body: unknown, targetScoop?: string) =>
+      client.sendSprinkleLick(sprinkleName, body, targetScoop),
+    onFollowerMessage: (text, messageId, attachments) => {
+      layout.panels.chat.addUserMessage(text, attachments);
+      agentHandle.sendMessage(text, messageId, attachments);
+      pageLeaderTray?.sync.broadcastUserMessage(text, messageId, attachments);
+    },
+    onFollowerAbort: () => agentHandle.stop(),
+    onFollowerCountChanged: (_count) => {
+      const followerPeers = pageLeaderTray?.peers.getPeers() ?? [];
+      window.localStorage.setItem(
+        'slicc.leaderTrayFollowers',
+        JSON.stringify(
+          followerPeers.map((p) => ({
+            runtimeId: p.bootstrapId,
+            runtime: p.runtime,
+            connectedAt: p.connectedAt ?? undefined,
+          }))
+        )
+      );
+    },
+    sendWebhookEvent: (id, headers, body) => client.sendWebhookEvent(id, headers, body),
+    onAgentEvent: (handler) => agentHandle.onEvent(handler),
+    browserAPI: browser,
+    browserTransport: realCdpTransport,
+    vfs: localFs,
+  });
+
+  /**
+   * Wire the leader-only hooks against the live handle. Called after
+   * `startPageLeaderTray` resolves successfully (both at boot and on
+   * `performTrayLeave` role-switch). The `null`-clearing counterpart
+   * is `clearLeaderHooks` below.
+   */
+  const wireLeaderHooks = (handle: PageLeaderTrayHandle): void => {
+    setConnectedFollowersGetter(() =>
+      handle.peers.getPeers().map((p) => ({
+        runtimeId: p.bootstrapId,
+        runtime: p.runtime,
+        connectedAt: p.connectedAt ?? undefined,
+      }))
+    );
+    setTrayResetter(() => handle.reset());
+    sprinkleManager.setSendToSprinkleHook((name, data) =>
+      handle.sync.broadcastSprinkleUpdate(name, data)
+    );
+    layout.panels.chat.setOnLocalUserMessage((text, messageId, attachments) =>
+      handle.sync.broadcastUserMessage(text, messageId, attachments)
+    );
+  };
+
+  const clearLeaderHooks = (): void => {
+    setConnectedFollowersGetter(null);
+    setTrayResetter(null);
+    layout.panels.chat.setOnLocalUserMessage(undefined);
+    sprinkleManager.setSendToSprinkleHook(undefined);
+  };
+
+  /**
+   * Shared between the `slicc:tray-leave` window event listener (the
+   * avatar popover dispatches this) and the panel-RPC `tray-leave` op
+   * (the worker-side `host leave`). The implementation lives in
+   * `ui/tray-leave-runtime.ts` so it can be unit tested against
+   * synthetic deps.
+   *
+   * Captures `pageLeaderTray` / `pageFollowerTray` via getters/setters
+   * so the closure reads the live binding at call time rather than
+   * snapshotting a stale value at deps-construction time.
+   */
+  const performTrayLeaveLocally = async (opts: {
+    workerBaseUrl: string | null;
+    requestId?: string;
+  }): Promise<TrayLeaveResult> => {
+    const { performTrayLeave } = await import('./tray-leave-runtime.js');
+    return await performTrayLeave(
+      { workerBaseUrl: opts.workerBaseUrl, requestId: opts.requestId },
+      {
+        getLeader: () => pageLeaderTray,
+        setLeader: (h) => {
+          pageLeaderTray = h;
+        },
+        getFollower: () => pageFollowerTray,
+        setFollower: (h) => {
+          pageFollowerTray = h as PageFollowerTrayHandle | null;
+        },
+        startLeader: (workerBaseUrl) => startPageLeaderTray(buildLeaderTrayOptions(workerBaseUrl)),
+        clearLeaderHooks,
+        wireLeaderHooks,
+        storage: window.localStorage,
+        log,
+      }
+    );
+  };
+
   // Install the panel-RPC handler so DOM-bound shell commands run by
   // the kernel worker (screencapture / say / afplay / clipboard /
   // open, plus the playwright app-origin lookup) can reach the page.
@@ -2475,6 +2615,11 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
         }
         return await pageLeaderTray.reset();
       },
+      // Worker-side `host leave` bridges through panel-RPC for the same
+      // reason as `tray-reset`: the leader/follower tray handles own
+      // non-transferable WebRTC resources and live on the page.
+      leaveTray: async ({ workerBaseUrl, requestId }) =>
+        await performTrayLeaveLocally({ workerBaseUrl, requestId }),
     }),
   });
   // Tear down on session reload so the handler doesn't outlive its
@@ -2536,110 +2681,12 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
         removeSprinkle: (name) => layout.removeSprinkle(name),
       });
     } else if (storedWorkerBaseUrl) {
-      pageLeaderTray = startPageLeaderTray({
-        workerBaseUrl: storedWorkerBaseUrl,
-        getMessages: () => layout.panels.chat.getMessages(),
-        getScoopJid: () => selectedScoop?.jid ?? 'cone',
-        getScoops: () =>
-          client.getScoops().map((s) => ({
-            jid: s.jid,
-            name: s.name,
-            folder: s.folder,
-            isCone: s.isCone,
-            assistantLabel: s.assistantLabel,
-            trigger: s.trigger,
-          })),
-        getSprinkles: () => {
-          const opened = new Set(sprinkleManager.opened());
-          return sprinkleManager.available().map((p) => ({
-            name: p.name,
-            title: p.title,
-            path: p.path,
-            open: opened.has(p.name),
-            autoOpen: p.autoOpen,
-          }));
-        },
-        readSprinkleContent: async (sprinkleName) => {
-          const sprinkle = sprinkleManager.available().find((s) => s.name === sprinkleName);
-          if (!sprinkle) return null;
-          try {
-            const raw = await localFs.readFile(sprinkle.path, { encoding: 'utf-8' });
-            return typeof raw === 'string' ? raw : new TextDecoder('utf-8').decode(raw);
-          } catch {
-            return null;
-          }
-        },
-        onSprinkleLick: (sprinkleName, body, targetScoop) =>
-          client.sendSprinkleLick(sprinkleName, body, targetScoop),
-        onFollowerMessage: (text, messageId, attachments) => {
-          layout.panels.chat.addUserMessage(text, attachments);
-          agentHandle.sendMessage(text, messageId, attachments);
-          // Re-broadcast so OTHER connected followers also see this
-          // follower's message. The originating follower dedupes its
-          // own echo via `sentMessageIds` in `FollowerSyncManager`, so
-          // no double-display. Without this, multi-follower setups
-          // were silently single-direction: only the sender and the
-          // leader saw a follower's message; sibling followers didn't.
-          pageLeaderTray?.sync.broadcastUserMessage(text, messageId, attachments);
-        },
-        onFollowerAbort: () => agentHandle.stop(),
-        onFollowerCountChanged: (_count) => {
-          const followerPeers = pageLeaderTray?.peers.getPeers() ?? [];
-          window.localStorage.setItem(
-            'slicc.leaderTrayFollowers',
-            JSON.stringify(
-              followerPeers.map((p) => ({
-                runtimeId: p.bootstrapId,
-                runtime: p.runtime,
-                connectedAt: p.connectedAt ?? undefined,
-              }))
-            )
-          );
-        },
-        sendWebhookEvent: (id, headers, body) => client.sendWebhookEvent(id, headers, body),
-        onAgentEvent: (handler) => agentHandle.onEvent(handler),
-        browserAPI: browser,
-        browserTransport: realCdpTransport,
-        vfs: localFs,
-      });
-      // Forward agent → sprinkle pushes over the WebRTC wire. Without
-      // this hook, `SprinkleManager.sendToSprinkle` (called by the welcome
-      // sprinkle flow, the `sprinkle` shell command, and any agent
-      // pushing data via the bridge) updates only the leader's local
-      // renderer — followers see the static initial content but never
-      // the live updates. iOS has the same expectation: its
-      // `AppState.sprinkleUpdates[name]` map is populated by
-      // `sprinkle.update` envelopes that this broadcaster emits.
-      sprinkleManager.setSendToSprinkleHook((name, data) =>
-        pageLeaderTray?.sync.broadcastSprinkleUpdate(name, data)
-      );
-      // Forward the leader's own chat input over the wire as
-      // `user_message_echo`. Without this hook, followers only see the
-      // leader's prompt after a snapshot refresh — agent responses
-      // stream live but the question that triggered them doesn't,
-      // leaving the follower chat looking like the assistant is
-      // talking to itself.
-      layout.panels.chat.setOnLocalUserMessage((text, messageId, attachments) =>
-        pageLeaderTray?.sync.broadcastUserMessage(text, messageId, attachments)
-      );
+      // Build options + wire hooks via the same helpers `performTrayLeave`
+      // uses on a role switch — keeps boot and switch locked to a single
+      // set of callbacks so they can't drift out of step.
+      pageLeaderTray = startPageLeaderTray(buildLeaderTrayOptions(storedWorkerBaseUrl));
+      wireLeaderHooks(pageLeaderTray);
     }
-  }
-
-  // Wire host-command setters so `host` in the terminal shows connected
-  // followers and `host reset` works. These module-level setters are read
-  // by the host shell command (which runs in the kernel worker's shell
-  // context, where the tray manager singletons are not live — the page
-  // owns them post-refactor, so the shell command reads them via these
-  // injected callbacks instead).
-  if (pageLeaderTray) {
-    setConnectedFollowersGetter(() =>
-      pageLeaderTray!.peers.getPeers().map((p) => ({
-        runtimeId: p.bootstrapId,
-        runtime: p.runtime,
-        connectedAt: p.connectedAt ?? undefined,
-      }))
-    );
-    setTrayResetter(() => pageLeaderTray!.reset());
   }
 
   // Propagate page-side leader status into the worker's localStorage shim so
@@ -2782,6 +2829,34 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
         });
       }
     }
+  });
+
+  // Runtime tray-leave: symmetric counterpart to `slicc:tray-join`. The
+  // avatar popover dispatches this when the user wants to drop out of
+  // the tray (or switch to leader role on a supplied worker URL).
+  // Shares `performTrayLeaveLocally` with the panel-RPC `tray-leave`
+  // op so the shell `host leave` command and the UI button drive the
+  // same teardown sequence.
+  //
+  // `performTrayLeave` (in `tray-leave-runtime.ts`) logs internally on
+  // both the stop-throw and start-throw paths; this catch covers the
+  // remaining rare throws (e.g., a programmer error in the closure
+  // wiring above) so an unhandled rejection doesn't surface in
+  // production telemetry.
+  window.addEventListener('slicc:tray-leave', (rawEvent: Event) => {
+    const event = rawEvent as CustomEvent<{
+      workerBaseUrl?: string | null;
+      requestId?: string;
+    }>;
+    const workerBaseUrl = event.detail?.workerBaseUrl ?? null;
+    const requestId = event.detail?.requestId;
+    void performTrayLeaveLocally({ workerBaseUrl, requestId }).catch((err) => {
+      log.error('slicc:tray-leave handler failed', {
+        workerBaseUrl,
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   });
 
   // Tear down on page unload so the WebSocket and any open data channels

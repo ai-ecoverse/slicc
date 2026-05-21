@@ -10,7 +10,7 @@
  * offscreen document already has a DOM.
  */
 
-import type { PanelRpcHandlers } from '../kernel/panel-rpc.js';
+import type { PanelRpcHandlers, PanelRpcResults } from '../kernel/panel-rpc.js';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import { getAllExtraOAuthDomains, setExtraOAuthDomains } from './provider-settings.js';
 
@@ -26,6 +26,18 @@ export interface StandalonePanelRpcHandlerOptions {
    * a leader is active; left undefined otherwise.
    */
   resetTray?: () => Promise<LeaderTrayRuntimeStatus>;
+  /**
+   * Leave the page-side leader/follower tray (or switch role to leader
+   * on the supplied worker URL). Wired by `mainStandaloneWorker` to the
+   * `slicc:tray-leave` event handler so `host leave` in the kernel
+   * worker drives the same teardown path as the avatar popover.
+   * Returns the previous mode and the post-leave worker URL so the
+   * shell can render an informative message.
+   */
+  leaveTray?: (opts: {
+    workerBaseUrl: string | null;
+    requestId?: string;
+  }) => Promise<PanelRpcResults['tray-leave']> | PanelRpcResults['tray-leave'];
 }
 
 /**
@@ -254,6 +266,13 @@ export function createStandalonePanelRpcHandlers(
         throw new Error('host reset: no active tray session to reset');
       }
       return await options.resetTray();
+    },
+
+    'tray-leave': async ({ workerBaseUrl, requestId }) => {
+      if (!options.leaveTray) {
+        throw new Error('host leave: tray leave is not available in this environment');
+      }
+      return await options.leaveTray({ workerBaseUrl, requestId });
     },
 
     'oauth-extras-set': ({ providerId, domains }) => {

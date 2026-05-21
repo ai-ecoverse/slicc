@@ -37,8 +37,6 @@ import {
   DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
   hasStoredTrayJoinUrl,
   resolveTrayRuntimeConfig,
-  TRAY_JOIN_STORAGE_KEY,
-  TRAY_WORKER_STORAGE_KEY,
 } from '../../../packages/webapp/src/scoops/tray-runtime-config.js';
 import { startFollowerWithAutoReconnect } from '../../../packages/webapp/src/scoops/tray-webrtc.js';
 import { FollowerSyncManager } from '../../../packages/webapp/src/scoops/tray-follower-sync.js';
@@ -53,6 +51,8 @@ import {
   type ExtensionLeaderTrayHandle,
 } from './extension-leader-tray.js';
 import { OffscreenBridge } from './offscreen-bridge.js';
+import { applyTrayRuntimeUpdate as applyTrayRuntimeUpdateHelper } from './apply-tray-runtime-update.js';
+import { OFFSCREEN_SET_TRAY_RUNTIME_HOOK } from '../../../packages/webapp/src/scoops/tray-leave.js';
 import { createLogger } from '../../../packages/webapp/src/core/index.js';
 import type { ExtensionMessage } from './messages.js';
 import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
@@ -512,6 +512,42 @@ async function init(): Promise<void> {
   };
 
   await syncTrayRuntime();
+
+  // Single source of truth for updating the offscreen's tray-runtime
+  // localStorage and re-running `syncTrayRuntime`. Used by:
+  //
+  //   - the `refresh-tray-runtime` panel→offscreen relay (panel UI),
+  //   - the `__slicc_setTrayRuntime` globalThis hook (in-offscreen
+  //     shell, e.g. `host leave` typed at the panel terminal — the
+  //     offscreen owns the shell that runs the agent's bash tool, and
+  //     `chrome.runtime.sendMessage` does NOT deliver to the sender's
+  //     own listeners, so the shell needs a direct local entry point).
+  //
+  // Logic is in `apply-tray-runtime-update.ts` for unit testability;
+  // this site just wires the closure-captured deps.
+  const applyTrayRuntimeUpdate = (
+    joinUrl: string | null | undefined,
+    workerBaseUrl: string | null | undefined
+  ): Promise<void> =>
+    applyTrayRuntimeUpdateHelper(joinUrl, workerBaseUrl, {
+      storage: window.localStorage,
+      stopTrayRuntime: () => {
+        stopTrayRuntime?.();
+        stopTrayRuntime = null;
+      },
+      resetTrayRuntimeKey: () => {
+        activeTrayRuntimeKey = JSON.stringify(null);
+      },
+      syncTrayRuntime,
+    });
+
+  // Publish the in-offscreen direct hook so the agent's shell (running
+  // in this same offscreen document) can drive the leave flow without
+  // round-tripping through `chrome.runtime.sendMessage`. The hook name
+  // is shared via the `OFFSCREEN_SET_TRAY_RUNTIME_HOOK` constant — the
+  // consumer in `tray-leave.ts` reads the same constant.
+  (globalThis as Record<string, unknown>)[OFFSCREEN_SET_TRAY_RUNTIME_HOOK] = applyTrayRuntimeUpdate;
+
   chrome.runtime.onMessage.addListener((message: unknown) => {
     if (!isExtensionMessage(message) || message.source !== 'panel') {
       return false;
@@ -524,18 +560,17 @@ async function init(): Promise<void> {
     // separate localStorage instances, so a join URL the user pasted in
     // the panel is invisible to `resolveTrayRuntimeConfig` here unless
     // we persist it locally first.
+    //
+    // The async work runs after the synchronous message ack. Catch +
+    // log any rejection so a failure inside `syncTrayRuntime` or the
+    // leader/follower teardown surfaces in production telemetry instead
+    // of becoming an unhandled rejection.
     const { joinUrl, workerBaseUrl } = message.payload;
-    if (typeof joinUrl === 'string' && joinUrl) {
-      window.localStorage.setItem(TRAY_JOIN_STORAGE_KEY, joinUrl);
-    } else if (joinUrl === null) {
-      window.localStorage.removeItem(TRAY_JOIN_STORAGE_KEY);
-    }
-    if (typeof workerBaseUrl === 'string' && workerBaseUrl) {
-      window.localStorage.setItem(TRAY_WORKER_STORAGE_KEY, workerBaseUrl);
-    } else if (workerBaseUrl === null && joinUrl === null) {
-      window.localStorage.removeItem(TRAY_WORKER_STORAGE_KEY);
-    }
-    void syncTrayRuntime();
+    void applyTrayRuntimeUpdate(joinUrl, workerBaseUrl).catch((err) => {
+      log.error('refresh-tray-runtime update failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     return false;
   });
 
