@@ -60,13 +60,18 @@ class PanelTerminalShell extends WasmShellHeadless {
 
   protected override async renderMediaPreview(items: MediaPreviewItem[]): Promise<void> {
     for (const item of items) {
-      const data = btoa(String.fromCharCode(...item.bytes));
+      let binary = '';
+      const bytes = item.bytes;
+      const chunkSize = 8192;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+      }
       this.transport.send({
         type: 'terminal-media-preview',
         sid: this.sid,
         path: item.path,
         mediaType: item.mimeType,
-        data,
+        data: btoa(binary),
       } satisfies TerminalMediaPreviewMsg as unknown as OffscreenToPanelMessage);
     }
   }
