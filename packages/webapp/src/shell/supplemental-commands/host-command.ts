@@ -9,6 +9,8 @@ import {
   type FollowerTrayRuntimeStatus,
 } from '../../scoops/tray-follower-status.js';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
+import { leaveTray as defaultLeaveTray, type TrayLeaveResult } from '../../scoops/tray-leave.js';
+import { normalizeTrayWorkerBaseUrl } from '../../scoops/tray-runtime-config.js';
 
 export interface ConnectedFollowerInfo {
   runtimeId: string;
@@ -97,23 +99,38 @@ function buildPanelRpcResetter(): (() => Promise<LeaderTrayRuntimeStatus>) | und
   return async () => await client.call('tray-reset', undefined);
 }
 
+/** Re-exported for the test surface — same shape as panel-RPC `tray-leave`. */
+export type { TrayLeaveResult } from '../../scoops/tray-leave.js';
+
 export interface HostCommandOptions {
   getStatus?: () => LeaderTrayRuntimeStatus;
   getFollowerStatus?: () => FollowerTrayRuntimeStatus;
   getFollowers?: () => ConnectedFollowerInfo[];
   resetTray?: () => Promise<LeaderTrayRuntimeStatus>;
+  /**
+   * Drive a tray leave (or follower → leader role switch). Defaults to
+   * the float-detecting helper in `scoops/tray-leave.ts`; tests inject a
+   * fake. The return shape matches the panel-RPC `tray-leave` result so
+   * the shell can surface a useful confirmation message.
+   */
+  leaveTray?: (opts: {
+    workerBaseUrl: string | null;
+    requestId?: string;
+  }) => Promise<TrayLeaveResult>;
 }
 
 function hostHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: `host - display or manage the current tray host status
 
-Usage: host [reset]
+Usage: host [reset | leave [--leader <worker-url>]]
 
 Shows the current tray state (leader or follower) and, when available, the join URL and connected followers.
 
 Subcommands:
-  reset   Disconnect all followers and create a fresh tray session with a new join URL
+  reset                       Disconnect all followers and create a fresh tray session with a new join URL
+  leave                       Leave the current tray (drops follower or stops leader; clears stored URLs)
+  leave --leader <worker-url> Leave the current role and immediately become a leader on <worker-url>
 `,
     stderr: '',
     exitCode: 0,
@@ -223,6 +240,14 @@ export function createHostCommand(options: HostCommandOptions = {}): Command {
       return handleReset(getFollowerSt, getStatus, resetter);
     }
 
+    if (args[0] === 'leave') {
+      // Parse `host leave [--leader <worker-url>]`. Anything else after
+      // `leave` is rejected so a typo doesn't silently leave the tray
+      // without honoring the user's intended switch-to-leader argument.
+      const leaver = options.leaveTray ?? buildDefaultLeaver();
+      return handleLeave(args.slice(1), getStatus, getFollowerSt, leaver);
+    }
+
     if (args.length > 0) {
       return {
         stdout: '',
@@ -247,6 +272,196 @@ export function createHostCommand(options: HostCommandOptions = {}): Command {
       exitCode: 0,
     };
   });
+}
+
+/**
+ * Build the default `host leave` driver. The shell runs in either the
+ * standalone kernel worker (no DOM, talks to the page via panel-RPC) or
+ * the extension offscreen document (has DOM + a `__slicc_setTrayRuntime`
+ * hook on `globalThis`). When a panel-RPC client is available we use
+ * it — the page returns the authoritative `TrayLeaveResult`. Without a
+ * panel-RPC client we fall through to the ambient helper and synthesize
+ * a result from local status snapshots (the offscreen path).
+ *
+ * Mirroring `buildPanelRpcResetter` above, the discriminator is
+ * "is there a panel-RPC client published?" — NOT a `typeof window`
+ * check. `isNodeRuntime()` returns true only under Node.js (vitest),
+ * so it would silently skip the panel-RPC branch in production
+ * standalone worker (`process.versions.node` is undefined there).
+ */
+function buildDefaultLeaver(): (opts: {
+  workerBaseUrl: string | null;
+  requestId?: string;
+}) => Promise<TrayLeaveResult> {
+  return async ({ workerBaseUrl, requestId }) => {
+    const panelRpcClient = getPanelRpcClient();
+
+    if (panelRpcClient) {
+      return await panelRpcClient.call('tray-leave', { workerBaseUrl, requestId });
+    }
+
+    // Offscreen path. Snapshot the mode before the leave so we can
+    // synthesize a `TrayLeaveResult` — the ambient `leaveTray()` helper
+    // returns `void`. NOTE: this synthesis is best-effort: the offscreen
+    // dispatches `__slicc_setTrayRuntime` which drives `syncTrayRuntime`,
+    // and the underlying `activeHandle.leader.start()` is fire-and-forget
+    // in `offscreen.ts`. So a `{kind: 'switched'}` result here reflects
+    // the leave succeeded + the start was initiated — not that the new
+    // leader actually came up. The user should check `host` to verify.
+    const followerSt = getFollowerTrayRuntimeStatus();
+    const leaderSt = getLeaderStatusWithFallback();
+    const previousMode: 'leader' | 'follower' | 'inactive' =
+      followerSt.state !== 'inactive'
+        ? 'follower'
+        : leaderSt.state !== 'inactive'
+          ? 'leader'
+          : 'inactive';
+
+    await defaultLeaveTray({ workerBaseUrl, requestId });
+
+    if (workerBaseUrl !== null) {
+      return { kind: 'switched', previousMode, workerBaseUrl };
+    }
+    if (previousMode === 'inactive') {
+      return { kind: 'noop' };
+    }
+    return { kind: 'left', previousMode };
+  };
+}
+
+/**
+ * Generate a correlation id for `host leave` runs so the page-side
+ * dispatcher can match logs across rapid retries. Mirrors the
+ * `tray-join` request-id format.
+ */
+function newLeaveRequestId(): string {
+  return `host-leave-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function handleLeave(
+  args: string[],
+  getLeaderStatus: () => LeaderTrayRuntimeStatus,
+  getFollowerStatus: () => FollowerTrayRuntimeStatus,
+  leaveTrayImpl: (opts: {
+    workerBaseUrl: string | null;
+    requestId?: string;
+  }) => Promise<TrayLeaveResult>
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  let workerBaseUrl: string | null = null;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--leader' || arg === '--as-leader') {
+      const value = args[i + 1];
+      if (!value) {
+        return {
+          stdout: '',
+          stderr: `host leave: ${arg} requires a worker base URL argument\n`,
+          exitCode: 1,
+        };
+      }
+      const normalized = normalizeTrayWorkerBaseUrl(value);
+      if (!normalized) {
+        return {
+          stdout: '',
+          stderr: `host leave: invalid worker base URL: ${value}\n`,
+          exitCode: 1,
+        };
+      }
+      workerBaseUrl = normalized;
+      i += 1;
+      continue;
+    }
+    return {
+      stdout: '',
+      stderr: `host leave: unexpected argument: ${arg}\n`,
+      exitCode: 1,
+    };
+  }
+
+  // Dormant + no leader requested → informational no-op. Exit 0 so
+  // script chains (`host leave || something`) don't treat an already-
+  // dormant runtime as a failure. The stderr message keeps the no-op
+  // visible to interactive users.
+  if (workerBaseUrl === null) {
+    const leaderStatus = getLeaderStatus();
+    const followerStatus = getFollowerStatus();
+    if (leaderStatus.state === 'inactive' && followerStatus.state === 'inactive') {
+      return {
+        stdout: '',
+        stderr: 'host leave: no active tray session\n',
+        exitCode: 0,
+      };
+    }
+  }
+
+  try {
+    const result = await leaveTrayImpl({ workerBaseUrl, requestId: newLeaveRequestId() });
+    return { stdout: formatLeaveResult(result), stderr: '', exitCode: 0 };
+  } catch (error) {
+    // Distinguish "leave succeeded but join failed" from "leave failed
+    // entirely" when the caller asked for a role switch. The page-side
+    // `performTrayLeave` throws ONLY when `startLeader` rejects — at
+    // that point the previous tray is already stopped and storage is
+    // rolled back to "fully dormant", so the leave half is complete.
+    const message = error instanceof Error ? error.message : String(error);
+    if (workerBaseUrl !== null) {
+      return {
+        stdout: '',
+        stderr:
+          `host leave: left the tray, but failed to become leader on ${workerBaseUrl}: ${message}\n` +
+          'Tray runtime is now dormant.\n',
+        exitCode: 1,
+      };
+    }
+    return {
+      stdout: '',
+      stderr: `host leave: ${message}\n`,
+      exitCode: 1,
+    };
+  }
+}
+
+function formatLeaveResult(result: TrayLeaveResult): string {
+  switch (result.kind) {
+    case 'noop':
+      return 'No active tray session.\n';
+    case 'left': {
+      const mode = result.previousMode;
+      switch (mode) {
+        case 'leader':
+          return 'Stopped leader. Tray runtime is now dormant.\n';
+        case 'follower':
+          return 'Disconnected from leader. Tray runtime is now dormant.\n';
+        default:
+          return assertUnreachable(mode);
+      }
+    }
+    case 'switched': {
+      const mode = result.previousMode;
+      switch (mode) {
+        case 'leader':
+          return `Stopped leader. Now leader on ${result.workerBaseUrl}\n`;
+        case 'follower':
+          return `Disconnected from leader. Now leader on ${result.workerBaseUrl}\n`;
+        case 'inactive':
+          return `Now leader on ${result.workerBaseUrl}\n`;
+        default:
+          return assertUnreachable(mode);
+      }
+    }
+    default:
+      return assertUnreachable(result);
+  }
+}
+
+/**
+ * Compile-time exhaustiveness guard. Adding a new variant to
+ * `TrayLeaveResult` (or a new `previousMode`) without updating
+ * `formatLeaveResult` becomes a typecheck error at the matching
+ * `default` branch — the unmatched value is no longer `never`.
+ */
+function assertUnreachable(value: never): never {
+  throw new Error(`formatLeaveResult: unhandled variant ${JSON.stringify(value)}`);
 }
 
 async function handleReset(

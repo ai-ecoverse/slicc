@@ -64,6 +64,56 @@ describe('createStandalonePanelRpcHandlers — tray-reset', () => {
   });
 });
 
+describe('createStandalonePanelRpcHandlers — tray-leave', () => {
+  it('forwards the payload to the leaveTray callback and returns its result', async () => {
+    const calls: Array<{ workerBaseUrl: string | null; requestId?: string }> = [];
+    const handlers = createStandalonePanelRpcHandlers({
+      leaveTray: async (opts) => {
+        calls.push(opts);
+        return { kind: 'left', previousMode: 'leader' };
+      },
+    });
+    const result = await handlers['tray-leave']!({
+      workerBaseUrl: 'https://new.example',
+      requestId: 'req-1',
+    });
+    expect(calls).toEqual([{ workerBaseUrl: 'https://new.example', requestId: 'req-1' }]);
+    expect(result).toEqual({ kind: 'left', previousMode: 'leader' });
+  });
+
+  it('forwards an undefined requestId without populating the opts shape', async () => {
+    let captured: { workerBaseUrl: string | null; requestId?: string } | undefined;
+    const handlers = createStandalonePanelRpcHandlers({
+      leaveTray: async (opts) => {
+        captured = opts;
+        return { kind: 'noop' };
+      },
+    });
+    await handlers['tray-leave']!({ workerBaseUrl: null });
+    expect(captured).toEqual({ workerBaseUrl: null, requestId: undefined });
+  });
+
+  it('rejects with a clear error when no leaveTray callback is wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({
+      // No leaveTray — mimics the boot moment before main.ts wires it.
+    });
+    await expect(handlers['tray-leave']!({ workerBaseUrl: null })).rejects.toThrow(
+      /not available in this environment/i
+    );
+  });
+
+  it('propagates a failure from the leaveTray callback (half-state on startLeader)', async () => {
+    const handlers = createStandalonePanelRpcHandlers({
+      leaveTray: async () => {
+        throw new Error('worker unreachable');
+      },
+    });
+    await expect(handlers['tray-leave']!({ workerBaseUrl: 'https://x' })).rejects.toThrow(
+      /worker unreachable/
+    );
+  });
+});
+
 /**
  * `oauth-extras-set` is the panel-RPC op that lets a worker-side
  * `oauth-domain` write reach real page `localStorage`. The handler

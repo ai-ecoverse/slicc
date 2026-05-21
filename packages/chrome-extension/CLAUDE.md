@@ -50,6 +50,22 @@ Mirror of `page-leader-tray.ts` for the offscreen runtime.
   dispatch runs in a fire-and-forget IIFE so the wire signature stays
   `void`.
 
+### Leaving a tray
+
+The offscreen publishes a `globalThis.__slicc_setTrayRuntime(joinUrl,
+workerBaseUrl)` hook that the in-offscreen agent shell uses to drive
+`syncTrayRuntime` directly — `chrome.runtime.sendMessage` does not
+deliver to the sender's own listeners, so the side-panel relay path is
+not reachable from the offscreen itself. The `refresh-tray-runtime`
+listener and the hook share `applyTrayRuntimeUpdate`. **Leave-entirely
+short-circuit**: when `applyTrayRuntimeUpdate(null, null)` runs (both
+storage keys cleared) it calls `stopTrayRuntime` directly instead of
+awaiting `syncTrayRuntime`, which would otherwise hit the
+`defaultWorkerBaseUrl` fallback in `resolveTrayRuntimeConfig` and
+silently rebuild a leader on the production worker. See
+`packages/webapp/src/scoops/tray-leave.ts` for the float-detecting
+helper used by both UI and shell.
+
 ## Detached Popout
 
 The extension supports popping the side panel out into a full-page tab

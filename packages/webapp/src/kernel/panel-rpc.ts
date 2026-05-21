@@ -40,6 +40,7 @@
 
 import type { OAuthExtraDomainsStore } from '@slicc/shared-ts';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import type { TrayLeaveResult } from '../scoops/tray-leave.js';
 
 const PANEL_RPC_CHANNEL = 'slicc-panel-rpc';
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -135,6 +136,21 @@ export type PanelRpcRequest =
       payload?: undefined;
     }
   | {
+      // Leave the multi-browser-sync tray (or switch from follower to
+      // leader on the supplied worker base URL). Worker callers (the
+      // `host leave` shell command) route through here; the
+      // leader/follower tray handles live page-side and own
+      // non-transferable WebRTC resources, so the page is the only
+      // side that can stop them.
+      //
+      // `workerBaseUrl: null` leaves entirely; a string value switches
+      // role to leader on that worker. `requestId` is forwarded into
+      // failure log meta so log entries on the worker and the page can
+      // be correlated across rapid retries.
+      op: 'tray-leave';
+      payload: { workerBaseUrl: string | null; requestId?: string };
+    }
+  | {
       // Write the user-configured extra-OAuth-domains store for a
       // single provider. Worker writes can't reach page localStorage
       // directly (the kernel-worker shim is page→worker only — see
@@ -171,6 +187,7 @@ export interface PanelRpcResults {
     audioinputs: Array<{ deviceId: string; label: string; groupId?: string }>;
   };
   'tray-reset': LeaderTrayRuntimeStatus;
+  'tray-leave': TrayLeaveResult;
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
 }
 

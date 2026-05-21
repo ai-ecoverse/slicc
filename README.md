@@ -124,6 +124,7 @@ SLICC can mirror itself across multiple browsers, even on other machines:
 
 1. **First browser:** click your avatar in the top-right header and choose **Enable multi-browser sync**. A dialog opens with the sync URL (already copied to your clipboard) and step-by-step instructions. The same dialog has a **Reset URL** button if you want to invalidate the link and disconnect connected browsers. (You can also type `host` in the built-in terminal to print the URL.)
 2. **Second browser:** open the account dialog, click **Connect to another browser**, and paste the URL. The "How do I get the sync URL?" hint inside the dialog walks through the same steps.
+3. **Leaving the tray:** click the avatar on either browser to open the popover — the tray section now has a **Stop multi-browser sync** (leader) or **Disconnect from leader** (follower) action. From the terminal, `host leave` does the same thing; `host leave --leader <worker-url>` leaves the current role and becomes a leader on that worker.
 
 Both browsers must run the same SLICC version. Once connected, the sessions stay in sync in real time.
 

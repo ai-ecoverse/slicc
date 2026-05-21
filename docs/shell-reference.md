@@ -21,7 +21,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **commands**                                | `help-command.ts`          | List all available commands (built-ins + .jsh)                                                                                                                                                                                                              | None                                                                                                                                        |
 | **which**                                   | `which-command.ts`         | Resolve a command path                                                                                                                                                                                                                                      | `<command>` — returns `/usr/bin/<name>` or VFS path                                                                                         |
 | **uname**                                   | `uname-command.ts`         | Print the current browser user agent                                                                                                                                                                                                                        | None                                                                                                                                        |
-| **host**                                    | `host-command.ts`          | Print the current leader tray status plus `launch_url` and `join_url` (`launch_url` is `https://.../tray/<id>` when this runtime is leader)                                                                                                                 | None                                                                                                                                        |
+| **host**                                    | `host-command.ts`          | Print the current leader tray status plus `launch_url` and `join_url`; `host reset` recycles the leader session; `host leave` exits the tray (or switches to leader on `--leader <url>`)                                                                    | `host`, `host reset`, `host leave`, `host leave --leader <worker-url>`                                                                      |
 | **oauth-token**                             | `oauth-token-command.ts`   | Get an OAuth access token for a provider. Returns the **masked** Bearer token (in both CLI and extension modes). The proxy/SW unmasks at the network boundary.                                                                                              | `<providerId>`, `--provider <id>`, `--list`, no args = selected provider; auto-triggers login if needed                                     |
 | **oauth-domain**                            | `oauth-domain-command.ts`  | Manage per-provider extra allowed domains for OAuth-issued tokens. Provider hardcoded `oauthTokenDomains` stay immutable; entries here layer on top. Stored in `localStorage` (`slicc_oauth_extra_domains`); also editable from the extension options page. | `list [<providerId>]`, `add <providerId> <domain>`, `remove <providerId> <domain>`, `clear <providerId>`                                    |
 | **local-llm**                               | `local-llm-command.ts`     | Inspect / configure the Local LLM provider (Ollama, LM Studio, llama.cpp, vLLM, mlx, Jan, LocalAI)                                                                                                                                                          | `local-llm` or `local-llm status` — verify connection; `local-llm discover` — probe `/v1/models` and save the list to Settings              |
@@ -67,6 +67,18 @@ host
 # In a leader runtime, launch_url is the tray URL itself
 # In non-leader/error runtimes with a saved session, it stays the local app launch URL
 # join_url exposes the tray join capability directly when a session exists
+
+# Disconnect from a leader (follower) or stop being a leader. Clears the
+# stored tray URLs so the next session boots dormant. Available in both
+# the standalone and extension floats. Exits 0 with an informational
+# stderr line when no tray session is active so `host leave || …`
+# script chains don't trip on a dormant runtime.
+host leave
+
+# Leave whatever role this runtime is in and immediately become a leader
+# on the supplied worker. Useful for testing extension-leader behavior
+# after a follower session, without manual localStorage surgery.
+host leave --leader https://www.sliccy.ai
 
 # Open a URL in a browser tab
 open https://example.com

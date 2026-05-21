@@ -50,6 +50,9 @@ import { getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { copyTextToClipboard } from './clipboard.js';
 import { computeTrayMenuModel } from './tray-join-url.js';
+import { createLogger } from '../core/logger.js';
+
+const layoutLog = createLogger('ui.layout');
 import { showSyncEnabledDialog } from './sync-dialog.js';
 import { getTrayResetter } from '../shell/supplemental-commands/host-command.js';
 import { type ExtensionTabId } from './tabbed-ui.js';
@@ -691,6 +694,35 @@ export class Layout {
       caption.textContent = model.caption;
       popover.appendChild(caption);
     }
+
+    // "Leave" affordance: previously the only way out was DevTools
+    // surgery on `slicc.trayJoinUrl` / `slicc.trayWorkerBaseUrl`. The
+    // helper routes through whichever transport matches the float — see
+    // `scoops/tray-leave.ts` for the four-transport switch.
+    const leaveBtn = document.createElement('button');
+    leaveBtn.className = 'avatar-popover__item avatar-popover__item--danger';
+    leaveBtn.textContent =
+      model.kind === 'follower' ? 'Disconnect from leader' : 'Stop multi-browser sync';
+    leaveBtn.addEventListener('click', async () => {
+      popover.remove();
+      try {
+        const { leaveTray } = await import('../scoops/tray-leave.js');
+        await leaveTray();
+      } catch (err) {
+        // Two failure shapes reach here: no-transport (sandboxed
+        // context with neither `chrome.runtime` nor `window`) and
+        // wire-dispatch rejection (chrome.runtime.sendMessage refused,
+        // or the page-event handler threw synchronously). Surface to
+        // production telemetry AND show a visible banner — the
+        // popover is already dismissed at this point, so a silent
+        // console log would leave the user thinking the leave
+        // succeeded.
+        const message = err instanceof Error ? err.message : String(err);
+        layoutLog.error('leave-tray failed', { error: message });
+        showTrayLeaveErrorToast(message);
+      }
+    });
+    popover.appendChild(leaveBtn);
   }
 
   /** Build the user avatar element — 28px circle, three states. */
@@ -1362,4 +1394,24 @@ export class Layout {
     this.panels.scoops.dispose();
     while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
   }
+}
+
+/**
+ * Briefly show a transient error banner at the top of the viewport.
+ * Used by the avatar popover's "Leave" button to surface a tray-leave
+ * failure after the popover has already been dismissed. Uses inline
+ * styles so it works without project CSS being loaded (tests, popout).
+ */
+function showTrayLeaveErrorToast(message: string): void {
+  const toast = document.createElement('div');
+  toast.setAttribute('role', 'alert');
+  toast.style.cssText =
+    'position: fixed; top: 12px; left: 50%; transform: translateX(-50%);' +
+    ' max-width: 520px; padding: 10px 14px; background: var(--slicc-cone, #c63b2c);' +
+    ' color: white; font-size: 13px; border-radius: 6px; z-index: 99999;' +
+    ' box-shadow: 0 4px 12px rgba(0,0,0,0.25); cursor: pointer;';
+  toast.textContent = `Multi-browser sync: couldn’t leave (${message}). Click to dismiss.`;
+  toast.addEventListener('click', () => toast.remove());
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 8000);
 }
