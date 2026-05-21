@@ -115,7 +115,7 @@ export function showImagePreview(src: string, originEl: HTMLElement): () => void
         activeCleanup = null;
       }
     };
-    const timeout = setTimeout(cleanup, 300);
+    const timeout = setTimeout(cleanup, 400);
     overlay.addEventListener(
       'transitionend',
       () => {
