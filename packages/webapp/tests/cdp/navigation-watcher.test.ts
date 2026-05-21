@@ -124,6 +124,80 @@ describe('NavigationWatcher', () => {
     expect(methods).not.toContain('Target.setAutoAttach');
   });
 
+  it('attaches to targets opened with an openerId (target="_blank" / window.open())', async () => {
+    // Regression: NavigationWatcher previously skipped every target
+    // with `openerId`, which meant `<a target="_blank">` clicks
+    // never got Page/Network enabled and their main-frame Link
+    // headers were silently dropped. Manual attach (without enabling
+    // the Debugger domain) does not pause anything, so we attach to
+    // all page targets including link-click children.
+    await watcher.start();
+    transport.sentCommands.length = 0;
+
+    transport.emit('Target.targetCreated', {
+      targetInfo: {
+        targetId: 'tab-child',
+        type: 'page',
+        attached: false,
+        openerId: 'tab-parent',
+        url: 'https://ex.com/landing',
+      },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const attachCalls = transport.sentCommands.filter((c) => c.method === 'Target.attachToTarget');
+    expect(attachCalls).toHaveLength(1);
+    expect(attachCalls[0].params).toMatchObject({ targetId: 'tab-child', flatten: true });
+
+    // And the watcher must subsequently emit the navigate event for
+    // that tab's main-frame Document response, end-to-end.
+    transport.emit('Target.attachedToTarget', {
+      sessionId: 'sess-child',
+      targetInfo: {
+        targetId: 'tab-child',
+        type: 'page',
+        url: 'https://ex.com/landing',
+        openerId: 'tab-parent',
+      },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    transport.emit('Network.responseReceived', {
+      sessionId: 'sess-child',
+      type: 'Document',
+      frameId: 'root-sess-child',
+      response: {
+        url: 'https://ex.com/landing',
+        headers: { link: `<https://github.com/o/r>; rel="${UPSKILL_REL}"` },
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      verb: 'upskill',
+      target: 'https://github.com/o/r',
+      targetId: 'tab-child',
+    });
+  });
+
+  it('still skips non-page target types (workers, iframes) regardless of openerId', async () => {
+    await watcher.start();
+    transport.sentCommands.length = 0;
+
+    transport.emit('Target.targetCreated', {
+      targetInfo: {
+        targetId: 'sw-1',
+        type: 'service_worker',
+        attached: false,
+        openerId: 'tab-parent',
+      },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const attachCalls = transport.sentCommands.filter((c) => c.method === 'Target.attachToTarget');
+    expect(attachCalls).toHaveLength(0);
+  });
+
   it('emits an event when a main-frame Document response advertises a handoff Link', async () => {
     await watcher.start();
 
