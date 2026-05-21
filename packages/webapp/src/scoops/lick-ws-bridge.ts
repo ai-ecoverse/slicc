@@ -101,10 +101,11 @@ export function startLickWsBridge(
   options: LickWsBridgeOptions
 ): LickWsBridgeHandle {
   // Fail fast on a malformed `locationHref` rather than letting a bad
-  // URL silently loop the reconnect path forever.
+  // URL silently loop the reconnect path forever. `void` signals that
+  // the constructed URL is discarded — we only want the parse-failure
+  // throw.
   try {
-     
-    new URL(options.locationHref);
+    void new URL(options.locationHref);
   } catch (err) {
     throw new Error(
       `startLickWsBridge: invalid locationHref ${JSON.stringify(options.locationHref)}: ${
