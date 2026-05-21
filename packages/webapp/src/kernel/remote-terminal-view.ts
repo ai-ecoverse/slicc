@@ -160,6 +160,7 @@ export class RemoteTerminalView {
       fontFamily: "'Source Code Pro', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
       theme: isDark ? DARK_THEME : LIGHT_THEME,
       convertEol: true,
+      macOptionIsMeta: true,
     });
 
     this.themeObserver = new MutationObserver(() => {
@@ -259,8 +260,8 @@ export class RemoteTerminalView {
         return;
       }
 
-      // Escape sequences first (arrows, Home, End, Delete).
-      if (data.startsWith('\x1b[') || data.startsWith('\x1bO')) {
+      // Escape sequences first (arrows, Home, End, Delete, Alt+key).
+      if (data.startsWith('\x1b')) {
         switch (data) {
           case '\x1b[A':
             this.handleHistoryUp();
@@ -287,6 +288,12 @@ export class RemoteTerminalView {
           case '\x1b[3~':
             this.handleDelete();
             return;
+          case '\x1bb':
+            this.handleWordBack();
+            return;
+          case '\x1bf':
+            this.handleWordForward();
+            return;
         }
         return;
       }
@@ -305,6 +312,21 @@ export class RemoteTerminalView {
             this.currentLine = '';
             this.cursorPos = 0;
             this.showPrompt();
+            break;
+          case '\x01':
+            this.handleHome();
+            break;
+          case '\x05':
+            this.handleEnd();
+            break;
+          case '\x0b':
+            this.handleKillToEnd();
+            break;
+          case '\x15':
+            this.handleKillToStart();
+            break;
+          case '\x17':
+            this.handleKillWordBack();
             break;
           case '\t':
             // Tab completion via a silent `compgen` round-trip through
@@ -377,6 +399,61 @@ export class RemoteTerminalView {
     if (delta <= 0) return;
     this.terminal?.write(`\x1b[${delta}C`);
     this.cursorPos = this.currentLine.length;
+  }
+
+  private handleKillToEnd(): void {
+    if (this.cursorPos >= this.currentLine.length) return;
+    this.currentLine = this.currentLine.slice(0, this.cursorPos);
+    this.terminal?.write('\x1b[K');
+  }
+
+  private handleKillToStart(): void {
+    if (this.cursorPos <= 0) return;
+    const after = this.currentLine.slice(this.cursorPos);
+    this.currentLine = after;
+    this.cursorPos = 0;
+    this.terminal?.write('\r\x1b[K');
+    this.showPrompt();
+    this.terminal?.write(after);
+    if (after.length > 0) {
+      this.terminal?.write(`\x1b[${after.length}D`);
+    }
+  }
+
+  private handleKillWordBack(): void {
+    if (this.cursorPos <= 0) return;
+    let i = this.cursorPos - 1;
+    while (i > 0 && this.currentLine[i - 1] === ' ') i--;
+    while (i > 0 && this.currentLine[i - 1] !== ' ') i--;
+    const deleted = this.cursorPos - i;
+    const after = this.currentLine.slice(this.cursorPos);
+    this.currentLine = this.currentLine.slice(0, i) + after;
+    this.cursorPos = i;
+    this.terminal?.write(`\x1b[${deleted}D\x1b[K`);
+    if (after.length > 0) {
+      this.terminal?.write(after);
+      this.terminal?.write(`\x1b[${after.length}D`);
+    }
+  }
+
+  private handleWordBack(): void {
+    if (this.cursorPos <= 0) return;
+    let i = this.cursorPos - 1;
+    while (i > 0 && this.currentLine[i - 1] === ' ') i--;
+    while (i > 0 && this.currentLine[i - 1] !== ' ') i--;
+    const moved = this.cursorPos - i;
+    this.cursorPos = i;
+    this.terminal?.write(`\x1b[${moved}D`);
+  }
+
+  private handleWordForward(): void {
+    if (this.cursorPos >= this.currentLine.length) return;
+    let i = this.cursorPos;
+    while (i < this.currentLine.length && this.currentLine[i] === ' ') i++;
+    while (i < this.currentLine.length && this.currentLine[i] !== ' ') i++;
+    const moved = i - this.cursorPos;
+    this.cursorPos = i;
+    this.terminal?.write(`\x1b[${moved}C`);
   }
 
   private handleHistoryUp(): void {
