@@ -40,6 +40,22 @@ export class McpAuthRequiredError extends Error {
   }
 }
 
+/**
+ * Thrown when a JSON-RPC request exceeds its per-request timeout. The
+ * `mcp` shell command maps this to exit code 124 (matching GNU
+ * `timeout(1)`) so scripts can branch on timeout vs. other failures.
+ */
+export class McpTimeoutError extends Error {
+  readonly method: string;
+  readonly timeoutMs: number;
+  constructor(opts: { method: string; timeoutMs: number }) {
+    super(`MCP request timed out after ${opts.timeoutMs}ms (${opts.method})`);
+    this.name = 'McpTimeoutError';
+    this.method = opts.method;
+    this.timeoutMs = opts.timeoutMs;
+  }
+}
+
 /** Constructor options for {@link McpClient}. */
 export interface McpClientOptions {
   /** Full server endpoint URL. */
@@ -233,7 +249,7 @@ export class McpClient {
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         timedOut = true;
-        reject(new Error(`MCP request timed out after ${this.timeoutMs}ms (${method})`));
+        reject(new McpTimeoutError({ method, timeoutMs: this.timeoutMs }));
         controller.abort();
       }, this.timeoutMs);
     });
@@ -252,7 +268,7 @@ export class McpClient {
         // it doesn't surface as an unhandled rejection after we've already
         // rethrown the timeout error.
         fetchPromise.catch(() => undefined);
-        throw new Error(`MCP request timed out after ${this.timeoutMs}ms (${method})`);
+        throw new McpTimeoutError({ method, timeoutMs: this.timeoutMs });
       }
       throw err;
     } finally {

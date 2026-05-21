@@ -22,6 +22,7 @@ import type { McpAppDef, McpFetchLike, McpServerEntry, McpToolDef } from '../mcp
 import type { OAuthLauncher } from '../../providers/types.js';
 import type { FetchLike } from '../mcp/oauth.js';
 import type { ScriptCatalog } from '../script-catalog.js';
+import { McpTimeoutError } from '../mcp/client.js';
 import { createLogger } from '../../core/logger.js';
 
 const log = createLogger('mcp-command');
@@ -116,6 +117,7 @@ export function createMcpCommand(deps: McpCommandDeps = {}): Command {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log.error('mcp subcommand failed', { sub, error: msg });
+      if (e instanceof McpTimeoutError) return err(`mcp ${sub}: ${msg}`, 124);
       return err(`mcp ${sub}: ${msg}`);
     }
   });
@@ -571,6 +573,8 @@ Slicc-level options (consumed before tool args):
   --timeout <seconds>   Override the per-request timeout (default 60s).
                         Must be a positive integer; invalid values warn
                         on stderr and fall back to the default.
+                        A timeout exits with code 124 (matching GNU
+                        timeout(1)) so scripts can branch on it.
 
 Arguments are coerced according to the tool's JSON Schema:
   string/integer/number/boolean. Bare \`--flag\` (no value or "--" next)

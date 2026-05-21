@@ -1284,7 +1284,7 @@ describe('mcp invoke --timeout flag (integration)', () => {
     expect(toolsCall?.body?.params).toEqual({ name: 'echo', arguments: { msg: 'hi' } });
   });
 
-  it('passes --timeout 1 through to McpClient (verified via fake-timer abort)', async () => {
+  it('passes --timeout 1 through to McpClient and exits 124 on timeout', async () => {
     await setServer('demo', {
       url: 'https://server.test/sse',
       tools: [{ name: 'slow', inputSchema: { type: 'object', properties: {} } }],
@@ -1302,11 +1302,72 @@ describe('mcp invoke --timeout flag (integration)', () => {
       const p = runCmd(['invoke', 'demo', 'slow', '--timeout', '1'], { fetchImpl });
       await vi.advanceTimersByTimeAsync(1100);
       const r = await p;
-      expect(r.exitCode).toBe(1);
+      // Exit 124 distinguishes timeout from other failures (matches GNU timeout(1)).
+      expect(r.exitCode).toBe(124);
       expect(r.stderr).toMatch(/timed out after 1000ms/);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('non-timeout failures still exit 1 (unknown server)', async () => {
+    const r = await runCmd(['invoke', 'no-such-server', 'whatever']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('unknown server "no-such-server"');
+  });
+
+  it('non-timeout failures still exit 1 (unknown tool on known server)', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      tools: [{ name: 'echo', inputSchema: { type: 'object', properties: {} } }],
+    });
+    const r = await runCmd(['invoke', 'demo', 'nope']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('unknown tool "nope"');
+  });
+
+  it('non-timeout failures still exit 1 (JSON-RPC error from server)', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      tools: [
+        {
+          name: 'echo',
+          inputSchema: {
+            type: 'object',
+            properties: { msg: { type: 'string' } },
+            required: ['msg'],
+          },
+        },
+      ],
+    });
+    // Fetch that returns a JSON-RPC error frame for tools/call (but initialize succeeds).
+    const fetchImpl: McpFetchLike = async (_url, init) => {
+      const body = init?.body
+        ? (JSON.parse(init.body as string) as { id: number; method: string })
+        : { id: 1, method: 'initialize' };
+      const encode = (obj: unknown) => new TextEncoder().encode(JSON.stringify(obj));
+      if (body.method === 'tools/call') {
+        return {
+          status: 200,
+          statusText: 'OK',
+          headers: { 'content-type': 'application/json' },
+          body: encode({
+            jsonrpc: '2.0',
+            id: body.id,
+            error: { code: -32602, message: 'invalid params' },
+          }),
+        };
+      }
+      return {
+        status: 200,
+        statusText: 'OK',
+        headers: { 'content-type': 'application/json' },
+        body: encode({ jsonrpc: '2.0', id: body.id, result: {} }),
+      };
+    };
+    const r = await runCmd(['invoke', 'demo', 'echo', '--msg', 'hi'], { fetchImpl });
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(/MCP RPC error -32602/);
   });
 
   it('warns to stderr but still succeeds when --timeout value is invalid (0)', async () => {

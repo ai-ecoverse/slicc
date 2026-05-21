@@ -3,6 +3,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   McpClient,
   McpAuthRequiredError,
+  McpTimeoutError,
   parseResourceMetadataUrl,
   selectSseResponseFrame,
 } from '../../../src/shell/mcp/client.js';
@@ -235,6 +236,28 @@ describe('McpClient: timeout/abort', () => {
     const assertion = expect(p).rejects.toThrow(/timed out/);
     await vi.advanceTimersByTimeAsync(60);
     await assertion;
+    vi.useRealTimers();
+  });
+
+  it('throws McpTimeoutError carrying method, timeoutMs, name, and the legacy message format', async () => {
+    vi.useFakeTimers();
+    const fetchImpl: McpFetchLike = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted by signal')));
+      });
+    const c = new McpClient({ url: 'https://mcp.example/rpc', fetchImpl, timeoutMs: 50 });
+    const p = c.toolsList();
+    // Capture the rejection eagerly so it isn't briefly unhandled while the
+    // timer callback fires.
+    const captured = p.catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(60);
+    const e = (await captured) as McpTimeoutError;
+    expect(e).toBeInstanceOf(McpTimeoutError);
+    expect(e.name).toBe('McpTimeoutError');
+    expect(e.method).toBe('tools/list');
+    expect(e.timeoutMs).toBe(50);
+    // Regression on log scraping: keep the original message format intact.
+    expect(e.message).toBe('MCP request timed out after 50ms (tools/list)');
     vi.useRealTimers();
   });
 });
