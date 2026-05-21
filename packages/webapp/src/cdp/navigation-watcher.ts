@@ -175,10 +175,13 @@ export class NavigationWatcher {
 
     try {
       // Use target discovery + manual attach instead of setAutoAttach.
-      // Auto-attach causes Chrome to pause the opener tab's JS when a
-      // window.open() popup is created, showing "debugger paused in another
-      // tab" and freezing OAuth flows. Manual attach via targetCreated lets
-      // us skip popup targets (those with openerId) entirely.
+      // Auto-attach with `waitForDebuggerOnStart` causes Chrome to pause
+      // both the new target's JS and surface a "debugger paused in
+      // another tab" banner on the opener, which freezes OAuth flows
+      // mid-redirect. Manual `Target.attachToTarget` (without enabling
+      // the `Debugger` domain — we only enable `Page` and `Network`)
+      // does NOT pause anything, so we can safely attach to every
+      // page target regardless of whether it has an `openerId`.
       await this.transport.send('Target.setDiscoverTargets', { discover: true });
     } catch (err) {
       log.error('Failed to enable target discovery', {
@@ -250,9 +253,17 @@ export class NavigationWatcher {
   }
 
   /**
-   * Handle a newly discovered target. Manually attach to non-popup page
-   * targets. Popup targets (those with openerId) are skipped — attaching
-   * to them causes Chrome to pause the opener tab.
+   * Handle a newly discovered target. Manually attach to every page
+   * target — including those with an `openerId` (i.e. tabs opened via
+   * `target="_blank"` link clicks or `window.open()`). The pause-the-
+   * opener pathology that prompted the earlier blanket skip was
+   * specific to `Target.setAutoAttach`; manual attach without
+   * enabling the `Debugger` domain is side-effect-free.
+   *
+   * Skipping every `openerId`-bearing target meant that any new tab
+   * spawned from a link click would never have `Page`/`Network`
+   * enabled on it, so its main-frame `Link` headers (and therefore
+   * the resulting `navigate` lick) were silently dropped.
    */
   private async handleTargetCreated(params: Record<string, unknown>): Promise<void> {
     const info = params['targetInfo'] as
@@ -260,13 +271,6 @@ export class NavigationWatcher {
       | undefined;
     if (!info || info.type !== 'page' || typeof info.targetId !== 'string') return;
     if (info.attached) return; // already attached
-    if (info.openerId) {
-      log.debug('Skipping popup target to avoid debugger pause', {
-        targetId: info.targetId,
-        openerId: info.openerId,
-      });
-      return;
-    }
 
     try {
       await this.transport.send('Target.attachToTarget', {
