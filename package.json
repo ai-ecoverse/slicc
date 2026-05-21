@@ -84,10 +84,10 @@
     "lint-staged": "17.0.4",
     "prettier": "3.8.3",
     "semantic-release": "25.0.3",
-    "tsx": "4.21.0",
+    "tsx": "4.21.1",
     "typescript": "^6.0.0",
     "typescript-eslint": "8.59.3",
-    "vite": "8.0.12",
+    "vite": "8.0.13",
     "vitest": "4.1.6"
   },
   "lint-staged": {
