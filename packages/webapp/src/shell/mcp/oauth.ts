@@ -43,6 +43,8 @@ export interface DiscoveredAuth {
   codeChallengeMethods?: string[];
   grantTypes?: string[];
   issuer: string;
+  /** Which discovery path produced this result. */
+  discoveryPath?: 'prm' | 'asm-origin-fallback';
 }
 
 export interface DynamicRegistrationResult {
@@ -76,38 +78,108 @@ export type FetchLike = (
 /**
  * Discover the authorization server endpoints for an MCP server.
  *
- * 1. If `resourceMetadataUrl` is not provided, fetch
- *    `<serverOrigin>/.well-known/oauth-protected-resource` (RFC 9728).
- * 2. Pick the first `authorization_servers` entry.
- * 3. Fetch `<authServer>/.well-known/oauth-authorization-server` (RFC 8414)
- *    and return the normalized endpoint bundle.
+ * Two-step strategy:
+ *
+ * 1. **PRM first (RFC 9728).** Fetch
+ *    `<serverOrigin>/.well-known/oauth-protected-resource` (or the
+ *    explicit `resourceMetadataUrl`). If it returns a 2xx with a
+ *    non-empty `authorization_servers`, use the first entry as the
+ *    authorization-server base URL.
+ * 2. **ASM-at-origin fallback (RFC 8414).** If PRM is unreachable
+ *    (non-2xx, network error, or empty `authorization_servers`),
+ *    transparently fall back to
+ *    `<serverOrigin>/.well-known/oauth-authorization-server` and treat
+ *    the server's own origin as the authorization server. This matches
+ *    the `mcp-remote` / Cloudflare-worker ecosystem, which routinely
+ *    skips PRM and only publishes ASM at the resource origin.
+ *
+ * The returned bundle carries `discoveryPath` so callers can log which
+ * route succeeded. If neither PRM nor ASM-at-origin yields valid
+ * metadata the thrown error includes both URLs and the underlying
+ * status/message for each.
  */
 export async function discoverAuth(
   serverUrl: string,
   resourceMetadataUrl: string | undefined,
   fetchImpl: FetchLike
 ): Promise<DiscoveredAuth> {
-  const prmUrl =
-    resourceMetadataUrl ?? `${new URL(serverUrl).origin}/.well-known/oauth-protected-resource`;
+  const serverOrigin = new URL(serverUrl).origin;
+  const prmUrl = resourceMetadataUrl ?? `${serverOrigin}/.well-known/oauth-protected-resource`;
+
+  // Step 1 — try PRM.
+  let prm: ProtectedResourceMetadata | null = null;
+  let prmReason: string | null = null;
   log.debug('Fetching PRM', { prmUrl });
-  const prmRes = await fetchImpl(prmUrl, { headers: { Accept: 'application/json' } });
-  if (!prmRes.ok) {
-    throw new Error(`PRM fetch failed: ${prmRes.status} ${prmRes.statusText} (${prmUrl})`);
+  try {
+    const prmRes = await fetchImpl(prmUrl, { headers: { Accept: 'application/json' } });
+    if (!prmRes.ok) {
+      prmReason = `${prmRes.status} ${prmRes.statusText}`;
+    } else {
+      const body = (await prmRes.json()) as ProtectedResourceMetadata;
+      if (!body.authorization_servers || body.authorization_servers.length === 0) {
+        prmReason = 'lists no authorization_servers';
+      } else {
+        prm = body;
+      }
+    }
+  } catch (err) {
+    prmReason = err instanceof Error ? err.message : String(err);
   }
-  const prm = (await prmRes.json()) as ProtectedResourceMetadata;
-  const asList = prm.authorization_servers ?? [];
-  if (asList.length === 0) {
-    throw new Error(`PRM at ${prmUrl} lists no authorization_servers`);
+
+  // Resolve which authorization-server base + ASM URL to use.
+  let asBase: string;
+  let asmUrl: string;
+  let discoveryPath: 'prm' | 'asm-origin-fallback';
+  if (prm && prm.authorization_servers && prm.authorization_servers.length > 0) {
+    asBase = prm.authorization_servers[0].replace(/\/+$/, '');
+    asmUrl = `${asBase}/.well-known/oauth-authorization-server`;
+    discoveryPath = 'prm';
+    log.debug('Discovery via PRM', { prmUrl, asmUrl });
+  } else {
+    asBase = serverOrigin;
+    asmUrl = `${serverOrigin}/.well-known/oauth-authorization-server`;
+    discoveryPath = 'asm-origin-fallback';
+    log.debug('PRM unavailable; falling back to ASM at server origin', {
+      prmUrl,
+      prmReason,
+      asmUrl,
+    });
   }
-  const asBase = asList[0].replace(/\/+$/, '');
-  const asmUrl = `${asBase}/.well-known/oauth-authorization-server`;
+
+  // Step 2 — fetch ASM.
+  let asm: AuthorizationServerMetadata | null = null;
+  let asmReason: string | null = null;
   log.debug('Fetching ASM', { asmUrl });
-  const asmRes = await fetchImpl(asmUrl, { headers: { Accept: 'application/json' } });
-  if (!asmRes.ok) {
-    throw new Error(`ASM fetch failed: ${asmRes.status} ${asmRes.statusText} (${asmUrl})`);
+  try {
+    const asmRes = await fetchImpl(asmUrl, { headers: { Accept: 'application/json' } });
+    if (!asmRes.ok) {
+      asmReason = `${asmRes.status} ${asmRes.statusText}`;
+    } else {
+      asm = (await asmRes.json()) as AuthorizationServerMetadata;
+    }
+  } catch (err) {
+    asmReason = err instanceof Error ? err.message : String(err);
   }
-  const asm = (await asmRes.json()) as AuthorizationServerMetadata;
+
+  if (!asm) {
+    if (discoveryPath === 'asm-origin-fallback') {
+      throw new Error(
+        `MCP OAuth discovery failed. ` +
+          `PRM (${prmUrl}): ${prmReason}. ` +
+          `ASM fallback (${asmUrl}): ${asmReason}.`
+      );
+    }
+    throw new Error(`ASM fetch failed: ${asmReason} (${asmUrl})`);
+  }
   if (!asm.authorization_endpoint || !asm.token_endpoint) {
+    if (discoveryPath === 'asm-origin-fallback') {
+      throw new Error(
+        `MCP OAuth discovery failed. ` +
+          `PRM (${prmUrl}): ${prmReason}. ` +
+          `ASM fallback (${asmUrl}) is missing required endpoints ` +
+          `(authorization_endpoint, token_endpoint).`
+      );
+    }
     throw new Error(`ASM at ${asmUrl} is missing required endpoints`);
   }
   return {
@@ -115,9 +187,10 @@ export async function discoverAuth(
     authorizationEndpoint: asm.authorization_endpoint,
     tokenEndpoint: asm.token_endpoint,
     registrationEndpoint: asm.registration_endpoint,
-    supportedScopes: asm.scopes_supported ?? prm.scopes_supported,
+    supportedScopes: asm.scopes_supported ?? prm?.scopes_supported,
     codeChallengeMethods: asm.code_challenge_methods_supported,
     grantTypes: asm.grant_types_supported,
+    discoveryPath,
   };
 }
 

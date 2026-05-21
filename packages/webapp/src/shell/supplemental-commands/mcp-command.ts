@@ -204,6 +204,12 @@ async function runOAuthForAdd(
   const launcher = deps.oauthLauncher ?? (await defaultLauncher());
 
   const asMetadata = await discoverAuth(serverUrl, resourceMetadataUrl, fetchImpl);
+  log.debug('MCP OAuth discovery succeeded', {
+    name,
+    serverUrl,
+    discoveryPath: asMetadata.discoveryPath,
+    issuer: asMetadata.issuer,
+  });
   const redirectUri = defaultRedirectUri();
   const dcr = await dynamicRegister(asMetadata, redirectUri, fetchImpl);
   const scope =

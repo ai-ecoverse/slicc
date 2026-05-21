@@ -73,15 +73,7 @@ describe('discoverAuth', () => {
     expect(meta.registrationEndpoint).toBe('https://auth.example.com/register');
     expect(meta.codeChallengeMethods).toEqual(['S256']);
     expect(meta.grantTypes).toContain('refresh_token');
-  });
-
-  it('throws when PRM lists no authorization_servers', async () => {
-    const fetchImpl = makeFetchStub([
-      { matchUrl: /.*/, handler: () => jsonResponse(200, { resource: 'x' }) },
-    ]);
-    await expect(discoverAuth('https://mcp.example.com', undefined, fetchImpl)).rejects.toThrow(
-      /lists no authorization_servers/
-    );
+    expect(meta.discoveryPath).toBe('prm');
   });
 
   it('uses an explicit resourceMetadataUrl when provided', async () => {
@@ -106,6 +98,94 @@ describe('discoverAuth', () => {
       fetchImpl
     );
     expect(meta.tokenEndpoint).toBe('https://auth.example.com/token');
+    expect(meta.discoveryPath).toBe('prm');
+  });
+
+  it('falls back to ASM at server origin when PRM 404s', async () => {
+    const fetchImpl = makeFetchStub([
+      {
+        matchUrl: 'https://mcp.example.com/.well-known/oauth-protected-resource',
+        handler: () => jsonResponse(404, { error: 'not_found' }),
+      },
+      {
+        matchUrl: 'https://mcp.example.com/.well-known/oauth-authorization-server',
+        handler: () =>
+          jsonResponse(200, {
+            issuer: 'https://mcp.example.com',
+            authorization_endpoint: 'https://mcp.example.com/authorize',
+            token_endpoint: 'https://mcp.example.com/token',
+            registration_endpoint: 'https://mcp.example.com/register',
+            code_challenge_methods_supported: ['S256'],
+          }),
+      },
+    ]);
+    const meta = await discoverAuth('https://mcp.example.com/mcp', undefined, fetchImpl);
+    expect(meta.discoveryPath).toBe('asm-origin-fallback');
+    expect(meta.issuer).toBe('https://mcp.example.com');
+    expect(meta.authorizationEndpoint).toBe('https://mcp.example.com/authorize');
+    expect(meta.tokenEndpoint).toBe('https://mcp.example.com/token');
+    expect(meta.registrationEndpoint).toBe('https://mcp.example.com/register');
+  });
+
+  it('falls back when PRM is 200 but lists no authorization_servers', async () => {
+    const fetchImpl = makeFetchStub([
+      {
+        matchUrl: 'https://mcp.example.com/.well-known/oauth-protected-resource',
+        handler: () => jsonResponse(200, { resource: 'https://mcp.example.com' }),
+      },
+      {
+        matchUrl: 'https://mcp.example.com/.well-known/oauth-authorization-server',
+        handler: () =>
+          jsonResponse(200, {
+            issuer: 'https://mcp.example.com',
+            authorization_endpoint: 'https://mcp.example.com/authorize',
+            token_endpoint: 'https://mcp.example.com/token',
+          }),
+      },
+    ]);
+    const meta = await discoverAuth('https://mcp.example.com', undefined, fetchImpl);
+    expect(meta.discoveryPath).toBe('asm-origin-fallback');
+    expect(meta.tokenEndpoint).toBe('https://mcp.example.com/token');
+  });
+
+  it('throws with both URLs in the message when PRM and ASM-at-origin both 404', async () => {
+    const fetchImpl = makeFetchStub([
+      {
+        matchUrl: 'https://mcp.example.com/.well-known/oauth-protected-resource',
+        handler: () => jsonResponse(404, { error: 'not_found' }),
+      },
+      {
+        matchUrl: 'https://mcp.example.com/.well-known/oauth-authorization-server',
+        handler: () => jsonResponse(404, { error: 'not_found' }),
+      },
+    ]);
+    const err = await discoverAuth('https://mcp.example.com', undefined, fetchImpl).catch(
+      (e) => e as Error
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain('https://mcp.example.com/.well-known/oauth-protected-resource');
+    expect(err.message).toContain('https://mcp.example.com/.well-known/oauth-authorization-server');
+    expect(err.message).toContain('404');
+  });
+
+  it('throws clearly when ASM-at-origin fallback is missing required endpoints', async () => {
+    const fetchImpl = makeFetchStub([
+      {
+        matchUrl: 'https://mcp.example.com/.well-known/oauth-protected-resource',
+        handler: () => jsonResponse(404, { error: 'not_found' }),
+      },
+      {
+        matchUrl: 'https://mcp.example.com/.well-known/oauth-authorization-server',
+        handler: () => jsonResponse(200, { issuer: 'https://mcp.example.com' }),
+      },
+    ]);
+    const err = await discoverAuth('https://mcp.example.com', undefined, fetchImpl).catch(
+      (e) => e as Error
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toContain('missing required endpoints');
+    expect(err.message).toContain('https://mcp.example.com/.well-known/oauth-authorization-server');
+    expect(err.message).toContain('https://mcp.example.com/.well-known/oauth-protected-resource');
   });
 });
 
