@@ -47,7 +47,9 @@ import {
 } from './provider-settings.js';
 import { quickLabel } from './quick-llm.js';
 import { trackChatSend, trackImageView } from './telemetry.js';
-import { attachLongPressGesture } from './long-press.js';
+// Side-effect import: registers the `<slicc-press-button>` custom element.
+import './press-button.js';
+import type { SliccPressButton } from './press-button.js';
 
 const log = createLogger('chat-panel');
 
@@ -2629,10 +2631,12 @@ export class ChatPanel {
     // Copy — short click copies the most recent assistant response,
     // long-press (>=1s, same gesture as the side rail) or a
     // modifier-click copies the entire chat.
-    const copyBtn = document.createElement('button');
+    const copyBtn = document.createElement('slicc-press-button') as SliccPressButton;
     copyBtn.className = 'msg__feedback-btn';
-    copyBtn.dataset.tooltip = 'Copy last response · hold to copy chat';
-    copyBtn.setAttribute('aria-label', 'Copy last response — hold to copy entire chat');
+    copyBtn.setAttribute('tooltip', 'Copy last response · hold to copy chat');
+    copyBtn.setAttribute('label', 'Copy last response — hold to copy entire chat');
+    // No double-click semantics — keep the short click instant.
+    copyBtn.setAttribute('disable-double-click', '');
     copyBtn.innerHTML =
       '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="m11.75,18h-7.5c-1.24,0-2.25-1.01-2.25-2.25v-7.5c0-1.24,1.01-2.25,2.25-2.25.41,0,.75.34.75.75s-.34.75-.75.75c-.41,0-.75.34-.75.75v7.5c0,.41.34.75.75.75h7.5c.41,0,.75-.34.75-.75,0-.41.34-.75.75-.75s.75.34.75.75c0,1.24-1.01,2.25-2.25,2.25Z"/><path d="m6.75,5c-.41,0-.75-.34-.75-.75,0-1.24,1.01-2.25,2.25-2.25.41,0,.75.34.75.75s-.34.75-.75.75c-.41,0-.75.34-.75.75,0,.41-.34.75-.75.75Z"/><path d="m13,3.5h-2c-.41,0-.75-.34-.75-.75s.34-.75.75-.75h2c.41,0,.75.34.75.75s-.34.75-.75.75Z"/><path d="m13,14h-2c-.41,0-.75-.34-.75-.75s.34-.75.75-.75h2c.41,0,.75.34.75.75s-.34.75-.75.75Z"/><path d="m15.75,14c-.41,0-.75-.34-.75-.75s.34-.75.75-.75c.41,0,.75-.34.75-.75,0-.41.34-.75.75-.75s.75.34.75.75c0,1.24-1.01,2.25-2.25,2.25Z"/><path d="m17.25,5c-.41,0-.75-.34-.75-.75,0-.41-.34-.75-.75-.75-.41,0-.75-.34-.75-.75s.34-.75.75-.75c1.24,0,2.25,1.01,2.25,2.25,0,.41-.34.75-.75.75Z"/><path d="m17.25,9.75c-.41,0-.75-.34-.75-.75v-2c0-.41.34-.75.75-.75s.75.34.75.75v2c0,.41-.34.75-.75.75Z"/><path d="m6.75,9.75c-.41,0-.75-.34-.75-.75v-2c0-.41.34-.75.75-.75s.75.34.75.75v2c0,.41-.34.75-.75.75Z"/><path d="m8.25,14c-1.24,0-2.25-1.01-2.25-2.25,0-.41.34-.75.75-.75s.75.34.75.75c0,.41.34.75.75.75.41,0,.75.34.75.75s-.34.75-.75.75Z"/></svg>';
 
@@ -2685,13 +2689,11 @@ export class ChatPanel {
       flashSuccess();
     };
 
-    attachLongPressGesture(copyBtn, {
-      onShortClick: () => {
-        void copyLastAssistant();
-      },
-      onLongPress: () => {
-        void copyAll();
-      },
+    copyBtn.addEventListener('short-click', () => {
+      void copyLastAssistant();
+    });
+    copyBtn.addEventListener('long-press', () => {
+      void copyAll();
     });
     row.appendChild(copyBtn);
 

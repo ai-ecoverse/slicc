@@ -173,16 +173,16 @@ describe('RailZone', () => {
     rail.addItem(makeItem('terminal', 'bottom'));
     const btn = railEl.querySelector<HTMLButtonElement>('[data-item-id="terminal"]')!;
 
-    expect(btn.querySelector('.rail__item-press-layer')).not.toBeNull();
+    expect(btn.querySelector('.slicc-press-btn__press-layer')).not.toBeNull();
     btn.dispatchEvent(new MouseEvent('mousedown', { button: 0, clientX: 5, clientY: 5 }));
 
-    const ripple = btn.querySelector<HTMLElement>('.rail__item-press');
+    const ripple = btn.querySelector<HTMLElement>('.slicc-press-btn__press');
     expect(ripple).not.toBeNull();
     expect(ripple!.style.transitionDuration).toBe(`${rail.__test__.longPressMs}ms`);
 
     // Releasing before threshold removes the ripple.
     btn.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
-    expect(btn.querySelector('.rail__item-press')).toBeNull();
+    expect(btn.querySelector('.slicc-press-btn__press')).toBeNull();
   });
 
   it('removing an item that was active collapses the panel', () => {

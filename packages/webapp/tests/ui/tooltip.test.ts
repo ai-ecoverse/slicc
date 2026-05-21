@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { initTooltips } from '../../src/ui/tooltip.js';
 
 // The tooltip is laid out as `font-size: 11px` text with `4px 8px` padding;
@@ -127,5 +130,58 @@ describe('tooltip placement', () => {
 
     // No room on the left (8 − 6 − 64 < 0), so it flips to the trigger's right edge + gap.
     expect(left).toBe(46);
+  });
+});
+
+describe('tooltip multi-line behavior', () => {
+  // Inject `.s2-tooltip` rules so jsdom's CSSOM resolves `white-space`,
+  // `max-width`, and `text-align` via `getComputedStyle`. jsdom doesn't
+  // load external stylesheets, so we read the actual CSS file from disk
+  // — this guarantees the test is checking the CSS the app actually
+  // ships, not a hand-typed mirror that could drift.
+  beforeAll(() => {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const cssPath = resolve(__dirname, '../../src/ui/styles/header.css');
+    const css = readFileSync(cssPath, 'utf-8');
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.appendChild(style);
+  });
+
+  it('declares pre-line, max-width: 280px, and left alignment for .s2-tooltip', () => {
+    const tip = document.createElement('div');
+    tip.className = 's2-tooltip';
+    document.body.appendChild(tip);
+    const cs = getComputedStyle(tip);
+    expect(cs.whiteSpace).toBe('pre-line');
+    expect(cs.maxWidth).toBe('280px');
+    expect(cs.textAlign).toBe('left');
+    tip.remove();
+  });
+
+  it('preserves embedded newlines in the tooltip textContent on hover', () => {
+    const btn = document.createElement('button');
+    btn.dataset.tooltip = 'Line one\nLine two\nLine three';
+    document.body.appendChild(btn);
+    (btn as unknown as { __rect: DOMRect }).__rect = makeRect({
+      left: 100,
+      right: 132,
+      top: 100,
+      bottom: 132,
+      width: 32,
+      height: 32,
+    });
+
+    vi.useFakeTimers();
+    btn.dispatchEvent(new MouseEvent('pointerover', { bubbles: true }));
+    vi.advanceTimersByTime(500);
+    const tip = document.querySelector('.s2-tooltip') as HTMLElement;
+
+    expect(tip.textContent).toBe('Line one\nLine two\nLine three');
+    expect(tip.textContent?.split('\n').length).toBe(3);
+    // `white-space: pre-line` honors the literal \n characters, so the
+    // CSS rule + the preserved textContent together guarantee 3 visual
+    // lines without jsdom needing to compute layout.
+    expect(getComputedStyle(tip).whiteSpace).toBe('pre-line');
   });
 });

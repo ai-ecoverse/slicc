@@ -47,7 +47,11 @@ import { createAttachmentTmpWriter } from './attachment-vfs.js';
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
 import { flushCredentialsToWorker, resolveDefaultModel } from './onboarding-helpers.js';
-import { runNewSessionFreeze } from './new-session.js';
+import {
+  runNewSessionFreeze,
+  runNewSessionFreezeQuick,
+  scheduleBackgroundEnrichment,
+} from './new-session.js';
 import { frozenSessionPath, parseFrozenArchive } from './session-freezer.js';
 import { BrowserAPI } from '../cdp/index.js';
 import { type Orchestrator } from '../scoops/index.js';
@@ -938,10 +942,22 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // Wire "New session" — freeze the cone's chat to /sessions/ via the
   // freezer (memory extraction + title), then delete ONLY the cone session
   // from IndexedDB. Scoops survive intentionally so the fresh cone inherits
-  // the existing scoop roster. Long-press passes `freeze: false` to discard
-  // the conversation without archiving it.
+  // the existing scoop roster.
+  //   - `freeze !== false && freeze !== 'quick'` → full freeze (default
+  //     short-click). Blocks reload while the LLM call runs.
+  //   - `freeze === 'quick'`                    → quick freeze (double
+  //     click). Writes a pending-enrichment archive and returns fast;
+  //     `enrichPendingSessions` finishes the work on the next boot.
+  //   - `freeze === false`                      → discard (long press).
+  //     No archive entry is written.
   layout.onClearChat = async (opts) => {
-    if (opts?.freeze !== false) {
+    if (opts?.freeze === 'quick') {
+      try {
+        await runNewSessionFreezeQuick({ vfs: localFs });
+      } catch (err) {
+        log.warn('Quick freezer step failed (clearing anyway)', { error: String(err) });
+      }
+    } else if (opts?.freeze !== false) {
       try {
         await runNewSessionFreeze({ vfs: localFs });
       } catch (err) {
@@ -1575,6 +1591,15 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 
   // Initialize operational telemetry (fire-and-forget)
   initTelemetry().catch(() => {});
+
+  // Background enrichment of pending-frozen sessions. Each impatient
+  // double-click on the new-session button leaves a `pendingEnrichment`
+  // entry in `/sessions/index.json` with a heuristic title; this pass
+  // re-runs the LLM calls and rewrites the archive title + appends the
+  // extracted memories to `/shared/CLAUDE.md`. Deferred behind
+  // `requestIdleCallback` (or `setTimeout(0)` as a fallback) so a slow
+  // enrichment never blocks first paint.
+  scheduleBackgroundEnrichment(localFs);
 }
 
 // ---------------------------------------------------------------------------
@@ -1967,11 +1992,22 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   // Wire "New session" — freeze the cone's chat to /sessions/ via the
   // freezer (memory extraction + title), then clear ONLY the cone
   // session via the kernel client. Scoops survive intentionally so the
-  // fresh cone inherits the existing scoop roster. When `opts.freeze`
-  // is false (long-press on the new-session button) the freezer is
-  // skipped entirely — useful when the user explicitly wants to discard.
+  // fresh cone inherits the existing scoop roster.
+  //   - `freeze !== false && freeze !== 'quick'` → full freeze (default
+  //     short-click). Blocks reload while the LLM call runs.
+  //   - `freeze === 'quick'`                    → quick freeze (double
+  //     click). Writes a pending-enrichment archive and returns fast;
+  //     `enrichPendingSessions` finishes the work on the next boot.
+  //   - `freeze === false`                      → discard (long press).
+  //     No archive entry is written.
   layout.onClearChat = async (opts) => {
-    if (opts?.freeze !== false) {
+    if (opts?.freeze === 'quick') {
+      try {
+        await runNewSessionFreezeQuick({ vfs: localFs });
+      } catch (err) {
+        log.warn('Quick freezer step failed (clearing anyway)', { error: String(err) });
+      }
+    } else if (opts?.freeze !== false) {
       try {
         await runNewSessionFreeze({ vfs: localFs });
       } catch (err) {
@@ -2837,6 +2873,11 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     await loadUIFixtureIntoChat(layout.panels.chat);
   }
   initTelemetry().catch(() => {});
+
+  // Background enrichment of pending-frozen sessions (see the extension
+  // path for rationale). Fire-and-forget after the boot-critical wiring
+  // is in place so a slow enrichment never blocks first paint.
+  scheduleBackgroundEnrichment(localFs);
 
   log.info('Standalone kernel-worker UI ready');
 }

@@ -198,8 +198,9 @@
   font-size: 11px;
   font-weight: 500;
   font-family: var(--s2-font-family);
-  white-space: nowrap;
-  text-align: center;
+  white-space: pre-line;
+  max-width: 280px;
+  text-align: left;
   border-radius: var(--s2-radius-s);
   pointer-events: none;
   opacity: 0;
