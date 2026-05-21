@@ -4,7 +4,7 @@
 
 ## Summary
 
-A new fourth float — **hosted-leader** — runs the existing SLICC webapp, node-server, and Chromium inside an [e2b.dev](https://e2b.dev) sandbox started by a local CLI command (`sliccy --cloud start`). The webapp inside the cloud Chromium is the cone **and** the tray leader, identical to standalone CLI mode. It connects outbound to the existing Cloudflare worker (`wss://www.sliccy.ai/controller/:token`), mints a normal tray, and prints the standard `/join/:token` URL back to the user, who attaches from any follower (iOS app, desktop SLICC, browser tab).
+A new fourth float — **hosted-leader** — runs the existing SLICC webapp, node-server, and Chromium inside an [e2b.dev](https://e2b.dev) sandbox started by a local CLI command (`slicc --cloud start`). The webapp inside the cloud Chromium is the cone **and** the tray leader, the same shape as standalone CLI mode with the boot-time deltas spelled out in §"Hosted leader boot contract". It connects outbound to the existing Cloudflare worker (`wss://www.sliccy.ai/controller/:token`), mints a normal tray, and prints the standard `/join/:token` URL back to the user, who attaches from any follower (iOS app, desktop SLICC, browser tab).
 
 The whole product surface is **CLI + an e2b sandbox**. The Cloudflare worker is unchanged except for a small, gated `kind: 'desktop' | 'hosted'` extension that bumps the reclaim TTL to 30 days for hosted trays so paused sessions can survive across days. There is no new server, no new web UI on sliccy.ai, no new authentication surface.
 
@@ -29,10 +29,10 @@ The following primitives are existing and depended on. Anything _not_ in this li
 
 ## Goals
 
-- A user can run `sliccy --cloud start` from their laptop and within ~3–5 seconds get back a tray join URL that any follower (iOS, desktop, browser) can open to drive the session.
+- A user can run `slicc --cloud start` from their laptop and within ~3–5 seconds get back a tray join URL that any follower (iOS, desktop, browser) can open to drive the session.
 - The hosted runtime reuses the existing webapp and node-server end-to-end. Build artifacts are identical to the desktop CLI build; the e2b template just bakes them in.
 - Followers attach via the existing tray protocol with no new transport.
-- Pause/resume across days works: `sliccy --cloud pause <id>` parks the session on e2b's storage, `sliccy --cloud resume <id>` brings it back; the leader inside the resumed sandbox reconnects to the same tray with the same controller token.
+- Pause/resume across days works: `slicc --cloud pause <id>` parks the session on e2b's storage, `slicc --cloud resume <id>` brings it back; the leader inside the resumed sandbox reconnects to the same tray with the same controller token.
 - Provider credentials reach the cloud sandbox via the existing `EnvSecretStore` boundary — no parallel system, no server-side keychain.
 - e2b's `auto_pause: true` handles the 1h (Base) / 24h (Pro) continuous-runtime cap automatically; we never explicitly pause for cap protection.
 - Worker change is bounded to a single gated branch (`TrayRecord.kind === 'hosted'`): roughly 50–100 lines across `CreateTrayRequest`, `POST /tray`, the DO internal create, both reclaim sites, the leader-summary deadline, the webapp's `createTraySession` body, and worker tests. Desktop trays are untouched.
@@ -144,16 +144,17 @@ export function createSubstrate(id: SubstrateId, opts: SubstrateConfig): Sandbox
                    USER'S MACHINE
    ┌────────────────────────────────────────────┐
    │ Terminal                                   │
-   │   $ sliccy --cloud start [--env-file ...]  │
-   │   $ sliccy --cloud list / pause / resume   │
+   │   $ slicc --cloud start [--env-file ...]  │
+   │   $ slicc --cloud list / pause / resume   │
    │                                            │
    │ Browser / iOS / Desktop SLICC (FOLLOWER)   │
    │   opens https://www.sliccy.ai/join/<tok>   │
    └─────────────┬──────────────────────────────┘
-                 │ (1) CLI calls e2b SDK
-                 │     Sandbox.create({template:"slicc", autoPause:true})
-                 │     uploads ~/.slicc/secrets.env → /slicc/secrets.env
-                 │ (3) CLI reads /tmp/slicc-join.json via sbx.files.read
+                 │ (1) CLI calls substrate.create()
+                 │     (e2b for MVP; CF Sandbox future — see §Substrate seam)
+                 │     substrate maps to Sandbox.create({template:"slicc",
+                 │     autoPause:true}); uploads secrets.env via writeFile
+                 │ (3) CLI reads /tmp/slicc-join.json via substrate.readFile
                  │     prints joinUrl to terminal
                  ▼
        ┌─────────────────────────────────────────┐
@@ -224,17 +225,30 @@ Everything that has to be true at the moment the cloud Chromium loads `localhost
 
 The `onLeaderReady` and `kind` options are additive: legacy callers ignore them, and the worker tolerates a missing `kind` (defaulting to `'desktop'`).
 
+**Two related runtime strings, on purpose.** The URL query parameter is `?runtime=hosted-leader` (short form, matches the existing `electron-overlay` convention in `runtime-mode.ts`). The string sent on tray attach (carried in `LeaderTraySession.runtime` and surfaced to followers) is `slicc-hosted-leader` (long form, matches the existing `slicc-standalone` convention). The boot path translates from the URL form to the attach form when constructing `LeaderTrayManager` options; followers see the long form in tray-status displays.
+
+**Stale `storedJoinUrl` precedence at boot.** Today `main.ts:2654-2683` checks `localStorage[TRAY_JOIN_STORAGE_KEY]` BEFORE `localStorage[TRAY_WORKER_STORAGE_KEY]` and starts a **follower** if a join URL is present. With a persisted `/data/profile` that survives pause/resume, a hosted sandbox that ever previously joined some tray as a follower (or accidentally inherited a join URL from a teardown that didn't clean up) could boot as a follower instead of a leader on next start. The hosted-leader branch MUST short-circuit this:
+
+```ts
+// In the tray block, BEFORE checking storedJoinUrl:
+if (runtimeMode === 'hosted-leader') {
+  window.localStorage.removeItem(TRAY_JOIN_STORAGE_KEY);
+  // Always start leader, never follower.
+  startHostedLeader();
+  return;
+}
+```
+
+`runtimeMode` must be threaded into `mainStandaloneWorker`. Today only an `isElectronOverlay` boolean is passed (`main.ts:3190`). Change the signature to pass the full `UiRuntimeMode` (or pass both `isElectronOverlay` and `isHostedLeader` booleans — preference is the full mode, since hosted-leader is the second-to-last reason we'll add such a parameter, not the last).
+
 ## CLI surface
 
-Five subcommands under `sliccy --cloud`. All call the e2b SDK from the local CLI; no other dependencies.
+Five subcommands under `slicc --cloud`. All resolve a `SandboxSubstrate` via the `createSubstrate(id, cfg)` factory (see §"Substrate seam"). For MVP, the only valid `id` is `'e2b'`; the e2b TS SDK is the only substrate-specific runtime dependency, and it is imported only from `packages/node-server/src/cloud/substrates/e2b.ts`.
+
+**Argv parsing rule.** `--cloud` (laptop-side orchestration) and `--hosted` (in-sandbox node-server boot) are mutually exclusive. node-server's argv parser rejects `--hosted --cloud …` with a clear error. `--cloud <subcmd>` is dispatched before any non-cloud server boot logic; `--hosted` triggers the in-sandbox path; bare `slicc` (no flags) continues to mean "open a local desktop SLICC" exactly as today.
 
 ```
-All subcommands resolve a `SandboxSubstrate` instance via `createSubstrate(id, cfg)`
-(see §"Substrate seam"). `id` defaults to `'e2b'` for MVP; `--substrate <id>` flag
-overrides. The subcommand bodies below use abstract `substrate.*` / `handle.*`
-calls — the e2b SDK only appears in `cloud/substrates/e2b.ts`.
-
-sliccy --cloud start [--env-file <path>] [--name <label>] [--substrate <id>]
+slicc --cloud start [--env-file <path>] [--name <label>] [--substrate <id>]
   • Resolves substrate (default e2b). Reads its credential (E2B_API_KEY for
     e2b) from process.env or ~/.slicc/secrets.env.
   • Reads --env-file or default ~/.slicc/secrets.env.
@@ -248,18 +262,18 @@ sliccy --cloud start [--env-file <path>] [--name <label>] [--substrate <id>]
   • Prints: joinUrl, sandboxId, "Open in iOS / browser / desktop SLICC"
   • Appends {substrate, sandboxId, name, ...} entry to ~/.slicc/cloud-sessions.json
 
-sliccy --cloud list
+slicc --cloud list
   • Reads ~/.slicc/cloud-sessions.json
   • Groups entries by substrate; for each group, calls substrate.list() to
     enrich state.
   • Prints table: substrate, sandboxId, name, state (running|paused|dead),
     joinUrl, age
 
-sliccy --cloud pause <sandboxId|name>
+slicc --cloud pause <sandboxId|name>
   • handle = await substrate.connect(sandboxId)
   • handle.pause(); updates local registry to state=paused
 
-sliccy --cloud resume <sandboxId|name>
+slicc --cloud resume <sandboxId|name>
   • handle = await substrate.connect(sandboxId)
   • Issues a "kick" to the resumed leader to recover from the case where
     reconnect attempts had already given up before the pause:
@@ -282,7 +296,7 @@ sliccy --cloud resume <sandboxId|name>
     warning but proceeds.
   • Prints joinUrl (same or new).
 
-sliccy --cloud kill <sandboxId|name>
+slicc --cloud kill <sandboxId|name>
   • handle = await substrate.connect(sandboxId)
   • handle.kill(); removes registry entry
 ```
@@ -326,7 +340,7 @@ A thin shim around the existing CLI boot. Differences from default:
 
 ```ts
 app.post('/api/cloud-status', express.json(), (req, res) => {
-  const { joinUrl, trayId, controllerUrl, webhookUrl, runtime } = req.body;
+  const { joinUrl, trayId, controllerUrl, webhookUrl, runtime, sliccVersion } = req.body;
   if (typeof joinUrl !== 'string') return res.status(400).end();
   fs.writeFileSync(
     '/tmp/slicc-join.json',
@@ -336,6 +350,7 @@ app.post('/api/cloud-status', express.json(), (req, res) => {
       controllerUrl,
       webhookUrl,
       runtime,
+      sliccVersion,
       updatedAt: new Date().toISOString(),
     })
   );
@@ -343,7 +358,14 @@ app.post('/api/cloud-status', express.json(), (req, res) => {
 });
 ```
 
-The file lives at `/tmp/slicc-join.json` because the CLI's polling step is a one-liner: `await sbx.files.read('/tmp/slicc-join.json')`. Each `POST /api/cloud-status` overwrites it, so the file's `mtime` (or a monotonic `updatedAt`) is the signal a re-mint has happened on resume.
+**`/api/leader-restart` contract.** Localhost only. Triggers a CDP `Page.reload()` against the webapp tab so a stuck leader (`onReconnectGaveUp` before pause, see Failure mode #5) can recover. Two implementation details the spec must pin down so this doesn't break in practice:
+
+1. **Page target identification.** node-server already maintains a CDP connection (used by the agent's `BrowserAPI`). `/api/leader-restart` reuses that connection. It must find the SLICC page target — not the blank `chrome://newtab/` or a devtools target. Strategy: filter `Target.getTargets()` by URL prefix `http://localhost:<port>/` (the same port node-server serves on). If multiple matches exist, prefer the one with `type === 'page'` and `attached === true`. If zero matches, the endpoint returns `503 NO_LEADER_TAB` and the CLI surfaces the error.
+2. **Retry loop for cold-start race.** CLI invokes `/api/leader-restart` immediately after `Sandbox.connect` returns. If Chromium hasn't fully come back yet (CDP not ready), the endpoint returns `503` and the CLI retries 5× at 1s intervals before giving up. node-server's existing CDP-readiness wait should cover most of this internally; the retry is defense in depth.
+
+The file lives at `/tmp/slicc-join.json` because the CLI's polling step is a one-liner: `await handle.readFile('/tmp/slicc-join.json')`. Each `POST /api/cloud-status` overwrites it. The CLI uses the JSON's monotonic `updatedAt` field (not container mtime, which is unreliable across pause/resume) to detect a re-mint after resume.
+
+**Persisted payload shape.** The POST body and the written JSON include `{joinUrl, trayId, controllerUrl, webhookUrl, runtime, sliccVersion, updatedAt}`. `sliccVersion` is sourced from the webapp's compiled-in version constant (matches the template's `metadata.sliccVersion` at build time); the CLI uses it to detect template/version skew on resume.
 
 ## webapp `hosted-leader` runtime
 
@@ -412,13 +434,13 @@ start_cmd = "slicc-start"
 ```bash
 #!/bin/sh
 set -e
-exec /opt/slicc/node-server/dist/index.js --hosted --port 5710 --no-open
+exec /opt/slicc/node-server/index.js --hosted --port 5710 --no-open
 ```
 
 **Build pipeline.**
 
 1. `npm run build` at repo root → produces `dist/node-server/` + `dist/ui/`.
-2. `npm run build -w @slicc/e2b-template` → calls `e2b template build`, publishes a new template version tagged with the SLICC release version (`metadata.sliccVersion`).
+2. `packages/dev-tools/e2b-template/scripts/build-template.sh` → calls `e2b template build`, publishes a new template version tagged with the SLICC release version (read from root `package.json`'s `version`). Stored as `metadata.sliccVersion` on the published template. The template folder is NOT an npm workspace — invoke the script directly (a root-level alias `npm run build:e2b-template` is optional).
 3. Release gate (CI): rebuild + republish template; run `verify-template.sh` against the freshly published template.
 
 **Resource sizing.** 2 vCPU / 2 GB memory chosen as the baseline. Pause time scales ~4s/GB RAM, so 2 GB = ~8s to pause. We will revisit when we have real workloads.
@@ -429,14 +451,14 @@ exec /opt/slicc/node-server/dist/index.js --hosted --port 5710 --no-open
 
 ```
 PAUSE
-1. CLI: sliccy --cloud pause <id> | OR | e2b auto-pause on runtime cap
+1. CLI: slicc --cloud pause <id> | OR | e2b auto-pause on runtime cap
 2. e2b serializes container state: FS at /data + /slicc, memory of all
    running processes (node-server, Chromium, the webapp page), open
    file descriptors (NOT open sockets).
 3. Sandbox is "paused" — billed for storage only, no compute.
 
 RESUME
-1. CLI: sliccy --cloud resume <id>
+1. CLI: slicc --cloud resume <id>
 2. sbx = await Sandbox.connect(<sandboxId>) — restore container, ~1s+
 3. node-server is alive; Chromium is alive; webapp page is alive mid-frame.
 4. Webapp's LeaderTrayManager auto-reconnect loop detects the dead WebSocket
@@ -446,7 +468,7 @@ RESUME
    window. With the hosted-tray TTL bump (below), this works up to 30 days.
 6. LeaderTrayManager's onReconnected fires → onLeaderReady → POST
    /api/cloud-status → /tmp/slicc-join.json refreshed.
-7. CLI's resume command polls for the file mtime to advance, then prints
+7. CLI's resume command polls for the file's `updatedAt` to advance past the last-seen value, then prints
    the joinUrl (which is the same URL as before — the controller token
    didn't change).
 ```
@@ -478,32 +500,33 @@ const reclaimMs = tray.kind === 'hosted' ? HOSTED_TRAY_RECLAIM_TTL_MS : TRAY_REC
 
 ## Components inventory
 
-| Path / artifact                                     | Status                                   | Notes                                                                                                                                                                                                                                                                         |
-| --------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/dev-tools/e2b-template/`                  | **NEW** directory (NOT an npm workspace) | Dockerfile, e2b.toml, start.sh, build scripts. Owns template version pinning. Carries its own `package.json` only if needed by the `e2b template build` tooling; not part of `workspaces` in root `package.json`.                                                             |
-| `packages/node-server/src/cloud/`                   | **NEW** subdirectory                     | `start.ts`, `list.ts`, `pause.ts`, `resume.ts`, `kill.ts` — one file per subcommand, substrate-agnostic. `registry.ts` for `~/.slicc/cloud-sessions.json` I/O (each entry tagged with `substrate: SubstrateId`).                                                              |
-| `packages/node-server/src/cloud/substrate.ts`       | **NEW**                                  | `SandboxSubstrate` interface, `SandboxHandle`, `CreateOpts`, `createSubstrate(id, cfg)` factory. The only place CLI code couples to substrate-specific shapes.                                                                                                                |
-| `packages/node-server/src/cloud/substrates/e2b.ts`  | **NEW**                                  | E2B implementation of `SandboxSubstrate` — thin wrapper over the e2b TS SDK. Sole holder of e2b SDK imports in the codebase.                                                                                                                                                  |
-| `packages/node-server/src/index.ts`                 | **MODIFIED**                             | New `--hosted` flag (parallels `--serve-only`); new `--cloud <subcmd>` dispatcher. The hosted flag triggers container Chrome args, disables auto-open, registers `/api/cloud-status` and `/api/leader-restart`. `/api/runtime-config` reads `SLICC_TRAY_WORKER_BASE_URL` env. |
-| `packages/node-server/src/chrome-launch.ts`         | **MODIFIED**                             | New `--hosted` code path that appends container flags (`--headless=new`, `--no-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu`, `--font-render-hinting=none`). Honors `CHROME_USER_DATA_DIR` env. Non-hosted path unchanged.                                             |
-| `packages/webapp/src/ui/runtime-mode.ts`            | **MODIFIED**                             | Add `'hosted-leader'` to `UiRuntimeMode`; teach `resolveUiRuntimeMode` and `shouldUseRuntimeModeTrayDefaults` about it.                                                                                                                                                       |
-| `packages/webapp/src/ui/main.ts`                    | **MODIFIED**                             | hosted-leader branch in the tray-block at ~line 2687 always starts the leader regardless of stored localStorage, threading `runtime='slicc-hosted-leader'` and `kind='hosted'`, plus an `onLeaderReady` callback POSTing to `/api/cloud-status`.                              |
-| `packages/webapp/src/ui/page-leader-tray.ts`        | **MODIFIED**                             | Accept `runtime` and `kind` parameters; remove the `runtime: 'slicc-standalone'` hardcode at line 190.                                                                                                                                                                        |
-| `packages/webapp/src/scoops/tray-leader.ts`         | **MODIFIED**                             | Add `onLeaderReady?: (session: LeaderTraySession) => void` option; fire from `start()` after the first successful `connectOnce()`. Add `kind?: 'desktop' \| 'hosted'` option; include in `createTraySession()` body.                                                          |
-| `packages/cloudflare-worker/src/shared.ts`          | **MODIFIED**                             | Add `HOSTED_TRAY_RECLAIM_TTL_MS = 30 * 24 * 60 * 60 * 1000`. Add optional `kind` to `CreateTrayRequest`. Add `kind` to `TrayRecord`.                                                                                                                                          |
-| `packages/cloudflare-worker/src/index.ts`           | **MODIFIED**                             | `POST /tray` handler reads `kind` from request body (default `'desktop'`); forwards to DO internal create.                                                                                                                                                                    |
-| `packages/cloudflare-worker/src/session-tray.ts`    | **MODIFIED**                             | Persist `kind` on `TrayRecord`. Branch reclaim TTL at both sites: the disconnect-grace at ~line 1106 AND `leaderSummary().reconnectDeadline` at ~line 698.                                                                                                                    |
-| `packages/cloudflare-worker/tests/index.test.ts`    | **MODIFIED**                             | Cover the `kind=hosted` POST /tray branch, the 30-day reclaim window, and the new `reconnectDeadline` for hosted trays.                                                                                                                                                       |
-| `packages/cloudflare-worker/tests/deployed.test.ts` | **MODIFIED**                             | Smoke check the new field shape on the deployed staging worker (worker-routes-mirror rule).                                                                                                                                                                                   |
-| `packages/node-server/tests/cloud/*`                | **NEW** tests                            | Mock e2b SDK; verify subcommand parsing, registry I/O, polling, the resume-kick / page-reload path, monotonic `updatedAt` semantics, template-version-mismatch warning.                                                                                                       |
-| `packages/node-server/tests/cloud-live.test.ts`     | **NEW** opt-in test                      | Gated by `SLICC_TEST_E2B_API_KEY` (matching `feat/s3-da-mounts` `test:live`). Excluded from CI. Asserts full create → cloud-status → tray-join → pause → resume → still-works cycle.                                                                                          |
-| `packages/webapp/tests/scoops/tray-leader.test.ts`  | **MODIFIED**                             | Verify `onLeaderReady` fires on initial create AND on each reconnect; verify `kind` is included in `POST /tray` body when set.                                                                                                                                                |
-| `README.md`                                         | **MODIFIED**                             | New section "Cloud (`sliccy --cloud`)" — quickstart, prerequisites (e2b account, secrets.env), known limitations (no OAuth providers, no FS-Access mounts, 30-day pause cliff).                                                                                               |
-| `docs/architecture.md`                              | **MODIFIED**                             | Add the hosted-leader float to the floats list and the subsystem map.                                                                                                                                                                                                         |
-| `docs/shell-reference.md`                           | **MODIFIED**                             | Document the `--cloud` subcommands.                                                                                                                                                                                                                                           |
-| `CLAUDE.md` (root)                                  | **MODIFIED**                             | Add "Cloud (hosted-leader) float" to the Floats list under "Concepts".                                                                                                                                                                                                        |
-| `packages/node-server/CLAUDE.md`                    | **MODIFIED**                             | Document `--hosted` mode and `--cloud` subcommands.                                                                                                                                                                                                                           |
-| `packages/cloudflare-worker/CLAUDE.md`              | **MODIFIED**                             | Document the `kind: 'desktop' \| 'hosted'` TrayRecord branch and `HOSTED_TRAY_RECLAIM_TTL_MS`.                                                                                                                                                                                |
+| Path / artifact                                      | Status                                   | Notes                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/dev-tools/e2b-template/`                   | **NEW** directory (NOT an npm workspace) | Dockerfile, e2b.toml, start.sh, build scripts. Owns template version pinning. Carries its own `package.json` only if needed by the `e2b template build` tooling; not part of `workspaces` in root `package.json`.                                                                                                                                                                                  |
+| `packages/node-server/src/cloud/`                    | **NEW** subdirectory                     | `start.ts`, `list.ts`, `pause.ts`, `resume.ts`, `kill.ts` — one file per subcommand, substrate-agnostic. `registry.ts` for `~/.slicc/cloud-sessions.json` I/O (each entry tagged with `substrate: SubstrateId`).                                                                                                                                                                                   |
+| `packages/node-server/src/cloud/substrate.ts`        | **NEW**                                  | `SandboxSubstrate` interface, `SandboxHandle`, `CreateOpts`, `createSubstrate(id, cfg)` factory. The only place CLI code couples to substrate-specific shapes.                                                                                                                                                                                                                                     |
+| `packages/node-server/src/cloud/substrates/e2b.ts`   | **NEW**                                  | E2B implementation of `SandboxSubstrate` — thin wrapper over the e2b TS SDK. Sole holder of e2b SDK imports in the codebase.                                                                                                                                                                                                                                                                       |
+| `packages/node-server/src/index.ts`                  | **MODIFIED**                             | New `--hosted` flag (parallels `--serve-only`); new `--cloud <subcmd>` dispatcher. The hosted flag triggers container Chrome args, disables auto-open, registers `/api/cloud-status` and `/api/leader-restart`. `/api/runtime-config` reads `SLICC_TRAY_WORKER_BASE_URL` env.                                                                                                                      |
+| `packages/node-server/src/chrome-launch.ts`          | **MODIFIED**                             | New `--hosted` code path that appends container flags (`--headless=new`, `--no-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu`, `--font-render-hinting=none`). Honors `CHROME_USER_DATA_DIR` env. Non-hosted path unchanged.                                                                                                                                                                  |
+| `packages/webapp/src/ui/runtime-mode.ts`             | **MODIFIED**                             | Add `'hosted-leader'` to `UiRuntimeMode`; teach `resolveUiRuntimeMode` and `shouldUseRuntimeModeTrayDefaults` about it.                                                                                                                                                                                                                                                                            |
+| `packages/webapp/src/ui/main.ts`                     | **MODIFIED**                             | hosted-leader branch in the tray-block at ~line 2687 always starts the leader regardless of stored localStorage, threading `runtime='slicc-hosted-leader'` and `kind='hosted'`, plus an `onLeaderReady` callback POSTing to `/api/cloud-status`.                                                                                                                                                   |
+| `packages/webapp/src/ui/page-leader-tray.ts`         | **MODIFIED**                             | Accept `runtime` and `kind` parameters; remove the `runtime: 'slicc-standalone'` hardcode at line 190.                                                                                                                                                                                                                                                                                             |
+| `packages/webapp/src/scoops/tray-leader.ts`          | **MODIFIED**                             | Add `onLeaderReady?: (session: LeaderTraySession) => void` option; fire from `start()` after the first successful `connectOnce()`. Add `kind?: 'desktop' \| 'hosted'` option; include in `createTraySession()` body.                                                                                                                                                                               |
+| `packages/cloudflare-worker/src/shared.ts`           | **MODIFIED**                             | Add `HOSTED_TRAY_RECLAIM_TTL_MS = 30 * 24 * 60 * 60 * 1000`. Add optional `kind` to `CreateTrayRequest`. Add `kind` to `TrayRecord`.                                                                                                                                                                                                                                                               |
+| `packages/cloudflare-worker/src/index.ts`            | **MODIFIED**                             | `POST /tray` at `createTray()` (line 287) currently ignores the request body; change to parse `await request.json()` for optional `kind: 'desktop' \| 'hosted'` (default `'desktop'`), include in `CreateTrayRequest` forwarded to DO internal create. Tolerate empty body for backward compat.                                                                                                    |
+| `packages/cloudflare-worker/src/session-tray.ts`     | **MODIFIED**                             | Persist `kind` on `TrayRecord`. Branch reclaim TTL at both sites: the disconnect-grace at ~line 1106 AND `leaderSummary().reconnectDeadline` at ~line 698.                                                                                                                                                                                                                                         |
+| `packages/cloudflare-worker/tests/index.test.ts`     | **MODIFIED**                             | Cover the `kind=hosted` POST /tray branch, the 30-day reclaim window, and the new `reconnectDeadline` for hosted trays.                                                                                                                                                                                                                                                                            |
+| `packages/cloudflare-worker/tests/deployed.test.ts`  | **MODIFIED**                             | Smoke check the new field shape on the deployed staging worker (worker-routes-mirror rule).                                                                                                                                                                                                                                                                                                        |
+| `packages/node-server/tests/cloud/*`                 | **NEW** tests                            | Mock the `SandboxSubstrate` interface (NOT the e2b SDK directly); verify subcommand parsing, registry I/O, polling, the resume-kick path, monotonic `updatedAt` semantics, template-version-mismatch warning. Includes a localhost-binding test for `/api/leader-restart` (refuses non-localhost) and a page-target-resolution test (no SLICC page → 503; multiple → first `type==='page'` match). |
+| `packages/node-server/tests/cloud/substrate.test.ts` | **NEW** tests                            | Type-level fixture for the `SandboxSubstrate` interface; in-memory fake substrate used by the other cloud tests.                                                                                                                                                                                                                                                                                   |
+| `packages/node-server/tests/cloud-live.test.ts`      | **NEW** opt-in test                      | Gated by `SLICC_TEST_E2B_API_KEY` (matching `feat/s3-da-mounts` `test:live`). Excluded from CI. Asserts full create → cloud-status → tray-join → pause → resume → still-works cycle.                                                                                                                                                                                                               |
+| `packages/webapp/tests/scoops/tray-leader.test.ts`   | **MODIFIED**                             | Verify `onLeaderReady` fires on initial create AND on each reconnect; verify `kind` is included in `POST /tray` body when set.                                                                                                                                                                                                                                                                     |
+| `README.md`                                          | **MODIFIED**                             | New section "Cloud (`slicc --cloud`)" — quickstart, prerequisites (e2b account, secrets.env), known limitations (no OAuth providers, no FS-Access mounts, 30-day pause cliff).                                                                                                                                                                                                                     |
+| `docs/architecture.md`                               | **MODIFIED**                             | Add the hosted-leader float to the floats list and the subsystem map.                                                                                                                                                                                                                                                                                                                              |
+| `docs/shell-reference.md`                            | **MODIFIED**                             | Document the `--cloud` subcommands.                                                                                                                                                                                                                                                                                                                                                                |
+| `CLAUDE.md` (root)                                   | **MODIFIED**                             | Add "Cloud (hosted-leader) float" to the Floats list under "Concepts".                                                                                                                                                                                                                                                                                                                             |
+| `packages/node-server/CLAUDE.md`                     | **MODIFIED**                             | Document `--hosted` mode and `--cloud` subcommands.                                                                                                                                                                                                                                                                                                                                                |
+| `packages/cloudflare-worker/CLAUDE.md`               | **MODIFIED**                             | Document the `kind: 'desktop' \| 'hosted'` TrayRecord branch and `HOSTED_TRAY_RECLAIM_TTL_MS`.                                                                                                                                                                                                                                                                                                     |
 
 Nothing else is touched. No new npm workspaces (template lives as a folder, not a workspace). New external dependency: the e2b TypeScript SDK package (currently published as `e2b` on npm) in `packages/node-server/package.json` — exact name and version pin confirmed at implementation time.
 
@@ -563,6 +586,7 @@ Each phase is independently shippable and reviewable. Phases 2–4 are the bulk 
 2. **`@e2b/sdk` package name and version pin.** Current name as of design time is `e2b` on npm (TS SDK). To be confirmed when wiring into `packages/node-server/package.json`.
 3. **Chromium auto-update inside the template.** The template snapshot pins Chromium to whatever was in `apt` at build time. Updating Chromium requires a template rebuild. Acceptable; documented in `packages/dev-tools/e2b-template/README.md`.
 4. **`/data/profile` size growth.** Long-running paused sessions accumulate IndexedDB / mount data. Pricing implication via paused storage costs. Punt until we observe real usage.
+5. **`substrate.list()` capability for e2b.** The CLI's `--cloud list` needs to enumerate sandboxes owned by the user (filtered to the SLICC template). The e2b TS SDK's list API and filtering capabilities (by template? by metadata?) must be confirmed at implementation time. Fallback for MVP if the API is limited: `list` reads only `~/.slicc/cloud-sessions.json` and per-entry calls `substrate.connect(id).getInfo()`. The interface accommodates either approach — `SandboxSubstrate.list()` returns a `SandboxSummary[]` from whatever the substrate can provide.
 
 ## Future work
 
