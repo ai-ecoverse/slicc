@@ -60,16 +60,17 @@ The compute substrate is **e2b.dev sandboxes** with a custom baked SLICC templat
 
 Alternatives:
 
-- **Cloudflare Sandbox** (the prior draft's substrate) — viable, but its natural fit is worker/DO-orchestrated (per-session DO owning the sandbox lifecycle), not laptop-CLI-orchestrated. Deferred to future work as an alternate substrate; the §"Substrate seam" below ensures it can be added without rewriting `cloud/`.
-- **Self-managed VM (Fly.io, Cloud Run, etc.)** — more operational surface, no built-in pause/resume. Could plug in as a substrate but no MVP motivation.
+- **Other sandbox runtimes** (Cloudflare Sandbox, Fly.io, Cloud Run, self-managed VMs, etc.) — not surveyed in detail for MVP. The §"Substrate seam" below makes adding any of them later a single-file addition to `cloud/substrates/` plus its own template package, without rewriting `cloud/`. MVP picks e2b because it is the path of least resistance for a laptop-orchestrated workflow with first-class pause/resume.
 
 ## Substrate seam
 
-The CLI does not call the e2b SDK directly. It calls a `SandboxSubstrate` interface — a small TypeScript abstraction over the substrate-specific operations the CLI subcommands need. MVP ships exactly one implementation (e2b); the interface exists so a future Cloudflare Sandbox (or any other) substrate slots in without rewriting `cloud/`.
+The CLI does not call the e2b SDK directly. It calls a `SandboxSubstrate` interface — a small TypeScript abstraction over the substrate-specific operations the CLI subcommands need. MVP ships exactly one substrate (`e2b`). The interface exists as a swap point, not as a commitment to any other specific substrate — future ones extend `SubstrateId` if and when they exist.
 
 ```ts
 // packages/node-server/src/cloud/substrate.ts
-export type SubstrateId = 'e2b' | 'cloudflare-sandbox';
+// MVP recognizes only 'e2b'. Future substrates extend this union when they exist;
+// do not enumerate speculative values here.
+export type SubstrateId = 'e2b';
 
 export interface SandboxSubstrate {
   readonly id: SubstrateId;
@@ -90,7 +91,7 @@ export interface SandboxHandle {
 }
 
 export interface CreateOpts {
-  template: string; // substrate-specific identifier (e2b template name, CF image, etc.)
+  template: string; // substrate-specific template identifier
   envVars: Record<string, string>;
   metadata: Record<string, string>; // sliccVersion + substrate-specific opaque blob
   autoPauseOnCap: boolean; // semantic flag; substrate decides how to honor
@@ -100,21 +101,29 @@ export interface CreateOpts {
 export function createSubstrate(id: SubstrateId, opts: SubstrateConfig): SandboxSubstrate;
 ```
 
-**What each substrate maps to:**
+**Why the abstraction exists if there's only one substrate.** Two concrete benefits worth more than the ~50 LoC overhead even at one-substrate scope:
 
-| Concept                | `e2b` impl                                                               | `cloudflare-sandbox` impl (future)                                                                 |
-| ---------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| `create`               | `Sandbox.create({template, autoPause, envs, metadata})` from the e2b SDK | POST to a worker control endpoint that calls CF Sandbox's create API; or direct SDK if creds local |
-| `connect`              | `Sandbox.connect(sandboxId)`                                             | Re-attach to the persistent CF Sandbox via its SDK (the worker DO holds the binding)               |
-| `pause`                | `sbx.pause()`                                                            | CF Sandbox's snapshot+stop (managed by the DO)                                                     |
-| `kill`                 | `sbx.kill()`                                                             | CF Sandbox destroy via worker / SDK                                                                |
-| `writeFile`            | `sbx.files.write(path, contents)`                                        | CF Sandbox FS API                                                                                  |
-| `run`                  | `sbx.commands.run(cmd)`                                                  | CF Sandbox shell-run primitive                                                                     |
-| `autoPauseOnCap: true` | `autoPause: true` at create                                              | DO alarm scheduled at cap-minus-safety; alarm calls `pause`                                        |
-| Public URL             | `https://{port}-{sandboxId}.e2b.app/` (unused)                           | CF Sandbox's worker-routed URL (also unused; both substrates route through tray)                   |
-| Credential boundary    | User's local `E2B_API_KEY`                                               | Worker-side (preferred) or local (alternative)                                                     |
+1. **Test isolation.** `cloud/*` tests mock the `SandboxSubstrate` interface with an in-memory fake. They never reach for the e2b SDK at all — no network, no auth, no fixtures.
+2. **Single coupling point.** The e2b SDK is imported in exactly one file (`cloud/substrates/e2b.ts`). When the SDK ships breaking changes between versions, the blast radius is one file.
 
-**The CLI subcommands are substrate-agnostic.** `start.ts` reads `substrate: SubstrateId` from CLI flags (`--substrate e2b` default) or `~/.slicc/cloud-sessions.json` for resume/list, calls `createSubstrate(id, cfg)`, and never references e2b directly. The registry tags every session with its substrate:
+A second substrate is something the seam _permits_, not something we're designing toward in MVP. We do not name candidates here.
+
+**Substrate ↔ e2b concept map** (the only mapping committed in MVP):
+
+| Concept                | `e2b` implementation                                                                               |
+| ---------------------- | -------------------------------------------------------------------------------------------------- |
+| `create`               | `Sandbox.create({template, autoPause, envs, metadata})` from the e2b SDK                           |
+| `connect`              | `Sandbox.connect(sandboxId)`                                                                       |
+| `pause`                | `sbx.pause()`                                                                                      |
+| `kill`                 | `sbx.kill()`                                                                                       |
+| `writeFile`            | `sbx.files.write(path, contents)`                                                                  |
+| `readFile`             | `sbx.files.read(path)`                                                                             |
+| `run`                  | `sbx.commands.run(cmd)`                                                                            |
+| `autoPauseOnCap: true` | `autoPause: true` passed at create                                                                 |
+| Public URL             | `https://{port}-{sandboxId}.e2b.app/` (constructed but unused — leader reaches users via the tray) |
+| Credential boundary    | User's local `E2B_API_KEY` (env or `~/.slicc/secrets.env`)                                         |
+
+**The CLI subcommands are substrate-agnostic.** `start.ts` resolves `substrate: SubstrateId` from a `--substrate` flag (defaulting to `'e2b'`, the only valid value for MVP) or from `~/.slicc/cloud-sessions.json` for resume/list, calls `createSubstrate(id, cfg)`, and never references e2b directly. The registry tags every session with its substrate so future entries don't have to backfill:
 
 ```json
 {
@@ -134,9 +143,9 @@ export function createSubstrate(id: SubstrateId, opts: SubstrateConfig): Sandbox
 
 **What stays substrate-agnostic outside `cloud/`:** the webapp's hosted-leader boot path, `node-server --hosted` mode, `/api/cloud-status` / `/api/leader-restart`, the container Chrome flags, the worker's `kind: 'hosted'` plumbing and 30-day reclaim TTL, `SLICC_TRAY_WORKER_BASE_URL`. None of these reference e2b semantically — they sit above the substrate seam.
 
-**What is substrate-specific outside `cloud/`:** the template package. `packages/dev-tools/e2b-template/` is e2b-only; a future CF Sandbox substrate adds a sibling `packages/dev-tools/cf-sandbox-image/` with its own image format and build pipeline. The webapp + node-server binaries baked into both are identical.
+**What is substrate-specific outside `cloud/`:** the template package. `packages/dev-tools/e2b-template/` is e2b-only; any future substrate would ship its own sibling template package (its own image format, its own build pipeline). The webapp + node-server binaries baked into both would be identical.
 
-**MVP scope.** Ship the interface, the e2b implementation, and the registry tag. Do not ship a CF Sandbox stub. Cost overhead vs an e2b-coupled CLI is ~50 LoC of interface + light wrapper; saved retrofit cost when CF Sandbox becomes real is significant (every CLI subcommand would otherwise be peppered with e2b SDK calls).
+**MVP scope.** Ship the interface, the e2b implementation, and the registry tag. Do not ship stubs for other substrates. Cost overhead vs an e2b-coupled CLI is ~50 LoC of interface + light wrapper; saved retrofit cost if a second substrate ever lands is significant (every CLI subcommand would otherwise be peppered with e2b SDK calls).
 
 ## Architecture
 
@@ -151,7 +160,7 @@ export function createSubstrate(id: SubstrateId, opts: SubstrateConfig): Sandbox
    │   opens https://www.sliccy.ai/join/<tok>   │
    └─────────────┬──────────────────────────────┘
                  │ (1) CLI calls substrate.create()
-                 │     (e2b for MVP; CF Sandbox future — see §Substrate seam)
+                 │     (e2b for MVP — see §Substrate seam)
                  │     substrate maps to Sandbox.create({template:"slicc",
                  │     autoPause:true}); uploads secrets.env via writeFile
                  │ (3) CLI reads /tmp/slicc-join.json via substrate.readFile
@@ -592,7 +601,7 @@ Each phase is independently shippable and reviewable. Phases 2–4 are the bulk 
 
 - **OAuth relay via the follower.** Adds the missing provider class. Tray-mediated; preserves the "credentials never leave the user's machine" model for the OAuth flow itself.
 - **Periodic snapshot for crash recovery.** Cheap, opt-in `--cloud start --snapshot-every 10m`.
-- **Cloudflare Sandbox as alternate substrate.** New `cloud/substrates/cloudflare-sandbox.ts` implementing `SandboxSubstrate`; new `packages/dev-tools/cf-sandbox-image/`. CLI gains `--substrate cloudflare-sandbox`. The webapp, node-server, tray hub, and `kind=hosted` worker plumbing are untouched. The prior 2026-04-28 CF Sandbox draft's full lifecycle product (6-state DO, read-only projections, lick-while-asleep) is a _separate_ future workstream — this substrate addition is the minimum needed to swap the runtime.
+- **Additional substrates.** When/if another sandbox runtime becomes interesting, add a `cloud/substrates/<name>.ts` implementing `SandboxSubstrate` plus a sibling template package. CLI gains the new value on its `--substrate` flag. The webapp, node-server, tray hub, and `kind=hosted` worker plumbing remain untouched.
 - **Worker-side `--cloud` (Approach B from brainstorm).** Worker holds the substrate key on behalf of users without their own account; web UI at `sliccy.ai/cloud`. Builds on top of MVP without rewiring it.
 - **Token re-mint on resume.** Removes the 30-day cliff; CLI calls a small worker endpoint, gets a fresh controller token, pushes into the resumed sandbox via `sbx.commands.run` writing to webapp localStorage. Implementation cost: ~2 days.
 - **Wake-on-webhook for hosted trays.** Worker endpoint that calls e2b `Sandbox.connect()` (resume) when a webhook arrives for a paused hosted tray, then forwards the webhook event after the leader reconnects. Removes the "no webhooks while paused" limitation.
