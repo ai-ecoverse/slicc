@@ -767,6 +767,31 @@ export class ChatPanel {
     this.appendMessageEl(msg);
   }
 
+  /** Add a base64-encoded image directly to the pending composer attachments. */
+  addImageAttachment(base64: string, name?: string, mimeType?: string): void {
+    let data = base64;
+    let mime = mimeType || 'image/jpeg';
+    if (base64.startsWith('data:')) {
+      const match = base64.match(/^data:(image\/[^;]+);base64,(.*)$/);
+      if (match) {
+        mime = match[1];
+        data = match[2];
+      }
+    }
+    const fileName = name || (mime === 'image/png' ? 'screenshot.png' : 'screenshot.jpg');
+    const size = Math.ceil((data.length * 3) / 4);
+    this.pendingAttachments.push({
+      id: uid(),
+      name: fileName,
+      mimeType: mime,
+      size,
+      kind: 'image',
+      data,
+    });
+    this.renderPendingAttachments();
+    this.updateSendButtonState();
+  }
+
   /** Add files to the pending composer attachments. */
   async addAttachmentsFromFiles(files: Iterable<File> | ArrayLike<File>): Promise<void> {
     const dropped = Array.from(files).filter((file) => file instanceof File);

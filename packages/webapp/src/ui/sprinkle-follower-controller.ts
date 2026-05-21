@@ -431,6 +431,9 @@ export class SprinkleFollowerController {
         // the cone agent." Matches iOS `SprinkleWebView` `case "stopCone"`.
         this.sync.sendSprinkleLick(sprinkleName, { action: '__stopCone__' });
       },
+      attachImage: () => {
+        // No-op on follower — the follower doesn't own the chat input.
+      },
     };
     return api;
   }

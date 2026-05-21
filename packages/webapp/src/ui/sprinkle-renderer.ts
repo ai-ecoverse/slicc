@@ -164,6 +164,8 @@ export class SprinkleRenderer {
           const k = localStorage.key(i);
           if (k?.startsWith(prefix)) localStorage.removeItem(k);
         }
+      } else if (msg.type === 'sprinkle-attach-image') {
+        this.bridge.attachImage(msg.base64, msg.name, msg.mimeType);
       } else if (msg.type === 'sprinkle-open') {
         this.bridge.open(msg.path, msg.projectRoot ? { projectRoot: msg.projectRoot } : undefined);
       } else if (msg.type === 'sprinkle-readfile') {
@@ -486,6 +488,7 @@ export class SprinkleRenderer {
     getState: function() { return _state; },
     close: function() { parent.postMessage({ type: 'sprinkle-close' }, '*'); },
     stopCone: function() { parent.postMessage({ type: 'sprinkle-stop-cone' }, '*'); },
+    attachImage: function(base64, name, mimeType) { parent.postMessage({ type: 'sprinkle-attach-image', base64: base64, name: name || 'screenshot.jpg', mimeType: mimeType || 'image/jpeg' }, '*'); },
     name: ''
   };
   window.slicc = api;
@@ -588,6 +591,8 @@ export class SprinkleRenderer {
         this.bridge.close();
       } else if (msg.type === 'sprinkle-stop-cone') {
         this.bridge.stopCone();
+      } else if (msg.type === 'sprinkle-attach-image') {
+        this.bridge.attachImage(msg.base64, msg.name, msg.mimeType);
       } else if (msg.type === 'sprinkle-readfile') {
         this.bridge.readFile(msg.path).then(
           (fileContent) =>

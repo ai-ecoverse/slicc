@@ -137,10 +137,17 @@ export class SprinkleManager {
     lickHandler: (event: LickEvent) => void,
     callbacks: SprinkleManagerCallbacks,
     stopConeHandler: () => void,
-    options: SprinkleManagerOptions = {}
+    options: SprinkleManagerOptions = {},
+    attachImageHandler: (base64: string, name?: string, mimeType?: string) => void = () => {}
   ) {
     this.fs = fs;
-    this.bridge = new SprinkleBridge(fs, lickHandler, (name) => this.close(name), stopConeHandler);
+    this.bridge = new SprinkleBridge(
+      fs,
+      lickHandler,
+      (name) => this.close(name),
+      stopConeHandler,
+      attachImageHandler
+    );
     this.callbacks = callbacks;
     this.autoOpenBehavior = options.autoOpenBehavior ?? 'activate';
     this.onSendToSprinkle = options.onSendToSprinkle;
