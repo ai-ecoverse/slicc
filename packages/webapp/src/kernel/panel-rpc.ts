@@ -145,6 +145,17 @@ export type PanelRpcRequest =
       // before resolving, avoiding the page→worker forward race.
       op: 'oauth-extras-set';
       payload: { providerId: string; domains: string[] };
+    }
+  | {
+      // Persist the full `slicc_accounts` array (the canonical OAuth
+      // login store) to real page `localStorage`. Same shim hazard as
+      // `oauth-extras-set`: the kernel-worker `localStorage` shim is
+      // page→worker only, so worker writes from `mcp add` /
+      // `onSilentRenew` would otherwise be lost on reload. Response
+      // carries the post-write serialized JSON so the worker can
+      // mirror it into its shim immediately. See issue #701.
+      op: 'save-oauth-accounts';
+      payload: { accountsJson: string };
     };
 
 export interface PanelRpcResults {
@@ -172,6 +183,7 @@ export interface PanelRpcResults {
   };
   'tray-reset': LeaderTrayRuntimeStatus;
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
+  'save-oauth-accounts': { storedJson: string };
 }
 
 export type PanelRpcOp = PanelRpcRequest['op'];

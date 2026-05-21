@@ -833,7 +833,7 @@ const cmd = ['mcp', 'invoke', ${JSON.stringify(name)}, ...argv.map(escape)].join
 const r = await exec(cmd);
 if (r.stdout) process.stdout.write(r.stdout);
 if (r.stderr) process.stderr.write(r.stderr);
-exit(r.exitCode || 0);
+process.exit(r.exitCode || 0);
 `;
 }
 

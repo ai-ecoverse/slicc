@@ -269,6 +269,20 @@ export function createStandalonePanelRpcHandlers(
       setExtraOAuthDomains(providerId, domains);
       return { storeAfter: getAllExtraOAuthDomains() };
     },
+
+    'save-oauth-accounts': ({ accountsJson }) => {
+      // Page-side write of `slicc_accounts` for `saveOAuthAccount`
+      // calls originating in the kernel worker (`mcp add`, MCP
+      // `onSilentRenew`). Same shim trap as `oauth-extras-set`:
+      // worker writes to its Map-backed shim don't echo back to the
+      // page, so without this bridge the MCP OAuth account is lost
+      // on reload (issue #701). Returning the stored JSON lets the
+      // worker mirror it into its shim immediately, avoiding a race
+      // with the `local-storage-set` forward.
+      localStorage.setItem('slicc_accounts', accountsJson);
+      const storedJson = localStorage.getItem('slicc_accounts') ?? accountsJson;
+      return { storedJson };
+    },
   };
 }
 

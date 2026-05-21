@@ -339,7 +339,16 @@ describe('aliasContent', () => {
     const content = aliasContent('weather');
     expect(content).toContain("'mcp', 'invoke', \"weather\"");
     expect(content).toContain('await exec(cmd)');
-    expect(content).toContain('exit(r.exitCode');
+    expect(content).toContain('process.exit(r.exitCode');
+  });
+
+  it('does not call a bare top-level `exit(` (only process.exit is in scope)', () => {
+    const content = aliasContent('weather');
+    // The realm exposes `exit` only via `process.exit` — a bare `exit(...)`
+    // call would throw `ReferenceError: exit is not defined`. Match `exit(`
+    // only when it is not preceded by `process.` / `.` / identifier chars so
+    // the legitimate `process.exit(...)` call does not trip the assertion.
+    expect(content).not.toMatch(/(^|[^A-Za-z0-9_.])exit\(/);
   });
 });
 

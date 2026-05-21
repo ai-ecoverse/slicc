@@ -18,6 +18,29 @@ const log = createLogger('oauth-bootstrap');
 const RENEW_BUFFER_MS = 60_000;
 
 export async function bootstrapOAuthReplicas(): Promise<void> {
+  // MCP providers are lazy-registered by the first `mcp` subcommand
+  // (see `shell/mcp/provider.ts:ensureMcpProviderRegistered`), so on
+  // a fresh page load `mcp:<name>` configs aren't in the registry
+  // yet. Without explicit registration here, an expired MCP token
+  // skips silent renewal below — `getRegisteredProviderConfig` returns
+  // undefined — and the user has to redo `mcp add` even though a
+  // refresh token is on disk. Best-effort: a corrupt
+  // `/workspace/.mcp/servers.json` or missing-FS path shouldn't block
+  // bootstrap for non-MCP providers.
+  try {
+    const { ensureAllMcpProvidersRegistered } = await import('../shell/mcp/provider.js');
+    const registered = await ensureAllMcpProvidersRegistered();
+    if (registered.length > 0) {
+      log.debug('Pre-registered MCP providers for OAuth bootstrap', {
+        count: registered.length,
+      });
+    }
+  } catch (err) {
+    log.warn('Failed to pre-register MCP providers for OAuth bootstrap', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   const accounts = getAccounts();
   log.info('Bootstrap OAuth replicas', { count: accounts.length });
 
