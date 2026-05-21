@@ -26,6 +26,13 @@ interface ThrottledErrorTrackerOptions {
   recoveryMessage: string;
   /** Throttle gate — only log a failure if this many ms have elapsed since the last log. Default 60 s. */
   throttleMs?: number;
+  /**
+   * After this many ms of sustained failure with no recovery, emit a
+   * "sustained" heartbeat log so operators can see ongoing outages
+   * (without a heartbeat the only signal is the initial failure log,
+   * then silence forever). Default 5 minutes.
+   */
+  sustainedRelogMs?: number;
   /** How many consecutive successes are required before declaring recovery. Default 5 ticks. */
   recoveryDebounceTicks?: number;
   /** Clock injection seam for testing. Default `performance.now()`. */
@@ -37,6 +44,7 @@ export class ThrottledErrorTracker {
   private readonly failureMessage: string;
   private readonly recoveryMessage: string;
   private readonly throttleMs: number;
+  private readonly sustainedRelogMs: number;
   private readonly recoveryDebounceTicks: number;
   private readonly now: () => number;
 
@@ -67,6 +75,12 @@ export class ThrottledErrorTracker {
         `ThrottledErrorTracker: throttleMs must be a non-negative finite number, got ${throttleMs}`
       );
     }
+    const sustainedRelogMs = opts.sustainedRelogMs ?? 300_000;
+    if (!Number.isFinite(sustainedRelogMs) || sustainedRelogMs < 0) {
+      throw new RangeError(
+        `ThrottledErrorTracker: sustainedRelogMs must be a non-negative finite number, got ${sustainedRelogMs}`
+      );
+    }
     const recoveryDebounceTicks = opts.recoveryDebounceTicks ?? 5;
     if (!Number.isInteger(recoveryDebounceTicks) || recoveryDebounceTicks < 1) {
       throw new RangeError(
@@ -77,26 +91,56 @@ export class ThrottledErrorTracker {
     this.failureMessage = opts.failureMessage;
     this.recoveryMessage = opts.recoveryMessage;
     this.throttleMs = throttleMs;
+    this.sustainedRelogMs = sustainedRelogMs;
     this.recoveryDebounceTicks = recoveryDebounceTicks;
     this.now = opts.now ?? (() => performance.now());
   }
 
-  /** Called on each refresh failure. Emits `log.error` at most once per `throttleMs`. */
+  /**
+   * Called on each refresh failure. Emits `log.error` on entry to a
+   * failing run (`throttleMs` cadence), then again every
+   * `sustainedRelogMs` while the failure persists. Subsequent logs
+   * within a single failure run are tagged `(sustained)` so an operator
+   * can distinguish a fresh outage from a still-ongoing one, and so
+   * persistent failures don't read as new incidents in a tailed log.
+   */
   reportFailure(error: unknown): void {
+    // Snapshot BEFORE we mutate state. `wasAlreadyFailing` distinguishes
+    // a fresh failure entry from a continuation of an existing run — it
+    // controls the `(sustained)` suffix below.
+    const wasAlreadyFailing = this.inFailingState;
     this.inFailingState = true;
     this.consecutiveSuccesses = 0;
     const now = this.now();
-    if (now - this.lastErrorLogAt > this.throttleMs) {
+    const elapsed = now - this.lastErrorLogAt;
+    // Cadence gate: a fresh failure (first one in a new failing run)
+    // uses `throttleMs` so the operator sees the outage promptly. A
+    // sustained failure (already failing, no recovery) uses the wider
+    // `sustainedRelogMs` so a permanent outage doesn't spam at 60s
+    // cadence — operators get a clear "fresh incident" signal followed
+    // by a slower heartbeat once the outage is established.
+    const cadence = wasAlreadyFailing ? this.sustainedRelogMs : this.throttleMs;
+    if (elapsed > cadence) {
       // Throttle counter commit goes in `finally` so a double-throw
       // (logger AND fallback console both fail) still advances the
       // counter — otherwise a permanently-broken log path would
       // disarm the throttle indefinitely, and every subsequent
       // failure would re-attempt the failing log on a tight loop.
+      const sustained = wasAlreadyFailing;
+      const message = sustained ? `${this.failureMessage} (sustained)` : this.failureMessage;
       try {
         try {
-          this.logger.error(this.failureMessage, {
-            error: error instanceof Error ? error.message : String(error),
-          });
+          this.logger.error(
+            message,
+            sustained
+              ? {
+                  error: error instanceof Error ? error.message : String(error),
+                  elapsedMs: Math.round(elapsed),
+                }
+              : {
+                  error: error instanceof Error ? error.message : String(error),
+                }
+          );
         } catch (logErr) {
           // Fallback so the operator has at least one signal of the
           // underlying failure AND the logger fault. Wrapped in its
@@ -105,7 +149,7 @@ export class ThrottledErrorTracker {
           // skip the throttle commit.
           try {
             console.error('[throttled-error-tracker] logger.error threw', logErr, {
-              originalMessage: this.failureMessage,
+              originalMessage: message,
               originalError: error instanceof Error ? error.message : String(error),
             });
           } catch {

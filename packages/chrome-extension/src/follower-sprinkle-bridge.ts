@@ -33,6 +33,19 @@ import type {
 } from './messages.js';
 import type { SprinkleFollowerSync } from '../../../packages/webapp/src/ui/sprinkle-follower-controller.js';
 import type { SprinkleSummary } from '../../../packages/webapp/src/scoops/tray-sync-protocol.js';
+import type { LeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
+import type { LeaderTrayResetResponseMsg } from './messages.js';
+import {
+  type PanelMessageSender,
+  type PanelMessageSubscriber,
+  type OffscreenMessageHub,
+  discriminateMsg,
+} from './bridge-transport.js';
+
+// Re-export the shared transport interfaces so existing consumers
+// (offscreen.ts, follower-sprinkle-bridge.test.ts, etc.) keep importing
+// them from this module's stable public surface.
+export type { PanelMessageSender, PanelMessageSubscriber, OffscreenMessageHub };
 
 // Compile-time invariant: the `sprinkles` array shape inside
 // `FollowerSprinklesListMsg` must remain assignable to the canonical
@@ -49,21 +62,22 @@ type _AssertSprinkleSummaryEnvelopeMatches =
 
 const _sprinkleSummaryEnvelopeMatches: _AssertSprinkleSummaryEnvelopeMatches = true;
 
-/**
- * Generic chrome.runtime sender — kept narrow so tests can substitute a
- * synchronous in-memory pipe.
- */
-export interface PanelMessageSender {
-  send(envelope: { source: 'panel'; payload: unknown }): void;
-}
+// Same invariant for `LeaderTrayRuntimeStatusEnvelope` carried by
+// `LeaderTrayResetResponseMsg.status` — `messages.ts` mirrors the shape inline
+// to keep tray-leader.ts (which references `chrome`/`window`/`createLogger`)
+// out of the webapp-worker tsconfig surface. Asserted bidirectionally so
+// either side drifting breaks the build. `LeaderTrayResetResponseMsg` is a
+// discriminated union (success/failure on `ok`); project the success branch
+// to read its `status` field.
+type _LeaderTrayResetStatus = Extract<LeaderTrayResetResponseMsg, { ok: true }>['status'];
+type _AssertLeaderTrayRuntimeStatusEnvelopeMatches =
+  _LeaderTrayResetStatus extends LeaderTrayRuntimeStatus
+    ? LeaderTrayRuntimeStatus extends _LeaderTrayResetStatus
+      ? true
+      : never
+    : never;
 
-/**
- * Subscription helper — returns an unsubscribe handle. The panel transport
- * already exposes `onMessage`; tests provide a fake.
- */
-export interface PanelMessageSubscriber {
-  onMessage(handler: (envelope: { source: string; payload: unknown }) => void): () => void;
-}
+const _leaderTrayRuntimeStatusEnvelopeMatches: _AssertLeaderTrayRuntimeStatusEnvelopeMatches = true;
 
 /**
  * Default timeout for the panel-side `fetchSprinkleContent`. When the offscreen
@@ -74,26 +88,6 @@ export interface PanelMessageSubscriber {
  * the same name for the panel's lifetime.
  */
 const DEFAULT_FETCH_TIMEOUT_MS = 15_000;
-
-/**
- * Discriminate an `unknown` runtime payload by checking only its `type`
- * tag. Returns `null` for any payload that doesn't match — never throws.
- *
- * **The cast is a type assertion, not a type guard.** Only the
- * discriminator is verified at runtime; the rest of `T`'s shape is
- * trusted. This is safe for messages crossing the intra-extension
- * `chrome.runtime` channel — both endpoints are in the same build and
- * the trust domain is the same. NOT sufficient for messages crossing a
- * real network/process boundary (e.g. the WebRTC tray wire); those need
- * full shape validation. Bridge consumers narrow further on the result
- * (e.g. `result.ok === true | false | other`) when the extra fields
- * matter.
- */
-function discriminateMsg<T extends { type: string }>(payload: unknown, type: T['type']): T | null {
-  if (!payload || typeof payload !== 'object') return null;
-  if ((payload as { type?: unknown }).type !== type) return null;
-  return payload as T;
-}
 
 /**
  * Panel-side proxy that implements `SprinkleFollowerSync` by routing every
@@ -256,6 +250,15 @@ export class PanelFollowerSprinkleProxy implements SprinkleFollowerSync {
   }
 }
 
+export interface OffscreenFollowerSprinkleBridgeHandle {
+  /** Push a `sprinkles.list` from the active leader connection to the panel. */
+  forwardSprinklesList(sprinkles: SprinkleSummary[]): void;
+  /** Push a `sprinkle.update` from the active leader connection to the panel. */
+  forwardSprinkleUpdate(sprinkleName: string, data: unknown): void;
+  /** Tear down the listener registered against the message hub. */
+  detach(): void;
+}
+
 /**
  * Offscreen-side adapter: subscribes to `chrome.runtime.onMessage` for
  * panel→offscreen sprinkle follower ops and routes them through the supplied
@@ -270,22 +273,6 @@ export class PanelFollowerSprinkleProxy implements SprinkleFollowerSync {
  * The sync interface is structurally identical to `SprinkleFollowerSync` from
  * the webapp — kept as the same type to avoid drift across modules.
  */
-export interface OffscreenMessageHub {
-  /** Send an envelope to the side panel (and any other panel-like consumers). */
-  sendToPanel(envelope: { source: 'offscreen'; payload: unknown }): void;
-  /** Subscribe to incoming panel envelopes. */
-  onPanelMessage(handler: (envelope: { source: string; payload: unknown }) => void): () => void;
-}
-
-export interface OffscreenFollowerSprinkleBridgeHandle {
-  /** Push a `sprinkles.list` from the active leader connection to the panel. */
-  forwardSprinklesList(sprinkles: SprinkleSummary[]): void;
-  /** Push a `sprinkle.update` from the active leader connection to the panel. */
-  forwardSprinkleUpdate(sprinkleName: string, data: unknown): void;
-  /** Tear down the listener registered against the message hub. */
-  detach(): void;
-}
-
 export function connectOffscreenFollowerSprinkleBridge(
   hub: OffscreenMessageHub,
   sync: SprinkleFollowerSync

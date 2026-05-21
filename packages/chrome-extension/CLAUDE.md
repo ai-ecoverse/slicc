@@ -27,6 +27,29 @@ Offscreen Document
 - **Service worker**: routes messages between panel and offscreen, proxies CDP to `chrome.debugger`.
 - **Offscreen document**: runs the agent engine, orchestrator, VFS, and tool execution loop.
 
+### Tray leader
+
+When the user configures a worker base URL with no join URL, offscreen
+becomes a tray leader via `extension-leader-tray.ts:startExtensionLeaderTray`.
+Mirror of `page-leader-tray.ts` for the offscreen runtime.
+
+- Constructs `LeaderSyncManager` with data-source callbacks against
+  `OffscreenBridge` state (chat buffer, scoops, sprinkles snapshot cache).
+- `LeaderTrayPeerManager.onPeerConnected → sync.addFollower(bootstrapId, channel, …)` —
+  the headline gap fix for #682.
+- `webhook.event` control messages route directly to
+  `orchestrator.handleWebhookEvent` (no `lick-webhook-event` hop —
+  extension's lickManager is in-process).
+- Panel-side `PanelLeaderSyncProxy` in `leader-sync-bridge.ts` pushes
+  sprinkle snapshots, sprinkle updates, user-message echoes, and
+  active-scoop selection. Lifecycle via `leader-mode-changed`;
+  `host reset` via `leader-tray-reset` RPC.
+- `onFollowerMessage` uses synchronous panel echo (via
+  `bridge.notifyPanelIncomingMessage`) because `'web'` is not in
+  `EXTERNAL_LICK_CHANNELS` (`lick-formatting.ts:29-37`). Orchestrator
+  dispatch runs in a fire-and-forget IIFE so the wire signature stays
+  `void`.
+
 ## Detached Popout
 
 The extension supports popping the side panel out into a full-page tab

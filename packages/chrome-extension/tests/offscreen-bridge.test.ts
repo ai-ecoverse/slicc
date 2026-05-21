@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
 
 // Mock chrome.runtime
 const messageListeners: Array<
@@ -405,12 +406,30 @@ describe('OffscreenBridge buildStateSnapshot', () => {
     expect(snapshot.scoops[1].isCone).toBe(false);
   });
 
-  it('sets activeScoopJid to cone jid', () => {
+  it('falls back to cone jid when no leader-active-scoop has been pushed', () => {
+    // No setActiveScoopJid call — exercises the cone-as-default fallback
+    // path the JSDoc on `activeScoopJid` documents.
     const snapshot = bridge.buildStateSnapshot();
     expect(snapshot.activeScoopJid).toBe('cone_1');
   });
 
-  it('sets activeScoopJid to null when no cone', () => {
+  it('returns the leader-pushed active scoop when one has been set', () => {
+    // Simulates the panel's PanelLeaderSyncProxy pushing a sub-scoop
+    // selection via `leader-active-scoop`. Survives panel reload because
+    // the snapshot consults the cached value before defaulting to cone.
+    bridge.setActiveScoopJid('scoop_test');
+    const snapshot = bridge.buildStateSnapshot();
+    expect(snapshot.activeScoopJid).toBe('scoop_test');
+  });
+
+  it('falls back to cone when active scoop is explicitly cleared to null', () => {
+    bridge.setActiveScoopJid('scoop_test');
+    bridge.setActiveScoopJid(null);
+    const snapshot = bridge.buildStateSnapshot();
+    expect(snapshot.activeScoopJid).toBe('cone_1');
+  });
+
+  it('sets activeScoopJid to null when no cone and no active scoop is set', () => {
     mockOrchestrator.getScoops.mockReturnValue([
       {
         jid: 'scoop_1',
@@ -1069,5 +1088,282 @@ describe('OffscreenBridge follower mode', () => {
       },
     });
     expect(typeof m.payload.message.timestamp).toBe('string');
+  });
+});
+
+describe('OffscreenBridge active-scoop tracking', () => {
+  it('defaults to null before any panel signal', () => {
+    const bridge = new OffscreenBridge();
+    expect(bridge.getActiveScoopJid()).toBeNull();
+  });
+
+  it('setActiveScoopJid updates the cached value', () => {
+    const bridge = new OffscreenBridge();
+    bridge.setActiveScoopJid('scoop-1');
+    expect(bridge.getActiveScoopJid()).toBe('scoop-1');
+  });
+
+  it('null clears the cache', () => {
+    const bridge = new OffscreenBridge();
+    bridge.setActiveScoopJid('scoop-1');
+    bridge.setActiveScoopJid(null);
+    expect(bridge.getActiveScoopJid()).toBeNull();
+  });
+});
+
+describe('OffscreenBridge.getMessagesForJid', () => {
+  it('returns the buffered messages cast to ChatMessage[]', () => {
+    const bridge = new OffscreenBridge();
+    // Seed via the @internal getBuffer (test only).
+    const buf = (bridge as any).getBuffer('scoop-1') as Array<any>;
+    buf.push({ id: 'm1', role: 'user', content: 'hi', timestamp: 1 });
+    const msgs = bridge.getMessagesForJid('scoop-1');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].id).toBe('m1');
+  });
+
+  it('returns an empty array for an unknown jid', () => {
+    const bridge = new OffscreenBridge();
+    expect(bridge.getMessagesForJid('nope')).toEqual([]);
+  });
+});
+
+describe('OffscreenBridge.routeSprinkleLick', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+  let mockOrchestrator: any;
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+
+    bridge = new OffscreenBridge();
+    mockOrchestrator = {
+      getScoops: vi.fn(() => [
+        { jid: 'cone-1', name: 'cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'scoop-2',
+          name: 'helper',
+          folder: 'helper',
+          isCone: false,
+          assistantLabel: 'helper',
+        },
+      ]),
+      handleMessage: vi.fn().mockResolvedValue(undefined),
+      createScoopTab: vi.fn().mockResolvedValue(undefined),
+      registerScoop: vi.fn().mockResolvedValue(undefined),
+      unregisterScoop: vi.fn().mockResolvedValue(undefined),
+      stopScoop: vi.fn(),
+      clearQueuedMessages: vi.fn().mockResolvedValue(undefined),
+      clearAllMessages: vi.fn().mockResolvedValue(undefined),
+      clearScoopMessages: vi.fn().mockResolvedValue(undefined),
+      delegateToScoop: vi.fn().mockResolvedValue(undefined),
+      updateModel: vi.fn(),
+    };
+
+    await bridge.bind(mockOrchestrator);
+  });
+
+  it('handles a sprinkle lick targeted at a specific scoop', async () => {
+    await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'helper');
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatJid: 'scoop-2',
+        channel: 'sprinkle',
+        senderName: 'sprinkle:welcome',
+        senderId: 'sprinkle',
+        fromAssistant: false,
+      })
+    );
+    // Buffer should have received a corresponding lick entry.
+    const buf = (bridge as any).getBuffer('scoop-2') as Array<any>;
+    expect(buf).toHaveLength(1);
+    expect(buf[0].source).toBe('lick');
+    expect(buf[0].channel).toBe('sprinkle');
+  });
+
+  it('falls back to the cone when no targetScoop is given', async () => {
+    await bridge.routeSprinkleLick('welcome', { action: 'go' });
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ chatJid: 'cone-1', channel: 'sprinkle' })
+    );
+  });
+
+  it('falls back to the cone when targetScoop does not match any scoop', async () => {
+    await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'unknown');
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ chatJid: 'cone-1' })
+    );
+  });
+
+  it('matches targetScoop by folder with a "-scoop" suffix', async () => {
+    mockOrchestrator.getScoops = vi.fn(() => [
+      { jid: 'cone-1', name: 'cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+      {
+        jid: 'scoop-3',
+        name: 'Helper',
+        folder: 'helper-scoop',
+        isCone: false,
+        assistantLabel: 'helper-scoop',
+      },
+    ]);
+    await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'helper');
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ chatJid: 'scoop-3' })
+    );
+  });
+
+  it('is a no-op when no orchestrator is bound', async () => {
+    const unboundBridge = new OffscreenBridge();
+    await unboundBridge.routeSprinkleLick('welcome', { action: 'go' });
+    // Nothing throws; mock orchestrator on the bound bridge is unaffected.
+    expect(mockOrchestrator.handleMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('OffscreenBridge.onAgentEvent tap', () => {
+  function captureEvents(bridge: InstanceType<typeof OffscreenBridge>) {
+    const events: Array<{ scoopJid: string; event: any }> = [];
+    const off = bridge.onAgentEvent((scoopJid: string, event: any) =>
+      events.push({ scoopJid, event })
+    );
+    return { events, off };
+  }
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('text_delta with no current messageId emits message_start + content_delta', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const { events } = captureEvents(bridge);
+    callbacks.onResponse?.('scoop-1', 'hello', true);
+    expect(events.map((e) => e.event.type)).toEqual(['message_start', 'content_delta']);
+    expect(events[1].event.text).toBe('hello');
+    expect(events.every((e) => e.scoopJid === 'scoop-1')).toBe(true);
+  });
+
+  it('subsequent text_delta with same messageId emits only content_delta', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    callbacks.onResponse?.('scoop-1', 'hello', true);
+    const { events } = captureEvents(bridge);
+    callbacks.onResponse?.('scoop-1', ' world', true);
+    expect(events).toHaveLength(1);
+    expect(events[0].event.type).toBe('content_delta');
+    expect(events[0].event.text).toBe(' world');
+  });
+
+  it('onResponseDone emits content_done', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    callbacks.onResponse?.('scoop-1', 'hello', true);
+    const { events } = captureEvents(bridge);
+    callbacks.onResponseDone?.('scoop-1');
+    expect(events).toHaveLength(1);
+    expect(events[0].event.type).toBe('content_done');
+  });
+
+  it('onToolStart conditional message_start + tool_use_start', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const { events } = captureEvents(bridge);
+    callbacks.onToolStart?.('scoop-1', 'bash', { command: 'ls' });
+    expect(events.map((e) => e.event.type)).toEqual(['message_start', 'tool_use_start']);
+    expect(events[1].event.toolName).toBe('bash');
+  });
+
+  it('onToolEnd emits tool_result only when messageId exists', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    callbacks.onToolStart?.('scoop-1', 'bash', {});
+    const { events } = captureEvents(bridge);
+    callbacks.onToolEnd?.('scoop-1', 'bash', 'output', false);
+    expect(events).toHaveLength(1);
+    expect(events[0].event).toMatchObject({ type: 'tool_result', toolName: 'bash' });
+  });
+
+  it('unsubscribe stops further events', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    const { events, off } = captureEvents(bridge);
+    off();
+    callbacks.onResponse?.('scoop-1', 'hello', true);
+    expect(events).toEqual([]);
+  });
+
+  it('turn_end clears the fan-out messageId gating state', () => {
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    // Prime the fan-out gating state with a text_delta envelope.
+    callbacks.onResponse?.('scoop-1', 'hello', true);
+    // Subscribe AFTER the priming so the captured events array only
+    // sees what happens after the turn_end + next text_delta.
+    const { events } = captureEvents(bridge);
+    // Simulate the bridge receiving a turn_end envelope. createCallbacks
+    // doesn't emit turn_end (only response_done), so drive it via
+    // bridge.emit directly — same pattern as the wire would deliver it.
+    (bridge as any).emit({
+      type: 'agent-event',
+      scoopJid: 'scoop-1',
+      eventType: 'turn_end',
+    });
+    // No event should be emitted to listeners (turn_end synthesis is deferred).
+    expect(events).toEqual([]);
+    // But the state should be cleared — next text_delta should re-emit
+    // message_start before content_delta.
+    callbacks.onResponse?.('scoop-1', 'next', true);
+    expect(events.map((e) => e.event.type)).toEqual(['message_start', 'content_delta']);
+  });
+});
+
+describe('OffscreenBridge.notifyPanelIncomingMessage', () => {
+  it('emits an incoming-message envelope with the canonical wire shape', () => {
+    const bridge = new OffscreenBridge();
+    const msg: ChannelMessage = {
+      id: 'm-99',
+      chatJid: 'scoop-1',
+      senderId: 'user',
+      senderName: 'User',
+      content: 'hello from follower',
+      timestamp: '2026-05-20T00:00:00.000Z',
+      fromAssistant: false,
+      channel: 'web',
+    };
+    sentMessages.length = 0;
+    bridge.notifyPanelIncomingMessage('scoop-1', msg);
+    const sent = sentMessages.find((m: any) => m?.payload?.type === 'incoming-message') as any;
+    expect(sent).toBeDefined();
+    expect(sent.payload.scoopJid).toBe('scoop-1');
+    expect(sent.payload.message).toMatchObject({
+      id: 'm-99',
+      content: 'hello from follower',
+      channel: 'web',
+      fromAssistant: false,
+    });
+  });
+
+  it('existing onIncomingMessage callback still emits via the same helper', () => {
+    // Characterization test: the refactored onIncomingMessage callback
+    // (which only fires for external lick channels) must produce the
+    // same wire envelope as before the refactor.
+    const bridge = new OffscreenBridge();
+    const callbacks = OffscreenBridge.createCallbacks(bridge);
+    sentMessages.length = 0;
+    callbacks.onIncomingMessage?.('cone-1', {
+      id: 'wh-1',
+      chatJid: 'cone-1',
+      senderId: 'webhook',
+      senderName: 'webhook:test',
+      content: '[Webhook test]',
+      timestamp: '2026-05-20T00:00:00.000Z',
+      fromAssistant: false,
+      channel: 'webhook',
+    });
+    const sent = sentMessages.find((m: any) => m?.payload?.type === 'incoming-message') as any;
+    expect(sent.payload.message.channel).toBe('webhook');
   });
 });

@@ -129,6 +129,8 @@ export class SprinkleManager {
   private lastRefreshAt = 0;
   private autoOpenBehavior: 'activate' | 'attention';
   private onSendToSprinkle?: (name: string, data: unknown) => void;
+  private readonly changeListeners = new Set<() => void>();
+  private changeNotifyScheduled = false;
 
   constructor(
     fs: VirtualFS,
@@ -350,6 +352,43 @@ export class SprinkleManager {
   async refresh(): Promise<void> {
     this.availableSprinkles = await discoverSprinkles(this.fs);
     log.info('Discovered sprinkles', { count: this.availableSprinkles.size });
+    this.notifyChange();
+  }
+
+  /**
+   * Subscribe to coalesced change notifications. Fires after `refresh()`,
+   * `open()`, `close()`, and `markActivated()` mutate the available/opened
+   * state. Multiple mutations within a single microtask collapse into a
+   * single notification — the listener observes the post-mutation snapshot
+   * rather than every intermediate step. Used by the panel-side leader
+   * sync (`installLeaderHooks`) to push sprinkle snapshots to followers.
+   *
+   * Returns an unsubscribe function. Listener exceptions are caught and
+   * logged so a broken subscriber can't break the manager or other
+   * subscribers.
+   */
+  onChange(handler: () => void): () => void {
+    this.changeListeners.add(handler);
+    return () => {
+      this.changeListeners.delete(handler);
+    };
+  }
+
+  private notifyChange(): void {
+    if (this.changeNotifyScheduled) return;
+    this.changeNotifyScheduled = true;
+    queueMicrotask(() => {
+      this.changeNotifyScheduled = false;
+      for (const fn of this.changeListeners) {
+        try {
+          fn();
+        } catch (err) {
+          log.error('SprinkleManager.onChange handler threw', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    });
   }
 
   /** Open a sprinkle by name, optionally in a specific zone. */
@@ -402,6 +441,7 @@ export class SprinkleManager {
     this.persistOpenSprinkles();
     trackSprinkleView(name);
     log.info('Sprinkle opened', { name, title: sprinkle.title });
+    this.notifyChange();
   }
 
   /**
@@ -415,6 +455,7 @@ export class SprinkleManager {
     this.attentionOnly.delete(name);
     this.persistOpenSprinkles();
     log.info('Sprinkle promoted from attention to user-opened', { name });
+    this.notifyChange();
   }
 
   /** Close a sprinkle by name. */
@@ -430,6 +471,7 @@ export class SprinkleManager {
     this.callbacks.removeSprinkle(name);
     this.persistOpenSprinkles();
     log.info('Sprinkle closed', { name });
+    this.notifyChange();
   }
 
   /** List available sprinkles. */

@@ -197,7 +197,13 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
         return;
       }
       void peers.handleControlMessage(message).catch((err) => {
-        log.warn('Tray leader bootstrap handling failed', {
+        // `error`, not `warn` — peer-manager dispatch failures mean a
+        // tray signaling/bootstrap envelope could not be applied; the
+        // user sees a follower never showing up, with no surface signal
+        // otherwise. Prod log gate is ERROR (`logger.ts`), so `warn`
+        // would be invisible. Matches the extension parity in
+        // `extension-leader-tray.ts`.
+        log.error('Tray leader bootstrap handling failed', {
           error: err instanceof Error ? err.message : String(err),
         });
       });
@@ -210,13 +216,19 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
       updateUrlBar(session);
     },
     onReconnectGaveUp: (lastError, attempts) => {
-      log.warn('Leader tray reconnect gave up', { lastError, attempts });
+      // `error`, not `warn` — sustained reconnect failure is the
+      // terminal state of the retry loop; followers will silently fail
+      // to connect from this point forward until the user reloads or
+      // resets the tray. The prod log gate is ERROR, so a `warn` here
+      // would be invisible to operators investigating "where did my
+      // tray go".
+      log.error('Leader tray reconnect gave up', { lastError, attempts });
     },
   });
 
   // --- Agent event tap → broadcast to all followers. The helper owns
   // this subscription (and unsubscribes on stop) so the caller doesn't
-  // have to track it. See spec §6.6.
+  // have to track it.
   const unsubscribeAgent = options.onAgentEvent((event) => sync.broadcastEvent(event));
 
   // --- Periodic refreshes. Each fires every `refreshIntervalMs` (5s
@@ -308,7 +320,11 @@ export function startPageLeaderTray(options: StartPageLeaderTrayOptions): PageLe
       updateUrlBar(session);
     })
     .catch((err) => {
-      log.warn('Leader tray start failed', {
+      // `error`, not `warn` — initial leader-tray start failure means
+      // multi-browser sync never came up at all. Prod log gate is ERROR,
+      // so a `warn` here would leave operators with no signal that the
+      // user's tray-leader configuration silently failed to activate.
+      log.error('Leader tray start failed', {
         error: err instanceof Error ? err.message : String(err),
       });
     });

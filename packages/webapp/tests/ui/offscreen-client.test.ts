@@ -54,7 +54,7 @@ describe('OffscreenClient', () => {
   });
 
   it('sends user-message to offscreen', () => {
-    client.selectedScoopJid = 'cone_123';
+    client.setSelectedScoopJid('cone_123');
     const handle = client.createAgentHandle();
 
     handle.sendMessage('Hello world', 'msg-1');
@@ -69,7 +69,7 @@ describe('OffscreenClient', () => {
   });
 
   it('sends attachments with user-message payloads', () => {
-    client.selectedScoopJid = 'cone_123';
+    client.setSelectedScoopJid('cone_123');
     const handle = client.createAgentHandle();
     const attachments = [
       {
@@ -89,7 +89,7 @@ describe('OffscreenClient', () => {
   });
 
   it('sends abort on stop', () => {
-    client.selectedScoopJid = 'cone_123';
+    client.setSelectedScoopJid('cone_123');
     const handle = client.createAgentHandle();
 
     handle.stop();
@@ -111,7 +111,7 @@ describe('OffscreenClient', () => {
   });
 
   it('handles agent-event text_delta', () => {
-    client.selectedScoopJid = 'cone_123';
+    client.setSelectedScoopJid('cone_123');
     const handle = client.createAgentHandle();
     const events: unknown[] = [];
     handle.onEvent((e) => events.push(e));
@@ -131,7 +131,7 @@ describe('OffscreenClient', () => {
   });
 
   it('ignores agent-events for non-selected scoops', () => {
-    client.selectedScoopJid = 'cone_123';
+    client.setSelectedScoopJid('cone_123');
     const handle = client.createAgentHandle();
     const events: unknown[] = [];
     handle.onEvent((e) => events.push(e));
@@ -206,7 +206,7 @@ describe('OffscreenClient', () => {
   });
 
   it('handles error for selected scoop', () => {
-    client.selectedScoopJid = 'cone_123';
+    client.setSelectedScoopJid('cone_123');
     const handle = client.createAgentHandle();
     const events: unknown[] = [];
     handle.onEvent((e) => events.push(e));
@@ -271,7 +271,7 @@ describe('OffscreenClient', () => {
   });
 
   it('ignores messages from non-offscreen sources', () => {
-    client.selectedScoopJid = 'cone_123';
+    client.setSelectedScoopJid('cone_123');
     const handle = client.createAgentHandle();
     const events: unknown[] = [];
     handle.onEvent((e) => events.push(e));
@@ -406,7 +406,7 @@ describe('OffscreenClient', () => {
   });
 
   it('handles tool_start and tool_end events', () => {
-    client.selectedScoopJid = 'cone_123';
+    client.setSelectedScoopJid('cone_123');
     const handle = client.createAgentHandle();
     const events: unknown[] = [];
     handle.onEvent((e) => events.push(e));
@@ -433,5 +433,85 @@ describe('OffscreenClient', () => {
     expect((events[1] as any).toolName).toBe('bash');
     expect((events[2] as any).type).toBe('tool_result');
     expect((events[2] as any).result).toBe('file1.txt\nfile2.txt');
+  });
+});
+
+describe('OffscreenClient.setSelectedScoopJid + onScoopSelected', () => {
+  let localClient: InstanceType<typeof OffscreenClient>;
+  const callbacks = {
+    onStatusChange: vi.fn(),
+    onScoopCreated: vi.fn(),
+    onScoopListUpdate: vi.fn(),
+    onIncomingMessage: vi.fn(),
+  };
+
+  beforeEach(() => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    localClient = new OffscreenClient(callbacks);
+  });
+
+  it('setSelectedScoopJid updates the field and fires listeners', () => {
+    const calls: string[] = [];
+    localClient.onScoopSelected((jid) => calls.push(jid));
+    localClient.setSelectedScoopJid('scoop-1');
+    expect(localClient.selectedScoopJid).toBe('scoop-1');
+    expect(calls).toEqual(['scoop-1']);
+  });
+
+  it('does not fire when the same jid is set twice', () => {
+    localClient.setSelectedScoopJid('scoop-1');
+    const calls: string[] = [];
+    localClient.onScoopSelected((jid) => calls.push(jid));
+    localClient.setSelectedScoopJid('scoop-1');
+    expect(calls).toEqual([]);
+  });
+
+  it('returns an unsubscribe that stops firing', () => {
+    const off = localClient.onScoopSelected(() => {
+      throw new Error('should not fire after off()');
+    });
+    off();
+    expect(() => localClient.setSelectedScoopJid('scoop-2')).not.toThrow();
+  });
+
+  it('handler throws are logged but do not break other listeners', () => {
+    const calls: string[] = [];
+    localClient.onScoopSelected(() => {
+      throw new Error('first handler bad');
+    });
+    localClient.onScoopSelected((jid) => calls.push(jid));
+    localClient.setSelectedScoopJid('scoop-3');
+    expect(calls).toEqual(['scoop-3']);
+  });
+
+  it('setSelectedScoopJid(null) updates the field but does NOT fire listeners', () => {
+    // The deliberate contract: a null clear is internal bookkeeping
+    // (no scoop selected), not a selection event. Listeners ONLY fire
+    // on transitions to a non-null jid. Without this gate, downstream
+    // observers (e.g. the extension-leader hooks pushing active-scoop
+    // to offscreen) would mistakenly broadcast a "selection" with a
+    // null payload on every clear.
+    localClient.setSelectedScoopJid('scoop-1');
+    const calls: string[] = [];
+    localClient.onScoopSelected((jid) => calls.push(jid));
+    localClient.setSelectedScoopJid(null);
+    expect(localClient.selectedScoopJid).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it('setSelectedScoopJid(null) followed by non-null fires the listener', () => {
+    // The flip side of the contract above: clearing to null and then
+    // selecting a new scoop MUST fire the listener for the new scoop.
+    // (If the null clear silently advanced state without resetting the
+    // change-detection gate, the next selection could be treated as
+    // unchanged.)
+    localClient.setSelectedScoopJid('scoop-1');
+    localClient.setSelectedScoopJid(null);
+    const calls: string[] = [];
+    localClient.onScoopSelected((jid) => calls.push(jid));
+    localClient.setSelectedScoopJid('scoop-2');
+    expect(calls).toEqual(['scoop-2']);
   });
 });

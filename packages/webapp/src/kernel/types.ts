@@ -154,7 +154,13 @@ export interface KernelClientFacade {
   // -------------------------------------------------------------------------
   // Selected-scoop state
   // -------------------------------------------------------------------------
-  selectedScoopJid: string | null;
+  readonly selectedScoopJid: string | null;
+  setSelectedScoopJid(jid: string | null): void;
+  /**
+   * Subscribe to scoop-selection changes. Handler fires only when the
+   * selected JID changes to a non-null value. Returns an unsubscribe.
+   */
+  onScoopSelected(handler: (jid: string) => void): () => void;
 
   // -------------------------------------------------------------------------
   // Local FS handle (read-only mirror — same IndexedDB, no mounts)

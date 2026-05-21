@@ -384,6 +384,65 @@ describe('SprinkleManager', () => {
     vfs.readFile = originalReadFile;
   });
 
+  describe('SprinkleManager.onChange', () => {
+    it('fires once after refresh() completes', async () => {
+      const calls: number[] = [];
+      const off = mgr.onChange(() => calls.push(Date.now()));
+      await mgr.refresh();
+      await Promise.resolve();
+      expect(calls.length).toBe(1);
+      off();
+    });
+
+    it('fires once per open()/close() state change', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      await mgr.refresh(); // seed
+      await Promise.resolve();
+      const calls: number[] = [];
+      mgr.onChange(() => calls.push(Date.now()));
+      await mgr.open('dash');
+      await Promise.resolve();
+      expect(calls.length).toBe(1);
+      mgr.close('dash');
+      await Promise.resolve();
+      expect(calls.length).toBe(2);
+    });
+
+    it('returns an unsubscribe that stops firing', async () => {
+      const calls: number[] = [];
+      const off = mgr.onChange(() => calls.push(Date.now()));
+      off();
+      await mgr.refresh();
+      await Promise.resolve();
+      expect(calls.length).toBe(0);
+    });
+
+    it('coalesces multiple refreshes within one microtask', async () => {
+      const calls: number[] = [];
+      mgr.onChange(() => calls.push(Date.now()));
+      await Promise.all([mgr.refresh(), mgr.refresh(), mgr.refresh()]);
+      await Promise.resolve();
+      expect(calls.length).toBe(1);
+    });
+
+    it('markActivated() fires the change listener', async () => {
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      await mgr.refresh(); // seed
+      await Promise.resolve();
+      const calls: number[] = [];
+      mgr.onChange(() => calls.push(Date.now()));
+      // attention: true so markActivated has work to do (promotes the
+      // attention-mode entry into the persisted open set + notifies).
+      await mgr.open('dash', undefined, { attention: true });
+      await Promise.resolve();
+      expect(calls.length).toBe(1);
+      calls.length = 0;
+      mgr.markActivated('dash');
+      await Promise.resolve();
+      expect(calls.length).toBe(1);
+    });
+  });
+
   it('open forwards the declared icon spec to the addSprinkle callback', async () => {
     // Custom icon contract: a sprinkle declaring <link rel="icon">
     // must surface the raw spec in the addSprinkle options so the

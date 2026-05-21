@@ -31,7 +31,6 @@ import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { initTheme } from './theme.js';
 import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
-import type { MessageAttachment } from '../core/attachments.js';
 import { isLickChannel, type LickChannel } from './lick-channels.js';
 import { createLogger } from '../core/index.js';
 import type { VirtualFS } from '../fs/index.js';
@@ -133,6 +132,11 @@ import {
 // circular module-evaluation order.
 import { broadcastToDips } from './dip.js';
 import { isExtensionMessage } from '../../../chrome-extension/src/messages.js';
+import type {
+  PanelMessageSender,
+  PanelMessageSubscriber,
+} from '../../../chrome-extension/src/bridge-transport.js';
+import { createExtensionLeaderHooks } from './extension-leader-hooks.js';
 import { enterDetachedActiveState } from './detached-active.js';
 
 const log = createLogger('main');
@@ -658,7 +662,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 
   const selectScoop = async (scoop: RegisteredScoop) => {
     selectedScoop = scoop;
-    client.selectedScoopJid = scoop.jid;
+    client.setSelectedScoopJid(scoop.jid);
     layout.panels.memory.setSelectedScoop(scoop.jid);
     layout.setScoopSwitcherSelected?.(scoop.jid);
     layout.panels.scoops.setSelectedJid(scoop.jid);
@@ -701,7 +705,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
       layout.refreshScoopSwitcher?.();
       if (!selectedScoop) {
         selectedScoop = scoop;
-        client.selectedScoopJid = scoop.jid;
+        client.setSelectedScoopJid(scoop.jid);
         layout.panels.memory.setSelectedScoop(scoop.jid);
       }
     },
@@ -724,7 +728,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
         const cone = scoops.find((s) => s.isCone);
         if (cone) {
           selectedScoop = cone;
-          client.selectedScoopJid = cone.jid;
+          client.setSelectedScoopJid(cone.jid);
           layout.panels.memory.setSelectedScoop(cone.jid);
         }
       }
@@ -803,7 +807,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
           selectedScoop ?? client.getScoops().find((s) => s.isCone) ?? client.getScoops()[0];
         if (target) {
           selectedScoop = target;
-          client.selectedScoopJid = target.jid;
+          client.setSelectedScoopJid(target.jid);
           await selectScoop(target);
         }
       } catch (err) {
@@ -1515,6 +1519,48 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
     removeSprinkle: (name) => layout.removeSprinkle(name),
   });
 
+  // ── Extension-leader-mode panel hooks ──────────────────────────────
+  // Activation/deactivation is driven by offscreen via
+  // `leader-mode-changed`; the helper (see `extension-leader-hooks.ts`)
+  // holds the four panel-only push handlers and the install/remove
+  // lifecycle. This block just stands up the production transports —
+  // chrome.runtime in, chrome.runtime out — and hands them off.
+  const leaderSyncSender: PanelMessageSender = {
+    send(envelope) {
+      chrome.runtime.sendMessage(envelope).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/receiving end does not exist/i.test(msg)) return;
+        log.error('Panel → offscreen sendMessage failed (leader)', { error: msg });
+      });
+    },
+  };
+  const leaderSyncSubscriber: PanelMessageSubscriber = {
+    onMessage(handler) {
+      const listener = (msg: unknown): boolean => {
+        if (!msg || typeof msg !== 'object' || !('source' in msg) || !('payload' in msg)) {
+          return false;
+        }
+        handler(msg as { source: string; payload: unknown });
+        return false;
+      };
+      chrome.runtime.onMessage.addListener(listener);
+      return () => chrome.runtime.onMessage.removeListener(listener);
+    },
+  };
+  const leaderHooks = createExtensionLeaderHooks({
+    sender: leaderSyncSender,
+    subscriber: leaderSyncSubscriber,
+    sprinkleManager,
+    client,
+    chat: layout.panels.chat,
+    log,
+  });
+  // Dispose on unload — mirrors the `host.dispose()` pattern in
+  // `offscreen.ts` (kernel host teardown on unload). Without this the
+  // chrome.runtime listener leaks across HMR cycles, and any in-flight
+  // resetTray timers float.
+  window.addEventListener('beforeunload', () => leaderHooks.dispose(), { once: true });
+
   // Auto-surface newly-added .shtml files in the rail. The panel's
   // `localFs` doesn't have the orchestrator's watcher (that lives in
   // offscreen), so attach a fresh one to catch panel-side writes
@@ -1810,7 +1856,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
 
   const selectScoop = async (scoop: RegisteredScoop): Promise<void> => {
     selectedScoop = scoop;
-    client.selectedScoopJid = scoop.jid;
+    client.setSelectedScoopJid(scoop.jid);
     layout.panels.scoops.setSelectedJid(scoop.jid);
     layout.panels.memory.setSelectedScoop(scoop.jid);
     layout.setScoopSwitcherSelected?.(scoop.jid);
