@@ -12,8 +12,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 describe('LickManager Proxy', () => {
-  let mockBroadcastChannels: Map<string, Set<MockBroadcastChannel>>;
-
   // Mock BroadcastChannel with message routing between host and proxy
   class MockBroadcastChannel {
     static channels = new Map<string, Set<MockBroadcastChannel>>();
@@ -600,6 +598,168 @@ describe('LickManager Proxy', () => {
 
       expect(result).toEqual([]);
       expect(Array.isArray(result)).toBe(true);
+    });
+  });
+
+  // ─── Webhook Tests ────────────────────────────────────────────────────────
+
+  describe('webhook ops', () => {
+    it('createWebhook proxies args and resolves with entry', async () => {
+      const { createLickManagerProxy, startLickManagerHost } =
+        await import('../src/lick-manager-proxy.js');
+
+      const mockEntry = {
+        id: 'wh-1',
+        name: 'github',
+        scoop: 'pr-reviewer',
+        createdAt: new Date().toISOString(),
+      };
+      const mockLickManager = {
+        createCronTask: vi.fn(),
+        listCronTasks: vi.fn(),
+        deleteCronTask: vi.fn(),
+        createWebhook: vi.fn().mockResolvedValue(mockEntry),
+        listWebhooks: vi.fn(),
+        deleteWebhook: vi.fn(),
+      };
+
+      startLickManagerHost(mockLickManager as any);
+      const proxy = createLickManagerProxy();
+
+      const promise = proxy.createWebhook('github', 'pr-reviewer', undefined);
+      await vi.advanceTimersToNextTimerAsync();
+      const result = await promise;
+
+      expect(mockLickManager.createWebhook).toHaveBeenCalledWith(
+        'github',
+        'pr-reviewer',
+        undefined
+      );
+      expect(result).toEqual(mockEntry);
+    });
+
+    it('deleteWebhook proxies id and resolves with boolean', async () => {
+      const { createLickManagerProxy, startLickManagerHost } =
+        await import('../src/lick-manager-proxy.js');
+
+      const mockLickManager = {
+        createCronTask: vi.fn(),
+        listCronTasks: vi.fn(),
+        deleteCronTask: vi.fn(),
+        createWebhook: vi.fn(),
+        listWebhooks: vi.fn(),
+        deleteWebhook: vi.fn().mockResolvedValue(true),
+      };
+
+      startLickManagerHost(mockLickManager as any);
+      const proxy = createLickManagerProxy();
+
+      const promise = proxy.deleteWebhook('wh-1');
+      await vi.advanceTimersToNextTimerAsync();
+      const result = await promise;
+
+      expect(mockLickManager.deleteWebhook).toHaveBeenCalledWith('wh-1');
+      expect(result).toBe(true);
+    });
+
+    it('listWebhooksAsync returns the entries', async () => {
+      const { listWebhooksAsync, startLickManagerHost } =
+        await import('../src/lick-manager-proxy.js');
+
+      const mockEntries = [
+        {
+          id: 'wh-1',
+          name: 'github',
+          createdAt: new Date().toISOString(),
+        },
+      ];
+      const mockLickManager = {
+        createCronTask: vi.fn(),
+        listCronTasks: vi.fn(),
+        deleteCronTask: vi.fn(),
+        createWebhook: vi.fn(),
+        listWebhooks: vi.fn().mockReturnValue(mockEntries),
+        deleteWebhook: vi.fn(),
+      };
+
+      startLickManagerHost(mockLickManager as any);
+
+      const promise = listWebhooksAsync();
+      await vi.advanceTimersToNextTimerAsync();
+      const result = await promise;
+
+      expect(result).toEqual(mockEntries);
+    });
+
+    it('getTrayWebhookUrlAsync returns the resolver value', async () => {
+      const { getTrayWebhookUrlAsync, startLickManagerHost } =
+        await import('../src/lick-manager-proxy.js');
+
+      const mockLickManager = {
+        createCronTask: vi.fn(),
+        listCronTasks: vi.fn(),
+        deleteCronTask: vi.fn(),
+        createWebhook: vi.fn(),
+        listWebhooks: vi.fn(),
+        deleteWebhook: vi.fn(),
+      };
+
+      startLickManagerHost(mockLickManager as any, {
+        getTrayWebhookUrl: () => 'https://worker.example.com/webhook/tok',
+      });
+
+      const promise = getTrayWebhookUrlAsync();
+      await vi.advanceTimersToNextTimerAsync();
+      const result = await promise;
+
+      expect(result).toBe('https://worker.example.com/webhook/tok');
+    });
+
+    it('getTrayWebhookUrlAsync returns null when host has no resolver', async () => {
+      const { getTrayWebhookUrlAsync, startLickManagerHost } =
+        await import('../src/lick-manager-proxy.js');
+
+      const mockLickManager = {
+        createCronTask: vi.fn(),
+        listCronTasks: vi.fn(),
+        deleteCronTask: vi.fn(),
+        createWebhook: vi.fn(),
+        listWebhooks: vi.fn(),
+        deleteWebhook: vi.fn(),
+      };
+
+      startLickManagerHost(mockLickManager as any);
+
+      const promise = getTrayWebhookUrlAsync();
+      await vi.advanceTimersToNextTimerAsync();
+      const result = await promise;
+
+      expect(result).toBeNull();
+    });
+
+    it('createWebhook rejects when lick manager throws', async () => {
+      const { createLickManagerProxy, startLickManagerHost } =
+        await import('../src/lick-manager-proxy.js');
+
+      const mockLickManager = {
+        createCronTask: vi.fn(),
+        listCronTasks: vi.fn(),
+        deleteCronTask: vi.fn(),
+        createWebhook: vi.fn().mockRejectedValue(new Error('Invalid filter')),
+        listWebhooks: vi.fn(),
+        deleteWebhook: vi.fn(),
+      };
+
+      startLickManagerHost(mockLickManager as any);
+      const proxy = createLickManagerProxy();
+
+      const promise = proxy.createWebhook('bad', 'scoop', '(e) => boom');
+      promise.catch(() => {});
+
+      await vi.advanceTimersToNextTimerAsync();
+      await vi.advanceTimersToNextTimerAsync();
+
+      await expect(promise).rejects.toThrow('Invalid filter');
     });
   });
 });

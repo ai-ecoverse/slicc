@@ -12,6 +12,14 @@ export interface CronTaskEntry {
   createdAt: string;
 }
 
+export interface WebhookEntry {
+  id: string;
+  name: string;
+  createdAt: string;
+  filter?: string;
+  scoop?: string;
+}
+
 export interface LickManager {
   createCronTask(
     name: string,
@@ -21,6 +29,9 @@ export interface LickManager {
   ): Promise<CronTaskEntry>;
   listCronTasks(): CronTaskEntry[];
   deleteCronTask(id: string): Promise<boolean>;
+  createWebhook(name: string, scoop?: string, filter?: string): Promise<WebhookEntry>;
+  listWebhooks(): WebhookEntry[];
+  deleteWebhook(id: string): Promise<boolean>;
 }
 
 export interface ScoopTabState {

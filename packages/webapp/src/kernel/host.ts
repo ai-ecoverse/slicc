@@ -350,6 +350,27 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   //    shell commands. globalThis is identical in worker + page.
   (globalThis as Record<string, unknown>).__slicc_lickManager = lickManager;
 
+  // 8a. /licks-ws bridge to the node-server (standalone / kernel-worker
+  //     only). Restores the lick wire that the inline-orchestrator
+  //     removal (commit 07cdce16) deleted along with the old page-side
+  //     handler: management requests from `/api/{webhooks,crontasks,
+  //     tray-status}`, inbound webhook events from `POST /webhooks/:id`,
+  //     and navigate events from `POST /api/handoff` now reach
+  //     `lickManager` again. The extension offscreen kernel-host has no
+  //     node-server peer to connect to, so we gate on `isExtension`.
+  let lickWsBridgeStop: (() => void) | null = null;
+  if (!isExtension) {
+    try {
+      const { startLickWsBridge } = await import('../scoops/lick-ws-bridge.js');
+      const handle = startLickWsBridge(lickManager, {
+        locationHref: self.location.href,
+      });
+      lickWsBridgeStop = handle.stop;
+    } catch (err) {
+      log.warn('Failed to start lick-ws bridge', err);
+    }
+  }
+
   // 8b. CDP-level NavigationWatcher (standalone / kernel-worker only).
   //     The extension float observes main-frame `Link` headers via
   //     `chrome.webRequest` in the service worker and forwards them as
@@ -495,6 +516,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
       unsubFollower?.();
       bshWatchdogStop?.();
       scriptCatalogDispose?.();
+      lickWsBridgeStop?.();
       // Tear down the NavigationWatcher's CDP subscriptions so a
       // new-session reload doesn't leave a stray observer attached to
       // every page target.

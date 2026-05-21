@@ -93,7 +93,7 @@ and self-close, but DO NOT count as the canonical detached tab.
 - `src/offscreen.ts` — offscreen runtime bootstrap
 - `src/offscreen-bridge.ts` — panel/offscreen message bridge
 - `src/messages.ts` — typed envelopes for panel, offscreen, and CDP traffic
-- `src/lick-manager-proxy.ts` — panel access to lick operations hosted in offscreen
+- `src/lick-manager-proxy.ts` — panel access to lick operations hosted in offscreen. Surfaces cron task + webhook CRUD plus a `getTrayWebhookUrl` resolver so the side-panel `webhook` command can build per-webhook URLs from the active leader tray session.
 - `src/sprinkle-proxy.ts` — sprinkle relay between offscreen and panel
 - `src/tab-group.ts` — persistent Chrome tab group handling
 - `src/tray-socket-proxy.ts` — worker/tray WebSocket proxying

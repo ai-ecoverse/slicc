@@ -1,5 +1,7 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { getTrayWebhookUrl, getWebhookUrl } from '../../ui/runtime-mode.js';
+import { getLeaderTrayRuntimeStatus } from '../../scoops/tray-leader.js';
 
 function webhookHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -36,29 +38,58 @@ interface WebhookInfo {
   scoop?: string;
 }
 
-async function apiCall(
-  method: string,
-  path: string,
-  body?: unknown
-): Promise<{ ok: boolean; status: number; data: unknown }> {
-  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
-  // In extension mode, we don't have a CLI server - webhooks not supported
-  if (isExtension) {
-    throw new Error('Webhooks are only available in CLI mode (npm run dev:full)');
+/** Get the LickManager from globalThis (published by `createKernelHost`). */
+function getDirectLickManager(): import('../../scoops/lick-manager.js').LickManager | null {
+  return (
+    ((globalThis as unknown as Record<string, unknown>).__slicc_lickManager as
+      | import('../../scoops/lick-manager.js').LickManager
+      | null) ?? null
+  );
+}
+
+/** Lazy-loaded proxy for when the command runs in the side panel terminal. */
+let _lickProxy: ReturnType<
+  typeof import('../../../../chrome-extension/src/lick-manager-proxy.js').createLickManagerProxy
+> | null = null;
+async function getLickProxy() {
+  if (_lickProxy) return _lickProxy;
+  const { createLickManagerProxy } =
+    await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+  _lickProxy = createLickManagerProxy();
+  return _lickProxy;
+}
+
+/**
+ * Resolve the webhook capability URL base for the current runtime
+ * (without the per-webhook id suffix). Returns:
+ * - extension leader → the cloudflare tray worker's webhook capability
+ *   URL (`<workerBaseUrl>/webhook/<token>`).
+ * - extension follower / no-tray / not leader → `null` (caller refuses).
+ * - standalone → `null` (caller falls back to the local node-server URL
+ *   via `getWebhookUrl(self.location.href, id)`).
+ */
+async function resolveWebhookUrlBase(): Promise<string | null> {
+  if (!isExtension) {
+    // Standalone reads the in-worker leader status synchronously; the
+    // tray session lives on the same globalThis as the LickManager.
+    return getLeaderTrayRuntimeStatus().session?.webhookUrl ?? null;
   }
-
-  const init: RequestInit = {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-  };
-  if (body) {
-    init.body = JSON.stringify(body);
+  // Offscreen kernel context: read the singleton directly.
+  if (getDirectLickManager()) {
+    return getLeaderTrayRuntimeStatus().session?.webhookUrl ?? null;
   }
+  // Side-panel terminal: proxy to offscreen.
+  const { getTrayWebhookUrlAsync } =
+    await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+  return await getTrayWebhookUrlAsync();
+}
 
-  const resp = await fetch(`/api/webhooks${path}`, init);
-  const data = await resp.json().catch(() => ({}));
-  return { ok: resp.ok, status: resp.status, data };
+/** Build the per-webhook URL for a given runtime. */
+function buildWebhookUrl(webhookId: string, trayUrlBase: string | null): string {
+  if (trayUrlBase) return getTrayWebhookUrl(trayUrlBase, webhookId);
+  return getWebhookUrl(self.location.href, webhookId);
 }
 
 export function createWebhookCommand(): Command {
@@ -99,22 +130,51 @@ export function createWebhookCommand(): Command {
             };
           }
 
-          const { ok, data } = await apiCall('POST', '', { name, filter, scoop });
-          if (!ok) {
+          // Filter compilation requires dynamic JS evaluation; Chrome
+          // extension CSP forbids it. crontask has the same gate.
+          if (isExtension && filter) {
             return {
               stdout: '',
-              stderr: `webhook: failed to create webhook: ${(data as { error?: string }).error ?? 'unknown error'}\n`,
+              stderr: 'webhook: --filter is not supported in extension mode (CSP restriction)\n',
               exitCode: 1,
             };
           }
 
-          const info = data as WebhookInfo;
-          let output = `Created webhook "${info.name}"\nID:  ${info.id}\nURL: ${info.url}\n`;
-          if (info.scoop) {
-            output += `Scoop: ${info.scoop}\n`;
+          // Extension follower / no-tray refusal — only fires in
+          // extension mode; standalone reaches the node-server over the
+          // /licks-ws bridge instead.
+          if (isExtension) {
+            const urlBase = await resolveWebhookUrlBase();
+            if (!urlBase) {
+              const leaderState = getLeaderTrayRuntimeStatus().state;
+              const msg =
+                leaderState === 'leader'
+                  ? 'webhook: tray session is not connected yet — wait for the leader to attach'
+                  : 'webhook: requires extension-leader mode with a tray worker URL configured (this device is currently in state "' +
+                    leaderState +
+                    '")';
+              return {
+                stdout: '',
+                stderr: msg + '\n',
+                exitCode: 1,
+              };
+            }
           }
-          if (info.filter) {
-            output += `Filter: ${info.filter}\n`;
+
+          const direct = getDirectLickManager();
+          const entry = direct
+            ? await direct.createWebhook(name, scoop, filter)
+            : await (await getLickProxy()).createWebhook(name, scoop, filter);
+
+          const trayUrlBase = await resolveWebhookUrlBase();
+          const url = buildWebhookUrl(entry.id, trayUrlBase);
+
+          let output = `Created webhook "${entry.name}"\nID:  ${entry.id}\nURL: ${url}\n`;
+          if (entry.scoop) {
+            output += `Scoop: ${entry.scoop}\n`;
+          }
+          if (entry.filter) {
+            output += `Filter: ${entry.filter}\n`;
           }
           return {
             stdout: output,
@@ -124,23 +184,42 @@ export function createWebhookCommand(): Command {
         }
 
         case 'list': {
-          const { ok, data } = await apiCall('GET', '');
-          if (!ok) {
+          const direct = getDirectLickManager();
+          let entries: import('../../scoops/lick-manager.js').WebhookEntry[];
+          if (direct) {
+            entries = direct.listWebhooks();
+          } else if (isExtension) {
+            const { listWebhooksAsync } =
+              await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+            entries = await listWebhooksAsync();
+          } else {
+            // Standalone always has direct access. If we got here the
+            // host hasn't booted yet — surface that rather than silently
+            // returning empty.
             return {
               stdout: '',
-              stderr: `webhook: failed to list webhooks: ${(data as { error?: string }).error ?? 'unknown error'}\n`,
+              stderr: 'webhook: LickManager is not initialized yet\n',
               exitCode: 1,
             };
           }
 
-          const webhooks = data as WebhookInfo[];
-          if (webhooks.length === 0) {
+          if (entries.length === 0) {
             return {
               stdout: 'No active webhooks\n',
               stderr: '',
               exitCode: 0,
             };
           }
+
+          const trayUrlBase = await resolveWebhookUrlBase();
+          const webhooks: WebhookInfo[] = entries.map((wh) => ({
+            id: wh.id,
+            name: wh.name,
+            url: buildWebhookUrl(wh.id, trayUrlBase),
+            createdAt: wh.createdAt,
+            filter: wh.filter,
+            scoop: wh.scoop,
+          }));
 
           let output = 'Active webhooks:\n';
           for (const wh of webhooks) {
@@ -170,18 +249,15 @@ export function createWebhookCommand(): Command {
             };
           }
 
-          const { ok, status, data } = await apiCall('DELETE', `/${id}`);
+          const direct = getDirectLickManager();
+          const ok = direct
+            ? await direct.deleteWebhook(id)
+            : await (await getLickProxy()).deleteWebhook(id);
+
           if (!ok) {
-            if (status === 404) {
-              return {
-                stdout: '',
-                stderr: `webhook: webhook "${id}" not found\n`,
-                exitCode: 1,
-              };
-            }
             return {
               stdout: '',
-              stderr: `webhook: failed to delete webhook: ${(data as { error?: string }).error ?? 'unknown error'}\n`,
+              stderr: `webhook: webhook "${id}" not found\n`,
               exitCode: 1,
             };
           }
