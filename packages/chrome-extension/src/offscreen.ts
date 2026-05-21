@@ -222,9 +222,16 @@ async function init(): Promise<void> {
     return false;
   });
 
-  // Start BroadcastChannel host so the side panel terminal can proxy crontask ops
+  // Start BroadcastChannel host so the side panel terminal can proxy
+  // crontask/webhook ops. The webhook command needs the active leader
+  // tray's webhook capability URL to build per-webhook URLs; resolve
+  // it here on demand (offscreen owns the leader status singleton —
+  // panel-side reads via the proxy).
   const { startLickManagerHost } = await import('./lick-manager-proxy.js');
-  startLickManagerHost(lickManager);
+  const { getLeaderTrayRuntimeStatus } = await import('../../webapp/src/scoops/tray-leader.js');
+  startLickManagerHost(lickManager, {
+    getTrayWebhookUrl: () => getLeaderTrayRuntimeStatus().session?.webhookUrl ?? null,
+  });
   console.log('[slicc-offscreen] LickManager BroadcastChannel host started');
 
   // Listen for navigate-lick events forwarded from the service worker's
