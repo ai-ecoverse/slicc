@@ -25,6 +25,7 @@ import {
   type DraftDipInstance,
 } from './dip.js';
 import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
+import { showImagePreview } from './image-preview.js';
 import {
   getToolDescriptor,
   createToolIcon,
@@ -2279,6 +2280,13 @@ export class ChatPanel {
         options.onRemove?.();
       });
       chip.appendChild(remove);
+    }
+
+    if (attachment.kind === 'image' && attachment.data) {
+      chip.style.cursor = 'pointer';
+      chip.addEventListener('click', () => {
+        showImagePreview(`data:${attachment.mimeType};base64,${attachment.data}`, visual);
+      });
     }
 
     return chip;
