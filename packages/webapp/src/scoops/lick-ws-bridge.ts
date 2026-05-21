@@ -10,22 +10,17 @@
  * talks to `LickManager` through a BroadcastChannel proxy — see
  * `packages/chrome-extension/src/lick-manager-proxy.ts`).
  *
- * This module is the kernel-side replacement for the legacy page-side
- * handler that lived in `ui/main.ts` before commit 07cdce16 removed
- * the inline-orchestrator standalone path. The wire shape is preserved
- * verbatim — same request types, same response envelope — so
- * `packages/node-server/src/index.ts` needs no changes.
- *
- * Wire shape (from node-server `sendLickRequest` / `broadcastLickEvent`):
+ * Wire shape (must match `packages/node-server/src/index.ts`
+ * `sendLickRequest` / `broadcastLickEvent`):
  *
  *   inbound  → `{ type, requestId?, ...payload }`
  *   outbound → `{ type: 'response', requestId, data?, error? }`
  *
- * Reconnect: on `onclose`, schedule a reconnect after `reconnectDelayMs`
- * unless `stop()` was called. The reconnect timer is the only piece of
- * mutable state that survives `connect()` calls.
+ * Reconnect policy: exponential backoff capped at 60s, escalating log
+ * level after a few attempts, and an unrecoverable signal emitted to
+ * the cone after sustained failure so the user sees that lick delivery
+ * is down rather than wondering why their webhook never fires.
  */
-
 import { createLogger } from '../core/logger.js';
 import type { LickManager } from './lick-manager.js';
 import { getLickWebSocketUrl, getTrayWebhookUrl, getWebhookUrl } from '../ui/runtime-mode.js';
@@ -34,13 +29,44 @@ import { getLeaderTrayRuntimeStatus } from './tray-leader.js';
 const log = createLogger('lick-ws-bridge');
 
 const DEFAULT_RECONNECT_DELAY_MS = 3000;
+const MAX_RECONNECT_DELAY_MS = 60_000;
+/** Number of consecutive failures before warns escalate to errors. */
+const RECONNECT_LOG_ESCALATE_AT = 3;
+/** Number of consecutive failures before we emit an unrecoverable cone signal. */
+const RECONNECT_GIVEUP_AT = 20;
+
+/**
+ * Minimal WebSocket-shaped object the bridge uses. Narrower than the
+ * full DOM `WebSocket` so the test factory doesn't need to lie via
+ * `as unknown as WebSocket`. The DOM `WebSocket` satisfies this shape
+ * structurally.
+ */
+export interface MinimalWebSocket {
+  send(data: string): void;
+  close(): void;
+  readyState: number;
+  // Match the DOM `WebSocket` signature shape so callers don't need
+  // `as unknown as WebSocket` to widen back to MDN's type.
+  onopen: ((ev: Event) => unknown) | null;
+  onmessage: ((ev: MessageEvent) => unknown) | null;
+  onclose: ((ev: CloseEvent) => unknown) | null;
+  onerror: ((ev: Event) => unknown) | null;
+}
+
+/** Mirror of `WebSocket.OPEN` so the bridge doesn't depend on the global. */
+const WS_OPEN = 1;
 
 export interface LickWsBridgeOptions {
-  /** Origin-bearing URL used to construct ws URLs and webhook URLs. */
+  /**
+   * Origin-bearing URL used to construct the WS endpoint and the
+   * fallback webhook URL. Validated eagerly via `new URL(...)`; bad
+   * input throws synchronously from `startLickWsBridge` rather than
+   * silently looping the reconnect.
+   */
   locationHref: string;
   /** Override the WebSocket constructor (tests). */
-  webSocketFactory?: (url: string) => WebSocket;
-  /** Override the reconnect delay (tests). Defaults to 3000ms. */
+  webSocketFactory?: (url: string) => MinimalWebSocket;
+  /** Override the base reconnect delay (tests). Defaults to 3000ms. */
   reconnectDelayMs?: number;
   /** Override the setTimeout used for reconnection (tests). */
   setTimeoutFn?: (cb: () => void, delay: number) => ReturnType<typeof setTimeout>;
@@ -49,7 +75,7 @@ export interface LickWsBridgeOptions {
 }
 
 export interface LickWsBridgeHandle {
-  /** Tear down the bridge: close the socket and cancel any pending reconnect. */
+  /** Idempotent — safe to call multiple times. */
   stop(): void;
 }
 
@@ -74,102 +100,209 @@ export function startLickWsBridge(
   lickManager: LickManager,
   options: LickWsBridgeOptions
 ): LickWsBridgeHandle {
-  const wsFactory = options.webSocketFactory ?? ((url) => new WebSocket(url));
-  const reconnectDelay = options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
+  // Fail fast on a malformed `locationHref` rather than letting a bad
+  // URL silently loop the reconnect path forever.
+  try {
+     
+    new URL(options.locationHref);
+  } catch (err) {
+    throw new Error(
+      `startLickWsBridge: invalid locationHref ${JSON.stringify(options.locationHref)}: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+
+  const wsFactory =
+    options.webSocketFactory ?? ((url) => new WebSocket(url) as unknown as MinimalWebSocket);
+  const baseDelay = options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
   const setTimer = options.setTimeoutFn ?? setTimeout;
   const clearTimer = options.clearTimeoutFn ?? clearTimeout;
 
   let stopped = false;
-  let socket: WebSocket | null = null;
+  let socket: MinimalWebSocket | null = null;
   let reconnectHandle: ReturnType<typeof setTimeout> | null = null;
+  let consecutiveFailures = 0;
+  let unrecoverableSignalled = false;
+
+  const wsUrl = getLickWebSocketUrl(options.locationHref);
 
   const connect = (): void => {
     if (stopped) return;
-    const wsUrl = getLickWebSocketUrl(options.locationHref);
-    let ws: WebSocket;
+    let ws: MinimalWebSocket;
     try {
       ws = wsFactory(wsUrl);
     } catch (err) {
       log.error('Failed to construct lick WebSocket', {
+        url: wsUrl,
         error: err instanceof Error ? err.message : String(err),
       });
-      scheduleReconnect();
+      onFailure('construct-threw');
       return;
     }
     socket = ws;
 
     ws.onopen = () => {
-      log.info('Lick WebSocket connected');
+      if (consecutiveFailures > 0) {
+        log.info('Lick WebSocket recovered', { attempts: consecutiveFailures });
+      } else {
+        log.info('Lick WebSocket connected');
+      }
+      consecutiveFailures = 0;
+      unrecoverableSignalled = false;
     };
 
     ws.onmessage = (event: MessageEvent) => {
       void handleMessage(ws, event.data).catch((err) => {
+        const preview =
+          typeof event.data === 'string' ? event.data.slice(0, 200) : '[non-string payload]';
         log.error('Failed to process lick message', {
           error: err instanceof Error ? err.message : String(err),
+          preview,
         });
       });
     };
 
     ws.onclose = () => {
-      socket = null;
+      if (socket === ws) socket = null;
       if (stopped) return;
-      log.warn(`Lick WebSocket disconnected, reconnecting in ${reconnectDelay}ms`);
-      scheduleReconnect();
+      onFailure('disconnected');
     };
 
-    ws.onerror = (err: Event) => {
-      log.error('Lick WebSocket error', { error: String(err) });
+    ws.onerror = (event: Event) => {
+      const target = event.target as MinimalWebSocket | null;
+      log.error('Lick WebSocket error', {
+        url: wsUrl,
+        readyState: target?.readyState,
+        eventType: event.type,
+      });
     };
   };
 
-  const scheduleReconnect = (): void => {
+  /**
+   * Record a failure, log appropriately, emit a cone signal at the
+   * give-up threshold, and schedule the next reconnect with backoff.
+   */
+  const onFailure = (cause: string): void => {
+    consecutiveFailures++;
+    const delay = Math.min(baseDelay * 2 ** (consecutiveFailures - 1), MAX_RECONNECT_DELAY_MS);
+    const fields = { url: wsUrl, attempt: consecutiveFailures, cause, retryInMs: delay };
+    if (consecutiveFailures >= RECONNECT_LOG_ESCALATE_AT) {
+      log.error('Lick WebSocket still down', fields);
+    } else {
+      log.warn('Lick WebSocket down', fields);
+    }
+    if (consecutiveFailures === RECONNECT_GIVEUP_AT && !unrecoverableSignalled) {
+      unrecoverableSignalled = true;
+      try {
+        lickManager.emitEvent({
+          type: 'session-reload',
+          targetScoop: undefined,
+          timestamp: new Date().toISOString(),
+          body: {
+            reason: 'lick-ws-bridge-down',
+            url: wsUrl,
+            attempts: consecutiveFailures,
+          },
+        });
+      } catch (err) {
+        log.error('Failed to emit lick-ws-bridge-down signal', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    scheduleReconnect(delay);
+  };
+
+  const scheduleReconnect = (delay: number): void => {
     if (stopped || reconnectHandle != null) return;
     reconnectHandle = setTimer(() => {
       reconnectHandle = null;
       connect();
-    }, reconnectDelay);
+    }, delay);
   };
 
-  const handleMessage = async (ws: WebSocket, raw: unknown): Promise<void> => {
+  const handleMessage = async (ws: MinimalWebSocket, raw: unknown): Promise<void> => {
     const text = typeof raw === 'string' ? raw : String(raw);
     const data = JSON.parse(text) as RequestMessage;
 
     if (data.requestId) {
-      const reply = await handleRequest(data);
-      ws.send(JSON.stringify(reply));
+      const requestId = data.requestId;
+      const reply = await handleRequest(data, requestId);
+      // The await above can hand control to a close/reconnect that
+      // invalidates `ws`. Don't send into a dead or replaced socket —
+      // the node-server's request hangs to timeout if we do.
+      if (stopped || socket !== ws || ws.readyState !== WS_OPEN) {
+        log.warn('Lick reply dropped — socket changed/closed mid-request', {
+          type: data.type,
+          requestId,
+        });
+        return;
+      }
+      try {
+        ws.send(JSON.stringify(reply));
+      } catch (err) {
+        log.error('ws.send() failed delivering lick reply', {
+          type: data.type,
+          requestId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       return;
     }
 
     if (data.type === 'webhook_event') {
-      lickManager.handleWebhookEvent(
-        data.webhookId as string,
-        (data.headers as Record<string, string>) ?? {},
-        data.body
-      );
+      const webhookId = typeof data.webhookId === 'string' ? data.webhookId : null;
+      if (!webhookId) {
+        log.error('Malformed webhook_event from lick-ws', {
+          receivedKeys: Object.keys(data),
+        });
+        return;
+      }
+      const headers =
+        data.headers && typeof data.headers === 'object'
+          ? (data.headers as Record<string, string>)
+          : {};
+      lickManager.handleWebhookEvent(webhookId, headers, data.body);
       return;
     }
 
     if (data.type === 'navigate_event') {
-      const sliccHeader = typeof data.sliccHeader === 'string' ? data.sliccHeader : '';
-      const navUrl = typeof data.url === 'string' && data.url.length > 0 ? data.url : '';
-      if (sliccHeader && navUrl) {
-        lickManager.emitEvent({
-          type: 'navigate',
-          navigateUrl: navUrl,
-          targetScoop: undefined,
-          timestamp: typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString(),
-          body: {
-            url: navUrl,
-            sliccHeader,
-            title: typeof data.title === 'string' ? data.title : undefined,
-          },
+      // Payload mirrors `packages/node-server/src/index.ts` POST
+      // /api/handoff, which broadcasts `{ verb, target, instruction?,
+      // url, title?, branch?, path? }` (RFC 8288 Link shape). The
+      // pre-removal `sliccHeader` shape was deleted in commit
+      // 085ac59e — readers MUST use the new fields.
+      const verb = typeof data.verb === 'string' ? data.verb : null;
+      const target = typeof data.target === 'string' ? data.target : null;
+      const navUrl = typeof data.url === 'string' && data.url.length > 0 ? data.url : null;
+      if ((verb !== 'handoff' && verb !== 'upskill') || !target || !navUrl) {
+        log.debug('navigate_event dropped — invalid payload', {
+          hasVerb: !!verb,
+          hasTarget: !!target,
+          hasUrl: !!navUrl,
         });
+        return;
       }
+      const body: Record<string, unknown> = { url: navUrl, verb, target };
+      if (typeof data.instruction === 'string') body.instruction = data.instruction;
+      if (typeof data.branch === 'string') body.branch = data.branch;
+      if (typeof data.path === 'string') body.path = data.path;
+      if (typeof data.title === 'string') body.title = data.title;
+      lickManager.emitEvent({
+        type: 'navigate',
+        navigateUrl: navUrl,
+        targetScoop: undefined,
+        timestamp: typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString(),
+        body,
+      });
     }
   };
 
-  const handleRequest = async (data: RequestMessage): Promise<ResponseEnvelope> => {
-    const requestId = data.requestId!;
+  const handleRequest = async (
+    data: RequestMessage,
+    requestId: string
+  ): Promise<ResponseEnvelope> => {
     try {
       switch (data.type) {
         case 'list_webhooks': {
@@ -261,18 +394,26 @@ export function startLickWsBridge(
 
   return {
     stop(): void {
+      if (stopped) return;
       stopped = true;
       if (reconnectHandle != null) {
         clearTimer(reconnectHandle);
         reconnectHandle = null;
       }
-      if (socket) {
+      const s = socket;
+      socket = null;
+      if (s) {
         try {
-          socket.close();
-        } catch {
-          // ignored — already closed
+          s.close();
+        } catch (err) {
+          // Closing an already-closed socket is benign; anything else
+          // is noteworthy.
+          if (s.readyState !== 3 /* CLOSED */ && s.readyState !== 2 /* CLOSING */) {
+            log.warn('Lick socket close() threw on a still-open socket', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
-        socket = null;
       }
     },
   };

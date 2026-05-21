@@ -83,7 +83,7 @@ describe('webhook command — help and argument validation', () => {
     const { command } = await loadCommandAndTrayLeader();
     const result = await command.execute(['delete'], {} as never);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('delete requires an ID');
+    expect(result.stderr).toContain('delete: requires an ID');
   });
 });
 
@@ -281,5 +281,227 @@ describe('webhook command — extension mode', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('URL: https://hub.slicc.dev/webhook/abc/wh-9');
+  });
+
+  it('list reports the empty case', async () => {
+    const lm = buildLickManagerMock();
+    (globalThis as Record<string, unknown>).__slicc_lickManager = lm;
+
+    const { command, setStatus } = await loadCommandAndTrayLeader();
+    setStatus({ state: 'leader', session: SESSION, error: null });
+
+    const result = await command.execute(['list'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('No active webhooks\n');
+  });
+
+  it('list renders existing webhooks with tray URLs when session is present', async () => {
+    const entries: WebhookEntry[] = [
+      { id: 'wh-1', name: 'github', scoop: 'pr', createdAt: new Date().toISOString() },
+    ];
+    const lm = buildLickManagerMock({
+      listWebhooks: vi.fn().mockReturnValue(entries),
+    });
+    (globalThis as Record<string, unknown>).__slicc_lickManager = lm;
+
+    const { command, setStatus } = await loadCommandAndTrayLeader();
+    setStatus({ state: 'leader', session: SESSION, error: null });
+
+    const result = await command.execute(['list'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('https://hub.slicc.dev/webhook/abc/wh-1');
+  });
+
+  it('list renders URL-unavailable placeholder when no tray and emits the hint footer', async () => {
+    const entries: WebhookEntry[] = [
+      { id: 'wh-1', name: 'github', scoop: 'pr', createdAt: new Date().toISOString() },
+    ];
+    const lm = buildLickManagerMock({
+      listWebhooks: vi.fn().mockReturnValue(entries),
+    });
+    (globalThis as Record<string, unknown>).__slicc_lickManager = lm;
+
+    const { command } = await loadCommandAndTrayLeader();
+    // default state is `inactive` — no tray session.
+
+    const result = await command.execute(['list'], {} as never);
+    expect(result.exitCode).toBe(0);
+    // Must NOT render a chrome-extension://… URL — that's the bug.
+    expect(result.stdout).not.toContain('chrome-extension://');
+    expect(result.stdout).toContain('(URL unavailable');
+    expect(result.stdout).toContain('require a leader tray');
+  });
+});
+
+describe('webhook command — standalone init-pending', () => {
+  beforeEach(() => {
+    vi.stubGlobal('chrome', undefined);
+    stubSelfLocation('http://localhost:5710/index.html');
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete (globalThis as Record<string, unknown>).__slicc_lickManager;
+  });
+
+  it('returns init-pending error when standalone host has not booted yet', async () => {
+    // No __slicc_lickManager AND standalone mode → no proxy fallback;
+    // command must surface a clear "not booted" error.
+    const { command } = await loadCommandAndTrayLeader();
+    const result = await command.execute(['list'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('kernel host has not booted yet');
+  });
+});
+
+// ─── Extension mode through the actual BroadcastChannel proxy ─────────────
+//
+// All other "extension mode" tests above set `__slicc_lickManager`
+// directly, so they exercise the offscreen-context branch and not the
+// side-panel proxy. This describe block does NOT preset the global —
+// it installs a MockBroadcastChannel + startLickManagerHost(...) and
+// proves the side-panel terminal path round-trips through the proxy.
+describe('webhook command — extension side panel → offscreen via BroadcastChannel', () => {
+  class MockBroadcastChannel {
+    static channels = new Map<string, Set<MockBroadcastChannel>>();
+    name: string;
+    onmessage: ((ev: MessageEvent) => void) | null = null;
+    constructor(name: string) {
+      this.name = name;
+      const set = MockBroadcastChannel.channels.get(name) ?? new Set();
+      set.add(this);
+      MockBroadcastChannel.channels.set(name, set);
+    }
+    postMessage(data: unknown): void {
+      const peers = MockBroadcastChannel.channels.get(this.name);
+      if (!peers) return;
+      for (const ch of peers) {
+        if (ch !== this && ch.onmessage) ch.onmessage(new MessageEvent('message', { data }));
+      }
+    }
+    close(): void {
+      MockBroadcastChannel.channels.get(this.name)?.delete(this);
+    }
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('chrome', { runtime: { id: 'ext-test-id' } });
+    vi.stubGlobal('BroadcastChannel', MockBroadcastChannel);
+    stubSelfLocation('chrome-extension://ext-test-id/index.html');
+    MockBroadcastChannel.channels.clear();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    MockBroadcastChannel.channels.clear();
+  });
+
+  it('side-panel webhook create round-trips through the proxy to the offscreen host', async () => {
+    const entry: WebhookEntry = {
+      id: 'wh-px',
+      name: 'github',
+      scoop: 'pr',
+      createdAt: new Date().toISOString(),
+    };
+    const mockLickManager = {
+      createWebhook: vi.fn().mockResolvedValue(entry),
+      listWebhooks: vi.fn(),
+      deleteWebhook: vi.fn(),
+      createCronTask: vi.fn(),
+      listCronTasks: vi.fn(),
+      deleteCronTask: vi.fn(),
+    };
+
+    // Start the offscreen host with a tray URL resolver.
+    const { startLickManagerHost } =
+      await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+    startLickManagerHost(mockLickManager as never, {
+      getTrayWebhookUrl: () => SESSION.webhookUrl,
+    });
+
+    const { command } = await loadCommandAndTrayLeader();
+    // NOTE: __slicc_lickManager is intentionally NOT set, forcing
+    // the command into the BroadcastChannel proxy branch.
+
+    const result = await command.execute(
+      ['create', '--scoop', 'pr', '--name', 'github'],
+      {} as never
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(mockLickManager.createWebhook).toHaveBeenCalledWith('github', 'pr', undefined);
+    expect(result.stdout).toContain('URL: https://hub.slicc.dev/webhook/abc/wh-px');
+  });
+
+  it('side-panel webhook list round-trips through the proxy', async () => {
+    const entries: WebhookEntry[] = [
+      { id: 'wh-1', name: 'github', scoop: 'pr', createdAt: new Date().toISOString() },
+    ];
+    const mockLickManager = {
+      createWebhook: vi.fn(),
+      listWebhooks: vi.fn().mockReturnValue(entries),
+      deleteWebhook: vi.fn(),
+      createCronTask: vi.fn(),
+      listCronTasks: vi.fn(),
+      deleteCronTask: vi.fn(),
+    };
+
+    const { startLickManagerHost } =
+      await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+    startLickManagerHost(mockLickManager as never, {
+      getTrayWebhookUrl: () => SESSION.webhookUrl,
+    });
+
+    const { command } = await loadCommandAndTrayLeader();
+
+    const result = await command.execute(['list'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('https://hub.slicc.dev/webhook/abc/wh-1');
+  });
+
+  it('side-panel webhook delete round-trips through the proxy', async () => {
+    const mockLickManager = {
+      createWebhook: vi.fn(),
+      listWebhooks: vi.fn(),
+      deleteWebhook: vi.fn().mockResolvedValue(true),
+      createCronTask: vi.fn(),
+      listCronTasks: vi.fn(),
+      deleteCronTask: vi.fn(),
+    };
+
+    const { startLickManagerHost } =
+      await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+    startLickManagerHost(mockLickManager as never);
+
+    const { command } = await loadCommandAndTrayLeader();
+
+    const result = await command.execute(['delete', 'wh-1'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(mockLickManager.deleteWebhook).toHaveBeenCalledWith('wh-1');
+  });
+
+  it('side-panel webhook create refuses when proxy reports no tray URL', async () => {
+    const mockLickManager = {
+      createWebhook: vi.fn(),
+      listWebhooks: vi.fn(),
+      deleteWebhook: vi.fn(),
+      createCronTask: vi.fn(),
+      listCronTasks: vi.fn(),
+      deleteCronTask: vi.fn(),
+    };
+
+    const { startLickManagerHost } =
+      await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+    // No tray URL resolver → returns null.
+    startLickManagerHost(mockLickManager as never);
+
+    const { command } = await loadCommandAndTrayLeader();
+
+    const result = await command.execute(['create', '--scoop', 'pr'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/extension-leader mode|tray session/);
+    expect(mockLickManager.createWebhook).not.toHaveBeenCalled();
   });
 });

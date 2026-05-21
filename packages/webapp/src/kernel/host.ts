@@ -124,11 +124,20 @@ export interface KernelHostConfig {
 
   /**
    * If true, the caller is the extension float. The kernel host then
-   * skips constructing a CDP-level `NavigationWatcher` because the
-   * extension observes main-frame `Link` headers via `chrome.webRequest`
-   * in the service worker and emits `navigate-lick` messages directly
-   * (see `offscreen.ts`). Leaving this falsy in standalone / kernel-
-   * worker boots is what makes navigate-licks fire end-to-end there.
+   * skips two pieces of standalone-only plumbing:
+   *
+   * 1. The CDP-level `NavigationWatcher` — the extension observes
+   *    main-frame `Link` headers via `chrome.webRequest` in the service
+   *    worker and emits `navigate-lick` messages directly (see
+   *    `offscreen.ts`); a CDP watcher in the offscreen kernel would
+   *    double-fire.
+   * 2. The `/licks-ws` bridge to the node-server (`startLickWsBridge`)
+   *    — there is no node-server in extension mode. Webhooks land at
+   *    the cloudflare tray worker and the panel webhook command uses
+   *    the BroadcastChannel proxy in `lick-manager-proxy.ts` instead.
+   *
+   * Leaving this falsy in standalone / kernel-worker boots is what
+   * makes both navigate-licks AND the lick-ws management wire work.
    */
   isExtension?: boolean;
 
@@ -350,14 +359,10 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   //    shell commands. globalThis is identical in worker + page.
   (globalThis as Record<string, unknown>).__slicc_lickManager = lickManager;
 
-  // 8a. /licks-ws bridge to the node-server (standalone / kernel-worker
-  //     only). Restores the lick wire that the inline-orchestrator
-  //     removal (commit 07cdce16) deleted along with the old page-side
-  //     handler: management requests from `/api/{webhooks,crontasks,
-  //     tray-status}`, inbound webhook events from `POST /webhooks/:id`,
-  //     and navigate events from `POST /api/handoff` now reach
-  //     `lickManager` again. The extension offscreen kernel-host has no
-  //     node-server peer to connect to, so we gate on `isExtension`.
+  // 8a. /licks-ws bridge to the node-server. The extension offscreen
+  //     kernel-host has no node-server peer to connect to, so we gate
+  //     on `isExtension`. See `scoops/lick-ws-bridge.ts` for the wire
+  //     shape.
   let lickWsBridgeStop: (() => void) | null = null;
   if (!isExtension) {
     try {
@@ -367,7 +372,15 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
       });
       lickWsBridgeStop = handle.stop;
     } catch (err) {
-      log.warn('Failed to start lick-ws bridge', err);
+      // Bridge failure is functionally identical to webhook/crontask/
+      // handoff lick delivery being non-functional for the rest of the
+      // session — must be visible in prod where `log.warn` is suppressed.
+      // `KernelHostLogger.error` is optional, fall back to warn.
+      (log.error ?? log.warn).call(
+        log,
+        'Failed to start lick-ws bridge — webhook / crontask / handoff lick delivery is non-functional in this session',
+        { error: err instanceof Error ? err.message : String(err) }
+      );
     }
   }
 

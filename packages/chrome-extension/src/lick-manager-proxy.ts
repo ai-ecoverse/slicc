@@ -81,6 +81,12 @@ export function startLickManagerHost(
 
 // ─── Proxy (side panel terminal) ────────────────────────────────────────────
 
+/**
+ * Surface the proxy exposes to callers. Listing operations are async
+ * here (no sync sibling) — `BroadcastChannel` round-trips need a tick,
+ * so a `listX(): X[]` signature would have to lie at runtime. Callers
+ * should `await listCronTasksAsync()` / `await listWebhooksAsync()`.
+ */
 interface LickManagerProxyMethods {
   createCronTask(
     name: string,
@@ -88,7 +94,6 @@ interface LickManagerProxyMethods {
     scoop?: string,
     filter?: string
   ): Promise<CronTaskEntry>;
-  listCronTasks(): CronTaskEntry[];
   deleteCronTask(id: string): Promise<boolean>;
   createWebhook(name: string, scoop?: string, filter?: string): Promise<WebhookEntry>;
   deleteWebhook(id: string): Promise<boolean>;
@@ -101,7 +106,11 @@ function request(op: string, args: unknown[] = []): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       ch.close();
-      reject(new Error('LickManager operation timed out'));
+      reject(
+        new Error(
+          `LickManager '${op}' timed out after ${TIMEOUT}ms — is the offscreen document running and has startLickManagerHost() been called?`
+        )
+      );
     }, TIMEOUT);
 
     ch.onmessage = (event: MessageEvent) => {
@@ -113,7 +122,17 @@ function request(op: string, args: unknown[] = []): Promise<unknown> {
       else resolve(msg.result);
     };
 
-    ch.postMessage({ type: 'lick-op', id, op, args });
+    try {
+      ch.postMessage({ type: 'lick-op', id, op, args });
+    } catch (err) {
+      clearTimeout(timer);
+      ch.close();
+      reject(
+        new Error(
+          `LickManager '${op}' postMessage failed: ${err instanceof Error ? err.message : String(err)}`
+        )
+      );
+    }
   });
 }
 
@@ -122,10 +141,6 @@ export function createLickManagerProxy(): LickManagerProxyMethods {
   return {
     createCronTask: (name, cron, scoop?, filter?) =>
       request('createCronTask', [name, cron, scoop, filter]) as Promise<CronTaskEntry>,
-    listCronTasks: () => {
-      // Synchronous signature but we need async — callers must await
-      throw new Error('Use listCronTasksAsync instead');
-    },
     deleteCronTask: (id) => request('deleteCronTask', [id]) as Promise<boolean>,
     createWebhook: (name, scoop?, filter?) =>
       request('createWebhook', [name, scoop, filter]) as Promise<WebhookEntry>,

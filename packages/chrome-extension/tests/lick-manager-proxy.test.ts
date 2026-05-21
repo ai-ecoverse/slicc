@@ -10,6 +10,26 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type {
+  WebhookEntry as ExtWebhookEntry,
+  CronTaskEntry as ExtCronTaskEntry,
+} from '../src/types.js';
+import type {
+  WebhookEntry as WebWebhookEntry,
+  CronTaskEntry as WebCronTaskEntry,
+} from '../../webapp/src/scoops/lick-manager.js';
+
+// Compile-time assertion that the chrome-extension's duplicated
+// `WebhookEntry` / `CronTaskEntry` stay structurally equal to the
+// canonical definitions in `packages/webapp/src/scoops/lick-manager.ts`.
+// If either side drifts, the runtime no-op test below fails to type.
+type AssertEqual<T, U> =
+  (<G>() => G extends T ? 1 : 2) extends <G>() => G extends U ? 1 : 2 ? true : false;
+function assertTrue<T extends true>(_: T): void {
+  /* erased — compile-time guard only */
+}
+assertTrue<AssertEqual<ExtWebhookEntry, WebWebhookEntry>>(true);
+assertTrue<AssertEqual<ExtCronTaskEntry, WebCronTaskEntry>>(true);
 
 describe('LickManager Proxy', () => {
   // Mock BroadcastChannel with message routing between host and proxy
@@ -338,12 +358,13 @@ describe('LickManager Proxy', () => {
       expect(result).toBe(true);
     });
 
-    it('listCronTasks throws with helpful error message', async () => {
+    it('proxy does not expose synchronous listCronTasks (callers use listCronTasksAsync)', async () => {
       const { createLickManagerProxy } = await import('../src/lick-manager-proxy.js');
 
       const proxy = createLickManagerProxy();
 
-      expect(() => proxy.listCronTasks()).toThrow('Use listCronTasksAsync instead');
+      // Type-level: listCronTasks is not in the interface.
+      expect((proxy as unknown as Record<string, unknown>).listCronTasks).toBeUndefined();
     });
 
     it('error response rejects the promise', async () => {
@@ -381,7 +402,7 @@ describe('LickManager Proxy', () => {
       // Advance time past timeout
       vi.advanceTimersByTime(5001);
 
-      await expect(promise).rejects.toThrow('LickManager operation timed out');
+      await expect(promise).rejects.toThrow(/timed out after \d+ms/);
     });
 
     it('cleans up channel and timer on timeout', async () => {
@@ -516,7 +537,7 @@ describe('LickManager Proxy', () => {
 
       vi.advanceTimersByTime(5001);
 
-      await expect(promise).rejects.toThrow('LickManager operation timed out');
+      await expect(promise).rejects.toThrow(/timed out after \d+ms/);
     });
 
     it('cleans up channel and timer on timeout', async () => {

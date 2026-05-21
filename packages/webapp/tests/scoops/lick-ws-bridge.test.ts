@@ -1,11 +1,10 @@
 /**
- * Tests for the kernel-host /licks-ws bridge.
- *
- * Verifies wire-protocol fidelity with the legacy page-side handler
- * removed in commit 07cdce16: management requests (list/create/delete
+ * Tests for the kernel-host /licks-ws bridge. Pins the wire shape
+ * shared with `packages/node-server/src/index.ts` (`sendLickRequest`,
+ * `broadcastLickEvent`): management requests (list/create/delete
  * webhooks + cron tasks + tray status), inbound events (webhook_event,
  * navigate_event), error envelope, URL construction (standalone vs
- * tray-leader), reconnection on socket close.
+ * tray-leader), reconnection + escalation, send-race on stop.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -19,10 +18,13 @@ class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
 
   url: string;
-  onopen: ((ev?: Event) => void) | null = null;
-  onclose: ((ev?: CloseEvent) => void) | null = null;
-  onmessage: ((ev: MessageEvent) => void) | null = null;
-  onerror: ((ev: Event) => void) | null = null;
+  /** Mirror of `WebSocket.readyState` — defaults to OPEN(1) so messages
+   * arriving via `emit()` are accepted. `close()` flips to CLOSED(3). */
+  readyState = 1;
+  onopen: ((ev: Event) => unknown) | null = null;
+  onclose: ((ev: CloseEvent) => unknown) | null = null;
+  onmessage: ((ev: MessageEvent) => unknown) | null = null;
+  onerror: ((ev: Event) => unknown) | null = null;
   sent: string[] = [];
   closed = false;
 
@@ -38,7 +40,8 @@ class FakeWebSocket {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.onclose?.();
+    this.readyState = 3;
+    this.onclose?.(new CloseEvent('close'));
   }
 
   /** Simulate a server → client message. */
@@ -94,7 +97,7 @@ describe('startLickWsBridge', () => {
 
     const handle = startLickWsBridge(lm, {
       locationHref: LOCATION,
-      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+      webSocketFactory: (url) => new FakeWebSocket(url),
     });
 
     expect(FakeWebSocket.instances).toHaveLength(1);
@@ -113,7 +116,7 @@ describe('startLickWsBridge', () => {
 
     const handle = startLickWsBridge(lm, {
       locationHref: LOCATION,
-      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+      webSocketFactory: (url) => new FakeWebSocket(url),
     });
     const ws = FakeWebSocket.instances[0];
 
@@ -150,7 +153,7 @@ describe('startLickWsBridge', () => {
 
     const handle = startLickWsBridge(lm, {
       locationHref: LOCATION,
-      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+      webSocketFactory: (url) => new FakeWebSocket(url),
     });
     const ws = FakeWebSocket.instances[0];
 
@@ -177,7 +180,7 @@ describe('startLickWsBridge', () => {
 
     const handle = startLickWsBridge(lm, {
       locationHref: LOCATION,
-      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+      webSocketFactory: (url) => new FakeWebSocket(url),
     });
     const ws = FakeWebSocket.instances[0];
 
@@ -195,11 +198,11 @@ describe('startLickWsBridge', () => {
   it('forwards webhook_event without requestId to lickManager.handleWebhookEvent', async () => {
     const { startLickWsBridge } = await loadBridge();
     const handleWebhookEvent = vi.fn();
-    const lm = buildLickManagerMock({ handleWebhookEvent } as Partial<LickManager>);
+    const lm = buildLickManagerMock({ handleWebhookEvent });
 
     const handle = startLickWsBridge(lm, {
       locationHref: LOCATION,
-      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+      webSocketFactory: (url) => new FakeWebSocket(url),
     });
     const ws = FakeWebSocket.instances[0];
 
@@ -215,20 +218,25 @@ describe('startLickWsBridge', () => {
     handle.stop();
   });
 
-  it('forwards navigate_event payloads as navigate licks when sliccHeader + url are present', async () => {
+  it('forwards navigate_event payloads as navigate licks using the {verb, target, url} shape', async () => {
+    // Wire shape matches node-server's `POST /api/handoff` payload
+    // (`packages/node-server/src/index.ts:1030-1044`) after commit
+    // 085ac59e replaced `sliccHeader` with RFC 8288 Link fields.
     const { startLickWsBridge } = await loadBridge();
     const emitEvent = vi.fn();
-    const lm = buildLickManagerMock({ emitEvent } as Partial<LickManager>);
+    const lm = buildLickManagerMock({ emitEvent });
 
     const handle = startLickWsBridge(lm, {
       locationHref: LOCATION,
-      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+      webSocketFactory: (url) => new FakeWebSocket(url),
     });
     const ws = FakeWebSocket.instances[0];
 
     ws.emit({
       type: 'navigate_event',
-      sliccHeader: 'handoff:do-thing',
+      verb: 'handoff',
+      target: 'https://example.com/repo',
+      instruction: 'do thing',
       url: 'about:handoff',
       title: 'Hand off',
       timestamp: '2026-05-21T00:00:00.000Z',
@@ -241,25 +249,68 @@ describe('startLickWsBridge', () => {
       timestamp: '2026-05-21T00:00:00.000Z',
       body: {
         url: 'about:handoff',
-        sliccHeader: 'handoff:do-thing',
+        verb: 'handoff',
+        target: 'https://example.com/repo',
+        instruction: 'do thing',
         title: 'Hand off',
       },
     });
     handle.stop();
   });
 
-  it('ignores navigate_event without sliccHeader', async () => {
+  it('forwards upskill navigate_event with branch + path', async () => {
     const { startLickWsBridge } = await loadBridge();
     const emitEvent = vi.fn();
-    const lm = buildLickManagerMock({ emitEvent } as Partial<LickManager>);
+    const lm = buildLickManagerMock({ emitEvent });
 
     const handle = startLickWsBridge(lm, {
       locationHref: LOCATION,
-      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+      webSocketFactory: (url) => new FakeWebSocket(url),
     });
     const ws = FakeWebSocket.instances[0];
 
-    ws.emit({ type: 'navigate_event', url: 'about:handoff' });
+    ws.emit({
+      type: 'navigate_event',
+      verb: 'upskill',
+      target: 'https://github.com/owner/repo',
+      url: 'about:handoff',
+      branch: 'main',
+      path: 'skills/foo',
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          verb: 'upskill',
+          target: 'https://github.com/owner/repo',
+          branch: 'main',
+          path: 'skills/foo',
+        }),
+      })
+    );
+    handle.stop();
+  });
+
+  it('drops navigate_event missing verb or target', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const emitEvent = vi.fn();
+    const lm = buildLickManagerMock({ emitEvent });
+
+    const handle = startLickWsBridge(lm, {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    // Missing verb
+    ws.emit({ type: 'navigate_event', target: 'x', url: 'about:handoff' });
+    // Missing target
+    ws.emit({ type: 'navigate_event', verb: 'handoff', url: 'about:handoff' });
+    // Missing url
+    ws.emit({ type: 'navigate_event', verb: 'handoff', target: 'x' });
+    // Invalid verb
+    ws.emit({ type: 'navigate_event', verb: 'nope', target: 'x', url: 'about:handoff' });
+
     expect(emitEvent).not.toHaveBeenCalled();
     handle.stop();
   });
@@ -268,7 +319,7 @@ describe('startLickWsBridge', () => {
     const { startLickWsBridge } = await loadBridge();
     const handle = startLickWsBridge(buildLickManagerMock(), {
       locationHref: LOCATION,
-      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+      webSocketFactory: (url) => new FakeWebSocket(url),
     });
     const ws = FakeWebSocket.instances[0];
 
@@ -288,7 +339,7 @@ describe('startLickWsBridge', () => {
     const { startLickWsBridge } = await loadBridge();
     const handle = startLickWsBridge(buildLickManagerMock(), {
       locationHref: LOCATION,
-      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+      webSocketFactory: (url) => new FakeWebSocket(url),
     });
     const ws = FakeWebSocket.instances[0];
 
@@ -313,7 +364,7 @@ describe('startLickWsBridge', () => {
 
     const handle = startLickWsBridge(buildLickManagerMock(), {
       locationHref: LOCATION,
-      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+      webSocketFactory: (url) => new FakeWebSocket(url),
       setTimeoutFn,
     });
 
@@ -330,7 +381,7 @@ describe('startLickWsBridge', () => {
 
     const handle = startLickWsBridge(buildLickManagerMock(), {
       locationHref: LOCATION,
-      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+      webSocketFactory: (url) => new FakeWebSocket(url),
       setTimeoutFn,
       clearTimeoutFn,
     });
@@ -345,5 +396,229 @@ describe('startLickWsBridge', () => {
     // schedule a new reconnect.
     FakeWebSocket.instances[0].close();
     expect(setTimeoutFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('stop() is idempotent', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+    expect(() => {
+      handle.stop();
+      handle.stop();
+      handle.stop();
+    }).not.toThrow();
+  });
+
+  it('reconnect-handle guard prevents double-scheduling on duplicate close events', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const setTimeoutFn = vi.fn().mockReturnValue(123 as unknown as ReturnType<typeof setTimeout>);
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+      setTimeoutFn,
+    });
+
+    // Two rapid close events on the same socket — only one reconnect
+    // should be queued.
+    const ws = FakeWebSocket.instances[0];
+    ws.onclose?.(new CloseEvent('close'));
+    ws.onclose?.(new CloseEvent('close'));
+    ws.onclose?.(new CloseEvent('close'));
+    expect(setTimeoutFn).toHaveBeenCalledTimes(1);
+    handle.stop();
+  });
+
+  it('reconnect delay grows exponentially up to the cap', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const delays: number[] = [];
+    // Fire reconnect callback synchronously so we can drive multiple
+    // failures in one tick. Records the delay each time.
+    const setTimeoutFn = vi.fn().mockImplementation((cb: () => void, delay: number) => {
+      delays.push(delay);
+      // Only fire the first 6 callbacks; stop() will halt further work.
+      if (delays.length <= 6) cb();
+      return delays.length as unknown as ReturnType<typeof setTimeout>;
+    });
+    // Always-throwing factory so each `connect()` fails immediately.
+    const factory = (_url: string): never => {
+      throw new Error('always fails');
+    };
+
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: factory as never,
+      setTimeoutFn,
+      reconnectDelayMs: 1000,
+    });
+
+    expect(delays.slice(0, 4)).toEqual([1000, 2000, 4000, 8000]);
+    handle.stop();
+  });
+
+  it('emits a session-reload signal to the cone after sustained failure', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const emitEvent = vi.fn();
+    const lm = buildLickManagerMock({ emitEvent });
+    let callbacks = 0;
+    const setTimeoutFn = vi.fn().mockImplementation((cb: () => void) => {
+      callbacks++;
+      // Drive enough failures to cross the give-up threshold (20).
+      if (callbacks <= 25) cb();
+      return callbacks as unknown as ReturnType<typeof setTimeout>;
+    });
+    const factory = (_url: string): never => {
+      throw new Error('always fails');
+    };
+
+    const handle = startLickWsBridge(lm, {
+      locationHref: LOCATION,
+      webSocketFactory: factory as never,
+      setTimeoutFn,
+      reconnectDelayMs: 100,
+    });
+
+    // Exactly one cone-visible signal at the threshold, not per-failure.
+    expect(emitEvent).toHaveBeenCalledTimes(1);
+    const [event] = (emitEvent.mock.calls[0] ?? []) as unknown[];
+    expect(event).toMatchObject({
+      type: 'session-reload',
+      body: { reason: 'lick-ws-bridge-down' },
+    });
+    handle.stop();
+  });
+
+  it('drops reply when the socket is replaced mid-await (race on stop)', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    let resolveCreate!: (entry: WebhookEntry) => void;
+    const createWebhook = vi
+      .fn()
+      .mockReturnValue(new Promise<WebhookEntry>((r) => (resolveCreate = r)));
+    const lm = buildLickManagerMock({ createWebhook });
+
+    const handle = startLickWsBridge(lm, {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({ type: 'create_webhook', requestId: 'r-race', name: 'github', scoop: 'pr' });
+
+    // While the handler awaits, stop the bridge — that closes the socket.
+    handle.stop();
+    expect(ws.readyState).toBe(3);
+
+    // Now resolve the in-flight LickManager call; the bridge should
+    // NOT send a reply into the dead socket.
+    resolveCreate({ id: 'wh-race', name: 'github', createdAt: 'now', scoop: 'pr' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(ws.sent).toHaveLength(0);
+  });
+
+  it('error envelope: createWebhook rejection surfaces as { error } reply', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const lm = buildLickManagerMock({
+      createWebhook: vi.fn().mockRejectedValue(new Error('Filter compile failed')),
+    });
+
+    const handle = startLickWsBridge(lm, {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({
+      type: 'create_webhook',
+      requestId: 'r-err',
+      name: 'github',
+      scoop: 'pr',
+      filter: 'bad',
+    });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+    const reply = JSON.parse(ws.sent[0]);
+    expect(reply).toEqual({
+      type: 'response',
+      requestId: 'r-err',
+      error: 'Filter compile failed',
+    });
+    handle.stop();
+  });
+
+  it('concurrent requests respond with matching requestIds (independent in-flight handlers)', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    let resolveA!: (entry: WebhookEntry) => void;
+    let resolveB!: (entry: WebhookEntry) => void;
+    const createWebhook = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<WebhookEntry>((r) => (resolveA = r)))
+      .mockImplementationOnce(() => new Promise<WebhookEntry>((r) => (resolveB = r)));
+    const lm = buildLickManagerMock({ createWebhook });
+
+    const handle = startLickWsBridge(lm, {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({ type: 'create_webhook', requestId: 'r-A', name: 'a', scoop: 's' });
+    ws.emit({ type: 'create_webhook', requestId: 'r-B', name: 'b', scoop: 's' });
+
+    // Resolve in REVERSE order; replies must still carry matching ids.
+    resolveB({ id: 'wh-B', name: 'b', createdAt: 'now', scoop: 's' });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThanOrEqual(1));
+    resolveA({ id: 'wh-A', name: 'a', createdAt: 'now', scoop: 's' });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThanOrEqual(2));
+
+    const replies = ws.sent.map((s) => JSON.parse(s));
+    const replyB = replies.find((r) => r.requestId === 'r-B');
+    const replyA = replies.find((r) => r.requestId === 'r-A');
+    expect(replyA?.data.id).toBe('wh-A');
+    expect(replyB?.data.id).toBe('wh-B');
+    handle.stop();
+  });
+
+  it('webhook_event missing webhookId is dropped, not forwarded with undefined', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const handleWebhookEvent = vi.fn();
+    const lm = buildLickManagerMock({ handleWebhookEvent });
+
+    const handle = startLickWsBridge(lm, {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({ type: 'webhook_event', headers: { 'x-test': '1' }, body: {} });
+    expect(handleWebhookEvent).not.toHaveBeenCalled();
+    handle.stop();
+  });
+
+  it('malformed JSON payload is caught and does not crash the message handler', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const handle = startLickWsBridge(buildLickManagerMock(), {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    // Bypass `emit()` to push a raw non-JSON string.
+    ws.onmessage?.(new MessageEvent('message', { data: '{not valid json' }));
+    // A subsequent well-formed message should still be processed.
+    ws.emit({ type: 'tray_status', requestId: 'r-after' });
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+    expect(JSON.parse(ws.sent[0]).requestId).toBe('r-after');
+    handle.stop();
+  });
+
+  it('throws synchronously on invalid locationHref', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    expect(() =>
+      startLickWsBridge(buildLickManagerMock(), {
+        locationHref: 'not a url',
+        webSocketFactory: (url) => new FakeWebSocket(url),
+      })
+    ).toThrow(/invalid locationHref/);
   });
 });

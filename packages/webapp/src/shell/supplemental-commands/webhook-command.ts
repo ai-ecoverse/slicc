@@ -38,6 +38,10 @@ interface WebhookInfo {
   scoop?: string;
 }
 
+/** Sentinel rendered in the URL column when no leader-tray URL is available
+ * (extension follower mode, no tray attached, leader still connecting). */
+const URL_UNAVAILABLE = '(URL unavailable — connect a leader tray)';
+
 const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
 /** Get the LickManager from globalThis (published by `createKernelHost`). */
@@ -49,7 +53,8 @@ function getDirectLickManager(): import('../../scoops/lick-manager.js').LickMana
   );
 }
 
-/** Lazy-loaded proxy for when the command runs in the side panel terminal. */
+/** Side-panel terminal doesn't have direct access to the offscreen
+ * LickManager singleton — proxy through BroadcastChannel instead. */
 let _lickProxy: ReturnType<
   typeof import('../../../../chrome-extension/src/lick-manager-proxy.js').createLickManagerProxy
 > | null = null;
@@ -62,13 +67,15 @@ async function getLickProxy() {
 }
 
 /**
- * Resolve the webhook capability URL base for the current runtime
- * (without the per-webhook id suffix). Returns:
- * - extension leader → the cloudflare tray worker's webhook capability
- *   URL (`<workerBaseUrl>/webhook/<token>`).
- * - extension follower / no-tray / not leader → `null` (caller refuses).
- * - standalone → `null` (caller falls back to the local node-server URL
- *   via `getWebhookUrl(self.location.href, id)`).
+ * Resolve the leader-tray webhook capability URL base (without the
+ * per-webhook id suffix), or `null` when no leader-tray URL exists in
+ * the current runtime. Returns:
+ * - extension leader with active session → the cloudflare tray worker's
+ *   webhook capability URL (`<workerBaseUrl>/webhook/<token>`).
+ * - extension follower / no-tray / leader-without-session → `null`.
+ * - standalone with active leader tray → the tray URL.
+ * - standalone without a leader tray → `null` (caller falls back to the
+ *   local node-server URL via `getWebhookUrl(self.location.href, id)`).
  */
 async function resolveWebhookUrlBase(): Promise<string | null> {
   if (!isExtension) {
@@ -86,10 +93,60 @@ async function resolveWebhookUrlBase(): Promise<string | null> {
   return await getTrayWebhookUrlAsync();
 }
 
-/** Build the per-webhook URL for a given runtime. */
+/**
+ * Build the per-webhook URL for the current runtime. Returns a non-
+ * functional placeholder in extension mode when `trayUrlBase` is null,
+ * because `self.location.origin` is `chrome-extension://<id>` which no
+ * external POST can reach.
+ */
 function buildWebhookUrl(webhookId: string, trayUrlBase: string | null): string {
   if (trayUrlBase) return getTrayWebhookUrl(trayUrlBase, webhookId);
+  if (isExtension) return URL_UNAVAILABLE;
   return getWebhookUrl(self.location.href, webhookId);
+}
+
+/**
+ * Return the configured manager surface. In standalone the kernel-host
+ * singleton is the source of truth; in extension we fall back to the
+ * BroadcastChannel proxy. Returns null in standalone if the host hasn't
+ * booted yet — callers must surface a clear error rather than letting
+ * the proxy timeout (which never delivers) eat 5 seconds and report
+ * itself as "operation timed out."
+ */
+async function getLickManagerSurface(): Promise<{
+  createWebhook: (
+    name: string,
+    scoop?: string,
+    filter?: string
+  ) => Promise<import('../../scoops/lick-manager.js').WebhookEntry>;
+  deleteWebhook: (id: string) => Promise<boolean>;
+  listWebhooks: () => Promise<import('../../scoops/lick-manager.js').WebhookEntry[]>;
+} | null> {
+  const direct = getDirectLickManager();
+  if (direct) {
+    return {
+      createWebhook: (name, scoop?, filter?) => direct.createWebhook(name, scoop, filter),
+      deleteWebhook: (id) => direct.deleteWebhook(id),
+      listWebhooks: async () => direct.listWebhooks(),
+    };
+  }
+  if (!isExtension) return null;
+  const proxy = await getLickProxy();
+  const { listWebhooksAsync } =
+    await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+  return {
+    createWebhook: (name, scoop?, filter?) => proxy.createWebhook(name, scoop, filter),
+    deleteWebhook: (id) => proxy.deleteWebhook(id),
+    listWebhooks: () => listWebhooksAsync(),
+  };
+}
+
+function notInitializedError(subcommand: string) {
+  return {
+    stdout: '',
+    stderr: `webhook ${subcommand}: kernel host has not booted yet — try again in a moment\n`,
+    exitCode: 1,
+  };
 }
 
 export function createWebhookCommand(): Command {
@@ -125,90 +182,66 @@ export function createWebhookCommand(): Command {
           if (!scoop) {
             return {
               stdout: '',
-              stderr: 'webhook: --scoop is required (every webhook must route to a scoop)\n',
+              stderr: 'webhook create: --scoop is required (every webhook must route to a scoop)\n',
               exitCode: 1,
             };
           }
 
           // Filter compilation requires dynamic JS evaluation; Chrome
-          // extension CSP forbids it. crontask has the same gate.
+          // extension CSP forbids it. crontask has the same gate. Users
+          // who need filters should run standalone mode.
           if (isExtension && filter) {
             return {
               stdout: '',
-              stderr: 'webhook: --filter is not supported in extension mode (CSP restriction)\n',
+              stderr:
+                'webhook create: --filter is not supported in extension mode (CSP forbids dynamic eval) — drop --filter, or use standalone CLI mode\n',
               exitCode: 1,
             };
           }
 
-          // Extension follower / no-tray refusal — only fires in
-          // extension mode; standalone reaches the node-server over the
-          // /licks-ws bridge instead.
+          // Extension non-leader / no-tray: refuse — there's no public
+          // webhook URL we can hand the user. Standalone falls through
+          // and renders the local node-server URL.
           if (isExtension) {
             const urlBase = await resolveWebhookUrlBase();
             if (!urlBase) {
               const leaderState = getLeaderTrayRuntimeStatus().state;
               const msg =
                 leaderState === 'leader'
-                  ? 'webhook: tray session is not connected yet — wait for the leader to attach'
-                  : 'webhook: requires extension-leader mode with a tray worker URL configured (this device is currently in state "' +
-                    leaderState +
-                    '")';
-              return {
-                stdout: '',
-                stderr: msg + '\n',
-                exitCode: 1,
-              };
+                  ? 'webhook create: tray session is not connected yet — wait for the leader to attach'
+                  : `webhook create: requires extension-leader mode with a tray worker URL configured (current state: "${leaderState}")`;
+              return { stdout: '', stderr: msg + '\n', exitCode: 1 };
             }
           }
 
-          const direct = getDirectLickManager();
-          const entry = direct
-            ? await direct.createWebhook(name, scoop, filter)
-            : await (await getLickProxy()).createWebhook(name, scoop, filter);
+          const lm = await getLickManagerSurface();
+          if (!lm) return notInitializedError('create');
+          const entry = await lm.createWebhook(name, scoop, filter);
 
-          const trayUrlBase = await resolveWebhookUrlBase();
-          const url = buildWebhookUrl(entry.id, trayUrlBase);
+          // Resolve URL after creation; if URL resolution fails, still
+          // report the created webhook ID so the user can clean it up
+          // rather than leaking a phantom entry.
+          let url: string;
+          try {
+            const trayUrlBase = await resolveWebhookUrlBase();
+            url = buildWebhookUrl(entry.id, trayUrlBase);
+          } catch (err) {
+            url = `(URL resolution failed: ${err instanceof Error ? err.message : String(err)})`;
+          }
 
           let output = `Created webhook "${entry.name}"\nID:  ${entry.id}\nURL: ${url}\n`;
-          if (entry.scoop) {
-            output += `Scoop: ${entry.scoop}\n`;
-          }
-          if (entry.filter) {
-            output += `Filter: ${entry.filter}\n`;
-          }
-          return {
-            stdout: output,
-            stderr: '',
-            exitCode: 0,
-          };
+          if (entry.scoop) output += `Scoop: ${entry.scoop}\n`;
+          if (entry.filter) output += `Filter: ${entry.filter}\n`;
+          return { stdout: output, stderr: '', exitCode: 0 };
         }
 
         case 'list': {
-          const direct = getDirectLickManager();
-          let entries: import('../../scoops/lick-manager.js').WebhookEntry[];
-          if (direct) {
-            entries = direct.listWebhooks();
-          } else if (isExtension) {
-            const { listWebhooksAsync } =
-              await import('../../../../chrome-extension/src/lick-manager-proxy.js');
-            entries = await listWebhooksAsync();
-          } else {
-            // Standalone always has direct access. If we got here the
-            // host hasn't booted yet — surface that rather than silently
-            // returning empty.
-            return {
-              stdout: '',
-              stderr: 'webhook: LickManager is not initialized yet\n',
-              exitCode: 1,
-            };
-          }
+          const lm = await getLickManagerSurface();
+          if (!lm) return notInitializedError('list');
+          const entries = await lm.listWebhooks();
 
           if (entries.length === 0) {
-            return {
-              stdout: 'No active webhooks\n',
-              stderr: '',
-              exitCode: 0,
-            };
+            return { stdout: 'No active webhooks\n', stderr: '', exitCode: 0 };
           }
 
           const trayUrlBase = await resolveWebhookUrlBase();
@@ -224,19 +257,16 @@ export function createWebhookCommand(): Command {
           let output = 'Active webhooks:\n';
           for (const wh of webhooks) {
             output += `  ${wh.id}  ${wh.name.padEnd(20)}  ${wh.url}`;
-            if (wh.scoop) {
-              output += `  -> ${wh.scoop}`;
-            }
-            if (wh.filter) {
-              output += `  [filtered]`;
-            }
+            if (wh.scoop) output += `  -> ${wh.scoop}`;
+            if (wh.filter) output += `  [filtered]`;
             output += '\n';
           }
-          return {
-            stdout: output,
-            stderr: '',
-            exitCode: 0,
-          };
+          // In extension mode without a leader tray, mention what to do
+          // about the URL_UNAVAILABLE rows so the user isn't guessing.
+          if (isExtension && !trayUrlBase) {
+            output += `\nNote: webhook URLs require a leader tray. Configure one in Settings to expose POST endpoints.\n`;
+          }
+          return { stdout: output, stderr: '', exitCode: 0 };
         }
 
         case 'delete': {
@@ -244,29 +274,24 @@ export function createWebhookCommand(): Command {
           if (!id) {
             return {
               stdout: '',
-              stderr: 'webhook: delete requires an ID\n',
+              stderr: 'webhook delete: requires an ID\n',
               exitCode: 1,
             };
           }
 
-          const direct = getDirectLickManager();
-          const ok = direct
-            ? await direct.deleteWebhook(id)
-            : await (await getLickProxy()).deleteWebhook(id);
+          const lm = await getLickManagerSurface();
+          if (!lm) return notInitializedError('delete');
+          const ok = await lm.deleteWebhook(id);
 
           if (!ok) {
             return {
               stdout: '',
-              stderr: `webhook: webhook "${id}" not found\n`,
+              stderr: `webhook delete: webhook "${id}" not found\n`,
               exitCode: 1,
             };
           }
 
-          return {
-            stdout: `Deleted webhook "${id}"\n`,
-            stderr: '',
-            exitCode: 0,
-          };
+          return { stdout: `Deleted webhook "${id}"\n`, stderr: '', exitCode: 0 };
         }
 
         default:
@@ -280,7 +305,7 @@ export function createWebhookCommand(): Command {
       const msg = err instanceof Error ? err.message : String(err);
       return {
         stdout: '',
-        stderr: `webhook: ${msg}\n`,
+        stderr: `webhook ${subcommand ?? '?'}: ${msg}\n`,
         exitCode: 1,
       };
     }
