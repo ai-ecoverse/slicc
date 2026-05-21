@@ -66,13 +66,14 @@ class PanelTerminalShell extends WasmShellHeadless {
       for (let i = 0; i < bytes.length; i += chunkSize) {
         binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
       }
-      this.transport.send({
+      const msg: TerminalMediaPreviewMsg = {
         type: 'terminal-media-preview',
         sid: this.sid,
         path: item.path,
         mediaType: item.mimeType,
         data: btoa(binary),
-      } satisfies TerminalMediaPreviewMsg as unknown as OffscreenToPanelMessage);
+      };
+      this.transport.send(msg as OffscreenToPanelMessage);
     }
   }
 }

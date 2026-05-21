@@ -257,7 +257,6 @@ export class RemoteTerminalView {
 
   private renderMediaPreview(event: TerminalEventMsg & { type: 'terminal-media-preview' }): void {
     if (!this.previewHost) return;
-    this.clearMediaPreview();
 
     const bytes = Uint8Array.from(atob(event.data), (c) => c.charCodeAt(0));
     const url = URL.createObjectURL(new Blob([bytes], { type: event.mediaType }));
@@ -268,8 +267,8 @@ export class RemoteTerminalView {
 
     const label = document.createElement('div');
     label.className = 'terminal-panel__preview-label';
-    const basename = event.path.split('/').pop() ?? event.path;
-    label.textContent = `${basename} · ${event.mediaType}`;
+    const name = event.path.split('/').pop() ?? event.path;
+    label.textContent = `${name} · ${event.mediaType}`;
     previewItem.appendChild(label);
 
     if (event.mediaType.startsWith('video/')) {
@@ -281,12 +280,14 @@ export class RemoteTerminalView {
       video.muted = true;
       video.playsInline = true;
       video.src = url;
+      video.addEventListener('loadedmetadata', () => this.refit(), { once: true });
       previewItem.appendChild(video);
     } else {
       const image = document.createElement('img');
       image.className = 'terminal-panel__preview-media';
-      image.alt = basename;
+      image.alt = name;
       image.src = url;
+      image.addEventListener('load', () => this.refit(), { once: true });
       previewItem.appendChild(image);
     }
 
@@ -681,6 +682,7 @@ export class RemoteTerminalView {
    */
   private async runRemote(command: string): Promise<TerminalExecResult> {
     this.isExecuting = true;
+    this.clearMediaPreview();
     try {
       return await this.runRemoteImpl(command);
     } finally {

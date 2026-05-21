@@ -13,7 +13,7 @@
  * VirtualFS) so we exercise the shell + PM contract end-to-end.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { createPanelTerminalHost } from '../../src/kernel/panel-terminal-host.js';
 import { ProcessManager } from '../../src/kernel/process-manager.js';
@@ -83,6 +83,222 @@ async function wirePanelHost(): Promise<Wired> {
     channel,
   };
 }
+
+describe('createPanelTerminalHost — imgcat media preview', () => {
+  // imgcat checks for browser APIs before proceeding; stub them for Node.
+  const origWindow = (globalThis as Record<string, unknown>).window;
+  const origDocument = (globalThis as Record<string, unknown>).document;
+
+  beforeEach(() => {
+    (globalThis as Record<string, unknown>).window = {};
+    (globalThis as Record<string, unknown>).document = {};
+  });
+  afterEach(() => {
+    if (origWindow === undefined) delete (globalThis as Record<string, unknown>).window;
+    else (globalThis as Record<string, unknown>).window = origWindow;
+    if (origDocument === undefined) delete (globalThis as Record<string, unknown>).document;
+    else (globalThis as Record<string, unknown>).document = origDocument;
+  });
+
+  it('emits terminal-media-preview when imgcat runs on an image file', async () => {
+    const w = await wirePanelHost();
+    await w.client.open();
+
+    // Write a small PNG stub to the VFS so imgcat can read it.
+    const fs = await VirtualFS.create({
+      dbName: `pthost-imgcat-${Math.random().toString(36).slice(2)}`,
+      wipe: true,
+    });
+    // We need a fresh host with this FS. Rebuild:
+    w.stop();
+
+    const pm = new ProcessManager();
+    const channel = new MessageChannel();
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+    const handle = createPanelTerminalHost({
+      transport: bridgeTransport,
+      fs,
+      browser: makeStubBrowser(),
+      processManager: pm,
+      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    });
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+
+    const events: import('../../src/shell/terminal-protocol.js').TerminalEventMsg[] = [];
+    const client = new TerminalSessionClient({
+      client: panelClient,
+      sid: 'img1',
+      onEvent: (e) => events.push(e),
+    });
+
+    await client.open();
+
+    // Write a minimal 1x1 PNG to VFS
+    const pngBytes = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+      0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
+      0xcf, 0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, 0x00, 0x00,
+      0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ]);
+    await fs.writeFile('/test.png', pngBytes);
+
+    const result = await client.exec('imgcat /test.png');
+    expect(result.exitCode).toBe(0);
+
+    const mediaEvents = events.filter((e) => e.type === 'terminal-media-preview');
+    expect(mediaEvents).toHaveLength(1);
+    const mediaEvent =
+      mediaEvents[0] as import('../../src/shell/terminal-protocol.js').TerminalMediaPreviewMsg;
+    expect(mediaEvent.path).toBe('/test.png');
+    expect(mediaEvent.mediaType).toBe('image/png');
+    // data should be valid base64
+    const decoded = atob(mediaEvent.data);
+    expect(decoded.length).toBe(pngBytes.length);
+
+    client.close();
+    handle.stop();
+    channel.port1.close();
+    channel.port2.close();
+  });
+
+  it('handles large files without stack overflow via chunked encoding', async () => {
+    const fs = await VirtualFS.create({
+      dbName: `pthost-large-${Math.random().toString(36).slice(2)}`,
+      wipe: true,
+    });
+    const pm = new ProcessManager();
+    const channel = new MessageChannel();
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+    const handle = createPanelTerminalHost({
+      transport: bridgeTransport,
+      fs,
+      browser: makeStubBrowser(),
+      processManager: pm,
+      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    });
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+
+    const events: import('../../src/shell/terminal-protocol.js').TerminalEventMsg[] = [];
+    const client = new TerminalSessionClient({
+      client: panelClient,
+      sid: 'large1',
+      onEvent: (e) => events.push(e),
+    });
+
+    await client.open();
+
+    // Write a fake "large" JPEG (100KB of zeros with JPEG header)
+    const size = 100 * 1024;
+    const jpgBytes = new Uint8Array(size);
+    jpgBytes[0] = 0xff;
+    jpgBytes[1] = 0xd8;
+    jpgBytes[2] = 0xff;
+    await fs.writeFile('/big.jpg', jpgBytes);
+
+    const result = await client.exec('imgcat /big.jpg');
+    expect(result.exitCode).toBe(0);
+
+    const mediaEvents = events.filter((e) => e.type === 'terminal-media-preview');
+    expect(mediaEvents).toHaveLength(1);
+    const mediaEvent =
+      mediaEvents[0] as import('../../src/shell/terminal-protocol.js').TerminalMediaPreviewMsg;
+    // Verify the full payload roundtrips correctly
+    const decoded = atob(mediaEvent.data);
+    expect(decoded.length).toBe(size);
+    expect(decoded.charCodeAt(0)).toBe(0xff);
+    expect(decoded.charCodeAt(1)).toBe(0xd8);
+
+    client.close();
+    handle.stop();
+    channel.port1.close();
+    channel.port2.close();
+  });
+
+  it('emits multiple media-preview messages for imgcat with multiple files', async () => {
+    const fs = await VirtualFS.create({
+      dbName: `pthost-multi-${Math.random().toString(36).slice(2)}`,
+      wipe: true,
+    });
+    const pm = new ProcessManager();
+    const channel = new MessageChannel();
+    const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
+    const handle = createPanelTerminalHost({
+      transport: bridgeTransport,
+      fs,
+      browser: makeStubBrowser(),
+      processManager: pm,
+      logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    });
+    const panelTransport = createPanelMessageChannelTransport(channel.port1);
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      panelTransport
+    );
+
+    const events: import('../../src/shell/terminal-protocol.js').TerminalEventMsg[] = [];
+    const client = new TerminalSessionClient({
+      client: panelClient,
+      sid: 'multi1',
+      onEvent: (e) => events.push(e),
+    });
+
+    await client.open();
+
+    // Write two small PNGs
+    const pngHeader = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+      0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
+      0xcf, 0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, 0x00, 0x00,
+      0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ]);
+    await fs.writeFile('/a.png', pngHeader);
+    await fs.writeFile('/b.png', pngHeader);
+
+    const result = await client.exec('imgcat /a.png /b.png');
+    expect(result.exitCode).toBe(0);
+
+    const mediaEvents = events.filter((e) => e.type === 'terminal-media-preview');
+    expect(mediaEvents).toHaveLength(2);
+    expect(
+      (mediaEvents[0] as import('../../src/shell/terminal-protocol.js').TerminalMediaPreviewMsg)
+        .path
+    ).toBe('/a.png');
+    expect(
+      (mediaEvents[1] as import('../../src/shell/terminal-protocol.js').TerminalMediaPreviewMsg)
+        .path
+    ).toBe('/b.png');
+
+    client.close();
+    handle.stop();
+    channel.port1.close();
+    channel.port2.close();
+  });
+});
 
 describe('createPanelTerminalHost — parity wiring', () => {
   it('registers a kind:"shell" process for every panel-typed exec', async () => {
