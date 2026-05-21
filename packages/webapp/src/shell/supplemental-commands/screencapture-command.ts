@@ -74,7 +74,7 @@ async function captureLocally(
           .catch(reject);
       video.onerror = () => reject(new Error('Failed to load video stream'));
     });
-    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    await new Promise<void>((r) => setTimeout(r, 100));
 
     const width = video.videoWidth;
     const height = video.videoHeight;

@@ -336,7 +336,7 @@ describe('screencapture command', () => {
       const promise = cmd.execute(['-c'], ctx as any);
 
       // Yield so screencapture's capture pipeline reaches the focus wait.
-      await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 200));
       expect((globalThis as any).navigator.clipboard.write).not.toHaveBeenCalled();
       expect(focusListeners.size).toBe(1);
 
