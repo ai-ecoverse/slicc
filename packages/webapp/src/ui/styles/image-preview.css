@@ -29,7 +29,9 @@
 .image-preview-image {
   position: absolute;
   border-radius: 6px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4), 0 8px 20px rgba(0, 0, 0, 0.3);
+  box-shadow:
+    0 20px 60px rgba(0, 0, 0, 0.4),
+    0 8px 20px rgba(0, 0, 0, 0.3);
   max-width: 90vw;
   max-height: 90vh;
   object-fit: contain;
