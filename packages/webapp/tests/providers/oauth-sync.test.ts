@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// Stub window+document at module scope so `hasLocalDom()` in
+// provider-settings.ts is true for every test in this suite — these
+// cover page-context OAuth flows (settings UI, github writeGitToken,
+// bootstrap-on-init). Without this, the worker-aware
+// `saveAccountsAsync` would take the panel-rpc branch.
+Object.defineProperty(globalThis, 'window', { value: {}, configurable: true });
+Object.defineProperty(globalThis, 'document', { value: {}, configurable: true });
+
 // Mock the getRegisteredProviderConfig to return github with oauthTokenDomains
 vi.mock('../../src/providers/index.js', async () => {
   const actual = await vi.importActual('../../src/providers/index.js');

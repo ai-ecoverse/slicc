@@ -187,7 +187,7 @@ describe('Bash Tool', () => {
     const commands = await browserBash.execute({ command: 'commands' });
     expect(commands.isError).toBeFalsy();
     expect(commands.content).toContain(
-      'open, imgcat, playwright-cli, playwright, puppeteer, webhook'
+      'open, imgcat, playwright-cli, playwright, puppeteer, sprinkle'
     );
 
     const usrBin = await browserBash.execute({ command: 'ls /usr/bin' });

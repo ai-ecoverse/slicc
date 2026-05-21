@@ -22,6 +22,14 @@ const mockStorage = {
 
 Object.defineProperty(globalThis, 'localStorage', { value: mockStorage, configurable: true });
 
+// Stub `window` + `document` at module scope so `hasLocalDom()` in
+// `provider-settings.ts` returns true for every test in this suite —
+// these tests cover the page-context call path (settings UI form,
+// Adobe/GitHub OAuth login). Without this, the worker-aware
+// `saveAccountsAsync` would take the panel-rpc branch and fail.
+Object.defineProperty(globalThis, 'window', { value: {}, configurable: true });
+Object.defineProperty(globalThis, 'document', { value: {}, configurable: true });
+
 const { mockGetProviders, mockGetModels, mockGetModel, mockCreateLogger, mockLog } = vi.hoisted(
   () => {
     const mockLog = {

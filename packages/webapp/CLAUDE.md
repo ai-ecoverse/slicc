@@ -65,6 +65,15 @@ Deep reference: `docs/kernel/process-model.md`.
 - `jsh-discovery.ts` and `bsh-discovery.ts` provide the raw scans used by the shared catalog.
 - `vfs-adapter.ts` bridges shell calls into the virtual filesystem and forwards `canWrite` (duck-typed so both `VirtualFS` and `RestrictedFS` back it without branching).
 
+### MCP Servers
+
+- Path: `packages/webapp/src/shell/mcp/`; command in `supplemental-commands/mcp-command.ts`.
+- Subcommands: `mcp add <url> [name]`, `mcp list`, `mcp delete <name>`, `mcp invoke <name> [tool] [--flag value]`, `mcp refresh <name>`.
+- Each registered server is exposed as an `mcp:<name>` OAuth provider (visible in `oauth-token --list`) when the server requires auth.
+- `mcp add` auto-writes an alias shim at `/workspace/.mcp/aliases/<name>.jsh` so `<name>` resolves as a top-level command and forwards to `mcp invoke <name>`.
+- MCP Apps declared by the server via `apps/list` are materialized as sprinkles under `/workspace/.mcp/sprinkles/<name>/`.
+- Registration is lazy: the first subcommand call re-registers all servers from `/workspace/.mcp/servers.json` so providers survive a page reload.
+
 ### CDP
 
 - Path: `packages/webapp/src/cdp/`
