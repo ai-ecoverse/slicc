@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
+  DEFAULT_TIMEOUT_MS,
   McpClient,
   McpAuthRequiredError,
   parseResourceMetadataUrl,
@@ -217,6 +218,10 @@ describe('McpClient: Mcp-Session-Id round-trip', () => {
 // ── Timeout / abort ────────────────────────────────────────────────
 
 describe('McpClient: timeout/abort', () => {
+  it('exports DEFAULT_TIMEOUT_MS = 60_000 (bumped from 30s for slow streamable-http servers)', () => {
+    expect(DEFAULT_TIMEOUT_MS).toBe(60_000);
+  });
+
   it('rejects when the per-request timeout elapses', async () => {
     vi.useFakeTimers();
     const fetchImpl: McpFetchLike = (_url, init) =>

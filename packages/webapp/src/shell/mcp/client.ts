@@ -17,7 +17,7 @@ import type { McpAppDef, McpFetchLike, McpRpcError, McpToolDef } from './types.j
 const log = createLogger('mcp-client');
 
 /** Default per-request timeout (ms). */
-const DEFAULT_TIMEOUT_MS = 30_000;
+export const DEFAULT_TIMEOUT_MS = 60_000;
 
 /** Streamable-HTTP spec version negotiated on `initialize`. */
 const MCP_PROTOCOL_VERSION = '2025-06-18';
@@ -48,7 +48,7 @@ export interface McpClientOptions {
   headers?: Record<string, string>;
   /** Pre-existing session id to echo on the first request. */
   sessionId?: string;
-  /** Per-request timeout in milliseconds (default 30s). */
+  /** Per-request timeout in milliseconds (default 60s). */
   timeoutMs?: number;
   /** Injected fetch — defaults to a wrapper around `createProxiedFetch()`. */
   fetchImpl?: McpFetchLike;

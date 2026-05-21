@@ -35,6 +35,7 @@ import {
   coerceArgsBySchema,
   renderToolResult,
   aliasContent,
+  extractTimeoutFlag,
 } from '../../../src/shell/supplemental-commands/mcp-command.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import { GLOBAL_FS_DB_NAME } from '../../../src/fs/global-db.js';
@@ -1159,5 +1160,202 @@ describe('mcp search', () => {
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain('plain_tool');
     expect(r.stdout).toMatch(/plain_tool\s+name/);
+  });
+});
+
+describe('extractTimeoutFlag', () => {
+  it('returns undefined timeout and unchanged args when --timeout is absent', () => {
+    const r = extractTimeoutFlag(['--repo', 'trieloff/vault', '--name', 'X']);
+    expect(r.timeoutMs).toBeUndefined();
+    expect(r.warnings).toEqual([]);
+    expect(r.remaining).toEqual(['--repo', 'trieloff/vault', '--name', 'X']);
+  });
+
+  it('consumes `--timeout 90` from the middle of the args and converts to ms', () => {
+    const r = extractTimeoutFlag(['--repo', 'x', '--timeout', '90', '--name', 'Y']);
+    expect(r.timeoutMs).toBe(90_000);
+    expect(r.warnings).toEqual([]);
+    expect(r.remaining).toEqual(['--repo', 'x', '--name', 'Y']);
+  });
+
+  it('consumes the `--timeout=90` inline form', () => {
+    const r = extractTimeoutFlag(['--timeout=45', '--repo', 'x']);
+    expect(r.timeoutMs).toBe(45_000);
+    expect(r.warnings).toEqual([]);
+    expect(r.remaining).toEqual(['--repo', 'x']);
+  });
+
+  it('warns and falls back when --timeout is 0', () => {
+    const r = extractTimeoutFlag(['--timeout', '0', '--repo', 'x']);
+    expect(r.timeoutMs).toBeUndefined();
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toMatch(/invalid --timeout value "0"/);
+    expect(r.remaining).toEqual(['--repo', 'x']);
+  });
+
+  it('warns and falls back when --timeout is negative', () => {
+    const r = extractTimeoutFlag(['--timeout', '-5']);
+    expect(r.timeoutMs).toBeUndefined();
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toMatch(/invalid --timeout value "-5"/);
+    expect(r.remaining).toEqual([]);
+  });
+
+  it('warns and falls back when --timeout is non-numeric', () => {
+    const r = extractTimeoutFlag(['--timeout', 'abc', '--repo', 'x']);
+    expect(r.timeoutMs).toBeUndefined();
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toMatch(/invalid --timeout value "abc"/);
+    expect(r.remaining).toEqual(['--repo', 'x']);
+  });
+
+  it('warns and falls back when --timeout has no value (end of args)', () => {
+    const r = extractTimeoutFlag(['--repo', 'x', '--timeout']);
+    expect(r.timeoutMs).toBeUndefined();
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toMatch(/--timeout requires a value/);
+    expect(r.remaining).toEqual(['--repo', 'x']);
+  });
+
+  it('warns and falls back when --timeout is followed by another flag', () => {
+    const r = extractTimeoutFlag(['--timeout', '--repo', 'x']);
+    expect(r.timeoutMs).toBeUndefined();
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toMatch(/--timeout requires a value/);
+    // The trailing --repo x is preserved as tool args, NOT consumed as the
+    // timeout value.
+    expect(r.remaining).toEqual(['--repo', 'x']);
+  });
+});
+
+describe('mcp invoke --timeout flag (integration)', () => {
+  beforeEach(async () => {
+    _testOnly_resetStoreCache();
+    _testOnly_resetMcpProviderState();
+    unregisterProviderConfig(mcpProviderId('demo'));
+    await wipeGlobalFs();
+    localStorage.clear();
+    mockGetOAuthPageOrigin.mockReset();
+    mockGetOAuthPageOrigin.mockResolvedValue({
+      origin: window.location.origin,
+      href: window.location.href,
+    });
+  });
+
+  afterEach(async () => {
+    _testOnly_resetMcpProviderState();
+    unregisterProviderConfig(mcpProviderId('demo'));
+    await new Promise((r) => setTimeout(r, 600));
+    _testOnly_resetStoreCache();
+  });
+
+  it('invoke help text mentions --timeout', async () => {
+    const r = await runCmd(['invoke', '--help']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('--timeout <seconds>');
+    expect(r.stdout).toContain('default 60s');
+  });
+
+  it('strips --timeout from args so it never reaches the tool-args parser', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      tools: [
+        {
+          name: 'echo',
+          inputSchema: {
+            type: 'object',
+            properties: { msg: { type: 'string' } },
+            required: ['msg'],
+          },
+        },
+      ],
+    });
+    const { fetch, calls } = makeMockMcpFetch({
+      toolResults: { echo: { content: [{ type: 'text', text: 'ok' }] } },
+    });
+    const r = await runCmd(['invoke', 'demo', 'echo', '--timeout', '90', '--msg', 'hi'], {
+      fetchImpl: fetch,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toBe('');
+    const toolsCall = calls.find((c) => c.body?.method === 'tools/call');
+    // Only the real tool arg made it through — --timeout was consumed
+    // upstream and is NOT visible as `{timeout: …}` on the JSON-RPC params.
+    expect(toolsCall?.body?.params).toEqual({ name: 'echo', arguments: { msg: 'hi' } });
+  });
+
+  it('passes --timeout 1 through to McpClient (verified via fake-timer abort)', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      tools: [{ name: 'slow', inputSchema: { type: 'object', properties: {} } }],
+    });
+    // Fetch that never resolves — the only way the call returns is via the
+    // McpClient timeout firing. If --timeout 1 wasn't threaded through, the
+    // default (60s) would prevent the abort from firing within 1500ms.
+    const fetchImpl: McpFetchLike = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      });
+
+    vi.useFakeTimers();
+    try {
+      const p = runCmd(['invoke', 'demo', 'slow', '--timeout', '1'], { fetchImpl });
+      await vi.advanceTimersByTimeAsync(1100);
+      const r = await p;
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr).toMatch(/timed out after 1000ms/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('warns to stderr but still succeeds when --timeout value is invalid (0)', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      tools: [
+        {
+          name: 'echo',
+          inputSchema: {
+            type: 'object',
+            properties: { msg: { type: 'string' } },
+            required: ['msg'],
+          },
+        },
+      ],
+    });
+    const { fetch } = makeMockMcpFetch({
+      toolResults: { echo: { content: [{ type: 'text', text: 'ok' }] } },
+    });
+    const r = await runCmd(['invoke', 'demo', 'echo', '--timeout', '0', '--msg', 'hi'], {
+      fetchImpl: fetch,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toBe('ok\n');
+    expect(r.stderr).toMatch(/invalid --timeout value "0"/);
+    expect(r.stderr).toMatch(/using default/);
+  });
+
+  it('warns to stderr but still succeeds when --timeout value is non-numeric', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      tools: [
+        {
+          name: 'echo',
+          inputSchema: {
+            type: 'object',
+            properties: { msg: { type: 'string' } },
+            required: ['msg'],
+          },
+        },
+      ],
+    });
+    const { fetch } = makeMockMcpFetch({
+      toolResults: { echo: { content: [{ type: 'text', text: 'ok' }] } },
+    });
+    const r = await runCmd(['invoke', 'demo', 'echo', '--timeout', 'abc', '--msg', 'hi'], {
+      fetchImpl: fetch,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toMatch(/invalid --timeout value "abc"/);
   });
 });

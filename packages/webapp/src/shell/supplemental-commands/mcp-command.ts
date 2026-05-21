@@ -464,11 +464,16 @@ async function cmdInvoke(args: string[], deps: McpCommandDeps): Promise<ExecResu
   }
 
   const toolArgs = rest.slice(1);
-  if (toolArgs.includes('--help') || toolArgs.includes('-h')) {
+  // `--timeout <sec>` is a slicc-level flag — strip it before the tool-args
+  // parser runs so it isn't mistaken for a tool input. Invalid values warn
+  // on stderr and fall back to the McpClient default rather than erroring.
+  const { timeoutMs, remaining: filteredArgs, warnings } = extractTimeoutFlag(toolArgs);
+
+  if (filteredArgs.includes('--help') || filteredArgs.includes('-h')) {
     return ok(formatToolHelp(name, tool));
   }
 
-  const coerced = coerceArgsBySchema(toolArgs, tool.inputSchema);
+  const coerced = coerceArgsBySchema(filteredArgs, tool.inputSchema);
   if (!coerced.ok) return err(`mcp invoke: ${coerced.error}`);
 
   const { McpClient } = await import('../mcp/client.js');
@@ -477,18 +482,95 @@ async function cmdInvoke(args: string[], deps: McpCommandDeps): Promise<ExecResu
     fetchImpl: deps.fetchImpl,
     headers: entry.headers,
     getAuthHeader: entry.auth ? () => getMcpBearerHeader(name) : undefined,
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   });
   await client.initialize();
   const result = await client.toolsCall(toolName, coerced.value);
-  return renderToolResult(result);
+  const rendered = renderToolResult(result);
+  if (warnings.length > 0) {
+    rendered.stderr = warnings.map((w) => `${w}\n`).join('') + rendered.stderr;
+  }
+  return rendered;
+}
+
+interface TimeoutExtraction {
+  timeoutMs: number | undefined;
+  remaining: string[];
+  warnings: string[];
+}
+
+/**
+ * Pull `--timeout <seconds>` / `--timeout=<seconds>` out of the args before
+ * they reach the tool-args parser. Returns the remaining args plus the
+ * resolved timeout in ms (or `undefined` to fall back to the client default).
+ * Invalid values produce a warning string but never throw.
+ */
+export function extractTimeoutFlag(args: string[]): TimeoutExtraction {
+  const remaining: string[] = [];
+  const warnings: string[] = [];
+  let timeoutMs: number | undefined;
+  let i = 0;
+  while (i < args.length) {
+    const a = args[i];
+    if (a.startsWith('--timeout=')) {
+      const raw = a.slice('--timeout='.length);
+      const parsed = parseTimeoutSeconds(raw);
+      if (parsed.ok) timeoutMs = parsed.value;
+      else warnings.push(parsed.error);
+      i += 1;
+      continue;
+    }
+    if (a === '--timeout') {
+      const next = args[i + 1];
+      if (next === undefined || next.startsWith('--')) {
+        warnings.push(
+          `mcp invoke: --timeout requires a value (got ${next === undefined ? 'nothing' : `"${next}"`}); using default.`
+        );
+        i += 1;
+        continue;
+      }
+      const parsed = parseTimeoutSeconds(next);
+      if (parsed.ok) timeoutMs = parsed.value;
+      else warnings.push(parsed.error);
+      i += 2;
+      continue;
+    }
+    remaining.push(a);
+    i += 1;
+  }
+  return { timeoutMs, remaining, warnings };
+}
+
+function parseTimeoutSeconds(
+  raw: string
+): { ok: true; value: number } | { ok: false; error: string } {
+  if (!/^-?\d+$/.test(raw)) {
+    return {
+      ok: false,
+      error: `mcp invoke: invalid --timeout value "${raw}" (expected positive integer seconds); using default.`,
+    };
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) {
+    return {
+      ok: false,
+      error: `mcp invoke: invalid --timeout value "${raw}" (must be >= 1 second); using default.`,
+    };
+  }
+  return { ok: true, value: n * 1000 };
 }
 
 function invokeHelpText(): string {
-  return `usage: mcp invoke <name> [tool] [--flag value …]
+  return `usage: mcp invoke <name> [tool] [--timeout <seconds>] [--flag value …]
 
   mcp invoke <name>                   List tools on <name>.
   mcp invoke <name> <tool> --help     Show flags for <tool>.
   mcp invoke <name> <tool> --foo bar  Call <tool> with arguments.
+
+Slicc-level options (consumed before tool args):
+  --timeout <seconds>   Override the per-request timeout (default 60s).
+                        Must be a positive integer; invalid values warn
+                        on stderr and fall back to the default.
 
 Arguments are coerced according to the tool's JSON Schema:
   string/integer/number/boolean. Bare \`--flag\` (no value or "--" next)
