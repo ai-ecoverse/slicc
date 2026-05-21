@@ -24,7 +24,7 @@ export function showImagePreview(src: string, originEl: HTMLElement): () => void
 
   const originRect = originEl.getBoundingClientRect();
 
-  const animateOpen = () => {
+  const setupAndAnimate = () => {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const maxW = vw * 0.9;
@@ -39,15 +39,6 @@ export function showImagePreview(src: string, originEl: HTMLElement): () => void
     const finalLeft = (vw - finalW) / 2;
     const finalTop = (vh - finalH) / 2;
 
-    // Position image at final size and location using CSS positioning
-    img.style.position = 'absolute';
-    img.style.width = `${finalW}px`;
-    img.style.height = `${finalH}px`;
-    img.style.left = `${finalLeft}px`;
-    img.style.top = `${finalTop}px`;
-    img.style.borderRadius = '6px';
-
-    // Calculate transform to start from the origin thumbnail
     const scaleX = originRect.width / finalW;
     const scaleY = originRect.height / finalH;
     const originCenterX = originRect.left + originRect.width / 2;
@@ -57,22 +48,29 @@ export function showImagePreview(src: string, originEl: HTMLElement): () => void
     const translateX = originCenterX - finalCenterX;
     const translateY = originCenterY - finalCenterY;
 
-    // Start at thumbnail position/size
+    // Place image at final layout position but visually at thumbnail via transform
+    img.style.position = 'absolute';
+    img.style.width = `${finalW}px`;
+    img.style.height = `${finalH}px`;
+    img.style.left = `${finalLeft}px`;
+    img.style.top = `${finalTop}px`;
     img.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scaleX}, ${scaleY})`;
     img.style.borderRadius = `${6 / Math.min(scaleX, scaleY)}px`;
 
-    // Trigger reflow then animate to final position
-    img.offsetHeight; // eslint-disable-line @typescript-eslint/no-unused-expressions
-    img.style.transform = 'translate(0, 0) scale(1, 1)';
-    img.style.borderRadius = '6px';
-
-    overlay.classList.add('image-preview-overlay--visible');
+    // Double-rAF ensures the browser paints the initial state before we animate
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        img.style.transform = 'translate(0, 0) scale(1, 1)';
+        img.style.borderRadius = '6px';
+        overlay.classList.add('image-preview-overlay--visible');
+      });
+    });
   };
 
   if (img.complete && img.naturalWidth > 0) {
-    requestAnimationFrame(animateOpen);
+    setupAndAnimate();
   } else {
-    img.onload = () => requestAnimationFrame(animateOpen);
+    img.onload = () => setupAndAnimate();
     img.onerror = () => {
       overlay.remove();
       activeOverlay = null;
