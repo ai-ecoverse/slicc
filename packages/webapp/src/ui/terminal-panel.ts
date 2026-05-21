@@ -78,9 +78,7 @@ export class TerminalPanel {
 
   /**
    * Connect a `RemoteTerminalView` (kernel-worker mode) and mount
-   * its xterm into this panel. The remote view has no media-preview
-   * surface today — wiring that as a panel UI capability is a
-   * follow-up.
+   * its xterm into this panel.
    */
   async mountRemoteShell(view: RemoteTerminalView): Promise<void> {
     this.shell?.setPreviewStateListener?.(null);
@@ -93,13 +91,15 @@ export class TerminalPanel {
     await view.mount(mountEl);
 
     const terminalHost = mountEl.querySelector<HTMLElement>('.terminal-panel__terminal-host');
+    const previewHost = mountEl.querySelector<HTMLElement>('.terminal-panel__preview');
     if (!terminalHost) {
       throw new Error('remote terminal mount did not create expected host');
     }
     this.terminalViewEl.replaceChildren(terminalHost);
-    // Preview tab disabled — keep the empty-state sentinel.
     this.previewViewEl.replaceChildren(this.previewEmptyEl);
-    this.handlePreviewStateChange(false);
+    if (previewHost) this.previewViewEl.appendChild(previewHost);
+
+    view.setPreviewStateListener((hasPreview) => this.handlePreviewStateChange(hasPreview));
   }
 
   /** Clear the terminal screen. */
