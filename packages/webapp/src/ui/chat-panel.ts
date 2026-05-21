@@ -769,6 +769,8 @@ export class ChatPanel {
 
   /** Add a base64-encoded image directly to the pending composer attachments. */
   addImageAttachment(base64: string, name?: string, mimeType?: string): void {
+    if (!base64 || typeof base64 !== 'string') return;
+
     let data = base64;
     let mime = mimeType || 'image/jpeg';
     if (base64.startsWith('data:')) {
@@ -776,10 +778,24 @@ export class ChatPanel {
       if (match) {
         mime = match[1];
         data = match[2];
+      } else {
+        const commaIdx = base64.indexOf(',');
+        if (commaIdx !== -1) data = base64.slice(commaIdx + 1);
       }
     }
-    const fileName = name || (mime === 'image/png' ? 'screenshot.png' : 'screenshot.jpg');
+
+    // Validate mime is an image type
+    if (!/^image\/[a-z0-9.+\-]+$/i.test(mime)) mime = 'image/jpeg';
+
+    // Sanitize name: strip control chars, cap at 200 chars
+    let fileName = name || (mime === 'image/png' ? 'screenshot.png' : 'screenshot.jpg');
+    fileName = fileName.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 200);
+    if (!fileName) fileName = 'screenshot.jpg';
+
+    // Estimate decoded size from base64 length; reject if over 10MB
     const size = Math.ceil((data.length * 3) / 4);
+    if (size > 10 * 1024 * 1024) return;
+
     this.pendingAttachments.push({
       id: uid(),
       name: fileName,
