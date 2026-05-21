@@ -11,6 +11,7 @@ import './styles/tabs.css';
 import './styles/dialog.css';
 import './styles/sprinkle-components.css';
 import './styles/feedback.css';
+import './styles/image-preview.css';
 
 /**
  * Main entry point for the Browser Coding Agent UI.
