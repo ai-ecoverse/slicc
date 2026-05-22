@@ -200,7 +200,9 @@ describe('POST /tray — kind plumbing', () => {
 });
 ```
 
-`makeTestEnv()` is the same env factory used elsewhere in the file. If `/internal/state?json=true` isn't already exposed on the DO, return the kind via the existing `/internal/snapshot` route or whichever route returns the persisted record.
+`makeTestEnv()` is the same env factory used elsewhere in the file. The hosted-kind test drives the DO directly (`SessionTrayDurableObject` + `FakeDurableObjectState`) and asserts against `state.storage.get('tray')`. The two `handleWorkerRequest`-based tests around it pin the public POST /tray contract (empty body and malformed JSON).
+
+If you want a third end-to-end test that POSTs to /tray and verifies the resulting tray's persisted `kind`, follow this pattern — `makeTestEnv()` returns a `TRAY_HUB` namespace whose `.get(id).fetch(...)` reaches `SessionTrayDurableObject` instances backed by `FakeDurableObjectState`s held inside the namespace; after `handleWorkerRequest('https://www.sliccy.ai/tray', kind=hosted)`, reach into the namespace for the freshly-minted tray and `await state.storage.get('tray')`. Reuse whatever holder the existing tests use for the namespace (look for the existing `TRAY_HUB`/`FakeDurableObjectNamespace` plumbing already at the top of the test file). This catches a regression where worker `POST /tray` parses the body but forgets to forward `kind` into the DO `CreateTrayRequest`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1645,6 +1647,16 @@ describe('restartLeader', () => {
     expect(result.code).toBe('NO_LEADER_TAB');
   });
 });
+
+describe('registerLeaderRestartEndpoint — localhost guard', () => {
+  it('returns 403 for a non-loopback remoteAddress', async () => {
+    // Construct an Express request whose req.socket.remoteAddress is
+    // '10.0.0.5' or similar. Mirror the cloud-status loopback-403 test
+    // pattern; the implementation reuses the same `requireLoopback`
+    // middleware so the assertion is symmetric: 403 with body
+    // `{ error: 'localhost only' }`.
+  });
+});
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1788,7 +1800,16 @@ if (RUNTIME_FLAGS.hosted) {
 cd packages/node-server && npx vitest run tests/leader-restart.test.ts
 ```
 
-Expected: PASS.
+Expected: PASS — page-target resolution, `restartLeader` against a fake CDP, and the 403 loopback guard.
+
+> **Phase 3 acceptance.** Tests pass against the abstract `CdpLike` fake.
+> The real `createHttpCdp` WebSocket half (`Target.attachToTarget` +
+> `Page.reload` over `ws`) is sketched but NOT fully implemented in the
+> snippet above. **Phase 4 dogfooding depends on it** — `slicc --cloud
+resume`'s kick path drives `/api/leader-restart`, which has to actually
+> reload the page. Finish the WebSocket implementation before declaring
+> Phase 3 done; the unit tests stay green either way because the fake
+> bypasses the real CDP transport.
 
 - [ ] **Step 5: Commit**
 
@@ -2565,8 +2586,24 @@ export interface CloudSessionEntry {
   name?: string;
   createdAt: string;
   joinUrl: string;
+  /** `Date.now()`-style timestamp of the last `--cloud` interaction with this entry. */
   lastSeen: string;
   state: 'running' | 'paused' | 'dead';
+  /**
+   * Last-known tray identity from `/tmp/slicc-join.json`. Set by `runStart`
+   * after the initial cloud-status read; preserved by `runPause` (do NOT
+   * overwrite this on pause — it is the comparison baseline that lets
+   * `runResume` detect tray rebuilds). `runResume` overwrites it after a
+   * successful refresh.
+   */
+  trayId?: string;
+  /**
+   * `updatedAt` from the last successful `/tmp/slicc-join.json` read.
+   * `runResume` polls for an `updatedAt` strictly newer than this value, so
+   * resume only declares success after the kick produced a fresh refresh.
+   * Preserved across `runPause` for the same reason as `trayId`.
+   */
+  lastJoinUpdatedAt?: string;
 }
 
 interface RegistryFile {
@@ -2839,14 +2876,21 @@ export async function runStart(opts: RunStartOpts): Promise<StartResult> {
     });
 
     const reg = new CloudSessionRegistry(opts.registryPath);
+    const nowIso = new Date().toISOString();
     const entry: CloudSessionEntry = {
       substrate: opts.substrate.id,
       sandboxId: handle.sandboxId,
       name: opts.name,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
       joinUrl: status.joinUrl,
-      lastSeen: status.updatedAt ?? new Date().toISOString(),
+      lastSeen: nowIso,
       state: 'running',
+      // These two are the comparison baseline for `runResume`. Set them at
+      // start so resume can detect (a) a stale read after the kick (via
+      // updatedAt strictly newer than this) and (b) a tray rebuild (via
+      // trayId mismatch).
+      trayId: status.trayId,
+      lastJoinUpdatedAt: status.updatedAt,
     };
     await reg.append(entry);
 
@@ -3146,6 +3190,8 @@ export async function runPause(opts: RunPauseOpts): Promise<void> {
 
   const handle = await opts.substrate.connect(entry.sandboxId);
   await handle.pause();
+  // Update ONLY state + lastSeen. trayId and lastJoinUpdatedAt are baseline
+  // values for the next resume — preserving them is load-bearing.
   await reg.update(entry.sandboxId, { state: 'paused', lastSeen: new Date().toISOString() });
 }
 ```
@@ -3224,6 +3270,11 @@ describe('slicc --cloud resume', () => {
       joinUrl: 'https://w/join/old',
       lastSeen: '2026-05-22T00:00:00Z',
       state: 'paused',
+      // Baseline that runResume compares against — matches the oldJoin file
+      // seeded above. Without these, the poll would accept the first read
+      // (the stale pre-kick file) and resume would falsely report success.
+      trayId: 'tray-old',
+      lastJoinUpdatedAt: '2026-05-22T00:00:00Z',
     });
 
     // Queue the response the curl/leader-restart call will produce, then a
@@ -3260,6 +3311,10 @@ describe('slicc --cloud resume', () => {
     const updated = (await reg.list())[0];
     expect(updated.state).toBe('running');
     expect(updated.joinUrl).toBe('https://w/join/new');
+    // Baseline gets advanced on success — next resume will compare against
+    // these values.
+    expect(updated.trayId).toBe('tray-old');
+    expect(updated.lastJoinUpdatedAt).toBe('2026-05-22T01:00:00Z');
   });
 
   it('detects tray rebuild when trayId changes', async () => {
@@ -3281,6 +3336,11 @@ describe('slicc --cloud resume', () => {
       joinUrl: 'https://w/join/old',
       lastSeen: '2026-05-22T00:00:00Z',
       state: 'paused',
+      // Baseline that runResume compares against — matches the oldJoin file
+      // seeded above. Without these, the poll would accept the first read
+      // (the stale pre-kick file) and resume would falsely report success.
+      trayId: 'tray-old',
+      lastJoinUpdatedAt: '2026-05-22T00:00:00Z',
     });
 
     sub.queueRun(h.sandboxId, () => {
@@ -3330,6 +3390,11 @@ describe('slicc --cloud resume', () => {
       joinUrl: 'https://w/join/old',
       lastSeen: '2026-05-22T00:00:00Z',
       state: 'paused',
+      // Baseline that runResume compares against — matches the oldJoin file
+      // seeded above. Without these, the poll would accept the first read
+      // (the stale pre-kick file) and resume would falsely report success.
+      trayId: 'tray-old',
+      lastJoinUpdatedAt: '2026-05-22T00:00:00Z',
     });
 
     sub.queueRun(h.sandboxId, () => {
@@ -3404,7 +3469,13 @@ export async function runResume(opts: RunResumeOpts): Promise<ResumeResult> {
   const entry = await reg.findByNameOrId(opts.query);
   if (!entry) throw new Error(`cloud session not found: ${opts.query}`);
 
-  const oldStatus = await readStatusBeforeResume(entry.joinUrl);
+  // Baseline from the registry — `runStart` stored these at create, and
+  // `runPause` preserves them across pause. Resume requires a strictly
+  // newer `updatedAt` than `entry.lastJoinUpdatedAt`, so we only declare
+  // success once the kick has produced a fresh refresh.
+  const baselineUpdatedAt = entry.lastJoinUpdatedAt;
+  const baselineTrayId = entry.trayId;
+
   const handle = await opts.substrate.connect(entry.sandboxId);
 
   // Kick the leader to recover from a possible onReconnectGaveUp state.
@@ -3430,21 +3501,29 @@ export async function runResume(opts: RunResumeOpts): Promise<ResumeResult> {
     throw new Error('Failed to kick leader after 5 retries (sandbox may not be healthy)');
   }
 
-  const refreshed = await pollForRefreshedStatus(handle, oldStatus.updatedAt, {
+  const refreshed = await pollForRefreshedStatus(handle, baselineUpdatedAt, {
     timeoutMs: opts.pollTimeoutMs ?? 60_000,
     intervalMs: opts.pollIntervalMs ?? 500,
   });
 
-  const trayRebuilt = oldStatus.trayId !== refreshed.trayId;
+  // Tray rebuilt iff we had a baseline AND the new trayId is different.
+  // (No baseline → can't tell, default to false so we don't spuriously
+  // warn on a freshly-created sandbox where the registry was wiped.)
+  const trayRebuilt = Boolean(
+    baselineTrayId && refreshed.trayId && baselineTrayId !== refreshed.trayId
+  );
   const versionMismatch =
     refreshed.sliccVersion && refreshed.sliccVersion !== opts.localSliccVersion
       ? { running: refreshed.sliccVersion, local: opts.localSliccVersion }
       : undefined;
 
+  // Write the new baseline back — same fields runStart populated.
   await reg.update(entry.sandboxId, {
     joinUrl: refreshed.joinUrl,
-    lastSeen: refreshed.updatedAt ?? new Date().toISOString(),
+    lastSeen: new Date().toISOString(),
     state: 'running',
+    trayId: refreshed.trayId,
+    lastJoinUpdatedAt: refreshed.updatedAt,
   });
 
   return {
@@ -3462,16 +3541,9 @@ interface CloudStatus {
   updatedAt?: string;
 }
 
-async function readStatusBeforeResume(joinUrl: string): Promise<CloudStatus> {
-  // Returns whatever we know from the registry, used only to compare trayId
-  // and updatedAt against the refreshed status. The actual file lives inside
-  // the sandbox; we read the refreshed copy after resume.
-  return { joinUrl, updatedAt: undefined };
-}
-
 async function pollForRefreshedStatus(
   handle: SandboxHandle,
-  lastUpdatedAt: string | undefined,
+  baselineUpdatedAt: string | undefined,
   opts: { timeoutMs: number; intervalMs: number }
 ): Promise<CloudStatus> {
   const start = Date.now();
@@ -3480,12 +3552,16 @@ async function pollForRefreshedStatus(
       const raw = await handle.readFile('/tmp/slicc-join.json');
       const parsed = JSON.parse(raw) as CloudStatus;
       if (parsed.joinUrl) {
-        if (!lastUpdatedAt || parsed.updatedAt !== lastUpdatedAt) {
+        // Require a STRICTLY newer updatedAt than the registry baseline.
+        // If we have no baseline (first-time resume of an externally-created
+        // sandbox), accept any well-formed read.
+        if (!baselineUpdatedAt) return parsed;
+        if (parsed.updatedAt && parsed.updatedAt !== baselineUpdatedAt) {
           return parsed;
         }
       }
     } catch {
-      /* not yet ready */
+      /* file not yet present or not yet refreshed */
     }
     await new Promise((r) => setTimeout(r, opts.intervalMs));
   }
@@ -4207,6 +4283,8 @@ Mapping each spec section to tasks:
 - **e2b SDK shape.** `Task 4.2` uses `Sandbox.list()`, `Sandbox.create(template, {autoPause, envs, metadata})`, `Sandbox.connect(id)`, `sbx.pause()`, `sbx.kill()`, `sbx.getInfo()`, `sbx.files.read/write`, `sbx.commands.run`. If the published SDK names differ at implementation time, patch `cloud/substrates/e2b.ts` to match — keep the `SandboxSubstrate` interface intact.
 - **`/api/runtime-config` field name.** Existing returns `trayWorkerBaseUrl`. Task 2.6 assumes the webapp reads that field via its existing runtime-config plumbing; verify the existing path before adding new code.
 - **`readSecretsEnv` helper in `dispatch.ts`.** Reuse the existing `EnvSecretStore` parsing path if it can be invoked statically; otherwise implement a minimal `${name}=value` parser inline. Don't fork the parsing logic.
+- **Resume baseline fields are load-bearing.** `runStart` (Task 4.4) MUST populate `trayId` and `lastJoinUpdatedAt` on the registry entry from the initial `/tmp/slicc-join.json` read. `runPause` (Task 4.6) MUST preserve them across pause (do not overwrite with wall-clock `lastSeen`). `runResume` (Task 4.7) reads them as the poll baseline; without a baseline the kick can return success against a stale pre-kick file read. The registry tests cover the field round-trip; the resume tests assert the baseline-driven polling behavior.
+- **`createHttpCdp` WebSocket half (Task 3.4).** Unit tests pass with the `CdpLike` fake. Phase 3 is NOT complete until `Target.attachToTarget` + `Page.reload` over the CDP WebSocket are actually implemented in `leader-restart.ts`. Phase 4 dogfooding depends on this. The pattern to follow is `attachConsoleForwarder` at `packages/node-server/src/index.ts:251`.
 
 ---
 
