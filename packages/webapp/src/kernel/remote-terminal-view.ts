@@ -589,8 +589,7 @@ export class RemoteTerminalView {
         return;
       }
       try {
-        const { storePendingHandle } = await import('../fs/mount-picker-popup.js');
-        await storePendingHandle(localMountIdbKey(target), handle);
+        await stashMountHandle(localMountIdbKey(target), handle);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         this.terminal?.writeln(`mount: failed to stash handle: ${msg}`);
@@ -735,6 +734,37 @@ function parseLocalMountTarget(line: string): string | null {
  */
 export function localMountIdbKey(target: string): string {
   return `pendingMount:term:${target}`;
+}
+
+/**
+ * Write `handle` into the `slicc-pending-mount` IDB store under `idbKey`.
+ *
+ * Inlined here instead of delegating to `mount-picker-popup.ts` because
+ * Vite merges `mount-picker-popup` into the main index chunk but does NOT
+ * re-export `storePendingHandle` from that chunk.  A dynamic import of the
+ * merged chunk therefore resolves to `undefined`, causing "t is not a
+ * function" at the call site.  Inlining the three-line IDB write here keeps
+ * the logic inside the same chunk as its caller and avoids the export gap.
+ */
+async function stashMountHandle(idbKey: string, handle: FileSystemDirectoryHandle): Promise<void> {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const req = indexedDB.open('slicc-pending-mount', 1);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains('handles')) {
+        req.result.createObjectStore('handles');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  const tx = db.transaction('handles', 'readwrite');
+  tx.objectStore('handles').put(handle, idbKey);
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('IDB transaction failed'));
+    tx.onabort = () => reject(tx.error ?? new Error('IDB transaction aborted'));
+  });
+  db.close();
 }
 
 // ---------------------------------------------------------------------------
