@@ -664,24 +664,69 @@ export class Layout {
       enableBtn.addEventListener('click', async () => {
         popover.remove();
         try {
+          // `leaveTray({ workerBaseUrl })` covers the inactive →
+          // leader transition via the existing `kind: 'switched'`
+          // branch in `performTrayLeave`. The ambient three-transport
+          // selector in `resolveAmbientLeaveTrayTransport` (offscreen
+          // hook / extension panel / standalone page; the fourth
+          // `standalone-worker` variant requires explicit panel-RPC
+          // injection and isn't reachable from a popover click)
+          // routes the same way as Stop, so no symmetric "enableTray"
+          // helper is needed.
+          //
+          // Worker URL resolution mirrors `main.ts:1700-1715` and
+          // `offscreen.ts:268-276` — `storedBaseUrl ?? envBaseUrl ??
+          // defaultWorkerBaseUrl` — so `VITE_WORKER_BASE_URL` and any
+          // surviving stored value win over the dev/prod default.
+          // Without this, a developer running `VITE_WORKER_BASE_URL=…
+          // npm run dev` who clicks Stop then Enable would silently
+          // land on the platform default instead of their PR-preview
+          // worker.
           const [
             { leaveTray },
-            { DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL, DEFAULT_STAGING_TRAY_WORKER_BASE_URL },
+            {
+              resolveTrayWorkerBaseUrl,
+              DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+              DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
+            },
           ] = await Promise.all([
             import('../scoops/tray-leave.js'),
             import('../scoops/tray-runtime-config.js'),
           ]);
-          // `leaveTray({ workerBaseUrl })` covers the inactive →
-          // leader transition via the existing `kind: 'switched'`
-          // branch in `performTrayLeave`. No symmetric "enableTray"
-          // helper needed; the multi-transport selection in
-          // `resolveAmbientLeaveTrayTransport` already handles
-          // extension panel / standalone page / offscreen hook.
-          const workerBaseUrl = __DEV__
-            ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
-            : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL;
+          const workerBaseUrl = await resolveTrayWorkerBaseUrl({
+            locationHref: window.location.href,
+            storage: window.localStorage,
+            envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+            defaultWorkerBaseUrl: __DEV__
+              ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
+              : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+          });
+          if (!workerBaseUrl) {
+            throw new Error('Could not resolve a tray worker URL');
+          }
           await leaveTray({ workerBaseUrl });
         } catch (err) {
+          // Failure shapes that DO reach this catch:
+          //   1. Dynamic-import chunk fetch failure (extension chunk
+          //      cached for an older build, or network during chunk
+          //      load).
+          //   2. `resolveTrayWorkerBaseUrl` returned null and the
+          //      explicit `Error` above fired (no env, no default,
+          //      no stored value — shouldn't happen in production).
+          //   3. `leaveTray` rejected synchronously: no usable
+          //      transport in this context. Unreachable in panel/page
+          //      but observable if `resolveAmbientLeaveTrayTransport`
+          //      is refactored.
+          //
+          // Failure shape that DOES NOT reach here: the offscreen-side
+          // `activeHandle.leader.start()` rejection in
+          // `chrome-extension/src/offscreen.ts:497` rolls back to
+          // `state: 'inactive'` via `activeHandle?.stop()` and only
+          // surfaces via `log.error` → telemetry. The user sees the
+          // offer affordance again on next popover open with no inline
+          // signal that the previous attempt failed; re-clicking Enable
+          // is the recovery path. Plumbing that error back to the panel
+          // is tracked separately — see PR #746 review.
           const message = err instanceof Error ? err.message : String(err);
           layoutLog.error('enable-tray failed', { error: message });
           showTrayActionErrorToast('enable', message);
@@ -726,7 +771,7 @@ export class Layout {
       caption.className = 'avatar-popover__caption';
       caption.textContent = model.caption;
       popover.appendChild(caption);
-    } else {
+    } else if (model.kind === 'follower') {
       const item = document.createElement('div');
       item.className = 'avatar-popover__item';
       item.textContent = model.label;
@@ -736,12 +781,22 @@ export class Layout {
       caption.className = 'avatar-popover__caption';
       caption.textContent = model.caption;
       popover.appendChild(caption);
+    } else {
+      // Exhaustiveness guard — if a new `TrayMenuModel` variant is
+      // added without a render branch here, TS narrows `model` to
+      // `never` and this assignment fails to compile. Without it,
+      // a new kind would silently flow into the trailing `else` and
+      // ship with wrong styling + an unintended leave button.
+      const _exhaustive: never = model;
+      void _exhaustive;
     }
 
     // "Leave" affordance: previously the only way out was DevTools
     // surgery on `slicc.trayJoinUrl` / `slicc.trayWorkerBaseUrl`. The
     // helper routes through whichever transport matches the float — see
-    // `scoops/tray-leave.ts` for the four-transport switch.
+    // the `LeaveTrayWire` four-variant union in `scoops/tray-leave.ts`
+    // (the ambient resolver picks 3; the fourth, `standalone-worker`,
+    // is reachable only via explicit panel-RPC injection).
     const leaveBtn = document.createElement('button');
     leaveBtn.className = 'avatar-popover__item avatar-popover__item--danger';
     leaveBtn.textContent =
