@@ -1445,10 +1445,46 @@ describe('POST /api/cloud-status', () => {
   });
 
   it('rejects requests from a non-loopback remoteAddress with 403', async () => {
-    // Construct an Express request whose req.socket.remoteAddress is '10.0.0.5'
-    // or similar (use a supertest forge or a fake socket harness). Expect 403.
-    // The test forces the loopback guard to fire; the JSON body should be
-    // { error: 'localhost only' }.
+    // Call the middleware directly with a synthetic request/response pair —
+    // simpler than spinning up an Express listener bound to a non-loopback
+    // address (which would require root for low ports anyway). Match the
+    // Express request surface that requireLoopback inspects.
+    const { requireLoopback } = await import('../src/cloud-status.js');
+    let statusCode = 0;
+    let body: unknown = null;
+    const req = { socket: { remoteAddress: '10.0.0.5' } } as unknown as Parameters<
+      typeof requireLoopback
+    >[0];
+    const res = {
+      status(code: number) {
+        statusCode = code;
+        return this;
+      },
+      json(payload: unknown) {
+        body = payload;
+        return this;
+      },
+    } as unknown as Parameters<typeof requireLoopback>[1];
+    let nextCalled = false;
+    requireLoopback(req, res, () => {
+      nextCalled = true;
+    });
+    expect(nextCalled).toBe(false);
+    expect(statusCode).toBe(403);
+    expect(body).toEqual({ error: 'localhost only' });
+  });
+
+  it('accepts each known loopback shape', async () => {
+    const { requireLoopback } = await import('../src/cloud-status.js');
+    for (const addr of ['127.0.0.1', '::1', '::ffff:127.0.0.1']) {
+      let nextCalled = false;
+      const req = { socket: { remoteAddress: addr } } as never;
+      const res = { status: () => res, json: () => res } as never;
+      requireLoopback(req, res, () => {
+        nextCalled = true;
+      });
+      expect(nextCalled).toBe(true);
+    }
   });
 });
 ```
@@ -1528,6 +1564,12 @@ In `packages/node-server/src/index.ts`, register the endpoint only when `--hoste
 ```typescript
 import { registerCloudStatusEndpoint } from './cloud-status.js';
 
+// G4: register BEFORE Chromium launches. The webapp's first action after
+// `?runtime=hosted-leader` boot is to mint a tray and POST /api/cloud-status.
+// If the route doesn't exist yet, the post 404s and the CLI poll times out.
+// Concretely: this block goes after the Express app is constructed and all
+// middleware is mounted, but BEFORE `launchChromium(...)` (or the equivalent
+// boot step that triggers Chrome).
 if (RUNTIME_FLAGS.hosted) {
   registerCloudStatusEndpoint(app, { joinFilePath: '/tmp/slicc-join.json' });
 }
@@ -1650,11 +1692,30 @@ describe('restartLeader', () => {
 
 describe('registerLeaderRestartEndpoint — localhost guard', () => {
   it('returns 403 for a non-loopback remoteAddress', async () => {
-    // Construct an Express request whose req.socket.remoteAddress is
-    // '10.0.0.5' or similar. Mirror the cloud-status loopback-403 test
-    // pattern; the implementation reuses the same `requireLoopback`
-    // middleware so the assertion is symmetric: 403 with body
-    // `{ error: 'localhost only' }`.
+    // Same synthetic-request approach as the cloud-status 403 test.
+    // requireLoopback is imported from cloud-status.ts and reused here, so
+    // the assertion is symmetric.
+    const { requireLoopback } = await import('../src/cloud-status.js');
+    let statusCode = 0;
+    let body: unknown = null;
+    const req = { socket: { remoteAddress: '10.0.0.5' } } as never;
+    const res = {
+      status(code: number) {
+        statusCode = code;
+        return this;
+      },
+      json(payload: unknown) {
+        body = payload;
+        return this;
+      },
+    } as never;
+    let nextCalled = false;
+    requireLoopback(req, res, () => {
+      nextCalled = true;
+    });
+    expect(nextCalled).toBe(false);
+    expect(statusCode).toBe(403);
+    expect(body).toEqual({ error: 'localhost only' });
   });
 });
 ```
@@ -1780,7 +1841,7 @@ export function createHttpCdp(cdpPort: number): CdpLike {
 
 The full `Target.attachToTarget` + `Page.reload` over WebSocket is verbose but mechanical. Use the `ws` package (already a node-server dependency) and follow `attachConsoleForwarder`'s pattern. Keep the implementation in `leader-restart.ts` so `restartLeader`'s testability via the abstract `CdpLike` is preserved.
 
-In `packages/node-server/src/index.ts`, register only when `--hosted`, after CDP is up:
+In `packages/node-server/src/index.ts`, register only when `--hosted`. Unlike `/api/cloud-status` (which must be live before Chromium boots), `/api/leader-restart` is only called by the CLI on resume — it's safe to register after `waitForCDP` resolves. Concretely: this block goes after `launchChromium(...)` and after `await waitForCDP(...)`:
 
 ```typescript
 import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
@@ -1802,22 +1863,230 @@ cd packages/node-server && npx vitest run tests/leader-restart.test.ts
 
 Expected: PASS — page-target resolution, `restartLeader` against a fake CDP, and the 403 loopback guard.
 
-> **Phase 3 acceptance.** Tests pass against the abstract `CdpLike` fake.
-> The real `createHttpCdp` WebSocket half (`Target.attachToTarget` +
-> `Page.reload` over `ws`) is sketched but NOT fully implemented in the
-> snippet above. **Phase 4 dogfooding depends on it** — `slicc --cloud
-resume`'s kick path drives `/api/leader-restart`, which has to actually
-> reload the page. Finish the WebSocket implementation before declaring
-> Phase 3 done; the unit tests stay green either way because the fake
-> bypasses the real CDP transport.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit (CdpLike fake; ws transport lands in Task 3.4b)**
 
 ```bash
 git add packages/node-server/src/leader-restart.ts \
         packages/node-server/src/index.ts \
         packages/node-server/tests/leader-restart.test.ts
-git commit -m "feat(node-server): /api/leader-restart triggers CDP Page.reload on the SLICC tab"
+git commit -m "feat(node-server): /api/leader-restart against CdpLike fake (ws transport pending)"
+```
+
+---
+
+### Task 3.4b: `createHttpCdp` real WebSocket transport
+
+Task 3.4 stops at the `CdpLike` fake. Phase 4's `slicc --cloud resume` dogfood depends on `/api/leader-restart` actually reloading the page in a real Chromium. This task lands the WebSocket implementation, with a roundtrip test against a real `ws` server that simulates a CDP target.
+
+**Files:**
+
+- Modify: `packages/node-server/src/leader-restart.ts`
+- Modify: `packages/node-server/tests/leader-restart.test.ts`
+
+- [ ] **Step 1: Write the failing roundtrip test**
+
+Append to `packages/node-server/tests/leader-restart.test.ts`:
+
+```typescript
+import { WebSocketServer } from 'ws';
+import { createServer } from 'node:http';
+import { createHttpCdp } from '../src/leader-restart.js';
+
+describe('createHttpCdp — real WebSocket roundtrip', () => {
+  it('attaches to a target and sends Page.reload', async () => {
+    // Stand up a fake CDP target: HTTP /json returns a target descriptor;
+    // a ws server accepts the connection and echoes Target.attachToTarget +
+    // Page.reload responses by request id.
+    const received: Array<{ id: number; method: string; params?: unknown; sessionId?: string }> =
+      [];
+    const httpServer = createServer((req, res) => {
+      if (req.url === '/json') {
+        res.setHeader('content-type', 'application/json');
+        res.end(
+          JSON.stringify([
+            {
+              id: 'page-1',
+              type: 'page',
+              url: 'http://localhost:5710/?runtime=hosted-leader',
+              webSocketDebuggerUrl: `ws://127.0.0.1:${(httpServer.address() as { port: number }).port}/devtools/page/page-1`,
+            },
+          ])
+        );
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
+    const port = (httpServer.address() as { port: number }).port;
+
+    const wss = new WebSocketServer({ server: httpServer });
+    wss.on('connection', (sock) => {
+      sock.on('message', (data) => {
+        const msg = JSON.parse(data.toString()) as {
+          id: number;
+          method: string;
+          params?: unknown;
+          sessionId?: string;
+        };
+        received.push(msg);
+        if (msg.method === 'Target.attachToTarget') {
+          sock.send(JSON.stringify({ id: msg.id, result: { sessionId: 'sess-1' } }));
+        } else if (msg.method === 'Page.reload') {
+          sock.send(JSON.stringify({ id: msg.id, result: {} }));
+        }
+      });
+    });
+
+    try {
+      const cdp = createHttpCdp(port);
+      const result = await restartLeader(cdp, 'http://localhost:5710/');
+      expect(result.ok).toBe(true);
+      expect(received.map((m) => m.method)).toEqual(['Target.attachToTarget', 'Page.reload']);
+      expect(received[1].sessionId).toBe('sess-1');
+    } finally {
+      wss.close();
+      httpServer.close();
+    }
+  });
+
+  it('returns CDP_NOT_READY when /json is unreachable', async () => {
+    const cdp = createHttpCdp(/* port that nothing is listening on */ 1);
+    const result = await restartLeader(cdp, 'http://localhost:5710/');
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('CDP_NOT_READY');
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+```
+cd packages/node-server && npx vitest run tests/leader-restart.test.ts -t "real WebSocket roundtrip"
+```
+
+Expected: FAIL — current `createHttpCdp` throws for `Target.attachToTarget`.
+
+- [ ] **Step 3: Implement the ws transport**
+
+Replace the stub branch of `createHttpCdp` in `packages/node-server/src/leader-restart.ts`. Pattern lifted from `attachConsoleForwarder` at `packages/node-server/src/index.ts:251`:
+
+```typescript
+import { WebSocket } from 'ws';
+
+interface PendingCall {
+  resolve: (value: unknown) => void;
+  reject: (err: Error) => void;
+}
+
+class CdpClient {
+  private nextId = 1;
+  private readonly pending = new Map<number, PendingCall>();
+  constructor(private readonly socket: WebSocket) {
+    socket.on('message', (data) => {
+      const msg = JSON.parse(data.toString()) as {
+        id?: number;
+        result?: unknown;
+        error?: { message: string };
+      };
+      if (msg.id === undefined) return; // event, not a response
+      const p = this.pending.get(msg.id);
+      if (!p) return;
+      this.pending.delete(msg.id);
+      if (msg.error) p.reject(new Error(msg.error.message));
+      else p.resolve(msg.result);
+    });
+  }
+  async send(method: string, params?: unknown, sessionId?: string): Promise<unknown> {
+    const id = this.nextId++;
+    const frame = JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) });
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.socket.send(frame, (err) => {
+        if (err) {
+          this.pending.delete(id);
+          reject(err);
+        }
+      });
+    });
+  }
+  close(): void {
+    this.socket.close();
+  }
+}
+
+async function openCdpClient(webSocketDebuggerUrl: string): Promise<CdpClient> {
+  const socket = new WebSocket(webSocketDebuggerUrl);
+  await new Promise<void>((resolve, reject) => {
+    socket.once('open', () => resolve());
+    socket.once('error', (err) => reject(err));
+  });
+  return new CdpClient(socket);
+}
+
+export function createHttpCdp(cdpPort: number): CdpLike {
+  let cachedClient: CdpClient | null = null;
+  let cachedWebSocketUrl: string | null = null;
+
+  return {
+    async send(method, params, sessionId) {
+      if (method === 'Target.getTargets') {
+        const res = await fetch(`http://127.0.0.1:${cdpPort}/json`);
+        const list = (await res.json()) as Array<{
+          id: string;
+          type: string;
+          url: string;
+          webSocketDebuggerUrl?: string;
+        }>;
+        // Stash the first page's ws url for subsequent send() calls in
+        // the same restartLeader cycle. Caller will issue
+        // Target.attachToTarget → Page.reload right after.
+        cachedWebSocketUrl =
+          list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl)?.webSocketDebuggerUrl ??
+          null;
+        return {
+          targetInfos: list.map((t) => ({
+            id: t.id,
+            type: t.type,
+            url: t.url,
+            attached: Boolean(t.webSocketDebuggerUrl),
+          })),
+        };
+      }
+      if (!cachedClient) {
+        if (!cachedWebSocketUrl)
+          throw new Error('createHttpCdp: no ws url cached — call Target.getTargets first');
+        cachedClient = await openCdpClient(cachedWebSocketUrl);
+      }
+      try {
+        return await cachedClient.send(method, params, sessionId);
+      } finally {
+        if (method === 'Page.reload') {
+          // Reload severs the session; drop the client so the next
+          // restartLeader cycle re-opens.
+          cachedClient.close();
+          cachedClient = null;
+          cachedWebSocketUrl = null;
+        }
+      }
+    },
+  };
+}
+```
+
+- [ ] **Step 4: Run tests**
+
+```
+cd packages/node-server && npx vitest run tests/leader-restart.test.ts
+```
+
+Expected: PASS — fake-CDP unit tests, 403 guard, AND the real-WebSocket roundtrip.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/node-server/src/leader-restart.ts packages/node-server/tests/leader-restart.test.ts
+git commit -m "feat(node-server): real CDP WebSocket transport for /api/leader-restart"
 ```
 
 ---
@@ -2718,7 +2987,14 @@ beforeEach(async () => {
   envFile = path.join(dir, 'secrets.env');
   await fs.writeFile(
     envFile,
-    'ANTHROPIC_API_KEY=sk-test\nANTHROPIC_API_KEY_DOMAINS=api.anthropic.com\n'
+    [
+      'ANTHROPIC_API_KEY=sk-test',
+      'ANTHROPIC_API_KEY_DOMAINS=api.anthropic.com',
+      // E2B creds intentionally in the source file — runStart must strip them
+      // before upload (G1: do not leak substrate creds into the cloud).
+      'E2B_API_KEY=e2b-secret',
+      'E2B_API_KEY_DOMAINS=e2b.dev',
+    ].join('\n') + '\n'
   );
   registryPath = path.join(dir, 'cloud-sessions.json');
 });
@@ -2764,7 +3040,11 @@ describe('slicc --cloud start', () => {
     expect(sandboxes).toHaveLength(1);
 
     const handle = await substrate.connect(result.sandboxId);
-    expect(await handle.readFile('/slicc/secrets.env')).toContain('ANTHROPIC_API_KEY=sk-test');
+    const uploaded = await handle.readFile('/slicc/secrets.env');
+    expect(uploaded).toContain('ANTHROPIC_API_KEY=sk-test');
+    // G1: E2B credentials must NOT be uploaded to the cloud sandbox.
+    expect(uploaded).not.toContain('E2B_API_KEY=');
+    expect(uploaded).not.toContain('E2B_API_KEY_DOMAINS=');
 
     const reg = new CloudSessionRegistry(registryPath);
     const entries = await reg.list();
@@ -2778,7 +3058,34 @@ describe('slicc --cloud start', () => {
     });
   });
 
-  it('kills the sandbox and throws when cloud-status never appears', async () => {
+  it('kills the sandbox and includes stderr-tail in the error when cloud-status never appears', async () => {
+    const substrate = new FakeSubstrate();
+
+    // G2: on poll timeout, runStart should fetch /tmp/slicc-stderr.log and
+    // include its tail in the surfaced error. Seed the file via onAfterCreate.
+    const start = runStart({
+      substrate,
+      envFilePath: envFile,
+      registryPath,
+      sliccVersion: '3.2.2',
+      workerBaseUrl: 'https://www.sliccy.ai',
+      pollTimeoutMs: 200,
+      pollIntervalMs: 10,
+      onAfterCreate: async (handle) => {
+        await handle.writeFile(
+          '/tmp/slicc-stderr.log',
+          'Error: Failed to launch Chromium\n  cause: missing libnss3\n'
+        );
+        // Intentionally do NOT write /tmp/slicc-join.json — force the poll
+        // to time out.
+      },
+    });
+
+    await expect(start).rejects.toThrow(/missing libnss3/);
+    expect(await substrate.list()).toHaveLength(0);
+  });
+
+  it('falls back gracefully when /tmp/slicc-stderr.log is absent', async () => {
     const substrate = new FakeSubstrate();
     const start = runStart({
       substrate,
@@ -2788,9 +3095,9 @@ describe('slicc --cloud start', () => {
       workerBaseUrl: 'https://www.sliccy.ai',
       pollTimeoutMs: 200,
       pollIntervalMs: 10,
+      // No onAfterCreate; no stderr file, no join file.
     });
-    await expect(start).rejects.toThrow(/cloud-status/i);
-    // Sandbox should have been killed.
+    await expect(start).rejects.toThrow(/no \/tmp\/slicc-stderr\.log produced/);
     expect(await substrate.list()).toHaveLength(0);
   });
 
@@ -2848,8 +3155,38 @@ export interface StartResult {
   name?: string;
 }
 
+/**
+ * Strip locally-only keys from secrets.env before upload. `E2B_API_KEY` is
+ * the user's substrate credential — there is no reason for it to live inside
+ * the cloud sandbox where the cone could use it to spawn additional
+ * sandboxes against the user's e2b account. Keep this list narrow.
+ */
+const SECRETS_STRIP_KEYS = ['E2B_API_KEY', 'E2B_API_KEY_DOMAINS'] as const;
+
+export function filterSecretsEnv(contents: string): string {
+  const out: string[] = [];
+  for (const line of contents.split('\n')) {
+    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
+    if (m && (SECRETS_STRIP_KEYS as readonly string[]).includes(m[1])) continue;
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+/** Fetch the last `n` lines of /tmp/slicc-stderr.log from inside the sandbox. */
+async function tailStderr(handle: SandboxHandle, n: number): Promise<string> {
+  try {
+    const raw = await handle.readFile('/tmp/slicc-stderr.log');
+    const lines = raw.split('\n');
+    return lines.slice(Math.max(0, lines.length - n)).join('\n');
+  } catch {
+    return '(no /tmp/slicc-stderr.log produced)';
+  }
+}
+
 export async function runStart(opts: RunStartOpts): Promise<StartResult> {
-  const envContents = await fs.readFile(opts.envFilePath, 'utf-8');
+  const rawEnv = await fs.readFile(opts.envFilePath, 'utf-8');
+  const envContents = filterSecretsEnv(rawEnv);
 
   const handle = await opts.substrate.create({
     template: opts.template ?? 'slicc',
@@ -2870,10 +3207,20 @@ export async function runStart(opts: RunStartOpts): Promise<StartResult> {
 
     if (opts.onAfterCreate) await opts.onAfterCreate(handle);
 
-    const status = await pollCloudStatus(handle, {
-      timeoutMs: opts.pollTimeoutMs ?? 60_000,
-      intervalMs: opts.pollIntervalMs ?? 500,
-    });
+    let status: CloudStatusPayload;
+    try {
+      status = await pollCloudStatus(handle, {
+        timeoutMs: opts.pollTimeoutMs ?? 60_000,
+        intervalMs: opts.pollIntervalMs ?? 500,
+      });
+    } catch (pollErr) {
+      // Surface boot diagnostics before tearing down. Spec failure mode #7.
+      const stderr = await tailStderr(handle, 50);
+      throw new Error(
+        `${pollErr instanceof Error ? pollErr.message : String(pollErr)}\n` +
+          `--- last 50 lines of /tmp/slicc-stderr.log ---\n${stderr}`
+      );
+    }
 
     const reg = new CloudSessionRegistry(opts.registryPath);
     const nowIso = new Date().toISOString();
@@ -3950,9 +4297,25 @@ async function runCloudSubcommand(parsed: ParsedCloudArgs): Promise<void> {
 
 // Helper stubs — implement using existing patterns:
 function readSecretsEnv(name: string): string | undefined {
-  // Read ~/.slicc/secrets.env (respecting --env-file if you choose to plumb it
-  // through), parse for `${name}=...`, return the value or undefined.
-  // Use the existing EnvSecretStore parser if it can be reused.
+  // Pre-dispatch the CLI needs to read one specific key (E2B_API_KEY) before
+  // any substrate or registry is constructed. The existing EnvSecretStore at
+  // `packages/node-server/src/secrets/env-secret-store.ts` exposes get(name)
+  // but only after construction with a path (and it gates on _DOMAINS). For
+  // the pre-dispatch use case, the simplest path is a 5-line file parser:
+  try {
+    const path = require('node:path');
+    const fs = require('node:fs');
+    const home = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '.';
+    const file = process.env['SLICC_SECRETS_FILE'] ?? path.join(home, '.slicc', 'secrets.env');
+    const contents = fs.readFileSync(file, 'utf-8') as string;
+    for (const line of contents.split('\n')) {
+      const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+      if (m && m[1] === name) return m[2].trim();
+    }
+  } catch {
+    /* file missing → return undefined */
+  }
+  return undefined;
 }
 function defaultSecretsPath(): string {
   return path.join(process.env['HOME'] ?? '.', '.slicc', 'secrets.env');
@@ -4134,6 +4497,9 @@ slicc --cloud kill <sandboxId|name>
 - Pause beyond 30 days exceeds the worker's hosted-tray reclaim TTL; a new tray will be minted on resume with a new join URL.
 - Sandbox crash (distinct from auto-pause-on-cap) loses state.
 - Anyone with access to your e2b team account can attach to a paused sandbox and read its filesystem (including `/slicc/secrets.env`). Treat the team account as a credential boundary.
+- `E2B_API_KEY` (and `E2B_API_KEY_DOMAINS`) are stripped from `secrets.env` before upload, so the cloud agent cannot spawn additional sandboxes against your account. Any OTHER local-only secret in `~/.slicc/secrets.env` is uploaded wholesale; if you have dev creds you don't want in the cloud, remove them from the file or use `--env-file` to point at a curated copy.
+- No SIGINT handling during `--cloud start`. If you Ctrl-C while the sandbox is starting, it may end up running with no registry entry. Find it via `--cloud list` (which queries e2b directly) and `--cloud kill` it.
+- No credential rotation flow. Updating `~/.slicc/secrets.env` after `--cloud start` does not propagate to a running sandbox. Workaround: `--cloud pause`, then upload the new file via the e2b SDK or dashboard, then `--cloud resume`.
 
 ````
 
@@ -4284,7 +4650,7 @@ Mapping each spec section to tasks:
 - **`/api/runtime-config` field name.** Existing returns `trayWorkerBaseUrl`. Task 2.6 assumes the webapp reads that field via its existing runtime-config plumbing; verify the existing path before adding new code.
 - **`readSecretsEnv` helper in `dispatch.ts`.** Reuse the existing `EnvSecretStore` parsing path if it can be invoked statically; otherwise implement a minimal `${name}=value` parser inline. Don't fork the parsing logic.
 - **Resume baseline fields are load-bearing.** `runStart` (Task 4.4) MUST populate `trayId` and `lastJoinUpdatedAt` on the registry entry from the initial `/tmp/slicc-join.json` read. `runPause` (Task 4.6) MUST preserve them across pause (do not overwrite with wall-clock `lastSeen`). `runResume` (Task 4.7) reads them as the poll baseline; without a baseline the kick can return success against a stale pre-kick file read. The registry tests cover the field round-trip; the resume tests assert the baseline-driven polling behavior.
-- **`createHttpCdp` WebSocket half (Task 3.4).** Unit tests pass with the `CdpLike` fake. Phase 3 is NOT complete until `Target.attachToTarget` + `Page.reload` over the CDP WebSocket are actually implemented in `leader-restart.ts`. Phase 4 dogfooding depends on this. The pattern to follow is `attachConsoleForwarder` at `packages/node-server/src/index.ts:251`.
+- **Task 3.4 + Task 3.4b ordering.** Task 3.4 ships the `CdpLike` interface + fake-based tests. Task 3.4b ships the real `ws` transport with a roundtrip test against a fake CDP server. Both must complete before Phase 4 dogfood — `slicc --cloud resume`'s kick path drives the real `/api/leader-restart`, which only works once 3.4b lands.
 
 ---
 
