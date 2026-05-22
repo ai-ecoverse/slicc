@@ -1351,6 +1351,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
       addSprinkle: (name, title, element, zone, options) =>
         layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined, options),
       removeSprinkle: (name) => layout.removeSprinkle(name),
+      minimizeSprinkle: (name) => layout.minimizeSprinkle(name),
     },
     () => {
       const cone = client.getScoops().find((s) => s.isCone);
@@ -2438,6 +2439,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
       addSprinkle: (name, title, element, zone, options) =>
         layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined, options),
       removeSprinkle: (name) => layout.removeSprinkle(name),
+      minimizeSprinkle: (name) => layout.minimizeSprinkle(name),
     },
     () => {
       const cone = client.getScoops().find((s) => s.isCone);
