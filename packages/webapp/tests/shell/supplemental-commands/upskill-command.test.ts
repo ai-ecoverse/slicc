@@ -680,6 +680,138 @@ describe('upskill Tessl registry integration', () => {
 
     delete (globalThis as Record<string, unknown>).__slicc_reloadSkills;
   });
+
+  it('falls back to Contents API when codeload returns 404 on --list', async () => {
+    const globalFs = await VirtualFS.create({ dbName: 'slicc-fs-global' });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_test_token');
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(404, '', {}, 'Not Found');
+      if (url.endsWith('/contents/'))
+        return response(
+          200,
+          JSON.stringify([{ name: 'private-skill', path: 'private-skill', type: 'dir' }])
+        );
+      if (url.includes('/contents/private-skill'))
+        return response(
+          200,
+          JSON.stringify([
+            {
+              name: 'SKILL.md',
+              path: 'private-skill/SKILL.md',
+              type: 'file',
+              download_url:
+                'https://raw.githubusercontent.com/org/private-repo/main/private-skill/SKILL.md',
+            },
+          ])
+        );
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['org/private-repo', '--list'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('private-skill');
+  });
+
+  it('falls back to Contents API when codeload returns 404 for a single skill install', async () => {
+    const globalFs = await VirtualFS.create({ dbName: 'slicc-fs-global' });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_test_token');
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(404, '', {}, 'Not Found');
+      if (url.endsWith('/contents/'))
+        return response(
+          200,
+          JSON.stringify([{ name: 'private-skill', path: 'private-skill', type: 'dir' }])
+        );
+      if (url.includes('/contents/private-skill'))
+        return response(
+          200,
+          JSON.stringify([
+            {
+              name: 'SKILL.md',
+              path: 'private-skill/SKILL.md',
+              type: 'file',
+              download_url:
+                'https://raw.githubusercontent.com/org/private-repo/main/private-skill/SKILL.md',
+            },
+          ])
+        );
+      if (url.endsWith('/private-skill/SKILL.md')) return response(200, '# Private Skill\n');
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['org/private-repo', '--skill', 'private-skill'],
+      createMockCtx() as any
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Installed skill "private-skill"');
+    await expect(fs.readTextFile('/workspace/skills/private-skill/SKILL.md')).resolves.toContain(
+      '# Private Skill'
+    );
+  });
+
+  it('falls back to Contents API when codeload returns 404 for --all multi-skill install', async () => {
+    const globalFs = await VirtualFS.create({ dbName: 'slicc-fs-global' });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_test_token');
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(404, '', {}, 'Not Found');
+      if (url.endsWith('/contents/'))
+        return response(
+          200,
+          JSON.stringify([
+            { name: 'skill-a', path: 'skill-a', type: 'dir' },
+            { name: 'skill-b', path: 'skill-b', type: 'dir' },
+          ])
+        );
+      if (url.includes('/contents/skill-a'))
+        return response(
+          200,
+          JSON.stringify([
+            {
+              name: 'SKILL.md',
+              path: 'skill-a/SKILL.md',
+              type: 'file',
+              download_url:
+                'https://raw.githubusercontent.com/org/private-repo/main/skill-a/SKILL.md',
+            },
+          ])
+        );
+      if (url.includes('/contents/skill-b'))
+        return response(
+          200,
+          JSON.stringify([
+            {
+              name: 'SKILL.md',
+              path: 'skill-b/SKILL.md',
+              type: 'file',
+              download_url:
+                'https://raw.githubusercontent.com/org/private-repo/main/skill-b/SKILL.md',
+            },
+          ])
+        );
+      if (url.endsWith('/skill-a/SKILL.md')) return response(200, '# Skill A\n');
+      if (url.endsWith('/skill-b/SKILL.md')) return response(200, '# Skill B\n');
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['org/private-repo', '--all'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    await expect(fs.readTextFile('/workspace/skills/skill-a/SKILL.md')).resolves.toContain(
+      '# Skill A'
+    );
+    await expect(fs.readTextFile('/workspace/skills/skill-b/SKILL.md')).resolves.toContain(
+      '# Skill B'
+    );
+  });
 });
 
 describe('scoreSkills', () => {
@@ -1311,6 +1443,166 @@ describe('installRecommendedSkills helper (no-shell entry point)', () => {
     // The pre-existing companion was left untouched.
     await expect(fs.readTextFile('/workspace/skills/migrate-block/SKILL.md')).resolves.toContain(
       'pre-existing'
+    );
+  });
+
+  it('falls back to Contents API when codeload returns 404 for a recommended skill', async () => {
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return response(
+          200,
+          JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          })
+        );
+      }
+      if (url.includes('codeload.github.com')) return response(404, '', {}, 'Not Found');
+      if (url.includes('/repos/adobe/skills/contents/skills/aem')) {
+        return response(
+          200,
+          JSON.stringify([
+            {
+              name: 'SKILL.md',
+              path: 'skills/aem/SKILL.md',
+              type: 'file',
+              download_url:
+                'https://raw.githubusercontent.com/adobe/skills/main/skills/aem/SKILL.md',
+            },
+          ])
+        );
+      }
+      if (url.endsWith('/skills/aem/SKILL.md')) {
+        return response(200, '---\nname: aem\n---\n# AEM\n');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBeNull();
+    expect(result.errors).toEqual([]);
+    expect(result.installedNames).toEqual(['aem']);
+    await expect(fs.readTextFile('/workspace/skills/aem/SKILL.md')).resolves.toContain('# AEM');
+  });
+
+  it('falls back to Contents API when codeload returns 404 for a recommended installAll bundle', async () => {
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return response(
+          200,
+          JSON.stringify({
+            data: [
+              {
+                name: 'migrate-page',
+                displayName: 'AEM Page Import',
+                description: 'Migration bundle',
+                repo: 'aemcoder/skills',
+                path: 'skills/migration/',
+                skill: 'migrate-page',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+                installAll: 'true',
+              },
+            ],
+          })
+        );
+      }
+      if (url.includes('codeload.github.com')) return response(404, '', {}, 'Not Found');
+      if (url.includes('/repos/aemcoder/skills/contents/skills/migration/migrate-page')) {
+        return response(
+          200,
+          JSON.stringify([
+            {
+              name: 'SKILL.md',
+              path: 'skills/migration/migrate-page/SKILL.md',
+              type: 'file',
+              download_url:
+                'https://raw.githubusercontent.com/aemcoder/skills/main/skills/migration/migrate-page/SKILL.md',
+            },
+          ])
+        );
+      }
+      if (url.includes('/repos/aemcoder/skills/contents/skills/migration/migrate-header')) {
+        return response(
+          200,
+          JSON.stringify([
+            {
+              name: 'SKILL.md',
+              path: 'skills/migration/migrate-header/SKILL.md',
+              type: 'file',
+              download_url:
+                'https://raw.githubusercontent.com/aemcoder/skills/main/skills/migration/migrate-header/SKILL.md',
+            },
+          ])
+        );
+      }
+      if (url.includes('/repos/aemcoder/skills/contents/skills/migration')) {
+        return response(
+          200,
+          JSON.stringify([
+            { name: 'migrate-page', path: 'skills/migration/migrate-page', type: 'dir' },
+            { name: 'migrate-header', path: 'skills/migration/migrate-header', type: 'dir' },
+          ])
+        );
+      }
+      if (url.endsWith('/skills/migration/migrate-page/SKILL.md')) {
+        return response(200, '---\nname: migrate-page\n---\n# Migrate Page\n');
+      }
+      if (url.endsWith('/skills/migration/migrate-header/SKILL.md')) {
+        return response(200, '---\nname: migrate-header\n---\n# Migrate Header\n');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const result = await installRecommendedSkills(fs, fetchMock as unknown as SecureFetch);
+    expect(result.skipped).toBeNull();
+    expect(result.errors).toEqual([]);
+    expect(result.installedNames.sort()).toEqual(['migrate-header', 'migrate-page']);
+    await expect(fs.readTextFile('/workspace/skills/migrate-page/SKILL.md')).resolves.toContain(
+      '# Migrate Page'
+    );
+    await expect(fs.readTextFile('/workspace/skills/migrate-header/SKILL.md')).resolves.toContain(
+      '# Migrate Header'
     );
   });
 });
