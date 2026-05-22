@@ -1920,6 +1920,8 @@ describe('POST /tray — kind plumbing', () => {
       env
     );
     expect(response.status).toBe(400);
+    const body = (await response.json()) as { code: string };
+    expect(body.code).toBe('INVALID_BODY');
   });
 
   it('treats explicit empty-string body the same as no body (back-compat)', async () => {
@@ -1929,5 +1931,46 @@ describe('POST /tray — kind plumbing', () => {
       env
     );
     expect(response.status).toBe(201);
+  });
+
+  it('accepts kind=hosted', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'hosted' }),
+      }),
+      env
+    );
+    expect(response.status).toBe(201);
+  });
+
+  it('accepts kind=desktop explicitly', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'desktop' }),
+      }),
+      env
+    );
+    expect(response.status).toBe(201);
+  });
+
+  it('rejects invalid kind with 400', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'invalid' }),
+      }),
+      env
+    );
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { code: string };
+    expect(body.code).toBe('INVALID_KIND');
   });
 });
