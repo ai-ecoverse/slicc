@@ -173,4 +173,58 @@ describe('createHttpCdp — real WebSocket roundtrip', () => {
     expect(result.ok).toBe(false);
     expect(result.code).toBe('CDP_NOT_READY');
   });
+
+  it('re-opens the WebSocket on a second restartLeader cycle (cache cleared on Page.reload)', async () => {
+    // Track every ws connection the test fixture receives. The first restartLeader
+    // cycle should open one connection; after Page.reload the cached client must
+    // be dropped, so the second cycle must open a NEW connection.
+    let wsConnections = 0;
+    const httpServer = createServer((req, res) => {
+      if (req.url === '/json') {
+        res.setHeader('content-type', 'application/json');
+        res.end(
+          JSON.stringify([
+            {
+              id: 'page-1',
+              type: 'page',
+              url: 'http://localhost:5710/?runtime=hosted-leader',
+              webSocketDebuggerUrl: `ws://127.0.0.1:${(httpServer.address() as { port: number }).port}/devtools/page/page-1`,
+            },
+          ])
+        );
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
+    const port = (httpServer.address() as { port: number }).port;
+
+    const wss = new WebSocketServer({ server: httpServer });
+    wss.on('connection', (sock) => {
+      wsConnections++;
+      sock.on('message', (data) => {
+        const msg = JSON.parse(data.toString()) as { id: number; method: string };
+        if (msg.method === 'Target.attachToTarget') {
+          sock.send(JSON.stringify({ id: msg.id, result: { sessionId: `sess-${wsConnections}` } }));
+        } else if (msg.method === 'Page.reload') {
+          sock.send(JSON.stringify({ id: msg.id, result: {} }));
+        }
+      });
+    });
+
+    try {
+      const cdp = createHttpCdp(port);
+      const first = await restartLeader(cdp, 'http://localhost:5710/');
+      expect(first.ok).toBe(true);
+      expect(wsConnections).toBe(1);
+
+      const second = await restartLeader(cdp, 'http://localhost:5710/');
+      expect(second.ok).toBe(true);
+      expect(wsConnections).toBe(2);
+    } finally {
+      wss.close();
+      httpServer.close();
+    }
+  });
 });

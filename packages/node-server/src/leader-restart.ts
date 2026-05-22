@@ -25,7 +25,7 @@ export function findSliccPageTarget(
 
 export interface RestartResult {
   ok: boolean;
-  code?: 'NO_LEADER_TAB' | 'CDP_NOT_READY' | 'INTERNAL';
+  code?: 'NO_LEADER_TAB' | 'CDP_NOT_READY' | 'CDP_ERROR' | 'INTERNAL';
   message?: string;
 }
 
@@ -35,7 +35,15 @@ export async function restartLeader(cdp: CdpLike, localUrlPrefix: string): Promi
     const result = (await cdp.send('Target.getTargets')) as { targetInfos: CdpTargetInfo[] };
     targets = result.targetInfos;
   } catch (err) {
-    return { ok: false, code: 'CDP_NOT_READY', message: String(err) };
+    const msg = err instanceof Error ? err.message : String(err);
+    // ECONNREFUSED / timeout / fetch failure → CDP cold-starting (retriable 503).
+    // Other failures (malformed response, protocol error) → fatal (500).
+    const isTransient = /ECONNREFUSED|timeout|fetch failed|ETIMEDOUT|ENOTFOUND/i.test(msg);
+    return {
+      ok: false,
+      code: isTransient ? 'CDP_NOT_READY' : 'CDP_ERROR',
+      message: msg,
+    };
   }
   const target = findSliccPageTarget(targets, localUrlPrefix);
   if (!target) return { ok: false, code: 'NO_LEADER_TAB' };

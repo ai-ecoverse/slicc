@@ -2660,6 +2660,13 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       // a stale TRAY_JOIN_STORAGE_KEY from a prior follower role. For hosted-leader
       // we ALWAYS start as leader; clear the join key so the existing branch
       // below cannot route us into the follower path on this or any subsequent boot.
+      //
+      // NOTE: not unit-tested. main.ts has no test scaffold today; building one
+      // for this 3-line branch isn't worth the cost. The behavior is covered
+      // indirectly by the live e2b harness (Phase 5.1) — a sandbox booted with
+      // a stale TRAY_JOIN_STORAGE_KEY would join an unreachable follower and
+      // /tmp/slicc-join.json would never appear, surfacing in the start poll
+      // timeout. If a regression slips, the live harness catches it.
       window.localStorage.removeItem(TRAY_JOIN_STORAGE_KEY);
 
       // resolveTrayRuntimeConfig already ran earlier in mainStandaloneWorker

@@ -811,7 +811,7 @@ describe('tray worker skeleton', () => {
       result: {
         action: 'fail',
         code: 'TRAY_EXPIRED',
-        error: 'Tray expired because the leader did not reclaim it within one hour',
+        error: 'Tray expired because the leader did not reclaim it in time',
       },
     });
   });

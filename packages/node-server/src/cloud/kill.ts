@@ -15,8 +15,19 @@ export async function runKill(opts: RunKillOpts): Promise<void> {
   try {
     const handle = await opts.substrate.connect(entry.sandboxId);
     await handle.kill();
-  } catch {
-    // Substrate doesn't know about it — registry cleanup still proceeds.
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Only proceed with registry cleanup if substrate reports "not found".
+    // Other errors (timeouts, auth failures) might leave a sandbox running;
+    // surface them so the user doesn't silently leak credits.
+    const notFound = /not found|unknown sandbox|404|does not exist/i.test(msg);
+    if (!notFound) {
+      throw new Error(
+        `substrate.kill failed (sandbox ${entry.sandboxId}): ${msg}. ` +
+          `Registry entry NOT removed — verify sandbox state manually.`
+      );
+    }
+    // else: substrate doesn't know about it; registry cleanup proceeds below.
   }
   await reg.remove(entry.sandboxId);
 }

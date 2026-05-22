@@ -107,6 +107,7 @@ async function pollForRefreshedStatus(
   opts: { timeoutMs: number; intervalMs: number }
 ): Promise<CloudStatus> {
   const start = Date.now();
+  let lastError: unknown = null;
   while (Date.now() - start < opts.timeoutMs) {
     try {
       const raw = await handle.readFile('/tmp/slicc-join.json');
@@ -120,10 +121,13 @@ async function pollForRefreshedStatus(
           return parsed;
         }
       }
-    } catch {
-      /* file not yet present or not yet refreshed */
+    } catch (err) {
+      lastError = err;
     }
     await new Promise((r) => setTimeout(r, opts.intervalMs));
   }
-  throw new Error(`cloud-status did not refresh within ${opts.timeoutMs}ms`);
+  const errSuffix = lastError
+    ? ` (last error: ${lastError instanceof Error ? lastError.message : String(lastError)})`
+    : ' (file never appeared)';
+  throw new Error(`cloud-status did not refresh within ${opts.timeoutMs}ms${errSuffix}`);
 }

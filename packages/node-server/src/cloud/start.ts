@@ -46,8 +46,14 @@ async function tailStderr(handle: SandboxHandle, n: number): Promise<string> {
     const raw = await handle.readFile('/tmp/slicc-stderr.log');
     const lines = raw.split('\n');
     return lines.slice(Math.max(0, lines.length - n)).join('\n');
-  } catch {
-    return '(no /tmp/slicc-stderr.log produced)';
+  } catch (err) {
+    // Discriminate "file absent" (acceptable fallback) from other errors
+    // (substrate read failure — worth surfacing for debug).
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/ENOENT|not found/i.test(msg)) {
+      return '(no /tmp/slicc-stderr.log produced)';
+    }
+    return `(failed to read /tmp/slicc-stderr.log: ${msg})`;
   }
 }
 
@@ -62,18 +68,22 @@ async function pollCloudStatus(
   opts: { timeoutMs: number; intervalMs: number }
 ): Promise<CloudStatusPayload> {
   const start = Date.now();
+  let lastError: unknown = null;
   while (Date.now() - start < opts.timeoutMs) {
     try {
       const raw = await handle.readFile('/tmp/slicc-join.json');
       const parsed = JSON.parse(raw) as CloudStatusPayload;
       if (parsed.joinUrl) return parsed;
-    } catch {
-      // file not yet present
+    } catch (err) {
+      lastError = err;
     }
     await new Promise((r) => setTimeout(r, opts.intervalMs));
   }
+  const errSuffix = lastError
+    ? ` (last error: ${lastError instanceof Error ? lastError.message : String(lastError)})`
+    : ' (file never appeared)';
   throw new Error(
-    `cloud-status did not appear within ${opts.timeoutMs}ms; sandbox may have failed to boot`
+    `cloud-status did not appear within ${opts.timeoutMs}ms; sandbox may have failed to boot${errSuffix}`
   );
 }
 

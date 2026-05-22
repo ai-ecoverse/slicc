@@ -221,7 +221,7 @@ export class SessionTrayDurableObject {
           {
             action: 'fail',
             code: 'TRAY_EXPIRED',
-            error: 'Tray expired because the leader did not reclaim it within one hour',
+            error: 'Tray expired because the leader did not reclaim it in time',
           },
           410
         );
@@ -1113,7 +1113,7 @@ export class SessionTrayDurableObject {
     await this.persistTray();
     return jsonResponse(
       {
-        error: 'Tray expired because the leader did not reclaim it within one hour',
+        error: 'Tray expired because the leader did not reclaim it in time',
         code: 'TRAY_EXPIRED',
       },
       410
