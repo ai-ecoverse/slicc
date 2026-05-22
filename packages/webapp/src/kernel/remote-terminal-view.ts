@@ -25,9 +25,6 @@
  * Deliberate non-features (deferred, none blocking the standalone
  * smoke test):
  *   - Multi-line continuation (PS2 / heredoc).
- *   - Inline media-preview (`imgcat`). For now `imgcat` writes its
- *     base64 escape into the terminal stream like any other command
- *     and the user-visible result is "the bytes printed inline."
  *   - Cwd-aware prompt. The worker shell tracks `cd`; the panel
  *     just renders a static `$ ` prompt. A future event can carry
  *     `cwd` updates from the host.
@@ -108,6 +105,10 @@ export class RemoteTerminalView {
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
   private terminalHost: HTMLElement | null = null;
+  private previewHost: HTMLElement | null = null;
+  private previewUrls: string[] = [];
+  private hasPreview = false;
+  private previewStateListener: ((hasPreview: boolean) => void) | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private themeObserver: MutationObserver | null = null;
 
@@ -180,6 +181,10 @@ export class RemoteTerminalView {
     this.terminalHost.className = 'terminal-panel__terminal-host';
     container.appendChild(this.terminalHost);
 
+    this.previewHost = document.createElement('div');
+    this.previewHost.className = 'terminal-panel__preview';
+    container.appendChild(this.previewHost);
+
     this.terminal.open(this.terminalHost);
     this.fitAddon.fit();
 
@@ -225,8 +230,14 @@ export class RemoteTerminalView {
     return this.runRemote(trimmed);
   }
 
+  setPreviewStateListener(listener: ((hasPreview: boolean) => void) | null): void {
+    this.previewStateListener = listener;
+    listener?.(this.hasPreview);
+  }
+
   /** Tear down the view + close the worker session. */
   dispose(): void {
+    this.clearMediaPreview();
     this.themeObserver?.disconnect();
     this.themeObserver = null;
     this.resizeObserver?.disconnect();
@@ -235,8 +246,66 @@ export class RemoteTerminalView {
     this.terminal = null;
     this.fitAddon = null;
     this.terminalHost = null;
+    this.previewHost = null;
     this.client.close();
     this.client.dispose();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internal — media preview
+  // ---------------------------------------------------------------------------
+
+  private renderMediaPreview(event: TerminalEventMsg & { type: 'terminal-media-preview' }): void {
+    if (!this.previewHost) return;
+
+    const bytes = Uint8Array.from(atob(event.data), (c) => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: event.mediaType }));
+    this.previewUrls.push(url);
+
+    const previewItem = document.createElement('div');
+    previewItem.className = 'terminal-panel__preview-item';
+
+    const label = document.createElement('div');
+    label.className = 'terminal-panel__preview-label';
+    const name = event.path.split('/').pop() ?? event.path;
+    label.textContent = `${name} · ${event.mediaType}`;
+    previewItem.appendChild(label);
+
+    if (event.mediaType.startsWith('video/')) {
+      const video = document.createElement('video');
+      video.className = 'terminal-panel__preview-media';
+      video.controls = true;
+      video.autoplay = true;
+      video.loop = true;
+      video.muted = true;
+      video.playsInline = true;
+      video.src = url;
+      video.addEventListener('loadedmetadata', () => this.refit(), { once: true });
+      previewItem.appendChild(video);
+    } else {
+      const image = document.createElement('img');
+      image.className = 'terminal-panel__preview-media';
+      image.alt = name;
+      image.src = url;
+      image.addEventListener('load', () => this.refit(), { once: true });
+      previewItem.appendChild(image);
+    }
+
+    this.previewHost.appendChild(previewItem);
+    this.previewHost.classList.add('terminal-panel__preview--visible');
+    this.hasPreview = true;
+    this.previewStateListener?.(true);
+  }
+
+  private clearMediaPreview(): void {
+    for (const url of this.previewUrls) URL.revokeObjectURL(url);
+    this.previewUrls = [];
+    if (this.previewHost) {
+      this.previewHost.replaceChildren();
+      this.previewHost.classList.remove('terminal-panel__preview--visible');
+    }
+    this.hasPreview = false;
+    this.previewStateListener?.(false);
   }
 
   // ---------------------------------------------------------------------------
@@ -613,6 +682,7 @@ export class RemoteTerminalView {
    */
   private async runRemote(command: string): Promise<TerminalExecResult> {
     this.isExecuting = true;
+    this.clearMediaPreview();
     try {
       return await this.runRemoteImpl(command);
     } finally {
@@ -676,10 +746,7 @@ export class RemoteTerminalView {
         }
         return;
       case 'terminal-media-preview':
-        // A future panel UI capability (image/video preview pane) may
-        // surface this. For now ignore — the underlying command
-        // (`imgcat`) writes its escape into stdout in the CLI shell,
-        // which we render above.
+        this.renderMediaPreview(event);
         return;
     }
     event satisfies never;
