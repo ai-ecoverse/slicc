@@ -2,7 +2,7 @@ import {
   FOLLOWER_ATTACH_RETRY_AFTER_MS,
   type FollowerBootstrapResponse,
   jsonResponse,
-  TRAY_RECLAIM_TTL_MS,
+  reclaimMsForTray,
   websocketResponse,
   type CreateTrayRequest,
   type DurableObjectStateLike,
@@ -183,6 +183,7 @@ export class SessionTrayDurableObject {
       joinToken: payload.joinToken,
       controllerToken: payload.controllerToken,
       webhookToken: payload.webhookToken,
+      kind: payload.kind ?? 'desktop',
       controllers: {},
       bootstraps: {},
       leader: null,
@@ -695,7 +696,7 @@ export class SessionTrayDurableObject {
       controllerId: leader.controllerId,
       connected: leader.connected && Boolean(this.leaderSocket),
       reconnectDeadline: leader.disconnectedAt
-        ? new Date(Date.parse(leader.disconnectedAt) + TRAY_RECLAIM_TTL_MS).toISOString()
+        ? new Date(Date.parse(leader.disconnectedAt) + reclaimMsForTray(this.tray)).toISOString()
         : null,
     };
   }
@@ -1103,7 +1104,7 @@ export class SessionTrayDurableObject {
       return null;
     }
 
-    const expiresAt = Date.parse(tray.leader.disconnectedAt) + TRAY_RECLAIM_TTL_MS;
+    const expiresAt = Date.parse(tray.leader.disconnectedAt) + reclaimMsForTray(tray);
     if (this.now() <= expiresAt) {
       return null;
     }

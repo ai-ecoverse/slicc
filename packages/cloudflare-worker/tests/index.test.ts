@@ -5,6 +5,7 @@ import {
   wantsJSON,
   TRAY_RECLAIM_TTL_MS,
   HOSTED_TRAY_RECLAIM_TTL_MS,
+  reclaimMsForTray,
   type CreateTrayRequest,
   type DurableObjectIdLike,
   type DurableObjectStateLike,
@@ -1972,5 +1973,81 @@ describe('POST /tray — kind plumbing', () => {
     expect(response.status).toBe(400);
     const body = (await response.json()) as { code: string };
     expect(body.code).toBe('INVALID_KIND');
+  });
+});
+
+describe('reclaimMsForTray', () => {
+  it('returns 30 days for kind=hosted', () => {
+    expect(reclaimMsForTray({ kind: 'hosted' } as TrayRecord)).toBe(HOSTED_TRAY_RECLAIM_TTL_MS);
+  });
+
+  it('returns 1 hour for kind=desktop', () => {
+    expect(reclaimMsForTray({ kind: 'desktop' } as TrayRecord)).toBe(TRAY_RECLAIM_TTL_MS);
+  });
+
+  it('returns 1 hour for absent kind (back-compat)', () => {
+    expect(reclaimMsForTray({} as TrayRecord)).toBe(TRAY_RECLAIM_TTL_MS);
+  });
+
+  it('returns 1 hour for null/undefined (defensive)', () => {
+    expect(reclaimMsForTray(null)).toBe(TRAY_RECLAIM_TTL_MS);
+    expect(reclaimMsForTray(undefined)).toBe(TRAY_RECLAIM_TTL_MS);
+  });
+});
+
+describe('SessionTrayDurableObject — kind persistence', () => {
+  it('persists kind=hosted on the tray record after /internal/create', async () => {
+    const state = new FakeDurableObjectState();
+    const tray = new SessionTrayDurableObject(
+      state,
+      {},
+      { now: () => Date.now(), webSocketPairFactory: createFakeWebSocketPair }
+    );
+
+    await tray.fetch(
+      new Request('https://internal/internal/create', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          trayId: 't1',
+          createdAt: new Date().toISOString(),
+          joinToken: 'j',
+          controllerToken: 'c',
+          webhookToken: 'w',
+          kind: 'hosted',
+        }),
+      })
+    );
+
+    const stored = (await state.storage.get('tray')) as TrayRecord;
+    expect(stored.kind).toBe('hosted');
+    expect(reclaimMsForTray(stored)).toBe(HOSTED_TRAY_RECLAIM_TTL_MS);
+  });
+
+  it('defaults to kind=desktop when /internal/create payload omits it', async () => {
+    const state = new FakeDurableObjectState();
+    const tray = new SessionTrayDurableObject(
+      state,
+      {},
+      { now: () => Date.now(), webSocketPairFactory: createFakeWebSocketPair }
+    );
+
+    await tray.fetch(
+      new Request('https://internal/internal/create', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          trayId: 't2',
+          createdAt: new Date().toISOString(),
+          joinToken: 'j2',
+          controllerToken: 'c2',
+          webhookToken: 'w2',
+        }),
+      })
+    );
+
+    const stored = (await state.storage.get('tray')) as TrayRecord;
+    expect(stored.kind ?? 'desktop').toBe('desktop');
+    expect(reclaimMsForTray(stored)).toBe(TRAY_RECLAIM_TTL_MS);
   });
 });

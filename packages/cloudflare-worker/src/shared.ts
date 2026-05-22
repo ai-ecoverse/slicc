@@ -9,6 +9,10 @@ export const TRAY_RECLAIM_TTL_MS = 60 * 60 * 1000;
 export const HOSTED_TRAY_RECLAIM_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const FOLLOWER_ATTACH_RETRY_AFTER_MS = 1_000;
 
+export function reclaimMsForTray(tray: TrayRecord | null | undefined): number {
+  return tray?.kind === 'hosted' ? HOSTED_TRAY_RECLAIM_TTL_MS : TRAY_RECLAIM_TTL_MS;
+}
+
 export interface DurableObjectIdLike {
   toString(): string;
 }
