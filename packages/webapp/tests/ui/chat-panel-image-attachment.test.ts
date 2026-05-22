@@ -31,6 +31,17 @@ vi.mock('../../src/ui/provider-settings.js', () => ({
   getProviderConfig: () => null,
 }));
 
+// Mock image-processor: passthrough processImageContent, real isSupportedImageFormat/getImageByteSize
+vi.mock('../../src/core/image-processor.js', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    processImageContent: vi.fn(async (image: { type: string; mimeType: string; data: string }) => {
+      return image;
+    }),
+  };
+});
+
 describe('ChatPanel.addImageAttachment', () => {
   let container: HTMLElement;
   let panel: ChatPanel;
@@ -69,25 +80,24 @@ describe('ChatPanel.addImageAttachment', () => {
     vi.unstubAllGlobals();
   });
 
-  it('adds a raw base64 image attachment with defaults', () => {
-    panel.addImageAttachment('abc123');
+  it('adds a raw base64 image attachment with defaults', async () => {
+    await panel.addImageAttachment('abc123');
 
     const chip = container.querySelector('.attachment-chip__name');
     expect(chip?.textContent).toBe('screenshot.jpg');
     expect(container.querySelector('.chat__attachments--visible')).not.toBeNull();
   });
 
-  it('adds an attachment with custom name and mimeType', () => {
-    panel.addImageAttachment('abc123', 'photo.png', 'image/png');
+  it('adds an attachment with custom name and mimeType', async () => {
+    await panel.addImageAttachment('abc123', 'photo.png', 'image/png');
 
     const chip = container.querySelector('.attachment-chip__name');
     expect(chip?.textContent).toBe('photo.png');
   });
 
-  it('extracts mime and data from a full data URL', () => {
-    panel.addImageAttachment('data:image/png;base64,iVBORw==', 'snap.png');
+  it('extracts mime and data from a full data URL', async () => {
+    await panel.addImageAttachment('data:image/png;base64,iVBORw==', 'snap.png');
 
-    // Sends the extracted base64 data, not the full URL
     const textarea = container.querySelector('textarea')!;
     textarea.value = 'check this';
     textarea.dispatchEvent(new Event('input'));
@@ -103,8 +113,8 @@ describe('ChatPanel.addImageAttachment', () => {
     });
   });
 
-  it('handles malformed data URL by stripping prefix at comma', () => {
-    panel.addImageAttachment('data:weird;base64,QUJD');
+  it('handles malformed data URL by stripping prefix at comma', async () => {
+    await panel.addImageAttachment('data:weird;base64,QUJD');
 
     const textarea = container.querySelector('textarea')!;
     textarea.value = 'go';
@@ -115,44 +125,44 @@ describe('ChatPanel.addImageAttachment', () => {
     expect(attachments[0].data).toBe('QUJD');
   });
 
-  it('rejects empty base64 input', () => {
-    panel.addImageAttachment('');
+  it('rejects empty base64 input', async () => {
+    await panel.addImageAttachment('');
 
     expect(container.querySelector('.chat__attachments--visible')).toBeNull();
   });
 
-  it('rejects oversized images (>10MB decoded)', () => {
+  it('rejects oversized images (>10MB decoded)', async () => {
     // ~14MB of base64 data (decodes to ~10.5MB)
     const huge = 'A'.repeat(14 * 1024 * 1024);
-    panel.addImageAttachment(huge);
+    await panel.addImageAttachment(huge);
 
     expect(container.querySelector('.chat__attachments--visible')).toBeNull();
   });
 
-  it('sanitizes name: strips control characters', () => {
-    panel.addImageAttachment('abc123', 'evil\x00\x1f\x7fname.png');
+  it('sanitizes name: strips control characters', async () => {
+    await panel.addImageAttachment('abc123', 'evil\x00\x1f\x7fname.png');
 
     const chip = container.querySelector('.attachment-chip__name');
     expect(chip?.textContent).toBe('evilname.png');
   });
 
-  it('sanitizes name: truncates at 200 characters', () => {
+  it('sanitizes name: truncates at 200 characters', async () => {
     const longName = 'a'.repeat(250) + '.png';
-    panel.addImageAttachment('abc123', longName);
+    await panel.addImageAttachment('abc123', longName);
 
     const chip = container.querySelector('.attachment-chip__name');
     expect(chip?.textContent?.length).toBeLessThanOrEqual(200);
   });
 
-  it('falls back to default name when sanitized name is empty', () => {
-    panel.addImageAttachment('abc123', '\x00\x01\x02');
+  it('falls back to default name when sanitized name is empty', async () => {
+    await panel.addImageAttachment('abc123', '\x00\x01\x02');
 
     const chip = container.querySelector('.attachment-chip__name');
     expect(chip?.textContent).toBe('screenshot.jpg');
   });
 
-  it('rejects invalid mimeType and falls back to image/jpeg', () => {
-    panel.addImageAttachment('abc123', 'test.jpg', 'text/html');
+  it('rejects invalid mimeType and falls back to image/jpeg', async () => {
+    await panel.addImageAttachment('abc123', 'test.jpg', 'text/html');
 
     const textarea = container.querySelector('textarea')!;
     textarea.value = 'go';
@@ -163,8 +173,8 @@ describe('ChatPanel.addImageAttachment', () => {
     expect(attachments[0].mimeType).toBe('image/jpeg');
   });
 
-  it('rejects image/svg+xml and falls back to image/jpeg', () => {
-    panel.addImageAttachment('abc123', 'icon.svg', 'image/svg+xml');
+  it('rejects image/svg+xml and falls back to image/jpeg', async () => {
+    await panel.addImageAttachment('abc123', 'icon.svg', 'image/svg+xml');
 
     const textarea = container.querySelector('textarea')!;
     textarea.value = 'go';
@@ -175,8 +185,8 @@ describe('ChatPanel.addImageAttachment', () => {
     expect(attachments[0].mimeType).toBe('image/jpeg');
   });
 
-  it('accepts valid image mime types', () => {
-    panel.addImageAttachment('abc123', 'test.webp', 'image/webp');
+  it('accepts valid image mime types', async () => {
+    await panel.addImageAttachment('abc123', 'test.webp', 'image/webp');
 
     const textarea = container.querySelector('textarea')!;
     textarea.value = 'go';
@@ -187,9 +197,9 @@ describe('ChatPanel.addImageAttachment', () => {
     expect(attachments[0].mimeType).toBe('image/webp');
   });
 
-  it('multiple calls add separate attachment chips', () => {
-    panel.addImageAttachment('abc', 'first.png', 'image/png');
-    panel.addImageAttachment('def', 'second.jpg', 'image/jpeg');
+  it('multiple calls add separate attachment chips', async () => {
+    await panel.addImageAttachment('abc', 'first.png', 'image/png');
+    await panel.addImageAttachment('def', 'second.jpg', 'image/jpeg');
 
     const chips = container.querySelectorAll('.attachment-chip__name');
     expect(chips).toHaveLength(2);
@@ -197,9 +207,9 @@ describe('ChatPanel.addImageAttachment', () => {
     expect(chips[1].textContent).toBe('second.jpg');
   });
 
-  it('estimates size from base64 length', () => {
-    // 12 base64 chars = 9 decoded bytes
-    panel.addImageAttachment('YWJjZGVmZ2hp');
+  it('uses getImageByteSize for accurate size estimation', async () => {
+    // 12 base64 chars = 9 decoded bytes (no padding)
+    await panel.addImageAttachment('YWJjZGVmZ2hp');
 
     const textarea = container.querySelector('textarea')!;
     textarea.value = 'go';
@@ -208,5 +218,15 @@ describe('ChatPanel.addImageAttachment', () => {
 
     const [, , attachments] = sendMessage.mock.calls[0];
     expect(attachments[0].size).toBe(9);
+  });
+
+  it('drops attachment when processImageContent returns text (unsupported)', async () => {
+    const { processImageContent } = await import('../../src/core/image-processor.js');
+    const mock = processImageContent as ReturnType<typeof vi.fn>;
+    mock.mockResolvedValueOnce({ type: 'text', text: '[Image removed]' });
+
+    await panel.addImageAttachment('abc123', 'huge.png', 'image/png');
+
+    expect(container.querySelector('.chat__attachments--visible')).toBeNull();
   });
 });

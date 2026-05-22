@@ -14,7 +14,11 @@ import { createLogger } from '../core/logger.js';
 import type { MessageAttachment, MessageAttachmentKind } from '../core/attachments.js';
 import { formatAttachmentSize, formatAttachmentSummary } from '../core/attachments.js';
 import { getMimeType } from '../core/mime-types.js';
-import { processImageContent, isSupportedImageFormat } from '../core/image-processor.js';
+import {
+  processImageContent,
+  isSupportedImageFormat,
+  getImageByteSize,
+} from '../core/image-processor.js';
 import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
 import {
   hydrateDips,
@@ -768,7 +772,7 @@ export class ChatPanel {
   }
 
   /** Add a base64-encoded image directly to the pending composer attachments. */
-  addImageAttachment(base64: string, name?: string, mimeType?: string): void {
+  async addImageAttachment(base64: string, name?: string, mimeType?: string): Promise<void> {
     if (!base64 || typeof base64 !== 'string') return;
 
     let data = base64;
@@ -792,17 +796,22 @@ export class ChatPanel {
     fileName = fileName.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 200);
     if (!fileName) fileName = 'screenshot.jpg';
 
-    // Estimate decoded size from base64 length; reject if over 10MB
-    const size = Math.ceil((data.length * 3) / 4);
-    if (size > 10 * 1024 * 1024) return;
+    // Reject images over 10MB raw (no point processing truly massive payloads)
+    const rawSize = getImageByteSize(data);
+    if (rawSize > 10 * 1024 * 1024) return;
+
+    // Run through the same resize pipeline as pasted images so oversized
+    // screenshots (e.g. Retina PNGs) are downsized to fit the 5MB API limit.
+    const processed = await processImageContent({ type: 'image', mimeType: mime, data });
+    if (processed.type !== 'image') return;
 
     this.pendingAttachments.push({
       id: uid(),
       name: fileName,
-      mimeType: mime,
-      size,
+      mimeType: processed.mimeType,
+      size: getImageByteSize(processed.data),
       kind: 'image',
-      data,
+      data: processed.data,
     });
     this.renderPendingAttachments();
     this.updateSendButtonState();
