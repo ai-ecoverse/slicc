@@ -34,6 +34,7 @@ import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { OauthSecretStore } from './secrets/oauth-secret-store.js';
 import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
+import { registerCloudStatusEndpoint } from './cloud-status.js';
 
 import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
@@ -1173,6 +1174,14 @@ async function main() {
     await secretProxy.reload();
     res.status(204).end();
   });
+
+  // Cloud status endpoint (hosted-only) — writes join info to /tmp/slicc-join.json
+  // Register BEFORE Chromium launches. The webapp's first action after
+  // ?runtime=hosted-leader boot is to mint a tray and POST /api/cloud-status.
+  // If the route doesn't exist yet, the post 404s and the CLI poll times out.
+  if (RUNTIME_FLAGS.hosted) {
+    registerCloudStatusEndpoint(app, { joinFilePath: '/tmp/slicc-join.json' });
+  }
 
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
   // Used by just-bash's curl which calls the browser's fetch() API.
