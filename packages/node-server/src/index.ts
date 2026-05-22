@@ -39,9 +39,27 @@ import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.j
 
 import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
+import { parseCloudArgs, type ParsedCloudArgs } from './cloud/dispatch.js';
+import { createSubstrate } from './cloud/substrate.js';
+import { CloudSessionRegistry } from './cloud/registry.js';
+import { runStart } from './cloud/start.js';
+import { runList } from './cloud/list.js';
+import { runPause } from './cloud/pause.js';
+import { runResume } from './cloud/resume.js';
+import { runKill } from './cloud/kill.js';
+import { promises as fsPromises } from 'node:fs';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
+
+// ---------------------------------------------------------------------------
+// Cloud dispatcher — must run BEFORE any other boot logic
+// ---------------------------------------------------------------------------
+const _parsedCloudArgs = parseCloudArgs(process.argv.slice(2));
+if (_parsedCloudArgs) {
+  await runCloudSubcommand(_parsedCloudArgs);
+  process.exit(0);
+}
 
 const RUNTIME_FLAGS = parseCliRuntimeFlags(process.argv.slice(2));
 
@@ -1994,6 +2012,105 @@ async function main() {
       }, 2500);
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// Cloud dispatcher helpers
+// ---------------------------------------------------------------------------
+
+async function readSecretsEnvKey(name: string): Promise<string | undefined> {
+  try {
+    const home = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '.';
+    const file = process.env['SLICC_SECRETS_FILE'] ?? join(home, '.slicc', 'secrets.env');
+    const contents = await fsPromises.readFile(file, 'utf-8');
+    for (const line of contents.split('\n')) {
+      const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+      if (m && m[1] === name) return m[2].trim();
+    }
+  } catch {
+    /* file missing → undefined */
+  }
+  return undefined;
+}
+
+function defaultSecretsPath(): string {
+  const home = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '.';
+  return join(home, '.slicc', 'secrets.env');
+}
+
+function readPackageVersion(): string {
+  try {
+    const pkgPath = join(PROJECT_ROOT, 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version: string };
+    return pkg.version;
+  } catch {
+    return 'unknown';
+  }
+}
+
+async function runCloudSubcommand(parsed: ParsedCloudArgs): Promise<void> {
+  const apiKey = process.env['E2B_API_KEY'] ?? (await readSecretsEnvKey('E2B_API_KEY'));
+  if (!apiKey) {
+    console.error(
+      'E2B_API_KEY not set. Add it to ~/.slicc/secrets.env (with E2B_API_KEY_DOMAINS=e2b.dev) ' +
+        'or export it.'
+    );
+    process.exit(2);
+  }
+  const substrate = createSubstrate(parsed.args.substrate, { apiKey });
+  const registryPath = CloudSessionRegistry.defaultPath();
+  const localSliccVersion = readPackageVersion();
+
+  switch (parsed.subcommand) {
+    case 'start': {
+      const result = await runStart({
+        substrate,
+        envFilePath: parsed.args.envFile ?? defaultSecretsPath(),
+        registryPath,
+        workerBaseUrl: process.env['SLICC_TRAY_WORKER_BASE_URL']?.trim() || 'https://www.sliccy.ai',
+        sliccVersion: localSliccVersion,
+        name: parsed.args.name,
+      });
+      console.log(`Sandbox ${result.sandboxId} ready.`);
+      console.log(`Open: ${result.joinUrl}`);
+      console.log('Attach from iOS, desktop SLICC, or any browser tab.');
+      break;
+    }
+    case 'list': {
+      const entries = await runList({ substrate, registryPath });
+      for (const e of entries) {
+        console.log(`${e.substrate}\t${e.sandboxId}\t${e.name ?? '-'}\t${e.state}\t${e.joinUrl}`);
+      }
+      break;
+    }
+    case 'pause':
+      await runPause({ substrate, registryPath, query: parsed.args.query! });
+      console.log('Paused.');
+      break;
+    case 'resume': {
+      const result = await runResume({
+        substrate,
+        registryPath,
+        query: parsed.args.query!,
+        localSliccVersion,
+      });
+      if (result.versionMismatch) {
+        console.warn(
+          `Warning: running sandbox is sliccVersion=${result.versionMismatch.running}, ` +
+            `local CLI is ${result.versionMismatch.local}. Proceeding anyway.`
+        );
+      }
+      if (result.trayRebuilt) {
+        console.warn('Tray was rebuilt; existing followers must re-attach to the new join URL.');
+      }
+      console.log(`Resumed. Open: ${result.joinUrl}`);
+      break;
+    }
+    case 'kill':
+      await runKill({ substrate, registryPath, query: parsed.args.query! });
+      console.log('Killed.');
+      break;
+  }
 }
 
 main().catch((err) => {
