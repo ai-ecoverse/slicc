@@ -36,11 +36,14 @@ export function createE2bSubstrate(cfg: SubstrateConfig): SandboxSubstrate {
       while (paginator.hasNext) {
         const page = await paginator.nextItems();
         for (const info of page) {
-          // Filter to sandboxes whose template ID is 'slicc'.
-          if (info.templateId === 'slicc') {
+          // The SDK's `templateId` is the immutable hash (e.g. cjd0k6foq…);
+          // the alias 'slicc' is on `info.name`. Filter on the alias.
+          if (info.name === 'slicc') {
             items.push({
               sandboxId: info.sandboxId,
-              name: info.name,
+              // Sandbox name (user-supplied `--name`) lives in metadata.
+              // info.name is the *template* name.
+              name: info.metadata?.['name'],
               state: mapState(info.state),
               metadata: info.metadata,
             });
