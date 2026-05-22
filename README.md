@@ -190,6 +190,33 @@ SLICC is part of the [AI Ecoverse](https://github.com/ai-ecoverse), a growing se
 
 SLICC would not have been possible without the pioneering inspiration of [OpenClaw](https://github.com/openclaw/openclaw), [NanoClaw](https://github.com/qwibitai/nanoclaw), and [Pi](https://github.com/earendil-works/pi-mono). Pi is actually the frozen heart of every SLICC instance.
 
+## Cloud (`slicc --cloud`)
+
+Run a SLICC leader inside an e2b.dev sandbox so it survives your laptop going to sleep.
+
+**Prerequisites:** an e2b account; `E2B_API_KEY` in `~/.slicc/secrets.env` (with `E2B_API_KEY_DOMAINS=e2b.dev`) or in `process.env`.
+
+```bash
+slicc --cloud start [--name task-1] [--env-file ~/.slicc/secrets.env]
+slicc --cloud list
+slicc --cloud pause <sandboxId|name>
+slicc --cloud resume <sandboxId|name>
+slicc --cloud kill <sandboxId|name>
+```
+
+`start` prints a tray join URL; open it on iOS SliccFollower, desktop SLICC, or any browser tab.
+
+**Known limitations:**
+
+- OAuth-based providers (Anthropic OAuth, GitHub OAuth, Adobe IMS) are not supported; use static keys / PATs in `secrets.env`.
+- Local FS-Access mounts don't work in headless cloud Chromium. S3 / S3-compatible / DA mounts via `secrets.env` credentials work.
+- Pause beyond 30 days exceeds the worker's hosted-tray reclaim TTL; a new tray will be minted on resume with a new join URL.
+- Sandbox crash (distinct from auto-pause-on-cap) loses state.
+- Anyone with access to your e2b team account can attach to a paused sandbox and read its filesystem (including `/slicc/secrets.env`). Treat the team account as a credential boundary.
+- `E2B_API_KEY` (and `E2B_API_KEY_DOMAINS`) are stripped from `secrets.env` before upload, so the cloud agent cannot spawn additional sandboxes against your account. Any OTHER local-only secret in `~/.slicc/secrets.env` is uploaded wholesale; if you have dev creds you don't want in the cloud, remove them from the file or use `--env-file` to point at a curated copy.
+- No SIGINT handling during `--cloud start`. If you Ctrl-C while the sandbox is starting, it may end up running with no registry entry. Find it via `--cloud list` (which queries e2b directly) and `--cloud kill` it.
+- No credential rotation flow. Updating `~/.slicc/secrets.env` after `--cloud start` does not propagate to a running sandbox. Workaround: `--cloud pause`, then upload the new file via the e2b SDK or dashboard, then `--cloud resume`.
+
 ## Development and deeper docs
 
 If you want to go deeper, the detailed docs live here:
