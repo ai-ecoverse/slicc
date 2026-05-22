@@ -13,6 +13,7 @@
 import type { PanelRpcHandlers, PanelRpcResults } from '../kernel/panel-rpc.js';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import { getAllExtraOAuthDomains, setExtraOAuthDomains } from './provider-settings.js';
+import type { PageInfo } from '../cdp/types.js';
 
 /**
  * Options threaded into the handler factory. Each callback is optional
@@ -38,6 +39,19 @@ export interface StandalonePanelRpcHandlerOptions {
     workerBaseUrl: string | null;
     requestId?: string;
   }) => Promise<PanelRpcResults['tray-leave']> | PanelRpcResults['tray-leave'];
+  /**
+   * Return the remote (follower) browser targets known to the page-side
+   * BrowserAPI. Only set when a leader tray is active. The worker's
+   * BrowserAPI has no trayTargetProvider, so it can't call
+   * listAllTargets() itself — this bridges the gap.
+   */
+  listRemoteTargets?: () => Promise<PageInfo[]> | PageInfo[];
+  /**
+   * Return the followers currently connected to the leader tray, plus
+   * the best candidate for teleport. Bridges the worker/page split for
+   * playwright-cli teleport --list and auto-teleport runtime selection.
+   */
+  listTrayFollowers?: () => PanelRpcResults['list-tray-followers'];
 }
 
 /**
@@ -301,6 +315,21 @@ export function createStandalonePanelRpcHandlers(
       localStorage.setItem('slicc_accounts', accountsJson);
       const storedJson = localStorage.getItem('slicc_accounts') ?? accountsJson;
       return { storedJson };
+    },
+
+    'list-remote-targets': async () => {
+      if (!options.listRemoteTargets) return { targets: [] };
+      const all = await options.listRemoteTargets();
+      // Only return remote entries (composite targetId = "runtimeId:localId")
+      const remote = all.filter((p) => p.targetId.includes(':'));
+      return {
+        targets: remote.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url })),
+      };
+    },
+
+    'list-tray-followers': () => {
+      if (!options.listTrayFollowers) return { followers: [], bestRuntimeId: null };
+      return options.listTrayFollowers();
     },
   };
 }

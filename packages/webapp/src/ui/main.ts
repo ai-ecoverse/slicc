@@ -2621,6 +2621,17 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
       // non-transferable WebRTC resources and live on the page.
       leaveTray: async ({ workerBaseUrl, requestId }) =>
         await performTrayLeaveLocally({ workerBaseUrl, requestId }),
+      // Bridge remote (follower) browser targets to the worker-side
+      // playwright-cli. The worker's BrowserAPI has no trayTargetProvider
+      // so listAllTargets() falls back to local CDP only; this callback
+      // fetches from the page-side BrowserAPI which is fully wired.
+      listRemoteTargets: () => browser.listAllTargets(),
+      // Bridge follower list for playwright-cli teleport --list and
+      // auto-teleport runtime selection.
+      listTrayFollowers: () => ({
+        followers: pageLeaderTray?.sync.getConnectedFollowers() ?? [],
+        bestRuntimeId: pageLeaderTray?.sync.getBestFollowerForTeleport()?.runtimeId ?? null,
+      }),
     }),
   });
   // Tear down on session reload so the handler doesn't outlive its
