@@ -2693,12 +2693,6 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         if (res.ok) {
           const bootstrap = (await res.json()) as { adobeImsToken?: string };
           if (bootstrap.adobeImsToken) {
-            // Clear any stale `selected-model` carried over in /data/profile
-            // from a previous boot — otherwise `getSelectedProvider()` parses
-            // an old `anthropic:...` string and never lands on the Adobe
-            // account we're about to add (resolving falls back to
-            // accounts[0].providerId when the localStorage value is empty).
-            window.localStorage.removeItem('selected-model');
             await saveOAuthAccount({
               providerId: 'adobe',
               accessToken: bootstrap.adobeImsToken,
