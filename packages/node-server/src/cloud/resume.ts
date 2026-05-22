@@ -108,6 +108,7 @@ async function pollForRefreshedStatus(
 ): Promise<CloudStatus> {
   const start = Date.now();
   let lastError: unknown = null;
+  let lastStalePayload: CloudStatus | null = null;
   while (Date.now() - start < opts.timeoutMs) {
     try {
       const raw = await handle.readFile('/tmp/slicc-join.json');
@@ -120,14 +121,25 @@ async function pollForRefreshedStatus(
         if (parsed.updatedAt && parsed.updatedAt !== baselineUpdatedAt) {
           return parsed;
         }
+        // File exists, joinUrl present, but updatedAt unchanged — capture for
+        // the timeout error so we can tell "missing" from "stale".
+        lastStalePayload = parsed;
       }
     } catch (err) {
       lastError = err;
     }
     await new Promise((r) => setTimeout(r, opts.intervalMs));
   }
-  const errSuffix = lastError
-    ? ` (last error: ${lastError instanceof Error ? lastError.message : String(lastError)})`
-    : ' (file never appeared)';
+  let errSuffix = '';
+  if (lastStalePayload) {
+    errSuffix =
+      ` (file present but stale: baseline.updatedAt=${baselineUpdatedAt}, ` +
+      `current.updatedAt=${lastStalePayload.updatedAt}, ` +
+      `current.trayId=${lastStalePayload.trayId})`;
+  } else if (lastError) {
+    errSuffix = ` (last error: ${lastError instanceof Error ? lastError.message : String(lastError)})`;
+  } else {
+    errSuffix = ' (file never appeared)';
+  }
   throw new Error(`cloud-status did not refresh within ${opts.timeoutMs}ms${errSuffix}`);
 }
