@@ -104,10 +104,6 @@ import {
   setTrayResetter,
 } from '../shell/supplemental-commands/host-command.js';
 import { setRsyncSendFsRequest } from '../shell/supplemental-commands/rsync-command.js';
-import {
-  setPlaywrightTeleportBestFollower,
-  setPlaywrightTeleportConnectedFollowers,
-} from '../shell/supplemental-commands/playwright-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 import { resolveSprinkleIconHtml } from './sprinkle-icon.js';
 import { initTelemetry } from './telemetry.js';

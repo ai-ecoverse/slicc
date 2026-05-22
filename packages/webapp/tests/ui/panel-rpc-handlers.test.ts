@@ -271,3 +271,46 @@ describe('createStandalonePanelRpcHandlers — save-oauth-accounts', () => {
     expect(lsData.slicc_accounts).toBe(next);
   });
 });
+
+describe('createStandalonePanelRpcHandlers — list-tray-followers', () => {
+  it('returns empty followers and null bestRuntimeId when no listTrayFollowers callback wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    const result = await handlers['list-tray-followers']!(undefined);
+    expect(result).toEqual({ followers: [], bestRuntimeId: null });
+  });
+
+  it('returns the result of the listTrayFollowers callback', async () => {
+    const followers = [
+      { runtimeId: 'f-1', runtime: 'slicc-standalone', floatType: 'standalone' as const },
+    ];
+    const handlers = createStandalonePanelRpcHandlers({
+      listTrayFollowers: () => ({ followers, bestRuntimeId: 'f-1' }),
+    });
+    const result = await handlers['list-tray-followers']!(undefined);
+    expect(result).toEqual({ followers, bestRuntimeId: 'f-1' });
+  });
+});
+
+describe('createStandalonePanelRpcHandlers — list-remote-targets', () => {
+  it('returns empty targets when no listRemoteTargets callback wired', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    const result = await handlers['list-remote-targets']!(undefined);
+    expect(result).toEqual({ targets: [] });
+  });
+
+  it('filters to composite targetIds only', async () => {
+    const handlers = createStandalonePanelRpcHandlers({
+      listRemoteTargets: () => [
+        { targetId: 'local-1', title: 'Local Tab', url: 'https://local.example.com' },
+        {
+          targetId: 'runtime-abc:tab-1',
+          title: 'Follower Tab',
+          url: 'https://follower.example.com',
+        },
+      ],
+    });
+    const result = await handlers['list-remote-targets']!(undefined);
+    expect(result.targets).toHaveLength(1);
+    expect(result.targets[0].targetId).toBe('runtime-abc:tab-1');
+  });
+});

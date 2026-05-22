@@ -41,6 +41,8 @@
 import type { OAuthExtraDomainsStore } from '@slicc/shared-ts';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { TrayLeaveResult } from '../scoops/tray-leave.js';
+// FloatType (and the two imports above) are domain types from scoops/ that leak into
+// this transport module. If this list grows, consolidate into a shared wire-types.ts.
 import type { FloatType } from '../scoops/tray-leader-sync.js';
 
 const PANEL_RPC_CHANNEL = 'slicc-panel-rpc';

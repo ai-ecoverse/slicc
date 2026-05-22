@@ -2,12 +2,55 @@ import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } 
 import {
   createPlaywrightCommand,
   getSharedState,
-  setPlaywrightTeleportBestFollower,
-  setPlaywrightTeleportConnectedFollowers,
 } from '../../../src/shell/supplemental-commands/playwright-command.js';
 import { _resetBrowseShCatalogCache } from '../../../src/shell/supplemental-commands/upskill-command.js';
 import type { BrowserAPI } from '../../../src/cdp/index.js';
 import type { VirtualFS } from '../../../src/fs/index.js';
+import type { PanelRpcClient } from '../../../src/kernel/panel-rpc.js';
+
+// ---------------------------------------------------------------------------
+// panel-rpc mock — controls follower state injected via page-side bridge
+// ---------------------------------------------------------------------------
+
+vi.mock('../../../src/kernel/panel-rpc.js', () => ({
+  getPanelRpcClient: vi.fn(),
+  hasLocalDom: vi.fn().mockReturnValue(false),
+}));
+
+import { getPanelRpcClient } from '../../../src/kernel/panel-rpc.js';
+
+/** Default empty tray response. */
+const NO_TRAY: PanelRpcClient = {
+  call: vi.fn().mockResolvedValue({ followers: [], bestRuntimeId: null, targets: [] }),
+  dispose: vi.fn(),
+};
+
+/** Wire a follower list + best follower into the panel-RPC mock. */
+function setMockFollowers(
+  followers: Array<{
+    runtimeId: string;
+    bootstrapId?: string;
+    runtime?: string;
+    floatType?: string;
+    lastActivity?: number;
+  }>,
+  bestRuntimeId: string | null = followers[0]?.runtimeId ?? null
+): void {
+  const client: PanelRpcClient = {
+    call: vi.fn().mockImplementation(async (op: string) => {
+      if (op === 'list-tray-followers') return { followers, bestRuntimeId };
+      if (op === 'list-remote-targets') return { targets: [] };
+      return {};
+    }),
+    dispose: vi.fn(),
+  };
+  vi.mocked(getPanelRpcClient).mockReturnValue(client);
+}
+
+/** Disconnect the panel-RPC client (simulates no tray). */
+function setMockNoTray(): void {
+  vi.mocked(getPanelRpcClient).mockReturnValue(null);
+}
 
 /** Minimal mock BrowserAPI. */
 function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
@@ -758,6 +801,65 @@ describe('playwright-cli tab management', () => {
     const result = await cmd.execute(['tab-list'], {} as any);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('No tabs open');
+  });
+
+  it('tab-list merges follower remote targets from panel-RPC when RPC client available', async () => {
+    // Worker listAllTargets returns only local tabs
+    (browser.listAllTargets as ReturnType<typeof vi.fn>) = vi
+      .fn()
+      .mockResolvedValue([
+        { targetId: 'local-1', title: 'Local Tab', url: 'https://local.example.com' },
+      ]);
+    // RPC returns a remote follower tab
+    const rpcClient: PanelRpcClient = {
+      call: vi.fn().mockResolvedValue({
+        targets: [
+          {
+            targetId: 'f-runtime:remote-tab',
+            title: 'Follower Tab',
+            url: 'https://follower.example.com',
+          },
+        ],
+      }),
+      dispose: vi.fn(),
+    };
+    vi.mocked(getPanelRpcClient).mockReturnValue(rpcClient);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-list'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Local Tab');
+    expect(result.stdout).toContain('Follower Tab');
+  });
+
+  it('tab-list deduplicates when RPC returns a target already in local results', async () => {
+    (browser.listAllTargets as ReturnType<typeof vi.fn>) = vi.fn().mockResolvedValue([
+      {
+        targetId: 'f-runtime:remote-tab',
+        title: 'Follower Tab',
+        url: 'https://follower.example.com',
+      },
+    ]);
+    const rpcClient: PanelRpcClient = {
+      call: vi.fn().mockResolvedValue({
+        targets: [
+          {
+            targetId: 'f-runtime:remote-tab',
+            title: 'Follower Tab',
+            url: 'https://follower.example.com',
+          },
+        ],
+      }),
+      dispose: vi.fn(),
+    };
+    vi.mocked(getPanelRpcClient).mockReturnValue(rpcClient);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-list'], {} as any);
+    expect(result.exitCode).toBe(0);
+    // Should appear exactly once despite being in both local and RPC results
+    const matches = (result.stdout.match(/Follower Tab/g) ?? []).length;
+    expect(matches).toBe(1);
   });
 
   it('tab-list shows → for current target and * for active tab', async () => {
@@ -1902,15 +2004,12 @@ describe('playwright-cli teleport subcommand', () => {
     vi.useFakeTimers();
     browser = createMockBrowser();
     fs = createMockFS();
-    // Reset module-level getters
-    setPlaywrightTeleportBestFollower(null);
-    setPlaywrightTeleportConnectedFollowers(null);
+    setMockNoTray();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    setPlaywrightTeleportBestFollower(null);
-    setPlaywrightTeleportConnectedFollowers(null);
+    setMockNoTray();
   });
 
   it('requires --start and --return', async () => {
@@ -2001,17 +2100,17 @@ describe('playwright-cli teleport subcommand', () => {
   });
 
   it('--list shows followers when connected', async () => {
-    setPlaywrightTeleportConnectedFollowers(() => () => [
+    setMockFollowers([
       {
         runtimeId: 'f-standalone-1',
         runtime: 'slicc-standalone',
-        floatType: 'standalone' as any,
+        floatType: 'standalone',
         lastActivity: Date.now() - 5000,
       },
       {
         runtimeId: 'f-ext-1',
         runtime: 'slicc-extension',
-        floatType: 'extension' as any,
+        floatType: 'extension',
         lastActivity: Date.now() - 10000,
       },
     ]);
@@ -2026,6 +2125,7 @@ describe('playwright-cli teleport subcommand', () => {
   });
 
   it('--list fails when not connected to a tray', async () => {
+    setMockNoTray();
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['teleport', '--list'], {} as any);
     expect(result.exitCode).toBe(1);
@@ -2033,7 +2133,7 @@ describe('playwright-cli teleport subcommand', () => {
   });
 
   it('--list shows message when no followers', async () => {
-    setPlaywrightTeleportConnectedFollowers(() => () => []);
+    setMockFollowers([]);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['teleport', '--list'], {} as any);
@@ -2108,21 +2208,15 @@ describe('playwright-cli teleport trigger and capture', () => {
     });
     fs = createMockFS();
 
-    // Wire up getBestFollower to return a follower
-    setPlaywrightTeleportBestFollower(() => () => ({
-      runtimeId: 'f-runtime',
-      bootstrapId: 'b-runtime',
-      floatType: 'standalone' as any,
-    }));
-    setPlaywrightTeleportConnectedFollowers(() => () => [
-      { runtimeId: 'f-runtime', runtime: 'slicc-standalone', floatType: 'standalone' as any },
+    // Wire up a follower via panel-RPC mock
+    setMockFollowers([
+      { runtimeId: 'f-runtime', runtime: 'slicc-standalone', floatType: 'standalone' },
     ]);
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    setPlaywrightTeleportBestFollower(null);
-    setPlaywrightTeleportConnectedFollowers(null);
+    setMockNoTray();
   });
 
   it('polls leader tab and triggers teleport on the intercepted auth URL', async () => {
@@ -2698,8 +2792,8 @@ describe('playwright-cli teleport trigger and capture', () => {
   });
 
   it('teleport fails gracefully when no followers connected', async () => {
-    // No best follower available
-    setPlaywrightTeleportBestFollower(() => () => null);
+    // No best follower — RPC returns null bestRuntimeId
+    setMockFollowers([], null);
 
     (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
       if (expr === 'window.location.href') return 'https://login.example.com/sso';
@@ -2737,14 +2831,12 @@ describe('playwright-cli open/goto with --teleport-start and --teleport-return',
     vi.useFakeTimers();
     browser = createMockBrowser();
     fs = createMockFS();
-    setPlaywrightTeleportBestFollower(null);
-    setPlaywrightTeleportConnectedFollowers(null);
+    setMockNoTray();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    setPlaywrightTeleportBestFollower(null);
-    setPlaywrightTeleportConnectedFollowers(null);
+    setMockNoTray();
   });
 
   it('open with --teleport-start/--teleport-return arms watcher', async () => {
@@ -2895,17 +2987,14 @@ describe('formatCookieDomainSummary (via teleport output)', () => {
       }),
     });
     fs = createMockFS();
-    setPlaywrightTeleportBestFollower(() => () => ({
-      runtimeId: 'f-runtime',
-      bootstrapId: 'b-runtime',
-      floatType: 'standalone' as any,
-    }));
+    setMockFollowers([
+      { runtimeId: 'f-runtime', runtime: 'slicc-standalone', floatType: 'standalone' },
+    ]);
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    setPlaywrightTeleportBestFollower(null);
-    setPlaywrightTeleportConnectedFollowers(null);
+    setMockNoTray();
   });
 
   it('domain summary appears in teleport completion output', async () => {
