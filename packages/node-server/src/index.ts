@@ -35,6 +35,7 @@ import { OauthSecretStore } from './secrets/oauth-secret-store.js';
 import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 import { registerCloudStatusEndpoint } from './cloud-status.js';
+import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
 
 import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
@@ -1953,6 +1954,15 @@ async function main() {
         console.log(`[cdp-proxy] Pre-connected: CDP available at ${cdpUrl}`);
         await ensureChromeConnection(cdpUrl);
         console.log('[cdp-proxy] Chrome WebSocket ready (pre-warmed)');
+
+        // Register leader-restart endpoint now that CDP is ready (hosted mode only)
+        if (RUNTIME_FLAGS.hosted) {
+          registerLeaderRestartEndpoint(app, {
+            cdp: createHttpCdp(CDP_PORT),
+            localUrlPrefix: `http://localhost:${SERVE_PORT}/`,
+          });
+          console.log('[hosted] /api/leader-restart endpoint registered');
+        }
       } catch (err) {
         console.log('[cdp-proxy] Pre-connect failed (will retry on first client):', err);
       }
