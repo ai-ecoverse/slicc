@@ -27,6 +27,7 @@ import type {
   LeaderTraySession,
   LeaderTraySessionStore,
   LeaderTrayWebSocket,
+  TrayKind,
 } from '../scoops/tray-leader.js';
 import { LeaderTrayPeerManager } from '../scoops/tray-webrtc.js';
 import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
@@ -61,7 +62,7 @@ export interface StartPageLeaderTrayOptions {
   /** Tray attach runtime string. Default 'slicc-standalone'. */
   runtime?: string;
   /** Tray kind. Default omitted (desktop). */
-  kind?: 'desktop' | 'hosted';
+  kind?: TrayKind;
   /**
    * Invoked once the leader tray is ready and the join URL is minted.
    * Used by hosted-leader mode to POST `/api/cloud-status`.

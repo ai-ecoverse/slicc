@@ -13,7 +13,7 @@ describe('parseCloudArgs', () => {
     ]);
     expect(r).toEqual({
       subcommand: 'start',
-      args: { name: 'task-1', envFile: '/etc/slicc.env', substrate: 'e2b' },
+      args: { substrate: 'e2b', name: 'task-1', envFile: '/etc/slicc.env' },
     });
   });
 
@@ -25,15 +25,15 @@ describe('parseCloudArgs', () => {
   it('parses --cloud pause/resume/kill with positional query', () => {
     expect(parseCloudArgs(['--cloud', 'pause', 'task-1'])).toEqual({
       subcommand: 'pause',
-      args: { query: 'task-1', substrate: 'e2b' },
+      args: { substrate: 'e2b', query: 'task-1' },
     });
     expect(parseCloudArgs(['--cloud', 'resume', 'sb-abc'])).toEqual({
       subcommand: 'resume',
-      args: { query: 'sb-abc', substrate: 'e2b' },
+      args: { substrate: 'e2b', query: 'sb-abc' },
     });
     expect(parseCloudArgs(['--cloud', 'kill', 'task-1'])).toEqual({
       subcommand: 'kill',
-      args: { query: 'task-1', substrate: 'e2b' },
+      args: { substrate: 'e2b', query: 'task-1' },
     });
   });
 

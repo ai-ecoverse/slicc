@@ -5,6 +5,8 @@ import type {
   TurnIceServer,
 } from './tray-signaling.js';
 
+export type TrayKind = 'desktop' | 'hosted';
+
 export const TRAY_RECLAIM_TTL_MS = 60 * 60 * 1000;
 export const HOSTED_TRAY_RECLAIM_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const FOLLOWER_ATTACH_RETRY_AFTER_MS = 1_000;
@@ -61,7 +63,7 @@ export interface TrayRecord {
   bootstraps: Record<string, TrayBootstrapRecord>;
   leader: LeaderRecord | null;
   expiredAt?: string;
-  kind?: 'desktop' | 'hosted';
+  kind?: TrayKind;
 }
 
 export interface CreateTrayRequest {
@@ -70,7 +72,7 @@ export interface CreateTrayRequest {
   joinToken: string;
   controllerToken: string;
   webhookToken: string;
-  kind?: 'desktop' | 'hosted';
+  kind?: TrayKind;
 }
 
 export interface TrayLeaderSummary {

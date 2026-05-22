@@ -8,7 +8,7 @@ export interface CloudSessionEntry {
   name?: string;
   createdAt: string;
   joinUrl: string;
-  /** `Date.now()`-style timestamp of the last `--cloud` interaction with this entry. */
+  /** ISO 8601 timestamp (e.g., '2026-05-22T16:00:00.000Z'). Updated on every list/resume tick. */
   lastSeen: string;
   state: 'running' | 'paused' | 'dead';
   /**
@@ -30,6 +30,20 @@ export interface CloudSessionEntry {
 
 interface RegistryFile {
   sessions: CloudSessionEntry[];
+}
+
+function isCloudSessionEntry(x: unknown): x is CloudSessionEntry {
+  if (typeof x !== 'object' || x === null) return false;
+  const e = x as Record<string, unknown>;
+  return (
+    typeof e.substrate === 'string' &&
+    typeof e.sandboxId === 'string' &&
+    typeof e.createdAt === 'string' &&
+    typeof e.joinUrl === 'string' &&
+    typeof e.lastSeen === 'string' &&
+    typeof e.state === 'string' &&
+    (e.state === 'running' || e.state === 'paused' || e.state === 'dead')
+  );
 }
 
 export class CloudSessionRegistry {
@@ -76,15 +90,28 @@ export class CloudSessionRegistry {
   }
 
   private async read(): Promise<RegistryFile> {
+    let raw: unknown;
     try {
-      const raw = await fs.readFile(this.filePath, 'utf-8');
-      const parsed = JSON.parse(raw) as RegistryFile;
-      if (!parsed.sessions || !Array.isArray(parsed.sessions)) return { sessions: [] };
-      return parsed;
+      raw = JSON.parse(await fs.readFile(this.filePath, 'utf-8'));
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { sessions: [] };
       throw err;
     }
+    if (
+      typeof raw !== 'object' ||
+      raw === null ||
+      !Array.isArray((raw as { sessions?: unknown }).sessions)
+    ) {
+      console.warn('cloud-sessions.json is malformed; treating as empty', this.filePath);
+      return { sessions: [] };
+    }
+    const candidates = (raw as { sessions: unknown[] }).sessions;
+    const sessions: CloudSessionEntry[] = [];
+    for (const c of candidates) {
+      if (isCloudSessionEntry(c)) sessions.push(c);
+      else console.warn('skipping malformed cloud-sessions entry', c);
+    }
+    return { sessions };
   }
 
   private async write(data: RegistryFile): Promise<void> {

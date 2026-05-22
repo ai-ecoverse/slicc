@@ -4,6 +4,12 @@ import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from 
 import * as db from './db.js';
 import { buildTrayWorkerUrl } from './tray-runtime-config.js';
 
+/**
+ * Mirrors TrayKind in packages/cloudflare-worker/src/shared.ts.
+ * Keep these in sync — TrayRecord.kind is the protocol field.
+ */
+export type TrayKind = 'desktop' | 'hosted';
+
 const log = createLogger('tray-leader');
 const LEADER_TRAY_STATE_KEY = 'leader-tray-session';
 const LEADER_TRAY_PING_INTERVAL_MS = 30_000;
@@ -159,7 +165,7 @@ export interface LeaderTrayManagerOptions {
    */
   onLeaderReady?: (session: LeaderTraySession) => void;
   /** Persisted on the tray; controls reclaim TTL on the worker. */
-  kind?: 'desktop' | 'hosted';
+  kind?: TrayKind;
 }
 
 export class IndexedDbLeaderTraySessionStore implements LeaderTraySessionStore {

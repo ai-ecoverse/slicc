@@ -2686,6 +2686,8 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         runtime: 'slicc-hosted-leader',
         kind: 'hosted',
         onLeaderReady: (session) => {
+          // TODO: handle POST failures (currently best-effort; if the cloud orchestrator
+          // never sees this, --cloud start times out with diagnostic from start.ts polling).
           void fetch('/api/cloud-status', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },

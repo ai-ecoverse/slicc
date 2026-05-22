@@ -23,11 +23,13 @@ export function findSliccPageTarget(
   return candidates.find((t) => t.attached) ?? candidates[0];
 }
 
-export interface RestartResult {
-  ok: boolean;
-  code?: 'NO_LEADER_TAB' | 'CDP_NOT_READY' | 'CDP_ERROR' | 'INTERNAL';
-  message?: string;
-}
+export type RestartResult =
+  | { ok: true }
+  | {
+      ok: false;
+      code: 'NO_LEADER_TAB' | 'CDP_NOT_READY' | 'CDP_ERROR' | 'INTERNAL';
+      message: string;
+    };
 
 export async function restartLeader(cdp: CdpLike, localUrlPrefix: string): Promise<RestartResult> {
   let targets: CdpTargetInfo[];
@@ -46,7 +48,7 @@ export async function restartLeader(cdp: CdpLike, localUrlPrefix: string): Promi
     };
   }
   const target = findSliccPageTarget(targets, localUrlPrefix);
-  if (!target) return { ok: false, code: 'NO_LEADER_TAB' };
+  if (!target) return { ok: false, code: 'NO_LEADER_TAB', message: 'no SLICC page target found' };
 
   const tid = target.targetId ?? target.id;
   if (!tid) return { ok: false, code: 'INTERNAL', message: 'target missing id' };
@@ -177,6 +179,6 @@ export function registerLeaderRestartEndpoint(
       return;
     }
     const status = result.code === 'NO_LEADER_TAB' || result.code === 'CDP_NOT_READY' ? 503 : 500;
-    res.status(status).json({ error: result.code, message: result.message ?? null });
+    res.status(status).json({ error: result.code, message: result.message });
   });
 }

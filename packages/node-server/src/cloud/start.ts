@@ -149,8 +149,12 @@ export async function runStart(opts: RunStartOpts): Promise<StartResult> {
     // Best-effort cleanup; ignore errors during teardown.
     try {
       await handle.kill();
-    } catch {
-      /* swallow */
+    } catch (cleanupErr) {
+      console.warn(
+        'failed to clean up partial sandbox after start error',
+        handle.sandboxId,
+        cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
+      );
     }
     throw err;
   }

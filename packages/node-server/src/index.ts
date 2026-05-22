@@ -2084,14 +2084,14 @@ async function runCloudSubcommand(parsed: ParsedCloudArgs): Promise<void> {
       break;
     }
     case 'pause':
-      await runPause({ substrate, registryPath, query: parsed.args.query! });
+      await runPause({ substrate, registryPath, query: parsed.args.query });
       console.log('Paused.');
       break;
     case 'resume': {
       const result = await runResume({
         substrate,
         registryPath,
-        query: parsed.args.query!,
+        query: parsed.args.query,
         localSliccVersion,
       });
       if (result.versionMismatch) {
@@ -2107,7 +2107,7 @@ async function runCloudSubcommand(parsed: ParsedCloudArgs): Promise<void> {
       break;
     }
     case 'kill':
-      await runKill({ substrate, registryPath, query: parsed.args.query! });
+      await runKill({ substrate, registryPath, query: parsed.args.query });
       console.log('Killed.');
       break;
   }

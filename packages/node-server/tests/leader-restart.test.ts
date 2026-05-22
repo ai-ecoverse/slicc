@@ -76,8 +76,7 @@ describe('restartLeader', () => {
       }),
     };
     const result = await restartLeader(fakeCdp, 'http://localhost:5710/');
-    expect(result.ok).toBe(false);
-    expect(result.code).toBe('NO_LEADER_TAB');
+    expect(result).toMatchObject({ ok: false, code: 'NO_LEADER_TAB' });
   });
 });
 
@@ -170,8 +169,7 @@ describe('createHttpCdp — real WebSocket roundtrip', () => {
   it('returns CDP_NOT_READY when /json is unreachable', async () => {
     const cdp = createHttpCdp(/* port that nothing is listening on */ 1);
     const result = await restartLeader(cdp, 'http://localhost:5710/');
-    expect(result.ok).toBe(false);
-    expect(result.code).toBe('CDP_NOT_READY');
+    expect(result).toMatchObject({ ok: false, code: 'CDP_NOT_READY' });
   });
 
   it('re-opens the WebSocket on a second restartLeader cycle (cache cleared on Page.reload)', async () => {

@@ -88,7 +88,7 @@ describe('POST /api/cloud-status', () => {
 
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: string };
-    expect(body.error).toBe('joinUrl required');
+    expect(body.error).toBe('invalid cloud-status payload');
   });
 
   it('requireLoopback rejects non-loopback remoteAddress with 403', () => {

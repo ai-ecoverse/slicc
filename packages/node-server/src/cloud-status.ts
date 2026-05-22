@@ -5,6 +5,24 @@ export interface CloudStatusEndpointOptions {
   joinFilePath: string;
 }
 
+function isCloudStatusPayload(x: unknown): x is {
+  joinUrl: string;
+  trayId?: string;
+  controllerUrl?: string;
+  webhookUrl?: string;
+  runtime?: string;
+  sliccVersion?: string;
+} {
+  if (typeof x !== 'object' || x === null) return false;
+  const p = x as Record<string, unknown>;
+  if (typeof p.joinUrl !== 'string' || p.joinUrl.length === 0) return false;
+  // Optional fields: validate type if present, but don't require.
+  for (const key of ['trayId', 'controllerUrl', 'webhookUrl', 'runtime', 'sliccVersion']) {
+    if (key in p && typeof p[key] !== 'string') return false;
+  }
+  return true;
+}
+
 /**
  * Reject non-loopback requests. The sandbox is a private execution boundary,
  * but defense in depth: someone might wire a port-forward and we want this
@@ -26,18 +44,11 @@ export function registerCloudStatusEndpoint(
   options: CloudStatusEndpointOptions
 ): void {
   app.post('/api/cloud-status', requireLoopback, express.json(), async (req, res) => {
-    const body = req.body as Partial<{
-      joinUrl: string;
-      trayId: string;
-      controllerUrl: string;
-      webhookUrl: string;
-      runtime: string;
-      sliccVersion: string;
-    }>;
-    if (typeof body.joinUrl !== 'string' || !body.joinUrl) {
-      res.status(400).json({ error: 'joinUrl required' });
+    if (!isCloudStatusPayload(req.body)) {
+      res.status(400).json({ error: 'invalid cloud-status payload' });
       return;
     }
+    const body = req.body;
     const payload = {
       joinUrl: body.joinUrl,
       trayId: body.trayId ?? null,

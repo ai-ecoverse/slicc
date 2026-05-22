@@ -1,14 +1,14 @@
 import type { SubstrateId } from './substrate.js';
 
-export interface ParsedCloudArgs {
-  subcommand: 'start' | 'list' | 'pause' | 'resume' | 'kill';
-  args: {
-    substrate: SubstrateId;
-    name?: string;
-    envFile?: string;
-    query?: string;
-  };
-}
+export type ParsedCloudArgs =
+  | {
+      subcommand: 'start';
+      args: { substrate: SubstrateId; name?: string; envFile?: string };
+    }
+  | { subcommand: 'list'; args: { substrate: SubstrateId } }
+  | { subcommand: 'pause'; args: { substrate: SubstrateId; query: string } }
+  | { subcommand: 'resume'; args: { substrate: SubstrateId; query: string } }
+  | { subcommand: 'kill'; args: { substrate: SubstrateId; query: string } };
 
 const VALID_SUBCOMMANDS = ['start', 'list', 'pause', 'resume', 'kill'] as const;
 type Sub = (typeof VALID_SUBCOMMANDS)[number];
@@ -28,29 +28,56 @@ export function parseCloudArgs(argv: string[]): ParsedCloudArgs | null {
   }
   const rest = argv.slice(cloudIdx + 2);
 
-  const args: ParsedCloudArgs['args'] = { substrate: 'e2b' };
+  const baseArgs: { substrate: SubstrateId; name?: string; envFile?: string; query?: string } = {
+    substrate: 'e2b',
+  };
   let i = 0;
   while (i < rest.length) {
     const a = rest[i];
     if (a === '--name') {
-      args.name = rest[++i];
+      baseArgs.name = rest[++i];
     } else if (a === '--env-file') {
-      args.envFile = rest[++i];
+      baseArgs.envFile = rest[++i];
     } else if (a === '--substrate') {
       const v = rest[++i];
       if (v !== 'e2b') throw new Error(`unsupported substrate: ${v} (MVP only supports 'e2b')`);
-      args.substrate = v;
+      baseArgs.substrate = v;
     } else if (
       !a.startsWith('--') &&
-      !args.query &&
+      !baseArgs.query &&
       (sub === 'pause' || sub === 'resume' || sub === 'kill')
     ) {
-      args.query = a;
+      baseArgs.query = a;
     } else {
       throw new Error(`unrecognized arg: ${a}`);
     }
     i++;
   }
 
-  return { subcommand: sub as Sub, args };
+  // Build discriminated union based on subcommand
+  switch (sub) {
+    case 'start':
+      return {
+        subcommand: 'start',
+        args: {
+          substrate: baseArgs.substrate,
+          name: baseArgs.name,
+          envFile: baseArgs.envFile,
+        },
+      };
+    case 'list':
+      return { subcommand: 'list', args: { substrate: baseArgs.substrate } };
+    case 'pause':
+    case 'resume':
+    case 'kill':
+      if (!baseArgs.query) {
+        throw new Error(`${sub} requires a query argument (sandbox ID or name)`);
+      }
+      return {
+        subcommand: sub,
+        args: { substrate: baseArgs.substrate, query: baseArgs.query },
+      };
+    default:
+      throw new Error(`unknown subcommand: ${sub}`);
+  }
 }
