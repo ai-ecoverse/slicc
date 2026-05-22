@@ -1242,6 +1242,149 @@ describe('LeaderTrayManager — onLeaderReady callback', () => {
   });
 });
 
+describe('LeaderTrayManager — kind in POST /tray body', () => {
+  it('omits kind from POST /tray body when not provided', async () => {
+    const store = new MemorySessionStore();
+    const socket = new FakeWebSocket();
+    let resolveSocketReady!: () => void;
+    const socketReady = new Promise<void>((resolve) => {
+      resolveSocketReady = resolve;
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            trayId: 'tray-1',
+            createdAt: '2026-03-11T00:00:00.000Z',
+            capabilities: {
+              join: { url: 'https://tray.example.com/join/token' },
+              controller: { url: 'https://tray.example.com/controller/token' },
+              webhook: { url: 'https://tray.example.com/webhook/token' },
+            },
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            trayId: 'tray-1',
+            controllerId: 'controller-1',
+            role: 'leader',
+            leaderKey: 'leader-key-1',
+            websocket: {
+              url: 'wss://tray.example.com/controller/token?controllerId=controller-1&leaderKey=leader-key-1',
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      );
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        resolveSocketReady();
+        return socket;
+      },
+      pingIntervalMs: 60_000,
+      // kind is not set
+    });
+    const startPromise = manager.start();
+
+    await socketReady;
+    socket.dispatch('message', {
+      data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-1' }),
+    });
+    await startPromise;
+
+    // Find the POST /tray call (first call)
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/tray');
+    expect(init.method).toBe('POST');
+    // Body should be omitted or should not contain 'kind'
+    if (init.body) {
+      const parsed = JSON.parse(init.body as string);
+      expect(parsed).not.toHaveProperty('kind');
+    }
+
+    manager.stop();
+  });
+
+  it('includes kind=hosted in POST /tray body when set', async () => {
+    const store = new MemorySessionStore();
+    const socket = new FakeWebSocket();
+    let resolveSocketReady!: () => void;
+    const socketReady = new Promise<void>((resolve) => {
+      resolveSocketReady = resolve;
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            trayId: 'tray-1',
+            createdAt: '2026-03-11T00:00:00.000Z',
+            capabilities: {
+              join: { url: 'https://tray.example.com/join/token' },
+              controller: { url: 'https://tray.example.com/controller/token' },
+              webhook: { url: 'https://tray.example.com/webhook/token' },
+            },
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            trayId: 'tray-1',
+            controllerId: 'controller-1',
+            role: 'leader',
+            leaderKey: 'leader-key-1',
+            websocket: {
+              url: 'wss://tray.example.com/controller/token?controllerId=controller-1&leaderKey=leader-key-1',
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      );
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        resolveSocketReady();
+        return socket;
+      },
+      pingIntervalMs: 60_000,
+      kind: 'hosted',
+    });
+    const startPromise = manager.start();
+
+    await socketReady;
+    socket.dispatch('message', {
+      data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-1' }),
+    });
+    await startPromise;
+
+    // Find the POST /tray call (first call)
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/tray');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBe(JSON.stringify({ kind: 'hosted' }));
+    expect(init.headers).toMatchObject({ 'content-type': 'application/json' });
+
+    manager.stop();
+  });
+});
+
 describe('subscribeToLeaderTrayRuntimeStatus', () => {
   // The extension panel mirrors offscreen status by calling
   // setLeaderTrayRuntimeStatus on every push. We rely on subscribers

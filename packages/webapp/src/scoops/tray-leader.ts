@@ -158,6 +158,8 @@ export interface LeaderTrayManagerOptions {
    * called on an already-active session (no transition from disconnected to connected).
    */
   onLeaderReady?: (session: LeaderTraySession) => void;
+  /** Persisted on the tray; controls reclaim TTL on the worker. */
+  kind?: 'desktop' | 'hosted';
 }
 
 export class IndexedDbLeaderTraySessionStore implements LeaderTraySessionStore {
@@ -483,10 +485,13 @@ export class LeaderTrayManager {
   }
 
   private async createTraySession(): Promise<LeaderTraySession> {
+    const body = this.options.kind ? JSON.stringify({ kind: this.options.kind }) : undefined;
     const created = await this.fetchJson<CreateTrayResponse>(
       buildTrayWorkerUrl(this.options.workerBaseUrl, 'tray'),
       {
         method: 'POST',
+        ...(body ? { headers: { 'content-type': 'application/json' } } : {}),
+        ...(body ? { body } : {}),
       }
     );
 
