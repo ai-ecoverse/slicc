@@ -1,5 +1,0 @@
-template_name = "slicc"
-cpu_count = 2
-memory_mb = 2048
-start_cmd = "slicc-start"
-# team_id is set via the build script's e2b CLI invocation, not committed here.
