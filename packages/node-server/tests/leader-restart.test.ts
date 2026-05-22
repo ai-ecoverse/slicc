@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { findSliccPageTarget, restartLeader } from '../src/leader-restart.js';
+import { findSliccPageTarget, restartLeader, createHttpCdp } from '../src/leader-restart.js';
+import { WebSocketServer } from 'ws';
+import { createServer } from 'node:http';
 
 describe('findSliccPageTarget', () => {
   it('returns the page target whose URL starts with the local URL', () => {
@@ -104,5 +106,71 @@ describe('registerLeaderRestartEndpoint — localhost guard', () => {
     expect(nextCalled).toBe(false);
     expect(statusCode).toBe(403);
     expect(body).toEqual({ error: 'localhost only' });
+  });
+});
+
+describe('createHttpCdp — real WebSocket roundtrip', () => {
+  it('attaches to a target and sends Page.reload', async () => {
+    // Stand up a fake CDP target: HTTP /json returns a target descriptor;
+    // a ws server accepts the connection and echoes Target.attachToTarget +
+    // Page.reload responses by request id.
+    const received: Array<{ id: number; method: string; params?: unknown; sessionId?: string }> =
+      [];
+    const httpServer = createServer((req, res) => {
+      if (req.url === '/json') {
+        res.setHeader('content-type', 'application/json');
+        res.end(
+          JSON.stringify([
+            {
+              id: 'page-1',
+              type: 'page',
+              url: 'http://localhost:5710/?runtime=hosted-leader',
+              webSocketDebuggerUrl: `ws://127.0.0.1:${(httpServer.address() as { port: number }).port}/devtools/page/page-1`,
+            },
+          ])
+        );
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
+    const port = (httpServer.address() as { port: number }).port;
+
+    const wss = new WebSocketServer({ server: httpServer });
+    wss.on('connection', (sock) => {
+      sock.on('message', (data) => {
+        const msg = JSON.parse(data.toString()) as {
+          id: number;
+          method: string;
+          params?: unknown;
+          sessionId?: string;
+        };
+        received.push(msg);
+        if (msg.method === 'Target.attachToTarget') {
+          sock.send(JSON.stringify({ id: msg.id, result: { sessionId: 'sess-1' } }));
+        } else if (msg.method === 'Page.reload') {
+          sock.send(JSON.stringify({ id: msg.id, result: {} }));
+        }
+      });
+    });
+
+    try {
+      const cdp = createHttpCdp(port);
+      const result = await restartLeader(cdp, 'http://localhost:5710/');
+      expect(result.ok).toBe(true);
+      expect(received.map((m) => m.method)).toEqual(['Target.attachToTarget', 'Page.reload']);
+      expect(received[1].sessionId).toBe('sess-1');
+    } finally {
+      wss.close();
+      httpServer.close();
+    }
+  });
+
+  it('returns CDP_NOT_READY when /json is unreachable', async () => {
+    const cdp = createHttpCdp(/* port that nothing is listening on */ 1);
+    const result = await restartLeader(cdp, 'http://localhost:5710/');
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('CDP_NOT_READY');
   });
 });
