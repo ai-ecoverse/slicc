@@ -252,6 +252,34 @@ describeIfConfigured('deployed tray worker', () => {
     const body = (await response.json()) as { error?: string; error_description?: string };
     expect(body.error).toBe('bad_verification_code');
   }, 15_000);
+
+  it('POST /tray with kind=hosted creates a tray against the deployed worker', async () => {
+    if (!workerBaseUrl) return;
+    const baseUrl = new URL(workerBaseUrl);
+    const response = await fetch(new URL('/tray', baseUrl), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'hosted' }),
+    });
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as CreateTrayResponse;
+    expect(body.trayId).toBeTruthy();
+    expect(body.capabilities.join.url).toBeTruthy();
+    expect(body.capabilities.controller.url).toBeTruthy();
+    expect(body.capabilities.webhook.url).toBeTruthy();
+  }, 15_000);
+
+  it('POST /tray with no body still creates a desktop tray (back-compat)', async () => {
+    if (!workerBaseUrl) return;
+    const baseUrl = new URL(workerBaseUrl);
+    const response = await fetch(new URL('/tray', baseUrl), { method: 'POST' });
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as CreateTrayResponse;
+    expect(body.trayId).toBeTruthy();
+    expect(body.capabilities.join.url).toBeTruthy();
+    expect(body.capabilities.controller.url).toBeTruthy();
+    expect(body.capabilities.webhook.url).toBeTruthy();
+  }, 15_000);
 });
 
 function openWebSocket(
