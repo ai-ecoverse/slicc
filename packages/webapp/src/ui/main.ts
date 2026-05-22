@@ -26,6 +26,7 @@ import {
   applyProviderDefaults,
   resolveCurrentModel,
   resolveModelById,
+  saveOAuthAccount,
 } from './provider-settings.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { initTheme } from './theme.js';
@@ -2680,6 +2681,36 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       // boot guarantees onLeaderReady fires with new credentials → POST
       // /api/cloud-status → laptop sees a fresh updatedAt and unblocks resume.
       await new IndexedDbLeaderTraySessionStore().clear();
+
+      // Inject pre-acquired provider credentials from secrets.env if present.
+      // The hosted sandbox can't complete OAuth flows (no human, no popup),
+      // so the laptop pastes a fresh IMS token into ~/.slicc/secrets.env and
+      // node-server exposes it via the loopback-only /api/hosted-bootstrap.
+      // Best-effort: a failure here leaves the provider unauthenticated and
+      // the user can still configure manually via the follower UI.
+      try {
+        const res = await fetch('/api/hosted-bootstrap');
+        if (res.ok) {
+          const bootstrap = (await res.json()) as { adobeImsToken?: string };
+          if (bootstrap.adobeImsToken) {
+            await saveOAuthAccount({
+              providerId: 'adobe',
+              accessToken: bootstrap.adobeImsToken,
+              // IMS tokens are typically 1-24h. We don't ship an exact expiry
+              // because the secrets.env mechanism wants a value+_DOMAINS pair
+              // per entry; defaulting to 1h is good enough for MVP (user
+              // pause/resumes with a fresh token if it ever bites them).
+              tokenExpiresAt: Date.now() + 60 * 60 * 1000,
+              userName: 'cloud-injected',
+            });
+            log.info('hosted-leader: Adobe IMS token injected from secrets.env');
+          }
+        }
+      } catch (err) {
+        log.warn('hosted-leader: bootstrap fetch failed; provider needs manual login', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
 
       // resolveTrayRuntimeConfig already ran earlier in mainStandaloneWorker
       // (~main.ts:1708) — by the time we reach the tray block, it has fetched

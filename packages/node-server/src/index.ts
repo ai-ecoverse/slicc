@@ -35,6 +35,7 @@ import { OauthSecretStore } from './secrets/oauth-secret-store.js';
 import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 import { registerCloudStatusEndpoint } from './cloud-status.js';
+import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
 import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
 
 import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
@@ -1200,6 +1201,7 @@ async function main() {
   // If the route doesn't exist yet, the post 404s and the CLI poll times out.
   if (RUNTIME_FLAGS.hosted) {
     registerCloudStatusEndpoint(app, { joinFilePath: '/tmp/slicc-join.json' });
+    registerHostedBootstrapEndpoint(app, { secretStore });
   }
 
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
