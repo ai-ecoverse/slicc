@@ -42,6 +42,8 @@ export interface SprinkleBridgeAPI {
   close(): void;
   /** Stop the cone agent */
   stopCone(): void;
+  /** Push an image into the chat input as a pending attachment (no agent turn). */
+  attachImage(base64: string, name?: string, mimeType?: string): void;
   /** Sprinkle name */
   readonly name: string;
 }
@@ -54,17 +56,20 @@ export class SprinkleBridge {
   private fs: VirtualFS;
   private closeHandler: (name: string) => void;
   private stopConeHandler: () => void;
+  private attachImageHandler: (base64: string, name?: string, mimeType?: string) => void;
 
   constructor(
     fs: VirtualFS,
     lickHandler: (event: LickEvent) => void,
     closeHandler: (name: string) => void,
-    stopConeHandler: () => void
+    stopConeHandler: () => void,
+    attachImageHandler: (base64: string, name?: string, mimeType?: string) => void
   ) {
     this.fs = fs;
     this.lickHandler = lickHandler;
     this.closeHandler = closeHandler;
     this.stopConeHandler = stopConeHandler;
+    this.attachImageHandler = attachImageHandler;
   }
 
   /** Create a bridge API for a specific sprinkle. */
@@ -164,6 +169,8 @@ export class SprinkleBridge {
       },
       close: () => this.closeHandler(sprinkleName),
       stopCone: () => this.stopConeHandler(),
+      attachImage: (base64: string, name?: string, mimeType?: string) =>
+        this.attachImageHandler(base64, name, mimeType),
     };
     return api;
   }

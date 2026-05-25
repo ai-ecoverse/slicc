@@ -1359,6 +1359,8 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
       // open over chat (covers the welcome flow mid-flight). The
       // rail icon pulses to invite the user to click when ready.
       autoOpenBehavior: 'attention',
+      onAttachImage: (base64, name, mimeType) =>
+        layout.panels.chat.addImageAttachment(base64, name, mimeType),
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
@@ -2436,6 +2438,10 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     () => {
       const cone = client.getScoops().find((s) => s.isCone);
       if (cone) client.stopScoop(cone.jid);
+    },
+    {
+      onAttachImage: (base64, name, mimeType) =>
+        layout.panels.chat.addImageAttachment(base64, name, mimeType),
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;

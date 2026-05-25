@@ -14,7 +14,11 @@ import { createLogger } from '../core/logger.js';
 import type { MessageAttachment, MessageAttachmentKind } from '../core/attachments.js';
 import { formatAttachmentSize, formatAttachmentSummary } from '../core/attachments.js';
 import { getMimeType } from '../core/mime-types.js';
-import { processImageContent, isSupportedImageFormat } from '../core/image-processor.js';
+import {
+  processImageContent,
+  isSupportedImageFormat,
+  getImageByteSize,
+} from '../core/image-processor.js';
 import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
 import {
   hydrateDips,
@@ -765,6 +769,53 @@ export class ChatPanel {
     };
     this.messages.push(msg);
     this.appendMessageEl(msg);
+  }
+
+  /** Add a base64-encoded image directly to the pending composer attachments. */
+  async addImageAttachment(base64: string, name?: string, mimeType?: string): Promise<void> {
+    if (!base64 || typeof base64 !== 'string') return;
+
+    let data = base64;
+    let mime = mimeType || 'image/jpeg';
+    if (base64.startsWith('data:')) {
+      const match = base64.match(/^data:(image\/[^;]+);base64,(.*)$/);
+      if (match) {
+        mime = match[1];
+        data = match[2];
+      } else {
+        const commaIdx = base64.indexOf(',');
+        if (commaIdx !== -1) data = base64.slice(commaIdx + 1);
+      }
+    }
+    if (!data) return;
+
+    // Validate against the app's supported image format allowlist (rejects SVG etc.)
+    if (!isSupportedImageFormat(mime)) mime = 'image/jpeg';
+
+    // Sanitize name: strip control chars, cap at 200 chars
+    let fileName = name || (mime === 'image/png' ? 'screenshot.png' : 'screenshot.jpg');
+    fileName = fileName.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 200);
+    if (!fileName) fileName = 'screenshot.jpg';
+
+    // Reject images over 10MB raw (no point processing truly massive payloads)
+    const rawSize = getImageByteSize(data);
+    if (rawSize > 10 * 1024 * 1024) return;
+
+    // Run through the same resize pipeline as pasted images so oversized
+    // screenshots (e.g. Retina PNGs) are downsized to fit the 5MB API limit.
+    const processed = await processImageContent({ type: 'image', mimeType: mime, data });
+    if (processed.type !== 'image') return;
+
+    this.pendingAttachments.push({
+      id: uid(),
+      name: fileName,
+      mimeType: processed.mimeType,
+      size: getImageByteSize(processed.data),
+      kind: 'image',
+      data: processed.data,
+    });
+    this.renderPendingAttachments();
+    this.updateSendButtonState();
   }
 
   /** Add files to the pending composer attachments. */

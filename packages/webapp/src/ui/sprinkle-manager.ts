@@ -86,6 +86,8 @@ export interface SprinkleManagerOptions {
    * must not skip the local renderer push or break the sprinkle.
    */
   onSendToSprinkle?: (name: string, data: unknown) => void;
+  /** Called when a sprinkle pushes an image into the chat input via slicc.attachImage(). */
+  onAttachImage?: (base64: string, name?: string, mimeType?: string) => void;
 }
 
 /**
@@ -140,7 +142,13 @@ export class SprinkleManager {
     options: SprinkleManagerOptions = {}
   ) {
     this.fs = fs;
-    this.bridge = new SprinkleBridge(fs, lickHandler, (name) => this.close(name), stopConeHandler);
+    this.bridge = new SprinkleBridge(
+      fs,
+      lickHandler,
+      (name) => this.close(name),
+      stopConeHandler,
+      options.onAttachImage ?? (() => {})
+    );
     this.callbacks = callbacks;
     this.autoOpenBehavior = options.autoOpenBehavior ?? 'activate';
     this.onSendToSprinkle = options.onSendToSprinkle;

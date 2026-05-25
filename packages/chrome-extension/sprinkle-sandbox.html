@@ -229,6 +229,9 @@ window.slicc = {
   stopCone: function() {
     parent.postMessage({ type: 'sprinkle-stop-cone' }, '*');
   },
+  attachImage: function(base64, name, mimeType) {
+    parent.postMessage({ type: 'sprinkle-attach-image', base64: base64, name: name, mimeType: mimeType }, '*');
+  },
 };
 window.bridge = window.slicc;
 
@@ -330,7 +333,8 @@ function buildNestedBridgeScript(savedState, savedStorage, name, isLight) {
       'getState: function() { return window.__slicc_state; },' +
       'open: function(path, opts) { parent.postMessage({ type: "sprinkle-open", path: path, projectRoot: opts && opts.projectRoot || null }, "*"); },' +
       'close: function() { parent.postMessage({ type: "sprinkle-close" }, "*"); },' +
-      'stopCone: function() { parent.postMessage({ type: "sprinkle-stop-cone" }, "*"); }' +
+      'stopCone: function() { parent.postMessage({ type: "sprinkle-stop-cone" }, "*"); },' +
+      'attachImage: function(base64, name, mimeType) { parent.postMessage({ type: "sprinkle-attach-image", base64: base64, name: name, mimeType: mimeType }, "*"); }' +
     '};' +
     'window.bridge = window.slicc;' +
     'addEventListener("message", function(e) {' +
@@ -562,7 +566,7 @@ addEventListener('message', function(e) {
   if (window.__slicc_childIframe && e.source === window.__slicc_childIframe.contentWindow) {
     var bridgeTypes = [
       'sprinkle-lick', 'sprinkle-set-state', 'sprinkle-close', 'sprinkle-stop-cone',
-      'sprinkle-open', 'sprinkle-readfile',
+      'sprinkle-attach-image', 'sprinkle-open', 'sprinkle-readfile',
       'sprinkle-writefile', 'sprinkle-readdir', 'sprinkle-exists',
       'sprinkle-stat', 'sprinkle-mkdir', 'sprinkle-rm',
       'sprinkle-storage-set', 'sprinkle-storage-remove', 'sprinkle-storage-clear',
