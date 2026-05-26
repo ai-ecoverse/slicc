@@ -138,3 +138,13 @@ jobs:
             echo "Deployed smoke test failed on attempt ${attempt}; waiting for workers.dev propagation before retrying..."
             sleep 15
           done
+
+      - name: Build and push e2b template
+        env:
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+        run: bash packages/dev-tools/e2b-template/scripts/build-template.sh
+
+      - name: Verify template boots
+        env:
+          SLICC_TEST_E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+        run: bash packages/dev-tools/e2b-template/scripts/verify-template.sh

@@ -109,3 +109,68 @@ This lives at the repo root because it coordinates the worker with browser runti
   2. `tests/deployed.test.ts` — smoke test that runs against the deployed staging worker (also checks routes list)
   3. The routes array in `src/index.ts` (the default 200 response)
      Missing any of these causes CI failures — the staging smoke test deploys the worker then verifies the routes match.
+
+## Cloud cones (sliccy.ai/cloud)
+
+Web feature shipped via Plan D. Spec at `docs/superpowers/specs/2026-05-26-cloud-cones-on-sliccy-ai-design.md`.
+
+### Routes
+
+- `GET  /cloud` — dashboard SPA (CSP-enforced)
+- `GET  /auth/cloud-callback` — IMS popup callback (HTML)
+- `GET  /auth/cloud-callback.js` — IMS popup callback (JS, served inline by worker)
+- `POST /api/cloud/start` — start a new cone (auth + cap-checked)
+- `GET  /api/cloud/list` — per-user cone list (reconciled with e2b per call)
+- `POST /api/cloud/pause` — pause a cone
+- `POST /api/cloud/resume` — resume a paused cone (refreshes IMS token in sandbox)
+- `POST /api/cloud/kill` — kill a cone (idempotent)
+- `POST /api/cloud/sign-out` — invalidate the auth cache entry for the bearer
+- `GET  /api/cloud/admin/stats` — admin-gated by `ADMIN_USER_IDS`
+
+All `/api/cloud/*` require `Authorization: Bearer <ims-access-token>` and route to `env.CLOUD_SESSIONS.idFromName(userId)` for per-user state. Lifecycle business logic lives inside the DurableObject (atomic via `state.blockConcurrencyWhile`), not in worker handlers.
+
+### Wrangler config
+
+Vars (in `wrangler.jsonc`):
+
+- `ALLOWED_EMAIL_DOMAIN` — CSV, default `adobe.com`. Set to `*` to allow any domain.
+- `BLOCKED_EMAILS` — CSV denylist (emails explicitly blocked even if domain allowed).
+- `REQUIRE_OWNER_ORG` — `true` for v2 expansion to any ownerOrg-holder.
+- `IMS_CLIENT_ID`, `IMS_ENVIRONMENT` — IMS app identity (prod or stg1).
+- `CONE_CAP_RUNNING`, `CONE_CAP_PAUSED` — per-user caps (default 1 / 5).
+- `ADMIN_USER_IDS` — CSV of IMS userIds with admin access.
+
+Secrets (`wrangler secret put`):
+
+- `E2B_API_KEY` — Adobe team e2b key. Worker-only; never reachable from browser.
+
+GitHub Actions secrets (for CI worker deploy + template build):
+
+- `E2B_API_KEY` — same value; scoped to the Adobe team workspace.
+
+### v1 → v2 expansion
+
+```bash
+npx wrangler secret put REQUIRE_OWNER_ORG  # value: true
+# update ALLOWED_EMAIL_DOMAIN in wrangler.jsonc to "*"
+npx wrangler deploy
+```
+
+### Stable API contract (worker ↔ sandbox)
+
+Worker depends on these surfaces inside paused-cone images. **Breaking changes require a deprecation cycle** because paused cones from older templates cannot be patched in-place:
+
+- `POST /api/leader-restart` (loopback in sandbox) — re-kicks the leader.
+- `GET  /api/hosted-bootstrap` (loopback in sandbox) — page reads ADOBE_IMS_TOKEN.
+- `POST /api/cloud-status` (loopback in sandbox) — page reports join state.
+- `/slicc/secrets.env` — sandbox file the worker writes via SDK.
+- `/tmp/slicc-join.json` — sandbox file the worker reads via SDK.
+- `ADOBE_IMS_TOKEN`, `ADOBE_IMS_TOKEN_DOMAINS`, `SLICC_TRAY_WORKER_BASE_URL` — envs consumed by `start.sh`.
+
+### Routes-mirror rule (applies to /api/cloud/\* too)
+
+Per the existing tray hub rule — every new route must appear in three places:
+
+- `src/index.ts` routes array (the default `GET /` body)
+- `tests/index.test.ts` routes-list assertion
+- `tests/deployed.test.ts` routes-list assertion

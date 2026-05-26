@@ -19,7 +19,6 @@ import { applySliccLinks } from './links.js';
 import { buildApiCatalogResponse } from './api-catalog.js';
 import { buildLlmsTxtResponse } from './llms-txt.js';
 import { buildRelResponse } from './rel-docs.js';
-import { handleSpike } from './spike/cloud-spike.js';
 import {
   handleStart,
   handleList,
@@ -38,7 +37,6 @@ export interface WorkerEnv {
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
   E2B_API_KEY?: string;
-  SPIKE_ENABLED?: string;
   IMS_ENVIRONMENT?: string;
   IMS_CLIENT_ID?: string;
   ALLOWED_EMAIL_DOMAIN?: string;
@@ -161,10 +159,6 @@ export async function handleWorkerRequest(
       ].join('; ')
     );
     return new Response(res.body, { status: res.status, headers });
-  }
-
-  if (url.pathname.startsWith('/spike/')) {
-    return handleSpike(request, env);
   }
 
   if (url.pathname === '/tray' && request.method === 'POST') {

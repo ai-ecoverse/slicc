@@ -293,6 +293,24 @@ describeIfConfigured('deployed tray worker', () => {
   }, 15_000);
 });
 
+describe('cloud routes smoke', () => {
+  it('rejects unauthenticated /api/cloud/list with 401', async () => {
+    if (!workerBaseUrl) return;
+    const res = await fetch(`${workerBaseUrl}/api/cloud/list`);
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/MISSING_TOKEN|INVALID_TOKEN/);
+  });
+
+  it('serves /cloud dashboard with CSP', async () => {
+    if (!workerBaseUrl) return;
+    const res = await fetch(`${workerBaseUrl}/cloud`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/text\/html/);
+    expect(res.headers.get('content-security-policy')).toBeTruthy();
+  });
+});
+
 function openWebSocket(
   url: string
 ): Promise<{ socket: WebSocket; nextMessage: () => Promise<Record<string, unknown>> }> {
