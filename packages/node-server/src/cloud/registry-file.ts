@@ -1,7 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { ConeEntry } from '@slicc/cloud-core';
-import type { SubstrateId } from './substrate.js';
+import type { ConeEntry, Registry } from '@slicc/cloud-core';
 
 interface RegistryFile {
   sessions: ConeEntry[];
@@ -21,7 +20,7 @@ function isConeEntry(x: unknown): x is ConeEntry {
   );
 }
 
-export class CloudSessionRegistry {
+export class FileRegistry implements Registry {
   constructor(private readonly filePath: string) {}
 
   static defaultPath(): string {
@@ -36,6 +35,7 @@ export class CloudSessionRegistry {
 
   async append(entry: ConeEntry): Promise<void> {
     const data = await this.read();
+    // UPSERT semantics: filter out existing sandboxId, then push the new entry
     data.sessions = data.sessions.filter((s) => s.sandboxId !== entry.sandboxId);
     data.sessions.push(entry);
     await this.write(data);
@@ -44,7 +44,9 @@ export class CloudSessionRegistry {
   async update(sandboxId: string, patch: Partial<ConeEntry>): Promise<void> {
     const data = await this.read();
     const idx = data.sessions.findIndex((s) => s.sandboxId === sandboxId);
-    if (idx === -1) return;
+    if (idx === -1) {
+      throw new Error(`entry not found: ${sandboxId}`);
+    }
     data.sessions[idx] = { ...data.sessions[idx], ...patch, sandboxId };
     await this.write(data);
   }

@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runPause } from '../../src/cloud/pause.js';
-import { CloudSessionRegistry } from '../../src/cloud/registry.js';
+import { FileRegistry } from '../../src/cloud/registry-file.js';
 import { FakeSubstrate } from './fake-substrate.js';
 
 let dir: string;
@@ -24,7 +24,7 @@ describe('slicc --cloud pause', () => {
       autoPauseOnCap: true,
       name: 'task-1',
     });
-    const reg = new CloudSessionRegistry(registryPath);
+    const reg = new FileRegistry(registryPath);
     await reg.append({
       substrate: 'e2b',
       sandboxId: h.sandboxId,
@@ -67,7 +67,7 @@ describe('slicc --cloud pause', () => {
       autoPauseOnCap: true,
       name: 'task-1',
     });
-    const reg = new CloudSessionRegistry(registryPath);
+    const reg = new FileRegistry(registryPath);
     const before = {
       substrate: 'e2b' as const,
       sandboxId: h.sandboxId,

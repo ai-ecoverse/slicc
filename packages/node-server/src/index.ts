@@ -42,7 +42,7 @@ import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
 import { parseCloudArgs, type ParsedCloudArgs } from './cloud/dispatch.js';
 import { createSubstrate } from './cloud/substrate.js';
-import { CloudSessionRegistry } from './cloud/registry.js';
+import { FileRegistry } from './cloud/registry-file.js';
 import { runStart } from './cloud/start.js';
 import { runList } from './cloud/list.js';
 import { runPause } from './cloud/pause.js';
@@ -2060,7 +2060,7 @@ async function runCloudSubcommand(parsed: ParsedCloudArgs): Promise<void> {
     process.exit(2);
   }
   const substrate = createSubstrate(parsed.args.substrate, { apiKey });
-  const registryPath = CloudSessionRegistry.defaultPath();
+  const registryPath = FileRegistry.defaultPath();
   const localSliccVersion = readPackageVersion();
 
   switch (parsed.subcommand) {

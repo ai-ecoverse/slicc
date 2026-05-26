@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { CloudSessionRegistry } from '../../src/cloud/registry.js';
+import { FileRegistry } from '../../src/cloud/registry-file.js';
 
 let dir: string;
 let file: string;
@@ -12,14 +12,14 @@ beforeEach(async () => {
   file = path.join(dir, 'cloud-sessions.json');
 });
 
-describe('CloudSessionRegistry', () => {
+describe('FileRegistry', () => {
   it('returns an empty list when the file is missing', async () => {
-    const reg = new CloudSessionRegistry(file);
+    const reg = new FileRegistry(file);
     expect(await reg.list()).toEqual([]);
   });
 
   it('appends, lists, and removes entries with stable ordering', async () => {
-    const reg = new CloudSessionRegistry(file);
+    const reg = new FileRegistry(file);
     await reg.append({
       substrate: 'e2b',
       sandboxId: 'a',
@@ -46,7 +46,7 @@ describe('CloudSessionRegistry', () => {
   });
 
   it('update merges fields by sandboxId', async () => {
-    const reg = new CloudSessionRegistry(file);
+    const reg = new FileRegistry(file);
     await reg.append({
       substrate: 'e2b',
       sandboxId: 'a',
@@ -63,7 +63,7 @@ describe('CloudSessionRegistry', () => {
   });
 
   it('findByNameOrId resolves both name and sandboxId', async () => {
-    const reg = new CloudSessionRegistry(file);
+    const reg = new FileRegistry(file);
     await reg.append({
       substrate: 'e2b',
       sandboxId: 'sb-abc',

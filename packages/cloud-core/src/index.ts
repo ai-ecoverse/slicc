@@ -8,3 +8,4 @@ export * from './substrate-factory.js';
 export * from './polling.js';
 export { createE2bSubstrate } from './substrates/e2b.js';
 export { filterSecretsEnv } from './secrets-filter.js';
+export type { Registry } from './registry.js';

@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runKill } from '../../src/cloud/kill.js';
-import { CloudSessionRegistry } from '../../src/cloud/registry.js';
+import { FileRegistry } from '../../src/cloud/registry-file.js';
 import { FakeSubstrate } from './fake-substrate.js';
 
 let dir: string;
@@ -24,7 +24,7 @@ describe('slicc --cloud kill', () => {
       autoPauseOnCap: true,
       name: 'task-1',
     });
-    const reg = new CloudSessionRegistry(registryPath);
+    const reg = new FileRegistry(registryPath);
     await reg.append({
       substrate: 'e2b',
       sandboxId: h.sandboxId,
@@ -43,7 +43,7 @@ describe('slicc --cloud kill', () => {
 
   it('removes the registry entry even when the sandbox is already dead', async () => {
     const sub = new FakeSubstrate();
-    const reg = new CloudSessionRegistry(registryPath);
+    const reg = new FileRegistry(registryPath);
     await reg.append({
       substrate: 'e2b',
       sandboxId: 'gone',

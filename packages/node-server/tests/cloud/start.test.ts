@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runStart } from '../../src/cloud/start.js';
-import { CloudSessionRegistry } from '../../src/cloud/registry.js';
+import { FileRegistry } from '../../src/cloud/registry-file.js';
 import { FakeSubstrate } from './fake-substrate.js';
 
 let dir: string;
@@ -69,7 +69,7 @@ describe('slicc --cloud start', () => {
     expect(uploaded).not.toContain('E2B_API_KEY=');
     expect(uploaded).not.toContain('E2B_API_KEY_DOMAINS=');
 
-    const reg = new CloudSessionRegistry(registryPath);
+    const reg = new FileRegistry(registryPath);
     const entries = await reg.list();
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({

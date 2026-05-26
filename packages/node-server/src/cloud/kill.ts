@@ -1,5 +1,5 @@
 import { CloudError } from '@slicc/cloud-core';
-import { CloudSessionRegistry } from './registry.js';
+import { FileRegistry } from './registry-file.js';
 import type { SandboxSubstrate } from './substrate.js';
 
 export interface RunKillOpts {
@@ -9,7 +9,7 @@ export interface RunKillOpts {
 }
 
 export async function runKill(opts: RunKillOpts): Promise<void> {
-  const reg = new CloudSessionRegistry(opts.registryPath);
+  const reg = new FileRegistry(opts.registryPath);
   const entry = await reg.findByNameOrId(opts.query);
   if (!entry) throw new CloudError('NOT_FOUND', `cloud session not found: ${opts.query}`);
 

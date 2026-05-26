@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runList } from '../../src/cloud/list.js';
-import { CloudSessionRegistry } from '../../src/cloud/registry.js';
+import { FileRegistry } from '../../src/cloud/registry-file.js';
 import { FakeSubstrate } from './fake-substrate.js';
 
 let dir: string;
@@ -41,7 +41,7 @@ describe('slicc --cloud list', () => {
     });
     await handleB.pause();
 
-    const reg = new CloudSessionRegistry(registryPath);
+    const reg = new FileRegistry(registryPath);
     for (const h of [handleA, handleB]) {
       await reg.append({
         substrate: 'e2b',
@@ -63,7 +63,7 @@ describe('slicc --cloud list', () => {
 
   it('marks an entry as dead when the substrate no longer knows about it', async () => {
     const sub = new FakeSubstrate();
-    const reg = new CloudSessionRegistry(registryPath);
+    const reg = new FileRegistry(registryPath);
     await reg.append({
       substrate: 'e2b',
       sandboxId: 'stale-id',

@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { runResume } from '../../src/cloud/resume.js';
-import { CloudSessionRegistry } from '../../src/cloud/registry.js';
+import { FileRegistry } from '../../src/cloud/registry-file.js';
 import { FakeSubstrate } from './fake-substrate.js';
 
 let dir: string;
@@ -34,7 +34,7 @@ describe('slicc --cloud resume', () => {
     await h.pause();
     sub.seedFile(h.sandboxId, '/tmp/slicc-join.json', oldJoin);
 
-    const reg = new CloudSessionRegistry(registryPath);
+    const reg = new FileRegistry(registryPath);
     await reg.append({
       substrate: 'e2b',
       sandboxId: h.sandboxId,
@@ -92,7 +92,7 @@ describe('slicc --cloud resume', () => {
     });
     sub.seedFile(h.sandboxId, '/tmp/slicc-join.json', oldJoin);
 
-    const reg = new CloudSessionRegistry(registryPath);
+    const reg = new FileRegistry(registryPath);
     await reg.append({
       substrate: 'e2b',
       sandboxId: h.sandboxId,
@@ -142,7 +142,7 @@ describe('slicc --cloud resume', () => {
     });
     sub.seedFile(h.sandboxId, '/tmp/slicc-join.json', oldJoin);
 
-    const reg = new CloudSessionRegistry(registryPath);
+    const reg = new FileRegistry(registryPath);
     await reg.append({
       substrate: 'e2b',
       sandboxId: h.sandboxId,
@@ -191,7 +191,7 @@ describe('slicc --cloud resume', () => {
     });
     sub.seedFile(h.sandboxId, '/tmp/slicc-join.json', oldJoin);
 
-    const reg = new CloudSessionRegistry(registryPath);
+    const reg = new FileRegistry(registryPath);
     await reg.append({
       substrate: 'e2b',
       sandboxId: h.sandboxId,

@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import type { ConeEntry, StartResult, CloudStatus } from '@slicc/cloud-core';
 import { CloudError, filterSecretsEnv, pollCloudStatus } from '@slicc/cloud-core';
-import { CloudSessionRegistry } from './registry.js';
+import { FileRegistry } from './registry-file.js';
 import type { SandboxHandle, SandboxSubstrate } from './substrate.js';
 
 export interface RunStartOpts {
@@ -75,7 +75,7 @@ export async function runStart(opts: RunStartOpts): Promise<StartResult> {
       );
     }
 
-    const reg = new CloudSessionRegistry(opts.registryPath);
+    const reg = new FileRegistry(opts.registryPath);
     const nowIso = new Date().toISOString();
     const entry: ConeEntry = {
       substrate: opts.substrate.id,

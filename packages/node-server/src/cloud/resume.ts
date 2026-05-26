@@ -1,6 +1,6 @@
 import type { ResumeResult } from '@slicc/cloud-core';
 import { CloudError, pollForRefreshedStatus } from '@slicc/cloud-core';
-import { CloudSessionRegistry } from './registry.js';
+import { FileRegistry } from './registry-file.js';
 import type { SandboxSubstrate } from './substrate.js';
 
 export interface RunResumeOpts {
@@ -20,7 +20,7 @@ const KICK_CMD =
   'curl -sS -X POST http://localhost:5710/api/leader-restart -o /dev/null -w "%{http_code}"';
 
 export async function runResume(opts: RunResumeOpts): Promise<ResumeResult> {
-  const reg = new CloudSessionRegistry(opts.registryPath);
+  const reg = new FileRegistry(opts.registryPath);
   const entry = await reg.findByNameOrId(opts.query);
   if (!entry) throw new CloudError('NOT_FOUND', `cloud session not found: ${opts.query}`);
 

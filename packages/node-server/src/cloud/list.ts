@@ -1,5 +1,5 @@
 import type { ConeEntry } from '@slicc/cloud-core';
-import { CloudSessionRegistry } from './registry.js';
+import { FileRegistry } from './registry-file.js';
 import type { SandboxSubstrate } from './substrate.js';
 
 export interface RunListOpts {
@@ -8,7 +8,7 @@ export interface RunListOpts {
 }
 
 export async function runList(opts: RunListOpts): Promise<ConeEntry[]> {
-  const reg = new CloudSessionRegistry(opts.registryPath);
+  const reg = new FileRegistry(opts.registryPath);
   const entries = await reg.list();
   if (entries.length === 0) return [];
 
