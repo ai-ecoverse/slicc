@@ -17,3 +17,5 @@ export { pauseCone } from './operations/pause.js';
 export type { PauseConeDeps } from './operations/pause.js';
 export { resumeCone } from './operations/resume.js';
 export type { ResumeConeOpts, ResumeConeDeps } from './operations/resume.js';
+export { killCone } from './operations/kill.js';
+export type { KillConeDeps, KillConeResult } from './operations/kill.js';
