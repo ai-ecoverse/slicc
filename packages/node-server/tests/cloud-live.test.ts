@@ -39,6 +39,7 @@ describeFn('cloud live e2e (requires SLICC_TEST_E2B_API_KEY)', () => {
 
       const resumeResult = await runResume({
         substrate,
+        envFilePath: envFile,
         registryPath,
         query: startResult.sandboxId,
         localSliccVersion: 'live-test',
