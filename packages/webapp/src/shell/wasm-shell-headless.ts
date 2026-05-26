@@ -470,6 +470,14 @@ export class WasmShellHeadless implements HeadlessShellLike {
 
         const command: Command = {
           name,
+          // just-bash v3 monkey-patches async primitives in the defense-
+          // in-depth sandbox for untrusted commands. The `.jsh` executor
+          // reads the script from the VFS and runs it in a worker realm,
+          // both of which require unpatched async I/O. Mark the command
+          // trusted so just-bash runs it inside
+          // `DefenseInDepthBox.runTrustedAsync`, matching how `git`,
+          // `mount`, and other host-extension commands are registered.
+          trusted: true,
           async execute(args: string[], ctx) {
             const currentMap = await catalog.getJshCommands();
             const currentPath = currentMap.get(cmdName);
