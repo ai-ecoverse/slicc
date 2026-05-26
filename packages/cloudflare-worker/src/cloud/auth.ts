@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { getProxyConfig } from './proxy-config.js';
 
 const JWKS_URLS: Record<string, string> = {
   prod: 'https://ims-na1.adobelogin.com/ims/keys',
@@ -83,15 +84,15 @@ interface JWTPayload {
 }
 
 export interface ValidateBearerEnv {
-  IMS_ENVIRONMENT: string;
-  IMS_CLIENT_ID: string;
+  ADOBE_PROXY_ENDPOINT?: string;
   ALLOWED_EMAIL_DOMAIN: string;
   BLOCKED_EMAILS: string;
   REQUIRE_OWNER_ORG: string;
 }
 
 export async function validateBearer(token: string, env: ValidateBearerEnv): Promise<AuthResult> {
-  const environment = env.IMS_ENVIRONMENT || 'prod';
+  const proxyConfig = await getProxyConfig(env);
+  const environment = proxyConfig.imsEnvironment || 'prod';
   const expectedIssuer = getImsHost(environment);
   const jwks = getJWKS(environment);
 
@@ -109,7 +110,7 @@ export async function validateBearer(token: string, env: ValidateBearerEnv): Pro
   if (payload.iss && payload.iss !== expectedIssuer) {
     throw new AuthError('INVALID_TOKEN', `issuer mismatch: ${payload.iss}`);
   }
-  if (payload.client_id !== env.IMS_CLIENT_ID) {
+  if (payload.client_id !== proxyConfig.clientId) {
     throw new AuthError('INVALID_TOKEN', `client_id mismatch: ${payload.client_id}`);
   }
   if (payload.type !== 'access_token') {

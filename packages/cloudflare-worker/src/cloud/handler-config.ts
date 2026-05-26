@@ -2,9 +2,10 @@
 // URL so the dashboard can construct its sign-in popup against environment-
 // specific values without rebuilding the bundle per environment.
 
+import { getProxyConfig } from './proxy-config.js';
+
 export interface ConfigEnv {
-  IMS_CLIENT_ID?: string;
-  IMS_ENVIRONMENT?: string;
+  ADOBE_PROXY_ENDPOINT?: string;
 }
 
 const IMS_AUTHORIZE_URLS: Record<string, string> = {
@@ -12,19 +13,27 @@ const IMS_AUTHORIZE_URLS: Record<string, string> = {
   stg1: 'https://ims-na1-stg1.adobelogin.com/ims/authorize/v2',
 };
 
-const SCOPE = 'openid,profile,email,session,ab.manage';
 const RELAY_URL = 'https://www.sliccy.ai/auth/callback';
 const RECEIVE_PATH = '/auth/cloud-callback';
 
-export function handleCloudConfig(_request: Request, env: ConfigEnv): Response {
-  const environment = env.IMS_ENVIRONMENT || 'prod';
-  const imsAuthorizeUrl = IMS_AUTHORIZE_URLS[environment] || IMS_AUTHORIZE_URLS.prod!;
-  return Response.json({
-    imsClientId: env.IMS_CLIENT_ID || 'darkalley',
-    imsEnvironment: environment,
-    imsAuthorizeUrl,
-    imsScope: SCOPE,
-    imsRelayUrl: RELAY_URL,
-    imsReceivePath: RECEIVE_PATH,
-  });
+export async function handleCloudConfig(_req: Request, env: ConfigEnv): Promise<Response> {
+  try {
+    const proxy = await getProxyConfig(env);
+    return Response.json({
+      imsClientId: proxy.clientId,
+      imsEnvironment: proxy.imsEnvironment,
+      imsAuthorizeUrl: IMS_AUTHORIZE_URLS[proxy.imsEnvironment] || IMS_AUTHORIZE_URLS.prod!,
+      imsScope: proxy.scopes,
+      imsRelayUrl: RELAY_URL,
+      imsReceivePath: RECEIVE_PATH,
+    });
+  } catch (err) {
+    return Response.json(
+      {
+        error: 'PROXY_CONFIG_UNAVAILABLE',
+        message: err instanceof Error ? err.message : String(err),
+      },
+      { status: 502 }
+    );
+  }
 }

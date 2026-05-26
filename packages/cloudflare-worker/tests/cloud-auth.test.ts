@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, vi, afterEach } from 'vitest';
 import { SignJWT, exportJWK, generateKeyPair, type CryptoKey } from 'jose';
 import { validateBearer, AuthError, extractBearer } from '../src/cloud/auth.js';
+import { clearProxyConfigCache } from '../src/cloud/proxy-config.js';
 
 const ENV = {
-  IMS_ENVIRONMENT: 'prod',
-  IMS_CLIENT_ID: 'test-client',
+  ADOBE_PROXY_ENDPOINT: 'https://proxy.test',
   ALLOWED_EMAIL_DOMAIN: 'adobe.com',
   BLOCKED_EMAILS: '',
   REQUIRE_OWNER_ORG: 'false',
@@ -35,10 +35,20 @@ beforeAll(async () => {
   jwk.use = 'sig';
 
   // Stub global fetch so jose's createRemoteJWKSet returns our key + IMS profile
-  // returns nothing surprising.
+  // returns nothing surprising. Must also mock proxy /v1/config.
   fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: RequestInfo | URL) => {
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes('/v1/config')) {
+      return new Response(
+        JSON.stringify({
+          clientId: 'test-client',
+          scopes: 'openid',
+          imsEnvironment: 'prod',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }
     if (url.includes('/ims/keys')) {
       return new Response(JSON.stringify({ keys: [jwk] }), {
         status: 200,
@@ -56,8 +66,9 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
-  // Clear call history between tests
+  // Clear call history between tests and flush proxy config cache
   fetchSpy.mockClear();
+  clearProxyConfigCache();
 });
 
 describe('validateBearer', () => {

@@ -133,10 +133,10 @@ All `/api/cloud/*` require `Authorization: Bearer <ims-access-token>` and route 
 
 Vars (in `wrangler.jsonc`):
 
+- `ADOBE_PROXY_ENDPOINT` — Adobe LLM proxy URL. Default `https://adobe-llm-proxy.paolo-moz.workers.dev`. Worker fetches `/v1/config` to learn IMS client_id + scopes + environment, keeping dashboard popup config in sync with what the cone needs to call the proxy.
 - `ALLOWED_EMAIL_DOMAIN` — CSV, default `adobe.com`. Set to `*` to allow any domain.
 - `BLOCKED_EMAILS` — CSV denylist (emails explicitly blocked even if domain allowed).
 - `REQUIRE_OWNER_ORG` — `true` for v2 expansion to any ownerOrg-holder.
-- `IMS_CLIENT_ID`, `IMS_ENVIRONMENT` — IMS app identity (prod or stg1).
 - `CONE_CAP_RUNNING`, `CONE_CAP_PAUSED` — per-user caps (default 1 / 5).
 - `ADMIN_USER_IDS` — CSV of IMS userIds with admin access.
 
