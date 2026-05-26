@@ -2735,6 +2735,21 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
           if (!res.ok) return;
           const bootstrap = (await res.json()) as { adobeImsToken?: string };
           if (!bootstrap.adobeImsToken) return;
+
+          // Seed the model/provider selection before injecting the account so the
+          // first user message resolves to `adobe`. Without this, getSelectedProvider()
+          // hits the `accounts.length > 0` branch — which depends on saveOAuthAccount
+          // having already pushed the account into the kernel-worker shim. The shim
+          // write is async (panel-rpc), so a sub-second user message after this block
+          // can race the account propagation. An explicit "selected-model" write is
+          // synchronous in the kernel-worker shim and removes the race.
+          //
+          // Skip the write if already set so a paused-then-resumed cone preserves
+          // whatever model the user picked in the prior session.
+          if (!localStorage.getItem('selected-model')) {
+            localStorage.setItem('selected-model', 'adobe:claude-opus-4-6');
+          }
+
           await saveOAuthAccount({
             providerId: 'adobe',
             accessToken: bootstrap.adobeImsToken,
