@@ -21,14 +21,17 @@ import type {
 
 // just-bash v3 ships `DefenseInDepthBox` from `security/index.js` (re-exported
 // at the package root for the Node bundle, but NOT from the browser bundle).
-// Resolve via a namespace lookup so the missing browser-bundle export degrades
-// gracefully to `undefined` instead of failing at bundle time. The browser
-// bundle also skips the sandbox enforcement when `defenseInDepth` isn't
-// explicitly enabled on `new Bash({...})`, so a no-op fallback is safe there.
+// Resolve via `Reflect.get` so Rolldown's namespace-import analysis cannot
+// statically prove the property is undefined (which would emit
+// `[IMPORT_IS_UNDEFINED]` and break the IIFE bundle warning budget) — the
+// access still resolves correctly at runtime against the Node bundle and
+// falls through to `undefined` in the browser bundle. The browser bundle
+// also skips sandbox enforcement when `defenseInDepth` isn't explicitly
+// enabled on `new Bash({...})`, so a no-op fallback is safe there.
 type RunTrustedAsync = <T>(fn: () => Promise<T> | T) => Promise<T>;
-const DefenseInDepthBox = (
-  justBash as unknown as { DefenseInDepthBox?: { runTrustedAsync?: RunTrustedAsync } }
-).DefenseInDepthBox;
+const DefenseInDepthBox = Reflect.get(justBash, 'DefenseInDepthBox') as
+  | { runTrustedAsync?: RunTrustedAsync }
+  | undefined;
 
 // These types are defined in just-bash's fs/interface.d.ts but not re-exported
 // from the package root. Define locally to match IFileSystem's method signatures.
