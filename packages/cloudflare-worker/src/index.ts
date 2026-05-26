@@ -8,6 +8,7 @@ import {
 } from './shared.js';
 import { buildHandoffResponse } from './handoff-page.js';
 import { SessionTrayDurableObject } from './session-tray.js';
+import { CloudSessionsDurableObject } from './cloud/cloud-sessions-do.js';
 import {
   handleOAuthToken,
   handleOAuthRevoke,
@@ -405,4 +406,4 @@ const worker = {
 };
 
 export default worker;
-export { SessionTrayDurableObject };
+export { SessionTrayDurableObject, CloudSessionsDurableObject };
