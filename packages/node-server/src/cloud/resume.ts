@@ -1,7 +1,7 @@
-import type { ResumeResult, CloudStatus } from '@slicc/cloud-core';
+import type { ResumeResult } from '@slicc/cloud-core';
 import { CloudError, pollForRefreshedStatus } from '@slicc/cloud-core';
 import { CloudSessionRegistry } from './registry.js';
-import type { SandboxHandle, SandboxSubstrate } from './substrate.js';
+import type { SandboxSubstrate } from './substrate.js';
 
 export interface RunResumeOpts {
   substrate: SandboxSubstrate;
