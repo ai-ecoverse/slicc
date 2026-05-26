@@ -51,6 +51,8 @@ describeIfConfigured('deployed tray worker', () => {
         'GET /api/cloud/admin/stats',
         'GET /auth/cloud-callback',
         'GET /auth/cloud-callback.js',
+        'GET /cloud',
+        'GET /cloud/*',
       ],
     });
 

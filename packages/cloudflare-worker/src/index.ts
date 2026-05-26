@@ -137,6 +137,32 @@ export async function handleWorkerRequest(
   if (url.pathname === '/auth/cloud-callback') return handleCloudCallback();
   if (url.pathname === '/auth/cloud-callback.js') return handleCloudCallbackScript();
 
+  // Cloud dashboard SPA (Plan D Phase D-6).
+  if (
+    url.pathname === '/cloud' ||
+    (url.pathname.startsWith('/cloud/') && (request.method === 'GET' || request.method === 'HEAD'))
+  ) {
+    const path =
+      url.pathname === '/cloud'
+        ? '/packages/webapp/cloud/index.html'
+        : `/packages/webapp${url.pathname}`;
+    const res = await env.ASSETS.fetch(new Request(new URL(path, request.url), request));
+    if (!res.body) return res;
+    const headers = new Headers(res.headers);
+    headers.set(
+      'content-security-policy',
+      [
+        "default-src 'self'",
+        "script-src 'self'",
+        "connect-src 'self' https://ims-na1.adobelogin.com",
+        "img-src 'self' data:",
+        "style-src 'self' 'unsafe-inline'",
+        "frame-ancestors 'none'",
+      ].join('; ')
+    );
+    return new Response(res.body, { status: res.status, headers });
+  }
+
   if (url.pathname.startsWith('/spike/')) {
     return handleSpike(request, env);
   }
@@ -321,6 +347,8 @@ export async function handleWorkerRequest(
         'GET /api/cloud/admin/stats',
         'GET /auth/cloud-callback',
         'GET /auth/cloud-callback.js',
+        'GET /cloud',
+        'GET /cloud/*',
       ],
     },
     200

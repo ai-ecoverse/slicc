@@ -1,0 +1,76 @@
+body {
+  font:
+    14px/1.4 system-ui,
+    sans-serif;
+  margin: 24px auto;
+  max-width: 720px;
+  color: #1a1a1a;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #ccc;
+  padding-bottom: 12px;
+}
+.hidden {
+  display: none !important;
+}
+.create-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 16px 0;
+}
+#cone-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+}
+.cone {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+.state-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 8px;
+}
+.cone.running .state-dot {
+  background: #2ec27e;
+}
+.cone.paused .state-dot {
+  background: #b8b8b8;
+}
+.cone.dead .state-dot {
+  background: #e02020;
+}
+.cone-actions {
+  display: flex;
+  gap: 6px;
+}
+.status {
+  color: #666;
+}
+.toast {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  padding: 12px 16px;
+  background: #1a1a1a;
+  color: #fff;
+  border-radius: 6px;
+  max-width: 320px;
+}
+.cap-info {
+  font-size: 12px;
+  color: #666;
+  text-align: right;
+}
