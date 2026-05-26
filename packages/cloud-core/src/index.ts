@@ -11,3 +11,5 @@ export { filterSecretsEnv } from './secrets-filter.js';
 export type { Registry } from './registry.js';
 export { startCone } from './operations/start.js';
 export type { StartConeOpts, StartConeDeps } from './operations/start.js';
+export { listCones } from './operations/list.js';
+export type { ListConesDeps, ListConesOpts } from './operations/list.js';
