@@ -22,11 +22,20 @@ import { handleSpike } from './spike/cloud-spike.js';
 
 export interface WorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
+  CLOUD_SESSIONS: DurableObjectNamespaceLike;
   ASSETS: { fetch(request: Request): Promise<Response> };
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
   E2B_API_KEY?: string;
   SPIKE_ENABLED?: string;
+  IMS_ENVIRONMENT?: string;
+  IMS_CLIENT_ID?: string;
+  ALLOWED_EMAIL_DOMAIN?: string;
+  BLOCKED_EMAILS?: string;
+  REQUIRE_OWNER_ORG?: string;
+  ADMIN_USER_IDS?: string;
+  CONE_CAP_RUNNING?: string;
+  CONE_CAP_PAUSED?: string;
 }
 
 function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {

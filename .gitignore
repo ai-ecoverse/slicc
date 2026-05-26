@@ -19,4 +19,5 @@ playwright-report/
 packages/swift-launcher/.node-cache/
 /tasks/
 .claude/settings.*
-.claude/worktrees/
+.claude/worktrees/packages/cloudflare-worker/.dev.vars
+packages/cloudflare-worker/.dev.vars
