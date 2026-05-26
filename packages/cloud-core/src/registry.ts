@@ -9,8 +9,8 @@ import type { ConeEntry } from './types.js';
  *  - Persist the `{ sessions: ConeEntry[] }` JSON shape (legacy schema, do not
  *    rename — existing CLI files in the wild depend on it).
  *  - Have UPSERT semantics on `append`: replacing an entry by sandboxId, not
- *    throwing on duplicate. This matches the existing CloudSessionRegistry
- *    behavior and is load-bearing for reconciliation passes.
+ *    throwing on duplicate. Same upsert behavior as the previous file-backed
+ *    implementation and is load-bearing for reconciliation passes.
  */
 export interface Registry {
   /** Read all entries. */

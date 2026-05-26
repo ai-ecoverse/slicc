@@ -62,6 +62,18 @@ describe('FileRegistry', () => {
     expect(entry?.state).toBe('paused');
   });
 
+  it('update throws when sandboxId is not found', async () => {
+    const reg = new FileRegistry(file);
+    await expect(reg.update('missing-id', { state: 'paused' })).rejects.toThrow(
+      /entry not found: missing-id/
+    );
+  });
+
+  it('remove is a no-op when sandboxId is not found', async () => {
+    const reg = new FileRegistry(file);
+    await expect(reg.remove('missing-id')).resolves.toBeUndefined();
+  });
+
   it('findByNameOrId resolves both name and sandboxId', async () => {
     const reg = new FileRegistry(file);
     await reg.append({
