@@ -169,18 +169,43 @@ export class CloudSessionsDurableObject {
   }
 
   private async resumeConeOp(body: ResumeConeBody): Promise<Response> {
-    return this.state.blockConcurrencyWhile(async () => {
-      const substrate = this.substrate();
-      const registry = this.registry();
+    const substrate = this.substrate();
+    const registry = this.registry();
+
+    // Atomic phase: list, cap check (excluding the target), entry existence/state.
+    const precheck = await this.state.blockConcurrencyWhile(async () => {
       const all = await listCones({ substrate, registry }, { metadata: { userId: body.userId } });
+      const target = all.find((c) => c.sandboxId === body.sandboxId);
+      if (!target) {
+        return {
+          error: errorResponse(404, 'NOT_FOUND', `cloud session not found: ${body.sandboxId}`),
+        };
+      }
+      if (target.state === 'running') {
+        return {
+          error: errorResponse(
+            409,
+            'ALREADY_RUNNING',
+            `cloud session is already running: ${body.sandboxId}`
+          ),
+        };
+      }
       const others = all.filter((c) => c.sandboxId !== body.sandboxId);
       const cap = checkCapsForRun(others, this.env);
       if (!cap.ok) {
-        return errorResponse(403, 'CAP_EXCEEDED', 'resuming would exceed running cap', {
-          running: cap.running,
-          cap: { running: cap.runningCap, paused: cap.pausedCap },
-        });
+        return {
+          error: errorResponse(403, 'CAP_EXCEEDED', 'resuming would exceed running cap', {
+            running: cap.running,
+            cap: { running: cap.runningCap, paused: cap.pausedCap },
+          }),
+        };
       }
+      return { error: null };
+    });
+    if (precheck.error) return precheck.error;
+
+    // Slow phase: no lock. substrate.connect + kick + poll + registry.update.
+    try {
       const result = await resumeCone(
         { substrate, registry },
         {
@@ -197,53 +222,52 @@ export class CloudSessionsDurableObject {
         joinUrl: result.joinUrl,
         trayRebuilt: result.trayRebuilt,
       });
-    });
+    } catch (err) {
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
+      }
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
   }
 
   private async pauseConeOp(body: SimpleSandboxBody): Promise<Response> {
-    return this.state.blockConcurrencyWhile(async () => {
-      try {
-        await pauseCone({ substrate: this.substrate(), registry: this.registry() }, body.sandboxId);
-        return okResponse();
-      } catch (err) {
-        if (isCloudError(err)) {
-          return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
-        }
-        return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    try {
+      await pauseCone({ substrate: this.substrate(), registry: this.registry() }, body.sandboxId);
+      return okResponse();
+    } catch (err) {
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
       }
-    });
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
   }
 
   private async killConeOp(body: SimpleSandboxBody): Promise<Response> {
-    return this.state.blockConcurrencyWhile(async () => {
-      try {
-        await killCone({ substrate: this.substrate(), registry: this.registry() }, body.sandboxId);
-        return okResponse();
-      } catch (err) {
-        if (isCloudError(err) && err.code === 'NOT_FOUND') return okResponse();
-        if (isCloudError(err)) {
-          return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
-        }
-        return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    try {
+      await killCone({ substrate: this.substrate(), registry: this.registry() }, body.sandboxId);
+    } catch (err) {
+      if (isCloudError(err) && err.code === 'NOT_FOUND') return okResponse();
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
       }
-    });
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
+    return okResponse();
   }
 
   private async listConesOp(body: ListConesBody): Promise<Response> {
-    return this.state.blockConcurrencyWhile(async () => {
-      try {
-        const cones = await listCones(
-          { substrate: this.substrate(), registry: this.registry() },
-          { metadata: { userId: body.userId } }
-        );
-        return okResponse({ cones });
-      } catch (err) {
-        if (isCloudError(err)) {
-          return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
-        }
-        return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    try {
+      const cones = await listCones(
+        { substrate: this.substrate(), registry: this.registry() },
+        { metadata: { userId: body.userId } }
+      );
+      return okResponse({ cones });
+    } catch (err) {
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
       }
-    });
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
   }
 }
 
