@@ -6,3 +6,4 @@ export * from './errors.js';
 export * from './substrate.js';
 export * from './substrate-factory.js';
 export { createE2bSubstrate } from './substrates/e2b.js';
+export { filterSecretsEnv } from './secrets-filter.js';
