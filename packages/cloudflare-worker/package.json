@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@slicc/cloud-core": "*",
-    "e2b": "^2.23.0"
+    "e2b": "^2.23.0",
+    "jose": "^6.2.3"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "4.20260514.1",
