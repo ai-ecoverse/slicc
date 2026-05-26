@@ -9,3 +9,5 @@ export * from './polling.js';
 export { createE2bSubstrate } from './substrates/e2b.js';
 export { filterSecretsEnv } from './secrets-filter.js';
 export type { Registry } from './registry.js';
+export { startCone } from './operations/start.js';
+export type { StartConeOpts, StartConeDeps } from './operations/start.js';
