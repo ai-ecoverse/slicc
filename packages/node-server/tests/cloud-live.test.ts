@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createSubstrate } from '../src/cloud/substrate.js';
+import { createSubstrate } from '@slicc/cloud-core';
 import { runStart } from '../src/cloud/start.js';
 import { runPause } from '../src/cloud/pause.js';
 import { runResume } from '../src/cloud/resume.js';

@@ -1,6 +1,5 @@
-import { listCones, type ConeEntry } from '@slicc/cloud-core';
+import { listCones, type ConeEntry, type SandboxSubstrate } from '@slicc/cloud-core';
 import { FileRegistry } from './registry-file.js';
-import type { SandboxSubstrate } from './substrate.js';
 
 export interface RunListOpts {
   substrate: SandboxSubstrate;

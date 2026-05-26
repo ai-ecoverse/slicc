@@ -41,7 +41,7 @@ import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.j
 import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
 import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
 import { parseCloudArgs, type ParsedCloudArgs } from './cloud/dispatch.js';
-import { createSubstrate } from './cloud/substrate.js';
+import { createSubstrate } from '@slicc/cloud-core';
 import { FileRegistry } from './cloud/registry-file.js';
 import { runStart } from './cloud/start.js';
 import { runList } from './cloud/list.js';

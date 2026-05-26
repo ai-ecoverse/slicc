@@ -1,4 +1,4 @@
-import type { SubstrateId } from './substrate.js';
+import type { SubstrateId } from '@slicc/cloud-core';
 
 export type ParsedCloudArgs =
   | {

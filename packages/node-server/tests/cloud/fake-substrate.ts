@@ -5,7 +5,7 @@ import type {
   SandboxInfo,
   SandboxSummary,
   RunResult,
-} from '../../src/cloud/substrate.js';
+} from '@slicc/cloud-core';
 
 interface FakeSandboxData {
   id: string;

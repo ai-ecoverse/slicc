@@ -1,6 +1,5 @@
-import { killCone } from '@slicc/cloud-core';
+import { killCone, type SandboxSubstrate } from '@slicc/cloud-core';
 import { FileRegistry } from './registry-file.js';
-import type { SandboxSubstrate } from './substrate.js';
 
 export interface RunKillOpts {
   substrate: SandboxSubstrate;
