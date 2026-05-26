@@ -1,3 +1,4 @@
+import type { ResumeResult, CloudStatus } from '@slicc/cloud-core';
 import { CloudSessionRegistry } from './registry.js';
 import type { SandboxHandle, SandboxSubstrate } from './substrate.js';
 
@@ -8,13 +9,6 @@ export interface RunResumeOpts {
   localSliccVersion: string;
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
-}
-
-export interface ResumeResult {
-  sandboxId: string;
-  joinUrl: string;
-  trayRebuilt: boolean;
-  versionMismatch?: { running: string; local: string };
 }
 
 // curl writes its body to /dev/null and prints the HTTP status code on stdout.
@@ -92,13 +86,6 @@ export async function runResume(opts: RunResumeOpts): Promise<ResumeResult> {
     trayRebuilt,
     ...(versionMismatch ? { versionMismatch } : {}),
   };
-}
-
-interface CloudStatus {
-  joinUrl: string;
-  trayId?: string;
-  sliccVersion?: string;
-  updatedAt?: string;
 }
 
 async function pollForRefreshedStatus(

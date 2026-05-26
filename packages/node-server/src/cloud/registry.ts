@@ -1,38 +1,13 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import type { ConeEntry } from '@slicc/cloud-core';
 import type { SubstrateId } from './substrate.js';
 
-export interface CloudSessionEntry {
-  substrate: SubstrateId;
-  sandboxId: string;
-  name?: string;
-  createdAt: string;
-  joinUrl: string;
-  /** ISO 8601 timestamp (e.g., '2026-05-22T16:00:00.000Z'). Updated on every list/resume tick. */
-  lastSeen: string;
-  state: 'running' | 'paused' | 'dead';
-  /**
-   * Last-known tray identity from `/tmp/slicc-join.json`. Set by `runStart`
-   * after the initial cloud-status read; preserved by `runPause` (do NOT
-   * overwrite this on pause — it is the comparison baseline that lets
-   * `runResume` detect tray rebuilds). `runResume` overwrites it after a
-   * successful refresh.
-   */
-  trayId?: string;
-  /**
-   * `updatedAt` from the last successful `/tmp/slicc-join.json` read.
-   * `runResume` polls for an `updatedAt` strictly newer than this value, so
-   * resume only declares success after the kick produced a fresh refresh.
-   * Preserved across `runPause` for the same reason as `trayId`.
-   */
-  lastJoinUpdatedAt?: string;
-}
-
 interface RegistryFile {
-  sessions: CloudSessionEntry[];
+  sessions: ConeEntry[];
 }
 
-function isCloudSessionEntry(x: unknown): x is CloudSessionEntry {
+function isConeEntry(x: unknown): x is ConeEntry {
   if (typeof x !== 'object' || x === null) return false;
   const e = x as Record<string, unknown>;
   return (
@@ -54,19 +29,19 @@ export class CloudSessionRegistry {
     return path.join(home, '.slicc', 'cloud-sessions.json');
   }
 
-  async list(): Promise<CloudSessionEntry[]> {
+  async list(): Promise<ConeEntry[]> {
     const data = await this.read();
     return data.sessions;
   }
 
-  async append(entry: CloudSessionEntry): Promise<void> {
+  async append(entry: ConeEntry): Promise<void> {
     const data = await this.read();
     data.sessions = data.sessions.filter((s) => s.sandboxId !== entry.sandboxId);
     data.sessions.push(entry);
     await this.write(data);
   }
 
-  async update(sandboxId: string, patch: Partial<CloudSessionEntry>): Promise<void> {
+  async update(sandboxId: string, patch: Partial<ConeEntry>): Promise<void> {
     const data = await this.read();
     const idx = data.sessions.findIndex((s) => s.sandboxId === sandboxId);
     if (idx === -1) return;
@@ -80,7 +55,7 @@ export class CloudSessionRegistry {
     await this.write(data);
   }
 
-  async findByNameOrId(query: string): Promise<CloudSessionEntry | null> {
+  async findByNameOrId(query: string): Promise<ConeEntry | null> {
     const data = await this.read();
     return (
       data.sessions.find((s) => s.sandboxId === query) ??
@@ -106,9 +81,9 @@ export class CloudSessionRegistry {
       return { sessions: [] };
     }
     const candidates = (raw as { sessions: unknown[] }).sessions;
-    const sessions: CloudSessionEntry[] = [];
+    const sessions: ConeEntry[] = [];
     for (const c of candidates) {
-      if (isCloudSessionEntry(c)) sessions.push(c);
+      if (isConeEntry(c)) sessions.push(c);
       else console.warn('skipping malformed cloud-sessions entry', c);
     }
     return { sessions };

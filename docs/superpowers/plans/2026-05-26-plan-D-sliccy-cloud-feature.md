@@ -611,6 +611,7 @@ interface ResumeConeBody {
   bearer: string;
   sandboxId: string;
   localSliccVersion: string;
+  userId: string;
 }
 interface SimpleSandboxBody {
   sandboxId: string;
@@ -674,7 +675,17 @@ export class CloudSessionsDurableObject implements DurableObject {
       { substrate, registry },
       { metadata: { userId: body.userId } }
     );
-    // 2. Cap check against reconciled state.
+    // 2. Enforce per-user soft-name uniqueness across non-dead cones.
+    const requestedName = body.name?.trim();
+    if (requestedName && reconciled.some((c) => c.state !== 'dead' && c.name === requestedName)) {
+      return errorResponse(
+        409,
+        'NAME_TAKEN',
+        `cloud session name already exists: ${requestedName}`
+      );
+    }
+
+    // 3. Cap check against reconciled state.
     const cap = checkCapsForRun(reconciled, this.env);
     if (!cap.ok) {
       return errorResponse(403, 'CAP_EXCEEDED', `at ${cap.reason} cap`, {
@@ -683,7 +694,7 @@ export class CloudSessionsDurableObject implements DurableObject {
         cap: { running: cap.runningCap, paused: cap.pausedCap },
       });
     }
-    // 3. Run startCone — atomic with the cap check above.
+    // 4. Run startCone — atomic with the checks above.
     const result = await startCone(
       { substrate, registry },
       {
@@ -697,7 +708,7 @@ export class CloudSessionsDurableObject implements DurableObject {
         },
         workerBaseUrl: body.workerOrigin,
         sliccVersion: 'web-' + new Date().toISOString().slice(0, 10),
-        name: body.name,
+        name: requestedName,
         metadata: { userId: body.userId, email: body.email },
       }
     );
@@ -712,7 +723,7 @@ export class CloudSessionsDurableObject implements DurableObject {
   private async resumeConeOp(body: ResumeConeBody): Promise<Response> {
     const substrate = this.substrate();
     const registry = this.registry();
-    const all = await listCones({ substrate, registry });
+    const all = await listCones({ substrate, registry }, { metadata: { userId: body.userId } });
     const others = all.filter((c) => c.sandboxId !== body.sandboxId);
     const cap = checkCapsForRun(others, this.env);
     if (!cap.ok) {
@@ -1108,6 +1119,7 @@ export async function handleResume(request: Request, env: CloudEnv): Promise<Res
     bearer,
     sandboxId: body.sandboxId,
     localSliccVersion: 'web-' + new Date().toISOString().slice(0, 10),
+    userId: auth.userId,
   });
 }
 
@@ -1462,7 +1474,7 @@ describe('thin handlers forward to DO lifecycle endpoints', () => {
     expect(getRecordedCalls('u1')[0]!.body).toMatchObject({ sandboxId: 's1' });
   });
 
-  it('handleResume → POSTs /resume-cone with bearer + sandboxId', async () => {
+  it('handleResume → POSTs /resume-cone with bearer + sandboxId + userId', async () => {
     await setCached('test-bearer', AUTH);
     const env = makeCloudEnv();
     const req = new Request('https://w/api/cloud/resume', {
@@ -1474,6 +1486,7 @@ describe('thin handlers forward to DO lifecycle endpoints', () => {
     expect(getRecordedCalls('u1')[0]!.body).toMatchObject({
       bearer: 'test-bearer',
       sandboxId: 's1',
+      userId: 'u1',
     });
   });
 
@@ -1607,6 +1620,52 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe('CAP_EXCEEDED');
+  });
+
+  it('start-cone returns 409 NAME_TAKEN for a duplicate live name in the same user scope', async () => {
+    const substrate = new FakeSubstrate();
+    substrate.seedSandbox('s1', {
+      metadata: { userId: 'u1', name: 'existing' },
+      state: 'paused',
+    });
+    const { state } = makeFakeState();
+    const do_ = new CloudSessionsDurableObject(state, makeDoEnv(substrate));
+    const res = await call(do_, '/start-cone', {
+      bearer: 'b',
+      userId: 'u1',
+      email: 'k@adobe.com',
+      workerOrigin: 'https://w',
+      name: ' existing ',
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('NAME_TAKEN');
+  });
+
+  it('resume-cone reconciles only the authenticated user scope before cap checks', async () => {
+    const substrate = new FakeSubstrate();
+    substrate.seedSandbox('foreign', {
+      metadata: { userId: 'u2', name: 'foreign' },
+      state: 'running',
+    });
+    substrate.seedSandbox('target', {
+      metadata: { userId: 'u1', name: 'target' },
+      state: 'paused',
+    });
+    const { state } = makeFakeState();
+    const do_ = new CloudSessionsDurableObject(state, makeDoEnv(substrate));
+    const res = await call(do_, '/resume-cone', {
+      bearer: 'b',
+      sandboxId: 'target',
+      localSliccVersion: 'web-test',
+      userId: 'u1',
+    });
+    expect(res.status).toBe(200);
+
+    const list = await call(do_, '/list-cones', { userId: 'u1' });
+    const body = (await list.json()) as { cones: Array<{ sandboxId: string }> };
+    expect(body.cones.some((c) => c.sandboxId === 'target')).toBe(true);
+    expect(body.cones.some((c) => c.sandboxId === 'foreign')).toBe(false);
   });
 
   it('kill-cone is idempotent', async () => {

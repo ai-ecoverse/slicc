@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
-import { CloudSessionRegistry, type CloudSessionEntry } from './registry.js';
+import type { ConeEntry, StartResult, CloudStatus } from '@slicc/cloud-core';
+import { CloudSessionRegistry } from './registry.js';
 import type { SandboxHandle, SandboxSubstrate } from './substrate.js';
 
 export interface RunStartOpts {
@@ -14,12 +15,6 @@ export interface RunStartOpts {
   pollTimeoutMs?: number;
   /** Test-only hook: invoked after substrate.create returns. */
   onAfterCreate?: (handle: SandboxHandle) => Promise<void>;
-}
-
-export interface StartResult {
-  sandboxId: string;
-  joinUrl: string;
-  name?: string;
 }
 
 /**
@@ -57,22 +52,16 @@ async function tailStderr(handle: SandboxHandle, n: number): Promise<string> {
   }
 }
 
-interface CloudStatusPayload {
-  joinUrl: string;
-  trayId?: string;
-  updatedAt?: string;
-}
-
 async function pollCloudStatus(
   handle: SandboxHandle,
   opts: { timeoutMs: number; intervalMs: number }
-): Promise<CloudStatusPayload> {
+): Promise<CloudStatus> {
   const start = Date.now();
   let lastError: unknown = null;
   while (Date.now() - start < opts.timeoutMs) {
     try {
       const raw = await handle.readFile('/tmp/slicc-join.json');
-      const parsed = JSON.parse(raw) as CloudStatusPayload;
+      const parsed = JSON.parse(raw) as CloudStatus;
       if (parsed.joinUrl) return parsed;
     } catch (err) {
       lastError = err;
@@ -110,7 +99,7 @@ export async function runStart(opts: RunStartOpts): Promise<StartResult> {
 
     if (opts.onAfterCreate) await opts.onAfterCreate(handle);
 
-    let status: CloudStatusPayload;
+    let status: CloudStatus;
     try {
       status = await pollCloudStatus(handle, {
         timeoutMs: opts.pollTimeoutMs ?? 60_000,
@@ -127,7 +116,7 @@ export async function runStart(opts: RunStartOpts): Promise<StartResult> {
 
     const reg = new CloudSessionRegistry(opts.registryPath);
     const nowIso = new Date().toISOString();
-    const entry: CloudSessionEntry = {
+    const entry: ConeEntry = {
       substrate: opts.substrate.id,
       sandboxId: handle.sandboxId,
       name: opts.name,

@@ -1,6 +1,12 @@
+import type { SandboxSummary as CoreSandboxSummary } from '@slicc/cloud-core';
+
 // MVP recognizes only 'e2b'. Future substrates extend this union when they
 // actually exist. Do not enumerate speculative values.
 export type SubstrateId = 'e2b';
+
+// Re-export SandboxSummary from cloud-core for backward compatibility with
+// existing substrate implementations.
+export type SandboxSummary = CoreSandboxSummary;
 
 export interface SubstrateConfig {
   /** Credential for the substrate (e.g. E2B_API_KEY). */
@@ -20,13 +26,6 @@ export interface SandboxInfo {
   state: 'running' | 'paused' | 'dead';
   metadata: Record<string, string>;
   createdAt: string;
-}
-
-export interface SandboxSummary {
-  sandboxId: string;
-  name?: string;
-  state: 'running' | 'paused' | 'dead';
-  metadata: Record<string, string>;
 }
 
 export interface RunResult {

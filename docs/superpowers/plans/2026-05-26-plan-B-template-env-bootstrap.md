@@ -4,7 +4,7 @@
 
 **Goal:** Eliminate the boot-time race where the in-sandbox bootstrap fetches `/api/hosted-bootstrap` ~5s after page load but secrets.env may not yet exist. Pass the IMS token (and any future bootstrap secrets) as sandbox env vars at `Sandbox.create`; have `start.sh` write `secrets.env` from those envs BEFORE invoking node-server. Also adds resume-time secrets refresh to the CLI (existing CLI bug — paused cones with expired IMS tokens can't recover).
 
-**Architecture:** Two-file change to the template (start.sh + template.ts env-passthrough), plus a refactor of `cloud-core/operations/start.ts` and `cloud-core/operations/resume.ts` to use `envs` and write secrets.env on resume respectively. The CLI's existing `secrets.env` upload via `files.write` stays AS BACKUP for cones running an older template build — gets removed once the new template has propagated.
+**Architecture:** Two-file change to the template (start.sh + template.ts env-passthrough), plus a refactor of `cloud-core/operations/start.ts` and `cloud-core/operations/resume.ts` to use `envs` and write secrets.env on resume respectively. The CLI keeps its full filtered `secrets.env` upload via `files.write` permanently, because env-var bootstrap only carries the IMS token while CLI cones still need non-Adobe secrets such as GitHub PATs, S3 keys, and OAuth-replica tokens.
 
 **Tech Stack:** Bash, TypeScript, e2b SDK v2.
 
