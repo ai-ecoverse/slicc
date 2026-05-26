@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { Api, Model } from '@earendil-works/pi-ai';
+import { setLogLevel, LogLevel } from '../../src/core/logger.js';
 
 /** Structural views used in test helpers and assertions to avoid `any`. */
 type TestContentBlock = {
@@ -696,5 +697,174 @@ describe('stripOrphanedToolResults', () => {
     const messages: AgentMessage[] = [createToolResult('a', 'id-a'), createToolResult('b', 'id-b')];
     const result = stripOrphanedToolResults(messages);
     expect(result).toEqual([]);
+  });
+});
+
+/**
+ * Sum estimated tokens over a message list using the same heuristic the
+ * mocked `estimateTokens` applies (ceil(text-chars / 4)).
+ */
+function totalEstimatedTokens(messages: AgentMessage[]): number {
+  let chars = 0;
+  for (const msg of messages) {
+    const content = asTestMessage(msg).content;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block.type === 'text' && block.text) chars += block.text.length;
+      }
+    }
+  }
+  return Math.ceil(chars / 4);
+}
+
+describe('createCompactContext hopeless branch', () => {
+  const mockModel = { id: 'test-model' } as unknown as Model<Api>;
+  const mockConfig = {
+    model: mockModel,
+    getApiKey: () => 'test-key' as string | undefined,
+    contextWindow: 200000,
+  };
+
+  beforeEach(() => {
+    mockCompleteSimple.mockReset();
+    mockCompleteSimple.mockResolvedValue(llmResponse('## Goal\nstub'));
+    // Ensure WARN-level lines actually reach console.warn under vitest.
+    setLogLevel(LogLevel.WARN);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // This test MUST run before any other hopeless-triggering test in the
+  // file: the logger's dedup buffer suppresses repeats of an identical
+  // structured warn within a 60s window, so only the first call is
+  // observable to the spy.
+  it(
+    'skips LLM, elides oversized toolResult, emits structured warn, ' +
+      'and returns under the soft threshold',
+    async () => {
+      // 4 MB of text → ~1M est. tokens. With contextWindow = 200k and
+      // hopelessMultiplier = 4 (default), totalTokens > 800k triggers
+      // the hopeless branch.
+      const hugeText = 'x'.repeat(4_000_000);
+      const messages: AgentMessage[] = [
+        createMessage('user', 'run tool'),
+        createAssistantWithToolCalls('calling', ['t1']),
+        createToolResult(hugeText, 't1'),
+        createMessage('user', 'follow up'),
+      ];
+
+      const compact = createCompactContext(mockConfig);
+      const result = await compact(messages);
+
+      // LLM summary MUST NOT be called in the hopeless branch.
+      expect(mockCompleteSimple).not.toHaveBeenCalled();
+
+      // The oversized toolResult must be replaced with the elision stub.
+      const stubs = result.filter((m) => firstText(m).includes('Tool result elided'));
+      expect(stubs.length).toBeGreaterThanOrEqual(1);
+      expect(firstText(stubs[0])).toMatch(
+        /Tool result elided: \d+ KB, exceeds half the context window/
+      );
+
+      // After elision we should be below the soft threshold
+      // (contextWindow - reserveTokens = 200000 - 16384 = 183616).
+      expect(totalEstimatedTokens(result)).toBeLessThan(200000 - 16384);
+
+      // Structured warn log MUST carry the documented fields.
+      const warnCalls = (console.warn as ReturnType<typeof vi.fn>).mock.calls;
+      const hopelessCall = warnCalls.find(
+        (c) => typeof c[1] === 'string' && c[1] === 'Compaction hopeless branch'
+      );
+      expect(hopelessCall).toBeDefined();
+      const fields = hopelessCall![2] as Record<string, unknown>;
+      expect(fields).toEqual({
+        totalTokens: expect.any(Number),
+        contextWindow: 200000,
+        multiplier: 4,
+        elidedCount: expect.any(Number),
+        elidedBytes: expect.any(Number),
+      });
+      expect(fields.elidedCount as number).toBeGreaterThanOrEqual(1);
+      expect(fields.elidedBytes as number).toBeGreaterThanOrEqual(1024);
+    }
+  );
+
+  it('still uses the LLM summary path when only over the soft threshold', async () => {
+    mockCompleteSimple.mockResolvedValueOnce(llmResponse('summary'));
+    const compact = createCompactContext(mockConfig);
+    // Aim for ~250k tokens total — over the soft threshold (183616) but
+    // well under the hopeless threshold (4 × 200000 = 800000).
+    const baseMsg = 'x'.repeat(200000); // 50k tokens per message
+    const messages = Array.from({ length: 5 }, () => createMessage('user', baseMsg));
+
+    const result = await compact(messages);
+
+    expect(mockCompleteSimple).toHaveBeenCalledTimes(1);
+    expect(firstText(result[0])).toContain('<context-summary>');
+  });
+
+  it('preserves tool-call/tool-result ID pairing across elision', async () => {
+    const huge = 'x'.repeat(4_000_000); // ~1M tokens each
+    const messages: AgentMessage[] = [
+      createMessage('user', 'kick off'),
+      createAssistantWithToolCalls('first', ['t1']),
+      createToolResult(huge, 't1'), // elided — toolResult
+      createAssistantWithToolCalls(huge, ['t2']), // elided — assistant with toolCall
+      createToolResult('small ok', 't2'),
+      createMessage('user', 'thanks'),
+    ];
+
+    const compact = createCompactContext(mockConfig);
+    const result = await compact(messages);
+
+    expect(mockCompleteSimple).not.toHaveBeenCalled();
+
+    // Every toolResult in the result must have a matching toolCall in
+    // some preceding assistant message — the elision must NOT have
+    // dropped the toolCall blocks from the assistant message.
+    for (let i = 0; i < result.length; i++) {
+      const msg = asTestMessage(result[i]);
+      if (msg.role !== 'toolResult' || !msg.toolCallId) continue;
+      let found = false;
+      for (let j = i - 1; j >= 0; j--) {
+        const prev = asTestMessage(result[j]);
+        if (prev.role === 'assistant' && Array.isArray(prev.content)) {
+          if (
+            prev.content.some(
+              (c: TestContentBlock) => c.type === 'toolCall' && c.id === msg.toolCallId
+            )
+          ) {
+            found = true;
+            break;
+          }
+        }
+        if (prev.role !== 'toolResult') break;
+      }
+      expect(found).toBe(true);
+    }
+
+    // Both elided messages must still carry the stub text.
+    const stubs = result.filter((m) => firstText(m).includes('Tool result elided'));
+    expect(stubs.length).toBe(2);
+  });
+
+  it('honors a custom hopelessMultiplier', async () => {
+    // Push the hopeless threshold up to 10 × contextWindow = 2_000_000
+    // tokens. A conversation around 1M tokens should now stay on the
+    // LLM-summary path even though it would have been hopeless at the
+    // default multiplier of 4.
+    mockCompleteSimple.mockResolvedValueOnce(llmResponse('summary'));
+    const compact = createCompactContext({ ...mockConfig, hopelessMultiplier: 10 });
+    const baseMsg = 'x'.repeat(400000); // 100k tokens per message
+    const messages = Array.from({ length: 10 }, () => createMessage('user', baseMsg));
+
+    await compact(messages);
+
+    expect(mockCompleteSimple).toHaveBeenCalledTimes(1);
   });
 });
