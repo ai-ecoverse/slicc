@@ -104,6 +104,10 @@ describe('slicc --cloud start', () => {
       },
     });
     await expect(start).rejects.toThrow(/missing libnss3/);
+    await expect(start).rejects.toMatchObject({
+      name: 'CloudError',
+      code: 'SANDBOX_NOT_READY',
+    });
     expect(await substrate.list()).toHaveLength(0);
   });
 
@@ -119,6 +123,10 @@ describe('slicc --cloud start', () => {
       pollIntervalMs: 10,
     });
     await expect(start).rejects.toThrow(/no \/tmp\/slicc-stderr\.log produced/);
+    await expect(start).rejects.toMatchObject({
+      name: 'CloudError',
+      code: 'SANDBOX_NOT_READY',
+    });
     expect(await substrate.list()).toHaveLength(0);
   });
 

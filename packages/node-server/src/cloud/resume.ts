@@ -1,4 +1,5 @@
 import type { ResumeResult, CloudStatus } from '@slicc/cloud-core';
+import { CloudError } from '@slicc/cloud-core';
 import { CloudSessionRegistry } from './registry.js';
 import type { SandboxHandle, SandboxSubstrate } from './substrate.js';
 
@@ -21,7 +22,7 @@ const KICK_CMD =
 export async function runResume(opts: RunResumeOpts): Promise<ResumeResult> {
   const reg = new CloudSessionRegistry(opts.registryPath);
   const entry = await reg.findByNameOrId(opts.query);
-  if (!entry) throw new Error(`cloud session not found: ${opts.query}`);
+  if (!entry) throw new CloudError('NOT_FOUND', `cloud session not found: ${opts.query}`);
 
   // Baseline from the registry — `runStart` stored these at create, and
   // `runPause` preserves them across pause. Resume requires a strictly
@@ -46,13 +47,19 @@ export async function runResume(opts: RunResumeOpts): Promise<ResumeResult> {
         break;
       }
       if (status !== '503') {
-        throw new Error(`/api/leader-restart returned unexpected status ${status}`);
+        throw new CloudError(
+          'LEADER_NOT_READY',
+          `/api/leader-restart returned unexpected status ${status}`
+        );
       }
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
   if (!kicked) {
-    throw new Error('Failed to kick leader after 5 retries (sandbox may not be healthy)');
+    throw new CloudError(
+      'LEADER_NOT_READY',
+      'Failed to kick leader after 5 retries (sandbox may not be healthy)'
+    );
   }
 
   const refreshed = await pollForRefreshedStatus(handle, baselineUpdatedAt, {
@@ -128,5 +135,8 @@ async function pollForRefreshedStatus(
   } else {
     errSuffix = ' (file never appeared)';
   }
-  throw new Error(`cloud-status did not refresh within ${opts.timeoutMs}ms${errSuffix}`);
+  throw new CloudError(
+    'LEADER_NOT_READY',
+    `cloud-status did not refresh within ${opts.timeoutMs}ms${errSuffix}`
+  );
 }

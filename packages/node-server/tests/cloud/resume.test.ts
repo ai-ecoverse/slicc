@@ -206,15 +206,18 @@ describe('slicc --cloud resume', () => {
 
     sub.queueRun(h.sandboxId, () => ({ stdout: '200', stderr: '', exitCode: 0 }));
 
-    await expect(
-      runResume({
-        substrate: sub,
-        registryPath,
-        query: 'task-1',
-        localSliccVersion: '3.2.2',
-        pollIntervalMs: 5,
-        pollTimeoutMs: 100,
-      })
-    ).rejects.toThrow(/cloud-status did not refresh/);
+    const resumePromise = runResume({
+      substrate: sub,
+      registryPath,
+      query: 'task-1',
+      localSliccVersion: '3.2.2',
+      pollIntervalMs: 5,
+      pollTimeoutMs: 100,
+    });
+    await expect(resumePromise).rejects.toThrow(/cloud-status did not refresh/);
+    await expect(resumePromise).rejects.toMatchObject({
+      name: 'CloudError',
+      code: 'LEADER_NOT_READY',
+    });
   });
 });

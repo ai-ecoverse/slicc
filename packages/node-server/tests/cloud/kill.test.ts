@@ -62,5 +62,11 @@ describe('slicc --cloud kill', () => {
     await expect(
       runKill({ substrate: new FakeSubstrate(), registryPath, query: 'nope' })
     ).rejects.toThrow(/not found/i);
+    await expect(
+      runKill({ substrate: new FakeSubstrate(), registryPath, query: 'nope' })
+    ).rejects.toMatchObject({
+      name: 'CloudError',
+      code: 'NOT_FOUND',
+    });
   });
 });

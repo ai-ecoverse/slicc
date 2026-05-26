@@ -1,3 +1,4 @@
+import { CloudError } from '@slicc/cloud-core';
 import { CloudSessionRegistry } from './registry.js';
 import type { SandboxSubstrate } from './substrate.js';
 
@@ -10,7 +11,7 @@ export interface RunPauseOpts {
 export async function runPause(opts: RunPauseOpts): Promise<void> {
   const reg = new CloudSessionRegistry(opts.registryPath);
   const entry = await reg.findByNameOrId(opts.query);
-  if (!entry) throw new Error(`cloud session not found: ${opts.query}`);
+  if (!entry) throw new CloudError('NOT_FOUND', `cloud session not found: ${opts.query}`);
 
   const handle = await opts.substrate.connect(entry.sandboxId);
   await handle.pause();

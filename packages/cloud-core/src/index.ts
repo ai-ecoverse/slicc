@@ -2,3 +2,4 @@
 // Populated by subsequent tasks as we move code in.
 
 export * from './types.js';
+export * from './errors.js';

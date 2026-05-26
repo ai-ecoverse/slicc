@@ -1,3 +1,4 @@
+import { CloudError } from '@slicc/cloud-core';
 import { CloudSessionRegistry } from './registry.js';
 import type { SandboxSubstrate } from './substrate.js';
 
@@ -10,7 +11,7 @@ export interface RunKillOpts {
 export async function runKill(opts: RunKillOpts): Promise<void> {
   const reg = new CloudSessionRegistry(opts.registryPath);
   const entry = await reg.findByNameOrId(opts.query);
-  if (!entry) throw new Error(`cloud session not found: ${opts.query}`);
+  if (!entry) throw new CloudError('NOT_FOUND', `cloud session not found: ${opts.query}`);
 
   try {
     const handle = await opts.substrate.connect(entry.sandboxId);
@@ -22,7 +23,8 @@ export async function runKill(opts: RunKillOpts): Promise<void> {
     // surface them so the user doesn't silently leak credits.
     const notFound = /not found|unknown sandbox|404|does not exist/i.test(msg);
     if (!notFound) {
-      throw new Error(
+      throw new CloudError(
+        'INTERNAL',
         `substrate.kill failed (sandbox ${entry.sandboxId}): ${msg}. ` +
           `Registry entry NOT removed — verify sandbox state manually.`
       );

@@ -50,6 +50,12 @@ describe('slicc --cloud pause', () => {
     await expect(
       runPause({ substrate: new FakeSubstrate(), registryPath, query: 'nope' })
     ).rejects.toThrow(/not found/i);
+    await expect(
+      runPause({ substrate: new FakeSubstrate(), registryPath, query: 'nope' })
+    ).rejects.toMatchObject({
+      name: 'CloudError',
+      code: 'NOT_FOUND',
+    });
   });
 
   it('preserves trayId and lastJoinUpdatedAt across pause (resume baseline)', async () => {

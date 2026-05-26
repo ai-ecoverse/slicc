@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import type { ConeEntry, StartResult, CloudStatus } from '@slicc/cloud-core';
+import { CloudError } from '@slicc/cloud-core';
 import { CloudSessionRegistry } from './registry.js';
 import type { SandboxHandle, SandboxSubstrate } from './substrate.js';
 
@@ -71,7 +72,8 @@ async function pollCloudStatus(
   const errSuffix = lastError
     ? ` (last error: ${lastError instanceof Error ? lastError.message : String(lastError)})`
     : ' (file never appeared)';
-  throw new Error(
+  throw new CloudError(
+    'SANDBOX_NOT_READY',
     `cloud-status did not appear within ${opts.timeoutMs}ms; sandbox may have failed to boot${errSuffix}`
   );
 }
@@ -108,9 +110,11 @@ export async function runStart(opts: RunStartOpts): Promise<StartResult> {
     } catch (pollErr) {
       // Surface boot diagnostics before tearing down. Spec failure mode #7.
       const stderr = await tailStderr(handle, 50);
-      throw new Error(
+      throw new CloudError(
+        'SANDBOX_NOT_READY',
         `${pollErr instanceof Error ? pollErr.message : String(pollErr)}\n` +
-          `--- last 50 lines of /tmp/slicc-stderr.log ---\n${stderr}`
+          `--- last 50 lines of /tmp/slicc-stderr.log ---\n${stderr}`,
+        { sandboxId: handle.sandboxId }
       );
     }
 
