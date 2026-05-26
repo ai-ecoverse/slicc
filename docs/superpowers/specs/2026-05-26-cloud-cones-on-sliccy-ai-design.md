@@ -1,5 +1,7 @@
 # Cloud cones on sliccy.ai — design
 
+> **Supersedes**: the "Web UI on sliccy.ai" non-goal in `docs/superpowers/specs/2026-05-22-hosted-slicc-e2b-design.md`. The hosted-leader feature lands on the web here.
+
 ## Goal
 
 Move the hosted-leader feature from "laptop-CLI-only" to "web-accessible at sliccy.ai/cloud" so Adobe employees can spawn, list, pause/resume, and kill their own cloud cones from any browser without needing the CLI installed. The CLI path (`slicc --cloud …`) stays in place for power users; this adds a parallel web entry point.
@@ -29,9 +31,72 @@ e2b sandbox (existing 'slicc' template, slightly modified)
   └── /api/leader-restart             ← UNCHANGED, kicked by worker on resume
 ```
 
-The orchestration code in `packages/node-server/src/cloud/` is the conceptual reference; the worker reimplements the essential operations against the e2b SDK because the Workers runtime may not load the full Node e2b SDK identically (verify during implementation; if it doesn't fit, switch to a dedicated Node backend service — captured as a fallback in the plan, not the recommendation).
+The orchestration logic is **factored into a new shared package** (`packages/cloud-core/`, exact placement decided during plan) consumed by BOTH the laptop CLI (existing `packages/node-server/src/cloud/`) AND the cloudflare-worker (new). The worker is a thin handler layer; the operations themselves live in `cloud-core`. See the next section for details — this is a v1 architectural commitment to prevent the dual-codebase drift that the alternative ("worker reimplements against e2b SDK") would inevitably produce.
 
-The substrate abstraction (`SandboxSubstrate`) migrates conceptually but as two separate consumers: laptop CLI keeps its current code path; worker has its own thin substrate adapter.
+## Shared orchestration module
+
+`packages/cloud-core/` is a new package depending only on `@slicc/shared-ts` (and a peer-dep `e2b` for the substrate types). Browser-and-Node-safe; no `node:fs` at module load.
+
+**Exports**:
+
+```typescript
+// substrate.ts — interface + factory; same shape as packages/node-server/src/cloud/substrate.ts
+export interface SandboxSubstrate { … }
+export interface SandboxHandle    { … }
+export type SubstrateId = 'e2b';
+export function createSubstrate(id, config): SandboxSubstrate;
+
+// operations.ts — pure functions, no I/O of their own. Take a substrate +
+// a "registry" abstraction (read/write/findByNameOrId/list) + opts.
+export async function startCone(deps, opts): Promise<StartResult>;
+export async function listCones(deps): Promise<Cone[]>;
+export async function pauseCone(deps, query): Promise<void>;
+export async function resumeCone(deps, opts): Promise<ResumeResult>;
+export async function killCone(deps, query): Promise<void>;
+
+// registry.ts — Registry interface (NOT implementation). Two implementations
+// live in their consumers:
+//   - packages/node-server: file-backed (~/.slicc/cloud-sessions.json) — existing
+//   - packages/cloudflare-worker: DO-backed (CloudSessionsDurableObject)
+export interface Registry {
+  list(): Promise<ConeEntry[]>;
+  findByNameOrId(query): Promise<ConeEntry | null>;
+  append(entry): Promise<void>;
+  update(id, patch): Promise<void>;
+  remove(id): Promise<void>;
+}
+
+// errors.ts — shared error codes (CAP_EXCEEDED, NOT_FOUND, LEADER_NOT_READY,
+// SANDBOX_NOT_READY, ALREADY_PAUSED, ALREADY_RUNNING, CDP_NOT_READY).
+
+// secrets-filter.ts — filterSecretsEnv (strip E2B_API_KEY*). Existing fn moves
+// from packages/node-server/src/cloud/start.ts to here.
+
+// polling.ts — pollCloudStatus, pollForRefreshedStatus. Move from
+// packages/node-server/src/cloud/{start,resume}.ts. The "stale file vs missing
+// file" diagnostic improvements from commit ca8d34ae come along.
+
+// types.ts — ConeEntry, CloudStatus, ResumeResult, StartResult shapes.
+```
+
+**Migration approach** (locked in for v1):
+
+- Move existing files from `packages/node-server/src/cloud/{substrate.ts,operations,start,list,pause,resume,kill}.ts` into `packages/cloud-core/`.
+- node-server's `packages/node-server/src/cloud/` shrinks to: `dispatch.ts` (CLI parser), `Registry` impl (file-backed), and a thin shim wiring `cloud-core` operations to the CLI command output formatter.
+- cloudflare-worker imports `cloud-core` directly. Its `Registry` impl is DO-backed. Its handler files are thin route shims that call `cloud-core` operations.
+- The `FakeSubstrate` testing helper moves with it; both consumers test against the same fake.
+
+**Operation-by-operation responsibility split**:
+
+| Layer                                    | Consumer    | What lives here                                                                                      |
+| ---------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------- |
+| `cloud-core/operations`                  | shared      | start/list/pause/resume/kill business logic — polling, baseline preservation, kick retry, validation |
+| `cloud-core/substrate`                   | shared      | substrate interface + e2b adapter                                                                    |
+| `node-server/cloud/dispatch.ts`          | CLI-only    | argv parsing, JSON-vs-pretty output formatting                                                       |
+| `node-server/cloud/registry-file.ts`     | CLI-only    | file-backed registry (`~/.slicc/cloud-sessions.json`)                                                |
+| `cloudflare-worker/cloud/handlers.ts`    | Worker-only | HTTP shim — extract userId, build deps, call ops                                                     |
+| `cloudflare-worker/cloud/registry-do.ts` | Worker-only | DurableObject-backed registry                                                                        |
+| `cloudflare-worker/cloud/auth.ts`        | Worker-only | JWT pipeline, allowlist/denylist, ownerOrg gate                                                      |
 
 ## Auth flow
 
@@ -66,6 +131,8 @@ Cache the validated `AuthResult` keyed by `SHA-256(token)` with TTL = `min(10min
 
 **"No refresh" tradeoff**: implicit grant doesn't return refresh tokens. When a token expires (Adobe IMS access tokens typically 24h), the dashboard catches the next 401, re-launches the IMS popup, transparently re-fires the request. With SSO this is zero-click; with fresh sessions it's the standard consent screen. Acceptable for internal tool.
 
+**v1.1 note**: if Adobe IMS policy ever blocks new clients from using implicit grant, the dashboard migrates to authorization-code + PKCE with a small BFF in the worker. Same callback surface, different exchange. Not v1 work.
+
 ## API surface
 
 All endpoints are under `/api/cloud/*`, all require `Authorization: Bearer <ims-access-token>`, all return JSON.
@@ -86,6 +153,7 @@ POST /api/cloud/pause    body: { sandboxId }
 
 POST /api/cloud/resume   body: { sandboxId }
    200 { sandboxId, joinUrl, trayRebuilt }
+   403 CAP_EXCEEDED       (resume would push running over CONE_CAP_RUNNING)
    404 NOT_FOUND
    409 ALREADY_RUNNING
    503 LEADER_NOT_READY   (post-resume Page.reload kick failed)
@@ -95,12 +163,29 @@ POST /api/cloud/kill     body: { sandboxId }
    404 NOT_FOUND
 ```
 
+**Error response envelope** (uniform across all endpoints):
+
+```json
+{
+  "error": "CAP_EXCEEDED",
+  "message": "1/1 running cones; pause or kill another first.",
+  "details": { "running": 1, "paused": 2, "cap": { "running": 1, "paused": 5 } }
+}
+```
+
+`error` is a stable machine code (dashboard switches on it). `message` is human-readable. `details` is optional, endpoint-specific.
+
 Middleware order on every request:
 
 ```
 authBearer    — verify JWT against IMS jwks; extract userId from sub claim
 loadUserDO    — env.CLOUD_SESSIONS.idFromName(userId) → stub
-checkCap      — only on /start; rejects if at running/paused cap
+checkCap      — on /start AND /resume; rejects if the transition would
+                exceed CONE_CAP_RUNNING (counts cones currently running plus
+                the one about to transition). Pause/kill never check.
+rateLimit     — soft per-user limit: 30 starts/hour, 60 list/min. Returns 429
+                with retry-after. Defense against bug-loops; not a security
+                feature.
 ```
 
 ## State storage
@@ -130,11 +215,49 @@ interface CloudSessionsState {
 - **Concurrent-write safety**: DO is single-threaded; rapid-fire actions serialize cleanly.
 - **Defense in depth**: each e2b sandbox is also tagged with `metadata.userId` at create; if DO state is ever lost, the user's cone list can be reconstructed by listing e2b sandboxes filtered by metadata.
 
+## Concurrency and idempotency
+
+DO is single-threaded but `Sandbox.create` is a network call that yields. Without care, a double-click "Create" could (a) pass the cap check twice and (b) start two sandboxes.
+
+**Resolution**: cap check + e2b create + registry append happen inside one `blockConcurrencyWhile` block in the DO. The DO holds a sequential lock for the user's entire mutation; the second click waits for the first to finish, sees the updated cap, and gets `CAP_EXCEEDED`.
+
+**Name uniqueness**: per-user, soft. `POST /start { name: "x" }` while another running/paused cone named "x" exists → reject with `409 NAME_TAKEN` (added to the API surface). Cross-user collisions are fine (different DO).
+
+**Idempotency**:
+
+- `POST /kill` returns 200 whether the cone existed or not.
+- `POST /pause` on already-paused: 409 `ALREADY_PAUSED` (NOT idempotent — the client should refresh and retry; auto-treating as success masks bugs).
+- `POST /resume` on already-running: 409 `ALREADY_RUNNING`.
+- `POST /start` is NOT idempotent — each call is a new create.
+
+## State reconciliation
+
+The DO is the cache; e2b is the source of truth. Drift happens (worker crash mid-operation, manual e2b sandbox deletion from the dashboard, paused cones expired past their reclaim TTL).
+
+**On every `GET /list`** (cheap):
+
+1. Read DO entries.
+2. Call `substrate.list({ metadata: { userId } })` against e2b — this is filtered by `metadata.userId` so it's small.
+3. For each DO entry: if e2b doesn't return it → mark `state: 'dead'`, surface to UI ("This cone has expired and can no longer be resumed; please kill it"). The DO entry stays until the user clicks Kill (which now just removes the registry entry).
+4. For each e2b entry NOT in DO: rebuild the entry from `metadata` (name, createdAt) and add. Defense-in-depth recovery.
+5. For each DO entry whose `state` disagrees with e2b's state: e2b wins; update DO.
+
+The reconciliation runs in the DO handler, before returning. Adds ~one e2b API call per list — fine for typical list rates.
+
+**On `POST /start` and `POST /resume`**: same reconciliation runs first (to ensure cap math is correct against real state, not stale DO state). Adds latency to mutations but eliminates "I have 1/1 running per DO but actually 0 in e2b" bugs.
+
+**joinUrl freshness**: the leader's tray can be rebuilt on reconnect (per the `IndexedDbLeaderTraySessionStore` clear in `40fb4eaf` — every hosted-leader page boot creates a fresh tray). When this happens, the leader POSTs a new joinUrl to `/api/cloud-status` inside the sandbox; the worker doesn't automatically know. The dashboard's polling `/list` is the only mechanism that surfaces a stale joinUrl in v1 — and currently `/list` doesn't talk to the sandbox to refresh joinUrl. Two options:
+
+- **v1**: accept that the dashboard's joinUrl can go stale silently between reloads. User notices when their follower disconnects, clicks "Open" again, gets the (possibly stale) URL. Document this.
+- **v1.x**: on `/list`, for each running cone, the worker uses `sbx.commands.run('cat /tmp/slicc-join.json')` to read the current canonical joinUrl, updates DO if changed. Adds latency proportional to running-cone-count. Trade off when stale-joinUrl complaints become real.
+
+v1 ships with the first; the spec calls this out as a known sharp edge.
+
 ## Sandbox lifecycle integration
 
-**Boot ordering** (the timing race that matters): the existing in-sandbox bootstrap (main.ts hosted-leader branch) fetches `/api/hosted-bootstrap` ~5s after `startPageLeaderTray`. If `secrets.env` doesn't exist at that moment, the page sees no token and the Adobe provider stays unconfigured. The laptop CLI uploads the file before the sandbox boots, so the race doesn't bite there. The worker has no file system access pre-boot.
+**Boot ordering** (the timing race that matters): the existing in-sandbox bootstrap (main.ts hosted-leader branch) fetches `/api/hosted-bootstrap` ~5s after `startPageLeaderTray`. If `secrets.env` doesn't exist at that moment, the page sees no token and the Adobe provider stays unconfigured. The CLI's current `runStart` actually has the same race — it calls `Sandbox.create` first, THEN `sbx.files.write` for secrets.env. The 5s page-side delay (commit `78ff315d`) papers over it; CLI gets lucky because file upload typically completes in well under 5s. The worker can't depend on this because `Sandbox.create({ readyCmd: waitForFile(...) })` blocks until AFTER the page has run and (possibly) already missed the bootstrap window.
 
-**Fix in the template**: pass the IMS token as a sandbox env var at `Sandbox.create` time; `start.sh` writes `secrets.env` from those envs BEFORE `exec`'ing node-server:
+**Fix in the template** (eliminates the race for BOTH CLI and worker): pass the IMS token as a sandbox env var at `Sandbox.create` time; `start.sh` writes `secrets.env` from those envs BEFORE `exec`'ing node-server:
 
 ```sh
 # packages/dev-tools/e2b-template/start.sh
@@ -149,7 +272,9 @@ exec node /opt/slicc/node-server/index.js --hosted --port 5710 --no-open …
 
 Worker calls `Sandbox.create('slicc', { envs: { ADOBE_IMS_TOKEN, ADOBE_IMS_TOKEN_DOMAINS }, metadata: { userId, name }, readyCmd: waitForFile('/tmp/slicc-join.json') })`. By the time `create` returns, the sandbox has secrets in place AND the leader has registered with the tray.
 
-**Resume token freshness**: on `/api/cloud/resume`, worker reads the current Bearer (which the dashboard refreshed if needed), writes a new `/slicc/secrets.env` via `sbx.files.write`, then `sbx.commands.run` curls `/api/leader-restart`. The 5s page-side bootstrap delay shipped in `78ff315d` re-fires after Page.reload and picks up the fresh token. Identical to the laptop CLI's resume.
+**CLI backport** (small, same change): laptop CLI's `runStart` migrates to passing the token via `envs` instead of `files.write`. Single shared substrate adapter, single boot story. Captured as part of the cloud-core extraction work.
+
+**Resume token freshness** (NEW behavior in v1 — CLI's `runResume` today does NOT refresh secrets, only kicks leader-restart): on `/api/cloud/resume`, worker reads the current Bearer (which the dashboard refreshed via the IMS popup if needed), writes a new `/slicc/secrets.env` via `sbx.files.write`, then `sbx.commands.run` curls `/api/leader-restart`. The 5s page-side bootstrap delay re-fires after Page.reload and picks up the fresh token. CLI gets the same treatment as part of the cloud-core extraction — long-paused cones with expired tokens are an existing CLI bug this work fixes incidentally.
 
 **API contract between worker and sandbox** (stable surfaces — changing these breaks paused cones from older templates):
 
@@ -183,6 +308,19 @@ This is the implicit deal with paused cones, and it requires the stable API cont
 
 ## Deployment and CI
 
+**Phase 0 — Workers + e2b SDK spike** (FIRST task in the plan, before any handler code).
+
+Time-boxed to ~2 days. Exit criteria:
+
+| Criterion                                                                                                                                         | Pass  | Fail action                                                                                                                             |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `Sandbox.create` + `files.write` + `commands.run` + `pause`/`resume`/`kill` run in a Workers runtime                                              | works | Migrate to dedicated Node service (Cloud Run / Adobe-internal host). Worker becomes a reverse proxy.                                    |
+| Worker bundle stays under CF size limit with e2b SDK included                                                                                     | yes   | Same as above                                                                                                                           |
+| `Sandbox.create` with readyCmd completes within 60s CPU/wall budget (network-blocked time doesn't count toward CPU, so this is mostly about wall) | yes   | Switch to async pattern: `POST /start` returns `{ sandboxId, status: 'starting' }` immediately; dashboard polls `/api/cloud/status/:id` |
+| `E2B_API_KEY` stays in worker secrets only — never reachable from browser                                                                         | yes   | Hard blocker; design must change                                                                                                        |
+
+The spike writes the smallest possible test: `wrangler dev` worker that exposes `POST /spike/start` → creates a sandbox → returns sandboxId. If it works locally, deploy to staging and confirm under real Workers limits. If any criterion fails, the plan branches to the Node-service fallback before any handler code is written.
+
 Cadence: **on release tag** (semantic-release driven; not on every main-merge).
 
 Extended `.github/workflows/worker.yml` runs in order:
@@ -208,9 +346,52 @@ GitHub Actions secret: `E2B_API_KEY` scoped to the Adobe team. Adds ~5-10min to 
 
 The local `bash packages/dev-tools/e2b-template/scripts/build-template.sh` keeps working for iterating on template Dockerfile/start.sh changes outside the release cycle.
 
+## Local development
+
+Four modes by fidelity, for different inner-loop needs:
+
+| Mode                                | Worker                 | IMS                                   | e2b                                             | Sandbox-to-tray plane                                  | What it's for                                                                         |
+| ----------------------------------- | ---------------------- | ------------------------------------- | ----------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| 1. Unit                             | vitest                 | mocked jwks + signed test JWT         | `FakeSubstrate`                                 | n/a                                                    | Handler logic, DO mutations, cap math, auth pipeline. ~95% of inner loop.             |
+| 2. wrangler dev + fake e2b          | local                  | real (popup against `adobelogin.com`) | `FakeSubstrate` (gated by `SUBSTRATE=fake` env) | n/a                                                    | UI iteration, API shapes, real auth flow. Fake cones appear in the list.              |
+| 3. wrangler dev + real e2b + tunnel | local                  | real                                  | real (Adobe team key)                           | local via `cloudflared tunnel` exposing localhost:8787 | Full E2E from a real sandbox through the dev worker. Costs e2b credits (cents/spawn). |
+| 4. Staging                          | `--env staging` deploy | real (stg1 if configured)             | real                                            | staging worker URL                                     | Pre-prod verification; runs the deployed-smoke tests.                                 |
+
+**One IMS-side setup**: the IMS app registration allows both prod (`https://www.sliccy.ai/auth/cloud-callback`) and dev (`http://localhost:8787/auth/cloud-callback`) redirect URIs.
+
+**Mode 3 wrinkle**: the sandbox is on the public internet (e2b's infra) and can't reach `localhost`. The tunnel approach exposes the dev worker via a public HTTPS URL; the worker sets `SLICC_TRAY_WORKER_BASE_URL=<tunnel-url>` in `Sandbox.create`'s envs. Alternative: split-brain — dashboard local, tray plane at `https://www.sliccy.ai` (or staging). Tests less of the worker path but doesn't need a tunnel.
+
+## Security considerations
+
+**Token in localStorage**: any XSS on `sliccy.ai/cloud` could exfiltrate the IMS Bearer. Mitigations:
+
+- Strict CSP on `/cloud` and `/auth/cloud-callback`: `default-src 'self'; script-src 'self'; connect-src 'self' https://ims-na1.adobelogin.com`. No inline scripts. No third-party origins beyond IMS.
+- Subresource Integrity on any external assets (none planned for v1; the dashboard is fully self-hosted).
+- The dashboard is single-purpose static HTML/JS served by the worker; no user-generated content, no markdown rendering, no postMessage from unknown origins (the IMS callback's `postMessage` is origin-checked).
+- Incident response: revoke a compromised token by adding the user's email to `BLOCKED_EMAILS` and waiting up to 10min for the worker auth cache to expire. Forced flush via `clearAuthCache()`-equivalent admin endpoint (v1.1 if needed).
+
+**Token in e2b sandbox env**: `ADOBE_IMS_TOKEN` is passed via `Sandbox.create({ envs })`. e2b stores these and they MAY appear in their dashboard, support dumps, or audit logs. Accept this as trusted-vendor risk; e2b is on Adobe's vendor list. Document in worker code: "ADOBE_IMS_TOKEN is exposed to e2b infrastructure by design; rotation TTL is bounded by IMS access-token lifetime (~24h)."
+
+**E2B_API_KEY in Wrangler secrets**: a single shared key bills the Adobe team account. Mitigations:
+
+- Worker secret, never reachable from browser (verified by the Phase 0 spike).
+- Per-user rate limits (above) prevent any single compromised user from runaway-spawning.
+- Worker alerts on sandbox count >100 in 10min (anomaly signal).
+- Key rotation: standard Wrangler secret rotation process; document in worker CLAUDE.md.
+
+**joinUrl is bearer-grade**: anyone with the URL can attach as a follower. Listed as a v1 non-goal for per-recipient sharing, but the risk needs to be visible to users:
+
+- Dashboard's "Open" affordance has a tooltip: "This link grants follower access — only share with people you trust to see this cone's screen and chat."
+- Copy-link UX shows the same warning once.
+- Worker doesn't expose joinUrl in any log or metric output.
+
+**Admin endpoint hardening**: `GET /api/cloud/admin/stats` (note: renamed from `_admin/stats` to avoid the underscore-path convention question) runs through the same JWT pipeline as user endpoints, then additionally requires `payload.sub ∈ ADMIN_USER_IDS` (env var, CSV). No IDOR: the response is aggregate counts only, never per-user PII beyond admin's own identity. Logged separately for audit.
+
+**JWT cache invalidation**: cache by `SHA-256(token)`. Invalidate on explicit sign-out (dashboard hits a `POST /api/cloud/sign-out` that takes the token-hash off the cache; even though there's no server session, this lets us cap a compromised token to <10min remaining lifetime). Also invalidate on any 401 from the `/ims/profile/v1` fallback (token was revoked at IMS).
+
 ## Dashboard UI
 
-Vanilla SPA served from the worker. No framework. ~500 LoC.
+Vanilla SPA served from the worker. No framework. Budget ~800-1000 LoC (IMS popup choreography, polling, cap UI, error mapping, cancel-during-create).
 
 ```
 ┌─ sliccy.ai/cloud ─────────────────────────────────────────┐
@@ -240,6 +421,10 @@ Vanilla SPA served from the worker. No framework. ~500 LoC.
 
 **Open behavior**: cone joinUrl opens in a new tab (`target="_blank"`). Follower tab is independent of the dashboard tab.
 
+**Create cancellation**: during the ~25s create spinner the Create button becomes a Cancel button. Clicking Cancel sends `POST /api/cloud/kill { sandboxId }` against whatever sandboxId the worker has already returned (or just no-op if create hasn't reached e2b yet — the DO holds a flag). Kill of a half-spawned sandbox is safe and cheap.
+
+**Sign-out**: clears `localStorage['cloud-ims-token']` AND hits `POST /api/cloud/sign-out` so the worker's token cache forgets the entry. The DO state stays — the user's cones persist; only the dashboard session ends.
+
 **Errors**: top-right toast with the API-returned code (CAP_EXCEEDED, NOT_FOUND, LEADER_NOT_READY) and a one-line explanation. Full error stashed in console for debug.
 
 ## Caps and quotas
@@ -259,12 +444,22 @@ No "total runtime per month" cap in v1. E2B's `auto-pause-on-cap` (which we alre
 
 | Layer          | Scope                                                                                                                                                  | Where                                                       |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
-| Unit           | Worker handlers + DO state mutations + cap enforcement + JWT verification — mock e2b SDK at the substrate boundary                                     | `packages/cloudflare-worker/tests/cloud.test.ts` (new)      |
+| Unit           | Worker handlers + DO state mutations + cap enforcement + JWT verification + reconciliation logic — mock e2b SDK at the substrate boundary              | `packages/cloudflare-worker/tests/cloud.test.ts` (new)      |
+| Shared core    | `cloud-core` operations (startCone, listCones, etc.) with `FakeSubstrate` + in-memory `Registry`. Same fake used by CLI tests and worker tests.        | `packages/cloud-core/tests/`                                |
 | Live opt-in    | Real e2b sandbox lifecycle via the worker substrate code — env-var-gated, same pattern as the existing `packages/node-server/tests/cloud-live.test.ts` | `packages/cloudflare-worker/tests/cloud-live.test.ts` (new) |
 | Deployed smoke | One end-to-end against staging post-deploy: spawn via real API, get joinUrl, kill                                                                      | extends `tests/deployed.test.ts`                            |
 | Template smoke | Confirm just-published `slicc` template boots                                                                                                          | existing `verify-template.sh` in CI                         |
 
-The `FakeSubstrate` from `packages/node-server/tests/cloud/fake-substrate.ts` ports to the worker as-is — the worker depends on the substrate interface, not e2b directly.
+**Specific test cases worth calling out** (not exhaustive, but the ones the gaps in the previous spec missed):
+
+- **DO concurrency**: two parallel `POST /start` requests when at running cap — exactly one succeeds, the other gets `CAP_EXCEEDED`. Verifies `blockConcurrencyWhile` is correctly scoped.
+- **Reconciliation drift**: DO has cone X, e2b returns X plus untracked Y, missing Z → list returns X (state from e2b), Y (rebuilt), Z (marked dead).
+- **Resume without fresh token**: caller's Bearer is expired during dashboard → 401, dashboard re-auths, retries. Verifies the re-auth loop end-to-end.
+- **Cap on resume**: user has 1 running + 1 paused (caps 1/5) → resume the paused one → `CAP_EXCEEDED` until they pause the running one.
+- **CSP enforcement**: dashboard fetches non-allowed origin → blocked. Smoke test for the CSP header shape.
+- **JWT cache invalidation**: token in cache, `/sign-out` hits → next request with same token → re-validates (cache miss).
+
+The `FakeSubstrate` from `packages/node-server/tests/cloud/fake-substrate.ts` moves with the rest of `cloud/` into `packages/cloud-core/tests/`. Both CLI and worker tests consume the same fake.
 
 IMS tests: mock the jwks endpoint, sign a test JWT with a known key. `jose` library standard.
 
@@ -307,4 +502,5 @@ Phase transition is a Wrangler env-var change + redeploy — no code change, no 
 - **Multiple templates**: only `slicc`. No thin/fat/GPU variants.
 - **Mobile UI**: desktop-only. The follower view (existing webapp) works on mobile already; the cone-management dashboard is desktop-first.
 - **Persistent audit log**: no per-user "who created what when" trail beyond ephemeral Workers logs.
-- **Backend-service fallback**: if e2b SDK turns out to be Workers-incompatible during implementation, the spec migrates to a dedicated Node backend service. Captured here as a known fallback; not the design intent.
+- **Backend-service fallback** is NOT a v1 non-goal — it's a Phase 0 spike outcome. If the spike says Workers+e2b is incompatible, the worker becomes a reverse proxy to a dedicated Node service and the rest of the design adjusts (DO moves to the Node service or stays as session lookup; static dashboard still served by worker). Captured in the deployment section, not here.
+- **Periodic janitor for orphan sandboxes**: reconciliation on every `/list` and `/start` handles most drift. A standalone "kill orphans tagged with my userId" cron is v1.1 if telemetry shows orphans accumulating.
