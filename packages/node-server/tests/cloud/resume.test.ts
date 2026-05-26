@@ -34,6 +34,9 @@ describe('slicc --cloud resume', () => {
     await h.pause();
     sub.seedFile(h.sandboxId, '/tmp/slicc-join.json', oldJoin);
 
+    const envFile = path.join(dir, 'secrets.env');
+    await fs.writeFile(envFile, 'ADOBE_IMS_TOKEN=test-token\n');
+
     const reg = new FileRegistry(registryPath);
     await reg.append({
       substrate: 'e2b',
@@ -66,6 +69,7 @@ describe('slicc --cloud resume', () => {
 
     const result = await runResume({
       substrate: sub,
+      envFilePath: envFile,
       registryPath,
       query: 'task-1',
       localSliccVersion: '3.2.2',
@@ -91,6 +95,9 @@ describe('slicc --cloud resume', () => {
       autoPauseOnCap: true,
     });
     sub.seedFile(h.sandboxId, '/tmp/slicc-join.json', oldJoin);
+
+    const envFile = path.join(dir, 'secrets.env');
+    await fs.writeFile(envFile, 'ADOBE_IMS_TOKEN=test-token\n');
 
     const reg = new FileRegistry(registryPath);
     await reg.append({
@@ -122,6 +129,7 @@ describe('slicc --cloud resume', () => {
 
     const result = await runResume({
       substrate: sub,
+      envFilePath: envFile,
       registryPath,
       query: 'task-1',
       localSliccVersion: '3.2.2',
@@ -141,6 +149,9 @@ describe('slicc --cloud resume', () => {
       autoPauseOnCap: true,
     });
     sub.seedFile(h.sandboxId, '/tmp/slicc-join.json', oldJoin);
+
+    const envFile = path.join(dir, 'secrets.env');
+    await fs.writeFile(envFile, 'ADOBE_IMS_TOKEN=test-token\n');
 
     const reg = new FileRegistry(registryPath);
     await reg.append({
@@ -172,6 +183,7 @@ describe('slicc --cloud resume', () => {
 
     const result = await runResume({
       substrate: sub,
+      envFilePath: envFile,
       registryPath,
       query: 'task-1',
       localSliccVersion: '3.2.2',
@@ -191,6 +203,9 @@ describe('slicc --cloud resume', () => {
     });
     sub.seedFile(h.sandboxId, '/tmp/slicc-join.json', oldJoin);
 
+    const envFile = path.join(dir, 'secrets.env');
+    await fs.writeFile(envFile, 'ADOBE_IMS_TOKEN=test-token\n');
+
     const reg = new FileRegistry(registryPath);
     await reg.append({
       substrate: 'e2b',
@@ -208,6 +223,7 @@ describe('slicc --cloud resume', () => {
 
     const resumePromise = runResume({
       substrate: sub,
+      envFilePath: envFile,
       registryPath,
       query: 'task-1',
       localSliccVersion: '3.2.2',
@@ -218,6 +234,66 @@ describe('slicc --cloud resume', () => {
     await expect(resumePromise).rejects.toMatchObject({
       name: 'CloudError',
       code: 'LEADER_NOT_READY',
+    });
+  });
+
+  it('writes refresh secrets to /slicc/secrets.env before kicking leader-restart', async () => {
+    const refreshBody = 'ADOBE_IMS_TOKEN=fresh-bearer\n';
+    const envFile = path.join(dir, 'secrets.env');
+    await fs.writeFile(envFile, refreshBody);
+
+    const sub = new FakeSubstrate();
+    const h = await sub.create({
+      template: 'slicc',
+      envVars: {},
+      metadata: { sliccVersion: '3.2.2' },
+      autoPauseOnCap: true,
+    });
+    await h.pause();
+    sub.seedFile(h.sandboxId, '/tmp/slicc-join.json', oldJoin);
+
+    const reg = new FileRegistry(registryPath);
+    await reg.append({
+      substrate: 'e2b',
+      sandboxId: h.sandboxId,
+      name: 'paused',
+      state: 'paused',
+      createdAt: '2026-05-01T00:00:00Z',
+      lastSeen: '2026-05-01T00:00:00Z',
+      lastJoinUpdatedAt: '2026-05-01T00:00:00Z',
+      joinUrl: 'https://w/old',
+      trayId: 'old-tray',
+    });
+
+    sub.queueRun(h.sandboxId, (cmd) => {
+      if (cmd.includes('leader-restart')) {
+        sub.seedFile(
+          h.sandboxId,
+          '/tmp/slicc-join.json',
+          JSON.stringify({
+            joinUrl: 'https://w/new',
+            trayId: 'old-tray',
+            runtime: 'slicc-hosted-leader',
+            sliccVersion: '3.2.2',
+            updatedAt: new Date().toISOString(),
+          })
+        );
+      }
+      return { stdout: '200', stderr: '', exitCode: 0 };
+    });
+
+    await runResume({
+      substrate: sub,
+      envFilePath: envFile,
+      registryPath,
+      query: 'paused',
+      localSliccVersion: 'test',
+    });
+
+    const writes = sub.getWrites(h.sandboxId);
+    expect(writes).toContainEqual({
+      path: '/slicc/secrets.env',
+      contents: refreshBody,
     });
   });
 });

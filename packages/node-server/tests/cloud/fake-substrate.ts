@@ -12,6 +12,7 @@ interface FakeSandboxData {
   state: 'running' | 'paused' | 'dead';
   metadata: Record<string, string>;
   files: Map<string, string>;
+  writes: Array<{ path: string; contents: string }>;
   name?: string;
   createdAt: string;
   runResponses: Array<RunResult | ((cmd: string) => RunResult)>;
@@ -32,6 +33,7 @@ export class FakeSubstrate implements SandboxSubstrate {
       state: 'running',
       metadata: { ...opts.metadata },
       files: new Map(),
+      writes: [],
       name: opts.name,
       createdAt: new Date().toISOString(),
       runResponses: [],
@@ -66,6 +68,11 @@ export class FakeSubstrate implements SandboxSubstrate {
     this.sandboxes.get(sandboxId)!.runResponses.push(response);
   }
 
+  /** Get writes recorded by writeFile calls on a given sandbox. */
+  getWrites(sandboxId: string): Array<{ path: string; contents: string }> {
+    return this.sandboxes.get(sandboxId)?.writes ?? [];
+  }
+
   private handle(data: FakeSandboxData): SandboxHandle {
     return {
       sandboxId: data.id,
@@ -84,10 +91,9 @@ export class FakeSubstrate implements SandboxSubstrate {
         createdAt: data.createdAt,
       }),
       writeFile: async (path, contents) => {
-        data.files.set(
-          path,
-          typeof contents === 'string' ? contents : new TextDecoder().decode(contents)
-        );
+        const text = typeof contents === 'string' ? contents : new TextDecoder().decode(contents);
+        data.files.set(path, text);
+        data.writes.push({ path, contents: text });
       },
       readFile: async (path) => {
         const v = data.files.get(path);

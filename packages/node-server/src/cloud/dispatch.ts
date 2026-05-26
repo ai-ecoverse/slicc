@@ -7,7 +7,7 @@ export type ParsedCloudArgs =
     }
   | { subcommand: 'list'; args: { substrate: SubstrateId } }
   | { subcommand: 'pause'; args: { substrate: SubstrateId; query: string } }
-  | { subcommand: 'resume'; args: { substrate: SubstrateId; query: string } }
+  | { subcommand: 'resume'; args: { substrate: SubstrateId; query: string; envFile?: string } }
   | { subcommand: 'kill'; args: { substrate: SubstrateId; query: string } };
 
 const VALID_SUBCOMMANDS = ['start', 'list', 'pause', 'resume', 'kill'] as const;
@@ -68,7 +68,6 @@ export function parseCloudArgs(argv: string[]): ParsedCloudArgs | null {
     case 'list':
       return { subcommand: 'list', args: { substrate: baseArgs.substrate } };
     case 'pause':
-    case 'resume':
     case 'kill':
       if (!baseArgs.query) {
         throw new Error(`${sub} requires a query argument (sandbox ID or name)`);
@@ -76,6 +75,18 @@ export function parseCloudArgs(argv: string[]): ParsedCloudArgs | null {
       return {
         subcommand: sub,
         args: { substrate: baseArgs.substrate, query: baseArgs.query },
+      };
+    case 'resume':
+      if (!baseArgs.query) {
+        throw new Error(`${sub} requires a query argument (sandbox ID or name)`);
+      }
+      return {
+        subcommand: 'resume',
+        args: {
+          substrate: baseArgs.substrate,
+          query: baseArgs.query,
+          envFile: baseArgs.envFile,
+        },
       };
     default:
       throw new Error(`unknown subcommand: ${sub}`);

@@ -2092,6 +2092,7 @@ async function runCloudSubcommand(parsed: ParsedCloudArgs): Promise<void> {
     case 'resume': {
       const result = await runResume({
         substrate,
+        envFilePath: parsed.args.envFile ?? defaultSecretsPath(),
         registryPath,
         query: parsed.args.query,
         localSliccVersion,
