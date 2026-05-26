@@ -1,0 +1,33 @@
+{
+  "name": "@slicc/cloud-core",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./tests/fake-substrate": {
+      "types": "./dist/tests/fake-substrate.d.ts",
+      "default": "./dist/tests/fake-substrate.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@slicc/shared-ts": "*",
+    "e2b": "^2.23.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.6"
+  }
+}
