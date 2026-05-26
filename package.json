@@ -84,7 +84,7 @@
     "lint-staged": "17.0.5",
     "prettier": "3.8.3",
     "semantic-release": "25.0.3",
-    "tsx": "4.22.2",
+    "tsx": "4.22.3",
     "typescript": "^6.0.0",
     "typescript-eslint": "8.59.4",
     "vite": "8.0.13",
