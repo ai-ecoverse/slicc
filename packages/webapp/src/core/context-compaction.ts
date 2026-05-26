@@ -22,6 +22,21 @@ import { completeSimple } from '@earendil-works/pi-ai';
 // modules that would break Vite's browser bundle. The compaction submodule itself
 // only depends on @earendil-works/pi-ai (already a browser-safe dependency).
 // Types are declared in packages/webapp/src/types/pi-coding-agent-compaction.d.ts.
+//
+// `estimateTokens` (chars/4 heuristic, conservative — overestimates) accounts for:
+//   - user:              `content` string OR text blocks in array content
+//   - assistant:         text blocks, thinking blocks, and toolCall blocks
+//                        (name length + JSON.stringify(arguments).length)
+//   - toolResult/custom: `content` string OR text blocks in array content,
+//                        + 4800 chars (~1200 tokens) per image block
+//   - bashExecution:     command + output length
+//   - branchSummary / compactionSummary: summary length
+// Verified against node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/
+// compaction.js (function `estimateTokens`). Tool-result text payloads — including
+// the multi-megabyte blobs that `open --view` can emit — ARE counted, so no wrapper
+// is required here. The regression guard lives in
+// tests/core/context-compaction-real-estimator.test.ts which exercises the un-mocked
+// estimator end-to-end.
 import {
   estimateTokens,
   shouldCompact,
