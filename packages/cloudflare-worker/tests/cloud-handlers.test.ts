@@ -6,7 +6,9 @@ import {
   handleResume,
   handleKill,
 } from '../src/cloud/handlers.js';
-import { setCached, clearAll as clearAuthCache } from '../src/cloud/auth-cache.js';
+import { handleSignOut } from '../src/cloud/handler-signout.js';
+import { handleAdminStats } from '../src/cloud/handler-admin.js';
+import { setCached, getCached, clearAll as clearAuthCache } from '../src/cloud/auth-cache.js';
 import { clearAll as clearRateLimit } from '../src/cloud/rate-limit.js';
 import {
   makeCloudEnv,
@@ -137,5 +139,47 @@ describe('handleKill', () => {
     expect(res.status).toBe(200);
     expect(getRecordedCalls()[0]!.endpoint).toBe('/kill-cone');
     expect(getRecordedCalls()[0]!.body).toEqual({ sandboxId: 'sbx-1' });
+  });
+});
+
+describe('handleSignOut', () => {
+  it('invalidates the auth cache for the bearer', async () => {
+    await setCached('drop', { userId: 'u', email: 'k@adobe.com', userName: 'K' });
+    const req = new Request('https://w/api/cloud/sign-out', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer drop' },
+    });
+    const res = await handleSignOut(req);
+    expect(res.status).toBe(200);
+    expect(await getCached('drop')).toBeNull();
+  });
+
+  it('returns 401 without Authorization header', async () => {
+    const req = new Request('https://w/api/cloud/sign-out', { method: 'POST' });
+    const res = await handleSignOut(req);
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('handleAdminStats', () => {
+  it('returns 403 for non-admin users', async () => {
+    await setCached('bearer', { userId: 'not-admin', email: 'k@adobe.com', userName: 'K' });
+    const env = { ...makeCloudEnv(), ADMIN_USER_IDS: 'someone-else' };
+    const req = new Request('https://w/api/cloud/admin/stats', {
+      headers: { Authorization: 'Bearer bearer' },
+    });
+    const res = await handleAdminStats(req, env);
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe('NOT_ADMIN');
+  });
+
+  it('returns 200 for admin users', async () => {
+    await setCached('bearer', { userId: 'admin-1', email: 'k@adobe.com', userName: 'K' });
+    const env = { ...makeCloudEnv(), ADMIN_USER_IDS: 'admin-1, admin-2' };
+    const req = new Request('https://w/api/cloud/admin/stats', {
+      headers: { Authorization: 'Bearer bearer' },
+    });
+    const res = await handleAdminStats(req, env);
+    expect(res.status).toBe(200);
   });
 });
