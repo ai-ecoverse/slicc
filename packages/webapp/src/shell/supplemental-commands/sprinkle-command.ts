@@ -13,6 +13,7 @@
 
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { stdinAsText } from '../just-bash-compat.js';
 import { showToolUIFromContext } from '../../tools/tool-ui.js';
 import type { SprinkleManager } from '../../ui/sprinkle-manager.js';
 import {
@@ -66,8 +67,9 @@ export function createSprinkleCommand(): Command {
       let html = args.slice(1).join(' ');
 
       // Check for piped stdin
-      if (!html && ctx.stdin) {
-        html = ctx.stdin;
+      if (!html) {
+        const stdinText = stdinAsText(ctx.stdin);
+        if (stdinText) html = stdinText;
       }
 
       if (!html) {

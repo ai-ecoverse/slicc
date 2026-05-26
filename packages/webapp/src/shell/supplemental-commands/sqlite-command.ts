@@ -1,5 +1,6 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { stdinAsText } from '../just-bash-compat.js';
 import { formatSqlValue, getSqlJs } from './shared.js';
 
 function sqliteHelp(): { stdout: string; stderr: string; exitCode: number } {
@@ -21,7 +22,7 @@ export function createSqliteCommand(name: 'sqlite3' | 'sqllite' = 'sqlite3'): Co
       sqlArgv = args.slice(1);
     }
 
-    const sql = sqlArgv.join(' ').trim() || ctx.stdin.trim();
+    const sql = sqlArgv.join(' ').trim() || stdinAsText(ctx.stdin).trim();
     if (!sql) {
       return {
         stdout: '',

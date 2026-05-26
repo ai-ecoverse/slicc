@@ -17,6 +17,7 @@
 
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { stdinAsText } from '../just-bash-compat.js';
 import { runInRealm } from '../../kernel/realm/realm-runner.js';
 import type { RealmFactory } from '../../kernel/realm/realm-runner.js';
 import {
@@ -98,8 +99,8 @@ export function createPython3LikeCommand(
       filename = scriptArg;
       sysArgv = [scriptArg, ...args.slice(1)];
       procArgv = [name, scriptArg, ...args.slice(1)];
-    } else if (ctx.stdin.trim().length > 0) {
-      code = ctx.stdin;
+    } else if (stdinAsText(ctx.stdin).trim().length > 0) {
+      code = stdinAsText(ctx.stdin);
       filename = '<stdin>';
       sysArgv = ['<stdin>'];
       procArgv = [name];
@@ -145,7 +146,7 @@ export function createPython3LikeCommand(
         cwd: ctx.cwd,
         filename,
         ctx,
-        stdin: ctx.stdin,
+        stdin: stdinAsText(ctx.stdin),
         pyodideIndexURL,
         pyodideSyncDirs: syncDirs,
       });
@@ -163,7 +164,7 @@ export function createPython3LikeCommand(
       cwd: ctx.cwd,
       filename,
       ctx,
-      stdin: ctx.stdin,
+      stdin: stdinAsText(ctx.stdin),
       pyodideIndexURL,
       pyodideSyncDirs: syncDirs,
       procKind: 'py',

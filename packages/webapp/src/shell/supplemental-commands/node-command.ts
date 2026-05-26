@@ -16,6 +16,7 @@
 
 import { defineCommand } from 'just-bash';
 import type { Command, CommandContext } from 'just-bash';
+import { EMPTY_BYTES, stdinAsText } from '../just-bash-compat.js';
 import { NODE_VERSION } from './shared.js';
 import { executeJsCode } from '../jsh-executor.js';
 
@@ -74,11 +75,11 @@ export function createNodeCommand(): Command {
       code = await ctx.fs.readFile(scriptPath);
       filename = scriptArg;
       argv = ['node', scriptArg, ...args.slice(1)];
-    } else if (ctx.stdin.trim().length > 0) {
-      code = ctx.stdin;
+    } else if (stdinAsText(ctx.stdin).trim().length > 0) {
+      code = stdinAsText(ctx.stdin);
       filename = '<stdin>';
       argv = ['node'];
-      innerCtx = { ...ctx, stdin: '' };
+      innerCtx = { ...ctx, stdin: EMPTY_BYTES };
     } else if (args.length > 0) {
       return {
         stdout: '',

@@ -28,6 +28,7 @@
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
 import type { BashExecResult, Command, CommandName } from 'just-bash';
+import { EMPTY_BYTES } from './just-bash-compat.js';
 import { VfsAdapter } from './vfs-adapter.js';
 import { GitCommands } from '../git/git-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
@@ -373,7 +374,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
         fs: this.vfsAdapter,
         cwd: this.cwd,
         env: new Map(Object.entries(this.lastEnv)),
-        stdin: '',
+        stdin: EMPTY_BYTES,
         exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
       },
       this.buildJshProcessConfig()
@@ -598,7 +599,7 @@ export class WasmShellHeadless implements HeadlessShellLike {
         fs: this.vfsAdapter,
         cwd: this.cwd,
         env: new Map(Object.entries(this.lastEnv)),
-        stdin: '',
+        stdin: EMPTY_BYTES,
         exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
       },
       this.buildJshProcessConfig()
