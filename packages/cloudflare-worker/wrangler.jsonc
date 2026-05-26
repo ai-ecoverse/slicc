@@ -3,6 +3,7 @@
   "name": "slicc-tray-hub",
   "main": "src/index.ts",
   "compatibility_date": "2026-03-11",
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "assets": {
     "directory": "../../dist/ui/",
