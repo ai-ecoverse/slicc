@@ -13,7 +13,6 @@ import {
   mkdirSync,
   copyFileSync,
   existsSync,
-  statSync,
 } from 'node:fs';
 import { join, relative, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
