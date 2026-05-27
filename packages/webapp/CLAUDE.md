@@ -65,6 +65,15 @@ Deep reference: `docs/kernel/process-model.md`.
 - `jsh-discovery.ts` and `bsh-discovery.ts` provide the raw scans used by the shared catalog.
 - `vfs-adapter.ts` bridges shell calls into the virtual filesystem and forwards `canWrite` (duck-typed so both `VirtualFS` and `RestrictedFS` back it without branching).
 
+### MCP Servers
+
+- Path: `packages/webapp/src/shell/mcp/`; command in `supplemental-commands/mcp-command.ts`.
+- Subcommands: `mcp add <url> [name]`, `mcp list`, `mcp delete <name>`, `mcp invoke <name> [tool] [--flag value]`, `mcp refresh <name>`.
+- Each registered server is exposed as an `mcp:<name>` OAuth provider (visible in `oauth-token --list`) when the server requires auth.
+- `mcp add` auto-writes an alias shim at `/workspace/.mcp/aliases/<name>.jsh` so `<name>` resolves as a top-level command and forwards to `mcp invoke <name>`.
+- MCP Apps declared by the server via `apps/list` are materialized as sprinkles under `/workspace/.mcp/sprinkles/<name>/`.
+- Registration is lazy: the first subcommand call re-registers all servers from `/workspace/.mcp/servers.json` so providers survive a page reload.
+
 ### CDP
 
 - Path: `packages/webapp/src/cdp/`
@@ -87,6 +96,7 @@ Deep reference: `docs/kernel/process-model.md`.
 - The iOS native follower (`packages/ios-app/SliccFollower/`) is a **separate implementation** of the same protocol — it does NOT consume `tray-follower-sync.ts`. Match its behavior when adding follower-side rendering (e.g., sprinkle handling lives in `AppState.handleDataChannelMessage` + `AppState.fetchSprinkleContent` on the Swift side).
 - Sprinkle sync: both the TS browser follower (`SprinkleFollowerController` + `FollowerSyncManager.fetchSprinkleContent`) and the iOS follower (`AppState.fetchSprinkleContent` + `SprinkleWebView`) implement the same chunk-reassemble + waiter-dedup + lick-forward flow. Leader-side wiring lives in `page-leader-tray.ts` (`getSprinkles`, `readSprinkleContent`, `onSprinkleLick`, periodic `broadcastSprinklesList`). The leader pushes `sprinkle.update` payloads when `SprinkleManager.sendToSprinkle(name, data)` runs.
 - Leaving a tray: `scoops/tray-leave.ts` exposes `leaveTray()` with a discriminated `LeaveTrayWire` union (offscreen-hook / extension-panel / standalone-worker / standalone-page) — exactly one transport is selected per call. `ui/tray-leave-runtime.ts` houses `performTrayLeave(opts, deps)`, the page-side executor used by both the `slicc:tray-leave` window listener in `main.ts` AND the panel-RPC `tray-leave` op. Result is a discriminated `TrayLeaveResult` (`noop` | `left` | `switched`) so the shell formatter narrows exhaustively. Storage write order is load-bearing: on a leader-restart the storage update happens AFTER `startLeader` resolves — a failed startup rolls back to fully-dormant storage rather than persisting a stale leader-on-failed-worker config. UI surface is the "Stop multi-browser sync" / "Disconnect from leader" button in the avatar popover (`ui/layout.ts`); shell surface is `host leave [--leader <url>]`.
+- Re-enabling after Stop: `ui/tray-join-url.ts:computeTrayMenuModel` returns `kind: 'leader-offer'` when both leader and follower are `inactive` (previously `'hidden'`, which removed the entire tray section from the avatar popover and stranded users who clicked Stop). The popover's `appendTrayMenu` renders an "Enable multi-browser sync" button that calls `leaveTray({ workerBaseUrl })` after resolving the worker URL via `resolveTrayWorkerBaseUrl` (so `VITE_WORKER_BASE_URL` and any surviving stored value still win over the dev/prod default — matching `main.ts` and `offscreen.ts` boot resolution). The existing `kind: 'switched'` branch in `performTrayLeave` covers `inactive → leader` without a separate helper, and `resolveAmbientLeaveTrayTransport`'s three ambient transports (extension panel / standalone page / offscreen hook) keep routing identical to the leave path. **Known gap:** the offscreen-side `activeHandle.leader.start()` rejection at `chrome-extension/src/offscreen.ts:497` rolls back to `state: 'inactive'` and only logs to telemetry — the user sees the offer button again with no inline error. Plumbing that signal back to the panel is tracked separately.
 
 ### Core Agent
 

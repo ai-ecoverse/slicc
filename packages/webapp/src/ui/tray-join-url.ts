@@ -18,23 +18,29 @@ export interface TrayMenuFollowerInput {
 }
 
 export type TrayMenuModel =
-  | { kind: 'hidden' }
+  | { kind: 'leader-offer'; label: string; caption: string }
   | { kind: 'leader-copy'; joinUrl: string; label: string; caption: string }
   | { kind: 'leader-pending'; label: string; caption: string }
   | { kind: 'follower'; label: string; caption: string };
 
 /**
  * Decide what the Tray section of the avatar popover should render,
- * given leader and follower status snapshots. Returns `{ kind: 'hidden' }`
- * when neither runtime is active so callers can skip the section
- * entirely.
+ * given leader and follower status snapshots. Returns `{ kind:
+ * 'leader-offer' }` when neither runtime is active so the user can
+ * re-enable multi-browser sync after a previous "Stop" (or a leader
+ * start failure that landed the runtime back in `inactive`) without
+ * dropping into the shell or reloading the extension.
  */
 export function computeTrayMenuModel(
   leader: TrayMenuLeaderInput,
   follower: TrayMenuFollowerInput
 ): TrayMenuModel {
   if (leader.state === 'inactive' && follower.state === 'inactive') {
-    return { kind: 'hidden' };
+    return {
+      kind: 'leader-offer',
+      label: 'Enable multi-browser sync',
+      caption: 'Connect another browser to this session.',
+    };
   }
   if (leader.state === 'leader' && leader.session?.joinUrl) {
     return {

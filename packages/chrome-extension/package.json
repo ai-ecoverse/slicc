@@ -9,8 +9,8 @@
   },
   "dependencies": {
     "@imagemagick/magick-wasm": "^0.0.40",
-    "@earendil-works/pi-ai": "^0.74.0",
-    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-ai": "^0.75.0",
+    "@earendil-works/pi-coding-agent": "^0.75.0",
     "@slicc/shared-ts": "*"
   }
 }

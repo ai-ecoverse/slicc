@@ -426,10 +426,17 @@ export class SprinkleFollowerController {
         window.open(url, '_blank');
       },
       close: () => this.closeLocally(sprinkleName),
+      minimize: () => {
+        // Follower-rendered sprinkles don't have a managed rail — minimize
+        // is a local UI operation on the leader. No-op on the follower side.
+      },
       stopCone: () => {
         // Special-case action that the leader's lick router maps to "abort
         // the cone agent." Matches iOS `SprinkleWebView` `case "stopCone"`.
         this.sync.sendSprinkleLick(sprinkleName, { action: '__stopCone__' });
+      },
+      attachImage: () => {
+        // No-op on follower — the follower doesn't own the chat input.
       },
     };
     return api;

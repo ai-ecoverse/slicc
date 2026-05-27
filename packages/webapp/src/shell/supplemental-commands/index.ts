@@ -19,6 +19,7 @@ import { createUnzipCommand } from './unzip-command.js';
 import { createWebhookCommand } from './webhook-command.js';
 import { createWebsocatCommand } from './websocat-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
+import { createMcpCommand } from './mcp-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createOAuthTokenCommand } from './oauth-token-command.js';
@@ -95,6 +96,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWebhookCommand(),
     createWebsocatCommand(),
     createCrontaskCommand(),
+    createMcpCommand({ fs: options.fs, scriptCatalog: options.scriptCatalog }),
     createFsWatchCommand(),
     createSprinkleCommand(),
     createPdftkCommand('pdftk'),

@@ -131,3 +131,19 @@ export function getRegisteredProviderConfig(providerId: string): ProviderConfig 
 export function getRegisteredProviderIds(): string[] {
   return [...providerConfigRegistry.keys()];
 }
+
+/**
+ * Register a provider config at runtime. Used by dynamically-discovered
+ * providers (e.g. MCP servers added via `mcp add`) that aren't known at
+ * build time and therefore can't be picked up by the import-glob in
+ * `registerProviders()`. Subsequent calls with the same id overwrite the
+ * existing entry, which keeps re-registration during a session idempotent.
+ */
+export function registerProviderConfig(config: ProviderConfig): void {
+  providerConfigRegistry.set(config.id, config);
+}
+
+/** Remove a previously-registered provider config (e.g. on `mcp delete`). */
+export function unregisterProviderConfig(providerId: string): boolean {
+  return providerConfigRegistry.delete(providerId);
+}

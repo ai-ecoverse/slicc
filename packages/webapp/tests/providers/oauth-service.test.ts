@@ -34,7 +34,10 @@ vi.stubGlobal(
   vi.fn(() => Promise.resolve({ status: 204 }))
 );
 
-// Default location: standalone CLI (no polling)
+// Default location: standalone CLI. Polling is always on now, so each
+// test that cares about poll timing should mockResolvedValue 204 on fetch
+// up front (or queue specific responses). Tests that resolve via
+// postMessage before the first poll fires (1 s) don't need to.
 vi.stubGlobal('location', { pathname: '/', search: '' });
 
 function fireMessage(data: unknown, opts: { origin?: string; source?: object | null } = {}) {
@@ -175,6 +178,7 @@ describe('createOAuthLauncher', () => {
     // Second poll: result available
     mockFetch.mockResolvedValueOnce({
       status: 200,
+      ok: true,
       json: () =>
         Promise.resolve({
           redirectUrl: 'http://localhost:5710/auth/callback#token=polled',
@@ -196,21 +200,22 @@ describe('createOAuthLauncher', () => {
     vi.stubGlobal('location', { pathname: '/', search: '' });
   });
 
-  it('does not poll in standalone CLI mode', async () => {
+  it('polls in standalone CLI mode and postMessage wins the race when it arrives first', async () => {
     vi.stubGlobal('location', { pathname: '/', search: '' });
 
     const mockFetch = vi.mocked(fetch);
+    // Server never has a result during the postMessage window
+    mockFetch.mockResolvedValue({ status: 204 } as Response);
 
     const launcher = createOAuthLauncher();
     const promise = launcher('https://idp.example.com/authorize');
 
-    // Advance past where polling would fire
-    await vi.advanceTimersByTimeAsync(2000);
+    // Let one poll fire and return 204
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mockFetch).toHaveBeenCalledWith('/api/oauth-result');
+    const callsBeforeMessage = mockFetch.mock.calls.length;
 
-    // fetch should NOT have been called (no polling in standalone mode)
-    expect(mockFetch).not.toHaveBeenCalled();
-
-    // Resolve via postMessage
+    // Now postMessage wins
     fireMessage({
       type: 'oauth-callback',
       redirectUrl: 'http://localhost:5710/auth/callback#token=msg',
@@ -218,6 +223,109 @@ describe('createOAuthLauncher', () => {
 
     const result = await promise;
     expect(result).toBe('http://localhost:5710/auth/callback#token=msg');
+
+    // Advance further — poll timer must have been cleared
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mockFetch.mock.calls.length).toBe(callsBeforeMessage);
+  });
+
+  it('resolves via polling in standalone CLI mode when postMessage never arrives (COOP-severed opener)', async () => {
+    vi.stubGlobal('location', { pathname: '/', search: '' });
+
+    const mockFetch = vi.mocked(fetch);
+    // First poll: no result yet
+    mockFetch.mockResolvedValueOnce({ status: 204 } as Response);
+    // Second poll: result available (callback POSTed it after window.opener was severed)
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          redirectUrl: 'http://localhost:5710/auth/callback#token=polled-cli',
+        }),
+    } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=polled-cli');
+  });
+
+  it('resolves null after timeout when the server only ever returns 204', async () => {
+    vi.stubGlobal('location', { pathname: '/', search: '' });
+
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockResolvedValue({ status: 204 } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    // Drive the clock past the 120 s overall timeout while the server
+    // keeps returning 204. The promise must resolve null and the popup
+    // must be closed.
+    await vi.advanceTimersByTimeAsync(120_001);
+
+    const result = await promise;
+    expect(result).toBeNull();
+    expect(mockPopup.close).toHaveBeenCalled();
+    expect(mockFetch).toHaveBeenCalled();
+  });
+
+  it('resolves null and logs when the server returns an error payload', async () => {
+    vi.stubGlobal('location', { pathname: '/', search: '' });
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const mockFetch = vi.mocked(fetch);
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () => Promise.resolve({ error: 'access_denied' }),
+    } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(result).toBeNull();
+    expect(errSpy).toHaveBeenCalledWith(
+      '[oauth-service] Server relay OAuth error:',
+      'access_denied'
+    );
+    errSpy.mockRestore();
+  });
+
+  it('logs and keeps polling when fetch rejects', async () => {
+    vi.stubGlobal('location', { pathname: '/', search: '' });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mockFetch = vi.mocked(fetch);
+    // First poll throws, second poll returns the result
+    mockFetch.mockRejectedValueOnce(new Error('boom'));
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          redirectUrl: 'http://localhost:5710/auth/callback#token=after-error',
+        }),
+    } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=after-error');
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
   it('continues polling on server errors in Electron overlay mode', async () => {
@@ -225,10 +333,11 @@ describe('createOAuthLauncher', () => {
 
     const mockFetch = vi.mocked(fetch);
     // First poll: server error
-    mockFetch.mockResolvedValueOnce({ status: 500 } as Response);
+    mockFetch.mockResolvedValueOnce({ status: 500, ok: false } as Response);
     // Second poll: success
     mockFetch.mockResolvedValueOnce({
       status: 200,
+      ok: true,
       json: () =>
         Promise.resolve({
           redirectUrl: 'http://localhost:5710/auth/callback#token=recovered',
@@ -308,5 +417,40 @@ describe('getOAuthPageOrigin', () => {
     delete (globalThis as any).window;
     delete (globalThis as any).__slicc_panelRpc;
     await expect(getOAuthPageOrigin()).rejects.toThrow(/panel-RPC bridge/);
+  });
+});
+
+describe('createOAuthLauncher — runtime gating regression', () => {
+  // Regression guard for the COOP-polling fix: extension contexts must
+  // still route through chrome.identity.launchWebAuthFlow via the
+  // service worker, NOT through launchOAuthCli's window.open + polling
+  // path. The polling change must not bleed into extension behavior.
+  afterEach(() => {
+    delete (globalThis as any).chrome;
+    vi.resetModules();
+  });
+
+  it('extension context (chrome.runtime.id present) routes to launchOAuthExtension, not launchOAuthCli', async () => {
+    const sendMessage = vi.fn(() => Promise.resolve());
+    const onMessage = { addListener: vi.fn(), removeListener: vi.fn() };
+    (globalThis as any).chrome = {
+      runtime: { id: 'test-extension-id', sendMessage, onMessage },
+    };
+
+    // Re-import the module so the top-level isExtension flag is recomputed
+    // with the chrome stub in place.
+    vi.resetModules();
+    const mod = await import('../../src/providers/oauth-service.js');
+    const launcher = mod.createOAuthLauncher();
+
+    const openCallsBefore = mockWindow.open.mock.calls.length;
+    // Fire the launcher; don't await — we just want to see what side
+    // effects it produced synchronously.
+    void launcher('https://idp.example.com/authorize');
+    await Promise.resolve();
+
+    expect(mockWindow.open.mock.calls.length).toBe(openCallsBefore);
+    expect(sendMessage).toHaveBeenCalled();
+    expect(onMessage.addListener).toHaveBeenCalled();
   });
 });

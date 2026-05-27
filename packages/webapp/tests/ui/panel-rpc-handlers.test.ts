@@ -198,3 +198,76 @@ describe('createStandalonePanelRpcHandlers — oauth-extras-set', () => {
     expect(result.storeAfter).toEqual({ github: ['hub.example.com'] });
   });
 });
+
+/**
+ * `save-oauth-accounts` mirrors `oauth-extras-set` for the canonical
+ * `slicc_accounts` array. Worker-side `saveOAuthAccount` calls (from
+ * `mcp add` / MCP `onSilentRenew`) would otherwise land only in the
+ * kernel-worker shim and be lost on reload — issue #701. The handler
+ * writes the serialized JSON through to real page `localStorage` and
+ * echoes the stored value back so the worker can mirror it into its
+ * shim atomically.
+ */
+describe('createStandalonePanelRpcHandlers — save-oauth-accounts', () => {
+  let lsData: Record<string, string>;
+  let originalLocalStorage: Storage;
+
+  beforeEach(() => {
+    originalLocalStorage = globalThis.localStorage;
+    lsData = {};
+    (globalThis as { localStorage: Storage }).localStorage = {
+      get length(): number {
+        return Object.keys(lsData).length;
+      },
+      key: (i: number) => Object.keys(lsData)[i] ?? null,
+      getItem: (k: string) => lsData[k] ?? null,
+      setItem: (k: string, v: string) => {
+        lsData[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete lsData[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(lsData)) delete lsData[k];
+      },
+    };
+  });
+
+  afterEach(() => {
+    (globalThis as { localStorage: Storage }).localStorage = originalLocalStorage;
+  });
+
+  it('writes the serialized accounts JSON to localStorage and returns the stored value', async () => {
+    const handlers = createStandalonePanelRpcHandlers({});
+    const handler = handlers['save-oauth-accounts'];
+    expect(handler).toBeTypeOf('function');
+    const accounts = [
+      {
+        providerId: 'mcp:secrets',
+        apiKey: '',
+        accessToken: 'tok-1',
+        refreshToken: 'rt-1',
+        tokenExpiresAt: 9_999_999_999_999,
+      },
+    ];
+    const accountsJson = JSON.stringify(accounts);
+    const result = await handler!({ accountsJson });
+    expect(result).toEqual({ storedJson: accountsJson });
+    // The real-localStorage write is what makes MCP OAuth survive a
+    // reload — without it the worker's shim Map would swallow the
+    // write (issue #701).
+    expect(lsData.slicc_accounts).toBe(accountsJson);
+  });
+
+  it('overwrites any previously stored accounts array', async () => {
+    lsData.slicc_accounts = JSON.stringify([{ providerId: 'github', apiKey: 'gh' }]);
+    const handlers = createStandalonePanelRpcHandlers({});
+    const next = JSON.stringify([
+      { providerId: 'github', apiKey: 'gh' },
+      { providerId: 'mcp:foo', apiKey: '', accessToken: 'tok' },
+    ]);
+    const result = await handlers['save-oauth-accounts']!({ accountsJson: next });
+    expect(result.storedJson).toBe(next);
+    expect(lsData.slicc_accounts).toBe(next);
+  });
+});

@@ -242,6 +242,10 @@ export const config: ProviderConfig = {
     '*.adobelogin.com',
     '*.adobe.io',
     'firefall.adobe.io',
+    'admin.hlx.page',
+    'admin.hlx.live',
+    'admin.aem.page',
+    'admin.aem.live',
   ],
 
   getModelIds: () => {

@@ -9,7 +9,9 @@ describe('SprinkleBridge', () => {
   let lickHandlerMock: ReturnType<typeof vi.fn>;
   let closeHandler: (name: string) => void;
   let closeHandlerMock: ReturnType<typeof vi.fn>;
+  let minimizeHandlerMock: ReturnType<typeof vi.fn>;
   let stopConeHandlerMock: ReturnType<typeof vi.fn>;
+  let attachImageHandlerMock: ReturnType<typeof vi.fn>;
   let mockFs: VirtualFS;
 
   beforeEach(() => {
@@ -17,7 +19,9 @@ describe('SprinkleBridge', () => {
     lickHandler = lickHandlerMock as unknown as (event: LickEvent) => void;
     closeHandlerMock = vi.fn();
     closeHandler = closeHandlerMock as unknown as (name: string) => void;
+    minimizeHandlerMock = vi.fn();
     stopConeHandlerMock = vi.fn();
+    attachImageHandlerMock = vi.fn();
     mockFs = {
       readFile: vi.fn().mockResolvedValue('file content'),
       writeFile: vi.fn().mockResolvedValue(undefined),
@@ -30,7 +34,14 @@ describe('SprinkleBridge', () => {
       mkdir: vi.fn().mockResolvedValue(undefined),
       rm: vi.fn().mockResolvedValue(undefined),
     } as unknown as VirtualFS;
-    bridge = new SprinkleBridge(mockFs, lickHandler, closeHandler, stopConeHandlerMock);
+    bridge = new SprinkleBridge(
+      mockFs,
+      lickHandler,
+      closeHandler,
+      minimizeHandlerMock,
+      stopConeHandlerMock,
+      attachImageHandlerMock
+    );
   });
 
   it('creates an API with the sprinkle name', () => {
@@ -63,6 +74,12 @@ describe('SprinkleBridge', () => {
     const api = bridge.createAPI('test-sprinkle');
     api.close();
     expect(closeHandlerMock).toHaveBeenCalledWith('test-sprinkle');
+  });
+
+  it('minimize() calls the minimize handler with the sprinkle name', () => {
+    const api = bridge.createAPI('test-sprinkle');
+    api.minimize();
+    expect(minimizeHandlerMock).toHaveBeenCalledWith('test-sprinkle');
   });
 
   it('readFile() delegates to VFS', async () => {
@@ -190,5 +207,17 @@ describe('SprinkleBridge', () => {
     const api = bridge.createAPI('test-sprinkle');
     api.stopCone();
     expect(stopConeHandlerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('attachImage() calls the attach-image handler with all args', () => {
+    const api = bridge.createAPI('test-sprinkle');
+    api.attachImage('abc123', 'test.png', 'image/png');
+    expect(attachImageHandlerMock).toHaveBeenCalledWith('abc123', 'test.png', 'image/png');
+  });
+
+  it('attachImage() calls the handler with optional args undefined', () => {
+    const api = bridge.createAPI('test-sprinkle');
+    api.attachImage('abc123');
+    expect(attachImageHandlerMock).toHaveBeenCalledWith('abc123', undefined, undefined);
   });
 });

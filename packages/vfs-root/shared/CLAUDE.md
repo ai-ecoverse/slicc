@@ -27,6 +27,7 @@ You have 100+ shell commands. When unsure if something is possible:
 Easy to miss. Try before DevTools, env vars, or external tools:
 
 - `oauth-token <provider>` / `--list` — stored OAuth tokens (adobe, github, …)
+- `mcp add <url>` — registers MCP server as `<name>` command
 - `webhook` / `crontask` — register HTTP-webhook or cron lick handlers
 - `agent <cwd> <cmds> <prompt>` — one-shot fire-and-forget scoop
 - `serve <dir>` — host a VFS dir over HTTP

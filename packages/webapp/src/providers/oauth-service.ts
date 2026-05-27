@@ -107,12 +107,17 @@ async function launchOAuthViaPanel(authorizeUrl: string): Promise<string | null>
 
 /**
  * CLI mode: open a popup to the authorize URL.
- * The OAuth provider redirects to /auth/callback which postMessages the
- * redirect URL back to this window, then auto-closes.
  *
- * In Electron overlay mode, window.open opens the system browser so
- * window.opener is null and postMessage won't work. The callback page
- * falls back to POSTing the result to the CLI server, and we poll for it.
+ * Two parallel signals race to deliver the redirect URL:
+ *   1. postMessage from the /auth/callback page back to this window
+ *      (works when window.opener is intact).
+ *   2. Polling /api/oauth-result on the backing server (works even when
+ *      window.opener is severed — e.g. by a COOP `same-origin` provider
+ *      such as GitHub/Google/Microsoft, or in Electron overlay mode
+ *      where window.open spawns the system browser).
+ *
+ * Whichever signal arrives first resolves the launcher promise; the
+ * other is cancelled in cleanup(). The 120 s timeout still applies.
  */
 async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
@@ -149,40 +154,35 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
 
     window.addEventListener('message', handler);
 
-    // Poll the server for the OAuth result — Electron overlay only.
-    // In Electron overlay mode, window.open opens the system browser so
-    // window.opener is null and postMessage won't work. The callback page
-    // falls back to POSTing the result to /api/oauth-result, and we poll.
-    // In normal CLI mode, postMessage works so polling is unnecessary.
-    const isElectronOverlay =
-      location.pathname.startsWith('/electron') ||
-      new URLSearchParams(location.search).get('runtime') === 'electron-overlay';
-    if (isElectronOverlay) {
-      pollTimer = setInterval(async () => {
+    // Always poll the server for the OAuth result as a fallback to
+    // postMessage. The callback page POSTs the result to /api/oauth-result
+    // when window.opener is null; both node-server and swift-server stash
+    // it for GET retrieval. Whichever signal arrives first wins.
+    pollTimer = setInterval(async () => {
+      if (resolved) return;
+      try {
+        const res = await fetch('/api/oauth-result');
+        if (res.status === 204) return; // no result yet
+        if (!res.ok) return; // server hiccup — keep polling
+        const data = (await res.json()) as { redirectUrl?: string; error?: string };
         if (resolved) return;
-        try {
-          const res = await fetch('/api/oauth-result');
-          if (res.status === 204) return; // no result yet
-          const data = (await res.json()) as { redirectUrl?: string; error?: string };
-          if (resolved) return;
-          cleanup();
+        cleanup();
 
-          if (data.error) {
-            console.error('[oauth-service] Server relay OAuth error:', data.error);
-            resolve(null);
-            return;
-          }
-
-          resolve(data.redirectUrl ?? null);
-        } catch (err) {
-          // Network error or JSON parse failure — keep polling
-          console.warn(
-            '[oauth-service] Poll failed:',
-            err instanceof Error ? err.message : String(err)
-          );
+        if (data.error) {
+          console.error('[oauth-service] Server relay OAuth error:', data.error);
+          resolve(null);
+          return;
         }
-      }, 1000);
-    }
+
+        resolve(data.redirectUrl ?? null);
+      } catch (err) {
+        // Network error or JSON parse failure — log and keep polling
+        console.warn(
+          '[oauth-service] Poll failed:',
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }, 1000);
 
     // Timeout after 2 minutes
     const timer = setTimeout(() => {

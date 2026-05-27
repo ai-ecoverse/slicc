@@ -49,11 +49,18 @@ describe('github.ts onOAuthLogin writes masked token to VFS', () => {
       location: { origin: 'http://localhost:5710', href: 'http://localhost:5710' },
       dispatchEvent: vi.fn(),
     };
+    // `hasLocalDom()` in provider-settings requires BOTH window and
+    // document to pick the direct-localStorage branch in
+    // `saveAccountsAsync`. Without this, these page-context tests
+    // would fall through to the worker panel-rpc branch and fail.
+    (globalThis as any).document = {};
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
     (globalThis as any).localStorage = originalLocalStorage;
+    delete (globalThis as any).window;
+    delete (globalThis as any).document;
   });
 
   it('behavioral: onOAuthLogin writes maskedValue to /workspace/.git/github-token, not the real token', async () => {
@@ -254,15 +261,24 @@ describe('github.ts onOAuthLogin in worker context (no window)', () => {
     // provider must resolve page origin via panel-RPC.
     delete (globalThis as any).window;
 
-    // Stand-in panel-RPC bridge that answers page-info from the simulated page.
+    // Stand-in panel-RPC bridge that answers `page-info` from the
+    // simulated page and forwards `save-oauth-accounts` to the
+    // worker-side localStorage stub (mirroring the real page handler
+    // which writes through to `window.localStorage`).
     (globalThis as any).__slicc_panelRpc = {
-      call: vi.fn(async (op: string) => {
-        if (op !== 'page-info') throw new Error(`unexpected op ${op}`);
-        return {
-          origin: 'http://localhost:5711',
-          href: 'http://localhost:5711/?cone=1',
-          title: '',
-        };
+      call: vi.fn(async (op: string, payload?: unknown) => {
+        if (op === 'page-info') {
+          return {
+            origin: 'http://localhost:5711',
+            href: 'http://localhost:5711/?cone=1',
+            title: '',
+          };
+        }
+        if (op === 'save-oauth-accounts') {
+          const { accountsJson } = payload as { accountsJson: string };
+          return { storedJson: accountsJson };
+        }
+        throw new Error(`unexpected op ${op}`);
       }),
       dispose: () => {},
     };

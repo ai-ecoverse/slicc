@@ -556,6 +556,47 @@ function saveAccounts(accounts: Account[]): void {
   localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
 }
 
+/**
+ * Worker-safe variant of `saveAccounts`. In page context it's a direct
+ * `localStorage.setItem`. In the kernel worker (no DOM, only the
+ * Map-backed `localStorage` shim that doesn't echo back to the page —
+ * see `kernel-worker.ts:installLocalStorageShim`) it routes the write
+ * through `panel-rpc` so the page handler can mutate real
+ * `window.localStorage`. The bridge response carries the stored JSON;
+ * we mirror it into the worker shim before resolving so an immediate
+ * `getAccounts()` read sees the new value without waiting for the
+ * cross-channel `local-storage-set` forward to land.
+ *
+ * Without this routing, `saveOAuthAccount` calls originating in the
+ * kernel worker (`mcp add`, MCP `onSilentRenew`) land only in the
+ * worker shim and are lost on reload — issue #701.
+ *
+ * If the mirror-back itself throws, the durable page-side write has
+ * already succeeded — log and continue rather than failing the caller
+ * for a transient shim glitch.
+ */
+async function saveAccountsAsync(accounts: Account[]): Promise<void> {
+  if (hasLocalDom()) {
+    saveAccounts(accounts);
+    return;
+  }
+  const rpc = getPanelRpcClient();
+  if (!rpc) {
+    throw new Error(
+      'saveAccountsAsync: no DOM and no panel-rpc client — cannot persist to page localStorage'
+    );
+  }
+  const accountsJson = JSON.stringify(accounts);
+  const { storedJson } = await rpc.call('save-oauth-accounts', { accountsJson });
+  try {
+    localStorage.setItem(ACCOUNTS_KEY, storedJson);
+  } catch (err) {
+    log.warn('worker-shim mirror failed after successful page write — reload to refresh', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 export function addAccount(
   providerId: string,
   apiKey: string,
@@ -599,7 +640,10 @@ export async function removeAccount(providerId: string): Promise<void> {
     });
   }
 
-  saveAccounts(getAccounts().filter((a) => a.providerId !== providerId));
+  // Use the worker-safe async variant so `mcp delete` (which runs in
+  // the kernel worker) writes through panel-rpc to real page
+  // localStorage instead of just the worker shim Map. See #701.
+  await saveAccountsAsync(getAccounts().filter((a) => a.providerId !== providerId));
   // Clear the stored `selected-model` if it pointed at the deleted
   // account. Without this, header dropdowns and the next message
   // continue to resolve `getSelectedProvider()` to the removed
@@ -636,7 +680,11 @@ export async function saveOAuthAccount(opts: {
     userAvatar: opts.userAvatar,
     baseUrl: opts.baseUrl ?? existing?.baseUrl,
   });
-  saveAccounts(accounts);
+  // Worker-safe save: `mcp add` and MCP `onSilentRenew` run in the
+  // kernel worker where a direct `saveAccounts` would land in the
+  // shim Map and be lost on reload (#701). The async helper routes
+  // worker writes through `panel-rpc` to real page localStorage.
+  await saveAccountsAsync(accounts);
 
   // Sync to replica (CLI: node-server /api/secrets/oauth-update; Extension: SW via chrome.storage.local + runtime.sendMessage)
   const cfg = getProviderConfig(opts.providerId);
@@ -693,7 +741,7 @@ export async function saveOAuthAccount(opts: {
         const acct = accounts.find((a) => a.providerId === opts.providerId);
         if (acct) {
           acct.maskedValue = resp.maskedValue;
-          saveAccounts(accounts);
+          await saveAccountsAsync(accounts);
         }
       }
     } else {
@@ -712,7 +760,7 @@ export async function saveOAuthAccount(opts: {
         const acct = accounts.find((a) => a.providerId === opts.providerId);
         if (acct && typeof data.maskedValue === 'string') {
           acct.maskedValue = data.maskedValue;
-          saveAccounts(accounts);
+          await saveAccountsAsync(accounts);
         }
       } else {
         // Server reachable but rejected the push (auth, validation, 5xx).
