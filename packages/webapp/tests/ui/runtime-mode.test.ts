@@ -9,6 +9,7 @@ import {
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
   shouldUseRuntimeModeTrayDefaults,
+  type UiRuntimeMode,
 } from '../../src/ui/runtime-mode.js';
 
 describe('runtime-mode', () => {
@@ -92,5 +93,32 @@ describe('runtime-mode', () => {
     ).toBe(true);
     expect(isElectronOverlaySetTabMessage({ type: 'something-else' })).toBe(false);
     expect(isElectronOverlaySetTabMessage(null)).toBe(false);
+  });
+});
+
+describe('runtime-mode — hosted-leader', () => {
+  it('resolves ?runtime=hosted-leader to hosted-leader (non-extension)', () => {
+    const mode = resolveUiRuntimeMode(
+      'http://localhost:5710/?runtime=hosted-leader',
+      /* isExtension */ false
+    );
+    expect(mode).toBe<UiRuntimeMode>('hosted-leader');
+  });
+
+  it('extension context never returns hosted-leader', () => {
+    const mode = resolveUiRuntimeMode(
+      'chrome-extension://abc/index.html?runtime=hosted-leader',
+      true
+    );
+    expect(mode).not.toBe('hosted-leader');
+  });
+
+  it('shouldUseRuntimeModeTrayDefaults is true for hosted-leader', () => {
+    expect(shouldUseRuntimeModeTrayDefaults('hosted-leader', true)).toBe(true);
+    expect(shouldUseRuntimeModeTrayDefaults('hosted-leader', false)).toBe(true);
+  });
+
+  it('falls back to standalone for missing runtime param', () => {
+    expect(resolveUiRuntimeMode('http://localhost:5710/', false)).toBe('standalone');
   });
 });

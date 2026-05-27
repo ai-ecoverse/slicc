@@ -200,6 +200,7 @@ Available as `slicc` in `<script>` tags and `onclick` attributes:
 
 - `slicc.name` — the sprinkle's name.
 - `slicc.close()` — close the sprinkle.
+- `slicc.minimize()` — collapse the sprinkle panel (rail icon stays visible; user can click to reopen). Does not close or destroy the sprinkle.
 - `slicc.stopCone()` — stop the cone agent.
 - `slicc.readFile(path)` — read a VFS file (returns `Promise<string>`).
 - `slicc.writeFile(path, content)` — write text content to a VFS file.

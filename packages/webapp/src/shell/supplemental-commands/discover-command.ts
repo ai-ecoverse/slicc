@@ -31,21 +31,31 @@ import { discoverLinks } from '../../net/discover-links.js';
 import { extractHandoff } from '../../net/handoff-link.js';
 import { parseLinkHeader } from '../../net/link-header.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
+import { normalizeHeadersInit } from '../proxy-headers.js';
 
 /**
  * Wrap a `SecureFetch` so it can stand in for the Web Fetch API. Used to
  * give `discoverLinks` (which speaks Web Fetch) the same CORS bypass /
  * forbidden-header bridging the rest of the shell enjoys.
  *
+ * Forwards caller-supplied `init.headers` (including forbidden headers like
+ * `Origin` / `Cookie` / `Referer`) so the underlying `SecureFetch` can run
+ * them through `encodeForbiddenRequestHeaders` and the proxy preserves them
+ * end-to-end.
+ *
  * The adapter doesn't thread `AbortSignal` into the underlying secure fetch
  * (the SecureFetch contract has no signal slot) — `discoverLinks` already
  * caps each call with its own timeout and tolerates non-aborting fetches.
  */
-function asWebFetch(secureFetch: SecureFetch): typeof fetch {
+export function asWebFetch(secureFetch: SecureFetch): typeof fetch {
   const adapter = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-    const result = await secureFetch(url, { method: init?.method ?? 'GET' });
+    const headers = normalizeHeadersInit(init?.headers);
+    const result = await secureFetch(url, {
+      method: init?.method ?? 'GET',
+      ...(headers ? { headers } : {}),
+    });
     return new Response(result.body as BodyInit, {
       status: result.status,
       statusText: result.statusText,

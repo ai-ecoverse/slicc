@@ -167,6 +167,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
           WORKER_BASE_URL: https://www.sliccy.ai
           CHROME_WEB_STORE_PUBLISHER_ID: ${{ vars.CHROME_WEB_STORE_PUBLISHER_ID }}
           CHROME_WEB_STORE_ITEM_ID: ${{ vars.CHROME_WEB_STORE_ITEM_ID }}

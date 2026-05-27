@@ -117,6 +117,11 @@ async function extensionPortFetch(
   const plainHeaders = headersToRecord(options?.headers);
   const method = options?.method ?? 'GET';
   const preparedBody = options?.body ? prepareRequestBody(options.body, plainHeaders) : undefined;
+  // Encode forbidden headers (Cookie/Origin/Referer/Proxy-*) under X-Proxy-*
+  // transport so the SW can restore them before calling upstream `fetch()` —
+  // same wire format the CLI proxy uses. Without this the SW silently
+  // strips them at the browser fetch boundary.
+  const transportHeaders = encodeForbiddenRequestHeaders(plainHeaders);
 
   let bodyBase64: string | undefined;
   let requestBodyTooLarge = false;
@@ -173,10 +178,14 @@ async function extensionPortFetch(
         });
         readResponseBody(synth, url)
           .then((body) => {
+            // Decode `X-Proxy-Set-Cookie` → `set-cookie` JSON-array string so
+            // callers can recover Set-Cookie values the browser would otherwise
+            // strip — matches CLI client decoding.
+            const decodedHeaders = decodeForbiddenResponseHeaders(headInfo!.headers);
             resolve({
               status: headInfo!.status,
               statusText: headInfo!.statusText,
-              headers: headInfo!.headers,
+              headers: decodedHeaders,
               body,
               url,
             });
@@ -211,7 +220,7 @@ async function extensionPortFetch(
       type: 'request',
       url,
       method,
-      headers: plainHeaders,
+      headers: transportHeaders,
       bodyBase64,
       requestBodyTooLarge,
     });

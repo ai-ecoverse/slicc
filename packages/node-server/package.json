@@ -3,16 +3,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('../../dist/node-server', { recursive: true, force: true });\" && tsc -p ../../tsconfig.cli.json && node scripts/inline-shared.mjs",
+    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('../../dist/node-server', { recursive: true, force: true });\" && tsc -p ../../tsconfig.cli.json && node scripts/inline-workspaces.mjs",
     "test": "vitest run",
+    "test:live:cloud": "vitest run tests/cloud-live.test.ts",
     "typecheck": "tsc --noEmit -p ../../tsconfig.cli.json"
   },
   "dependencies": {
-    "@slicc/shared-ts": "*"
+    "@slicc/cloud-core": "*",
+    "@slicc/shared-ts": "*",
+    "e2b": "^2.23.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/ws": "^8.5.14",
-    "electron": "42.1.0"
+    "electron": "42.2.0"
   }
 }

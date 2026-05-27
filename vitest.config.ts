@@ -132,6 +132,13 @@ export default defineConfig({
           include: ['packages/cloudflare-worker/tests/**/*.test.ts'],
         },
       },
+      {
+        extends: true,
+        test: {
+          name: 'cloud-core',
+          include: ['packages/cloud-core/tests/**/*.test.ts'],
+        },
+      },
     ],
   },
 });

@@ -156,6 +156,7 @@ export function buildChromeLaunchArgs(options: {
   cdpPort: number;
   launchUrl: string;
   profile: ChromeLaunchProfile;
+  hosted?: boolean;
 }): string[] {
   const args = [
     `--remote-debugging-port=${options.cdpPort}`,
@@ -178,6 +179,16 @@ export function buildChromeLaunchArgs(options: {
   if (options.profile.extensionPath) {
     args.push(`--disable-extensions-except=${options.profile.extensionPath}`);
     args.push(`--load-extension=${options.profile.extensionPath}`);
+  }
+
+  if (options.hosted) {
+    args.push(
+      '--headless=new',
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--font-render-hinting=none'
+    );
   }
 
   args.push(options.launchUrl);
