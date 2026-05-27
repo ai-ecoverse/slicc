@@ -20,6 +20,8 @@ npm run package:release
 - **Standalone CLI**: launches Chrome and serves the webapp.
 - **Serve-only**: reuses an already-running CDP target.
 - **Electron mode**: launches or attaches to an Electron app and injects the overlay shell.
+- **Hosted mode (`--hosted`)**: bundled with the e2b template at `packages/dev-tools/e2b-template/`. node-server boots headless Chromium against `?runtime=hosted-leader`, persists `--user-data-dir=/data/profile`, exposes `/api/cloud-status` and `/api/leader-restart`, reads `SLICC_TRAY_WORKER_BASE_URL`.
+- **Cloud subcommands (`--cloud start/list/pause/resume/kill`)**: laptop-side orchestration over an e2b sandbox. Code in `src/cloud/`. Goes through the `SandboxSubstrate` interface; e2b SDK is imported only by `cloud/substrates/e2b.ts`. Mutually exclusive with `--hosted`.
 
 `packages/node-server/src/runtime-flags.ts` is the source of truth for supported flags such as `--serve-only`, `--cdp-port`, `--electron`, `--profile`, `--lead`, `--join`, and `--prompt`.
 

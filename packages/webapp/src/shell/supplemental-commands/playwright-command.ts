@@ -19,6 +19,7 @@ import { discoverLinks } from '../../net/discover-links.js';
 import { extractHandoff, type HandoffMatch } from '../../net/handoff-link.js';
 import { parseLinkHeader, type ParsedLink } from '../../net/link-header.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
+import { normalizeHeadersInit } from '../proxy-headers.js';
 import {
   fetchBrowseShCatalog,
   normalizeHostname,
@@ -1664,13 +1665,19 @@ function requireTab(flags: Record<string, string>): { targetId: string } | { err
 /**
  * Adapter that lets `discoverLinks` (Web Fetch shape) ride on our
  * `SecureFetch`, inheriting CORS bypass and forbidden-header bridging.
- * Mirrors the helper used by the standalone `discover` command.
+ * Mirrors the helper used by the standalone `discover` command — also
+ * forwards `init.headers` so caller-supplied forbidden headers
+ * (`Origin`, `Cookie`, `Referer`) survive end-to-end.
  */
-function asWebFetch(secureFetch: SecureFetch): typeof fetch {
+export function asWebFetch(secureFetch: SecureFetch): typeof fetch {
   const adapter = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-    const result = await secureFetch(url, { method: init?.method ?? 'GET' });
+    const headers = normalizeHeadersInit(init?.headers);
+    const result = await secureFetch(url, {
+      method: init?.method ?? 'GET',
+      ...(headers ? { headers } : {}),
+    });
     return new Response(result.body as BodyInit, {
       status: result.status,
       statusText: result.statusText,

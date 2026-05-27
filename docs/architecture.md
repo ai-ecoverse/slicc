@@ -1,5 +1,22 @@
 # Architecture
 
+## Deployment Floats
+
+SLICC runs in multiple runtime environments ("floats"):
+
+- **Chrome extension** (Manifest V3): Three-layer — side panel (UI), service worker (relay + CDP proxy), offscreen document (agent engine). Agent survives side panel close.
+- **Standalone CLI**: Express server launches Chrome, proxies CDP. Split layout with scoops + chat + terminal + files/memory.
+- **Electron float**: Reuses CLI server in `--serve-only` mode, injects overlay shell.
+- **Hosted-leader (cloud)**: node-server `--hosted` + headless Chromium + the webapp boot in a remote e2b sandbox, started by `slicc --cloud start`. The webapp inside the sandbox is the cone + tray leader, identical to standalone CLI but with:
+  - `runtime=hosted-leader` URL query → `slicc-hosted-leader` tray attach runtime
+  - `kind: 'hosted'` in `POST /tray` body (worker reclaim TTL → 30 days)
+  - Unconditional leader auto-start in `main.ts` (does not depend on stored localStorage)
+  - `onLeaderReady` callback POSTs join info to localhost `/api/cloud-status`
+  - `/api/leader-restart` recovers a stuck leader via CDP `Page.reload()`
+  - `SLICC_TRAY_WORKER_BASE_URL` env drives `/api/runtime-config`
+  - Substrate abstraction: `packages/node-server/src/cloud/substrate.ts` defines `SandboxSubstrate`; MVP impl at `cloud/substrates/e2b.ts`.
+  - Template: `packages/dev-tools/e2b-template/` (Dockerfile + e2b.toml + start.sh + build/verify scripts).
+
 ## Layer Stack Table
 
 | Layer                       | Directory                              | Responsibility                                                                  | Key File                                   | Test File (in `packages/*/tests/`)                                                                    |

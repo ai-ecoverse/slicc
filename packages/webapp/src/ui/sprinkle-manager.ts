@@ -45,6 +45,8 @@ export interface SprinkleManagerCallbacks {
   ): void;
   /** Called to remove a sprinkle from the layout. */
   removeSprinkle(name: string): void;
+  /** Called to collapse the rail content panel without destroying the sprinkle. */
+  minimizeSprinkle(name: string): void;
 }
 
 const OPEN_SPRINKLES_KEY = 'slicc-open-sprinkles';
@@ -146,6 +148,7 @@ export class SprinkleManager {
       fs,
       lickHandler,
       (name) => this.close(name),
+      (name) => this.minimize(name),
       stopConeHandler,
       options.onAttachImage ?? (() => {})
     );
@@ -480,6 +483,17 @@ export class SprinkleManager {
     this.persistOpenSprinkles();
     log.info('Sprinkle closed', { name });
     this.notifyChange();
+  }
+
+  /**
+   * Minimize (collapse) a sprinkle by name. The rail icon stays visible and
+   * the sprinkle remains open/registered — the user can click the icon to
+   * reopen it. No-op if the sprinkle is not open.
+   */
+  minimize(name: string): void {
+    if (!this.openSprinkles.has(name)) return;
+    this.callbacks.minimizeSprinkle(name);
+    log.info('Sprinkle minimized', { name });
   }
 
   /** List available sprinkles. */

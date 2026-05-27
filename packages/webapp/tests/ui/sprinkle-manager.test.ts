@@ -61,6 +61,7 @@ describe('SprinkleManager', () => {
   let lickHandler: (event: LickEvent) => void;
   let addSprinkle: ReturnType<typeof vi.fn>;
   let removeSprinkle: ReturnType<typeof vi.fn>;
+  let minimizeSprinkle: ReturnType<typeof vi.fn>;
   let mgr: SprinkleManager;
 
   beforeEach(async () => {
@@ -73,6 +74,7 @@ describe('SprinkleManager', () => {
     lickHandler = vi.fn() as unknown as (event: LickEvent) => void;
     addSprinkle = vi.fn();
     removeSprinkle = vi.fn();
+    minimizeSprinkle = vi.fn();
     mgr = new SprinkleManager(
       vfs,
       lickHandler,
@@ -83,6 +85,7 @@ describe('SprinkleManager', () => {
           element: HTMLElement
         ) => void,
         removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+        minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
       },
       vi.fn()
     );
@@ -122,6 +125,22 @@ describe('SprinkleManager', () => {
     expect(() => mgr.sendToSprinkle('unknown', {})).not.toThrow();
   });
 
+  it('minimize() calls the minimizeSprinkle callback when the sprinkle is open', async () => {
+    await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+    await mgr.refresh();
+    await mgr.open('dash');
+    minimizeSprinkle.mockClear();
+
+    mgr.minimize('dash');
+
+    expect(minimizeSprinkle).toHaveBeenCalledWith('dash');
+  });
+
+  it('minimize() is a no-op when the sprinkle is not open', () => {
+    mgr.minimize('not-open');
+    expect(minimizeSprinkle).not.toHaveBeenCalled();
+  });
+
   it('sendToSprinkle fires the onSendToSprinkle hook when sprinkle is open (leader broadcast wiring)', async () => {
     // The hook is what `ui/main.ts:mainStandaloneWorker` wires to
     // `pageLeaderTray.sync.broadcastSprinkleUpdate` so followers receive the
@@ -139,6 +158,7 @@ describe('SprinkleManager', () => {
           element: HTMLElement
         ) => void,
         removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+        minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
       },
       vi.fn(),
       { onSendToSprinkle }
@@ -164,6 +184,7 @@ describe('SprinkleManager', () => {
           element: HTMLElement
         ) => void,
         removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+        minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
       },
       vi.fn(),
       { onSendToSprinkle }
@@ -189,6 +210,7 @@ describe('SprinkleManager', () => {
           element: HTMLElement
         ) => void,
         removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+        minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
       },
       vi.fn(),
       { onSendToSprinkle }
@@ -255,6 +277,7 @@ describe('SprinkleManager', () => {
           element: HTMLElement
         ) => void,
         removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+        minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
       },
       vi.fn(),
       { onSendToSprinkle: constructorHook }

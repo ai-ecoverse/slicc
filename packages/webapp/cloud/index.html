@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>SLICC cloud cones</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Cloud cones</h1>
+      <div id="user-box" class="hidden">
+        <span id="user-label"></span>
+        <button id="sign-out-btn">Sign out</button>
+      </div>
+    </header>
+
+    <main id="signed-out" class="hidden">
+      <button id="sign-in-btn">Sign in with Adobe</button>
+    </main>
+
+    <main id="signed-in" class="hidden">
+      <section class="create-row">
+        <input id="cone-name" placeholder="name (optional)" autocomplete="off" />
+        <button id="create-btn">+ New cone</button>
+        <span id="create-status" class="status"></span>
+      </section>
+      <section class="list">
+        <ul id="cone-list"></ul>
+        <div id="cap-info" class="cap-info"></div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

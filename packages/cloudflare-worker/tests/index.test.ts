@@ -4,6 +4,9 @@ import {
   FOLLOWER_ATTACH_RETRY_AFTER_MS,
   wantsJSON,
   TRAY_RECLAIM_TTL_MS,
+  HOSTED_TRAY_RECLAIM_TTL_MS,
+  reclaimMsForTray,
+  type CreateTrayRequest,
   type DurableObjectIdLike,
   type DurableObjectStateLike,
   type TrayRecord,
@@ -131,15 +134,28 @@ const fakeAssets = {
     }),
 };
 
+const fakeCloudSessions = {
+  idFromName: (_name: string) => ({ toString: () => 'fake-cloud-id' }),
+  idFromString: (_id: string) => ({ toString: () => 'fake-cloud-id' }),
+  newUniqueId: () => ({ toString: () => 'fake-cloud-id' }),
+  get: (_id: unknown) => ({
+    fetch: async (_req: Request) => new Response('cloud DO not stubbed', { status: 501 }),
+  }),
+};
+
 function createTestHarness(start = Date.parse('2026-03-11T00:00:00.000Z')): {
-  env: { TRAY_HUB: FakeNamespace; ASSETS: typeof fakeAssets };
+  env: {
+    TRAY_HUB: FakeNamespace;
+    ASSETS: typeof fakeAssets;
+    CLOUD_SESSIONS: typeof fakeCloudSessions;
+  };
   advance: (ms: number) => void;
   readTray: (trayId: string) => Promise<TrayRecord | undefined>;
 } {
   let now = start;
   const namespace = new FakeNamespace(() => now);
   return {
-    env: { TRAY_HUB: namespace, ASSETS: fakeAssets },
+    env: { TRAY_HUB: namespace, ASSETS: fakeAssets, CLOUD_SESSIONS: fakeCloudSessions },
     advance: (ms: number) => {
       now += ms;
     },
@@ -808,7 +824,7 @@ describe('tray worker skeleton', () => {
       result: {
         action: 'fail',
         code: 'TRAY_EXPIRED',
-        error: 'Tray expired because the leader did not reclaim it within one hour',
+        error: 'Tray expired because the leader did not reclaim it in time',
       },
     });
   });
@@ -1158,6 +1174,18 @@ describe('tray worker skeleton', () => {
         'POST /oauth/revoke',
         'GET /api/runtime-config',
         'ANY /api/fetch-proxy',
+        'GET /api/cloud/config',
+        'POST /api/cloud/start',
+        'GET /api/cloud/list',
+        'POST /api/cloud/pause',
+        'POST /api/cloud/resume',
+        'POST /api/cloud/kill',
+        'POST /api/cloud/sign-out',
+        'GET /api/cloud/admin/stats',
+        'GET /auth/cloud-callback',
+        'GET /auth/cloud-callback.js',
+        'GET /cloud',
+        'GET /cloud/*',
       ],
     });
   });
@@ -1745,6 +1773,38 @@ describe('generic OAuth token broker', () => {
   });
 });
 
+describe('OAuth relay (/auth/callback)', () => {
+  it('returns HTML with allowlist injected from env var', async () => {
+    const { env } = createTestHarness();
+    const testEnv = {
+      ...env,
+      ALLOWED_CLOUD_DASHBOARD_ORIGINS: 'https://example.com,https://staging.example.com',
+    };
+    const req = new Request('https://www.sliccy.ai/auth/callback');
+    const res = await handleWorkerRequest(req, testEnv);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+
+    const html = await res.text();
+    // Verify the allowlist is inlined in the script
+    expect(html).toContain('["https://example.com","https://staging.example.com"]');
+    // Verify remote source branch exists
+    expect(html).toContain("source === 'remote'");
+  });
+
+  it('accepts empty ALLOWED_CLOUD_DASHBOARD_ORIGINS', async () => {
+    const { env } = createTestHarness();
+    const req = new Request('https://www.sliccy.ai/auth/callback');
+    const res = await handleWorkerRequest(req, env);
+
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    // Empty allowlist should be []
+    expect(html).toMatch(/var allowed = \[\];/);
+  });
+});
+
 describe('API routes', () => {
   it('returns runtime config with worker base URL and OAuth client IDs', async () => {
     const env = { ...createTestHarness().env, GITHUB_CLIENT_ID: 'test-gh-id' };
@@ -1852,5 +1912,199 @@ describe('X-Robots-Tag header', () => {
     expect(wsResponse.status).toBe(101);
     expect(wsResponse.headers.has('x-robots-tag')).toBe(false);
     expect((wsResponse as unknown as { webSocket: unknown }).webSocket).toBeDefined();
+  });
+});
+
+describe('shared types — hosted tray', () => {
+  it('HOSTED_TRAY_RECLAIM_TTL_MS is 30 days', () => {
+    expect(HOSTED_TRAY_RECLAIM_TTL_MS).toBe(30 * 24 * 60 * 60 * 1000);
+  });
+
+  it('TRAY_RECLAIM_TTL_MS unchanged at 1 hour', () => {
+    expect(TRAY_RECLAIM_TTL_MS).toBe(60 * 60 * 1000);
+  });
+
+  it('CreateTrayRequest.kind is an optional string-literal union', () => {
+    const desktop: CreateTrayRequest = {
+      trayId: 't',
+      createdAt: 'now',
+      joinToken: 'j',
+      controllerToken: 'c',
+      webhookToken: 'w',
+    };
+    const hosted: CreateTrayRequest = { ...desktop, kind: 'hosted' };
+    const explicit: CreateTrayRequest = { ...desktop, kind: 'desktop' };
+    expect(desktop.kind).toBeUndefined();
+    expect(hosted.kind).toBe('hosted');
+    expect(explicit.kind).toBe('desktop');
+  });
+
+  it('TrayRecord.kind is part of the persisted shape', () => {
+    const rec = {
+      trayId: 't',
+      createdAt: 'now',
+      joinToken: 'j',
+      controllerToken: 'c',
+      webhookToken: 'w',
+      controllers: {},
+      bootstraps: {},
+      leader: null,
+      kind: 'hosted',
+    } as TrayRecord;
+    expect(rec.kind).toBe('hosted');
+  });
+});
+
+describe('POST /tray — kind plumbing', () => {
+  it('accepts an empty body and defaults kind to desktop', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
+      env
+    );
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body).toHaveProperty('trayId');
+  });
+
+  it('rejects malformed JSON with 400', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{not json',
+      }),
+      env
+    );
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { code: string };
+    expect(body.code).toBe('INVALID_BODY');
+  });
+
+  it('treats explicit empty-string body the same as no body (back-compat)', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', { method: 'POST', body: '' }),
+      env
+    );
+    expect(response.status).toBe(201);
+  });
+
+  it('accepts kind=hosted', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'hosted' }),
+      }),
+      env
+    );
+    expect(response.status).toBe(201);
+  });
+
+  it('accepts kind=desktop explicitly', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'desktop' }),
+      }),
+      env
+    );
+    expect(response.status).toBe(201);
+  });
+
+  it('rejects invalid kind with 400', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/tray', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'invalid' }),
+      }),
+      env
+    );
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { code: string };
+    expect(body.code).toBe('INVALID_KIND');
+  });
+});
+
+describe('reclaimMsForTray', () => {
+  it('returns 30 days for kind=hosted', () => {
+    expect(reclaimMsForTray({ kind: 'hosted' } as TrayRecord)).toBe(HOSTED_TRAY_RECLAIM_TTL_MS);
+  });
+
+  it('returns 1 hour for kind=desktop', () => {
+    expect(reclaimMsForTray({ kind: 'desktop' } as TrayRecord)).toBe(TRAY_RECLAIM_TTL_MS);
+  });
+
+  it('returns 1 hour for absent kind (back-compat)', () => {
+    expect(reclaimMsForTray({} as TrayRecord)).toBe(TRAY_RECLAIM_TTL_MS);
+  });
+
+  it('returns 1 hour for null/undefined (defensive)', () => {
+    expect(reclaimMsForTray(null)).toBe(TRAY_RECLAIM_TTL_MS);
+    expect(reclaimMsForTray(undefined)).toBe(TRAY_RECLAIM_TTL_MS);
+  });
+});
+
+describe('SessionTrayDurableObject — kind persistence', () => {
+  it('persists kind=hosted on the tray record after /internal/create', async () => {
+    const state = new FakeDurableObjectState();
+    const tray = new SessionTrayDurableObject(
+      state,
+      {},
+      { now: () => Date.now(), webSocketPairFactory: createFakeWebSocketPair }
+    );
+
+    await tray.fetch(
+      new Request('https://internal/internal/create', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          trayId: 't1',
+          createdAt: new Date().toISOString(),
+          joinToken: 'j',
+          controllerToken: 'c',
+          webhookToken: 'w',
+          kind: 'hosted',
+        }),
+      })
+    );
+
+    const stored = (await state.storage.get('tray')) as TrayRecord;
+    expect(stored.kind).toBe('hosted');
+    expect(reclaimMsForTray(stored)).toBe(HOSTED_TRAY_RECLAIM_TTL_MS);
+  });
+
+  it('defaults to kind=desktop when /internal/create payload omits it', async () => {
+    const state = new FakeDurableObjectState();
+    const tray = new SessionTrayDurableObject(
+      state,
+      {},
+      { now: () => Date.now(), webSocketPairFactory: createFakeWebSocketPair }
+    );
+
+    await tray.fetch(
+      new Request('https://internal/internal/create', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          trayId: 't2',
+          createdAt: new Date().toISOString(),
+          joinToken: 'j2',
+          controllerToken: 'c2',
+          webhookToken: 'w2',
+        }),
+      })
+    );
+
+    const stored = (await state.storage.get('tray')) as TrayRecord;
+    expect(stored.kind ?? 'desktop').toBe('desktop');
+    expect(reclaimMsForTray(stored)).toBe(TRAY_RECLAIM_TTL_MS);
   });
 });

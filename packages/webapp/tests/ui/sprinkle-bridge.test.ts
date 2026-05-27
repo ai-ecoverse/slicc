@@ -9,6 +9,7 @@ describe('SprinkleBridge', () => {
   let lickHandlerMock: ReturnType<typeof vi.fn>;
   let closeHandler: (name: string) => void;
   let closeHandlerMock: ReturnType<typeof vi.fn>;
+  let minimizeHandlerMock: ReturnType<typeof vi.fn>;
   let stopConeHandlerMock: ReturnType<typeof vi.fn>;
   let attachImageHandlerMock: ReturnType<typeof vi.fn>;
   let mockFs: VirtualFS;
@@ -18,6 +19,7 @@ describe('SprinkleBridge', () => {
     lickHandler = lickHandlerMock as unknown as (event: LickEvent) => void;
     closeHandlerMock = vi.fn();
     closeHandler = closeHandlerMock as unknown as (name: string) => void;
+    minimizeHandlerMock = vi.fn();
     stopConeHandlerMock = vi.fn();
     attachImageHandlerMock = vi.fn();
     mockFs = {
@@ -36,6 +38,7 @@ describe('SprinkleBridge', () => {
       mockFs,
       lickHandler,
       closeHandler,
+      minimizeHandlerMock,
       stopConeHandlerMock,
       attachImageHandlerMock
     );
@@ -71,6 +74,12 @@ describe('SprinkleBridge', () => {
     const api = bridge.createAPI('test-sprinkle');
     api.close();
     expect(closeHandlerMock).toHaveBeenCalledWith('test-sprinkle');
+  });
+
+  it('minimize() calls the minimize handler with the sprinkle name', () => {
+    const api = bridge.createAPI('test-sprinkle');
+    api.minimize();
+    expect(minimizeHandlerMock).toHaveBeenCalledWith('test-sprinkle');
   });
 
   it('readFile() delegates to VFS', async () => {
