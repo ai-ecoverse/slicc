@@ -180,7 +180,10 @@ export async function handleWorkerRequest(
         ? '/packages/webapp/cloud/index.html'
         : `/packages/webapp${url.pathname}`;
     const res = await env.ASSETS.fetch(new Request(new URL(path, request.url), request));
-    if (!res.body) return res;
+    // Don't early-bail on null body: CF Workers' ASSETS binding can return
+    // responses with res.body === null even for valid 200s (especially when
+    // SPA fallback served the response). new Response(null, ...) is valid
+    // and preserves the empty body.
     const headers = new Headers(res.headers);
     headers.set(
       'content-security-policy',
@@ -193,7 +196,11 @@ export async function handleWorkerRequest(
         "frame-ancestors 'none'",
       ].join('; ')
     );
-    return new Response(res.body, { status: res.status, headers });
+    return new Response(res.body, {
+      status: res.status,
+      statusText: res.statusText,
+      headers,
+    });
   }
 
   if (url.pathname === '/tray' && request.method === 'POST') {
