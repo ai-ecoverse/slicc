@@ -175,16 +175,26 @@ export async function handleWorkerRequest(
     url.pathname === '/cloud' ||
     (url.pathname.startsWith('/cloud/') && (request.method === 'GET' || request.method === 'HEAD'))
   ) {
+    // Use the canonical directory URL — fetching `index.html` triggers CF
+    // Static Assets' html_handling auto-canonicalize which 307s to the dir,
+    // and the worker only intercepts `/cloud*`, so the followed redirect
+    // hits Static Assets directly without our CSP wrapper. Asking for `/`
+    // returns the same index.html content without the redirect dance.
     const path =
-      url.pathname === '/cloud'
-        ? '/packages/webapp/cloud/index.html'
-        : `/packages/webapp${url.pathname}`;
+      url.pathname === '/cloud' ? '/packages/webapp/cloud/' : `/packages/webapp${url.pathname}`;
     const res = await env.ASSETS.fetch(new Request(new URL(path, request.url), request));
-    // Don't early-bail on null body: CF Workers' ASSETS binding can return
-    // responses with res.body === null even for valid 200s (especially when
-    // SPA fallback served the response). new Response(null, ...) is valid
-    // and preserves the empty body.
-    const headers = new Headers(res.headers);
+
+    // If ASSETS still returned a redirect (e.g., for some edge path),
+    // follow it internally and proxy the eventual response — this preserves
+    // our CSP wrapping across any auto-canonicalize hop.
+    const finalRes =
+      res.status >= 300 && res.status < 400 && res.headers.get('location')
+        ? await env.ASSETS.fetch(
+            new Request(new URL(res.headers.get('location')!, request.url), request)
+          )
+        : res;
+
+    const headers = new Headers(finalRes.headers);
     headers.set(
       'content-security-policy',
       [
@@ -196,9 +206,9 @@ export async function handleWorkerRequest(
         "frame-ancestors 'none'",
       ].join('; ')
     );
-    return new Response(res.body, {
-      status: res.status,
-      statusText: res.statusText,
+    return new Response(finalRes.body, {
+      status: finalRes.status,
+      statusText: finalRes.statusText,
       headers,
     });
   }
