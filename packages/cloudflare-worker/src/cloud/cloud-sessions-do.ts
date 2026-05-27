@@ -172,6 +172,9 @@ export class CloudSessionsDurableObject {
     const registry = this.registry();
 
     // Atomic phase: list, cap check (excluding the target), entry existence/state.
+    // RESERVE the slot under the lock by flipping target to 'running' so a concurrent
+    // /resume sees it in cap count and bounces. If the slow resume below fails,
+    // we flip back to 'paused' in the catch.
     const precheck = await this.state.blockConcurrencyWhile(async () => {
       const all = await listCones({ substrate, registry }, { metadata: { userId: body.userId } });
       const target = all.find((c) => c.sandboxId === body.sandboxId);
@@ -199,6 +202,9 @@ export class CloudSessionsDurableObject {
           }),
         };
       }
+
+      // Reserve the slot: flip target to 'running' so concurrent /resume sees it in cap count.
+      await registry.update(body.sandboxId, { state: 'running' });
       return { error: null };
     });
     if (precheck.error) return precheck.error;
@@ -214,6 +220,7 @@ export class CloudSessionsDurableObject {
             `ADOBE_IMS_TOKEN=${body.bearer}`,
             `ADOBE_IMS_TOKEN_DOMAINS=${ADOBE_TOKEN_DOMAINS}`,
           ].join('\n'),
+          skipStateCheck: true, // Already checked + reserved under lock
         }
       );
       return okResponse({
@@ -222,6 +229,13 @@ export class CloudSessionsDurableObject {
         trayRebuilt: result.trayRebuilt,
       });
     } catch (err) {
+      // Rollback the speculative state flip.
+      try {
+        await registry.update(body.sandboxId, { state: 'paused' });
+      } catch {
+        /* swallow */
+      }
+
       if (isCloudError(err)) {
         return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
       }
