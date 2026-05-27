@@ -11,7 +11,7 @@ If this scares, confuses, or excites you, keep reading.
 
 # slicc — Self-Licking Ice Cream Cone
 
-[![74% Vibe_Coded](https://img.shields.io/badge/74%25-Vibe_Coded-ff69b4?style=for-the-badge&logo=claude&logoColor=white)](https://github.com/ai-ecoverse/vibe-coded-badge-action)
+[![75% Vibe_Coded](https://img.shields.io/badge/75%25-Vibe_Coded-ff69b4?style=for-the-badge&logo=claude&logoColor=white)](https://github.com/ai-ecoverse/vibe-coded-badge-action)
 
 [![npm](https://img.shields.io/npm/v/sliccy)](https://www.npmjs.com/package/sliccy)
 
@@ -125,7 +125,6 @@ SLICC can mirror itself across multiple browsers, even on other machines:
 1. **First browser:** click your avatar in the top-right header and choose **Enable multi-browser sync**. A dialog opens with the sync URL (already copied to your clipboard) and step-by-step instructions. The same dialog has a **Reset URL** button if you want to invalidate the link and disconnect connected browsers. (You can also type `host` in the built-in terminal to print the URL.)
 2. **Second browser:** open the account dialog, click **Connect to another browser**, and paste the URL. The "How do I get the sync URL?" hint inside the dialog walks through the same steps.
 3. **Leaving the tray:** click the avatar on either browser to open the popover — the tray section now has a **Stop multi-browser sync** (leader) or **Disconnect from leader** (follower) action. From the terminal, `host leave` does the same thing; `host leave --leader <worker-url>` leaves the current role and becomes a leader on that worker.
-4. **Re-enabling after Stop:** once you've stopped multi-browser sync, the avatar popover keeps an **Enable multi-browser sync** entry so you can restart the leader without reloading the extension or dropping into the shell. Clicking it spins up a new leader on the default tray worker; reopen the popover after a moment to copy the fresh sync URL.
 
 Both browsers must run the same SLICC version. Once connected, the sessions stay in sync in real time.
 
@@ -190,33 +189,6 @@ SLICC is part of the [AI Ecoverse](https://github.com/ai-ecoverse), a growing se
 - [ai-aligned-git](https://github.com/ai-ecoverse/ai-aligned-git) and [ai-aligned-gh](https://github.com/ai-ecoverse/ai-aligned-gh) — guardrails and attribution helpers for AI-assisted Git/GitHub work
 
 SLICC would not have been possible without the pioneering inspiration of [OpenClaw](https://github.com/openclaw/openclaw), [NanoClaw](https://github.com/qwibitai/nanoclaw), and [Pi](https://github.com/earendil-works/pi-mono). Pi is actually the frozen heart of every SLICC instance.
-
-## Cloud (`slicc --cloud`)
-
-Run a SLICC leader inside an e2b.dev sandbox so it survives your laptop going to sleep.
-
-**Prerequisites:** an e2b account; `E2B_API_KEY` in `~/.slicc/secrets.env` (with `E2B_API_KEY_DOMAINS=e2b.dev`) or in `process.env`.
-
-```bash
-slicc --cloud start [--name task-1] [--env-file ~/.slicc/secrets.env]
-slicc --cloud list
-slicc --cloud pause <sandboxId|name>
-slicc --cloud resume <sandboxId|name>
-slicc --cloud kill <sandboxId|name>
-```
-
-`start` prints a tray join URL; open it on iOS SliccFollower, desktop SLICC, or any browser tab.
-
-**Known limitations:**
-
-- OAuth-based providers (Anthropic OAuth, GitHub OAuth, Adobe IMS) are not supported; use static keys / PATs in `secrets.env`.
-- Local FS-Access mounts don't work in headless cloud Chromium. S3 / S3-compatible / DA mounts via `secrets.env` credentials work.
-- Pause beyond 30 days exceeds the worker's hosted-tray reclaim TTL; a new tray will be minted on resume with a new join URL.
-- Sandbox crash (distinct from auto-pause-on-cap) loses state.
-- Anyone with access to your e2b team account can attach to a paused sandbox and read its filesystem (including `/slicc/secrets.env`). Treat the team account as a credential boundary.
-- `E2B_API_KEY` (and `E2B_API_KEY_DOMAINS`) are stripped from `secrets.env` before upload, so the cloud agent cannot spawn additional sandboxes against your account. Any OTHER local-only secret in `~/.slicc/secrets.env` is uploaded wholesale; if you have dev creds you don't want in the cloud, remove them from the file or use `--env-file` to point at a curated copy.
-- No SIGINT handling during `--cloud start`. If you Ctrl-C while the sandbox is starting, it may end up running with no registry entry. Find it via `--cloud list` (which queries e2b directly) and `--cloud kill` it.
-- No credential rotation flow. Updating `~/.slicc/secrets.env` after `--cloud start` does not propagate to a running sandbox. Workaround: `--cloud pause`, then upload the new file via the e2b SDK or dashboard, then `--cloud resume`.
 
 ## Development and deeper docs
 
