@@ -180,21 +180,24 @@ function renderCones(cones) {
     if (c.state === 'running') {
       const btn = document.createElement('button');
       btn.textContent = 'Pause';
-      btn.addEventListener('click', () => pauseCone(c.sandboxId));
+      btn.addEventListener('click', () => runConeAction(li, c.sandboxId, 'pause'));
       actions.appendChild(btn);
     }
     if (c.state === 'paused') {
       const btn = document.createElement('button');
       btn.textContent = 'Resume';
-      btn.addEventListener('click', () => resumeCone(c.sandboxId));
+      btn.addEventListener('click', () => runConeAction(li, c.sandboxId, 'resume'));
       actions.appendChild(btn);
     }
     const killBtn = document.createElement('button');
     killBtn.textContent = 'Kill';
-    killBtn.addEventListener('click', () => killConeAction(c.sandboxId));
+    killBtn.addEventListener('click', () => runConeAction(li, c.sandboxId, 'kill'));
     actions.appendChild(killBtn);
 
     li.appendChild(actions);
+    if (busyRows.has(c.sandboxId)) {
+      applyBusyStateToRow(li, busyRows.get(c.sandboxId));
+    }
     list.appendChild(li);
   }
 
@@ -219,31 +222,48 @@ async function refreshList() {
   }
 }
 
-async function pauseCone(sandboxId) {
-  try {
-    await api('/api/cloud/pause', { method: 'POST', body: JSON.stringify({ sandboxId }) });
-    await refreshList();
-  } catch (e) {
-    showToast('Pause failed: ' + e.message);
+// Tracks which cones have an action in-flight so re-renders preserve the
+// busy state. Maps sandboxId → action label ('Pausing…' / 'Resuming…' / 'Killing…').
+const busyRows = new Map();
+
+const ACTIONS = {
+  pause: { label: 'Pausing…', path: '/api/cloud/pause', confirm: null },
+  resume: { label: 'Resuming…', path: '/api/cloud/resume', confirm: null },
+  kill: {
+    label: 'Killing…',
+    path: '/api/cloud/kill',
+    confirm: 'Kill this cone? This cannot be undone.',
+  },
+};
+
+function applyBusyStateToRow(li, label) {
+  li.classList.add('cone--busy');
+  for (const btn of li.querySelectorAll('button')) {
+    btn.disabled = true;
   }
+  let badge = li.querySelector('.cone-busy-badge');
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'cone-busy-badge';
+    const statusEl = li.querySelector('.status');
+    if (statusEl) statusEl.appendChild(badge);
+  }
+  badge.textContent = ' · ' + label;
 }
 
-async function resumeCone(sandboxId) {
+async function runConeAction(li, sandboxId, kind) {
+  const action = ACTIONS[kind];
+  if (!action) return;
+  if (action.confirm && !confirm(action.confirm)) return;
+  busyRows.set(sandboxId, action.label);
+  applyBusyStateToRow(li, action.label);
   try {
-    await api('/api/cloud/resume', { method: 'POST', body: JSON.stringify({ sandboxId }) });
-    await refreshList();
+    await api(action.path, { method: 'POST', body: JSON.stringify({ sandboxId }) });
   } catch (e) {
-    showToast('Resume failed: ' + e.message);
-  }
-}
-
-async function killConeAction(sandboxId) {
-  if (!confirm('Kill this cone? This cannot be undone.')) return;
-  try {
-    await api('/api/cloud/kill', { method: 'POST', body: JSON.stringify({ sandboxId }) });
+    showToast(kind.charAt(0).toUpperCase() + kind.slice(1) + ' failed: ' + e.message);
+  } finally {
+    busyRows.delete(sandboxId);
     await refreshList();
-  } catch (e) {
-    showToast('Kill failed: ' + e.message);
   }
 }
 
