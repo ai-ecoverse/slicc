@@ -9,6 +9,8 @@ import type {
 } from '../substrate.js';
 import type { SandboxSummary } from '../types.js';
 
+const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour
+
 export function createE2bSubstrate(cfg: SubstrateConfig): SandboxSubstrate {
   // Capture apiKey locally to pass explicitly to every SDK call (worker-safe).
   const apiKey = cfg.apiKey;
@@ -20,6 +22,7 @@ export function createE2bSubstrate(cfg: SubstrateConfig): SandboxSubstrate {
         apiKey,
         envs: opts.envVars,
         metadata: opts.metadata,
+        timeoutMs: DEFAULT_TTL_MS,
         ...(opts.autoPauseOnCap ? { lifecycle: { onTimeout: 'pause' } } : {}),
       });
       return wrap(sbx);
@@ -54,6 +57,9 @@ export function createE2bSubstrate(cfg: SubstrateConfig): SandboxSubstrate {
         }
       }
       return items;
+    },
+    async extendTimeout(sandboxId: string, ttlMs: number): Promise<void> {
+      await Sandbox.setTimeout(sandboxId, ttlMs, { apiKey });
     },
   };
 }

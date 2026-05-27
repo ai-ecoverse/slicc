@@ -222,6 +222,9 @@ describe('listCones', () => {
           { sandboxId: 's-paused', state: 'paused' as const, metadata: { name: 'paused' } },
         ];
       },
+      async extendTimeout(_sandboxId: string, _ttlMs: number): Promise<void> {
+        // No-op for this test
+      },
     };
     await listCones({ substrate, registry });
     // Only the running sandbox should trigger a connect call
@@ -230,5 +233,22 @@ describe('listCones', () => {
     expect(registry.entries).toHaveLength(2);
     const paused = registry.entries.find((e) => e.sandboxId === 's-paused');
     expect(paused?.joinUrl).toBe(''); // No joinUrl recovery for paused
+  });
+
+  it('extends timeout on running cones during reconciliation', async () => {
+    const registry = new MemRegistry();
+    const timeoutCalls: Array<{ sandboxId: string; ttlMs: number }> = [];
+    const substrate = makeFakeSubstrate({
+      listResult: [
+        { sandboxId: 's-running', state: 'running', metadata: { userId: 'u1' } },
+        { sandboxId: 's-paused', state: 'paused', metadata: { userId: 'u1' } },
+      ],
+      timeoutCalls,
+    });
+    await listCones({ substrate, registry });
+    const extended = timeoutCalls.map((c) => c.sandboxId);
+    expect(extended).toContain('s-running');
+    expect(extended).not.toContain('s-paused');
+    expect(timeoutCalls[0]?.ttlMs).toBe(60 * 60 * 1000);
   });
 });

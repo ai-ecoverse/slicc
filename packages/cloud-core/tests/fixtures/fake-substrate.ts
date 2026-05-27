@@ -74,12 +74,15 @@ export interface FakeSubstrateOpts {
   creates?: CreateOpts[];
   /** List result to return; default []. */
   listResult?: SandboxSummary[];
+  /** Captures all extendTimeout calls. */
+  timeoutCalls?: Array<{ sandboxId: string; ttlMs: number }>;
 }
 
 export function makeFakeSubstrate(opts: FakeSubstrateOpts = {}): SandboxSubstrate {
   const handle = opts.handle ?? makeFakeHandle();
   const creates = opts.creates ?? [];
   const listResult = opts.listResult ?? [];
+  const timeoutCalls = opts.timeoutCalls ?? [];
 
   return {
     id: 'e2b' as SubstrateId,
@@ -103,6 +106,9 @@ export function makeFakeSubstrate(opts: FakeSubstrateOpts = {}): SandboxSubstrat
         }
         return true;
       });
+    },
+    async extendTimeout(sandboxId: string, ttlMs: number): Promise<void> {
+      timeoutCalls.push({ sandboxId, ttlMs });
     },
   };
 }

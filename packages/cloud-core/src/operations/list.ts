@@ -117,5 +117,23 @@ export async function listCones(
     await deps.registry.append(recovered);
     reconciled.push(recovered);
   }
+
+  // Refresh the timeout of every running cone so active users keep their cones
+  // alive past the 1h default. Failures are non-fatal — a sandbox that
+  // disappears between substrate.list() and extendTimeout() will be discovered
+  // dead on the NEXT list call.
+  const DEFAULT_TTL_MS = 60 * 60 * 1000;
+  await Promise.all(
+    reconciled
+      .filter((c) => c.state === 'running')
+      .map(async (c) => {
+        try {
+          await deps.substrate.extendTimeout(c.sandboxId, DEFAULT_TTL_MS);
+        } catch {
+          // Sandbox may have died between list and extendTimeout; ignore.
+        }
+      })
+  );
+
   return reconciled;
 }

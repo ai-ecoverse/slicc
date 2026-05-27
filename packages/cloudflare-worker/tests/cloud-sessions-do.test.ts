@@ -84,6 +84,10 @@ class FakeSubstrate implements SandboxSubstrate {
     });
   }
 
+  async extendTimeout(_sandboxId: string, _ttlMs: number): Promise<void> {
+    // No-op for tests.
+  }
+
   private handle(sandboxId: string): SandboxHandle {
     const sb = this.sandboxes.get(sandboxId)!;
     return {

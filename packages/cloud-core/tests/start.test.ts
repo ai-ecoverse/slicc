@@ -51,6 +51,9 @@ function makeStartTestSubstrate(opts: { joinJson: string }): SandboxSubstrate {
         },
       ];
     },
+    async extendTimeout(_sandboxId: string, _ttlMs: number): Promise<void> {
+      // No-op for tests.
+    },
   };
 }
 
@@ -144,6 +147,9 @@ describe('startCone', () => {
       async list(_opts?: import('../src/substrate.js').ListOpts): Promise<SandboxSummary[]> {
         return [];
       },
+      async extendTimeout(_sandboxId: string, _ttlMs: number): Promise<void> {
+        // No-op for tests.
+      },
     };
 
     const registry = new MemRegistry();
@@ -208,6 +214,9 @@ describe('startCone', () => {
       },
       async list(_opts?: import('../src/substrate.js').ListOpts): Promise<SandboxSummary[]> {
         return [];
+      },
+      async extendTimeout(_sandboxId: string, _ttlMs: number): Promise<void> {
+        // No-op for tests.
       },
     };
 
@@ -290,6 +299,9 @@ describe('startCone', () => {
       },
       async list(_opts?: import('../src/substrate.js').ListOpts): Promise<SandboxSummary[]> {
         return [];
+      },
+      async extendTimeout(_sandboxId: string, _ttlMs: number): Promise<void> {
+        // No-op for tests.
       },
     };
 

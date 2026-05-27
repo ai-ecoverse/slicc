@@ -50,6 +50,12 @@ export interface SandboxSubstrate {
   create(opts: CreateOpts): Promise<SandboxHandle>;
   connect(sandboxId: string): Promise<SandboxHandle>;
   list(opts?: ListOpts): Promise<SandboxSummary[]>;
+  /**
+   * Reset the sandbox's auto-pause countdown. The substrate-specific TTL
+   * floor applies (e.g. e2b Hobby plan caps at 1h, Pro at 24h). For non-e2b
+   * substrates that don't support this concept, implement as a no-op.
+   */
+  extendTimeout(sandboxId: string, ttlMs: number): Promise<void>;
 }
 
 export interface SubstrateFactory {
