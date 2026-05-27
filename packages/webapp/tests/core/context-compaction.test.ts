@@ -698,3 +698,121 @@ describe('stripOrphanedToolResults', () => {
     expect(result).toEqual([]);
   });
 });
+
+describe('createCompactContext — oversized keep window elision', () => {
+  const mockModel = { id: 'test-model' } as unknown as Model<Api>;
+  const mockConfig = {
+    model: mockModel,
+    getApiKey: () => 'test-key' as string | undefined,
+    contextWindow: 200000,
+  };
+
+  beforeEach(() => {
+    mockCompleteSimple.mockReset();
+    mockCompleteSimple.mockResolvedValue(llmResponse('## Summary\ncompacted'));
+  });
+
+  it('elides oversized messages in the keep window so compaction does not re-trigger', async () => {
+    const compact = createCompactContext(mockConfig);
+
+    // Build a conversation where older messages push us over the threshold,
+    // but the LAST message alone is ~180K tokens (720K chars). The keep
+    // window will hold this message and a few small ones. Without elision,
+    // post-compaction total would still exceed the threshold.
+    const smallMsg = 'x'.repeat(4000); // ~1K tokens
+    const hugeToolResult = 'y'.repeat(720000); // ~180K tokens
+
+    const messages: AgentMessage[] = [
+      // Older messages (will be summarized)
+      createMessage('user', smallMsg),
+      createMessage('assistant', smallMsg),
+      createMessage('user', smallMsg),
+      createMessage('assistant', smallMsg),
+      // Recent: assistant with tool call + oversized tool result
+      createAssistantWithToolCalls('let me read that file', ['tool-big']),
+      createToolResult(hugeToolResult, 'tool-big'),
+      // Final user message
+      createMessage('user', 'thanks, now fix it'),
+    ];
+
+    const result = await compact(messages);
+
+    // The oversized tool result should have been elided
+    const toolResultMsg = result.find((m) => (m as unknown as TestMessage).role === 'toolResult');
+    if (toolResultMsg) {
+      const text = firstText(toolResultMsg);
+      expect(text).toContain('elided during compaction');
+      expect(text).not.toContain(hugeToolResult);
+    }
+
+    // Post-compaction total should be well under threshold so it won't
+    // re-trigger on the next prompt.
+    let postTokens = 0;
+    for (const msg of result) {
+      postTokens += (
+        vi.mocked(
+          await import('@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js')
+        ).estimateTokens as (m: AgentMessage) => number
+      )(msg);
+    }
+    // Should be WAY below the 183K threshold
+    expect(postTokens).toBeLessThan(100000);
+  });
+
+  it('preserves toolCall blocks when eliding an assistant message', async () => {
+    const compact = createCompactContext(mockConfig);
+
+    const smallMsg = 'x'.repeat(4000);
+    const hugeAssistant = 'z'.repeat(720000);
+
+    const messages: AgentMessage[] = [
+      createMessage('user', smallMsg),
+      createMessage('assistant', smallMsg),
+      createMessage('user', smallMsg),
+      createMessage('assistant', smallMsg),
+      // Oversized assistant with tool calls
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: hugeAssistant },
+          { type: 'toolCall', id: 'tc1', name: 'read_file', arguments: { path: '/foo' } },
+        ],
+        timestamp: 0,
+      } as unknown as AgentMessage,
+      createToolResult('short result', 'tc1'),
+      createMessage('user', 'ok'),
+    ];
+
+    const result = await compact(messages);
+
+    // Find the elided assistant message
+    const assistantMsgs = result.filter((m) => (m as unknown as TestMessage).role === 'assistant');
+    const elided = assistantMsgs.find((m) => {
+      const content = (m as unknown as TestMessage).content;
+      return Array.isArray(content) && content.some((b) => b.text?.includes('elided'));
+    });
+    expect(elided).toBeDefined();
+
+    // toolCall block must still be present
+    const content = (elided as unknown as TestMessage).content as TestContentBlock[];
+    const toolCallBlock = content.find((b) => b.type === 'toolCall');
+    expect(toolCallBlock).toBeDefined();
+    expect(toolCallBlock!.id).toBe('tc1');
+  });
+
+  it('does not elide when keep window is already under budget', async () => {
+    const compact = createCompactContext(mockConfig);
+
+    // All messages are reasonably sized — normal compaction, no elision needed
+    const baseMsg = 'x'.repeat(65000); // ~16K tokens each
+    const messages = Array.from({ length: 12 }, () => createMessage('user', baseMsg));
+
+    const result = await compact(messages);
+
+    // No message should contain "elided" text
+    for (const msg of result) {
+      const text = firstText(msg);
+      expect(text).not.toContain('elided during compaction');
+    }
+  });
+});

@@ -281,6 +281,92 @@ async function runCompactionCall(
 }
 
 /**
+ * Elide oversized messages in the keep window so that post-compaction
+ * total stays below the compaction threshold. Targets the largest
+ * messages first (by estimated tokens), replacing their content with a
+ * short placeholder while preserving `toolCall` blocks on assistant
+ * messages (so tool-call / tool-result pairing stays valid).
+ */
+function elideOversizedInKeepWindow(
+  messages: AgentMessage[],
+  contextWindow: number,
+  reserveTokens: number,
+  summaryBudget: number
+): AgentMessage[] {
+  const threshold = contextWindow - reserveTokens;
+  const targetKeptTokens = threshold - summaryBudget;
+
+  type Sized = { index: number; tokens: number };
+  const sized: Sized[] = messages.map((m, i) => ({ index: i, tokens: estimateTokens(m) }));
+  let totalKept = sized.reduce((sum, s) => sum + s.tokens, 0);
+
+  if (totalKept <= targetKeptTokens) return messages;
+
+  // Sort descending by size — elide the biggest messages first.
+  const candidates = sized
+    .filter((s) => {
+      const role = (messages[s.index] as { role: string }).role;
+      return role === 'toolResult' || role === 'assistant';
+    })
+    .sort((a, b) => b.tokens - a.tokens);
+
+  const result = messages.slice();
+  for (const candidate of candidates) {
+    if (totalKept <= targetKeptTokens) break;
+
+    const msg = result[candidate.index] as {
+      role: string;
+      content?: unknown;
+      toolCallId?: string;
+      toolName?: string;
+    };
+    const contentSize = approxContentSize(msg.content);
+    const kb = Math.max(1, Math.round(contentSize / 1024));
+    const placeholder = {
+      type: 'text' as const,
+      text: `[Content elided during compaction: ${kb} KB. Re-read the file or re-run the command if needed.]`,
+    };
+
+    if (msg.role === 'assistant') {
+      const content = Array.isArray(msg.content) ? msg.content : [];
+      const toolCalls = content.filter((b: { type?: string }) => b.type === 'toolCall');
+      result[candidate.index] = {
+        ...(msg as object),
+        content: [placeholder, ...toolCalls],
+      } as AgentMessage;
+    } else {
+      result[candidate.index] = {
+        ...(msg as object),
+        content: [placeholder],
+      } as AgentMessage;
+    }
+
+    const newTokens = estimateTokens(result[candidate.index]);
+    totalKept -= candidate.tokens - newTokens;
+
+    log.info('Elided oversized message in keep window', {
+      index: candidate.index,
+      role: msg.role,
+      originalTokens: candidate.tokens,
+      newTokens,
+    });
+  }
+
+  return result;
+}
+
+function approxContentSize(content: unknown): number {
+  if (typeof content === 'string') return content.length;
+  if (!Array.isArray(content)) return 0;
+  let total = 0;
+  for (const block of content as Array<{ type?: string; text?: string; data?: string }>) {
+    if (block.type === 'text' && block.text) total += block.text.length;
+    else if (block.type === 'image' && block.data) total += block.data.length;
+  }
+  return total;
+}
+
+/**
  * Create a transformContext function that uses LLM summarization for compaction.
  *
  * The returned function:
@@ -349,7 +435,25 @@ export function createCompactContext(
     }
 
     const messagesToSummarize = messages.slice(0, cutIndex);
-    const messagesToKeep = stripOrphanedToolResults(messages.slice(cutIndex));
+    let messagesToKeep = stripOrphanedToolResults(messages.slice(cutIndex));
+
+    // Guard: if the kept window alone is large enough to re-trigger
+    // compaction on the very next turn (after the summary is prepended),
+    // elide oversized messages in place. Without this, a single huge
+    // tool result in the recent window causes compaction to fire on every
+    // prompt — it runs, produces a summary, but the result still exceeds
+    // the threshold because the keep window dwarfs the freed space.
+    const keptWindowTokens = messagesToKeep.reduce((sum, m) => sum + estimateTokens(m), 0);
+    const summaryBudget = Math.floor(0.8 * reserveTokens);
+    const postCompactionEstimate = keptWindowTokens + summaryBudget;
+    if (postCompactionEstimate > contextWindow - reserveTokens) {
+      messagesToKeep = elideOversizedInKeepWindow(
+        messagesToKeep,
+        contextWindow,
+        reserveTokens,
+        summaryBudget
+      );
+    }
 
     log.info('Compaction cut point', {
       summarizing: messagesToSummarize.length,
