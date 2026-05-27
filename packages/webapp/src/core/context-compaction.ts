@@ -289,13 +289,8 @@ async function runCompactionCall(
  */
 function elideOversizedInKeepWindow(
   messages: AgentMessage[],
-  contextWindow: number,
-  reserveTokens: number,
-  summaryBudget: number
+  targetKeptTokens: number
 ): AgentMessage[] {
-  const threshold = contextWindow - reserveTokens;
-  const targetKeptTokens = threshold - summaryBudget;
-
   type Sized = { index: number; tokens: number };
   const sized: Sized[] = messages.map((m, i) => ({ index: i, tokens: estimateTokens(m) }));
   let totalKept = sized.reduce((sum, s) => sum + s.tokens, 0);
@@ -314,7 +309,7 @@ function elideOversizedInKeepWindow(
   for (const candidate of candidates) {
     if (totalKept <= targetKeptTokens) break;
 
-    const msg = result[candidate.index] as {
+    const msg = result[candidate.index] as AgentMessage & {
       role: string;
       content?: unknown;
       toolCallId?: string;
@@ -330,15 +325,9 @@ function elideOversizedInKeepWindow(
     if (msg.role === 'assistant') {
       const content = Array.isArray(msg.content) ? msg.content : [];
       const toolCalls = content.filter((b: { type?: string }) => b.type === 'toolCall');
-      result[candidate.index] = {
-        ...(msg as object),
-        content: [placeholder, ...toolCalls],
-      } as AgentMessage;
+      result[candidate.index] = { ...msg, content: [placeholder, ...toolCalls] } as AgentMessage;
     } else {
-      result[candidate.index] = {
-        ...(msg as object),
-        content: [placeholder],
-      } as AgentMessage;
+      result[candidate.index] = { ...msg, content: [placeholder] } as AgentMessage;
     }
 
     const newTokens = estimateTokens(result[candidate.index]);
@@ -445,14 +434,9 @@ export function createCompactContext(
     // the threshold because the keep window dwarfs the freed space.
     const keptWindowTokens = messagesToKeep.reduce((sum, m) => sum + estimateTokens(m), 0);
     const summaryBudget = Math.floor(0.8 * reserveTokens);
-    const postCompactionEstimate = keptWindowTokens + summaryBudget;
-    if (postCompactionEstimate > contextWindow - reserveTokens) {
-      messagesToKeep = elideOversizedInKeepWindow(
-        messagesToKeep,
-        contextWindow,
-        reserveTokens,
-        summaryBudget
-      );
+    const targetKeptTokens = contextWindow - reserveTokens - summaryBudget;
+    if (keptWindowTokens > targetKeptTokens) {
+      messagesToKeep = elideOversizedInKeepWindow(messagesToKeep, targetKeptTokens);
     }
 
     log.info('Compaction cut point', {
