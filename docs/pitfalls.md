@@ -366,6 +366,52 @@ Host the real leader tray `WebSocket` in `packages/chrome-extension/src/service-
 
 **Git CORS**: Same rules apply to isomorphic-git HTTP requests (clone, push, pull). Both modes now route through `createProxiedFetch()`.
 
+## Origin Contract: Forbidden Headers & Default-Origin Fallback
+
+**The Problem**
+
+Browsers silently strip a small set of "forbidden" request headers — `Origin`, `Referer`, `Cookie`, `Proxy-*` — from any `fetch()` call made in page or Service Worker contexts. A skill author writing `fetch(url, { headers: { Origin: 'https://foo.com' } })` will see that header vanish before it reaches the network. Upstream CORS-protected APIs that key on `Origin` then either reject the request or fall back to a content-derived bucket.
+
+**The Contract**
+
+`createProxiedFetch()` and every `SecureFetch`-backed shell call (curl, `node -e "fetch(...)"`, `upskill`, `mcp invoke`, git, etc.) preserve forbidden headers in both floats via the same `X-Proxy-*` wire transport, and both proxies synthesize a default `Origin` when none survives.
+
+| Step                                                                   | CLI                                                       | Extension                                                                    |
+| ---------------------------------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Client encodes `Origin`/`Referer`/`Cookie`/`Proxy-*` as `X-Proxy-*`    | `createProxiedFetch` → `encodeForbiddenRequestHeaders`    | `extensionPortFetch` → `encodeForbiddenRequestHeaders` over `chrome.runtime` |
+| Proxy decodes `X-Proxy-*` back to real header names before upstream    | `/api/fetch-proxy` handler in `node-server/src/index.ts`  | SW `handleFetchProxyConnectionAsync` in `fetch-proxy-shared.ts`              |
+| If no caller `Origin` survived, synthesize `<scheme>://<host>` of URL  | Yes — `new URL(targetUrl).origin`                         | Yes — `new URL(cleanedUrl).origin`                                           |
+| Caller-supplied `Origin` always wins                                   | Decode runs before fallback                               | Decode runs before fallback                                                  |
+| Browser-injected `localhost` `Origin`/`Referer` stripped before refill | `isLocalhostOrigin` deletes it, fallback then synthesizes | (n/a — extension `Origin` is the extension ID, not localhost)                |
+
+**Overriding the Origin**
+
+To force a specific `Origin` upstream, pass one explicitly — it survives end-to-end because the encode step runs in your runtime before the browser can strip it:
+
+```bash
+# curl in the agent shell
+curl -H "Origin: https://example.com" https://api.example.com/data
+
+# node -e using SecureFetch (wired into the shell `fetch` binding)
+node -e 'fetch("https://api.example.com/data", { headers: { Origin: "https://example.com" } })'
+
+# upskill / mcp invoke / any other SecureFetch caller — same shape
+upskill some-org/some-skill   # propagates Origin if the skill sets one
+```
+
+Leave `Origin` unset to get the default — the proxy will use the target URL's origin (e.g., a request to `https://api.example.com/v1/foo` gets `Origin: https://api.example.com`). This is intentionally permissive: most upstream APIs accept their own origin, and skill authors don't need to think about CORS unless they want a specific value.
+
+**Why both floats need the encode/decode dance**
+
+The extension float also runs `fetch()` from a page-context (the side panel or offscreen document), so the same browser-strip behavior applies — extension `host_permissions` bypass CORS at the network layer but do **not** restore stripped request headers. The `extensionPortFetch` branch was changed in Wave 1 to match the CLI branch exactly; before that, extension-mode `curl -H "Origin: ..."` silently dropped the header even though CLI-mode worked. The default-origin fallback in the extension SW closes the matching gap for callers that don't set an Origin at all.
+
+**Related Files**
+
+- `packages/webapp/src/shell/proxy-headers.ts` — `encodeForbiddenRequestHeaders` / `decodeForbiddenRequestHeaders` (shared by both floats)
+- `packages/webapp/src/shell/proxied-fetch.ts` — `createProxiedFetch` factory; CLI and extension branches both encode
+- `packages/node-server/src/index.ts` — `/api/fetch-proxy` handler; decode + localhost-strip + default-origin synth
+- `packages/chrome-extension/src/fetch-proxy-shared.ts` — SW `handleFetchProxyConnectionAsync`; same decode + default-origin synth
+
 ## Kernel-Worker Fetch Bypass: Same-Origin Only
 
 `packages/webapp/src/kernel/kernel-worker.ts` wraps `globalThis.fetch` to
