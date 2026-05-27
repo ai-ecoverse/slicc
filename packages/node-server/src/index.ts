@@ -1276,6 +1276,16 @@ async function main() {
         // Only strip browser's auto-added localhost origin, preserve legitimate origins
         delete headers['origin'];
       }
+      // Default-Origin fallback: when no explicit caller Origin survives, synthesize
+      // one from the target URL so upstream CORS-protected APIs see a real Origin
+      // instead of nothing. Caller-supplied X-Proxy-Origin (handled above) still wins.
+      if (!headers['origin']) {
+        try {
+          headers['origin'] = new URL(targetUrl).origin;
+        } catch {
+          // Malformed targetUrl — leave origin unset; the upstream fetch will fail anyway.
+        }
+      }
 
       // Forbidden-header transport: restore X-Proxy-Referer → Referer
       const proxyReferer = req.headers['x-proxy-referer'];
