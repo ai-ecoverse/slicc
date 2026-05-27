@@ -222,10 +222,16 @@ function renderCones(cones) {
     `${running} running · ${paused} paused (cap: ${capRunning}/${capPaused})`;
 
   const btn = document.getElementById('create-btn');
-  btn.disabled = running >= capRunning;
-  btn.title = btn.disabled
-    ? `Cap reached (${running}/${capRunning} running). Pause or kill another first.`
-    : '';
+  const runningCapHit = running >= capRunning;
+  const pausedCapHit = paused >= capPaused;
+  btn.disabled = runningCapHit || pausedCapHit;
+  if (runningCapHit) {
+    btn.title = `Cap reached (${running}/${capRunning} running). Pause or kill another first.`;
+  } else if (pausedCapHit) {
+    btn.title = `Paused cap reached (${paused}/${capPaused}). Resume or kill a paused cone first.`;
+  } else {
+    btn.title = '';
+  }
 }
 
 async function refreshList() {
