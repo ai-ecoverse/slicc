@@ -337,6 +337,11 @@ export class SprinkleManager {
             log.warn('Failed to restore sprinkle', { name });
           }
         }
+        // URL is the explicit source of truth — a shared link should
+        // reopen exactly the panels it names. Skip the unseen-surfacing
+        // pass so a fresh profile loading `?sprinkles=dash` doesn't
+        // also attention-surface every other discoverable sprinkle.
+        return;
       } else {
         const raw = localStorage.getItem(OPEN_SPRINKLES_KEY);
         if (raw) {

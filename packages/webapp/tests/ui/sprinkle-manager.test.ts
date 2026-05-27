@@ -788,6 +788,28 @@ describe('SprinkleManager', () => {
       expect(localStorage.getItem('slicc-open-sprinkles')).toBeNull();
     });
 
+    it('restoreOpenSprinkles with explicit URL param does NOT surface other unseen sprinkles', async () => {
+      // Regression guard for the Codex P2 review on PR #773: when the
+      // URL carries `?sprinkles=dash`, the function used to fall
+      // through to `surfaceUnseenSprinkles()` after the URL-controlled
+      // restore. On a fresh profile (empty `slicc-known-sprinkles`),
+      // that surfaced every OTHER discoverable sprinkle in attention
+      // mode — so opening a shared link `?sprinkles=dash` quietly
+      // popped icons for everything else the user had never seen.
+      // The URL must restore exactly the panels it names.
+      await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title><div>hi</div>');
+      await vfs.writeFile('/shared/sprinkles/other/other.shtml', '<title>O</title><div>hi</div>');
+      window.history.replaceState(null, '', '/?sprinkles=dash');
+      // Fresh profile: known-sprinkles ledger is empty.
+      expect(localStorage.getItem('slicc-known-sprinkles')).toBeNull();
+
+      await mgr.refresh();
+      await mgr.restoreOpenSprinkles();
+
+      expect(mgr.opened()).toEqual(['dash']);
+      expect(mgr.opened()).not.toContain('other');
+    });
+
     it('restoreOpenSprinkles prefers URL over legacy localStorage when both exist', async () => {
       await vfs.writeFile('/shared/sprinkles/url-one/url-one.shtml', '<title>U</title><div/>');
       await vfs.writeFile('/shared/sprinkles/legacy/legacy.shtml', '<title>L</title><div/>');
@@ -851,12 +873,15 @@ describe('SprinkleManager', () => {
       expect(registerSprinkle).not.toHaveBeenCalled();
     });
 
-    it('inlineSprinkles names are never registered', async () => {
-      await vfs.writeFile(
-        '/shared/sprinkles/welcome/welcome.shtml',
-        '<title>Welcome</title><div>hi</div>'
-      );
+    it('inlineSprinkles names are filtered out of registerSprinkle (and unset lets them through)', async () => {
+      // `welcome` would also work in principle, but it's already
+      // removed upstream by HIDDEN_SPRINKLES in sprinkle-discovery.ts,
+      // so the assertion would pass even if `inlineSprinkles` were
+      // ignored. Use a non-hidden name to actually exercise the
+      // `inlineSprinkles` filter in `syncRegisteredIcons`.
+      await vfs.writeFile('/shared/sprinkles/foo/foo.shtml', '<title>Foo</title><div>hi</div>');
       await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dash</title><div>hi</div>');
+
       const inlineMgr = new SprinkleManager(
         vfs,
         lickHandler,
@@ -872,14 +897,41 @@ describe('SprinkleManager', () => {
           unregisterSprinkle: unregisterSprinkle as unknown as (name: string) => void,
         },
         vi.fn(),
-        { inlineSprinkles: new Set(['welcome']) }
+        { inlineSprinkles: new Set(['foo']) }
       );
 
       await inlineMgr.refresh();
 
-      const names = registerSprinkle.mock.calls.map((c) => c[0]);
-      expect(names).toContain('dash');
-      expect(names).not.toContain('welcome');
+      const filteredNames = registerSprinkle.mock.calls.map((c) => c[0]);
+      expect(filteredNames).toContain('dash');
+      expect(filteredNames).not.toContain('foo');
+
+      // Control: without `inlineSprinkles`, the same `foo` IS
+      // registered. Proves the absence above is caused by the
+      // option, not by upstream discovery filtering.
+      registerSprinkle.mockClear();
+      const defaultMgr = new SprinkleManager(
+        vfs,
+        lickHandler,
+        {
+          addSprinkle: addSprinkle as unknown as (
+            name: string,
+            title: string,
+            element: HTMLElement
+          ) => void,
+          removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+          minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
+          registerSprinkle: registerSprinkle as unknown as (name: string, title: string) => void,
+          unregisterSprinkle: unregisterSprinkle as unknown as (name: string) => void,
+        },
+        vi.fn()
+      );
+
+      await defaultMgr.refresh();
+
+      const defaultNames = registerSprinkle.mock.calls.map((c) => c[0]);
+      expect(defaultNames).toContain('dash');
+      expect(defaultNames).toContain('foo');
     });
 
     it('refresh unregisters sprinkles that disappear from the VFS', async () => {
