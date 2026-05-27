@@ -15,6 +15,7 @@ export type CloudErrorCode =
   | 'CDP_NOT_READY'
   | 'CDP_ERROR'
   | 'DO_UNREACHABLE'
+  | 'UPSTREAM_UNAVAILABLE'
   | 'INTERNAL';
 
 export class CloudError extends Error {

@@ -29,7 +29,10 @@ export async function authenticateRequest(
     return result;
   } catch (err) {
     if (err instanceof AuthError) {
-      const status = err.code === 'NOT_ALLOWED' ? 403 : 401;
+      let status: number;
+      if (err.code === 'NOT_ALLOWED') status = 403;
+      else if (err.code === 'UPSTREAM_UNAVAILABLE') status = 503;
+      else status = 401;
       return errorResponse(status, err.code, err.message);
     }
     return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));

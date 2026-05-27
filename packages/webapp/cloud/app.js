@@ -214,10 +214,10 @@ function renderCones(cones) {
     list.appendChild(li);
   }
 
-  const running = cones.filter((c) => c.state === 'running').length;
+  const running = cones.filter((c) => c.state === 'running' || c.state === 'reserved').length;
   const paused = cones.filter((c) => c.state === 'paused').length;
-  const capRunning = CONFIG.capRunning || 1;
-  const capPaused = CONFIG.capPaused || 5;
+  const capRunning = CONFIG.capRunning ?? 1;
+  const capPaused = CONFIG.capPaused ?? 5;
   document.getElementById('cap-info').textContent =
     `${running} running · ${paused} paused (cap: ${capRunning}/${capPaused})`;
 
@@ -343,13 +343,6 @@ window.addEventListener('focus', () => {
   if (getToken()) refreshList();
 });
 
-if (getToken()) {
-  setSignedIn();
-  refreshList();
-} else {
-  setSignedOut();
-}
-
 const signInBtn = document.getElementById('sign-in-btn');
 signInBtn.disabled = true;
 signInBtn.textContent = 'Loading…';
@@ -357,8 +350,15 @@ loadConfig()
   .then(() => {
     signInBtn.disabled = false;
     signInBtn.textContent = 'Sign in with Adobe';
+    if (getToken()) {
+      setSignedIn();
+      refreshList();
+    } else {
+      setSignedOut();
+    }
   })
   .catch((e) => {
     signInBtn.textContent = 'Config error';
     showToast('Could not load IMS config: ' + e.message);
+    setSignedOut();
   });

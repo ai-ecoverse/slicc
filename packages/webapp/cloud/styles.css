@@ -219,6 +219,9 @@ button:focus-visible {
 .cone.dead .state-dot {
   background: var(--dead);
 }
+.cone.reserved .state-dot {
+  background: var(--accent);
+}
 
 .cone strong {
   font-weight: 600;

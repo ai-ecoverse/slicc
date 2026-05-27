@@ -194,3 +194,51 @@ describe('extractBearer', () => {
     expect(extractBearer(req)).toBe('abc123');
   });
 });
+
+describe('authenticateRequest (middleware)', () => {
+  it('maps UPSTREAM_UNAVAILABLE to 503', async () => {
+    // Clear proxy config cache to force a fresh fetch with a new environment
+    clearProxyConfigCache();
+
+    // Mock fetch to fail JWKS for a stg1 token (bypass cached prod JWKS)
+    fetchSpy.mockImplementation(async (input: RequestInfo | URL) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes('/v1/config')) {
+        return new Response(
+          JSON.stringify({
+            clientId: 'test-client',
+            scopes: 'openid',
+            imsEnvironment: 'stg1',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      if (url.includes('/ims/keys')) {
+        throw new Error('network error: ECONNREFUSED');
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const token = await makeToken({
+      iss: 'https://ims-na1-stg1.adobelogin.com',
+      sub: 'usr-upstream',
+      client_id: 'test-client',
+      type: 'access_token',
+      email: 'test@adobe.com',
+    });
+
+    const { authenticateRequest } = await import('../src/cloud/auth-middleware.js');
+    const req = new Request('https://x/', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const result = await authenticateRequest(req, ENV);
+
+    // Should be a Response, not AuthResult
+    expect(result).toBeInstanceOf(Response);
+    const res = result as Response;
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body).toMatchObject({ error: 'UPSTREAM_UNAVAILABLE' });
+  });
+});
