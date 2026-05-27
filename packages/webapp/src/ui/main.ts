@@ -27,6 +27,7 @@ import {
   applyProviderDefaults,
   resolveCurrentModel,
   resolveModelById,
+  saveOAuthAccount,
 } from './provider-settings.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { initTheme } from './theme.js';
@@ -61,6 +62,7 @@ import { SessionStore as AgentSessionStore } from '../core/session.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import {
+  IndexedDbLeaderTraySessionStore,
   LeaderTrayManager,
   createTrayFetch,
   getLeaderTrayRuntimeStatus,
@@ -98,6 +100,7 @@ import {
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
   shouldUseRuntimeModeTrayDefaults,
+  type UiRuntimeMode,
 } from './runtime-mode.js';
 import {
   setConnectedFollowersGetter,
@@ -1684,7 +1687,8 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 // path can't accidentally regress the inline path that ships today.
 // ---------------------------------------------------------------------------
 
-async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean): Promise<void> {
+async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode): Promise<void> {
+  const isElectronOverlay = runtimeMode === 'electron-overlay';
   log.info('starting standalone with kernel worker');
 
   const { spawnKernelWorker } = await import('../kernel/spawn.js');
@@ -2662,7 +2666,113 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   {
     const storedJoinUrl = window.localStorage.getItem(TRAY_JOIN_STORAGE_KEY);
     const storedWorkerBaseUrl = window.localStorage.getItem(TRAY_WORKER_STORAGE_KEY);
-    if (storedJoinUrl) {
+    if (runtimeMode === 'hosted-leader') {
+      // A persisted /data/profile (which survives e2b pause/resume) could carry
+      // a stale TRAY_JOIN_STORAGE_KEY from a prior follower role. For hosted-leader
+      // we ALWAYS start as leader; clear the join key so the existing branch
+      // below cannot route us into the follower path on this or any subsequent boot.
+      //
+      // NOTE: not unit-tested. main.ts has no test scaffold today; building one
+      // for this 3-line branch isn't worth the cost. The behavior is covered
+      // indirectly by the live e2b harness (Phase 5.1) — a sandbox booted with
+      // a stale TRAY_JOIN_STORAGE_KEY would join an unreachable follower and
+      // /tmp/slicc-join.json would never appear, surfacing in the start poll
+      // timeout. If a regression slips, the live harness catches it.
+      window.localStorage.removeItem(TRAY_JOIN_STORAGE_KEY);
+
+      // ALSO clear the persisted leader session from IndexedDB. After a
+      // pause/resume + leader-restart kick, Chrome's Page.reload re-runs
+      // main.ts, but IndexedDB survives. Without this clear, LeaderTrayManager
+      // would reuse the stale session, the on-worker tray would be gone
+      // (or its leaderKey expired), and either we'd silently sit on dead
+      // credentials or attachWithRecovery would create a new tray but the
+      // refresh path is fragile. Forcing a fresh tray on every hosted-leader
+      // boot guarantees onLeaderReady fires with new credentials → POST
+      // /api/cloud-status → laptop sees a fresh updatedAt and unblocks resume.
+      await new IndexedDbLeaderTraySessionStore().clear();
+
+      // resolveTrayRuntimeConfig already ran earlier in mainStandaloneWorker
+      // (~main.ts:1708) — by the time we reach the tray block, it has fetched
+      // /api/runtime-config (which node-server's --hosted mode populates from
+      // SLICC_TRAY_WORKER_BASE_URL) and seeded TRAY_WORKER_STORAGE_KEY in
+      // localStorage. Reuse that value rather than re-fetching.
+      const workerBaseUrl = window.localStorage.getItem(TRAY_WORKER_STORAGE_KEY);
+      if (!workerBaseUrl) {
+        throw new Error(
+          'hosted-leader: TRAY_WORKER_STORAGE_KEY not seeded — runtime-config resolution failed'
+        );
+      }
+
+      pageLeaderTray = startPageLeaderTray({
+        ...buildLeaderTrayOptions(workerBaseUrl),
+        runtime: 'slicc-hosted-leader',
+        kind: 'hosted',
+        onLeaderReady: (session) => {
+          // TODO: handle POST failures (currently best-effort; if the cloud orchestrator
+          // never sees this, --cloud start times out with diagnostic from start.ts polling).
+          void fetch('/api/cloud-status', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              joinUrl: session.joinUrl,
+              trayId: session.trayId,
+              controllerUrl: session.controllerUrl,
+              webhookUrl: session.webhookUrl,
+              runtime: session.runtime,
+              sliccVersion: __SLICC_VERSION__,
+            }),
+          }).catch((err) => {
+            log.error('failed to POST /api/cloud-status', { error: String(err) });
+          });
+        },
+      });
+      wireLeaderHooks(pageLeaderTray);
+
+      // Inject pre-acquired provider credentials AFTER the tray AND the first
+      // follower has had time to establish WebRTC. Writing to localStorage
+      // propagates to the kernel-worker's shim, which triggers a re-init that
+      // breaks any in-flight WebRTC peer setup → followers stuck at
+      // LEADER_CONNECTED.
+      //
+      // 5s after page boot covers the worst-case extension cold start; the
+      // user can't realistically type a message in that window, so the agent
+      // sees the Adobe account by its first lazy init.
+      void (async () => {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          const res = await fetch('/api/hosted-bootstrap');
+          if (!res.ok) return;
+          const bootstrap = (await res.json()) as { adobeImsToken?: string };
+          if (!bootstrap.adobeImsToken) return;
+
+          // Seed the model/provider selection before injecting the account so the
+          // first user message resolves to `adobe`. Without this, getSelectedProvider()
+          // hits the `accounts.length > 0` branch — which depends on saveOAuthAccount
+          // having already pushed the account into the kernel-worker shim. The shim
+          // write is async (panel-rpc), so a sub-second user message after this block
+          // can race the account propagation. An explicit "selected-model" write is
+          // synchronous in the kernel-worker shim and removes the race.
+          //
+          // Skip the write if already set so a paused-then-resumed cone preserves
+          // whatever model the user picked in the prior session.
+          if (!localStorage.getItem('selected-model')) {
+            localStorage.setItem('selected-model', 'adobe:claude-opus-4-6');
+          }
+
+          await saveOAuthAccount({
+            providerId: 'adobe',
+            accessToken: bootstrap.adobeImsToken,
+            tokenExpiresAt: Date.now() + 60 * 60 * 1000,
+            userName: 'cloud-injected',
+          });
+          log.info('hosted-leader: Adobe IMS token injected from secrets.env');
+        } catch (err) {
+          log.warn('hosted-leader: bootstrap fetch failed; provider needs manual login', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+    } else if (storedJoinUrl) {
       pageFollowerTray = startPageFollowerTray({
         joinUrl: storedJoinUrl,
         onSnapshot: (messages) => layout.panels.chat.loadMessages(messages),
@@ -3196,7 +3306,7 @@ async function main(): Promise<void> {
   // model). If we ever need to roll back, restore the pre-removal
   // commit (see git log for "remove legacy inline-orchestrator
   // path").
-  return mainStandaloneWorker(app, runtimeMode === 'electron-overlay');
+  return mainStandaloneWorker(app, runtimeMode);
 }
 
 main().catch((err) => {

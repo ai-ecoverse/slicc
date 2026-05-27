@@ -21,6 +21,7 @@ export interface CliRuntimeFlags {
   /** Path to a .env file for secrets */
   envFile: string | null;
   version: boolean;
+  hosted: boolean;
 }
 
 export const DEFAULT_CLI_CDP_PORT = 9222;
@@ -50,6 +51,7 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
   let prompt: string | null = null;
   let envFile: string | null = null;
   let version = false;
+  let hosted = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
@@ -64,6 +66,10 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     }
     if (arg === '--serve-only') {
       serveOnly = true;
+      continue;
+    }
+    if (arg === '--hosted') {
+      hosted = true;
       continue;
     }
     if (arg.startsWith('--cdp-port=')) {
@@ -203,5 +209,6 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     prompt,
     envFile,
     version,
+    hosted,
   };
 }

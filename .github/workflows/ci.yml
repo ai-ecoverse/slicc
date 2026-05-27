@@ -19,6 +19,7 @@ jobs:
       webapp: ${{ steps.filter.outputs.webapp }}
       vfs-root: ${{ steps.filter.outputs.vfs-root }}
       assets: ${{ steps.filter.outputs.assets }}
+      cloud-core: ${{ steps.filter.outputs.cloud-core }}
       node-server: ${{ steps.filter.outputs.node-server }}
       extension: ${{ steps.filter.outputs.extension }}
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
@@ -39,6 +40,8 @@ jobs:
               - 'packages/vfs-root/**'
             assets:
               - 'packages/assets/**'
+            cloud-core:
+              - 'packages/cloud-core/**'
             node-server:
               - 'packages/node-server/**'
             extension:
@@ -128,6 +131,7 @@ jobs:
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
       needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
       needs.changes.outputs.extension == 'true' ||
       needs.changes.outputs.cloudflare-worker == 'true' ||
@@ -231,6 +235,7 @@ jobs:
   node-server:
     needs: changes
     if: >-
+      needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
@@ -323,6 +328,7 @@ jobs:
   cloudflare-worker:
     needs: changes
     if: >-
+      needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.cloudflare-worker == 'true' ||
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
@@ -372,8 +378,12 @@ jobs:
           command: deploy --env staging
           secrets: |
             CLOUDFLARE_TURN_API_TOKEN
+            GITHUB_CLIENT_SECRET
+            E2B_API_KEY
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Wait before staging deploy retry 2
         if: steps.deploy_attempt_1.outcome == 'failure'
         run: sleep 20
@@ -390,8 +400,12 @@ jobs:
           command: deploy --env staging
           secrets: |
             CLOUDFLARE_TURN_API_TOKEN
+            GITHUB_CLIENT_SECRET
+            E2B_API_KEY
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Wait before staging deploy retry 3
         if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
         run: sleep 40
@@ -408,8 +422,12 @@ jobs:
           command: deploy --env staging
           secrets: |
             CLOUDFLARE_TURN_API_TOKEN
+            GITHUB_CLIENT_SECRET
+            E2B_API_KEY
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET }}
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
       - name: Finalize staging deploy
         id: deploy
         if: steps.deploy_attempt_1.outcome == 'success' || steps.deploy_attempt_2.outcome == 'success' || steps.deploy_attempt_3.outcome == 'success'
@@ -560,6 +578,7 @@ jobs:
   global-install:
     needs: changes
     if: >-
+      needs.changes.outputs.cloud-core == 'true' ||
       needs.changes.outputs.node-server == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest

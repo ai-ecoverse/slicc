@@ -1,0 +1,12 @@
+{
+  "name": "slicc-hosted-runtime",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "e2b": "^2.23.0",
+    "electron": "42.0.1",
+    "express": "^5.0.0",
+    "ws": "^8.18.0"
+  }
+}

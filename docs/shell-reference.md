@@ -769,6 +769,30 @@ secret set API_KEY
 
 ---
 
+## `slicc --cloud` CLI
+
+Laptop-side orchestration of cloud SLICC sandboxes via e2b.dev. Mutually exclusive with `--hosted`.
+
+### Subcommands
+
+- **`start [--name <label>] [--env-file <path>] [--substrate <id>]`** — create a sandbox, upload secrets, wait for join URL. Prints the tray join URL once the leader is ready.
+- **`list`** — show all known cloud sessions (registry + live state from e2b).
+- **`pause <sandboxId|name>`** — pause the sandbox; state preserved on e2b storage. The sandbox can be resumed later from the same state.
+- **`resume <sandboxId|name>`** — resume a paused sandbox; kicks `/api/leader-restart`, polls for refreshed join URL. Returns the new join URL.
+- **`kill <sandboxId|name>`** — destroy the sandbox; remove from registry. Irreversible.
+
+### Registry
+
+Cloud session state lives in `~/.slicc/cloud-sessions.json`. Each entry maps a sandbox ID to its name, substrate, creation time, and last known join URL.
+
+### Secrets
+
+`--cloud start` reads from `~/.slicc/secrets.env` (or the path specified via `--env-file`) and uploads it to `/slicc/secrets.env` inside the sandbox. `E2B_API_KEY` and `E2B_API_KEY_DOMAINS` are stripped before upload so the cloud agent cannot spawn additional sandboxes against your account.
+
+### Known Limitations
+
+See `README.md` § Cloud for prerequisites and limitations (OAuth providers, local mounts, pause TTL, credential rotation, SIGINT handling).
+
 ## References
 
 - **just-bash**: https://github.com/jotaen/just-bash
