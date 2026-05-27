@@ -77,4 +77,40 @@ describe('GET /api/cloud/config', () => {
     await handleCloudConfig(new Request('https://w/api/cloud/config'), {});
     expect(callCount).toBe(1);
   });
+
+  it('uses IMS_RELAY_URL env var when provided', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes('/v1/config')) {
+        return new Response(
+          JSON.stringify({ clientId: 'x', scopes: 'y', imsEnvironment: 'prod' }),
+          { status: 200 }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const res = await handleCloudConfig(new Request('https://w/api/cloud/config'), {
+      IMS_RELAY_URL: 'https://staging.example/auth/callback',
+    });
+    const body = (await res.json()) as Record<string, string>;
+    expect(body.imsRelayUrl).toBe('https://staging.example/auth/callback');
+  });
+
+  it('defaults to production relay URL when IMS_RELAY_URL not set', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes('/v1/config')) {
+        return new Response(
+          JSON.stringify({ clientId: 'x', scopes: 'y', imsEnvironment: 'prod' }),
+          { status: 200 }
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const res = await handleCloudConfig(new Request('https://w/api/cloud/config'), {});
+    const body = (await res.json()) as Record<string, string>;
+    expect(body.imsRelayUrl).toBe('https://www.sliccy.ai/auth/callback');
+  });
 });

@@ -6,6 +6,7 @@ import { getProxyConfig } from './proxy-config.js';
 
 export interface ConfigEnv {
   ADOBE_PROXY_ENDPOINT?: string;
+  IMS_RELAY_URL?: string;
 }
 
 const IMS_AUTHORIZE_URLS: Record<string, string> = {
@@ -13,18 +14,19 @@ const IMS_AUTHORIZE_URLS: Record<string, string> = {
   stg1: 'https://ims-na1-stg1.adobelogin.com/ims/authorize/v2',
 };
 
-const RELAY_URL = 'https://www.sliccy.ai/auth/callback';
+const DEFAULT_RELAY_URL = 'https://www.sliccy.ai/auth/callback';
 const RECEIVE_PATH = '/auth/cloud-callback';
 
 export async function handleCloudConfig(_req: Request, env: ConfigEnv): Promise<Response> {
   try {
     const proxy = await getProxyConfig(env);
+    const relayUrl = env.IMS_RELAY_URL || DEFAULT_RELAY_URL;
     return Response.json({
       imsClientId: proxy.clientId,
       imsEnvironment: proxy.imsEnvironment,
       imsAuthorizeUrl: IMS_AUTHORIZE_URLS[proxy.imsEnvironment] || IMS_AUTHORIZE_URLS.prod!,
       imsScope: proxy.scopes,
-      imsRelayUrl: RELAY_URL,
+      imsRelayUrl: relayUrl,
       imsReceivePath: RECEIVE_PATH,
     });
   } catch (err) {

@@ -21,6 +21,7 @@
     "GITHUB_CLIENT_ID": "Ov23li6DZA5dPBZIaqFS",
     // Cloud cones environment and IMS
     "ADOBE_PROXY_ENDPOINT": "https://adobe-llm-proxy.paolo-moz.workers.dev",
+    "IMS_RELAY_URL": "https://www.sliccy.ai/auth/callback",
     "ALLOWED_EMAIL_DOMAIN": "adobe.com",
     "BLOCKED_EMAILS": "",
     "REQUIRE_OWNER_ORG": "false",
@@ -70,6 +71,7 @@
         "GITHUB_CLIENT_ID": "Ov23liUe1b3b6GDjPGz4",
         // Cloud cones environment and IMS
         "ADOBE_PROXY_ENDPOINT": "https://adobe-llm-proxy.paolo-moz.workers.dev",
+        "IMS_RELAY_URL": "https://slicc-tray-hub-staging.kpauls177.workers.dev/auth/callback",
         "ALLOWED_EMAIL_DOMAIN": "adobe.com",
         "BLOCKED_EMAILS": "",
         "REQUIRE_OWNER_ORG": "false",
