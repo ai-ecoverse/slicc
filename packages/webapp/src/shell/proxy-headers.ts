@@ -41,6 +41,35 @@ export function encodeForbiddenRequestHeaders(
 }
 
 /**
+ * Decode request headers from the X-Proxy-* transport back to their real names.
+ * X-Proxy-Cookie → cookie, X-Proxy-Origin → origin, X-Proxy-Referer → referer,
+ * X-Proxy-Proxy-* → proxy-*. Inverse of `encodeForbiddenRequestHeaders` —
+ * used by the proxy server side (CLI Express handler, extension SW) before
+ * calling upstream `fetch()`. Match is case-insensitive on the `X-Proxy-`
+ * prefix; the decoded key is always lowercase.
+ */
+export function decodeForbiddenRequestHeaders(
+  headers: Record<string, string>
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLowerCase();
+    if (lower === 'x-proxy-cookie') {
+      result['cookie'] = value;
+    } else if (lower === 'x-proxy-origin') {
+      result['origin'] = value;
+    } else if (lower === 'x-proxy-referer') {
+      result['referer'] = value;
+    } else if (lower.startsWith('x-proxy-proxy-')) {
+      result[lower.replace(/^x-proxy-/, '')] = value;
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+/**
  * Decode response headers that the proxy transported under non-forbidden names.
  * X-Proxy-Set-Cookie (JSON array) → set-cookie (JSON array string)
  */

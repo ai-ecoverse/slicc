@@ -298,3 +298,131 @@ describe('handleFetchProxyConnectionAsync — synchronous listener attach', () =
     ]);
   });
 });
+
+// X-Proxy-* forbidden-header transport parity with CLI. Browser `fetch()`
+// silently strips Cookie/Origin/Referer/Proxy-* request headers AND the
+// `Set-Cookie` response header, so both the page→SW request and the
+// SW→page response are encoded under `X-Proxy-*` names.
+describe('handleFetchProxyConnection — X-Proxy-* request decode', () => {
+  let pipeline: SecretsPipeline;
+
+  beforeEach(async () => {
+    pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: { get: async () => undefined, listAll: async () => [] },
+    });
+    await pipeline.reload();
+  });
+
+  async function dispatch(headers: Record<string, string>): Promise<Record<string, string>> {
+    let captured: Record<string, string> | undefined;
+    (globalThis as any).fetch = vi.fn(async (_url: string, init: { headers: any }) => {
+      captured = init.headers as Record<string, string>;
+      return new Response('ok', { status: 200, statusText: 'OK' });
+    });
+    const port = makePort(() => {});
+    handleFetchProxyConnection(port, pipeline);
+    port.fireMessage({
+      type: 'request',
+      url: 'https://api.example.com/path',
+      method: 'GET',
+      headers,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    if (!captured) throw new Error('fetch was not called');
+    return captured;
+  }
+
+  it('decodes X-Proxy-Origin → origin', async () => {
+    const h = await dispatch({ 'X-Proxy-Origin': 'https://example.com' });
+    expect(h.origin).toBe('https://example.com');
+    expect('X-Proxy-Origin' in h).toBe(false);
+  });
+
+  it('decodes X-Proxy-Referer → referer', async () => {
+    const h = await dispatch({ 'X-Proxy-Referer': 'https://example.com/page' });
+    expect(h.referer).toBe('https://example.com/page');
+    expect('X-Proxy-Referer' in h).toBe(false);
+  });
+
+  it('decodes X-Proxy-Cookie → cookie', async () => {
+    const h = await dispatch({ 'X-Proxy-Cookie': 'sid=abc; theme=dark' });
+    expect(h.cookie).toBe('sid=abc; theme=dark');
+    expect('X-Proxy-Cookie' in h).toBe(false);
+  });
+
+  it('decodes X-Proxy-Proxy-* → proxy-* (preserves original suffix)', async () => {
+    const h = await dispatch({ 'X-Proxy-Proxy-Authorization': 'Basic dXNlcjpwYXNz' });
+    expect(h['proxy-authorization']).toBe('Basic dXNlcjpwYXNz');
+    expect('X-Proxy-Proxy-Authorization' in h).toBe(false);
+  });
+
+  it('leaves non-forbidden headers untouched', async () => {
+    const h = await dispatch({ 'User-Agent': 'curl/8', Accept: '*/*' });
+    expect(h['User-Agent']).toBe('curl/8');
+    expect(h['Accept']).toBe('*/*');
+  });
+});
+
+describe('handleFetchProxyConnection — Set-Cookie encode on response', () => {
+  let pipeline: SecretsPipeline;
+
+  beforeEach(async () => {
+    pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: { get: async () => undefined, listAll: async () => [] },
+    });
+    await pipeline.reload();
+  });
+
+  it('packs upstream Set-Cookie values into X-Proxy-Set-Cookie JSON array', async () => {
+    const upstreamHeaders = new Headers([
+      ['content-type', 'text/plain'],
+      ['set-cookie', 'sid=abc; Path=/'],
+      ['set-cookie', 'theme=dark; Path=/'],
+    ]);
+    (globalThis as any).fetch = vi.fn(
+      async () => new Response('ok', { status: 200, statusText: 'OK', headers: upstreamHeaders })
+    );
+
+    const posts: any[] = [];
+    const port = makePort((m) => posts.push(m));
+    handleFetchProxyConnection(port, pipeline);
+    port.fireMessage({
+      type: 'request',
+      url: 'https://api.example.com/login',
+      method: 'GET',
+      headers: {},
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    const head = posts.find((p) => p.type === 'response-head');
+    expect(head).toBeDefined();
+    expect(head.headers['X-Proxy-Set-Cookie']).toBeDefined();
+    const parsed = JSON.parse(head.headers['X-Proxy-Set-Cookie']);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toContain('sid=abc; Path=/');
+    expect(parsed).toContain('theme=dark; Path=/');
+    // The raw `set-cookie` is dropped from the page-visible map (browsers
+    // strip it anyway; X-Proxy-Set-Cookie is the recoverable transport).
+    expect(head.headers['set-cookie']).toBeUndefined();
+  });
+
+  it('omits X-Proxy-Set-Cookie when upstream sets no cookies', async () => {
+    (globalThis as any).fetch = vi.fn(
+      async () => new Response('ok', { status: 200, statusText: 'OK' })
+    );
+    const posts: any[] = [];
+    const port = makePort((m) => posts.push(m));
+    handleFetchProxyConnection(port, pipeline);
+    port.fireMessage({
+      type: 'request',
+      url: 'https://api.example.com/x',
+      method: 'GET',
+      headers: {},
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    const head = posts.find((p) => p.type === 'response-head');
+    expect(head.headers['X-Proxy-Set-Cookie']).toBeUndefined();
+  });
+});

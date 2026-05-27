@@ -1,6 +1,48 @@
 import { type SecretsPipeline } from '@slicc/shared-ts';
+import { decodeForbiddenRequestHeaders } from '../../webapp/src/shell/proxy-headers.js';
 
 export const REQUEST_BODY_CAP = 32 * 1024 * 1024;
+
+/**
+ * Extract `Set-Cookie` values from upstream response headers as a list.
+ * `Headers.forEach` joins multi-value `set-cookie` entries with a comma
+ * (per WHATWG fetch — undef behavior for set-cookie), so use the dedicated
+ * `getSetCookie()` accessor when available. Falls back to a single
+ * comma-joined string for older runtimes that don't implement it.
+ */
+function extractSetCookies(headers: Headers): string[] {
+  const get = (headers as unknown as { getSetCookie?: () => string[] }).getSetCookie;
+  if (typeof get === 'function') {
+    return get.call(headers);
+  }
+  const joined = headers.get('set-cookie');
+  return joined ? [joined] : [];
+}
+
+/**
+ * Build the response-head headers map the way the CLI proxy does:
+ *   - drop `set-cookie` and any `x-proxy-*` from the scrubbed map
+ *   - if there were any `set-cookie` values, repack them as a JSON array
+ *     under `X-Proxy-Set-Cookie` so the page side can recover them via
+ *     `decodeForbiddenResponseHeaders`.
+ */
+function buildResponseHeaders(
+  scrubbed: Record<string, string>,
+  upstream: Headers,
+  pipeline: SecretsPipeline
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(scrubbed)) {
+    const lower = k.toLowerCase();
+    if (lower === 'set-cookie' || lower.startsWith('x-proxy-')) continue;
+    out[k] = v;
+  }
+  const setCookies = extractSetCookies(upstream);
+  if (setCookies.length > 0) {
+    out['X-Proxy-Set-Cookie'] = pipeline.scrubResponse(JSON.stringify(setCookies));
+  }
+  return out;
+}
 
 export interface PortLike {
   onMessage: { addListener: (fn: (msg: unknown) => void) => void };
@@ -110,7 +152,9 @@ export function handleFetchProxyConnectionAsync(
       const cleanedUrl = credsResult.url;
       const host = new URL(cleanedUrl).host;
 
-      const headers: Record<string, string> = { ...msg.headers };
+      // Decode X-Proxy-* forbidden-header transport BEFORE unmask so the
+      // pipeline sees real header names. Matches CLI server behavior.
+      const headers: Record<string, string> = decodeForbiddenRequestHeaders(msg.headers);
       const headersResult = pipeline.unmaskHeaders(headers, host);
       if (headersResult.forbidden) {
         send(port, {
@@ -135,7 +179,8 @@ export function handleFetchProxyConnectionAsync(
         body: body as BodyInit | undefined,
         signal: ac.signal,
       });
-      const respHeaders = pipeline.scrubHeaders(upstream.headers);
+      const scrubbed = pipeline.scrubHeaders(upstream.headers);
+      const respHeaders = buildResponseHeaders(scrubbed, upstream.headers, pipeline);
       send(port, {
         type: 'response-head',
         status: upstream.status,
@@ -148,8 +193,8 @@ export function handleFetchProxyConnectionAsync(
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-          const scrubbed = pipeline.scrubResponseBytes(value);
-          send(port, { type: 'response-chunk', dataBase64: encodeBase64Bytes(scrubbed) });
+          const bodyScrubbed = pipeline.scrubResponseBytes(value);
+          send(port, { type: 'response-chunk', dataBase64: encodeBase64Bytes(bodyScrubbed) });
         }
       }
       send(port, { type: 'response-end' });
@@ -197,7 +242,9 @@ export function handleFetchProxyConnection(port: PortLike, pipeline: SecretsPipe
       const cleanedUrl = credsResult.url;
       const host = new URL(cleanedUrl).host;
 
-      const headers: Record<string, string> = { ...msg.headers };
+      // Decode X-Proxy-* forbidden-header transport BEFORE unmask so the
+      // pipeline sees real header names. Matches CLI server behavior.
+      const headers: Record<string, string> = decodeForbiddenRequestHeaders(msg.headers);
       const headersResult = pipeline.unmaskHeaders(headers, host);
       if (headersResult.forbidden) {
         send(port, {
@@ -222,7 +269,8 @@ export function handleFetchProxyConnection(port: PortLike, pipeline: SecretsPipe
         body: body as BodyInit | undefined,
         signal: ac.signal,
       });
-      const respHeaders = pipeline.scrubHeaders(upstream.headers);
+      const scrubbed = pipeline.scrubHeaders(upstream.headers);
+      const respHeaders = buildResponseHeaders(scrubbed, upstream.headers, pipeline);
       send(port, {
         type: 'response-head',
         status: upstream.status,
@@ -239,8 +287,8 @@ export function handleFetchProxyConnection(port: PortLike, pipeline: SecretsPipe
           // (git packfiles, ZIPs, images) survive intact. Chunk-boundary
           // scrub limitation matches CLI behavior: a coincidental real-value
           // straddling a chunk boundary leaks through. v2: carry-over window.
-          const scrubbed = pipeline.scrubResponseBytes(value);
-          send(port, { type: 'response-chunk', dataBase64: encodeBase64Bytes(scrubbed) });
+          const bodyScrubbed = pipeline.scrubResponseBytes(value);
+          send(port, { type: 'response-chunk', dataBase64: encodeBase64Bytes(bodyScrubbed) });
         }
       }
       send(port, { type: 'response-end' });
