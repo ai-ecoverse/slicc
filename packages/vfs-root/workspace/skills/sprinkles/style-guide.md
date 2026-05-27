@@ -523,7 +523,7 @@ Panels should look like professional tools, not chatbot output. Follow these rul
 
 **No emojis in headings or labels.** Use badges, status lights, and semantic color to convey meaning — not 🔍 ❌ ✅ ⚠️ 📊 icons.
 
-**No inline color styles.** Use the semantic variants (`--positive`, `--negative`, `--notice`, `--informative`) instead of hardcoded hex colors.
+**No inline color styles, and never hard-code light/dark values.** Use the semantic variants (`--positive`, `--negative`, `--notice`, `--informative`) and S2 tokens — they swap automatically when the parent theme flips. For one-off colors not covered by a token, use `light-dark()` (see "Light & dark mode" below).
 
 **Use tables for structured findings.** When presenting lists of issues, checks, or recommendations, use `.sprinkle-table` with severity badges in the first column — not bullet lists with emoji prefixes.
 
@@ -731,9 +731,27 @@ slicc.on('update', function (data) {
 
 ---
 
+## Light & dark mode
+
+All sprinkles inherit the parent's theme automatically. The parent injects its S2 tokens and toggles a `.theme-light` class on the sprinkle root — the iframe's `<html>` in full-document mode, or the outermost container injected into the sidebar in fragment mode — whenever the user flips themes. Every `var(--s2-*)` token below swaps with it. **Never hard-code colors for one theme**, and **do not use `@media (prefers-color-scheme: ...)`** for colors that should mirror the app theme (it desyncs from the parent's class-based toggle).
+
+For one-off colors that aren't covered by an S2 token, use CSS `light-dark()`:
+
+```css
+:root {
+  color-scheme: light dark;
+}
+.my-tile {
+  background: light-dark(#fafafa, #1c1c1c);
+  color: light-dark(#222, #eee);
+}
+```
+
+`light-dark()` only resolves the dark branch when `color-scheme` is set on an ancestor — set it on `:root` in full-document mode, or on your outermost container in fragment mode. This intentionally follows the user's OS `color-scheme` preference for one-off custom colors; the S2 tokens above still track the parent app's class-based theme toggle in lockstep.
+
 ## Spectrum 2 Token Reference
 
-Full-document sprinkles (`.shtml`) inherit S2 CSS custom properties from the parent page. Always use tokens — never hardcode hex values.
+Full-document sprinkles (`.shtml`) inherit S2 CSS custom properties from the parent page. Every token below is theme-aware: its value swaps when `.theme-light` is toggled on `<html>`, so you get correct light and dark colors for free. Always use tokens — never hardcode hex values.
 
 ### Border Radius
 

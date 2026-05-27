@@ -22,6 +22,14 @@ allowed-tools: bash, read_file, write_file, edit_file
 
 Pick full-document mode when you need custom CSS beyond `.sprinkle-*` classes, complex layouts (sidebar + main, split panes, tabs), or interactive canvas/SVG.
 
+## Light & dark mode
+
+Theming is **automatic**. The parent injects its S2 tokens into every sprinkle and toggles a `.theme-light` class on the sprinkle root — the iframe's `<html>` in full-document mode, or the outermost container injected into the sidebar in fragment mode — whenever the user flips the parent theme. All `var(--s2-*)` tokens swap in lockstep. **Never hard-code colors for one theme.**
+
+- Use S2 tokens (`var(--s2-content-default)`, `var(--s2-bg-layer-2)`, etc.) for everything — see `style-guide.md` for the full reference.
+- For one-off colors not covered by an S2 token, use CSS `light-dark(<light>, <dark>)` and set `color-scheme: light dark` on an ancestor (the root in full-document mode, the outermost container in fragment mode). `light-dark()` returns the dark value only when `color-scheme` is set. This intentionally follows the user's OS `color-scheme` preference for one-off custom colors; S2 tokens still track the parent app's class-based theme toggle in lockstep.
+- **Do NOT use `@media (prefers-color-scheme: ...)`** to swap colors that should mirror the parent app's theme. The parent's theme toggle is a class on the sprinkle root, not the OS preference, so media queries desync from the actual app theme. Use S2 tokens (class-driven) or `light-dark()` (OS-driven, for one-off custom colors only) instead.
+
 ## Layout & viewport
 
 Sprinkles open in **one of four viewport contexts**, and you must design for the narrowest:
