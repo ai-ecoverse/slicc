@@ -19,6 +19,9 @@ export interface ResumeConeOpts {
   refreshSecretsContents?: string;
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
+  /** Skip the state check (NOT_FOUND + ALREADY_RUNNING). Used by the worker
+   * after doing atomic cap-check + state-flip under DO lock. */
+  skipStateCheck?: boolean;
 }
 
 // curl writes its body to /dev/null and prints the HTTP status code on stdout.
@@ -32,13 +35,22 @@ export async function resumeCone(
   deps: ResumeConeDeps,
   opts: ResumeConeOpts
 ): Promise<ResumeResult> {
+  // skipStateCheck is used by the worker after doing atomic cap-check + state-flip
+  // under DO lock. CLI still wants the NOT_FOUND + ALREADY_RUNNING checks.
+  if (!opts.skipStateCheck) {
+    const entry = await deps.registry.findByNameOrId(opts.query);
+    if (!entry) throw new CloudError('NOT_FOUND', `cloud session not found: ${opts.query}`);
+
+    // NEW: ALREADY_RUNNING check (additive — existing CLI resume didn't have this).
+    if (entry.state === 'running') {
+      throw new CloudError('ALREADY_RUNNING', `cloud session is already running: ${opts.query}`);
+    }
+  }
+
+  // After state checks, fetch the entry again for baseline data (the worker's
+  // precheck already validated it exists).
   const entry = await deps.registry.findByNameOrId(opts.query);
   if (!entry) throw new CloudError('NOT_FOUND', `cloud session not found: ${opts.query}`);
-
-  // NEW: ALREADY_RUNNING check (additive — existing CLI resume didn't have this).
-  if (entry.state === 'running') {
-    throw new CloudError('ALREADY_RUNNING', `cloud session is already running: ${opts.query}`);
-  }
 
   // Baseline from the registry — `startCone` stored these at create, and
   // `pauseCone` preserves them across pause. Resume requires a strictly

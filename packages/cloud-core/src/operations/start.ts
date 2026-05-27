@@ -91,14 +91,22 @@ export async function reserveSlot(
   const { listCones } = await import('./list.js');
   const existing = await listCones(deps, opts.userId ? { metadata: { userId: opts.userId } } : {});
 
-  // Cap check: count running entries (including existing reservations)
+  // Cap check: count both running and paused entries (reservations count as running)
   if (opts.env) {
     const running = existing.filter((e) => e.state === 'running').length;
+    const paused = existing.filter((e) => e.state === 'paused').length;
     const runningCap = Number.parseInt(opts.env.CONE_CAP_RUNNING, 10);
+    const pausedCap = Number.parseInt(opts.env.CONE_CAP_PAUSED, 10);
     if (running >= runningCap) {
       throw new CloudError('CAP_EXCEEDED', `at running cap (${running}/${runningCap})`, {
         running,
         cap: runningCap,
+      });
+    }
+    if (paused >= pausedCap) {
+      throw new CloudError('CAP_EXCEEDED', `at paused cap (${paused}/${pausedCap})`, {
+        paused,
+        cap: pausedCap,
       });
     }
   }
@@ -128,70 +136,76 @@ export async function reserveSlot(
 export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promise<StartResult> {
   const safeSecrets = filterSecretsEnv(opts.envContents);
 
-  // If we have a reservation, we'll update it after create; otherwise append a new placeholder
-  const reservationId = opts.reservationId;
-
-  const handle = await deps.substrate.create({
-    template: opts.template ?? 'slicc',
-    autoPauseOnCap: opts.autoPauseOnCap ?? true,
-    envVars: {
-      SLICC_TRAY_WORKER_BASE_URL: opts.workerBaseUrl,
-      ...(opts.envs ?? {}),
-    },
-    metadata: {
-      sliccVersion: opts.sliccVersion,
-      ...(opts.name ? { name: opts.name } : {}),
-      ...(opts.metadata ?? {}),
-    },
-    name: opts.name,
-  });
-
-  // Capture freshness baseline AFTER sandbox creation: any /tmp/slicc-join.json
-  // with updatedAt at or before this ISO is from the template snapshot, not
-  // the new sandbox's leader. Subtract a small skew margin for clock drift
-  // between the worker fetching this timestamp and the sandbox writing the
-  // file: the sandbox's clock might be slightly behind, so a tiny margin
-  // gives the leader's first real write a chance to be accepted.
-  const minUpdatedAt = new Date(Date.now() - 5_000).toISOString();
-  const createdAt = new Date().toISOString();
-
-  // Update or append placeholder depending on whether we have a reservation.
-  // If reservationId is provided, update it to the real sandboxId and remove the old entry.
-  // Otherwise, append a new placeholder as before.
-  //
-  // The placeholder ensures concurrent /list-cones calls see the cone in the registry
-  // (pass 1) instead of treating it as an orphan (pass 2). The empty joinUrl
-  // means the dashboard hides the Open button until pollCloudStatus completes
-  // and the entry is updated below.
-  if (reservationId) {
-    // Remove the reservation entry and append the real one
-    await deps.registry.remove(reservationId);
-    const placeholder: ConeEntry = {
-      substrate: deps.substrate.id,
-      sandboxId: handle.sandboxId,
-      name: opts.name,
-      createdAt,
-      lastSeen: createdAt,
-      state: 'running',
-      joinUrl: '',
-      metadata: opts.metadata,
-    };
-    await deps.registry.append(placeholder);
-  } else {
-    // Legacy path: no reservation, append directly
-    const placeholder: ConeEntry = {
-      substrate: deps.substrate.id,
-      sandboxId: handle.sandboxId,
-      name: opts.name,
-      createdAt,
-      lastSeen: createdAt,
-      state: 'running',
-      joinUrl: '',
-    };
-    await deps.registry.append(placeholder);
-  }
+  // Track whichever registry entry is currently live, for cleanup on failure.
+  let activeRegistryId: string | undefined = opts.reservationId;
+  let handle: SandboxHandle | undefined;
 
   try {
+    // Wrap create inside try block to ensure reservation cleanup on failure.
+    handle = await deps.substrate.create({
+      template: opts.template ?? 'slicc',
+      autoPauseOnCap: opts.autoPauseOnCap ?? true,
+      envVars: {
+        SLICC_TRAY_WORKER_BASE_URL: opts.workerBaseUrl,
+        ...(opts.envs ?? {}),
+      },
+      metadata: {
+        sliccVersion: opts.sliccVersion,
+        ...(opts.name ? { name: opts.name } : {}),
+        ...(opts.metadata ?? {}),
+      },
+      name: opts.name,
+    });
+
+    // Capture freshness baseline AFTER sandbox creation: any /tmp/slicc-join.json
+    // with updatedAt at or before this ISO is from the template snapshot, not
+    // the new sandbox's leader. Subtract a small skew margin for clock drift
+    // between the worker fetching this timestamp and the sandbox writing the
+    // file: the sandbox's clock might be slightly behind, so a tiny margin
+    // gives the leader's first real write a chance to be accepted.
+    const minUpdatedAt = new Date(Date.now() - 5_000).toISOString();
+    const createdAt = new Date().toISOString();
+
+    // Update or append placeholder depending on whether we have a reservation.
+    // If reservationId is provided, update it to the real sandboxId and remove the old entry.
+    // Otherwise, append a new placeholder as before.
+    //
+    // The placeholder ensures concurrent /list-cones calls see the cone in the registry
+    // (pass 1) instead of treating it as an orphan (pass 2). The empty joinUrl
+    // means the dashboard hides the Open button until pollCloudStatus completes
+    // and the entry is updated below.
+    if (opts.reservationId) {
+      // Remove the reservation entry and append the real one
+      await deps.registry.remove(opts.reservationId);
+      const placeholder: ConeEntry = {
+        substrate: deps.substrate.id,
+        sandboxId: handle.sandboxId,
+        name: opts.name,
+        createdAt,
+        lastSeen: createdAt,
+        state: 'running',
+        joinUrl: '',
+        metadata: opts.metadata,
+      };
+      await deps.registry.append(placeholder);
+      // After swapping, the real sandboxId is the active registry key.
+      activeRegistryId = handle.sandboxId;
+    } else {
+      // Legacy path: no reservation, append directly
+      const placeholder: ConeEntry = {
+        substrate: deps.substrate.id,
+        sandboxId: handle.sandboxId,
+        name: opts.name,
+        createdAt,
+        lastSeen: createdAt,
+        state: 'running',
+        joinUrl: '',
+      };
+      await deps.registry.append(placeholder);
+      // The newly-appended sandboxId is the active registry key.
+      activeRegistryId = handle.sandboxId;
+    }
+
     // Two-layer secrets bootstrap (see Plan B): start.sh prefers env-derived
     // secrets, but we still upload the full filtered file so non-Adobe secrets
     // (GitHub PATs, S3 keys, OAuth replicas) reach the sandbox.
@@ -229,19 +243,21 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
       joinUrl: status.joinUrl,
     };
   } catch (err) {
-    // Best-effort cleanup: remove the registry entry (reservation or real) and kill the sandbox.
-    // If we had a reservation that was never converted, remove it; otherwise remove the real sandboxId.
-    const entryToRemove = reservationId ?? handle.sandboxId;
-    try {
-      await deps.registry.remove(entryToRemove);
-    } catch {
-      /* swallow */
+    // Best-effort cleanup: remove whichever registry entry is currently active.
+    if (activeRegistryId) {
+      try {
+        await deps.registry.remove(activeRegistryId);
+      } catch {
+        /* swallow */
+      }
     }
     // Always kill the real sandbox if it was created (handle exists at this point)
-    try {
-      await handle.kill();
-    } catch {
-      /* swallow */
+    if (handle) {
+      try {
+        await handle.kill();
+      } catch {
+        /* swallow */
+      }
     }
     throw err;
   }

@@ -11,8 +11,8 @@
       "default": "./dist/src/index.js"
     },
     "./tests/fake-substrate": {
-      "types": "./dist/tests/fake-substrate.d.ts",
-      "default": "./dist/tests/fake-substrate.js"
+      "types": "./dist/tests/fixtures/fake-substrate.d.ts",
+      "default": "./dist/tests/fixtures/fake-substrate.js"
     }
   },
   "files": [
