@@ -216,13 +216,15 @@ function renderCones(cones) {
 
   const running = cones.filter((c) => c.state === 'running').length;
   const paused = cones.filter((c) => c.state === 'paused').length;
+  const capRunning = CONFIG.capRunning || 1;
+  const capPaused = CONFIG.capPaused || 5;
   document.getElementById('cap-info').textContent =
-    `${running} running · ${paused} paused (cap: 1/5)`;
+    `${running} running · ${paused} paused (cap: ${capRunning}/${capPaused})`;
 
   const btn = document.getElementById('create-btn');
-  btn.disabled = running >= 1;
+  btn.disabled = running >= capRunning;
   btn.title = btn.disabled
-    ? `Cap reached (${running}/1 running). Pause or kill another first.`
+    ? `Cap reached (${running}/${capRunning} running). Pause or kill another first.`
     : '';
 }
 

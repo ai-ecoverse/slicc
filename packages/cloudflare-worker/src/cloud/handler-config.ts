@@ -7,6 +7,8 @@ import { getProxyConfig } from './proxy-config.js';
 export interface ConfigEnv {
   ADOBE_PROXY_ENDPOINT?: string;
   IMS_RELAY_URL?: string;
+  CONE_CAP_RUNNING?: string;
+  CONE_CAP_PAUSED?: string;
 }
 
 const IMS_AUTHORIZE_URLS: Record<string, string> = {
@@ -16,6 +18,17 @@ const IMS_AUTHORIZE_URLS: Record<string, string> = {
 
 const DEFAULT_RELAY_URL = 'https://www.sliccy.ai/auth/callback';
 const RECEIVE_PATH = '/auth/cloud-callback';
+
+function parseCapLimit(name: string, raw: string | undefined, defaultVal: number): number {
+  if (!raw) return defaultVal;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(
+      `Invalid cap env ${name}=${JSON.stringify(raw)}: must be a non-negative integer`
+    );
+  }
+  return n;
+}
 
 export async function handleCloudConfig(_req: Request, env: ConfigEnv): Promise<Response> {
   try {
@@ -28,6 +41,8 @@ export async function handleCloudConfig(_req: Request, env: ConfigEnv): Promise<
       imsScope: proxy.scopes,
       imsRelayUrl: relayUrl,
       imsReceivePath: RECEIVE_PATH,
+      capRunning: parseCapLimit('CONE_CAP_RUNNING', env.CONE_CAP_RUNNING, 1),
+      capPaused: parseCapLimit('CONE_CAP_PAUSED', env.CONE_CAP_PAUSED, 5),
     });
   } catch (err) {
     // Discriminate network/HTTP errors (transient, 502) from shape errors (config bug, 500).
