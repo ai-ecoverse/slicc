@@ -733,7 +733,7 @@ slicc.on('update', function (data) {
 
 ## Light & dark mode
 
-All sprinkles inherit the parent's theme automatically. The parent injects its S2 tokens and toggles a `.theme-light` class on the iframe's `<html>` whenever the user flips themes — every `var(--s2-*)` token below swaps with it. **Never hard-code colors for one theme**, and **do not use `@media (prefers-color-scheme: ...)`** (it desyncs from the parent's class-based toggle).
+All sprinkles inherit the parent's theme automatically. The parent injects its S2 tokens and toggles a `.theme-light` class on the sprinkle root — the iframe's `<html>` in full-document mode, or the outermost container injected into the sidebar in fragment mode — whenever the user flips themes. Every `var(--s2-*)` token below swaps with it. **Never hard-code colors for one theme**, and **do not use `@media (prefers-color-scheme: ...)`** for colors that should mirror the app theme (it desyncs from the parent's class-based toggle).
 
 For one-off colors that aren't covered by an S2 token, use CSS `light-dark()`:
 
@@ -747,7 +747,7 @@ For one-off colors that aren't covered by an S2 token, use CSS `light-dark()`:
 }
 ```
 
-`light-dark()` only resolves the dark branch when `color-scheme` is set on an ancestor — set it on `:root` in full-document mode, or on your outermost container in fragment mode.
+`light-dark()` only resolves the dark branch when `color-scheme` is set on an ancestor — set it on `:root` in full-document mode, or on your outermost container in fragment mode. This intentionally follows the user's OS `color-scheme` preference for one-off custom colors; the S2 tokens above still track the parent app's class-based theme toggle in lockstep.
 
 ## Spectrum 2 Token Reference
 
