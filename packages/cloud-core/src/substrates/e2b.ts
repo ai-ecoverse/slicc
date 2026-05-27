@@ -28,10 +28,13 @@ export function createE2bSubstrate(cfg: SubstrateConfig): SandboxSubstrate {
       const sbx = await Sandbox.connect(sandboxId, { apiKey });
       return wrap(sbx);
     },
-    async list(): Promise<SandboxSummary[]> {
-      // The e2b SDK paginator throws on nextItems() past the end — guard
-      // with hasNext (the documented pattern in the SDK examples).
-      const paginator = Sandbox.list({ apiKey });
+    async list(opts?: import('../substrate.js').ListOpts): Promise<SandboxSummary[]> {
+      // The e2b SDK accepts query.metadata for server-side filtering.
+      // Pass it through if provided.
+      const paginator = Sandbox.list({
+        apiKey,
+        ...(opts?.metadata ? { query: { metadata: opts.metadata } } : {}),
+      });
       const items: SandboxSummary[] = [];
       while (paginator.hasNext) {
         const page = await paginator.nextItems();

@@ -2,6 +2,7 @@ import {
   createSubstrate,
   isCloudError,
   startCone,
+  reserveSlot,
   listCones,
   pauseCone,
   resumeCone,
@@ -96,50 +97,48 @@ export class CloudSessionsDurableObject {
     const substrate = this.substrate();
     const registry = this.registry();
 
-    // Atomic phase: reconcile, cap check, name conflict check.
+    // Atomic phase under DO lock: reserve slot (cap+name check + append placeholder).
     // Fast (<1s) — fits comfortably under blockConcurrencyWhile.
-    //
-    // RACE NOTE: between this check and substrate.create() below, two concurrent
-    // /start-cone calls could both pass. With CAP_RUNNING=1 that briefly yields
-    // 2 running cones. v1 acceptable since the worker shards per-userId and a
-    // single user rarely issues two simultaneous starts; tighter reservation
-    // (pending-slot append + atomic finalize) is a future enhancement.
+    // After this lock releases, the reservation entry COUNTS in cap math, so
+    // concurrent /start-cone calls will see the cap exceeded and bounce.
     const reservation = await this.state.blockConcurrencyWhile(async () => {
-      const reconciled = await listCones(
-        { substrate, registry },
-        { metadata: { userId: body.userId } }
-      );
-      const requestedName = body.name?.trim();
-      if (requestedName && reconciled.some((c) => c.state !== 'dead' && c.name === requestedName)) {
+      try {
         return {
-          error: errorResponse(
-            409,
-            'NAME_TAKEN',
-            `cloud session name already exists: ${requestedName}`
-          ),
+          ok: true as const,
+          ...(await reserveSlot(
+            { substrate, registry },
+            {
+              userId: body.userId,
+              name: body.name?.trim(),
+              metadata: { userId: body.userId },
+              sliccVersion: 'web-' + new Date().toISOString().slice(0, 10),
+              env: this.env,
+            }
+          )),
+        };
+      } catch (err) {
+        if (isCloudError(err)) {
+          return {
+            ok: false as const,
+            response: errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details),
+          };
+        }
+        return {
+          ok: false as const,
+          response: errorResponse(500, 'INTERNAL', String(err)),
         };
       }
-
-      const cap = checkCapsForRun(reconciled, this.env);
-      if (!cap.ok) {
-        return {
-          error: errorResponse(403, 'CAP_EXCEEDED', `at ${cap.reason} cap`, {
-            running: cap.running,
-            paused: cap.paused,
-            cap: { running: cap.runningCap, paused: cap.pausedCap },
-          }),
-        };
-      }
-      return { error: null };
     });
 
-    if (reservation.error) return reservation.error;
+    if (!reservation.ok) return reservation.response;
 
-    // Slow phase: NOT under lock. ~15-25s.
+    // Slow phase: NO LOCK. The reservation entry holds the cap slot.
+    // ~15-25s for substrate.create + poll.
     try {
       const result = await startCone(
         { substrate, registry },
         {
+          reservationId: reservation.reservationId,
           envContents: [
             `ADOBE_IMS_TOKEN=${body.bearer}`,
             `ADOBE_IMS_TOKEN_DOMAINS=${ADOBE_TOKEN_DOMAINS}`,
@@ -160,6 +159,7 @@ export class CloudSessionsDurableObject {
         joinUrl: result.joinUrl,
       });
     } catch (err) {
+      // startCone itself cleans up the reservation entry on failure.
       if (isCloudError(err)) {
         return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
       }

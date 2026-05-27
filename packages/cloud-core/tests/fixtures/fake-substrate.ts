@@ -92,8 +92,17 @@ export function makeFakeSubstrate(opts: FakeSubstrateOpts = {}): SandboxSubstrat
       if (opts.connectError) throw opts.connectError;
       return handle;
     },
-    async list() {
-      return listResult;
+    async list(listOpts?: import('../../src/substrate.js').ListOpts) {
+      // Optionally filter listResult by metadata if provided
+      if (!listOpts?.metadata) return listResult;
+      const filterMetadata = listOpts.metadata;
+      return listResult.filter((s) => {
+        if (!s.metadata) return false;
+        for (const [k, v] of Object.entries(filterMetadata)) {
+          if (s.metadata[k] !== v) return false;
+        }
+        return true;
+      });
     },
   };
 }

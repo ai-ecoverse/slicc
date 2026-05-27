@@ -36,6 +36,11 @@ export interface ConeEntry {
    * Preserved across `runPause` for the same reason as `trayId`.
    */
   lastJoinUpdatedAt?: string;
+  /**
+   * Additional metadata (e.g., { userId, createdBy }). Used by workers for
+   * filtering and by CLI for tracking.
+   */
+  metadata?: Record<string, string>;
 }
 
 /**

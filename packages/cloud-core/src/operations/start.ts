@@ -28,11 +28,30 @@ export interface StartConeOpts {
   pollIntervalMs?: number;
   /** Default true. */
   autoPauseOnCap?: boolean;
+  /** Optional reservation ID from reserveSlot(); if provided, updates that
+   * placeholder entry instead of appending a new one. */
+  reservationId?: string;
 }
 
 export interface StartConeDeps {
   substrate: SandboxSubstrate;
   registry: Registry;
+}
+
+export interface ReserveSlotOpts {
+  /** User ID for filtering (worker use) or undefined (CLI use). */
+  userId?: string;
+  /** Optional name; checked for conflicts. */
+  name?: string;
+  /** Metadata to store on the reservation entry. */
+  metadata?: Record<string, string>;
+  /** SLICC version recorded on the registry entry. */
+  sliccVersion: string;
+  /** Environment for cap checking. */
+  env?: {
+    CONE_CAP_RUNNING: string;
+    CONE_CAP_PAUSED: string;
+  };
 }
 
 /** Fetch the last n lines of /tmp/slicc-stderr.log from inside the sandbox. */
@@ -52,8 +71,65 @@ async function tailStderr(handle: SandboxHandle, n: number): Promise<string> {
   }
 }
 
+/**
+ * Reserve a slot in the registry atomically under DO lock, BEFORE substrate.create.
+ * Returns a synthetic reservationId (pending-<uuid>) that counts toward the cap.
+ * Throws CloudError('CAP_EXCEEDED' | 'NAME_TAKEN') on conflict.
+ *
+ * Callers MUST wrap this in blockConcurrencyWhile so two concurrent calls
+ * serialize and the second sees the first's placeholder.
+ */
+export async function reserveSlot(
+  deps: StartConeDeps,
+  opts: ReserveSlotOpts
+): Promise<{ reservationId: string }> {
+  const reservationId = `pending-${crypto.randomUUID()}`;
+  const createdAt = new Date().toISOString();
+
+  // Read existing entries to enforce caps + name conflicts.
+  // Use listCones for full reconciliation (registry + substrate), filtered by userId if provided.
+  const { listCones } = await import('./list.js');
+  const existing = await listCones(deps, opts.userId ? { metadata: { userId: opts.userId } } : {});
+
+  // Cap check: count running entries (including existing reservations)
+  if (opts.env) {
+    const running = existing.filter((e) => e.state === 'running').length;
+    const runningCap = Number.parseInt(opts.env.CONE_CAP_RUNNING, 10);
+    if (running >= runningCap) {
+      throw new CloudError('CAP_EXCEEDED', `at running cap (${running}/${runningCap})`, {
+        running,
+        cap: runningCap,
+      });
+    }
+  }
+
+  // Name conflict check
+  const requestedName = opts.name?.trim();
+  if (requestedName && existing.some((e) => e.state !== 'dead' && e.name === requestedName)) {
+    throw new CloudError('NAME_TAKEN', `cloud session name already exists: ${requestedName}`);
+  }
+
+  // Append placeholder entry
+  const placeholder: ConeEntry = {
+    substrate: deps.substrate.id,
+    sandboxId: reservationId,
+    name: requestedName,
+    createdAt,
+    lastSeen: createdAt,
+    state: 'running',
+    joinUrl: '',
+    metadata: opts.metadata,
+  };
+  await deps.registry.append(placeholder);
+
+  return { reservationId };
+}
+
 export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promise<StartResult> {
   const safeSecrets = filterSecretsEnv(opts.envContents);
+
+  // If we have a reservation, we'll update it after create; otherwise append a new placeholder
+  const reservationId = opts.reservationId;
 
   const handle = await deps.substrate.create({
     template: opts.template ?? 'slicc',
@@ -79,26 +155,41 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
   const minUpdatedAt = new Date(Date.now() - 5_000).toISOString();
   const createdAt = new Date().toISOString();
 
-  // Pre-append a placeholder entry IMMEDIATELY after create returns. This
-  // ensures concurrent /list-cones calls see the cone in the registry
+  // Update or append placeholder depending on whether we have a reservation.
+  // If reservationId is provided, update it to the real sandboxId and remove the old entry.
+  // Otherwise, append a new placeholder as before.
+  //
+  // The placeholder ensures concurrent /list-cones calls see the cone in the registry
   // (pass 1) instead of treating it as an orphan (pass 2). The empty joinUrl
   // means the dashboard hides the Open button until pollCloudStatus completes
   // and the entry is updated below.
-  //
-  // Without this pre-append, the orphan recovery in listCones would call
-  // substrate.connect() + readFile('/tmp/slicc-join.json') during the slow
-  // poll window — which reads the stale template-baked URL, races into the
-  // dashboard, and lets the user click an Open link pointing at a dead tray.
-  const placeholder: ConeEntry = {
-    substrate: deps.substrate.id,
-    sandboxId: handle.sandboxId,
-    name: opts.name,
-    createdAt,
-    lastSeen: createdAt,
-    state: 'running',
-    joinUrl: '',
-  };
-  await deps.registry.append(placeholder);
+  if (reservationId) {
+    // Remove the reservation entry and append the real one
+    await deps.registry.remove(reservationId);
+    const placeholder: ConeEntry = {
+      substrate: deps.substrate.id,
+      sandboxId: handle.sandboxId,
+      name: opts.name,
+      createdAt,
+      lastSeen: createdAt,
+      state: 'running',
+      joinUrl: '',
+      metadata: opts.metadata,
+    };
+    await deps.registry.append(placeholder);
+  } else {
+    // Legacy path: no reservation, append directly
+    const placeholder: ConeEntry = {
+      substrate: deps.substrate.id,
+      sandboxId: handle.sandboxId,
+      name: opts.name,
+      createdAt,
+      lastSeen: createdAt,
+      state: 'running',
+      joinUrl: '',
+    };
+    await deps.registry.append(placeholder);
+  }
 
   try {
     // Two-layer secrets bootstrap (see Plan B): start.sh prefers env-derived
@@ -138,12 +229,15 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
       joinUrl: status.joinUrl,
     };
   } catch (err) {
-    // Best-effort cleanup: remove the placeholder entry and kill the sandbox.
+    // Best-effort cleanup: remove the registry entry (reservation or real) and kill the sandbox.
+    // If we had a reservation that was never converted, remove it; otherwise remove the real sandboxId.
+    const entryToRemove = reservationId ?? handle.sandboxId;
     try {
-      await deps.registry.remove(handle.sandboxId);
+      await deps.registry.remove(entryToRemove);
     } catch {
       /* swallow */
     }
+    // Always kill the real sandbox if it was created (handle exists at this point)
     try {
       await handle.kill();
     } catch {

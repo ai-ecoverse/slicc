@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { startCone } from '../src/operations/start.js';
+import { startCone, reserveSlot } from '../src/operations/start.js';
 import type {
   CreateOpts,
   SandboxHandle,
@@ -7,7 +7,7 @@ import type {
   SubstrateId,
   SandboxSummary,
 } from '../src/index.js';
-import { MemRegistry, makeFakeHandle } from './fixtures/index.js';
+import { MemRegistry, makeFakeHandle, makeFakeSubstrate } from './fixtures/index.js';
 
 // Specialized for startCone: handle stores files per-create, tracks kill state for list result.
 function makeStartTestSubstrate(opts: { joinJson: string }): SandboxSubstrate {
@@ -41,7 +41,7 @@ function makeStartTestSubstrate(opts: { joinJson: string }): SandboxSubstrate {
     async connect() {
       throw new Error('not used in startCone tests');
     },
-    async list(): Promise<SandboxSummary[]> {
+    async list(_opts?: import('../src/substrate.js').ListOpts): Promise<SandboxSummary[]> {
       if (killed) return [];
       return [
         {
@@ -141,7 +141,7 @@ describe('startCone', () => {
       async connect() {
         throw new Error('not used');
       },
-      async list(): Promise<SandboxSummary[]> {
+      async list(_opts?: import('../src/substrate.js').ListOpts): Promise<SandboxSummary[]> {
         return [];
       },
     };
@@ -206,7 +206,7 @@ describe('startCone', () => {
       async connect() {
         throw new Error('not used');
       },
-      async list(): Promise<SandboxSummary[]> {
+      async list(_opts?: import('../src/substrate.js').ListOpts): Promise<SandboxSummary[]> {
         return [];
       },
     };
@@ -288,7 +288,7 @@ describe('startCone', () => {
       async connect() {
         throw new Error('not used');
       },
-      async list(): Promise<SandboxSummary[]> {
+      async list(_opts?: import('../src/substrate.js').ListOpts): Promise<SandboxSummary[]> {
         return [];
       },
     };
@@ -315,5 +315,141 @@ describe('startCone', () => {
     expect(entries[0]?.trayId).toBe('t-fresh');
     expect(entries[0]?.lastJoinUpdatedAt).toBe(freshUpdatedAt);
     expect(entries[0]?.joinUrl).toBe('https://w/join/fresh');
+  });
+
+  it('reserveSlot appends a placeholder entry that counts toward cap', async () => {
+    // Use makeFakeSubstrate with empty listResult so reserveSlot doesn't see
+    // phantom sandboxes from the substrate
+    const substrate = makeFakeSubstrate({ listResult: [] });
+    const registry = new MemRegistry();
+
+    const { reservationId } = await reserveSlot(
+      { substrate, registry },
+      {
+        userId: 'u1',
+        name: 'reserved',
+        metadata: { userId: 'u1' },
+        sliccVersion: 'test',
+        env: { CONE_CAP_RUNNING: '1', CONE_CAP_PAUSED: '5' },
+      }
+    );
+
+    expect(reservationId).toMatch(/^pending-/);
+
+    // Verify the placeholder was appended
+    const entries = await registry.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.sandboxId).toBe(reservationId);
+    expect(entries[0]?.name).toBe('reserved');
+    expect(entries[0]?.state).toBe('running');
+    expect(entries[0]?.joinUrl).toBe('');
+
+    // Verify a second reservation hits CAP_EXCEEDED
+    await expect(
+      reserveSlot(
+        { substrate, registry },
+        {
+          userId: 'u1',
+          name: 'second',
+          metadata: { userId: 'u1' },
+          sliccVersion: 'test',
+          env: { CONE_CAP_RUNNING: '1', CONE_CAP_PAUSED: '5' },
+        }
+      )
+    ).rejects.toMatchObject({ name: 'CloudError', code: 'CAP_EXCEEDED' });
+  });
+
+  it('reserveSlot throws NAME_TAKEN when name conflicts with existing entry', async () => {
+    // Pre-populate substrate with the existing sandbox so listCones sees it as live
+    const substrate = makeFakeSubstrate({
+      listResult: [
+        {
+          sandboxId: 'sbx-existing',
+          name: 'existing',
+          state: 'running',
+          metadata: { userId: 'u1' },
+        },
+      ],
+    });
+    const registry = new MemRegistry();
+
+    // Pre-populate with an existing entry
+    await registry.append({
+      substrate: 'e2b',
+      sandboxId: 'sbx-existing',
+      name: 'existing',
+      createdAt: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      state: 'running',
+      joinUrl: 'https://w/join/existing',
+      metadata: { userId: 'u1' },
+    });
+
+    await expect(
+      reserveSlot(
+        { substrate, registry },
+        {
+          userId: 'u1',
+          name: 'existing',
+          metadata: { userId: 'u1' },
+          sliccVersion: 'test',
+          env: { CONE_CAP_RUNNING: '5', CONE_CAP_PAUSED: '5' },
+        }
+      )
+    ).rejects.toMatchObject({ name: 'CloudError', code: 'NAME_TAKEN' });
+  });
+
+  it('startCone with reservationId updates the placeholder entry', async () => {
+    const updatedAt = new Date().toISOString();
+    // For startCone we can use makeStartTestSubstrate since we're actually creating
+    const substrate = makeStartTestSubstrate({
+      joinJson: JSON.stringify({
+        joinUrl: 'https://w/join/real',
+        trayId: 't-real',
+        updatedAt,
+      }),
+    });
+    const registry = new MemRegistry();
+
+    // First reserve a slot — use a clean substrate for this phase
+    const reserveSubstrate = makeFakeSubstrate({ listResult: [] });
+    const { reservationId } = await reserveSlot(
+      { substrate: reserveSubstrate, registry },
+      {
+        userId: 'u1',
+        name: 'reserved',
+        metadata: { userId: 'u1' },
+        sliccVersion: 'test',
+        env: { CONE_CAP_RUNNING: '5', CONE_CAP_PAUSED: '5' },
+      }
+    );
+
+    // Verify placeholder exists
+    let entries = await registry.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.sandboxId).toBe(reservationId);
+
+    // Now call startCone with the reservation (use the real substrate for create)
+    const result = await startCone(
+      { substrate, registry },
+      {
+        reservationId,
+        envContents: '',
+        workerBaseUrl: 'https://w',
+        sliccVersion: 'test',
+        name: 'reserved',
+        metadata: { userId: 'u1' },
+      }
+    );
+
+    expect(result.sandboxId).toBe('sbx-fake');
+    expect(result.joinUrl).toBe('https://w/join/real');
+
+    // Verify the placeholder was replaced with the real entry
+    entries = await registry.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.sandboxId).toBe('sbx-fake');
+    expect(entries[0]?.name).toBe('reserved');
+    expect(entries[0]?.joinUrl).toBe('https://w/join/real');
   });
 });

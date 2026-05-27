@@ -64,14 +64,23 @@ class FakeSubstrate implements SandboxSubstrate {
     return this.handle(sandboxId);
   }
 
-  async list(): Promise<SandboxSummary[]> {
-    return Array.from(this.sandboxes.values()).map((s) => ({
+  async list(opts?: import('@slicc/cloud-core').ListOpts): Promise<SandboxSummary[]> {
+    const all = Array.from(this.sandboxes.values()).map((s) => ({
       sandboxId: s.id,
       state: s.state,
       metadata: s.metadata,
       createdAt: s.createdAt,
       name: s.name,
     }));
+    // Filter by metadata if provided (mimics e2b server-side filtering)
+    if (!opts?.metadata) return all;
+    return all.filter((s) => {
+      if (!s.metadata) return false;
+      for (const [k, v] of Object.entries(opts.metadata)) {
+        if (s.metadata[k] !== v) return false;
+      }
+      return true;
+    });
   }
 
   private handle(sandboxId: string): SandboxHandle {
@@ -121,6 +130,9 @@ class FakeSubstrate implements SandboxSubstrate {
 
 function makeFakeState() {
   const storage = new Map<string, unknown>();
+  const lockQueue: Array<() => void> = [];
+  let locked = false;
+
   const state = {
     storage: {
       get: async <T>(k: string): Promise<T | undefined> => storage.get(k) as T | undefined,
@@ -128,7 +140,20 @@ function makeFakeState() {
         storage.set(k, v);
       },
     },
-    blockConcurrencyWhile: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
+    blockConcurrencyWhile: async <T>(fn: () => Promise<T>): Promise<T> => {
+      // Serialize access: wait for lock, run fn, release lock
+      while (locked) {
+        await new Promise<void>((resolve) => lockQueue.push(resolve));
+      }
+      locked = true;
+      try {
+        return await fn();
+      } finally {
+        locked = false;
+        const next = lockQueue.shift();
+        if (next) next();
+      }
+    },
   };
   return { state, storage };
 }
@@ -268,5 +293,37 @@ describe('CloudSessionsDurableObject — lifecycle endpoints', () => {
     const body = (await res.json()) as { sandboxId: string; joinUrl: string };
     expect(body.sandboxId).toMatch(/^sbx-/);
     expect(body.joinUrl).toMatch(/^https:\/\//);
+  });
+
+  it('concurrent start-cone calls serialize via blockConcurrencyWhile — second gets CAP_EXCEEDED', async () => {
+    const substrate = new FakeSubstrate();
+    const { state } = makeFakeState();
+    const do_ = new CloudSessionsDurableObject(state as any, makeDoEnv(substrate));
+
+    // Launch two concurrent start-cone requests. The DO's blockConcurrencyWhile
+    // serializes them: first reserves a slot, second tries to reserve and hits cap.
+    const [res1, res2] = await Promise.all([
+      call(do_, '/start-cone', {
+        bearer: 'b1',
+        userId: 'u1',
+        workerOrigin: 'https://w',
+        name: 'first',
+      }),
+      call(do_, '/start-cone', {
+        bearer: 'b2',
+        userId: 'u1',
+        workerOrigin: 'https://w',
+        name: 'second',
+      }),
+    ]);
+
+    // One should succeed (200), the other should get CAP_EXCEEDED (403)
+    const statuses = [res1.status, res2.status].sort();
+    expect(statuses).toEqual([200, 403]);
+
+    const bodies = await Promise.all([res1.json(), res2.json()]);
+    const errors = bodies.filter((b) => b.error);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toBe('CAP_EXCEEDED');
   });
 });

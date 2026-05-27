@@ -29,34 +29,41 @@ export async function listCones(
   opts: ListConesOpts = {}
 ): Promise<ConeEntry[]> {
   const registryEntries = await deps.registry.list();
-  const live = await deps.substrate.list();
+  // Pass metadata filter to substrate.list for server-side filtering
+  const live = await deps.substrate.list(opts.metadata ? { metadata: opts.metadata } : undefined);
+  const liveById = new Map(live.map((s) => [s.sandboxId, s] as const));
 
-  // The current substrate.list() signature is parameterless (no ListOpts param yet).
-  // Plan D Task D7+D10 will add it. For now, we still accept opts.metadata in this
-  // function signature so callers can pass it (forward-compat), but we won't filter
-  // by metadata at the substrate level — the e2b adapter sees all sandboxes in the
-  // team account either way. We can optionally filter the returned list locally:
-  const filtered = opts.metadata
-    ? live.filter((s) => {
-        if (!s.metadata) return false;
-        for (const [k, v] of Object.entries(opts.metadata!)) {
-          if (s.metadata[k] !== v) return false;
-        }
-        return true;
-      })
-    : live;
-  const liveById = new Map(filtered.map((s) => [s.sandboxId, s] as const));
+  // Helper to check if an entry matches the metadata filter
+  const matchesFilter = (entry: ConeEntry): boolean => {
+    if (!opts.metadata) return true;
+    if (!entry.metadata) return false;
+    for (const [k, v] of Object.entries(opts.metadata)) {
+      if (entry.metadata[k] !== v) return false;
+    }
+    return true;
+  };
 
   // Pass 1: walk registry; reconcile against live.
   const reconciled: ConeEntry[] = [];
   for (const entry of registryEntries) {
+    // Skip entries that don't match the metadata filter
+    if (!matchesFilter(entry)) continue;
+
     const liveEntry = liveById.get(entry.sandboxId);
     if (!liveEntry) {
-      // Substrate doesn't know about it — sandbox expired or was killed externally.
-      if (entry.state !== 'dead') {
-        await deps.registry.update(entry.sandboxId, { state: 'dead' });
+      // Substrate doesn't know about it. Two cases:
+      // 1. Reservation placeholders (sandboxId starts with 'pending-'): keep as running
+      // 2. Real sandboxes that expired or were killed externally: mark dead
+      if (entry.sandboxId.startsWith('pending-')) {
+        // Reservation placeholder — keep it alive
+        reconciled.push(entry);
+      } else {
+        // Real sandbox is missing — mark dead
+        if (entry.state !== 'dead') {
+          await deps.registry.update(entry.sandboxId, { state: 'dead' });
+        }
+        reconciled.push({ ...entry, state: 'dead' });
       }
-      reconciled.push({ ...entry, state: 'dead' });
       continue;
     }
     if (entry.state !== liveEntry.state) {

@@ -41,18 +41,15 @@ export interface SandboxHandle {
   run(cmd: string): Promise<RunResult>;
 }
 
+export interface ListOpts {
+  metadata?: Record<string, string>;
+}
+
 export interface SandboxSubstrate {
   readonly id: SubstrateId;
   create(opts: CreateOpts): Promise<SandboxHandle>;
   connect(sandboxId: string): Promise<SandboxHandle>;
-  list(): Promise<SandboxSummary[]>;
-}
-
-// ListOpts is defined now for Plan D reconciliation, though not yet consumed
-// by SandboxSubstrate.list(). Plan D (Task D1) will change list() to accept
-// ListOpts?.
-export interface ListOpts {
-  metadata?: Record<string, string>;
+  list(opts?: ListOpts): Promise<SandboxSummary[]>;
 }
 
 export interface SubstrateFactory {
