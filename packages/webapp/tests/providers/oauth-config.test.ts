@@ -10,5 +10,9 @@ describe('OAuth provider domain config', () => {
   });
   it('adobe provider has IMS hosts', () => {
     expect(adobeProvider.oauthTokenDomains?.length).toBeGreaterThan(0);
+    expect(adobeProvider.oauthTokenDomains).toContain('admin.hlx.page');
+    expect(adobeProvider.oauthTokenDomains).toContain('admin.hlx.live');
+    expect(adobeProvider.oauthTokenDomains).toContain('admin.aem.page');
+    expect(adobeProvider.oauthTokenDomains).toContain('admin.aem.live');
   });
 });

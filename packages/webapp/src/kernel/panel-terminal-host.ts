@@ -19,6 +19,8 @@
 import { TerminalSessionHost } from './terminal-session-host.js';
 import type { TerminalSessionHostOptions } from './terminal-session-host.js';
 import { WasmShellHeadless } from '../shell/wasm-shell-headless.js';
+import type { MediaPreviewItem } from '../shell/supplemental-commands/imgcat-command.js';
+import type { TerminalMediaPreviewMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { ProcessManager } from './process-manager.js';
@@ -47,6 +49,35 @@ export interface PanelTerminalHostHandle {
   stop: () => void;
 }
 
+class PanelTerminalShell extends WasmShellHeadless {
+  constructor(
+    private readonly sid: TerminalSessionId,
+    private readonly transport: KernelTransport<ExtensionMessage, OffscreenToPanelMessage>,
+    shellOptions: ConstructorParameters<typeof WasmShellHeadless>[0]
+  ) {
+    super(shellOptions);
+  }
+
+  protected override async renderMediaPreview(items: MediaPreviewItem[]): Promise<void> {
+    for (const item of items) {
+      let binary = '';
+      const bytes = item.bytes;
+      const chunkSize = 8192;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+      }
+      const msg: TerminalMediaPreviewMsg = {
+        type: 'terminal-media-preview',
+        sid: this.sid,
+        path: item.path,
+        mediaType: item.mimeType,
+        data: btoa(binary),
+      };
+      this.transport.send(msg as OffscreenToPanelMessage);
+    }
+  }
+}
+
 export function createPanelTerminalHost(
   options: PanelTerminalHostOptions
 ): PanelTerminalHostHandle {
@@ -55,8 +86,8 @@ export function createPanelTerminalHost(
   const host = new TerminalSessionHost({
     transport,
     processManager,
-    createShell: (_sid, opts) =>
-      new WasmShellHeadless({
+    createShell: (sid, opts) =>
+      new PanelTerminalShell(sid, transport, {
         fs,
         cwd: opts.cwd,
         env: opts.env,

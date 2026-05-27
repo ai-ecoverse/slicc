@@ -33,7 +33,7 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 - `GET|POST /join/:token` — follower join and bootstrap polling flow
 - `GET|POST /controller/:token` — leader attach flow and leader WebSocket upgrade
 - `POST /webhook/:token/:webhookId` — forward webhook events into the live leader
-- `GET /auth/callback` — OAuth callback relay page (decodes `state` param with port/path/nonce, redirects to localhost)
+- `GET /auth/callback` — OAuth callback relay page (decodes `state` param with source/port/path/nonce, redirects to localhost for `source:'local'`, extension for `source:'extension'`, or allowlisted remote origin for `source:'remote'`)
 
 ### Signaling model
 
@@ -47,6 +47,15 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 - TURN credentials are fetched with `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN`.
 - `session-tray.ts` caches ICE servers and refreshes them before TTL expiry.
 - `wrangler.jsonc` defines the key ID; the API token is stored as a Wrangler secret.
+
+### Tray kind (desktop / hosted)
+
+`TrayRecord.kind` is `'desktop' | 'hosted'`, defaulting to `'desktop'` when absent.
+`POST /tray` reads an optional `kind` from the request body (no body = desktop;
+malformed body = 400). The reclaim TTL is `HOSTED_TRAY_RECLAIM_TTL_MS = 30 days`
+for hosted trays, `TRAY_RECLAIM_TTL_MS = 1 hour` for desktop trays — branched
+through the pure helper `reclaimMsForTray(tray)` in `shared.ts`. Hosted trays
+support laptop-orchestrated sandboxes that pause for days at a time.
 
 ### Static Asset Serving
 
@@ -100,3 +109,68 @@ This lives at the repo root because it coordinates the worker with browser runti
   2. `tests/deployed.test.ts` — smoke test that runs against the deployed staging worker (also checks routes list)
   3. The routes array in `src/index.ts` (the default 200 response)
      Missing any of these causes CI failures — the staging smoke test deploys the worker then verifies the routes match.
+
+## Cloud cones (sliccy.ai/cloud)
+
+Web feature shipped via Plan D. Spec at `docs/superpowers/specs/2026-05-26-cloud-cones-on-sliccy-ai-design.md`.
+
+### Routes
+
+- `GET  /cloud` — dashboard SPA (CSP-enforced)
+- `GET  /auth/cloud-callback` — IMS popup callback (HTML)
+- `GET  /auth/cloud-callback.js` — IMS popup callback (JS, served inline by worker)
+- `POST /api/cloud/start` — start a new cone (auth + cap-checked)
+- `GET  /api/cloud/list` — per-user cone list (reconciled with e2b per call)
+- `POST /api/cloud/pause` — pause a cone
+- `POST /api/cloud/resume` — resume a paused cone (refreshes IMS token in sandbox)
+- `POST /api/cloud/kill` — kill a cone (idempotent)
+- `POST /api/cloud/sign-out` — invalidate the auth cache entry for the bearer
+- `GET  /api/cloud/admin/stats` — admin-gated by `ADMIN_USER_IDS`
+
+All `/api/cloud/*` require `Authorization: Bearer <ims-access-token>` and route to `env.CLOUD_SESSIONS.idFromName(userId)` for per-user state. Lifecycle business logic lives inside the DurableObject (atomic via `state.blockConcurrencyWhile`), not in worker handlers.
+
+### Wrangler config
+
+Vars (in `wrangler.jsonc`):
+
+- `ADOBE_PROXY_ENDPOINT` — Adobe LLM proxy URL. Default `https://adobe-llm-proxy.paolo-moz.workers.dev`. Worker fetches `/v1/config` to learn IMS client_id + scopes + environment, keeping dashboard popup config in sync with what the cone needs to call the proxy.
+- `ALLOWED_EMAIL_DOMAIN` — CSV, default `adobe.com`. Set to `*` to allow any domain.
+- `BLOCKED_EMAILS` — CSV denylist (emails explicitly blocked even if domain allowed).
+- `REQUIRE_OWNER_ORG` — `true` for v2 expansion to any ownerOrg-holder.
+- `CONE_CAP_RUNNING`, `CONE_CAP_PAUSED` — per-user caps (default 1 / 5).
+- `ADMIN_USER_IDS` — CSV of IMS userIds with admin access.
+
+Secrets (`wrangler secret put`):
+
+- `E2B_API_KEY` — Adobe team e2b key. Worker-only; never reachable from browser.
+
+GitHub Actions secrets (for CI worker deploy + template build):
+
+- `E2B_API_KEY` — same value; scoped to the Adobe team workspace.
+
+### v1 → v2 expansion
+
+```bash
+npx wrangler secret put REQUIRE_OWNER_ORG  # value: true
+# update ALLOWED_EMAIL_DOMAIN in wrangler.jsonc to "*"
+npx wrangler deploy
+```
+
+### Stable API contract (worker ↔ sandbox)
+
+Worker depends on these surfaces inside paused-cone images. **Breaking changes require a deprecation cycle** because paused cones from older templates cannot be patched in-place:
+
+- `POST /api/leader-restart` (loopback in sandbox) — re-kicks the leader.
+- `GET  /api/hosted-bootstrap` (loopback in sandbox) — page reads ADOBE_IMS_TOKEN.
+- `POST /api/cloud-status` (loopback in sandbox) — page reports join state.
+- `/slicc/secrets.env` — sandbox file the worker writes via SDK.
+- `/tmp/slicc-join.json` — sandbox file the worker reads via SDK.
+- `ADOBE_IMS_TOKEN`, `ADOBE_IMS_TOKEN_DOMAINS`, `SLICC_TRAY_WORKER_BASE_URL` — envs consumed by `start.sh`.
+
+### Routes-mirror rule (applies to /api/cloud/\* too)
+
+Per the existing tray hub rule — every new route must appear in three places:
+
+- `src/index.ts` routes array (the default `GET /` body)
+- `tests/index.test.ts` routes-list assertion
+- `tests/deployed.test.ts` routes-list assertion

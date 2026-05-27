@@ -117,6 +117,7 @@ export default tseslint.config(
       'packages/webapp/src/shell/**/*.ts',
       'packages/webapp/src/skills/**/*.ts',
       'packages/webapp/src/tools/**/*.ts',
+      'packages/webapp/cloud/**/*.js',
     ],
     languageOptions: {
       globals: {

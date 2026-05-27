@@ -40,8 +40,12 @@ export interface SprinkleBridgeAPI {
   open(path: string, opts?: { projectRoot?: string }): void;
   /** Close this sprinkle */
   close(): void;
+  /** Collapse the sprinkle panel (rail icon stays visible; user can click to reopen). Does not close or destroy the sprinkle. */
+  minimize(): void;
   /** Stop the cone agent */
   stopCone(): void;
+  /** Push an image into the chat input as a pending attachment (no agent turn). */
+  attachImage(base64: string, name?: string, mimeType?: string): void;
   /** Sprinkle name */
   readonly name: string;
 }
@@ -53,18 +57,24 @@ export class SprinkleBridge {
   private lickHandler: (event: LickEvent) => void;
   private fs: VirtualFS;
   private closeHandler: (name: string) => void;
+  private minimizeHandler: (name: string) => void;
   private stopConeHandler: () => void;
+  private attachImageHandler: (base64: string, name?: string, mimeType?: string) => void;
 
   constructor(
     fs: VirtualFS,
     lickHandler: (event: LickEvent) => void,
     closeHandler: (name: string) => void,
-    stopConeHandler: () => void
+    minimizeHandler: (name: string) => void,
+    stopConeHandler: () => void,
+    attachImageHandler: (base64: string, name?: string, mimeType?: string) => void
   ) {
     this.fs = fs;
     this.lickHandler = lickHandler;
     this.closeHandler = closeHandler;
+    this.minimizeHandler = minimizeHandler;
     this.stopConeHandler = stopConeHandler;
+    this.attachImageHandler = attachImageHandler;
   }
 
   /** Create a bridge API for a specific sprinkle. */
@@ -163,7 +173,10 @@ export class SprinkleBridge {
         window.open(url, '_blank');
       },
       close: () => this.closeHandler(sprinkleName),
+      minimize: () => this.minimizeHandler(sprinkleName),
       stopCone: () => this.stopConeHandler(),
+      attachImage: (base64: string, name?: string, mimeType?: string) =>
+        this.attachImageHandler(base64, name, mimeType),
     };
     return api;
   }

@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import {
+  asWebFetch as asWebFetchPlaywright,
   createPlaywrightCommand,
   getSharedState,
 } from '../../../src/shell/supplemental-commands/playwright-command.js';
+import { asWebFetch as asWebFetchDiscover } from '../../../src/shell/supplemental-commands/discover-command.js';
+import type { SecureFetch } from 'just-bash';
 import { _resetBrowseShCatalogCache } from '../../../src/shell/supplemental-commands/upskill-command.js';
 import type { BrowserAPI } from '../../../src/cdp/index.js';
 import type { VirtualFS } from '../../../src/fs/index.js';
@@ -4019,4 +4022,61 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
     });
     expect(catalogHits).toHaveLength(0);
   });
+});
+
+// Origin-propagation contract for the two `asWebFetch` shims.
+// `discoverLinks` (and similar Web-Fetch-shaped consumers) speak the
+// browser Fetch API; the shims wrap a `SecureFetch` so those callers
+// inherit our CORS bypass + forbidden-header bridging. If the shim
+// drops `init.headers`, a caller-supplied `Origin` is silently lost on
+// the way to the proxy — breaking the Wave 1 Origin contract.
+describe('asWebFetch — Origin propagation through SecureFetch shim', () => {
+  function makeOkFetchResult() {
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'text/plain' },
+      body: new TextEncoder().encode('ok'),
+      url: 'https://api.example.com/x',
+    };
+  }
+
+  for (const [label, asWebFetch] of [
+    ['discover-command.asWebFetch', asWebFetchDiscover],
+    ['playwright-command.asWebFetch', asWebFetchPlaywright],
+  ] as const) {
+    describe(label, () => {
+      it('forwards init.headers.Origin (record) to the underlying SecureFetch', async () => {
+        const secureFetch = vi.fn(async () => makeOkFetchResult()) as unknown as SecureFetch;
+        const fetchAdapter = asWebFetch(secureFetch);
+        await fetchAdapter('https://api.example.com/x', {
+          headers: { Origin: 'https://my.app' },
+        });
+        expect(secureFetch).toHaveBeenCalledTimes(1);
+        const [, opts] = (secureFetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+        expect(opts?.headers).toMatchObject({ Origin: 'https://my.app' });
+      });
+
+      it('forwards init.headers.Origin (Headers instance) to the underlying SecureFetch', async () => {
+        const secureFetch = vi.fn(async () => makeOkFetchResult()) as unknown as SecureFetch;
+        const fetchAdapter = asWebFetch(secureFetch);
+        const h = new Headers();
+        h.set('Origin', 'https://my.app');
+        await fetchAdapter('https://api.example.com/x', { headers: h });
+        const [, opts] = (secureFetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+        const got = opts?.headers as Record<string, string>;
+        // Headers lowercase keys when iterated via forEach.
+        const originVal = got['origin'] ?? got['Origin'];
+        expect(originVal).toBe('https://my.app');
+      });
+
+      it('omits headers when no init.headers given (no empty object leak)', async () => {
+        const secureFetch = vi.fn(async () => makeOkFetchResult()) as unknown as SecureFetch;
+        const fetchAdapter = asWebFetch(secureFetch);
+        await fetchAdapter('https://api.example.com/x');
+        const [, opts] = (secureFetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+        expect(opts?.headers).toBeUndefined();
+      });
+    });
+  }
 });

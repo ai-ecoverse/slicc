@@ -4,6 +4,9 @@ node_modules/
 *.min.css
 package-lock.json
 artifacts/
+# Swift package build artifacts (gitignored in each swift-* package; exclude
+# from prettier so a local `swift build` doesn't pollute prettier --check)
+**/.build/
 # HTML files with embedded content that shouldn't be reformatted
 index.html
 sandbox.html

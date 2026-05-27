@@ -2,9 +2,16 @@ import { describe, it, expect } from 'vitest';
 import { computeTrayMenuModel, describeInvalidJoinUrl } from '../../src/ui/tray-join-url.js';
 
 describe('computeTrayMenuModel', () => {
-  it('hides the section when nothing is active', () => {
+  it('offers to enable multi-browser sync when nothing is active', () => {
+    // Regression: this used to return `{ kind: 'hidden' }`, which hid the
+    // tray section entirely. After the "Stop multi-browser sync" leave
+    // affordance landed (PR #721), users who clicked Stop had no way to
+    // re-enable without reloading the extension or dropping into the
+    // shell. The offer state restores the missing symmetric entry.
     expect(computeTrayMenuModel({ state: 'inactive' }, { state: 'inactive' })).toEqual({
-      kind: 'hidden',
+      kind: 'leader-offer',
+      label: 'Enable multi-browser sync',
+      caption: 'Connect another browser to this session.',
     });
   });
 
