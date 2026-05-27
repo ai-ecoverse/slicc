@@ -522,8 +522,11 @@ export class Orchestrator {
 
     // Split the shared file into auto-extracted blocks vs. everything else.
     // Each auto-block runs from its `## Auto-extracted` heading through to
-    // either the next `## ` heading or EOF; the rest is preserved verbatim
-    // so any user-authored header, footer, or interleaved content survives.
+    // either the next top-level heading (`# ` or `## `) or EOF; the rest is
+    // preserved verbatim so any user-authored header, footer, or interleaved
+    // content survives. Stopping at `# ` as well as `## ` prevents a
+    // hand-edited `# Footer` after an auto block from being swept into the
+    // lifted region (PR #770 Codex P2 review).
     const lines = sharedContent.split('\n');
     const blocks: string[] = [];
     const kept: string[] = [];
@@ -532,7 +535,7 @@ export class Orchestrator {
       if (/^## Auto-extracted/.test(lines[i])) {
         const start = i;
         i++;
-        while (i < lines.length && !/^## /.test(lines[i])) i++;
+        while (i < lines.length && !/^#{1,2}\s/.test(lines[i])) i++;
         blocks.push(lines.slice(start, i).join('\n').trimEnd());
       } else {
         kept.push(lines[i]);

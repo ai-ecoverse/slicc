@@ -8,6 +8,23 @@ vi.mock('../../src/core/context-compaction.js', () => ({
   runOneOffCompactionCall: (...args: unknown[]) => mockRunOneOffCompactionCall(...args),
 }));
 
+// Mock the budget sink so tests can assert the freezer routes through it
+// (i.e. the post-append budget step actually runs with the credentials the
+// caller passed in). `vi.hoisted` guarantees the spy is initialized BEFORE
+// the import below evaluates the freezer module (which transitively imports
+// cone-memory-budget). Default impl returns a no-op result; individual tests
+// override via `mockResolvedValue` / `mockRejectedValueOnce` to inspect
+// arguments or simulate throws.
+const { mockApplyConeMemoryBudget } = vi.hoisted(() => ({
+  mockApplyConeMemoryBudget: vi.fn(async () => ({
+    restructured: false,
+    reason: 'no-llm' as const,
+  })),
+}));
+vi.mock('../../src/scoops/cone-memory-budget.js', () => ({
+  applyConeMemoryBudget: (...args: unknown[]) => mockApplyConeMemoryBudget(...args),
+}));
+
 // chat-panel imports a wide chunk (incl. SessionStore via indexeddb shims) at
 // module load — the freezer only needs `formatChatForClipboard`. Stub it to a
 // minimal markdown renderer so the freezer's `.md` output is testable without
@@ -87,6 +104,11 @@ const fakeModel = { id: 'test-model', provider: 'anthropic' } as unknown as Para
 describe('freezeConeSession', () => {
   beforeEach(() => {
     mockRunOneOffCompactionCall.mockReset();
+    mockApplyConeMemoryBudget.mockReset();
+    mockApplyConeMemoryBudget.mockResolvedValue({
+      restructured: false,
+      reason: 'no-llm',
+    });
   });
 
   it('skips when session is below MIN_MESSAGES_TO_FREEZE', async () => {
@@ -287,6 +309,102 @@ describe('freezeConeSession', () => {
     expect(index[0].title).toBe('Second session');
     expect(index[1].title).toBe('First session');
   });
+
+  it('routes the post-append step through applyConeMemoryBudget with the caller credentials', async () => {
+    // Regression for PR #770 Codex P2 review: the freezer's VFS-only memory
+    // append must run the same budget check the orchestrator path runs, with
+    // the model/apiKey/headers threaded through. Without this wiring an
+    // unbounded /workspace/CLAUDE.md grows past the logarithmic budget and
+    // never restructures.
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('- bullet from freezer')
+      .mockResolvedValueOnce('Freezer wired title');
+
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [userMessage('q'), assistantMessage('a'), userMessage('r'), assistantMessage('b')],
+      createdAt: 0,
+      updatedAt: 1,
+    });
+    const vfs = makeFakeVfs();
+
+    await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'secret-key',
+      headers: { 'X-Session-Id': 'sess-123' },
+    });
+
+    // Budget sink was invoked exactly once (only the memory append path runs
+    // it; the title path does not write to CLAUDE.md).
+    expect(mockApplyConeMemoryBudget).toHaveBeenCalledTimes(1);
+    const call = mockApplyConeMemoryBudget.mock.calls[0][0] as {
+      vfs: unknown;
+      model: unknown;
+      apiKey: string;
+      headers?: Record<string, string>;
+    };
+    expect(call.vfs).toBe(vfs);
+    expect(call.model).toBe(fakeModel);
+    expect(call.apiKey).toBe('secret-key');
+    expect(call.headers).toEqual({ 'X-Session-Id': 'sess-123' });
+  });
+
+  it('skips the budget step when no LLM credentials are wired (no throw, no call args mismatch)', async () => {
+    // Without an apiKey the freezer skips memory extraction entirely, so
+    // the budget sink never runs — there's nothing to budget.
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [
+        userMessage('plan the migration'),
+        assistantMessage('ok'),
+        userMessage('go'),
+        assistantMessage('done'),
+      ],
+      createdAt: 0,
+      updatedAt: 1,
+    });
+    const vfs = makeFakeVfs();
+
+    await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: undefined,
+    });
+
+    expect(mockApplyConeMemoryBudget).not.toHaveBeenCalled();
+  });
+
+  it('swallows applyConeMemoryBudget failures (memory append still succeeds)', async () => {
+    // The budget check is best-effort. A thrown error from the sink must
+    // never escape the freezer — the appended bullets stay on disk and the
+    // archive write proceeds.
+    mockRunOneOffCompactionCall.mockResolvedValueOnce('- bullet').mockResolvedValueOnce('Title');
+    mockApplyConeMemoryBudget.mockRejectedValueOnce(new Error('budget exploded'));
+
+    const store = makeFakeStore({
+      id: 'session-cone',
+      messages: [userMessage('q'), assistantMessage('a'), userMessage('r'), assistantMessage('b')],
+      createdAt: 0,
+      updatedAt: 1,
+    });
+    const vfs = makeFakeVfs();
+
+    const result = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+    });
+
+    expect(result).not.toBeNull();
+    // Appended bullet still on disk.
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toContain('- bullet');
+    // Archive still landed.
+    expect(vfs.files.has(`/sessions/${result!.filename}`)).toBe(true);
+  });
 });
 
 describe('parseFrozenArchive', () => {
@@ -464,6 +582,11 @@ describe('parseFrozenArchive', () => {
 describe('freezeConeSession quick mode', () => {
   beforeEach(() => {
     mockRunOneOffCompactionCall.mockReset();
+    mockApplyConeMemoryBudget.mockReset();
+    mockApplyConeMemoryBudget.mockResolvedValue({
+      restructured: false,
+      reason: 'no-llm',
+    });
   });
 
   it('writes a pending-named archive and pendingEnrichment index entry without LLM calls', async () => {
@@ -562,6 +685,11 @@ describe('listPendingEnrichments', () => {
 describe('enrichPendingSession', () => {
   beforeEach(() => {
     mockRunOneOffCompactionCall.mockReset();
+    mockApplyConeMemoryBudget.mockReset();
+    mockApplyConeMemoryBudget.mockResolvedValue({
+      restructured: false,
+      reason: 'no-llm',
+    });
   });
 
   /** Build a fully-populated fake VFS with one quick-frozen pending entry. */
@@ -639,6 +767,18 @@ describe('enrichPendingSession', () => {
     expect(index[0].filename).toBe(updated!.filename);
     expect(index[0].pendingEnrichment).toBeUndefined();
     expect(index[0].title).toBe('Build pipeline debug');
+
+    // Budget sink ran for the boot-time pending-enrichment memory append
+    // with the same credentials the caller passed in.
+    expect(mockApplyConeMemoryBudget).toHaveBeenCalled();
+    const lastCall = mockApplyConeMemoryBudget.mock.calls.at(-1)![0] as {
+      vfs: unknown;
+      model: unknown;
+      apiKey: string;
+    };
+    expect(lastCall.vfs).toBe(vfs);
+    expect(lastCall.model).toBe(fakeModel);
+    expect(lastCall.apiKey).toBe('k');
   });
 
   it('is a no-op when the archive file is missing (already renamed)', async () => {

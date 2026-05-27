@@ -31,6 +31,7 @@ import {
   COMPACTION_MEMORY_INSTRUCTION,
   COMPACTION_TITLE_INSTRUCTION,
 } from '../core/context-compaction.js';
+import { applyConeMemoryBudget } from '../scoops/cone-memory-budget.js';
 import { formatChatForClipboard } from './chat-panel.js';
 
 const log = createLogger('session-freezer');
@@ -145,7 +146,11 @@ export async function freezeConeSession(
       });
       if (bullets.trim() && bullets.trim() !== 'NONE') {
         try {
-          await appendConeMemoryViaVfs(opts.vfs, bullets.trim(), 'new-session');
+          await appendConeMemoryViaVfs(opts.vfs, bullets.trim(), 'new-session', {
+            model: opts.model,
+            apiKey: opts.apiKey,
+            headers: opts.headers,
+          });
           log.info('Memory extracted and appended on new-session');
         } catch (err) {
           log.warn('Memory append failed', {
@@ -366,10 +371,24 @@ async function ensureDir(vfs: VirtualFS, path: string): Promise<void> {
   }
 }
 
+/**
+ * Append auto-extracted bullets to `/workspace/CLAUDE.md`, then route through
+ * the logarithmic memory budget (`applyConeMemoryBudget`) so a long-running
+ * series of freezer/enrichment appends gets restructured the same way the
+ * orchestrator's compaction-driven `appendConeMemory` path does. The budget
+ * step is best-effort — credentials are optional; when missing or when the
+ * sink throws, the appended bullets stay on disk and we just log.
+ */
 async function appendConeMemoryViaVfs(
   vfs: VirtualFS,
   bullets: string,
-  source: string
+  source: string,
+  budgetOpts?: {
+    model?: Parameters<typeof applyConeMemoryBudget>[0]['model'];
+    apiKey?: string;
+    headers?: Record<string, string>;
+    signal?: AbortSignal;
+  }
 ): Promise<void> {
   const path = '/workspace/CLAUDE.md';
   let current = '';
@@ -385,6 +404,25 @@ async function appendConeMemoryViaVfs(
   const separator = current.length === 0 || current.endsWith('\n') ? '' : '\n';
   const block = `${separator}\n${heading}\n\n${bullets}\n`;
   await vfs.writeFile(path, current + block);
+
+  // Post-append budget step. Symmetric to the orchestrator path —
+  // bound `/workspace/CLAUDE.md` against the logarithmic budget when
+  // credentials are wired through. Failures are swallowed by the sink
+  // itself, but wrap in try/catch defensively so a thrown error never
+  // escapes the freezer.
+  try {
+    await applyConeMemoryBudget({
+      vfs,
+      model: budgetOpts?.model,
+      apiKey: budgetOpts?.apiKey,
+      headers: budgetOpts?.headers,
+      signal: budgetOpts?.signal,
+    });
+  } catch (err) {
+    log.warn('Cone memory budget step threw (append already committed)', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 async function updateSessionsIndex(
@@ -560,7 +598,11 @@ export async function enrichPendingSession(
   const trimmedBullets = bullets.trim();
   if (trimmedBullets && trimmedBullets !== 'NONE') {
     try {
-      await appendConeMemoryViaVfs(vfs, trimmedBullets, 'pending-enrichment');
+      await appendConeMemoryViaVfs(vfs, trimmedBullets, 'pending-enrichment', {
+        model: opts.model,
+        apiKey: opts.apiKey,
+        headers: opts.headers,
+      });
     } catch (err) {
       log.warn('Enrichment memory append failed (continuing with title rewrite)', {
         filename: entry.filename,
