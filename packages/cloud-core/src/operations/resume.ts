@@ -13,9 +13,9 @@ export interface ResumeConeOpts {
   query: string;
   localSliccVersion: string;
   /** Optional: if provided, written to /slicc/secrets.env AFTER substrate.connect
-   * and BEFORE the leader-restart kick. Used by Plan D's worker to inject a
-   * fresh IMS bearer. CLI currently leaves this undefined; Plan B can pass it
-   * for the same effect. */
+   * and BEFORE the leader-restart kick. Both CLI (node-server resume-cone.ts:26)
+   * and worker (cloud-sessions-do.ts:228) pass this unconditionally now to inject
+   * a fresh IMS bearer. */
   refreshSecretsContents?: string;
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
@@ -62,9 +62,8 @@ export async function resumeCone(
 
   const handle = await deps.substrate.connect(entry.sandboxId);
 
-  // NEW: refreshSecretsContents hook. If provided, write to /slicc/secrets.env
-  // BEFORE the kick loop. This is additive — CLI passes undefined; Plan D's
-  // worker will pass a fresh IMS bearer token.
+  // refreshSecretsContents: both CLI and worker pass this now to inject a fresh
+  // IMS bearer. Write to /slicc/secrets.env BEFORE the kick loop.
   if (opts.refreshSecretsContents !== undefined) {
     await handle.writeFile('/slicc/secrets.env', opts.refreshSecretsContents);
   }

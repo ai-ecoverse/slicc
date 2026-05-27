@@ -108,6 +108,11 @@ export async function listCones(
       } catch (err) {
         // File not readable (sandbox is transitioning, or file doesn't exist).
         // Leave joinUrl empty — UI will handle gracefully.
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('[cloud-core] orphan recovery readFile failed', {
+          sandboxId: summary.sandboxId,
+          err: msg,
+        });
       }
     }
 
@@ -137,8 +142,10 @@ export async function listCones(
       .map(async (c) => {
         try {
           await deps.substrate.extendTimeout(c.sandboxId, DEFAULT_TTL_MS);
-        } catch {
+        } catch (err) {
           // Sandbox may have died between list and extendTimeout; ignore.
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn('[cloud-core] extendTimeout failed', { sandboxId: c.sandboxId, err: msg });
         }
       })
   );

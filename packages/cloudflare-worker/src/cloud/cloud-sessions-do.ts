@@ -241,8 +241,9 @@ export class CloudSessionsDurableObject {
       // Rollback the speculative state flip.
       try {
         await registry.update(body.sandboxId, { state: 'paused' });
-      } catch {
-        /* swallow */
+      } catch (rollbackErr) {
+        const msg = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+        console.warn('[cloud-do] resume rollback failed', { sandboxId: body.sandboxId, err: msg });
       }
 
       if (isCloudError(err)) {

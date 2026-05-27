@@ -216,9 +216,15 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
       activeRegistryId = handle.sandboxId;
     }
 
-    // Two-layer secrets bootstrap (see Plan B): start.sh prefers env-derived
-    // secrets, but we still upload the full filtered file so non-Adobe secrets
-    // (GitHub PATs, S3 keys, OAuth replicas) reach the sandbox.
+    // Two-layer secrets bootstrap (see Plan B):
+    //   1. start.sh writes /slicc/secrets.env from $ADOBE_IMS_TOKEN ONLY IF the
+    //      file doesn't already exist (fallback for the race-free worker path
+    //      where env-vars arrive before this writeFile lands).
+    //   2. THIS writeFile uploads the full filtered secrets.env (with all the
+    //      user's non-Adobe secrets — GitHub PATs, S3 keys, etc.) and OVERWRITES
+    //      whatever start.sh wrote. The CLI race is benign because the page-side
+    //      bootstrap polls /api/hosted-bootstrap after a 5s delay, by which time
+    //      this writeFile has landed.
     await handle.writeFile('/slicc/secrets.env', safeSecrets);
 
     let status: Awaited<ReturnType<typeof pollCloudStatus>>;
@@ -258,16 +264,26 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
     if (activeRegistryId) {
       try {
         await deps.registry.remove(activeRegistryId);
-      } catch {
-        /* swallow */
+      } catch (cleanupErr) {
+        const msg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        console.warn('[cloud-core] start cleanup', {
+          phase: 'registry-remove',
+          sandboxId: activeRegistryId,
+          err: msg,
+        });
       }
     }
     // Always kill the real sandbox if it was created (handle exists at this point)
     if (handle) {
       try {
         await handle.kill();
-      } catch {
-        /* swallow */
+      } catch (cleanupErr) {
+        const msg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+        console.warn('[cloud-core] start cleanup', {
+          phase: 'handle-kill',
+          sandboxId: handle.sandboxId,
+          err: msg,
+        });
       }
     }
     throw err;

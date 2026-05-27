@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-# Runtime env. (E2B v2 `setEnvs` is build-time only, so the template's runtime
-# env has to be set here. node-server also has these as defaults when --hosted
-# is passed, so these `export`s are belt-and-suspenders.)
-export SLICC_HOSTED=1
+# Runtime env. SLICC_SECRETS_FILE is load-bearing — without it, node-server
+# would default to ~/.slicc/secrets.env (the laptop CLI path) inside the
+# sandbox, where nothing exists. CHROME_USER_DATA_DIR matches the --hosted
+# default and is belt-and-suspenders.
 export SLICC_SECRETS_FILE=/slicc/secrets.env
 export CHROME_USER_DATA_DIR=/data/profile
 
