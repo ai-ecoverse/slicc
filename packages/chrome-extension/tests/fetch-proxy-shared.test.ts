@@ -362,6 +362,21 @@ describe('handleFetchProxyConnection — X-Proxy-* request decode', () => {
     expect(h['User-Agent']).toBe('curl/8');
     expect(h['Accept']).toBe('*/*');
   });
+
+  // Default-Origin fallback parity with CLI `/api/fetch-proxy`. When no
+  // caller-supplied Origin reaches the SW (page-side strips Origin on the
+  // forbidden-headers boundary), synthesize one from the target URL so
+  // CORS-protected upstreams see a real Origin instead of nothing.
+  it('synthesizes Origin from target URL when no Origin given', async () => {
+    const h = await dispatch({});
+    expect(h.origin).toBe('https://api.example.com');
+  });
+
+  it('caller-supplied X-Proxy-Origin wins over default-Origin fallback', async () => {
+    const h = await dispatch({ 'X-Proxy-Origin': 'https://my.app' });
+    expect(h.origin).toBe('https://my.app');
+    expect('X-Proxy-Origin' in h).toBe(false);
+  });
 });
 
 describe('handleFetchProxyConnection — Set-Cookie encode on response', () => {

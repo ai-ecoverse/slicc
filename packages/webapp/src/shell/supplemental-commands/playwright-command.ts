@@ -1668,7 +1668,7 @@ function requireTab(flags: Record<string, string>): { targetId: string } | { err
  * forwards `init.headers` so caller-supplied forbidden headers
  * (`Origin`, `Cookie`, `Referer`) survive end-to-end.
  */
-function asWebFetch(secureFetch: SecureFetch): typeof fetch {
+export function asWebFetch(secureFetch: SecureFetch): typeof fetch {
   const adapter = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;

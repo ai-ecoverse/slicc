@@ -167,6 +167,19 @@ export function handleFetchProxyConnectionAsync(
         headers.authorization = credsResult.syntheticAuthorization;
       }
 
+      // Default-Origin fallback: when no caller Origin survives the
+      // X-Proxy-Origin decode step above, synthesize one from the target URL
+      // so upstream CORS-protected APIs see a real Origin instead of nothing.
+      // Caller-supplied Origin (decoded from X-Proxy-Origin) still wins
+      // because the decode step ran first. Matches CLI server behavior.
+      if (!headers.origin) {
+        try {
+          headers.origin = new URL(cleanedUrl).origin;
+        } catch {
+          // Malformed cleanedUrl — leave origin unset; upstream fetch will fail anyway.
+        }
+      }
+
       let body: Uint8Array | undefined;
       if (msg.bodyBase64) {
         const raw = decodeBase64Bytes(msg.bodyBase64);
@@ -255,6 +268,19 @@ export function handleFetchProxyConnection(port: PortLike, pipeline: SecretsPipe
       }
       if (credsResult.syntheticAuthorization && !('authorization' in headers)) {
         headers.authorization = credsResult.syntheticAuthorization;
+      }
+
+      // Default-Origin fallback: when no caller Origin survives the
+      // X-Proxy-Origin decode step above, synthesize one from the target URL
+      // so upstream CORS-protected APIs see a real Origin instead of nothing.
+      // Caller-supplied Origin (decoded from X-Proxy-Origin) still wins
+      // because the decode step ran first. Matches CLI server behavior.
+      if (!headers.origin) {
+        try {
+          headers.origin = new URL(cleanedUrl).origin;
+        } catch {
+          // Malformed cleanedUrl — leave origin unset; upstream fetch will fail anyway.
+        }
       }
 
       let body: Uint8Array | undefined;

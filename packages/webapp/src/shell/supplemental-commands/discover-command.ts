@@ -46,7 +46,7 @@ import { createProxiedFetch } from '../proxied-fetch.js';
  * (the SecureFetch contract has no signal slot) — `discoverLinks` already
  * caps each call with its own timeout and tolerates non-aborting fetches.
  */
-function asWebFetch(secureFetch: SecureFetch): typeof fetch {
+export function asWebFetch(secureFetch: SecureFetch): typeof fetch {
   const adapter = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
