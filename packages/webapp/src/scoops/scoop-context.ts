@@ -204,16 +204,38 @@ export interface ScoopContextCallbacks {
     jids: readonly string[],
     timeoutMs?: number
   ) => { scheduled: string[]; unknown: string[] };
-  /** Get global CLAUDE.md content (shared across all scoops) */
+  /**
+   * Get `/shared/CLAUDE.md` content (the runtime instructions file
+   * visible to all scoops). Auto-extracted memory does NOT land here —
+   * see {@link appendConeMemory} for the cone-private sink.
+   */
   getGlobalMemory: () => Promise<string>;
-  /** Update global CLAUDE.md (cone only) */
+  /**
+   * Update `/shared/CLAUDE.md` (cone only). Backs the explicit
+   * `update_global_memory` tool surface; not used by the auto-extraction
+   * pass (which routes through {@link appendConeMemory}).
+   */
   setGlobalMemory?: (content: string) => Promise<void>;
   /**
-   * Append auto-extracted memory bullets to /shared/CLAUDE.md (cone only).
+   * Append auto-extracted memory bullets to /workspace/CLAUDE.md (cone only).
    * Called by the compaction memory-extraction pass. When omitted the
-   * compaction pass skips its second LLM call entirely.
+   * compaction pass skips its second LLM call entirely. The explicit-edit
+   * surface for `/shared/CLAUDE.md` is the `update_global_memory` tool.
+   *
+   * `meta` may carry the active LLM model + credentials so the sink can
+   * run a budget-driven restructure pass when an append overshoots the
+   * size budget — see `cone-memory-budget.ts`.
    */
-  appendGlobalMemory?: (bullets: string, meta: { source: string }) => Promise<void>;
+  appendConeMemory?: (
+    bullets: string,
+    meta: {
+      source: string;
+      model?: Model<Api>;
+      apiKey?: string;
+      headers?: Record<string, string>;
+      signal?: AbortSignal;
+    }
+  ) => Promise<void>;
   /**
    * Optional lifecycle hook for compaction. Emitted by the compaction
    * `transformContext` before and after each LLM call so the panel can
@@ -476,10 +498,17 @@ export class ScoopContext {
       // Auto-extracted memory is cone-only — scoops keep their own local
       // memory files curated by the user. Wiring the callback only for the
       // cone also skips the second compaction LLM call entirely for scoops.
+      // Forward the active model + key + adobe headers so the sink can run
+      // its budget-driven restructure pass against the same provider.
       const onMemoryUpdates =
-        this.scoop.isCone && this.callbacks.appendGlobalMemory
+        this.scoop.isCone && this.callbacks.appendConeMemory
           ? (bullets: string) =>
-              this.callbacks.appendGlobalMemory!(bullets, { source: 'compaction' })
+              this.callbacks.appendConeMemory!(bullets, {
+                source: 'compaction',
+                model,
+                apiKey: getApiKey() ?? undefined,
+                headers: compactionHeaders,
+              })
           : undefined;
       const compactFn = createCompactContext({
         model,

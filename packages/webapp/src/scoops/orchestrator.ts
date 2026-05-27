@@ -35,6 +35,8 @@ import {
   type ScoopCostData,
 } from '../shell/supplemental-commands/cost-command.js';
 import type { AssistantMessage, ImageContent } from '../core/types.js';
+import { applyConeMemoryBudget, CONE_MEMORY_PATH } from './cone-memory-budget.js';
+import type { Api, Model } from '@earendil-works/pi-ai';
 
 const log = createLogger('orchestrator');
 
@@ -184,6 +186,14 @@ export class Orchestrator {
    * untracked-prompt behavior (plain AbortController).
    */
   private processManager: ProcessManager | null = null;
+  /**
+   * Serialization chain for all writes to `/workspace/CLAUDE.md`. Every
+   * {@link appendConeMemory} call queues onto this promise so concurrent
+   * appends (e.g. compaction + freezer overlapping during a "New session"
+   * race) cannot lose blocks or corrupt the file. Resolves to `void` and
+   * never rejects — internal errors are logged and swallowed.
+   */
+  private memoryWriteChain: Promise<void> = Promise.resolve();
 
   constructor(
     container: HTMLElement,
@@ -247,6 +257,12 @@ export class Orchestrator {
 
     // Initialize global memory
     await this.ensureGlobalMemory();
+
+    // One-time migration: move legacy auto-extracted blocks from
+    // /shared/CLAUDE.md into /workspace/CLAUDE.md. Auto-memory now lives on
+    // the cone's CLAUDE.md so it doesn't leak into every scoop's prompt
+    // surface. Idempotent — guarded by a sentinel file.
+    await this.migrateLegacyConeMemory();
 
     // Initialize task scheduler
     this.scheduler = new TaskScheduler({
@@ -380,7 +396,7 @@ export class Orchestrator {
   }
 
   /**
-   * Append a block of auto-extracted memory bullets to /shared/CLAUDE.md.
+   * Append a block of auto-extracted memory bullets to /workspace/CLAUDE.md.
    * Used by the compaction memory-extraction pass and by the "New session"
    * freezer flow.
    *
@@ -388,18 +404,190 @@ export class Orchestrator {
    * easy to prune by hand. The `source` field is included in the heading
    * (e.g., "compaction", "new-session") so the user can see why a block
    * was added.
+   *
+   * Targets `/workspace/CLAUDE.md` (the cone's memory) rather than
+   * `/shared/CLAUDE.md` (the global, scoop-visible memory). The
+   * `update_global_memory` tool remains the explicit-edit surface for the
+   * shared file.
+   *
+   * Writes are serialized through {@link memoryWriteChain} so concurrent
+   * appends (e.g. compaction overlapping a freezer "New session" pass)
+   * cannot race each other. When `meta.model` + `meta.apiKey` are wired
+   * the post-append size is checked against the logarithmic budget and
+   * an over-threshold file is restructured via an LLM call — see
+   * {@link applyConeMemoryBudget}.
    */
-  async appendGlobalMemory(bullets: string, meta: { source: string }): Promise<void> {
+  async appendConeMemory(
+    bullets: string,
+    meta: {
+      source: string;
+      model?: Model<Api>;
+      apiKey?: string;
+      headers?: Record<string, string>;
+      signal?: AbortSignal;
+    }
+  ): Promise<void> {
     if (!this.sharedFs) return;
     const trimmed = bullets.trim();
     if (!trimmed) return;
-    const current = await this.getGlobalMemory();
-    const date = new Date().toISOString().slice(0, 10);
-    const heading = `## Auto-extracted (${date}, ${meta.source})`;
-    const separator = current.length === 0 || current.endsWith('\n') ? '' : '\n';
-    const block = `${separator}\n${heading}\n\n${trimmed}\n`;
-    await this.setGlobalMemory(current + block);
-    log.info('Global memory appended', { source: meta.source, length: trimmed.length });
+
+    const next = this.memoryWriteChain.then(async () => {
+      const fs = this.sharedFs;
+      // Re-check after awaiting the chain: shutdown may have dropped the FS.
+      if (!fs) return;
+      let current = '';
+      try {
+        const raw = await fs.readFile(CONE_MEMORY_PATH, { encoding: 'utf-8' });
+        current = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+      } catch {
+        // File doesn't exist yet — ensure parent dir then create on write below.
+        try {
+          await fs.mkdir('/workspace', { recursive: true });
+        } catch {
+          // Directory already exists
+        }
+      }
+      const date = new Date().toISOString().slice(0, 10);
+      const heading = `## Auto-extracted (${date}, ${meta.source})`;
+      const separator = current.length === 0 || current.endsWith('\n') ? '' : '\n';
+      const block = `${separator}\n${heading}\n\n${trimmed}\n`;
+      await fs.writeFile(CONE_MEMORY_PATH, current + block);
+      log.info('Cone memory appended', { source: meta.source, length: trimmed.length });
+
+      // Budget check — best-effort, never rethrows. When no LLM credentials
+      // were threaded through (e.g. freezer-VFS-only path) this is a no-op.
+      try {
+        await applyConeMemoryBudget({
+          vfs: fs,
+          model: meta.model,
+          apiKey: meta.apiKey,
+          headers: meta.headers,
+          signal: meta.signal,
+        });
+      } catch (err) {
+        log.warn('applyConeMemoryBudget threw — ignored', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+    // Keep the chain alive even on error so a subsequent append still queues.
+    this.memoryWriteChain = next.catch((err) => {
+      log.warn('Cone memory append failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+    await next;
+  }
+
+  /**
+   * One-shot migration of pre-existing `## Auto-extracted` blocks from
+   * `/shared/CLAUDE.md` into `/workspace/CLAUDE.md`.
+   *
+   * Auto-memory used to land in the shared file, which made every scoop
+   * see the cone's auto-extracted memories in its prompt. The new sink is
+   * the cone's own `/workspace/CLAUDE.md`. On the first boot after this
+   * change, lift any legacy auto-extracted blocks out of the shared file
+   * and append them to the cone's file (preserving any user header
+   * already there). Drop ONLY the auto-extracted regions from the shared
+   * file — any user-authored header, footer, or content between blocks
+   * stays exactly as it was on disk. A sentinel is written so subsequent
+   * boots are no-ops.
+   */
+  private async migrateLegacyConeMemory(): Promise<void> {
+    if (!this.sharedFs) return;
+    const sentinelPath = '/workspace/.cone-memory-migrated';
+    try {
+      await this.sharedFs.stat(sentinelPath);
+      // Sentinel exists — already migrated.
+      return;
+    } catch {
+      // No sentinel yet — proceed with the migration check.
+    }
+
+    let sharedContent = '';
+    try {
+      const raw = await this.sharedFs.readFile('/shared/CLAUDE.md', { encoding: 'utf-8' });
+      sharedContent = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    } catch {
+      // No shared memory file — nothing to migrate. Still drop the sentinel
+      // so we don't re-check on every boot.
+    }
+
+    const autoBlockRegex = /^## Auto-extracted[^\n]*$/m;
+    if (!autoBlockRegex.test(sharedContent)) {
+      // No legacy auto-extracted blocks. Mark migration complete and return.
+      await this.writeMigrationSentinel(sentinelPath);
+      return;
+    }
+
+    // Split the shared file into auto-extracted blocks vs. everything else.
+    // Each auto-block runs from its `## Auto-extracted` heading through to
+    // either the next `## ` heading or EOF; the rest is preserved verbatim
+    // so any user-authored header, footer, or interleaved content survives.
+    const lines = sharedContent.split('\n');
+    const blocks: string[] = [];
+    const kept: string[] = [];
+    let i = 0;
+    while (i < lines.length) {
+      if (/^## Auto-extracted/.test(lines[i])) {
+        const start = i;
+        i++;
+        while (i < lines.length && !/^## /.test(lines[i])) i++;
+        blocks.push(lines.slice(start, i).join('\n').trimEnd());
+      } else {
+        kept.push(lines[i]);
+        i++;
+      }
+    }
+
+    if (blocks.length === 0) {
+      await this.writeMigrationSentinel(sentinelPath);
+      return;
+    }
+
+    // Append the lifted blocks to /workspace/CLAUDE.md, preserving any
+    // existing user header.
+    let coneContent = '';
+    try {
+      const raw = await this.sharedFs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' });
+      coneContent = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    } catch {
+      try {
+        await this.sharedFs.mkdir('/workspace', { recursive: true });
+      } catch {
+        // Already exists
+      }
+    }
+    const separator = coneContent.length === 0 || coneContent.endsWith('\n') ? '' : '\n';
+    const merged = coneContent + separator + '\n' + blocks.join('\n\n') + '\n';
+    await this.sharedFs.writeFile('/workspace/CLAUDE.md', merged);
+
+    // Rewrite /shared/CLAUDE.md with the non-auto portions joined together,
+    // trimming trailing empties down to a single trailing newline.
+    let endIdx = kept.length;
+    while (endIdx > 0 && kept[endIdx - 1] === '') endIdx--;
+    const newShared = endIdx === 0 ? '' : kept.slice(0, endIdx).join('\n') + '\n';
+    await this.sharedFs.writeFile('/shared/CLAUDE.md', newShared);
+    // Refresh the in-memory cache so subsequent reads see the cleaned file.
+    this.globalMemoryCache = newShared;
+
+    await this.writeMigrationSentinel(sentinelPath);
+    log.info('Migrated legacy cone memory from /shared/CLAUDE.md to /workspace/CLAUDE.md', {
+      blockCount: blocks.length,
+    });
+  }
+
+  private async writeMigrationSentinel(sentinelPath: string): Promise<void> {
+    if (!this.sharedFs) return;
+    try {
+      await this.sharedFs.mkdir('/workspace', { recursive: true });
+    } catch {
+      // Already exists
+    }
+    await this.sharedFs.writeFile(
+      sentinelPath,
+      `Migration completed at ${new Date().toISOString()}\n`
+    );
   }
 
   /** Get the shared VirtualFS */
@@ -1634,8 +1822,8 @@ export class Orchestrator {
         : undefined,
       getGlobalMemory: () => this.getGlobalMemory(),
       setGlobalMemory: scoop.isCone ? (content) => this.setGlobalMemory(content) : undefined,
-      appendGlobalMemory: scoop.isCone
-        ? (bullets, meta) => this.appendGlobalMemory(bullets, meta)
+      appendConeMemory: scoop.isCone
+        ? (bullets, meta) => this.appendConeMemory(bullets, meta)
         : undefined,
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),
     };

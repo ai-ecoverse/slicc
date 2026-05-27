@@ -159,11 +159,13 @@ describe('freezeConeSession', () => {
     expect(index).toHaveLength(1);
     expect(index[0].title).toBe('Fixing the auth bug');
 
-    // Memory append landed in /shared/CLAUDE.md with a dated heading.
-    const memoryDoc = vfs.files.get('/shared/CLAUDE.md');
+    // Memory append landed in /workspace/CLAUDE.md with a dated heading.
+    const memoryDoc = vfs.files.get('/workspace/CLAUDE.md');
     expect(memoryDoc).toBeTruthy();
     expect(memoryDoc).toMatch(/Auto-extracted.*new-session/);
     expect(memoryDoc).toContain('user prefers vim');
+    // /shared/CLAUDE.md is not touched by the freezer anymore.
+    expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
   });
 
   it('skips memory append when LLM returns NONE', async () => {
@@ -184,6 +186,7 @@ describe('freezeConeSession', () => {
       apiKey: 'k',
     });
 
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
     expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
   });
 
@@ -496,6 +499,7 @@ describe('freezeConeSession quick mode', () => {
     // Archive landed under /sessions/.
     expect(vfs.files.has(`/sessions/${result!.filename}`)).toBe(true);
     // No memory append in quick mode.
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
     expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
 
     // Index entry carries the pendingEnrichment flag for the boot scanner.
@@ -619,11 +623,13 @@ describe('enrichPendingSession', () => {
     expect(newContent).toContain('title: "Build pipeline debug"');
     expect(newContent).toContain('# Build pipeline debug');
 
-    // Memory landed under /shared/CLAUDE.md with the pending-enrichment source tag.
-    const memory = vfs.files.get('/shared/CLAUDE.md');
+    // Memory landed under /workspace/CLAUDE.md with the pending-enrichment source tag.
+    const memory = vfs.files.get('/workspace/CLAUDE.md');
     expect(memory).toBeTruthy();
     expect(memory).toMatch(/Auto-extracted.*pending-enrichment/);
     expect(memory).toContain('prefers vitest');
+    // /shared/CLAUDE.md is no longer the auto-memory sink.
+    expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
 
     // Index now points to the renamed file and drops the pending flag.
     const index = await readSessionsIndex(
@@ -700,6 +706,7 @@ describe('enrichPendingSession', () => {
     expect(vfs.files.has(`/sessions/${pendingFilename}`)).toBe(true);
     // No memory was appended either — we abort BEFORE the memory append
     // so retries don't accumulate duplicate bullets.
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
     expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
     // Index unchanged — entry is still pending so the next boot retries.
     const index = await readSessionsIndex(

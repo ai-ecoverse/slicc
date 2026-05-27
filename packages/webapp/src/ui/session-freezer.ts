@@ -8,7 +8,7 @@
  *      and return null — nothing meaningful to extract or archive.
  *   3. Run two LLM calls over the message list with a shared system prompt
  *      (Anthropic prompt cache hits on the prefix for the second call):
- *        - Memory extraction → append bullets to /shared/CLAUDE.md.
+ *        - Memory extraction → append bullets to /workspace/CLAUDE.md.
  *        - Title generation → 3-6 word label used to name the archive.
  *      Either call may fail independently; failures fall through to safe
  *      defaults (no memory append, heuristic title).
@@ -145,7 +145,7 @@ export async function freezeConeSession(
       });
       if (bullets.trim() && bullets.trim() !== 'NONE') {
         try {
-          await appendGlobalMemoryViaVfs(opts.vfs, bullets.trim(), 'new-session');
+          await appendConeMemoryViaVfs(opts.vfs, bullets.trim(), 'new-session');
           log.info('Memory extracted and appended on new-session');
         } catch (err) {
           log.warn('Memory append failed', {
@@ -366,19 +366,19 @@ async function ensureDir(vfs: VirtualFS, path: string): Promise<void> {
   }
 }
 
-async function appendGlobalMemoryViaVfs(
+async function appendConeMemoryViaVfs(
   vfs: VirtualFS,
   bullets: string,
   source: string
 ): Promise<void> {
-  const path = '/shared/CLAUDE.md';
+  const path = '/workspace/CLAUDE.md';
   let current = '';
   try {
     const raw = await vfs.readFile(path, { encoding: 'utf-8' });
     current = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
   } catch {
     // File doesn't exist yet — we'll create it via writeFile below.
-    await ensureDir(vfs, '/shared');
+    await ensureDir(vfs, '/workspace');
   }
   const date = new Date().toISOString().slice(0, 10);
   const heading = `## Auto-extracted (${date}, ${source})`;
@@ -560,7 +560,7 @@ export async function enrichPendingSession(
   const trimmedBullets = bullets.trim();
   if (trimmedBullets && trimmedBullets !== 'NONE') {
     try {
-      await appendGlobalMemoryViaVfs(vfs, trimmedBullets, 'pending-enrichment');
+      await appendConeMemoryViaVfs(vfs, trimmedBullets, 'pending-enrichment');
     } catch (err) {
       log.warn('Enrichment memory append failed (continuing with title rewrite)', {
         filename: entry.filename,
