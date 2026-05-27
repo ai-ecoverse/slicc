@@ -9,9 +9,11 @@ import type {
   SandboxSummary,
 } from '@slicc/cloud-core';
 
+// Substrate states only — 'reserved' is a registry-only state, never reported
+// by the substrate (e2b). Mirrors SandboxSummary.state in cloud-core.
 interface FakeSandbox {
   id: string;
-  state: 'running' | 'paused' | 'dead' | 'reserved';
+  state: 'running' | 'paused' | 'dead';
   metadata: Record<string, string>;
   name?: string;
   createdAt: string;
