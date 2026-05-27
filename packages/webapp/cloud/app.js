@@ -247,8 +247,6 @@ async function killConeAction(sandboxId) {
   }
 }
 
-let createController = null;
-
 document.getElementById('sign-in-btn').addEventListener('click', async () => {
   try {
     await startImsPopup();
@@ -277,23 +275,18 @@ document.getElementById('sign-out-btn').addEventListener('click', async () => {
 
 const createBtn = document.getElementById('create-btn');
 createBtn.addEventListener('click', async () => {
-  if (createController) {
-    createController.abort();
-    createController = null;
-    return;
-  }
+  if (createBtn.disabled) return; // already in flight
   const nameInput = document.getElementById('cone-name');
   const status = document.getElementById('create-status');
   const name = nameInput.value.trim() || undefined;
   const originalLabel = createBtn.textContent;
-  createBtn.textContent = 'Cancel';
-  status.textContent = 'starting…';
-  createController = new AbortController();
+  createBtn.disabled = true;
+  createBtn.textContent = 'Starting…';
+  status.textContent = 'creating cone (this can take 30s)…';
   try {
     const result = await api('/api/cloud/start', {
       method: 'POST',
       body: JSON.stringify({ name }),
-      signal: createController.signal,
     });
     status.textContent = 'ready';
     nameInput.value = '';
@@ -302,15 +295,11 @@ createBtn.addEventListener('click', async () => {
       window.open(result.joinUrl, '_blank', 'noopener,noreferrer');
     }
   } catch (e) {
-    if (e.name === 'AbortError') {
-      status.textContent = 'cancelled';
-    } else {
-      showToast('Create failed: ' + e.message);
-      status.textContent = '';
-    }
+    showToast('Create failed: ' + e.message);
+    status.textContent = '';
   } finally {
+    createBtn.disabled = false;
     createBtn.textContent = originalLabel;
-    createController = null;
     setTimeout(() => (status.textContent = ''), 3000);
   }
 });
