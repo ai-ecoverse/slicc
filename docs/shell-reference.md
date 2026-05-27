@@ -564,7 +564,7 @@ curl -X POST /api/fetch-proxy \
 
 All `fetch()` and `curl` calls route through proxy (CLI: `/api/fetch-proxy`, extension: `fetch-proxy.fetch` SW Port handler). Both modes now provide full secret-injection coverage.
 
-Browsers strip `Origin`, `Referer`, `Cookie`, and `Proxy-*` from page-context `fetch()` calls, so the proxy restores them via an `X-Proxy-*` transport and synthesizes a default `Origin` from the target URL when no caller value survives. Override with `curl -H "Origin: ..."` (or pass an `Origin` header to any `SecureFetch`-backed call). See [Origin Contract: Forbidden Headers & Default-Origin Fallback](./pitfalls.md#origin-contract-forbidden-headers--default-origin-fallback) in `docs/pitfalls.md` for the full contract.
+Browsers strip `Origin`, `Referer`, `Cookie`, and `Proxy-*` from page-context `fetch()` calls, so the proxy restores them via an `X-Proxy-*` transport and synthesizes a default `Origin` from the target URL when no caller value survives. In CLI mode the Express handler decodes the headers and Node `fetch()` carries them through; in the extension SW, decoding alone is not sufficient because Chrome strips/rewrites forbidden headers regardless of the init dict, so the SW additionally installs a per-request `chrome.declarativeNetRequest` session rule (keyed to a unique URL fragment) that rewrites them on egress. Override with `curl -H "Origin: ..."` (or pass an `Origin` header to any `SecureFetch`-backed call). See [Origin Contract: Forbidden Headers & Default-Origin Fallback](./pitfalls.md#origin-contract-forbidden-headers--default-origin-fallback) in `docs/pitfalls.md` for the full contract.
 
 ### Extension Mode
 

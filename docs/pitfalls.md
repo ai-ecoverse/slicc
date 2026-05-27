@@ -372,21 +372,38 @@ Host the real leader tray `WebSocket` in `packages/chrome-extension/src/service-
 
 Browsers silently strip a small set of "forbidden" request headers — `Origin`, `Referer`, `Cookie`, `Proxy-*` — from any `fetch()` call made in page or Service Worker contexts. A skill author writing `fetch(url, { headers: { Origin: 'https://foo.com' } })` will see that header vanish before it reaches the network. Upstream CORS-protected APIs that key on `Origin` then either reject the request or fall back to a content-derived bucket.
 
+The extension float makes this worse: Chrome MV3 strips `Cookie`/`Referer`/`Proxy-*` from extension-SW `fetch()` regardless of the `init.headers` dict or `host_permissions`, **and** rewrites `Origin` to `chrome-extension://<id>` on the wire. So the obvious "decode `X-Proxy-*` back into the headers dict and call `fetch(url, { headers })`" approach is **not** sufficient in the SW — the headers are visible to JS but never reach the network.
+
 **The Contract**
 
-`createProxiedFetch()` and every `SecureFetch`-backed shell call (curl, `node -e "fetch(...)"`, `upskill`, `mcp invoke`, git, etc.) preserve forbidden headers in both floats via the same `X-Proxy-*` wire transport, and both proxies synthesize a default `Origin` when none survives.
+`createProxiedFetch()` and every `SecureFetch`-backed shell call (curl, `node -e "fetch(...)"`, `upskill`, `mcp invoke`, git, etc.) preserve forbidden headers in both floats via the same `X-Proxy-*` wire transport, but the two proxies use different mechanisms to actually land them on the upstream request, and both synthesize a default `Origin` when none survives.
 
-| Step                                                                   | CLI                                                       | Extension                                                                    |
-| ---------------------------------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| Client encodes `Origin`/`Referer`/`Cookie`/`Proxy-*` as `X-Proxy-*`    | `createProxiedFetch` → `encodeForbiddenRequestHeaders`    | `extensionPortFetch` → `encodeForbiddenRequestHeaders` over `chrome.runtime` |
-| Proxy decodes `X-Proxy-*` back to real header names before upstream    | `/api/fetch-proxy` handler in `node-server/src/index.ts`  | SW `handleFetchProxyConnectionAsync` in `fetch-proxy-shared.ts`              |
-| If no caller `Origin` survived, synthesize `<scheme>://<host>` of URL  | Yes — `new URL(targetUrl).origin`                         | Yes — `new URL(cleanedUrl).origin`                                           |
-| Caller-supplied `Origin` always wins                                   | Decode runs before fallback                               | Decode runs before fallback                                                  |
-| Browser-injected `localhost` `Origin`/`Referer` stripped before refill | `isLocalhostOrigin` deletes it, fallback then synthesizes | (n/a — extension `Origin` is the extension ID, not localhost)                |
+| Step                                                                   | CLI                                                       | Extension                                                                                                                                                                       |
+| ---------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Client encodes `Origin`/`Referer`/`Cookie`/`Proxy-*` as `X-Proxy-*`    | `createProxiedFetch` → `encodeForbiddenRequestHeaders`    | `extensionPortFetch` → `encodeForbiddenRequestHeaders` over `chrome.runtime`                                                                                                    |
+| Proxy decodes `X-Proxy-*` back to real header names before upstream    | `/api/fetch-proxy` handler in `node-server/src/index.ts`  | SW `handleFetchProxyConnectionAsync` in `fetch-proxy-shared.ts`                                                                                                                 |
+| Forbidden headers actually reach upstream                              | Yes — Node `fetch()` honors the init dict for every name  | **DNR rule required** — `installForbiddenHeaderRule` installs a per-request `chrome.declarativeNetRequest.updateSessionRules` `modifyHeaders` rule that rewrites them on egress |
+| If no caller `Origin` survived, synthesize `<scheme>://<host>` of URL  | Yes — `new URL(targetUrl).origin`                         | Yes — `new URL(cleanedUrl).origin`                                                                                                                                              |
+| Caller-supplied `Origin` always wins                                   | Decode runs before fallback                               | Decode runs before fallback; DNR `set` operation overrides the Chrome-injected extension Origin                                                                                 |
+| Browser-injected `localhost` `Origin`/`Referer` stripped before refill | `isLocalhostOrigin` deletes it, fallback then synthesizes | (n/a — extension `Origin` is the extension ID, replaced by DNR or fallback)                                                                                                     |
+
+**The DNR mechanism (extension SW only)**
+
+`installForbiddenHeaderRule` in `packages/chrome-extension/src/fetch-proxy-shared.ts`:
+
+1. Scans the decoded `headers` dict for forbidden names (`cookie`, `origin`, `referer`, anything `proxy-*`).
+2. Mints a unique URL fragment token (`#slicc-req-<uuid>`) and appends it to the cleaned upstream URL, stripping any caller-supplied fragment so the DNR `urlFilter` matches exactly one in-flight request. The fragment never reaches the upstream server but DNR `urlFilter` sees it (empirically verified against Chrome for Testing 146).
+3. Installs a `chrome.declarativeNetRequest.updateSessionRules` `modifyHeaders` rule keyed to that fragment URL, with one `{ operation: 'set' }` entry per forbidden header.
+4. The SW then calls `fetch(fetchUrl, { method, headers, body, signal })`. Chrome strips/rewrites the forbidden headers in the init dict as usual, then the DNR rule rewrites them back on the way out.
+5. A `finally` block calls `cleanup()`, which removes the session rule via `removeRuleIds`. Each rule has a unique monotonic id so concurrent in-flight requests don't collide even if cleanup is delayed; any leaked rule expires when the SW unloads.
+
+**Graceful no-op fallback**
+
+When `chrome.declarativeNetRequest` is unavailable (vitest, non-extension runtimes, older Chrome), `installForbiddenHeaderRule` returns the original URL and a no-op `cleanup`. The forbidden headers are still passed to `fetch()` under their real names — useful for unit tests that mock `fetch` and assert on the headers dict — but in a real Chrome SW they would not survive. The synthesized default-`Origin` still lands in `init.headers` and is observable to mocks, but caller-supplied forbidden headers from a real extension SW require DNR to reach the network.
 
 **Overriding the Origin**
 
-To force a specific `Origin` upstream, pass one explicitly — it survives end-to-end because the encode step runs in your runtime before the browser can strip it:
+To force a specific `Origin` upstream, pass one explicitly — it survives end-to-end because the encode step runs in your runtime before the browser can strip it, and in the extension SW the DNR rule rewrites it on the wire:
 
 ```bash
 # curl in the agent shell
@@ -401,16 +418,16 @@ upskill some-org/some-skill   # propagates Origin if the skill sets one
 
 Leave `Origin` unset to get the default — the proxy will use the target URL's origin (e.g., a request to `https://api.example.com/v1/foo` gets `Origin: https://api.example.com`). This is intentionally permissive: most upstream APIs accept their own origin, and skill authors don't need to think about CORS unless they want a specific value.
 
-**Why both floats need the encode/decode dance**
+**Why decode alone isn't enough in the extension**
 
-The extension float also runs `fetch()` from a page-context (the side panel or offscreen document), so the same browser-strip behavior applies — extension `host_permissions` bypass CORS at the network layer but do **not** restore stripped request headers. The `extensionPortFetch` branch was changed in Wave 1 to match the CLI branch exactly; before that, extension-mode `curl -H "Origin: ..."` silently dropped the header even though CLI-mode worked. The default-origin fallback in the extension SW closes the matching gap for callers that don't set an Origin at all.
+The extension SW runs `fetch()` in a Service Worker context, so the same browser-strip behavior applies — extension `host_permissions` bypass CORS at the network layer but do **not** restore stripped request headers, and Chrome rewrites `Origin` to `chrome-extension://<id>` independently of what the init dict contains. An earlier iteration of the extension branch decoded `X-Proxy-*` back into the headers dict and stopped there; that made the headers visible to the SW but they never reached the upstream. The DNR session-rule shim closes that gap. The default-origin fallback in the SW handles the orthogonal case where no caller `Origin` is set at all.
 
 **Related Files**
 
 - `packages/webapp/src/shell/proxy-headers.ts` — `encodeForbiddenRequestHeaders` / `decodeForbiddenRequestHeaders` (shared by both floats)
 - `packages/webapp/src/shell/proxied-fetch.ts` — `createProxiedFetch` factory; CLI and extension branches both encode
 - `packages/node-server/src/index.ts` — `/api/fetch-proxy` handler; decode + localhost-strip + default-origin synth
-- `packages/chrome-extension/src/fetch-proxy-shared.ts` — SW `handleFetchProxyConnectionAsync`; same decode + default-origin synth
+- `packages/chrome-extension/src/fetch-proxy-shared.ts` — SW `handleFetchProxyConnectionAsync`; decode + default-origin synth + `installForbiddenHeaderRule` (DNR session-rule shim, fragment-keyed, cleanup in `finally`)
 
 ## Kernel-Worker Fetch Bypass: Same-Origin Only
 
