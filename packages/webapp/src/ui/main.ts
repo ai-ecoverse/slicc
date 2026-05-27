@@ -1650,7 +1650,8 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // double-click on the new-session button leaves a `pendingEnrichment`
   // entry in `/sessions/index.json` with a heuristic title; this pass
   // re-runs the LLM calls and rewrites the archive title + appends the
-  // extracted memories to `/shared/CLAUDE.md`. Deferred behind
+  // extracted memories to `/workspace/CLAUDE.md` (the cone-private memory
+  // sink — `/shared/CLAUDE.md` is left untouched). Deferred behind
   // `requestIdleCallback` (or `setTimeout(0)` as a fallback) so a slow
   // enrichment never blocks first paint.
   scheduleBackgroundEnrichment(localFs);
@@ -2038,8 +2039,9 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     if (selectedScoop) syncThinkingButtonForScoop(selectedScoop);
   };
 
-  // Wire local VFS to client so the memory panel (which reads
-  // /shared/CLAUDE.md via `client.getGlobalMemory()`) sees the actual
+  // Wire local VFS to client so the memory panel (which surfaces
+  // `/shared/CLAUDE.md` via `client.getGlobalMemory()` and the cone-
+  // private `/workspace/CLAUDE.md` via the scoop FS) sees the actual
   // file system. Without this the panel reads empty in standalone-worker
   // mode — only the extension path was calling setLocalFS before.
   client.setLocalFS(localFs);
