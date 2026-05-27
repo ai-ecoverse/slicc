@@ -1,5 +1,5 @@
 /**
- * Regression guard for PR 2 — verifies that the real (un-mocked)
+ * Regression guard for tool-result token accounting — verifies that the real (un-mocked)
  * `estimateTokens` from `@earendil-works/pi-coding-agent` counts the bytes of
  * `toolResult` messages. The bug that motivated this guard was a scoop that
  * filled its context with multi-megabyte base64 image payloads via repeated
