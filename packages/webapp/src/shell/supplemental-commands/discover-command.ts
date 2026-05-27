@@ -37,6 +37,11 @@ import { createProxiedFetch } from '../proxied-fetch.js';
  * give `discoverLinks` (which speaks Web Fetch) the same CORS bypass /
  * forbidden-header bridging the rest of the shell enjoys.
  *
+ * Forwards caller-supplied `init.headers` (including forbidden headers like
+ * `Origin` / `Cookie` / `Referer`) so the underlying `SecureFetch` can run
+ * them through `encodeForbiddenRequestHeaders` and the proxy preserves them
+ * end-to-end.
+ *
  * The adapter doesn't thread `AbortSignal` into the underlying secure fetch
  * (the SecureFetch contract has no signal slot) — `discoverLinks` already
  * caps each call with its own timeout and tolerates non-aborting fetches.
@@ -45,7 +50,11 @@ function asWebFetch(secureFetch: SecureFetch): typeof fetch {
   const adapter = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-    const result = await secureFetch(url, { method: init?.method ?? 'GET' });
+    const headers = normalizeHeaders(init?.headers);
+    const result = await secureFetch(url, {
+      method: init?.method ?? 'GET',
+      ...(headers ? { headers } : {}),
+    });
     return new Response(result.body as BodyInit, {
       status: result.status,
       statusText: result.statusText,
@@ -53,6 +62,29 @@ function asWebFetch(secureFetch: SecureFetch): typeof fetch {
     });
   };
   return adapter as typeof fetch;
+}
+
+/**
+ * Convert any `HeadersInit` shape to a plain `Record<string, string>` so the
+ * forbidden-header encoder in `proxied-fetch` can read it. Returns `undefined`
+ * when no headers are present so the adapter can omit the field entirely.
+ */
+function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  if (headers instanceof Headers) {
+    const rec: Record<string, string> = {};
+    headers.forEach((v, k) => {
+      rec[k] = v;
+    });
+    return Object.keys(rec).length === 0 ? undefined : rec;
+  }
+  if (Array.isArray(headers)) {
+    const rec: Record<string, string> = {};
+    for (const [k, v] of headers) rec[k] = v;
+    return Object.keys(rec).length === 0 ? undefined : rec;
+  }
+  const rec = { ...(headers as Record<string, string>) };
+  return Object.keys(rec).length === 0 ? undefined : rec;
 }
 
 function helpText(): string {

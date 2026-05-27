@@ -1664,13 +1664,19 @@ function requireTab(flags: Record<string, string>): { targetId: string } | { err
 /**
  * Adapter that lets `discoverLinks` (Web Fetch shape) ride on our
  * `SecureFetch`, inheriting CORS bypass and forbidden-header bridging.
- * Mirrors the helper used by the standalone `discover` command.
+ * Mirrors the helper used by the standalone `discover` command — also
+ * forwards `init.headers` so caller-supplied forbidden headers
+ * (`Origin`, `Cookie`, `Referer`) survive end-to-end.
  */
 function asWebFetch(secureFetch: SecureFetch): typeof fetch {
   const adapter = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-    const result = await secureFetch(url, { method: init?.method ?? 'GET' });
+    const headers = normalizeHeadersInit(init?.headers);
+    const result = await secureFetch(url, {
+      method: init?.method ?? 'GET',
+      ...(headers ? { headers } : {}),
+    });
     return new Response(result.body as BodyInit, {
       status: result.status,
       statusText: result.statusText,
@@ -1678,6 +1684,31 @@ function asWebFetch(secureFetch: SecureFetch): typeof fetch {
     });
   };
   return adapter as typeof fetch;
+}
+
+/**
+ * Coerce any `HeadersInit` shape to a plain record so it can ride on
+ * `SecureFetchOptions.headers`. Returns `undefined` when empty so the
+ * adapter can omit the field entirely.
+ */
+function normalizeHeadersInit(
+  headers: HeadersInit | undefined
+): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  if (headers instanceof Headers) {
+    const rec: Record<string, string> = {};
+    headers.forEach((v, k) => {
+      rec[k] = v;
+    });
+    return Object.keys(rec).length === 0 ? undefined : rec;
+  }
+  if (Array.isArray(headers)) {
+    const rec: Record<string, string> = {};
+    for (const [k, v] of headers) rec[k] = v;
+    return Object.keys(rec).length === 0 ? undefined : rec;
+  }
+  const rec = { ...(headers as Record<string, string>) };
+  return Object.keys(rec).length === 0 ? undefined : rec;
 }
 
 /** One browse.sh catalog match for the destination hostname. */
