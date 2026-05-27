@@ -96,6 +96,14 @@ export interface CompactionConfig {
   reserveTokens?: number;
   keepRecentTokens?: number;
   /**
+   * Multiplier of `contextWindow` above which compaction is treated as
+   * hopeless: the LLM summary call is skipped entirely because passing
+   * the conversation as a prompt would itself blow context. Oversized
+   * tool results / assistant tool-call payloads are elided in-place
+   * before any naive drop. Defaults to 4.
+   */
+  hopelessMultiplier?: number;
+  /**
    * HTTP headers forwarded to the LLM provider for the summarization and
    * memory-extraction requests. Used by the Adobe LLM proxy path to attach
    * `X-Session-Id` so compaction calls land in the same session as the
@@ -295,6 +303,131 @@ async function runCompactionCall(
     .trim();
 }
 
+/** Default `hopelessMultiplier`. */
+const DEFAULT_HOPELESS_MULTIPLIER = 4;
+
+/**
+ * Approximate the byte size of a message's content for the hopeless-branch
+ * stub. Mirrors `extractText` but counts characters across text, thinking,
+ * tool-call argument JSON, and inline image base64 so the reported KB is a
+ * realistic estimate of what the elision dropped.
+ */
+function approxContentBytes(content: unknown): number {
+  if (typeof content === 'string') return content.length;
+  if (!Array.isArray(content)) return 0;
+  let total = 0;
+  for (const block of content) {
+    const b = block as {
+      type?: string;
+      text?: string;
+      thinking?: string;
+      arguments?: unknown;
+      source?: { data?: string };
+    };
+    if (b.type === 'text' && b.text) total += b.text.length;
+    else if (b.type === 'thinking' && b.thinking) total += b.thinking.length;
+    else if (b.type === 'toolCall' && b.arguments !== undefined) {
+      try {
+        total += JSON.stringify(b.arguments).length;
+      } catch {
+        // unserializable arguments — best-effort, skip
+      }
+    } else if (b.type === 'image' && b.source?.data) total += b.source.data.length;
+  }
+  return total;
+}
+
+function buildElisionStub(approxBytes: number, role: 'toolResult' | 'assistant'): string {
+  const kb = Math.max(1, Math.round(approxBytes / 1024));
+  const prefix = role === 'assistant' ? 'Assistant message elided' : 'Tool result elided';
+  return `[${prefix}: ${kb} KB, exceeds half the context window. Re-run with smaller arguments — e.g. open --view --size low.]`;
+}
+
+/**
+ * In the hopeless branch, replace the content of any single `toolResult`
+ * (or assistant message carrying tool calls) whose estimated tokens exceed
+ * `(contextWindow - reserveTokens) / 2` with a short stub.
+ *
+ * - Message ordering, role, `toolCallId`, and `toolName` are preserved.
+ * - For assistant messages, `toolCall` content blocks are kept (with `id`,
+ *   `name`, and `type` intact) so the agent loop's tool-call/tool-result
+ *   pairing stays valid. Each block's `arguments` payload is rewritten to
+ *   a small `{ elided: true, originalBytes: <n> }` stub so multi-megabyte
+ *   `write_file`-style argument blobs don't survive elision and re-trigger
+ *   the hopeless branch on the next turn.
+ * - Assistant messages without any `toolCall` block are passed through
+ *   unchanged — only assistant turns that actually carry tool calls
+ *   participate in this elision, matching the JSDoc invariant.
+ */
+function elideHopelessMessages(
+  messages: AgentMessage[],
+  contextWindow: number,
+  reserveTokens: number
+): { messages: AgentMessage[]; elidedCount: number; elidedBytes: number } {
+  const perMessageThreshold = (contextWindow - reserveTokens) / 2;
+  let elidedCount = 0;
+  let elidedBytes = 0;
+
+  const out = messages.map((msg) => {
+    const tokens = estimateTokens(msg);
+    if (tokens <= perMessageThreshold) return msg;
+    const role = (msg as { role: string }).role;
+    if (role !== 'toolResult' && role !== 'assistant') return msg;
+
+    const m = msg as { content?: unknown };
+    const bytes = approxContentBytes(m.content);
+
+    if (role === 'toolResult') {
+      elidedCount++;
+      elidedBytes += bytes;
+      return {
+        ...(msg as object),
+        content: [{ type: 'text', text: buildElisionStub(bytes, 'toolResult') }],
+      } as AgentMessage;
+    }
+
+    // Assistant branch: only elide turns that actually carry tool calls.
+    const content = Array.isArray(m.content) ? m.content : [];
+    const toolCalls = content.filter((b) => (b as { type?: string }).type === 'toolCall') as Array<{
+      type: string;
+      id?: string;
+      name?: string;
+      arguments?: unknown;
+    }>;
+    if (toolCalls.length === 0) return msg;
+
+    // Rewrite each toolCall's `arguments` to a small stub while preserving
+    // `type`, `id`, and `name`. This drops multi-megabyte argument payloads
+    // (e.g. a large `write_file` `content` field) that would otherwise
+    // survive elision and keep the conversation over the hopeless threshold.
+    const elidedToolCalls = toolCalls.map((tc) => {
+      let argBytes = 0;
+      if (tc.arguments !== undefined) {
+        try {
+          argBytes = JSON.stringify(tc.arguments).length;
+        } catch {
+          // unserializable arguments — best-effort, treat as 0 bytes
+        }
+      }
+      return {
+        type: tc.type,
+        id: tc.id,
+        name: tc.name,
+        arguments: { elided: true, originalBytes: argBytes },
+      };
+    });
+
+    elidedCount++;
+    elidedBytes += bytes;
+    return {
+      ...(msg as object),
+      content: [{ type: 'text', text: buildElisionStub(bytes, 'assistant') }, ...elidedToolCalls],
+    } as AgentMessage;
+  });
+
+  return { messages: out, elidedCount, elidedBytes };
+}
+
 /**
  * Create a transformContext function that uses LLM summarization for compaction.
  *
@@ -315,6 +448,7 @@ export function createCompactContext(
   const contextWindow = config.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   const reserveTokens = config.reserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens;
   const keepRecentTokens = config.keepRecentTokens ?? DEFAULT_COMPACTION_SETTINGS.keepRecentTokens;
+  const hopelessMultiplier = config.hopelessMultiplier ?? DEFAULT_HOPELESS_MULTIPLIER;
 
   const settings = { enabled: true, reserveTokens, keepRecentTokens };
 
@@ -332,19 +466,52 @@ export function createCompactContext(
       return messages;
     }
 
+    // Hopeless branch — total context so far beyond the window that
+    // serializing the conversation into a summary prompt would itself
+    // blow context. Elide oversized tool results / assistant tool-call
+    // payloads in-place, skip the LLM call entirely, and let the naive
+    // drop path handle anything still over the soft threshold.
+    let workingMessages = messages;
+    let isHopeless = false;
+    if (totalTokens > contextWindow * hopelessMultiplier) {
+      isHopeless = true;
+      const elision = elideHopelessMessages(messages, contextWindow, reserveTokens);
+      workingMessages = elision.messages;
+      log.warn('Compaction hopeless branch', {
+        totalTokens,
+        contextWindow,
+        multiplier: hopelessMultiplier,
+        elidedCount: elision.elidedCount,
+        elidedBytes: elision.elidedBytes,
+      });
+
+      // Recompute total tokens against the elided message list. If we
+      // are back under the soft threshold, return immediately — no
+      // LLM call, no naive drop.
+      let postTokens = 0;
+      for (const msg of workingMessages) {
+        postTokens += estimateTokens(msg);
+      }
+      if (!shouldCompact(postTokens, contextWindow, settings)) {
+        return workingMessages;
+      }
+      // Else fall through to the naive-drop path with the elided
+      // messages — the LLM block below is skipped via `isHopeless`.
+    }
+
     log.info('Context compaction triggered', {
       totalTokens,
       contextWindow,
       threshold: contextWindow - reserveTokens,
-      messageCount: messages.length,
+      messageCount: workingMessages.length,
     });
 
     // Find cut point: walk backward from end to keep ~keepRecentTokens
     let keptTokens = 0;
-    let cutIndex = messages.length;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msgTokens = estimateTokens(messages[i]);
-      if (keptTokens + msgTokens > keepRecentTokens && cutIndex < messages.length) {
+    let cutIndex = workingMessages.length;
+    for (let i = workingMessages.length - 1; i >= 0; i--) {
+      const msgTokens = estimateTokens(workingMessages[i]);
+      if (keptTokens + msgTokens > keepRecentTokens && cutIndex < workingMessages.length) {
         break;
       }
       keptTokens += msgTokens;
@@ -353,18 +520,18 @@ export function createCompactContext(
 
     // Don't split assistant+toolResult pairs: if cutIndex lands on a toolResult,
     // walk backward to include its assistant message
-    while (cutIndex > 0 && hasRole(messages[cutIndex], 'toolResult')) {
+    while (cutIndex > 0 && hasRole(workingMessages[cutIndex], 'toolResult')) {
       cutIndex--;
     }
 
     // Need at least 1 message to summarize and 1 to keep
-    if (cutIndex <= 0 || cutIndex >= messages.length) {
+    if (cutIndex <= 0 || cutIndex >= workingMessages.length) {
       log.warn('Cannot find valid cut point for compaction');
-      return messages;
+      return workingMessages;
     }
 
-    const messagesToSummarize = messages.slice(0, cutIndex);
-    const messagesToKeep = stripOrphanedToolResults(messages.slice(cutIndex));
+    const messagesToSummarize = workingMessages.slice(0, cutIndex);
+    const messagesToKeep = stripOrphanedToolResults(workingMessages.slice(cutIndex));
 
     log.info('Compaction cut point', {
       summarizing: messagesToSummarize.length,
@@ -382,8 +549,11 @@ export function createCompactContext(
       }
     };
 
-    // Attempt LLM-powered summarization
-    const apiKey = config.getApiKey();
+    // Attempt LLM-powered summarization. Skip in the hopeless branch —
+    // serializing the conversation into the summary prompt would itself
+    // blow context, so we fall straight through to naive drop on the
+    // already-elided message list.
+    const apiKey = isHopeless ? undefined : config.getApiKey();
     if (apiKey) {
       try {
         const conversationText = serializeMessages(messagesToSummarize);
@@ -456,7 +626,7 @@ export function createCompactContext(
           error: err instanceof Error ? err.message : String(err),
         });
       }
-    } else {
+    } else if (!isHopeless) {
       log.warn('No API key available for LLM summarization, falling back to naive drop');
     }
     // Always clear the indicator before returning — both the fallback path
