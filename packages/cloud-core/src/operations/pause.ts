@@ -17,6 +17,9 @@ export interface PauseConeDeps {
 export async function pauseCone(deps: PauseConeDeps, query: string): Promise<void> {
   const entry = await deps.registry.findByNameOrId(query);
   if (!entry) throw new CloudError('NOT_FOUND', `cloud session not found: ${query}`);
+  if (entry.state === 'reserved') {
+    throw new CloudError('ALREADY_RUNNING', `cloud session is being started/resumed: ${query}`);
+  }
   if (entry.state === 'paused') {
     throw new CloudError('ALREADY_PAUSED', `cloud session is already paused: ${query}`);
   }

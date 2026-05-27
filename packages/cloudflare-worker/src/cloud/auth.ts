@@ -59,11 +59,28 @@ interface IMSProfile {
 }
 
 async function fetchImsProfile(token: string, environment: string): Promise<IMSProfile> {
-  const res = await fetch(`${getImsHost(environment)}/ims/profile/v1`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) throw new AuthError('INVALID_TOKEN', `IMS profile fetch failed: ${res.status}`);
-  return (await res.json()) as IMSProfile;
+  let res: Response;
+  try {
+    res = await fetch(`${getImsHost(environment)}/ims/profile/v1`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch (err) {
+    throw new AuthError(
+      'UPSTREAM_UNAVAILABLE',
+      `IMS profile fetch error: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  if (res.status >= 500) {
+    throw new AuthError('UPSTREAM_UNAVAILABLE', `IMS profile returned ${res.status}`);
+  }
+  if (!res.ok) {
+    throw new AuthError('INVALID_TOKEN', `IMS profile rejected token: ${res.status}`);
+  }
+  try {
+    return (await res.json()) as IMSProfile;
+  } catch (err) {
+    throw new AuthError('UPSTREAM_UNAVAILABLE', 'IMS profile returned non-JSON body');
+  }
 }
 
 export function extractBearer(request: Request): string {
@@ -108,7 +125,12 @@ export async function validateBearer(token: string, env: ValidateBearerEnv): Pro
     // Discriminate upstream failures (JWKS fetch issues) from token validity issues.
     // JWKS errors → 503 UPSTREAM_UNAVAILABLE (transient, retry later).
     // Token errors → 401 INVALID_TOKEN (client must re-authenticate).
-    if (err instanceof errors.JWKSTimeout || err instanceof errors.JWKSNoMatchingKey) {
+    if (
+      err instanceof errors.JWKSTimeout ||
+      err instanceof errors.JWKSNoMatchingKey ||
+      err instanceof errors.JWKSInvalid ||
+      err instanceof errors.JWKSMultipleMatchingKeys
+    ) {
       throw new AuthError(
         'UPSTREAM_UNAVAILABLE',
         `JWKS service unavailable: ${err instanceof Error ? err.message : String(err)}`

@@ -155,4 +155,32 @@ describe('pauseCone', () => {
     const entry = await registry.findByNameOrId('my-session');
     expect(entry?.state).toBe('paused');
   });
+
+  it('throws ALREADY_RUNNING when entry is reserved', async () => {
+    const registry = new MemRegistry();
+    await registry.append({
+      sandboxId: 's-reserved',
+      substrate: 'e2b',
+      createdAt: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      state: 'reserved',
+      joinUrl: '',
+      reservedAt: new Date().toISOString(),
+    });
+
+    const substrate = makeFakeSubstrate({
+      handle: makePauseTestHandle('s-reserved'),
+    });
+
+    let thrownErr: Error | undefined;
+    try {
+      await pauseCone({ substrate, registry }, 's-reserved');
+    } catch (err) {
+      thrownErr = err as Error;
+    }
+    expect(thrownErr).toBeInstanceOf(CloudError);
+    const cloudErr = thrownErr as CloudError;
+    expect(cloudErr.code).toBe('ALREADY_RUNNING');
+    expect(cloudErr.message).toContain('being started/resumed');
+  });
 });

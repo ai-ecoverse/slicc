@@ -41,6 +41,11 @@ export interface ConeEntry {
    */
   lastJoinUpdatedAt?: string;
   /**
+   * ISO timestamp set when state transitions to 'reserved'. Used by listCones
+   * to GC stale reservations from crashed operations (TTL: 10 minutes).
+   */
+  reservedAt?: string;
+  /**
    * Additional metadata (e.g., { userId, createdBy }). Used by workers for
    * filtering and by CLI for tracking.
    */

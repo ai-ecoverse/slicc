@@ -251,4 +251,65 @@ describe('listCones', () => {
     expect(extended).not.toContain('s-paused');
     expect(timeoutCalls[0]?.ttlMs).toBe(60 * 60 * 1000);
   });
+
+  it('preserves reserved entries during reconciliation (not marked dead)', async () => {
+    const registry = new MemRegistry();
+    const now = new Date().toISOString();
+    await registry.append({
+      sandboxId: 'pending-abc',
+      substrate: 'e2b',
+      createdAt: now,
+      lastSeen: now,
+      joinUrl: '',
+      state: 'reserved',
+      reservedAt: now,
+    });
+    const substrate = makeFakeSubstrate({ listResult: [] }); // substrate knows nothing about it
+    const result = await listCones({ substrate, registry });
+    expect(result).toHaveLength(1);
+    expect(result[0]?.state).toBe('reserved');
+    expect(result[0]?.sandboxId).toBe('pending-abc');
+    // Should NOT have been removed from registry
+    expect(registry.entries).toHaveLength(1);
+  });
+
+  it('reclaims stale reserved entries (older than 10 min TTL)', async () => {
+    const registry = new MemRegistry();
+    const staleTime = new Date(Date.now() - 11 * 60 * 1000).toISOString(); // 11 min ago
+    await registry.append({
+      sandboxId: 'pending-stale',
+      substrate: 'e2b',
+      createdAt: staleTime,
+      lastSeen: staleTime,
+      joinUrl: '',
+      state: 'reserved',
+      reservedAt: staleTime,
+    });
+    const substrate = makeFakeSubstrate({ listResult: [] });
+    const result = await listCones({ substrate, registry });
+    // Stale reservation should be reclaimed (not in result)
+    expect(result).toHaveLength(0);
+    // Should have been removed from registry
+    expect(registry.entries).toHaveLength(0);
+  });
+
+  it('preserves fresh reserved entries (younger than 10 min TTL)', async () => {
+    const registry = new MemRegistry();
+    const freshTime = new Date(Date.now() - 5 * 60 * 1000).toISOString(); // 5 min ago
+    await registry.append({
+      sandboxId: 'pending-fresh',
+      substrate: 'e2b',
+      createdAt: freshTime,
+      lastSeen: freshTime,
+      joinUrl: '',
+      state: 'reserved',
+      reservedAt: freshTime,
+    });
+    const substrate = makeFakeSubstrate({ listResult: [] });
+    const result = await listCones({ substrate, registry });
+    // Fresh reservation should be preserved
+    expect(result).toHaveLength(1);
+    expect(result[0]?.state).toBe('reserved');
+    expect(registry.entries).toHaveLength(1);
+  });
 });

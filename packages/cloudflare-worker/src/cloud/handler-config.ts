@@ -31,6 +31,22 @@ function parseCapLimit(name: string, raw: string | undefined, defaultVal: number
 }
 
 export async function handleCloudConfig(_req: Request, env: ConfigEnv): Promise<Response> {
+  // Worker config validation — local to the worker, not proxy-related.
+  let capRunning: number, capPaused: number;
+  try {
+    capRunning = parseCapLimit('CONE_CAP_RUNNING', env.CONE_CAP_RUNNING, 1);
+    capPaused = parseCapLimit('CONE_CAP_PAUSED', env.CONE_CAP_PAUSED, 5);
+  } catch (err) {
+    return Response.json(
+      {
+        error: 'WORKER_CONFIG_INVALID',
+        message: err instanceof Error ? err.message : String(err),
+      },
+      { status: 500 }
+    );
+  }
+
+  // Proxy config — separate try block.
   try {
     const proxy = await getProxyConfig(env);
     const relayUrl = env.IMS_RELAY_URL || DEFAULT_RELAY_URL;
@@ -41,8 +57,8 @@ export async function handleCloudConfig(_req: Request, env: ConfigEnv): Promise<
       imsScope: proxy.scopes,
       imsRelayUrl: relayUrl,
       imsReceivePath: RECEIVE_PATH,
-      capRunning: parseCapLimit('CONE_CAP_RUNNING', env.CONE_CAP_RUNNING, 1),
-      capPaused: parseCapLimit('CONE_CAP_PAUSED', env.CONE_CAP_PAUSED, 5),
+      capRunning,
+      capPaused,
     });
   } catch (err) {
     // Discriminate network/HTTP errors (transient, 502) from shape errors (config bug, 500).

@@ -52,6 +52,11 @@ export interface ReserveSlotOpts {
     CONE_CAP_RUNNING: string;
     CONE_CAP_PAUSED: string;
   };
+  /** Pre-reconciled cone list (from listCones). If provided, skips the slow
+   * reconciliation call inside reserveSlot, making it fast enough to fit under
+   * blockConcurrencyWhile. Worker callers MUST pass this to avoid holding the
+   * DO lock through substrate.list(). */
+  reconciledCones?: ConeEntry[];
 }
 
 /** Fetch the last n lines of /tmp/slicc-stderr.log from inside the sandbox. */
@@ -97,9 +102,15 @@ export async function reserveSlot(
   const createdAt = new Date().toISOString();
 
   // Read existing entries to enforce caps + name conflicts.
-  // Use listCones for full reconciliation (registry + substrate), filtered by userId if provided.
-  const { listCones } = await import('./list.js');
-  const existing = await listCones(deps, opts.userId ? { metadata: { userId: opts.userId } } : {});
+  // If caller provided a pre-reconciled list (worker DO path), use it directly.
+  // Otherwise (CLI path), do a full reconciliation via listCones.
+  let existing: ConeEntry[];
+  if (opts.reconciledCones) {
+    existing = opts.reconciledCones;
+  } else {
+    const { listCones } = await import('./list.js');
+    existing = await listCones(deps, opts.userId ? { metadata: { userId: opts.userId } } : {});
+  }
 
   // Cap check: count both running and reserved entries (reservations count as running)
   if (opts.env) {
@@ -135,6 +146,7 @@ export async function reserveSlot(
     createdAt,
     lastSeen: createdAt,
     state: 'reserved',
+    reservedAt: createdAt,
     joinUrl: '',
     metadata: opts.metadata,
   };
@@ -217,14 +229,15 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
     }
 
     // Two-layer secrets bootstrap (see Plan B):
-    //   1. start.sh writes /slicc/secrets.env from $ADOBE_IMS_TOKEN ONLY IF the
-    //      file doesn't already exist (fallback for the race-free worker path
-    //      where env-vars arrive before this writeFile lands).
-    //   2. THIS writeFile uploads the full filtered secrets.env (with all the
-    //      user's non-Adobe secrets — GitHub PATs, S3 keys, etc.) and OVERWRITES
-    //      whatever start.sh wrote. The CLI race is benign because the page-side
-    //      bootstrap polls /api/hosted-bootstrap after a 5s delay, by which time
-    //      this writeFile has landed.
+    //   1. start.sh writes /slicc/secrets.env from $ADOBE_IMS_TOKEN if the file
+    //      doesn't already exist (fallback for race-free worker path where env-vars
+    //      arrive before this writeFile lands).
+    //   2. THIS writeFile uploads the full filtered secrets.env. Worker overwrites
+    //      with Adobe-only content (effectively a no-op since start.sh already wrote
+    //      the same token). CLI overwrites with non-Adobe secrets (GitHub PATs, S3
+    //      keys, etc.), load-bearing for CLI-launched cones. The CLI race is benign
+    //      because the page-side bootstrap polls /api/hosted-bootstrap after a 5s
+    //      delay, by which time this writeFile has landed.
     await handle.writeFile('/slicc/secrets.env', safeSecrets);
 
     let status: Awaited<ReturnType<typeof pollCloudStatus>>;

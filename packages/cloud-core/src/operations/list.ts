@@ -49,21 +49,31 @@ export async function listCones(
     // Skip entries that don't match the metadata filter
     if (!matchesFilter(entry)) continue;
 
-    // Reserved entries skip reconciliation — they are in-flight operations holding
-    // a cap slot. The operation that reserved it is responsible for promoting it
-    // to 'running' (on success) or cleaning it up (on failure).
+    // Reserved entries: check for stale reservations (TTL: 10 min) and reclaim.
+    // Stale reservations are from crashed operations that never completed or rolled back.
     if (entry.state === 'reserved') {
+      const STALE_MS = 10 * 60 * 1000;
+      if (entry.reservedAt && Date.now() - new Date(entry.reservedAt).getTime() > STALE_MS) {
+        // Reclaim stale reservation
+        await deps.registry.remove(entry.sandboxId);
+        console.warn('[cloud-core] reclaimed stale reservation', {
+          sandboxId: entry.sandboxId,
+          reservedAt: entry.reservedAt,
+        });
+        continue;
+      }
+      // Active reservation — preserve as-is (in-flight operation holding a cap slot)
       reconciled.push(entry);
       continue;
     }
 
     const liveEntry = liveById.get(entry.sandboxId);
     if (!liveEntry) {
-      // Substrate doesn't know about it — mark dead unless it's a placeholder
-      // (sandboxId starts with 'pending-', which should only happen if an operation
-      // crashed before promoting the reservation to 'reserved' state).
+      // Substrate doesn't know about it — mark dead unless it's a placeholder.
+      // The 'pending-' prefix is a sentinel for "no real sandbox yet" (paired
+      // with state:'reserved' by reserveSlot before substrate.create).
       if (entry.sandboxId.startsWith('pending-')) {
-        // Reservation placeholder in old state format — keep it alive
+        // Reservation placeholder — no real sandbox yet. Keep it alive.
         reconciled.push(entry);
       } else {
         // Real sandbox is missing — mark dead
@@ -126,6 +136,7 @@ export async function listCones(
       state: summary.state,
       trayId,
       lastJoinUpdatedAt,
+      metadata: summary.metadata,
     };
     await deps.registry.append(recovered);
     reconciled.push(recovered);

@@ -8,6 +8,7 @@ import {
   resumeCone,
   killCone,
   type SandboxSubstrate,
+  type ConeEntry,
 } from '@slicc/cloud-core';
 import { checkCapsForRun } from './caps.js';
 import { errorResponse, okResponse } from './error-envelope.js';
@@ -97,12 +98,28 @@ export class CloudSessionsDurableObject {
     const substrate = this.substrate();
     const registry = this.registry();
 
-    // Atomic phase under DO lock: reserve slot (cap+name check + append placeholder).
-    // Fast (<1s) — fits comfortably under blockConcurrencyWhile.
-    // After this lock releases, the reservation entry COUNTS in cap math, so
-    // concurrent /start-cone calls will see the cap exceeded and bounce.
+    // Reconcile outside lock (slow e2b API calls).
+    let reconciled: ConeEntry[];
+    try {
+      reconciled = await listCones({ substrate, registry }, { metadata: { userId: body.userId } });
+    } catch (err) {
+      if (isCloudError(err)) {
+        return errorResponse(errCodeToStatus(err.code), err.code, err.message, err.details);
+      }
+      return errorResponse(500, 'INTERNAL', err instanceof Error ? err.message : String(err));
+    }
+
+    // Atomic phase under DO lock: registry-only cap + name + reserve placeholder. Fast (<10ms).
+    // Re-read registry inside the lock to catch concurrent reservations (the reconciled
+    // list from outside the lock may be stale if another start-cone reserved while we
+    // were waiting for the lock). Filter by userId to match the reconciliation scope.
     const reservation = await this.state.blockConcurrencyWhile(async () => {
       try {
+        const freshRegistry = await registry.list();
+        const filtered = body.userId
+          ? freshRegistry.filter((e) => e.metadata?.userId === body.userId)
+          : freshRegistry;
+
         return {
           ok: true as const,
           ...(await reserveSlot(
@@ -113,6 +130,7 @@ export class CloudSessionsDurableObject {
               metadata: { userId: body.userId },
               sliccVersion: 'web-' + new Date().toISOString().slice(0, 10),
               env: this.env,
+              reconciledCones: filtered,
             }
           )),
         };
@@ -184,6 +202,7 @@ export class CloudSessionsDurableObject {
     }
 
     // Atomic phase: registry-only reads + state flip. Fast (<10ms typical).
+    let originalState: 'paused' | 'dead' | undefined;
     const precheck = await this.state.blockConcurrencyWhile(async () => {
       const all = await registry.list();
       const target = all.find((c) => c.sandboxId === body.sandboxId);
@@ -212,8 +231,13 @@ export class CloudSessionsDurableObject {
         };
       }
 
+      // Capture original state for rollback (paused or dead).
+      originalState = target.state;
       // Reserve the slot: flip target to 'reserved' so concurrent /resume sees it in cap count.
-      await registry.update(body.sandboxId, { state: 'reserved' });
+      await registry.update(body.sandboxId, {
+        state: 'reserved',
+        reservedAt: new Date().toISOString(),
+      });
       return { error: null };
     });
     if (precheck.error) return precheck.error;
@@ -238,9 +262,11 @@ export class CloudSessionsDurableObject {
         trayRebuilt: result.trayRebuilt,
       });
     } catch (err) {
-      // Rollback the speculative state flip.
+      // Rollback the speculative state flip to the original state (not always 'paused').
       try {
-        await registry.update(body.sandboxId, { state: 'paused' });
+        if (originalState) {
+          await registry.update(body.sandboxId, { state: originalState });
+        }
       } catch (rollbackErr) {
         const msg = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
         console.warn('[cloud-do] resume rollback failed', { sandboxId: body.sandboxId, err: msg });

@@ -13,9 +13,8 @@ export interface ResumeConeOpts {
   query: string;
   localSliccVersion: string;
   /** Optional: if provided, written to /slicc/secrets.env AFTER substrate.connect
-   * and BEFORE the leader-restart kick. Both CLI (node-server resume-cone.ts:26)
-   * and worker (cloud-sessions-do.ts:228) pass this unconditionally now to inject
-   * a fresh IMS bearer. */
+   * and BEFORE the leader-restart kick. Both CLI (cloud/resume.ts) and worker
+   * (cloud-sessions-do.ts) pass this unconditionally now to inject a fresh IMS bearer. */
   refreshSecretsContents?: string;
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
