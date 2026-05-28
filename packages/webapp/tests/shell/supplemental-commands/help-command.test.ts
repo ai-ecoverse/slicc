@@ -141,6 +141,9 @@ const DEFAULT_BUILTIN_COMMANDS = [
   'python',
   'python3',
   'sqlite3',
+  'tsc',
+  'esbuild',
+  'test',
   'skill',
   'upskill',
   'serve',
@@ -242,5 +245,18 @@ describe('commands command', () => {
     const result = await cmd.execute([], createMockCtx(DEFAULT_BUILTIN_COMMANDS));
     expect(result.exitCode).toBe(0);
     expect(result.stdout).not.toContain('Other:');
+  });
+
+  it('groups tsc/esbuild/test under Build tools', async () => {
+    const cmd = createCommandsCommand();
+    const result = await cmd.execute([], createMockCtx(['ls', 'tsc', 'esbuild', 'test']));
+    expect(result.exitCode).toBe(0);
+    const lines = result.stdout.split('\n');
+    const idx = lines.findIndex((l) => l.includes('Build tools:'));
+    expect(idx).toBeGreaterThan(-1);
+    const listing = (lines[idx + 1] ?? '').trim();
+    expect(listing).toContain('tsc');
+    expect(listing).toContain('esbuild');
+    expect(listing).toContain('test');
   });
 });
