@@ -23,7 +23,11 @@ import type {
   WalkTreeEntry,
   WriteBatchPayload,
   WriteBatchResult,
+  WsObserveRequest,
+  WsSelector,
+  WsSubscriberInfo,
 } from './realm-types.js';
+import type { WsSubscriberRegistry } from './ws-subscribers.js';
 import { createNodeFetchAdapter } from '../../shell/supplemental-commands/node-fetch-adapter.js';
 
 export interface RealmHostHandle {
@@ -39,6 +43,20 @@ export interface RealmHostHandle {
  */
 export interface RealmHostOptions {
   browser?: BrowserAPI;
+  /**
+   * Optional override for the WebSocket subscriber registry used by
+   * `browser.websocket.*`. Production callers omit it and the host
+   * falls back to `globalThis.__slicc_wsSubscribers` (constructed in
+   * `kernel/host.ts`). Tests inject an in-memory registry directly.
+   */
+  wsSubscribers?: WsSubscriberRegistry;
+  /**
+   * Owning scoop's `jid`. Stamped onto every `wsObserve` so the
+   * registry can auto-clean up subscribers on `scoop drop`. Realm
+   * callers cannot supply this themselves — it must come from the
+   * trusted host side.
+   */
+  scoopJid?: string;
 }
 
 /**
@@ -103,7 +121,7 @@ async function dispatch(
     case 'fetch':
       return dispatchFetch(req.op, req.args, ctx);
     case 'browser':
-      return dispatchBrowser(req.op, req.args, resolveBrowser(opts));
+      return dispatchBrowser(req.op, req.args, resolveBrowser(opts), opts);
     default:
       throw new Error(`realm-host: unknown channel '${req.channel}'`);
   }
@@ -121,6 +139,20 @@ function resolveBrowser(opts: RealmHostOptions): BrowserAPI {
   const g = globalThis as { __slicc_browser?: BrowserAPI };
   if (g.__slicc_browser) return g.__slicc_browser;
   throw new Error('browser is not available in this runtime');
+}
+
+/**
+ * Resolve the WS subscriber registry used by `browser.websocket.*`.
+ * Production callers leave `opts.wsSubscribers` unset and the host
+ * picks up the singleton wired in `kernel/host.ts`; tests inject one
+ * directly. Missing registry throws a clear runtime error rather
+ * than crashing with `undefined.observe is not a function`.
+ */
+function resolveWsSubscribers(opts: RealmHostOptions): WsSubscriberRegistry {
+  if (opts.wsSubscribers) return opts.wsSubscribers;
+  const g = globalThis as { __slicc_wsSubscribers?: WsSubscriberRegistry };
+  if (g.__slicc_wsSubscribers) return g.__slicc_wsSubscribers;
+  throw new Error('browser.websocket is not available in this runtime');
 }
 
 // ---------------------------------------------------------------------------
@@ -324,7 +356,12 @@ async function dispatchFetch(
  * `browser.withTab` so they can't race with the panel terminal's
  * `playwright` invocations.
  */
-async function dispatchBrowser(op: string, args: unknown[], browser: BrowserAPI): Promise<unknown> {
+async function dispatchBrowser(
+  op: string,
+  args: unknown[],
+  browser: BrowserAPI,
+  opts: RealmHostOptions
+): Promise<unknown> {
   switch (op) {
     case 'findTab': {
       const query = (args[0] as { domain?: string; urlMatch?: string } | undefined) ?? {};
@@ -354,6 +391,27 @@ async function dispatchBrowser(op: string, args: unknown[], browser: BrowserAPI)
       const targetId = args[0] as string;
       const key = args[1] as string;
       return getLocalStorage(browser, targetId, key);
+    }
+    case 'wsObserve': {
+      // Realm code never supplies the owning scoop — the trusted host
+      // side stamps it from `opts.scoopJid` so the registry's
+      // `dropForScoop(jid)` cleanup hook can find this entry later.
+      const req = { ...(args[0] as WsObserveRequest), scoopJid: opts.scoopJid };
+      const info: WsSubscriberInfo = await resolveWsSubscribers(opts).observe(req);
+      return info;
+    }
+    case 'wsUpdate': {
+      const id = args[0] as string;
+      const patch =
+        (args[1] as { urlMatch?: string | null; filter?: WsSelector | null } | undefined) ?? {};
+      return resolveWsSubscribers(opts).update(id, patch);
+    }
+    case 'wsClose': {
+      const id = args[0] as string;
+      return resolveWsSubscribers(opts).close(id);
+    }
+    case 'wsList': {
+      return resolveWsSubscribers(opts).list();
     }
     default:
       throw new Error(`realm-host: unknown browser op '${op}'`);

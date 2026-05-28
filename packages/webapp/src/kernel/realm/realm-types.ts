@@ -188,6 +188,70 @@ export interface WriteBatchResult {
   failedFiles: ReadonlyArray<{ path: string; error: string }>;
 }
 
+/**
+ * Declarative WebSocket frame selector. Skill code never supplies a
+ * `Function` or a string of JS — only a JSON object whose `where` is
+ * a deep-equality template the runtime matches against the parsed
+ * frame body. `parseAs` chooses the parse strategy applied by the
+ * page-side router before matching; `project` optionally narrows the
+ * payload that crosses back to the realm/sinks.
+ */
+export interface WsSelector {
+  /** How the page-side router parses each frame's `data` before matching. */
+  parseAs?: 'json' | 'text';
+  /**
+   * Deep-equality template. Every key/value present in `where` must
+   * match the parsed frame. Missing keys on the frame fail the match.
+   */
+  where?: Record<string, unknown>;
+  /** Project a subset of the parsed object's top-level fields. */
+  project?: readonly string[];
+}
+
+/**
+ * Sanctioned forwarding destinations. Skill code cannot supply an
+ * arbitrary URL — `webhook` is resolved against the existing webhook
+ * registry, `scoop` against the orchestrator, `vfs` against an
+ * allowlisted absolute path, `log` against telemetry.
+ */
+export type WsSink =
+  | { sink: 'webhook'; webhookId: string }
+  | { sink: 'scoop'; scoopJid: string }
+  | { sink: 'vfs'; path: string }
+  | { sink: 'log' };
+
+/**
+ * Args for `browser.wsObserve` (kernel-side op). The realm sends a
+ * fully-resolved request; the host validates the sink, allocates a
+ * subscriber id, and ensures the page-side router is installed.
+ */
+export interface WsObserveRequest {
+  targetId: string;
+  urlMatch?: string;
+  filter?: WsSelector;
+  forward: WsSink;
+  /**
+   * The scoop owning the subscriber. Used for auto-cleanup on
+   * `scoop drop`; supplied by the realm bootstrap from
+   * `init.env.SLICC_SCOOP_JID` when available.
+   */
+  scoopJid?: string;
+}
+
+/**
+ * Public-facing view of an active subscriber, returned by
+ * `browser.websocket.list()`.
+ */
+export interface WsSubscriberInfo {
+  id: string;
+  targetId: string;
+  urlMatch?: string;
+  filter?: WsSelector;
+  forward: WsSink;
+  scoopJid?: string;
+  createdAt: string;
+}
+
 /** Outbound from the realm. */
 export type RealmOutbound = RealmDoneMsg | RealmErrorMsg | RealmRpcRequest | RealmIframeReadyMsg;
 

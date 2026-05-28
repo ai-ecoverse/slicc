@@ -925,6 +925,48 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       'return { ok: r.ok, status: r.status, headers: h, body: b };' +
     '})()';
   }
+  // `browser.websocket` — declarative WebSocket observer mirror.
+  // Mirror of `createWsObserverApi` in js-realm-shared.ts.
+  function makeWsHandle(info) {
+    return Object.assign({}, info, {
+      update: function (patch) {
+        patch = patch || {};
+        var wire = {};
+        if (Object.prototype.hasOwnProperty.call(patch, 'urlMatch')) {
+          wire.urlMatch = patch.urlMatch === null
+            ? null
+            : (patch.urlMatch instanceof RegExp ? patch.urlMatch.source : patch.urlMatch);
+        }
+        if (Object.prototype.hasOwnProperty.call(patch, 'filter')) wire.filter = patch.filter;
+        return rpcCall('browser', 'wsUpdate', [info.id, wire]);
+      },
+      close: function () { return rpcCall('browser', 'wsClose', [info.id]); },
+    });
+  }
+  var websocketBridge = {
+    on: function (tab, opts) {
+      var targetId = resolveBrowserTargetId(tab);
+      opts = opts || {};
+      var urlMatch = opts.urlMatch === undefined
+        ? undefined
+        : (opts.urlMatch instanceof RegExp ? opts.urlMatch.source : opts.urlMatch);
+      var selector;
+      var builder = {
+        filter: function (next) {
+          if (typeof next === 'function' || typeof next === 'string') {
+            throw new TypeError('browser.websocket: filter must be a declarative JSON object, not a function or string');
+          }
+          selector = next;
+          return builder;
+        },
+        forward: function (sink) {
+          return rpcCall('browser', 'wsObserve', [{ targetId: targetId, urlMatch: urlMatch, filter: selector, forward: sink }]).then(makeWsHandle);
+        },
+      };
+      return builder;
+    },
+    list: function () { return rpcCall('browser', 'wsList', []); },
+  };
   const browserBridge = {
     findTab: (query) => rpcCall('browser', 'findTab', [normalizeBrowserFindQuery(query || {})]),
     ensureTab: (url, options) => rpcCall('browser', 'ensureTab', [url, normalizeBrowserMatchUrl(options || {})]),
@@ -933,6 +975,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     cookie: (tab, name) => rpcCall('browser', 'cookie', [resolveBrowserTargetId(tab), name]),
     localStorage: (tab, key) => rpcCall('browser', 'localStorage', [resolveBrowserTargetId(tab), key]),
     fetch: (tab, url, opts) => rpcCall('browser', 'evalAsync', [resolveBrowserTargetId(tab), buildBrowserFetchScript(url, opts || {})]),
+    websocket: websocketBridge,
   };
 
   let exitCode = 0;

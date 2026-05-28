@@ -427,6 +427,47 @@ browser.localStorage(tab, key: string): Promise<string | null>
 
 The page-context bridge is owned by the runtime — skills never author eval-file temp files or parse double-encoded JSON.
 
+#### `browser.websocket` — declarative WebSocket observer
+
+Sanctioned replacement for the `WebSocket.prototype.send` monkey-patches that
+Tessl/Snyk flagged in `slack.jsh`. Skill code never patches a third-party
+page's prototype, never sees the full inbound frame firehose, and cannot
+supply an arbitrary URL to forward to.
+
+```typescript
+const sub = await browser.websocket
+  .on(tab, { urlMatch: /wss-primary\.slack\.com/ })
+  .filter({ parseAs: 'json', where: { type: 'message', channel: 'C0899S7HV0E' } })
+  .forward({ sink: 'webhook', webhookId: 'slack-watch-abc123' });
+
+await sub.update({ filter: { where: { channel: 'C-new' } } });
+await sub.close();
+await browser.websocket.list();
+```
+
+**Security review notes (Wave 4.1):**
+
+- The page-side router (`__sliccWsRouter`) is a single static, runtime-owned
+  script. It patches `WebSocket.prototype.send` **at most once per tab** —
+  `installWsRouter()` is idempotent. Skills cannot supply page-context code;
+  the router source lives in `packages/webapp/src/kernel/realm/ws-router-page.ts`.
+- The `filter` selector is a declarative JSON object (`parseAs`, `where`,
+  `project`). The realm builder rejects a `Function` or string of JS at the
+  boundary, so a compromised skill cannot smuggle code into the runtime via
+  the filter slot.
+- The runtime forwards matched frames to one of four sanctioned sinks:
+  - `'webhook'` — resolved against the existing `webhook` registry; an
+    unknown `webhookId` rejects at `subscriber-creation time`.
+  - `'scoop'` — delivered via `orchestrator.dispatchToScoop`.
+  - `'vfs'` — appended to an absolute path that must start with
+    `/workspace/`.
+  - `'log'` — telemetry only.
+- Outbound (`WebSocket.prototype.send`) interception is **out of scope** —
+  `send` is hooked only as a discovery mechanism so the inbound `message`
+  listener can be attached.
+- Subscribers owned by a scoop are auto-closed when the scoop is dropped
+  (`Orchestrator.unregisterScoop` → `WsSubscriberRegistry.dropForScoop`).
+
 #### `browser.fetch(tab, url, opts)`
 
 Replaces the eval-file + base64 + double-JSON-unwrap pattern in ~9 skills (slack, linkedin, concur, suno, fluffyjaws, servicenow, apple-music, oryx, outlook).

@@ -1330,6 +1330,21 @@ export class Orchestrator {
     // Snapshot cost data before destroying context
     this.snapshotScoopCost(jid);
 
+    // Auto-cleanup any `browser.websocket` subscribers owned by this
+    // scoop — keeps the page-side router from forwarding into a dead
+    // sink. Best-effort; never blocks tear-down.
+    const wsSubs = (
+      globalThis as { __slicc_wsSubscribers?: { dropForScoop: (j: string) => Promise<number> } }
+    ).__slicc_wsSubscribers;
+    if (wsSubs) {
+      void wsSubs.dropForScoop(jid).catch((err) => {
+        log.warn('dropForScoop (ws subscribers) failed', {
+          jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
     this.clearIdleTimer(jid);
     await this.destroyScoopTab(jid);
     this.sessionStore?.delete(jid).catch((err) => {
