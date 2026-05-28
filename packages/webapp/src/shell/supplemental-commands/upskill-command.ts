@@ -31,8 +31,8 @@ const SKILLS_DIR = '/workspace/skills';
 const GITHUB_GLOBAL_DB = GLOBAL_FS_DB_NAME;
 const GITHUB_TOKEN_PATH = '/workspace/.git/github-token';
 const GITHUB_API_ACCEPT = 'application/vnd.github.v3+json';
-const SKILL_CATALOG_URL = 'https://www.sliccy.com/skills/catalog.json';
 const SKILL_CATALOG_BASE_URL = 'https://www.sliccy.com/skills/';
+const SKILL_CATALOG_URL = `${SKILL_CATALOG_BASE_URL}catalog.json`;
 
 interface TesslSkillAttributes {
   name: string;
@@ -1479,11 +1479,13 @@ function normalizeProfile(profile: Partial<UserProfile>): UserProfile {
 
 /**
  * Slugify a company name for use as a catalog filename component, e.g.
- * `"Adobe"` → `"adobe"`, `"Acme Inc."` → `"acme-inc"`. Returns `null` when
- * the input slugs to an empty string so callers can skip the fetch.
+ * `"Adobe"` → `"adobe"`, `"Acme Inc."` → `"acme-inc"`. Accepts `unknown`
+ * so a corrupted/manually-edited `/home/<user>/.welcome.json` (e.g.
+ * `company: 42`) can never throw — returns `null` for non-strings or
+ * anything that slugs to an empty string.
  */
-function slugifyCompany(company: string | undefined | null): string | null {
-  if (!company) return null;
+function slugifyCompany(company: unknown): string | null {
+  if (typeof company !== 'string' || !company) return null;
   const slug = company
     .toLowerCase()
     .trim()
@@ -1499,11 +1501,11 @@ function slugifyCompany(company: string | undefined | null): string | null {
  */
 async function fetchCompanyCatalog(
   fetchFn: SecureFetch,
-  company: string | undefined | null
+  company: unknown
 ): Promise<CatalogSkill[]> {
-  const slug = slugifyCompany(company);
-  if (!slug) return [];
   try {
+    const slug = slugifyCompany(company);
+    if (!slug) return [];
     const response = await fetchFn(`${SKILL_CATALOG_BASE_URL}${slug}.json`, {
       headers: { Accept: 'application/json' },
     });
