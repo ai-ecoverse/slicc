@@ -385,7 +385,62 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       return bytes.byteLength;
     },
   };
+  // exec(string) parses through the shell; exec.spawn(argv[]) is the
+  // shell-free variant — mirrors child_process.spawn(cmd, args). Same
+  // surface as the worker realm (`js-realm-shared.ts`).
   const execBridge = (cmd) => rpcCall('exec', 'run', [cmd]);
+  execBridge.spawn = (argv) => rpcCall('exec', 'spawn', [argv]);
+
+  // `skill` global — mirrors kernel/realm/skill-global.ts (the canonical
+  // TS implementation). Boot-time computed from init.argv[1], frozen.
+  // Keep this in sync with skill-global.ts.
+  const skillGlobal = (() => {
+    const scriptPath = (init.argv && init.argv[1]) || '';
+    const slash = scriptPath.lastIndexOf('/');
+    const dir = !scriptPath ? '' : slash < 0 ? '' : slash === 0 ? '/' : scriptPath.substring(0, slash);
+    const refs = dir ? dir + '/references' : 'references';
+    const assets = dir ? dir + '/assets' : 'assets';
+    const configPath = dir ? dir + '/.config' : '.config';
+    const safeArg = (s) => /^[A-Za-z0-9_\-./:@]+$/.test(s) ? s : "'" + String(s).replace(/'/g, "'\\''") + "'";
+    async function readConfig() {
+      let exists;
+      try { exists = await fsBridge.exists(configPath); } catch { return null; }
+      if (!exists) return null;
+      let raw;
+      try { raw = await fsBridge.readFile(configPath); } catch { return null; }
+      const text = typeof raw === 'string' ? raw : String(raw);
+      if (!text.trim()) return null;
+      let parsed;
+      try { parsed = JSON.parse(text); }
+      catch (err) {
+        throw new Error('skill.config(): failed to parse ' + configPath + ': ' + (err instanceof Error ? err.message : String(err)));
+      }
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+      throw new Error('skill.config(): ' + configPath + ' must contain a JSON object');
+    }
+    async function config(updates) {
+      const existing = await readConfig();
+      if (updates === undefined) return existing;
+      if (updates === null || typeof updates !== 'object' || Array.isArray(updates)) {
+        throw new TypeError('skill.config(updates): updates must be a plain object');
+      }
+      const merged = Object.assign({}, existing || {}, updates);
+      await fsBridge.writeFile(configPath, JSON.stringify(merged, null, 2) + '\n');
+      return merged;
+    }
+    async function token(providerId) {
+      if (typeof providerId !== 'string' || !providerId.trim()) {
+        throw new TypeError('skill.token(providerId): providerId must be a non-empty string');
+      }
+      const res = await execBridge('oauth-token ' + safeArg(providerId));
+      if (res.exitCode !== 0) {
+        const msg = (res.stderr || '').trim() || ('oauth-token exited with code ' + res.exitCode);
+        throw new Error("skill.token('" + providerId + "'): " + msg);
+      }
+      return String(res.stdout || '').replace(/\r?\n+$/, '');
+    }
+    return Object.freeze({ dir, refs, assets, config, token });
+  })();
   async function realmFetch(input, init2) {
     const url = input instanceof Request
       ? input.url
@@ -495,10 +550,10 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   try {
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     const fn = new AsyncFunction(
-      'fs', 'process', 'console', 'require', 'module', 'exports', 'exec', 'fetch',
+      'fs', 'process', 'console', 'require', 'module', 'exports', 'exec', 'fetch', 'skill',
       '"use strict";\n' + init.code
     );
-    await fn(fsBridge, processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, execBridge, realmFetch);
+    await fn(fsBridge, processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, execBridge, realmFetch, skillGlobal);
   } catch (err) {
     if (err && typeof err === 'object' && NODE_EXIT in err) {
       exitCode = err[NODE_EXIT];

@@ -25,6 +25,7 @@ import {
   nativePackageError,
   withTimeout,
 } from './require-guards.js';
+import { createSkillGlobal } from './skill-global.js';
 
 const NODE_BUILTINS_UNAVAILABLE = new Set([
   'http',
@@ -192,10 +193,22 @@ export async function runJsRealm(
     },
   };
 
-  const execBridge = (
-    command: string
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }> =>
-    rpc.call('exec', 'run', [command]);
+  // `exec(string)` parses the command through the shell — convenient
+  // for one-liners but punishing for anyone constructing commands
+  // programmatically (the spec called out the bespoke `shellQuote()`
+  // helpers skills kept reinventing). `exec.spawn(argv[])` mirrors
+  // `child_process.spawn(cmd, args)` and bypasses shell parsing on
+  // every arg, killing the quoting-trap class of bugs.
+  type ExecResult = { stdout: string; stderr: string; exitCode: number };
+  const execRun = (command: string): Promise<ExecResult> => rpc.call('exec', 'run', [command]);
+  const execBridge = Object.assign(execRun, {
+    spawn: (argv: string[]): Promise<ExecResult> => rpc.call('exec', 'spawn', [argv]),
+  });
+
+  // `skill` is computed once at boot from argv[1] and frozen. It exposes
+  // the script-relative path helpers and the skill-scoped config/token
+  // store; see `skill-global.ts` for the surface and rationale.
+  const skillGlobal = createSkillGlobal({ argv: init.argv, fs: fsBridge, exec: execBridge });
 
   async function realmFetch(input: string | URL | Request, opts?: RequestInit): Promise<Response> {
     const url =
@@ -313,7 +326,8 @@ export async function runJsRealm(
       module: typeof moduleShim,
       exports: Record<string, unknown>,
       exec: typeof execBridge,
-      fetch: typeof realmFetch
+      fetch: typeof realmFetch,
+      skill: typeof skillGlobal
     ) => Promise<unknown>;
     const fn = new AsyncFn(
       'fs',
@@ -324,6 +338,7 @@ export async function runJsRealm(
       'exports',
       'exec',
       'fetch',
+      'skill',
       `"use strict";\n${init.code}`
     );
     await fn(
@@ -334,7 +349,8 @@ export async function runJsRealm(
       moduleShim,
       moduleShim.exports,
       execBridge,
-      realmFetch
+      realmFetch,
+      skillGlobal
     );
   } catch (err: unknown) {
     if (err instanceof NodeExitError) {
