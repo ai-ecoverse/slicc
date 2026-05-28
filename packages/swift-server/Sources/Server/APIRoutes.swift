@@ -22,7 +22,23 @@ private let proxyBlockedResponseHeaders: Set<String> = [
     "transfer-encoding", "content-encoding", "www-authenticate",
     "set-cookie",
 ]
-private let fetchProxyMethods: [HTTPRequest.Method] = [.get, .head, .post, .put, .patch, .delete, .options]
+private let fetchProxyMethods: [HTTPRequest.Method] = [
+    .get, .head, .post, .put, .patch, .delete, .options,
+    // WebDAV (RFC 4918) + CalDAV (RFC 4791) + WebDAV extensions. These verbs
+    // are not in HTTPTypes' built-in `Method` statics, but `Method(rawValue:)`
+    // accepts any valid RFC 9110 method token. Upstream forwarding works
+    // because the `HTTPMethod.init(_:)` mapping at the bottom of this file
+    // falls back to `.RAW(value:)` for any method not enumerated here.
+    HTTPRequest.Method(rawValue: "PROPFIND")!,
+    HTTPRequest.Method(rawValue: "PROPPATCH")!,
+    HTTPRequest.Method(rawValue: "MKCOL")!,
+    HTTPRequest.Method(rawValue: "MKCALENDAR")!,
+    HTTPRequest.Method(rawValue: "REPORT")!,
+    HTTPRequest.Method(rawValue: "COPY")!,
+    HTTPRequest.Method(rawValue: "MOVE")!,
+    HTTPRequest.Method(rawValue: "LOCK")!,
+    HTTPRequest.Method(rawValue: "UNLOCK")!,
+]
 
 private actor OAuthResultStore {
     struct PendingResult: Codable, Sendable, Equatable {

@@ -3,6 +3,8 @@ import Foundation
 import Hummingbird
 import HummingbirdTesting
 import HTTPTypes
+import NIOCore
+import NIOPosix
 import XCTest
 @testable import slicc_server
 
@@ -191,6 +193,203 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
+    // The fetch proxy must accept WebDAV (RFC 4918) and CalDAV (RFC 4791)
+    // verbs in addition to the standard HTTP methods so the agent can
+    // talk to CalDAV / WebDAV servers from the Sliccstart float. The four
+    // round-trip tests below cover the new method set end-to-end against
+    // the representative verbs called out in the spec's Acceptance
+    // Criterion #3 (PROPFIND, REPORT, MKCALENDAR, LOCK): the proxy must
+    // register the route, forward the verb / body / DAV-specific request
+    // header unchanged, and let the upstream's response flow back to the
+    // client. The remaining five verbs (PROPPATCH, MKCOL, COPY, MOVE,
+    // UNLOCK) share the exact same code path.
+
+    func testFetchProxyForwardsPropfindWithBodyAndDavHeaders() async throws {
+        try await self.runDavRoundTripTest(
+            method: "PROPFIND",
+            davHeaderName: "Depth",
+            davHeaderValue: "1",
+            requestBody: """
+                <?xml version="1.0" encoding="utf-8"?>
+                <D:propfind xmlns:D="DAV:"><D:prop><D:displayname/></D:prop></D:propfind>
+                """
+        )
+    }
+
+    func testFetchProxyForwardsReportWithCalDAVBody() async throws {
+        try await self.runDavRoundTripTest(
+            method: "REPORT",
+            davHeaderName: "Depth",
+            davHeaderValue: "1",
+            requestBody: """
+                <?xml version="1.0" encoding="utf-8"?>
+                <C:calendar-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">
+                  <D:prop><D:getetag/><C:calendar-data/></D:prop>
+                  <C:filter><C:comp-filter name="VCALENDAR"/></C:filter>
+                </C:calendar-query>
+                """
+        )
+    }
+
+    func testFetchProxyForwardsMkcalendarWithoutBody() async throws {
+        // MKCALENDAR (RFC 4791 § 5.3.1) is the CalDAV verb for creating a
+        // calendar collection; the request body is optional and frequently
+        // omitted. This test exercises the no-body path and asserts the
+        // verb passes through to the upstream and the upstream's response
+        // status flows back unchanged.
+        try await self.runDavRoundTripTest(
+            method: "MKCALENDAR",
+            davHeaderName: nil,
+            davHeaderValue: nil,
+            requestBody: ""
+        )
+    }
+
+    func testFetchProxyForwardsLockWithBodyAndTimeoutHeader() async throws {
+        // LOCK (RFC 4918 § 9.10) carries both an XML body (lockinfo) and
+        // the WebDAV-specific `Timeout` request header. This test asserts
+        // that the verb, body, and `Timeout: Second-300` header all reach
+        // the upstream unchanged.
+        try await self.runDavRoundTripTest(
+            method: "LOCK",
+            davHeaderName: "Timeout",
+            davHeaderValue: "Second-300",
+            requestBody: """
+                <?xml version="1.0" encoding="utf-8"?>
+                <D:lockinfo xmlns:D="DAV:">
+                  <D:lockscope><D:exclusive/></D:lockscope>
+                  <D:locktype><D:write/></D:locktype>
+                  <D:owner><D:href>mailto:agent@example.com</D:href></D:owner>
+                </D:lockinfo>
+                """
+        )
+    }
+
+    /// Round-trip helper: stands up a live Hummingbird server hosting an
+    /// upstream stub route, registers the API routes (including
+    /// `/api/fetch-proxy`) on a separate router used in `.router` (in-memory)
+    /// mode, then routes a DAV request through the proxy and asserts the
+    /// verb, body, and DAV header reached the upstream unchanged and that
+    /// the upstream's 207 Multi-Status response flowed back.
+    ///
+    /// Two implementation notes:
+    ///
+    /// - We use an MTELG-backed `HTTPClient` (NIO-Posix sockets) for the
+    ///   proxy's outbound call instead of the singleton, which on macOS
+    ///   resolves to NIOTransportServices (Network.framework). Network.framework
+    ///   has been observed to refuse local-loopback connections with
+    ///   `NWPOSIXError 1` in unit-test environments; raw Posix sockets work
+    ///   reliably.
+    /// - The upstream stub is its own live `Application`; the proxy itself is
+    ///   exercised through `.router` mode so the test client invokes the
+    ///   proxy handler directly without depending on a second listener.
+    private func runDavRoundTripTest(
+        method: String,
+        davHeaderName: String?,
+        davHeaderValue: String?,
+        requestBody: String
+    ) async throws {
+        let httpMethod = try XCTUnwrap(HTTPRequest.Method(rawValue: method))
+        let davHeader: HTTPField.Name? = try {
+            guard let davHeaderName else { return nil }
+            return try XCTUnwrap(HTTPField.Name(davHeaderName))
+        }()
+        let captured = CapturedRequestBox()
+
+        // Build the upstream stub on its own router/app.
+        let upstreamRouter = Router()
+        upstreamRouter.on("/upstream", method: httpMethod) { request, _ in
+            let body = try await request.body.collect(upTo: 1 * 1024 * 1024)
+            await captured.record(
+                method: request.method.rawValue,
+                davHeader: davHeader.flatMap { request.headers[$0] },
+                body: String(buffer: body)
+            )
+            return Response(
+                status: HTTPResponse.Status(code: 207, reasonPhrase: "Multi-Status"),
+                headers: [.contentType: "application/xml; charset=utf-8"],
+                body: .init(byteBuffer: ByteBuffer(string: "<multistatus/>"))
+            )
+        }
+        let upstreamApp = Application(responder: upstreamRouter.buildResponder())
+
+        // Dedicated MTELG-backed HTTPClient for the proxy's outbound call.
+        // On macOS, AsyncHTTPClient's singleton ELG resolves to
+        // NIOTransportServices (Network.framework) which has been observed
+        // to refuse local-loopback connections with `NWPOSIXError 1` in
+        // unit-test environments; raw Posix sockets work reliably.
+        let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let httpClient = HTTPClient(eventLoopGroupProvider: .shared(eventLoopGroup))
+
+        do {
+            try await upstreamApp.test(.live) { upstreamClient in
+                try await self.executeDavRoundTrip(
+                    httpMethod: httpMethod,
+                    davHeader: davHeader,
+                    davHeaderValue: davHeaderValue,
+                    requestBody: requestBody,
+                    upstreamPort: try XCTUnwrap(upstreamClient.port, "live test framework must expose a port"),
+                    httpClient: httpClient
+                )
+            }
+        } catch {
+            try? await httpClient.shutdown()
+            try? await eventLoopGroup.shutdownGracefully()
+            throw error
+        }
+        try await httpClient.shutdown()
+        try await eventLoopGroup.shutdownGracefully()
+
+        let snapshot = await captured.snapshot()
+        XCTAssertEqual(snapshot.method, method, "\(method) verb must reach upstream unchanged")
+        if let davHeaderName, let davHeaderValue {
+            XCTAssertEqual(
+                snapshot.davHeader,
+                davHeaderValue,
+                "\(davHeaderName) header must reach upstream unchanged"
+            )
+        }
+        XCTAssertEqual(snapshot.body, requestBody, "request body must reach upstream byte-for-byte")
+    }
+
+    private func executeDavRoundTrip(
+        httpMethod: HTTPRequest.Method,
+        davHeader: HTTPField.Name?,
+        davHeaderValue: String?,
+        requestBody: String,
+        upstreamPort: Int,
+        httpClient: HTTPClient
+    ) async throws {
+        let proxyRouter = Router()
+        registerAPIRoutes(
+            router: proxyRouter,
+            lickSystem: LickSystem(),
+            config: self.makeConfig(),
+            httpClient: httpClient
+        )
+        let proxyApp = Application(responder: proxyRouter.buildResponder())
+
+        var headers: HTTPFields = [
+            HTTPField.Name("X-Target-URL")!: "http://localhost:\(upstreamPort)/upstream",
+            .contentType: "application/xml; charset=utf-8",
+        ]
+        if let davHeader, let davHeaderValue {
+            headers[davHeader] = davHeaderValue
+        }
+
+        try await proxyApp.test(.router) { proxyClient in
+            try await proxyClient.execute(
+                uri: "/api/fetch-proxy",
+                method: httpMethod,
+                headers: headers,
+                body: ByteBuffer(string: requestBody)
+            ) { response in
+                XCTAssertEqual(response.status.code, 207, "207 Multi-Status must flow back to the client")
+                XCTAssertEqual(String(buffer: response.body), "<multistatus/>")
+            }
+        }
+    }
+
     func testOAuthResultRoundTripsAndClears() async throws {
         try await self.withHTTPClient { httpClient in
             let router = Router()
@@ -289,5 +488,31 @@ final class APIRoutesTests: XCTestCase {
             await lickSystem.handleMessage(text: payload)
         }
         await lickSystem.addClient(client)
+    }
+}
+
+/// Thread-safe holder for upstream-side request observations captured by
+/// the DAV round-trip tests. The stub upstream route runs on the live
+/// server's task; the test assertions run on the test task — so a plain
+/// `var` would trip the Sendable checker.
+private actor CapturedRequestBox {
+    struct Snapshot {
+        let method: String?
+        let davHeader: String?
+        let body: String?
+    }
+
+    private var method: String?
+    private var davHeader: String?
+    private var body: String?
+
+    func record(method: String, davHeader: String?, body: String) {
+        self.method = method
+        self.davHeader = davHeader
+        self.body = body
+    }
+
+    func snapshot() -> Snapshot {
+        .init(method: self.method, davHeader: self.davHeader, body: self.body)
     }
 }
