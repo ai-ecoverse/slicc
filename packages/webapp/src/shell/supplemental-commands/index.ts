@@ -47,6 +47,7 @@ import { createAgentCommand } from './agent-command.js';
 import { createDiscoverCommand } from './discover-command.js';
 import { createPsCommand } from './ps-command.js';
 import { createKillCommand } from './kill-command.js';
+import { createBiomeCommand } from './biome-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import type { ProcessManager } from '../../kernel/process-manager.js';
@@ -94,6 +95,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createSqliteCommand('sqllite'),
     createTscCommand(),
     createTestCommand(),
+    createBiomeCommand(),
     createNodeCommand(),
     createPython3LikeCommand('python3'),
     createPython3LikeCommand('python'),
