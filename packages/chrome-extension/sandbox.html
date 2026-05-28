@@ -884,6 +884,47 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     if (!options || options.matchUrl === undefined) return {};
     return { matchUrl: options.matchUrl instanceof RegExp ? options.matchUrl.source : options.matchUrl };
   }
+  // `browser.fetch` — page-context fetch on top of evalAsync. Mirrors
+  // buildBrowserFetchScript in js-realm-shared.ts. Credentials default
+  // to 'include' so the page's session cookies travel automatically.
+  function buildBrowserFetchScript(url, opts) {
+    opts = opts || {};
+    const headers = {};
+    const rawHeaders = opts.headers || {};
+    for (const k of Object.keys(rawHeaders)) {
+      const v = rawHeaders[k];
+      if (typeof v === 'string') headers[k] = v;
+    }
+    const method = typeof opts.method === 'string' ? opts.method : 'GET';
+    const credentials = (opts.credentials === 'same-origin' || opts.credentials === 'omit') ? opts.credentials : 'include';
+    let body;
+    if (opts.body !== undefined && opts.body !== null) {
+      if (typeof opts.body === 'string') {
+        body = opts.body;
+      } else {
+        body = JSON.stringify(opts.body);
+        const hasCt = Object.keys(headers).some((k) => k.toLowerCase() === 'content-type');
+        if (!hasCt) headers['Content-Type'] = 'application/json';
+      }
+    }
+    const init = { method: method, credentials: credentials, headers: headers };
+    if (body !== undefined) init.body = body;
+    const passthrough = ['mode','cache','redirect','referrer','referrerPolicy','integrity','keepalive'];
+    for (const k of passthrough) {
+      if (opts[k] !== undefined) init[k] = opts[k];
+    }
+    return '(async () => {' +
+      'const r = await fetch(' + JSON.stringify(url) + ', ' + JSON.stringify(init) + ');' +
+      'const h = {};' +
+      'r.headers.forEach((v, k) => { h[k] = v; });' +
+      "const ct = r.headers.get('content-type') || '';" +
+      'let b;' +
+      "if (ct.indexOf('application/json') !== -1) {" +
+      'try { b = await r.json(); } catch (e) { b = await r.text(); }' +
+      '} else { b = await r.text(); }' +
+      'return { ok: r.ok, status: r.status, headers: h, body: b };' +
+    '})()';
+  }
   const browserBridge = {
     findTab: (query) => rpcCall('browser', 'findTab', [normalizeBrowserFindQuery(query || {})]),
     ensureTab: (url, options) => rpcCall('browser', 'ensureTab', [url, normalizeBrowserMatchUrl(options || {})]),
@@ -891,6 +932,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     evalAsync: (tab, fnOrCode) => rpcCall('browser', 'evalAsync', [resolveBrowserTargetId(tab), serializeBrowserEvalSource(fnOrCode)]),
     cookie: (tab, name) => rpcCall('browser', 'cookie', [resolveBrowserTargetId(tab), name]),
     localStorage: (tab, key) => rpcCall('browser', 'localStorage', [resolveBrowserTargetId(tab), key]),
+    fetch: (tab, url, opts) => rpcCall('browser', 'evalAsync', [resolveBrowserTargetId(tab), buildBrowserFetchScript(url, opts || {})]),
   };
 
   let exitCode = 0;

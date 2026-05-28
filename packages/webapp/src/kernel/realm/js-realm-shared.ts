@@ -264,6 +264,15 @@ export async function runJsRealm(
       rpc.call('browser', 'cookie', [resolveTargetId(tab), name]),
     localStorage: (tab: TabHandle | string, key: string): Promise<string | null> =>
       rpc.call('browser', 'localStorage', [resolveTargetId(tab), key]),
+    fetch: (
+      tab: TabHandle | string,
+      url: string,
+      opts: BrowserFetchOptions = {}
+    ): Promise<BrowserFetchResult> =>
+      rpc.call('browser', 'evalAsync', [
+        resolveTargetId(tab),
+        buildBrowserFetchScript(url, opts),
+      ]) as Promise<BrowserFetchResult>,
   };
 
   // `http` is the standard API-client builder; see `http-global.ts`. It
@@ -518,6 +527,115 @@ function serializeEvalSource(
   }
   if (typeof source === 'string') return source;
   throw new TypeError('browser.eval/evalAsync: source must be a function or string');
+}
+
+/**
+ * Options accepted by `browser.fetch(tab, url, opts)`. Mirrors the
+ * `RequestInit` subset that round-trips cleanly as JSON through the
+ * page-context bridge — non-serializable shapes (FormData, Blob,
+ * AbortSignal, ReadableStream) are intentionally out of scope. Body
+ * may be a string (sent verbatim) or any JSON-encodable value (the
+ * bridge stringifies it and defaults Content-Type to application/json).
+ */
+export interface BrowserFetchOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+  credentials?: 'include' | 'same-origin' | 'omit';
+  mode?: string;
+  cache?: string;
+  redirect?: string;
+  referrer?: string;
+  referrerPolicy?: string;
+  integrity?: string;
+  keepalive?: boolean;
+}
+
+/**
+ * Structured result returned by `browser.fetch`. `body` is parsed
+ * JSON when the response Content-Type contains `application/json`,
+ * otherwise raw text. Binary responses are out of scope for Wave 3.1
+ * (the script returns the text decoding the page applies).
+ */
+export interface BrowserFetchResult {
+  ok: boolean;
+  status: number;
+  headers: Record<string, string>;
+  body: unknown;
+}
+
+/**
+ * Build the self-contained page-context script that `browser.fetch`
+ * injects via `evalAsync`. All request shaping (method/credentials/
+ * headers/body) is baked into the script via `JSON.stringify` so the
+ * page side does nothing but call `fetch()` and assemble the
+ * structured response. Credentials default to `'include'` so session
+ * cookies travel automatically — that's the whole reason
+ * `browser.fetch` exists rather than the realm-side `fetch`. Body
+ * objects become a JSON string and force Content-Type unless the
+ * caller already set one. Plain string bodies are passed through.
+ *
+ * Exported so `realm-iframe`/parity tests can assert the injected
+ * script is a single function (no temp file, no base64 chunking).
+ */
+export function buildBrowserFetchScript(url: string, opts: BrowserFetchOptions = {}): string {
+  const headers: Record<string, string> = {};
+  const rawHeaders = opts.headers ?? {};
+  for (const [k, v] of Object.entries(rawHeaders)) {
+    if (typeof v === 'string') headers[k] = v;
+  }
+  const method = typeof opts.method === 'string' ? opts.method : 'GET';
+  const credentials =
+    opts.credentials === 'same-origin' || opts.credentials === 'omit'
+      ? opts.credentials
+      : 'include';
+  let body: string | undefined;
+  if (opts.body !== undefined && opts.body !== null) {
+    if (typeof opts.body === 'string') {
+      body = opts.body;
+    } else {
+      body = JSON.stringify(opts.body);
+      const hasCt = Object.keys(headers).some((k) => k.toLowerCase() === 'content-type');
+      if (!hasCt) headers['Content-Type'] = 'application/json';
+    }
+  }
+  const init: Record<string, unknown> = { method, credentials, headers };
+  if (body !== undefined) init.body = body;
+  const passthrough = [
+    'mode',
+    'cache',
+    'redirect',
+    'referrer',
+    'referrerPolicy',
+    'integrity',
+    'keepalive',
+  ] as const;
+  for (const k of passthrough) {
+    const v = opts[k];
+    if (v !== undefined) init[k] = v;
+  }
+  // Single self-contained async IIFE — runs entirely in the page,
+  // returns a structured-cloneable object that CDP returnByValue
+  // round-trips back to the realm host as-is. Keep this stringly
+  // typed (no template-literal substitutions inside the function
+  // body) so JSON.stringify is the only escape boundary.
+  return (
+    '(async () => {' +
+    'const r = await fetch(' +
+    JSON.stringify(url) +
+    ', ' +
+    JSON.stringify(init) +
+    ');' +
+    'const h = {};' +
+    'r.headers.forEach((v, k) => { h[k] = v; });' +
+    "const ct = r.headers.get('content-type') || '';" +
+    'let b;' +
+    "if (ct.indexOf('application/json') !== -1) {" +
+    'try { b = await r.json(); } catch (e) { b = await r.text(); }' +
+    '} else { b = await r.text(); }' +
+    'return { ok: r.ok, status: r.status, headers: h, body: b };' +
+    '})()'
+  );
 }
 
 /**
