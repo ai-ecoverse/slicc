@@ -9,11 +9,37 @@ fi
 export E2B_API_KEY="$SLICC_TEST_E2B_API_KEY"
 
 # Spin one sandbox, poll for /tmp/slicc-join.json, kill.
+#
+# `Sandbox.create` against a freshly published template occasionally exceeds the
+# e2b SDK's default 30s `requestTimeoutMs` while the build is still cold. We
+# bump the per-call timeout to 2 minutes and retry the create up to 3 times
+# with linear backoff before giving up. Everything after create is unchanged.
 node --input-type=module -e '
 import { Sandbox } from "e2b";
 
-const sbx = await Sandbox.create("slicc", { autoPause: false });
-console.log("created", sbx.sandboxId);
+const MAX_ATTEMPTS = 3;
+const CREATE_TIMEOUT_MS = 120_000;
+const BACKOFF_MS = 5_000;
+
+let sbx;
+for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  try {
+    sbx = await Sandbox.create("slicc", {
+      lifecycle: { onTimeout: "kill" },
+      requestTimeoutMs: CREATE_TIMEOUT_MS,
+    });
+    console.log("created", sbx.sandboxId, "(attempt " + attempt + ")");
+    break;
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    console.error("Sandbox.create attempt " + attempt + " failed: " + msg);
+    if (attempt === MAX_ATTEMPTS) {
+      console.error("FAIL: Sandbox.create failed after " + MAX_ATTEMPTS + " attempts");
+      throw err;
+    }
+    await new Promise((r) => setTimeout(r, BACKOFF_MS * attempt));
+  }
+}
 
 const start = Date.now();
 let joinJson = null;
