@@ -585,3 +585,133 @@ describe('handleFetchProxyConnection — DNR forbidden-header rule', () => {
     expect(headersOnFetch.cookie).toBe('sid=abc');
   });
 });
+
+// Regression: WebDAV / CalDAV verbs (PROPFIND, REPORT, MKCALENDAR, LOCK,
+// etc.) must pass through `msg.method` straight to upstream `fetch()` —
+// browser fetch only forbids CONNECT/TRACE/TRACK. The DNR forbidden-header
+// installer only acts on Cookie/Origin/Referer/Proxy-*, so DAV-only headers
+// like `Depth` and `Timeout` are forwarded as ordinary request headers and
+// must survive the round-trip untouched.
+describe('handleFetchProxyConnection — WebDAV/CalDAV verb pass-through', () => {
+  let pipeline: SecretsPipeline;
+
+  beforeEach(async () => {
+    pipeline = new SecretsPipeline({
+      sessionId: 'session-fixed',
+      source: { get: async () => undefined, listAll: async () => [] },
+    });
+    await pipeline.reload();
+  });
+
+  function encodeBase64(s: string): string {
+    let bin = '';
+    const bytes = new TextEncoder().encode(s);
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+
+  async function dispatchDav(req: {
+    method: string;
+    url?: string;
+    headers?: Record<string, string>;
+    body?: string;
+  }): Promise<{
+    method: string | undefined;
+    headers: Record<string, string> | undefined;
+    bodyBytes: Uint8Array | undefined;
+    posts: any[];
+  }> {
+    let capturedMethod: string | undefined;
+    let capturedHeaders: Record<string, string> | undefined;
+    let capturedBody: Uint8Array | undefined;
+    (globalThis as any).fetch = vi.fn(async (_url: string, init: any) => {
+      capturedMethod = init.method;
+      capturedHeaders = init.headers;
+      capturedBody = init.body instanceof Uint8Array ? init.body : undefined;
+      return new Response('<multistatus/>', {
+        status: 207,
+        statusText: 'Multi-Status',
+        headers: { 'content-type': 'application/xml' },
+      });
+    });
+    const posts: any[] = [];
+    const port = makePort((m) => posts.push(m));
+    handleFetchProxyConnection(port, pipeline);
+    port.fireMessage({
+      type: 'request',
+      url: req.url ?? 'https://dav.example.com/calendars/user/',
+      method: req.method,
+      headers: req.headers ?? {},
+      bodyBase64: req.body !== undefined ? encodeBase64(req.body) : undefined,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    return {
+      method: capturedMethod,
+      headers: capturedHeaders,
+      bodyBytes: capturedBody,
+      posts,
+    };
+  }
+
+  it('PROPFIND passes verb, XML body, and Depth: 1 header through; 207 reaches the port', async () => {
+    const xml =
+      '<?xml version="1.0"?><propfind xmlns="DAV:"><prop><displayname/></prop></propfind>';
+    const { method, headers, bodyBytes, posts } = await dispatchDav({
+      method: 'PROPFIND',
+      headers: { Depth: '1', 'Content-Type': 'application/xml' },
+      body: xml,
+    });
+
+    expect(method).toBe('PROPFIND');
+    expect(headers?.Depth).toBe('1');
+    expect(headers?.['Content-Type']).toBe('application/xml');
+    expect(bodyBytes).toBeDefined();
+    expect(new TextDecoder().decode(bodyBytes!)).toBe(xml);
+
+    const head = posts.find((p) => p.type === 'response-head');
+    expect(head).toMatchObject({ type: 'response-head', status: 207, statusText: 'Multi-Status' });
+    expect(posts.some((p) => p.type === 'response-end')).toBe(true);
+  });
+
+  it('REPORT passes verb and XML body through; 207 reaches the port', async () => {
+    const xml = '<?xml version="1.0"?><c:calendar-query xmlns:c="urn:ietf:params:xml:ns:caldav"/>';
+    const { method, headers, bodyBytes, posts } = await dispatchDav({
+      method: 'REPORT',
+      headers: { Depth: '1', 'Content-Type': 'application/xml' },
+      body: xml,
+    });
+
+    expect(method).toBe('REPORT');
+    expect(headers?.Depth).toBe('1');
+    expect(new TextDecoder().decode(bodyBytes!)).toBe(xml);
+
+    const head = posts.find((p) => p.type === 'response-head');
+    expect(head).toMatchObject({ status: 207 });
+  });
+
+  it('MKCALENDAR with no body passes verb through; body is undefined', async () => {
+    const { method, bodyBytes, posts } = await dispatchDav({
+      method: 'MKCALENDAR',
+      headers: { 'Content-Type': 'application/xml' },
+    });
+
+    expect(method).toBe('MKCALENDAR');
+    expect(bodyBytes).toBeUndefined();
+    expect(posts.some((p) => p.type === 'response-head')).toBe(true);
+    expect(posts.some((p) => p.type === 'response-end')).toBe(true);
+  });
+
+  it('LOCK passes verb, body, and Timeout: Second-300 header through', async () => {
+    const xml =
+      '<?xml version="1.0"?><lockinfo xmlns="DAV:"><lockscope><exclusive/></lockscope></lockinfo>';
+    const { method, headers, bodyBytes } = await dispatchDav({
+      method: 'LOCK',
+      headers: { Timeout: 'Second-300', 'Content-Type': 'application/xml' },
+      body: xml,
+    });
+
+    expect(method).toBe('LOCK');
+    expect(headers?.Timeout).toBe('Second-300');
+    expect(new TextDecoder().decode(bodyBytes!)).toBe(xml);
+  });
+});
