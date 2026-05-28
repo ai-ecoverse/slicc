@@ -386,6 +386,94 @@ module.exports: {}        // Available for ES module pattern
 exports: module.exports   // Alias
 ```
 
+### Proposed jsh runtime extensions
+
+The following globals are **spec'd but not yet implemented** — they were extracted from cross-skill duplication analysis (see the workspace spec at `analyze-skills`). Skills MAY reference them in design discussions and SHOULD prefer them over hand-rolled equivalents once shipped. When in doubt, run `commands` or check whether the global resolves at runtime before reimplementing.
+
+#### `process.argv.parseFlags()`
+
+Replaces the per-skill `--flag=val` / `--flag val` / positional parsing loop reinvented in every surveyed skill.
+
+```typescript
+process.argv.parseFlags(): {
+  positional: string[];   // non-flag args
+  flags: Record<string, string | boolean>;
+  subcommand: string | null; // first positional, if it looks like a subcommand
+}
+```
+
+```javascript
+// Today (every skill, ~25 LoC):
+for (let i = 1; i < args.length; i++) {
+  /* …--flag=val / --flag val / positional… */
+}
+
+// Proposed:
+const { positional, flags, subcommand } = process.argv.parseFlags();
+```
+
+#### `browser` global
+
+Replaces the `exec('playwright-cli tab-list')` shell-out + regex parse used in ~12 skills.
+
+```typescript
+browser.findTab(opts: { domain?: string; urlMatch?: RegExp | string }): Promise<TabHandle | null>
+browser.ensureTab(url: string): Promise<TabHandle>            // open if missing
+browser.eval(tab, fn: Function | string): Promise<unknown>    // sync expression
+browser.evalAsync(tab, fn: AsyncFunction): Promise<unknown>   // async, returns parsed JSON
+browser.cookie(tab, name: string): Promise<string | null>
+browser.localStorage(tab, key: string): Promise<string | null>
+```
+
+The page-context bridge is owned by the runtime — skills never author eval-file temp files or parse double-encoded JSON.
+
+#### `browser.fetch(tab, url, opts)`
+
+Replaces the eval-file + base64 + double-JSON-unwrap pattern in ~9 skills (slack, linkedin, concur, suno, fluffyjaws, servicenow, apple-music, oryx, outlook).
+
+```typescript
+browser.fetch(tab: TabHandle, url: string, opts?: {
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | ...;
+  headers?: Record<string, string>;
+  body?: unknown;                  // object → JSON-stringified
+  credentials?: 'include' | 'omit'; // defaults to 'include'
+}): Promise<{ ok: boolean; status: number; headers: Record<string, string>; body: unknown }>
+```
+
+Runs inside the tab's origin, so session cookies and same-origin headers are automatic. Response body is JSON-parsed when content-type permits.
+
+#### `browser.websocket` — declarative WebSocket observer
+
+Replaces the `WebSocket.prototype.send` prototype patch + page-context `onmessage` reader + `fetch(arbitraryUrl, …)` exfil pattern flagged by security review in `slack.jsh`.
+
+```typescript
+browser.websocket
+  .on(tab, opts: { urlMatch: RegExp | string }): Subscription
+  .filter(opts: { parseAs: 'json' | 'text'; where: Record<string, unknown> }): Subscription
+  .forward(opts: { sink: 'webhook' | 'scoop' | 'vfs' | 'log'; webhookId?: string; scoopName?: string; path?: string }): Promise<Subscriber>
+
+browser.websocket.list(): Promise<Subscriber[]>
+subscriber.update(opts): Promise<void>
+subscriber.close(): Promise<void>
+```
+
+**Sink set is a closed enum.** Skills cannot supply an arbitrary URL — the page-side router (runtime-owned, audited once) only knows how to forward matched frames to: a registered `webhook` ID, an in-process `scoop`, an allowlisted VFS `path`, or `log`. There is no way for skill code to monkey-patch `WebSocket.prototype` or author the page-context router.
+
+```javascript
+// Before (~90 LoC of injected, string-built JS; flagged for prototype hijacking + exfil):
+const interceptorCode = `(async () => { WebSocket.prototype.send = function(data) { /* … */ }; })()`;
+await fs.writeFile(tmpFile, interceptorCode);
+await exec(`playwright-cli eval-file ${tmpFile} --tab=${tabId}`);
+
+// After (~10 LoC, no page-authored JS, audited sinks):
+const sub = await browser.websocket
+  .on(tab, { urlMatch: /wss-primary\.slack\.com/ })
+  .filter({ parseAs: 'json', where: { type: 'message', channel: 'C0899S7HV0E' } })
+  .forward({ sink: 'webhook', webhookId: 'slack-watch-abc123' });
+```
+
+Scope: read-only. Outbound frame interception (modifying `send`) is intentionally out of scope and would be a separate, more heavily gated API.
+
 ### Example .jsh Script
 
 ```javascript

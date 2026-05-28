@@ -84,12 +84,33 @@ Rules of thumb:
 
 ### `.jsh` — JavaScript shell scripts
 
-`.jsh` files are auto-discovered as shell commands anywhere on the VFS:
+`.jsh` files are auto-discovered as shell commands anywhere on the VFS. **Full reference: `docs/shell-reference.md` (sections "Globals API" and "Proposed jsh runtime extensions").**
 
-- **Auto-discovery**: registered as callable commands by filename (without the extension). A skill can ship its own commands by including a `.jsh` next to `SKILL.md`.
-- **Node-like globals**: `process`, `console`, `fs` — a VFS bridge with `readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile`.
-- **Dual-mode**: works in both the CLI server and the Chrome extension.
-- **Top-level `await`**: scripts are wrapped in `AsyncFunction`. Always `await` fs methods. Don't use `.then()`.
+- **Auto-discovery**: registered as callable commands by filename (without the extension). A skill can ship its own commands by including a `.jsh` next to `SKILL.md`. Priority root `/workspace/skills/` wins on basename collisions.
+- **Dual-mode**: works in both the CLI server and the Chrome extension (sandbox iframe). Don't rely on CLI-only Node modules.
+- **Top-level `await`**: scripts are wrapped in `AsyncFunction`. Always `await` fs/exec/fetch. Don't use `.then()`.
+
+#### Runtime globals (use these — don't reinvent)
+
+| Global       | Use for                                                                                                                                            |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `process`    | `argv`, `env`, `cwd()`, `exit(code)`, `stdout.write`, `stderr.write`, `stdin.read()`                                                               |
+| `console`    | `log`/`info` → stdout, `warn`/`error` → stderr                                                                                                     |
+| `fs`         | `readFile`, `writeFile`, `readFileBinary`, `writeFileBinary`, `readDir`, `exists`, `stat`, `mkdir`, `rm`, `fetchToFile` — all paths are VFS, async |
+| `exec(cmd)`  | Run any shell command and get `{ stdout, stderr, exitCode }`. Use this to compose with other `.jsh` and supplemental commands.                     |
+| `fetch`      | Standard `fetch` routed through SLICC's proxied transport (cookies + CORS handled).                                                                |
+| `require(p)` | Pull npm packages from esm.sh (version-pinnable: `require('lodash@4')`). Cached per session.                                                       |
+
+#### Proposed runtime extensions (spec'd — check `commands` before reimplementing)
+
+If you find yourself writing one of these patterns, **stop and check whether the runtime now provides it** — the surface below was extracted from cross-skill duplication and may already be live (test with `node -e "console.log(typeof process.argv.parseFlags, typeof browser)"`):
+
+- **`process.argv.parseFlags()`** — returns `{ positional, flags, subcommand }`. Replaces the per-skill `--flag=val` / `--flag val` parsing loop.
+- **`browser.*`** — `findTab({ domain | urlMatch })`, `ensureTab(url)`, `eval(tab, fn)`, `evalAsync(tab, fn)`, `cookie(tab, name)`, `localStorage(tab, key)`. Replaces shelling out to `playwright-cli tab-list` and regex-parsing its output.
+- **`browser.fetch(tab, url, opts)`** — page-context fetch (runs inside the tab's origin, so cookies + same-origin headers are automatic). Replaces the `eval-file` temp-file + double-JSON-unwrap dance.
+- **`browser.websocket.on(tab, …).filter({…}).forward({ sink })`** — declarative WebSocket observer with a closed sink set (`webhook` / `scoop` / `vfs` / `log`). **Required** for any new WS-watch use case; do not author page-context `WebSocket.prototype` patches in skill code.
+
+When the runtime offers one of these, prefer it over hand-rolled equivalents — it's audited once and shorter in skill code.
 
 Ship a `.jsh` when the skill needs deterministic, parameterizable behavior the agent shouldn't have to re-derive each time (e.g. a `slicc-handoff` helper, a custom diff formatter, a domain-specific lint).
 
