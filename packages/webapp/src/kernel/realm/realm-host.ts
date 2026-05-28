@@ -218,11 +218,28 @@ async function collectTree(
 // ---------------------------------------------------------------------------
 
 async function dispatchExec(op: string, args: unknown[], ctx: CommandContext): Promise<unknown> {
-  if (op !== 'run') throw new Error(`realm-host: unknown exec op '${op}'`);
   if (!ctx.exec) throw new Error('exec is not available in this runtime');
-  const command = args[0] as string;
-  const result = await ctx.exec(command, { cwd: ctx.cwd });
-  return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+  if (op === 'run') {
+    const command = args[0] as string;
+    const result = await ctx.exec(command, { cwd: ctx.cwd });
+    return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+  }
+  if (op === 'spawn') {
+    // Shell-free variant — mirrors `child_process.spawnSync(cmd, args)`.
+    // Passes `argv.slice(1)` through just-bash's `args` option, which
+    // bypasses shell parsing / globbing / quoting entirely. argv[0] is
+    // the bare executable name (no metas) so the shell sees a single
+    // word and the rest are appended verbatim. Eliminates the
+    // `shellQuote()` boilerplate skills used to keep around.
+    const argv = args[0];
+    if (!Array.isArray(argv) || argv.length === 0 || !argv.every((a) => typeof a === 'string')) {
+      throw new Error('exec.spawn: argv must be a non-empty string[]');
+    }
+    const [cmd, ...rest] = argv as string[];
+    const result = await ctx.exec(cmd, { cwd: ctx.cwd, args: rest });
+    return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+  }
+  throw new Error(`realm-host: unknown exec op '${op}'`);
 }
 
 // ---------------------------------------------------------------------------
