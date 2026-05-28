@@ -13,11 +13,13 @@
  */
 
 import type { CommandContext } from 'just-bash';
+import type { BrowserAPI } from '../../cdp/browser-api.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type {
   RealmRpcRequest,
   RealmRpcResponse,
   SerializedFetchResponse,
+  TabHandle,
   WalkTreeEntry,
   WriteBatchPayload,
   WriteBatchResult,
@@ -30,17 +32,31 @@ export interface RealmHostHandle {
 }
 
 /**
+ * Optional dependencies injected into the realm host. `browser` is
+ * resolved via this hook for tests; production callers can omit it
+ * and the host falls back to `globalThis.__slicc_browser` (the
+ * BrowserAPI published by `kernel/host.ts` at boot).
+ */
+export interface RealmHostOptions {
+  browser?: BrowserAPI;
+}
+
+/**
  * Attach an RPC server to a realm port. Returns a handle whose
  * `dispose()` removes the listener — the runner calls it when the
  * realm exits or is force-terminated so the port doesn't keep
  * answering after the realm is gone.
  */
-export function attachRealmHost(port: RealmPortLike, ctx: CommandContext): RealmHostHandle {
+export function attachRealmHost(
+  port: RealmPortLike,
+  ctx: CommandContext,
+  opts: RealmHostOptions = {}
+): RealmHostHandle {
   const handler = (event: MessageEvent): void => {
     const data = event.data as { type?: string };
     if (data?.type !== 'realm-rpc-req') return;
     const req = event.data as RealmRpcRequest;
-    void respond(port, req, ctx);
+    void respond(port, req, ctx, opts);
   };
   port.addEventListener('message', handler);
   port.start?.();
@@ -57,10 +73,11 @@ export function attachRealmHost(port: RealmPortLike, ctx: CommandContext): Realm
 async function respond(
   port: RealmPortLike,
   req: RealmRpcRequest,
-  ctx: CommandContext
+  ctx: CommandContext,
+  opts: RealmHostOptions
 ): Promise<void> {
   try {
-    const result = await dispatch(req, ctx);
+    const result = await dispatch(req, ctx, opts);
     const res: RealmRpcResponse = { type: 'realm-rpc-res', id: req.id, result };
     // Body bytes need to be transferred so we don't structured-clone
     // potentially-large response bodies on every fetch.
@@ -73,7 +90,11 @@ async function respond(
   }
 }
 
-async function dispatch(req: RealmRpcRequest, ctx: CommandContext): Promise<unknown> {
+async function dispatch(
+  req: RealmRpcRequest,
+  ctx: CommandContext,
+  opts: RealmHostOptions
+): Promise<unknown> {
   switch (req.channel) {
     case 'vfs':
       return dispatchVfs(req.op, req.args, ctx);
@@ -81,9 +102,25 @@ async function dispatch(req: RealmRpcRequest, ctx: CommandContext): Promise<unkn
       return dispatchExec(req.op, req.args, ctx);
     case 'fetch':
       return dispatchFetch(req.op, req.args, ctx);
+    case 'browser':
+      return dispatchBrowser(req.op, req.args, resolveBrowser(opts));
     default:
       throw new Error(`realm-host: unknown channel '${req.channel}'`);
   }
+}
+
+/**
+ * Resolve the BrowserAPI to use for the `browser` channel. Tests
+ * inject one through `opts`; production paths read the one published
+ * on `globalThis` by `kernel/host.ts`. A missing browser throws a
+ * clear "unavailable in this runtime" error rather than a generic
+ * undefined-method crash.
+ */
+function resolveBrowser(opts: RealmHostOptions): BrowserAPI {
+  if (opts.browser) return opts.browser;
+  const g = globalThis as { __slicc_browser?: BrowserAPI };
+  if (g.__slicc_browser) return g.__slicc_browser;
+  throw new Error('browser is not available in this runtime');
 }
 
 // ---------------------------------------------------------------------------
@@ -273,6 +310,243 @@ async function dispatchFetch(
     body,
     url: response.url,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Channel: browser
+// ---------------------------------------------------------------------------
+
+/**
+ * Dispatch a `browser` channel RPC. All ops route through
+ * `BrowserAPI` (the same surface `playwright-command.ts` uses), so
+ * standalone and extension floats share one bridge — only the
+ * underlying CDP transport differs. Tab-scoped ops serialize through
+ * `browser.withTab` so they can't race with the panel terminal's
+ * `playwright` invocations.
+ */
+async function dispatchBrowser(op: string, args: unknown[], browser: BrowserAPI): Promise<unknown> {
+  switch (op) {
+    case 'findTab': {
+      const query = (args[0] as { domain?: string; urlMatch?: string } | undefined) ?? {};
+      return findTab(browser, query);
+    }
+    case 'ensureTab': {
+      const url = args[0] as string;
+      const options = (args[1] as { matchUrl?: string } | undefined) ?? {};
+      return ensureTab(browser, url, options);
+    }
+    case 'eval': {
+      const targetId = args[0] as string;
+      const code = args[1] as string;
+      return evalInTab(browser, targetId, code, false);
+    }
+    case 'evalAsync': {
+      const targetId = args[0] as string;
+      const code = args[1] as string;
+      return evalInTab(browser, targetId, code, true);
+    }
+    case 'cookie': {
+      const targetId = args[0] as string;
+      const name = args[1] as string;
+      return getCookie(browser, targetId, name);
+    }
+    case 'localStorage': {
+      const targetId = args[0] as string;
+      const key = args[1] as string;
+      return getLocalStorage(browser, targetId, key);
+    }
+    default:
+      throw new Error(`realm-host: unknown browser op '${op}'`);
+  }
+}
+
+async function listTabHandles(browser: BrowserAPI): Promise<TabHandle[]> {
+  // `listAllTargets` includes remote tray targets when wired; the
+  // standalone path with no tray transparently falls back to
+  // `listPages`.
+  const pages =
+    typeof browser.listAllTargets === 'function'
+      ? await browser.listAllTargets()
+      : await browser.listPages();
+  return pages.map((p) => ({ targetId: p.targetId, url: p.url, title: p.title }));
+}
+
+async function findTab(
+  browser: BrowserAPI,
+  query: { domain?: string; urlMatch?: string }
+): Promise<TabHandle | null> {
+  const tabs = await listTabHandles(browser);
+  if (query.domain) {
+    const wanted = query.domain.toLowerCase();
+    for (const t of tabs) {
+      const host = safeHostname(t.url);
+      if (host && host.toLowerCase() === wanted) return t;
+    }
+    return null;
+  }
+  if (query.urlMatch) {
+    let re: RegExp;
+    try {
+      re = new RegExp(query.urlMatch);
+    } catch (err) {
+      throw new Error(
+        `browser.findTab: invalid urlMatch regex: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    for (const t of tabs) {
+      if (re.test(t.url)) return t;
+    }
+    return null;
+  }
+  throw new Error('browser.findTab: query requires `domain` or `urlMatch`');
+}
+
+async function ensureTab(
+  browser: BrowserAPI,
+  url: string,
+  options: { matchUrl?: string }
+): Promise<TabHandle> {
+  // Default match: same origin as the requested URL. Callers can
+  // override with a regex (`matchUrl`) when origin equality is too
+  // loose / tight (e.g. matching a path prefix or a tray target).
+  const tabs = await listTabHandles(browser);
+  if (options.matchUrl) {
+    let re: RegExp;
+    try {
+      re = new RegExp(options.matchUrl);
+    } catch (err) {
+      throw new Error(
+        `browser.ensureTab: invalid matchUrl regex: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    const hit = tabs.find((t) => re.test(t.url));
+    if (hit) return hit;
+  } else {
+    const wantedOrigin = safeOrigin(url);
+    if (wantedOrigin) {
+      const hit = tabs.find((t) => safeOrigin(t.url) === wantedOrigin);
+      if (hit) return hit;
+    }
+  }
+  const targetId = await browser.createPage(url);
+  // `createPage` returns just the id; build a handle eagerly so the
+  // caller can immediately `browser.eval(tab, ...)` without a second
+  // listPages round-trip. Title may still be empty (the page hasn't
+  // loaded yet) but `url` matches what the caller asked for.
+  return { targetId, url, title: '' };
+}
+
+async function evalInTab(
+  browser: BrowserAPI,
+  targetId: string,
+  code: string,
+  awaitPromise: boolean
+): Promise<unknown> {
+  return browser.withTab(targetId, async () => {
+    const value = await browser.evaluate(code, { awaitPromise, returnByValue: true });
+    return unwrapEvalResult(value);
+  });
+}
+
+/**
+ * Transparent double-JSON unwrap. CDP `Runtime.evaluate` with
+ * `returnByValue: true` already round-trips structured-cloneable
+ * values directly — but the long-standing convention in
+ * `playwright eval-file` scripts is to `JSON.stringify` the final
+ * value so the shell can pipe it cleanly. That puts one or two
+ * layers of JSON encoding between the user's value and the realm
+ * caller. We peel both transparently so realm code sees the value
+ * directly, no `JSON.parse(JSON.parse(...))` ceremony.
+ */
+function unwrapEvalResult(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const first = tryParseJson(value);
+  if (first === undefined) return value;
+  if (typeof first === 'string') {
+    const second = tryParseJson(first);
+    return second === undefined ? first : second;
+  }
+  return first;
+}
+
+function tryParseJson(text: string): unknown {
+  const trimmed = text.trim();
+  // Cheap heuristic gate: only parse strings that look like a JSON
+  // literal. Avoids accidentally turning `"42"` (a stringified
+  // number a user explicitly wanted as a string) into 42 — every
+  // bare `JSON.stringify(value)` for non-object values still starts
+  // with `"`/`[`/`{` or a digit/`-`/`true`/`false`/`null`. The trim
+  // is necessary because Runtime.evaluate sometimes returns the
+  // wrapped string with leading/trailing whitespace.
+  if (trimmed.length === 0) return undefined;
+  const first = trimmed[0];
+  const looksJson =
+    first === '{' ||
+    first === '[' ||
+    first === '"' ||
+    first === '-' ||
+    (first >= '0' && first <= '9') ||
+    trimmed === 'true' ||
+    trimmed === 'false' ||
+    trimmed === 'null';
+  if (!looksJson) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
+async function getCookie(
+  browser: BrowserAPI,
+  targetId: string,
+  name: string
+): Promise<string | null> {
+  return browser.withTab(targetId, async () => {
+    // `Network.getCookies` (no `urls`) returns cookies visible to
+    // the attached page — same surface `playwright cookie-get`
+    // uses, so standalone + extension behave identically.
+    const result = await browser.sendCDP('Network.getCookies');
+    const cookies = (result['cookies'] as Array<{ name?: string; value?: string }>) ?? [];
+    const hit = cookies.find((c) => c.name === name);
+    return hit && typeof hit.value === 'string' ? hit.value : null;
+  });
+}
+
+async function getLocalStorage(
+  browser: BrowserAPI,
+  targetId: string,
+  key: string
+): Promise<string | null> {
+  // Read via in-page evaluate so we hit the same origin's storage
+  // partition the page sees — `DOMStorage.getDOMStorageItems`
+  // requires a frame ID and security origin lookup we'd otherwise
+  // have to plumb, and the evaluate path matches `playwright
+  // eval` semantics.
+  return browser.withTab(targetId, async () => {
+    const raw = await browser.evaluate(
+      `(function(){try{var v=window.localStorage.getItem(${JSON.stringify(key)});return v===null?null:String(v);}catch(e){return null;}})()`,
+      { returnByValue: true }
+    );
+    if (raw === null || raw === undefined) return null;
+    return typeof raw === 'string' ? raw : String(raw);
+  });
+}
+
+function safeHostname(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+function safeOrigin(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

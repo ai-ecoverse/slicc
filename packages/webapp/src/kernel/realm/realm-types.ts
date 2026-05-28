@@ -77,7 +77,19 @@ export interface RealmErrorMsg {
 }
 
 /** Channels the kernel host exposes to user code. */
-export type RealmRpcChannel = 'vfs' | 'exec' | 'fetch';
+export type RealmRpcChannel = 'vfs' | 'exec' | 'fetch' | 'browser';
+
+/**
+ * Tab handle returned to realm code by `browser.findTab` /
+ * `browser.ensureTab`. A plain object so it round-trips through
+ * structured clone without losing identity — the realm uses
+ * `targetId` to address the tab on subsequent calls.
+ */
+export interface TabHandle {
+  targetId: string;
+  url: string;
+  title: string;
+}
 
 /**
  * Realm → host RPC. Each request gets exactly one matching

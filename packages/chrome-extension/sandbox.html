@@ -859,15 +859,49 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   };
   const moduleShim = { exports: {}, filename: init.filename };
 
+  // `browser` global — mirror of kernel/realm/js-realm-shared.ts. Calls
+  // the `browser` RPC channel exposed by realm-host.ts. Accepts a
+  // TabHandle (from findTab/ensureTab) or a bare targetId string.
+  function resolveBrowserTargetId(tab) {
+    if (typeof tab === 'string') return tab;
+    if (tab && typeof tab === 'object' && typeof tab.targetId === 'string') return tab.targetId;
+    throw new TypeError('browser: expected a tab handle or targetId string');
+  }
+  function serializeBrowserEvalSource(source) {
+    if (typeof source === 'function') return '(' + source.toString() + ')()';
+    if (typeof source === 'string') return source;
+    throw new TypeError('browser.eval/evalAsync: source must be a function or string');
+  }
+  function normalizeBrowserFindQuery(query) {
+    const out = {};
+    if (query && query.domain !== undefined) out.domain = query.domain;
+    if (query && query.urlMatch !== undefined) {
+      out.urlMatch = query.urlMatch instanceof RegExp ? query.urlMatch.source : query.urlMatch;
+    }
+    return out;
+  }
+  function normalizeBrowserMatchUrl(options) {
+    if (!options || options.matchUrl === undefined) return {};
+    return { matchUrl: options.matchUrl instanceof RegExp ? options.matchUrl.source : options.matchUrl };
+  }
+  const browserBridge = {
+    findTab: (query) => rpcCall('browser', 'findTab', [normalizeBrowserFindQuery(query || {})]),
+    ensureTab: (url, options) => rpcCall('browser', 'ensureTab', [url, normalizeBrowserMatchUrl(options || {})]),
+    eval: (tab, fnOrCode) => rpcCall('browser', 'eval', [resolveBrowserTargetId(tab), serializeBrowserEvalSource(fnOrCode)]),
+    evalAsync: (tab, fnOrCode) => rpcCall('browser', 'evalAsync', [resolveBrowserTargetId(tab), serializeBrowserEvalSource(fnOrCode)]),
+    cookie: (tab, name) => rpcCall('browser', 'cookie', [resolveBrowserTargetId(tab), name]),
+    localStorage: (tab, key) => rpcCall('browser', 'localStorage', [resolveBrowserTargetId(tab), key]),
+  };
+
   let exitCode = 0;
   try {
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     const fn = new AsyncFunction(
-      'fs', 'process', 'console', 'require', 'module', 'exports', 'exec', 'fetch', 'skill', 'http',
+      'fs', 'process', 'console', 'require', 'module', 'exports', 'exec', 'fetch', 'skill', 'http', 'browser',
       'cli', 'c', 'time', 'fmt', 'pool',
       '"use strict";\n' + init.code
     );
-    await fn(fsBridge, processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, execBridge, realmFetch, skillGlobal, httpGlobal, cliApi, colorApi, time, fmt, pool);
+    await fn(fsBridge, processShim, consoleShim, requireShim, moduleShim, moduleShim.exports, execBridge, realmFetch, skillGlobal, httpGlobal, browserBridge, cliApi, colorApi, time, fmt, pool);
   } catch (err) {
     if (err && typeof err === 'object' && NODE_EXIT in err) {
       exitCode = err[NODE_EXIT];
