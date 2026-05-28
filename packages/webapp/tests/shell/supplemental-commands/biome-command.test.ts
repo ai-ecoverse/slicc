@@ -206,4 +206,26 @@ describeHeavy('createBiomeCommand (live WASM)', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
   }, 60_000);
+
+  it('check (no --write) exits non-zero on unformatted files', async () => {
+    resetBiomeForTests();
+    const cmd = createBiomeCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile('/workspace/unfmt.ts', 'const  x   =  1;export {x};\n');
+    const result = await cmd.execute(['check', 'unfmt.ts'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/not formatted/);
+    // Source file must not have been mutated without --write.
+    expect(await ctx.fs.readFile('/workspace/unfmt.ts')).toMatch(/const {2}x/);
+  }, 60_000);
+
+  it('ci (no --write) exits non-zero on unformatted files', async () => {
+    resetBiomeForTests();
+    const cmd = createBiomeCommand();
+    const ctx = createMockCtx();
+    await ctx.fs.writeFile('/workspace/unfmt-ci.ts', 'const  x   =  1;export {x};\n');
+    const result = await cmd.execute(['ci', 'unfmt-ci.ts'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/not formatted/);
+  }, 60_000);
 });

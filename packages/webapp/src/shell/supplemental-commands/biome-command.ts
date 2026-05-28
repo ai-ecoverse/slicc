@@ -392,6 +392,15 @@ async function processFile(
       summary.changedCount += 1;
     } else if (!parsed.write && parsed.subcommand === 'format') {
       summary.stdoutChunks.push(fmt.content);
+    } else if (!parsed.write && fmt.content !== current) {
+      // `check` / `ci` without `--write`: a file that would be
+      // reformatted must surface as a failure, matching the upstream
+      // Biome CLI. Record it as an error for `check` (non-zero exit)
+      // and as a warning for `ci` (ci already fails on warnings, so
+      // the exit code is the same, but the count is more honest).
+      summary.diagnostics += `${path}: file is not formatted (run with --write to fix)\n`;
+      if (parsed.subcommand === 'ci') summary.warningCount += 1;
+      else summary.errorCount += 1;
     }
   } else if (parsed.subcommand === 'lint' && parsed.write && fixMode && current !== source) {
     // `lint --apply --write` persists the fixed content.
@@ -413,8 +422,11 @@ function renderDiagnostics(
   let errors = 0;
   let warnings = 0;
   for (const d of diagnostics as { severity?: string }[]) {
+    // Biome emits `warn` (not `warning`); accept both so future
+    // version bumps that align the string don't silently regress.
+    // `information` / `hint` are informational only and don't count.
     if (d.severity === 'error' || d.severity === 'fatal') errors += 1;
-    else if (d.severity === 'warning') warnings += 1;
+    else if (d.severity === 'warn' || d.severity === 'warning') warnings += 1;
   }
   let text = '';
   try {
