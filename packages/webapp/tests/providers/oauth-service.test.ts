@@ -49,7 +49,11 @@ function fireMessage(data: unknown, opts: { origin?: string; source?: object | n
 }
 
 // Import AFTER stubs are in place (module reads `window` at call time)
-import { createOAuthLauncher, getOAuthPageOrigin } from '../../src/providers/oauth-service.js';
+import {
+  createOAuthLauncher,
+  getOAuthPageOrigin,
+  openIdpLogoutUrl,
+} from '../../src/providers/oauth-service.js';
 
 describe('createOAuthLauncher', () => {
   beforeEach(() => {
@@ -127,6 +131,29 @@ describe('createOAuthLauncher', () => {
     const result = await promise;
     expect(result).toBeNull();
     expect(mockPopup.close).toHaveBeenCalled();
+  });
+
+  it('resolves null immediately when the user closes the OAuth popup (cancelled flow)', async () => {
+    // Provide a popup with a mutable `closed` property so we can simulate
+    // the user dismissing the window mid-flow.
+    let popupClosed = false;
+    const cancelPopup = {
+      close: vi.fn(),
+      get closed() {
+        return popupClosed;
+      },
+    };
+    mockWindow.open.mockReturnValueOnce(cancelPopup);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    // Simulate user closing the popup, then advance past one poll interval
+    popupClosed = true;
+    vi.advanceTimersByTime(500);
+
+    const result = await promise;
+    expect(result).toBeNull();
   });
 
   it('cleans up message listener after successful callback', async () => {
@@ -417,6 +444,69 @@ describe('getOAuthPageOrigin', () => {
     delete (globalThis as any).window;
     delete (globalThis as any).__slicc_panelRpc;
     await expect(getOAuthPageOrigin()).rejects.toThrow(/panel-RPC bridge/);
+  });
+});
+
+describe('openIdpLogoutUrl', () => {
+  afterEach(() => {
+    // Restore mockWindow so it is available for other describe blocks
+    vi.stubGlobal('window', mockWindow);
+  });
+
+  it('opens a popup to the given URL with popup=yes in the features string', async () => {
+    const closeStub = vi.fn();
+    // closed: false so the poll loop does not resolve early; timeout fires first
+    vi.stubGlobal('window', { open: vi.fn(() => ({ close: closeStub, closed: false })) });
+
+    await openIdpLogoutUrl('https://idp.example.com/logout', 50);
+
+    expect((window as any).open).toHaveBeenCalledWith(
+      'https://idp.example.com/logout',
+      '_blank',
+      expect.stringContaining('popup=yes')
+    );
+  });
+
+  it('force-closes the popup and resolves after the timeout when user does not close it', async () => {
+    const closeStub = vi.fn();
+    vi.stubGlobal('window', { open: vi.fn(() => ({ close: closeStub, closed: false })) });
+
+    await openIdpLogoutUrl('https://idp.example.com/logout', 50);
+
+    expect(closeStub).toHaveBeenCalled();
+  });
+
+  it('resolves as soon as the user closes the popup without waiting for the timeout', async () => {
+    let closed = false;
+    const closeStub = vi.fn(() => {
+      closed = true;
+    });
+    vi.stubGlobal('window', {
+      open: vi.fn(() => ({
+        close: closeStub,
+        get closed() {
+          return closed;
+        },
+      })),
+    });
+
+    // Simulate user closing the popup after ~60ms; timeout is 10s so it must
+    // be the popup.closed poll (every 500ms in prod, but here we just rely on
+    // the popup closing before the deadline).
+    setTimeout(() => {
+      closed = true;
+    }, 60);
+
+    const start = Date.now();
+    await openIdpLogoutUrl('https://idp.example.com/logout', 10_000);
+    // Should resolve well before the 10s timeout
+    expect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it('resolves undefined and does not throw when window is undefined (worker runtime)', async () => {
+    vi.stubGlobal('window', undefined);
+
+    await expect(openIdpLogoutUrl('https://idp.example.com/logout')).resolves.toBeUndefined();
   });
 });
 

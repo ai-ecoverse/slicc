@@ -164,6 +164,10 @@ vi.mock('../../src/providers/index.js', () => ({
   shouldIncludeProvider: () => true,
 }));
 
+vi.mock('../../src/providers/oauth-service.js', () => ({
+  openIdpLogoutUrl: vi.fn().mockResolvedValue(undefined),
+}));
+
 import {
   getSelectedProvider,
   setSelectedProvider,
@@ -192,6 +196,7 @@ import {
   resolveModelById,
   saveOAuthAccount,
   getOAuthAccountInfo,
+  logoutOAuthAccount,
 } from '../../src/ui/provider-settings.js';
 import type { ProviderDefault } from '../../src/ui/provider-settings.js';
 
@@ -245,6 +250,52 @@ describe('multi-account storage', () => {
     const accounts = getAccounts();
     expect(accounts).toHaveLength(1);
     expect(accounts[0].providerId).toBe('openai');
+  });
+
+  it('removeAccount calls logoutOAuthAccount (onOAuthLogout) for OAuth providers before removing', async () => {
+    const onOAuthLogoutSpy = vi.fn().mockResolvedValue(undefined);
+    const configs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    configs.set('test-oauth', {
+      id: 'test-oauth',
+      name: 'Test OAuth',
+      description: 'OAuth test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogout: onOAuthLogoutSpy,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => configs.get(id));
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'test-oauth', apiKey: '', accessToken: 'tok-xyz', userName: 'bob' },
+      ])
+    );
+
+    await removeAccount('test-oauth');
+
+    // Account is fully removed
+    expect(getAccounts()).toHaveLength(0);
+    // Token revocation was called (via logoutOAuthAccount)
+    expect(onOAuthLogoutSpy).toHaveBeenCalledOnce();
+  });
+
+  it('removeAccount does NOT call onOAuthLogout for non-OAuth providers', async () => {
+    const onOAuthLogoutSpy = vi.fn();
+    const configs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    configs.set('anthropic', {
+      ...configs.get('anthropic'),
+      onOAuthLogout: onOAuthLogoutSpy,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => configs.get(id));
+    addAccount('anthropic', 'sk-ant');
+    await removeAccount('anthropic');
+    expect(onOAuthLogoutSpy).not.toHaveBeenCalled();
+    expect(getAccounts()).toHaveLength(0);
   });
 
   it('getApiKeyForProvider returns the key for a specific provider', () => {
@@ -1541,5 +1592,94 @@ describe('model metadata overrides', () => {
     const models = getProviderModels('test-proxy');
     expect(String(models[0].api)).toContain('anthropic');
     expect(String(models[0].api)).not.toContain('openai');
+  });
+});
+
+describe('logoutOAuthAccount', () => {
+  let onOAuthLogoutMock: ReturnType<typeof vi.fn>;
+  let getOAuthLogoutUrlMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+
+    onOAuthLogoutMock = vi.fn().mockResolvedValue(undefined);
+    getOAuthLogoutUrlMock = vi.fn().mockReturnValue('https://idp.example.com/logout');
+
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-oauth', {
+      id: 'test-oauth',
+      name: 'Test OAuth',
+      description: 'OAuth test provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogout: onOAuthLogoutMock,
+      getOAuthLogoutUrl: getOAuthLogoutUrlMock,
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        {
+          providerId: 'test-oauth',
+          apiKey: '',
+          accessToken: 'tok-abc',
+          userName: 'alice',
+          userAvatar: 'https://example.com/avatar.png',
+        },
+      ])
+    );
+  });
+
+  it('calls onOAuthLogout when defined', async () => {
+    await logoutOAuthAccount('test-oauth');
+    expect(onOAuthLogoutMock).toHaveBeenCalledOnce();
+  });
+
+  it('calls getOAuthLogoutUrl with the account object', async () => {
+    await logoutOAuthAccount('test-oauth');
+    expect(getOAuthLogoutUrlMock).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'test-oauth', accessToken: 'tok-abc' })
+    );
+  });
+
+  it('after logout: account has loggedOut:true, accessToken cleared, apiKey empty, userName/userAvatar retained', async () => {
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    expect(accounts[0]).toMatchObject({
+      providerId: 'test-oauth',
+      loggedOut: true,
+      apiKey: '',
+      userName: 'alice',
+      userAvatar: 'https://example.com/avatar.png',
+    });
+    expect(accounts[0].accessToken).toBeUndefined();
+  });
+
+  it('does nothing for a non-OAuth provider', async () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'anthropic', apiKey: 'sk-ant-123' }])
+    );
+    await logoutOAuthAccount('anthropic');
+    const accounts = getAccounts();
+    expect(accounts[0].loggedOut).toBeUndefined();
+    expect(onOAuthLogoutMock).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for an unknown providerId', async () => {
+    await expect(logoutOAuthAccount('unknown-provider')).resolves.toBeUndefined();
+  });
+
+  it('continues local cleanup when onOAuthLogout throws — still sets loggedOut:true and warns', async () => {
+    onOAuthLogoutMock.mockRejectedValue(new Error('IdP error'));
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    expect(accounts[0].loggedOut).toBe(true);
+    expect(mockLog.warn).toHaveBeenCalledWith('onOAuthLogout failed', expect.anything());
   });
 });

@@ -45,6 +45,7 @@ import {
   getAccounts,
   getProviderConfig,
   removeAccount,
+  logoutOAuthAccount,
 } from './provider-settings.js';
 import { getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
@@ -909,8 +910,13 @@ export class Layout {
       const signOutBtn = document.createElement('button');
       signOutBtn.className = 'avatar-popover__item';
       signOutBtn.textContent = 'Sign out';
-      signOutBtn.addEventListener('click', () => {
-        removeAccount(account.providerId);
+      signOutBtn.addEventListener('click', async () => {
+        const cfg = getProviderConfig(account.providerId);
+        if (cfg?.isOAuth) {
+          await logoutOAuthAccount(account.providerId);
+        } else {
+          await removeAccount(account.providerId);
+        }
         popover.remove();
         this.refreshAvatar();
         this.refreshModels?.();

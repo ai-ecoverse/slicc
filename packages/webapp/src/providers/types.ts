@@ -80,6 +80,13 @@ export interface OAuthLoginOptions {
    * space-separated). The provider is responsible for any normalization.
    */
   scopes?: string;
+  /**
+   * When true, the provider should force the user to re-authenticate even if
+   * an active SSO session exists (e.g. Adobe IMS prompt=login). Used by the
+   * Login button on a logged-out account row to guarantee a fresh account
+   * selection rather than silently re-authorizing the previous account.
+   */
+  forceReauth?: boolean;
 }
 
 /**
@@ -188,6 +195,19 @@ export interface ProviderConfig {
   ) => Promise<void>;
   /** Called when the user clicks logout for this OAuth provider. */
   onOAuthLogout?: () => Promise<void>;
+  /**
+   * Returns the URL to open in a popup to clear the IdP browser session before
+   * re-authentication. When defined, the URL is opened during logout (not login)
+   * so that a subsequent Login always gets a fresh account selection.
+   *
+   * Design note (Option B): This is intentionally disruptive — it signs the user
+   * out of the provider in their browser. See the spec at
+   * docs/superpowers/specs/2026-05-28-oauth-logout-account-switching-design.md.
+   *
+   * If undefined, IdP session logout is skipped for this provider (token revocation
+   * via onOAuthLogout still runs).
+   */
+  getOAuthLogoutUrl?: (account: { accessToken?: string; providerId: string }) => string | undefined;
   /**
    * Optional: refresh an expired/expiring token silently from page context.
    * Called by oauth-bootstrap at page load so the kernel-worker can stream

@@ -567,6 +567,14 @@ export const config: ProviderConfig = {
     // Clear account
     await saveOAuthAccount({ providerId: 'github', accessToken: '' });
   },
+
+  /**
+   * Opens https://github.com/logout to clear the GitHub browser session.
+   * Note: GitHub's actual logout is a CSRF-protected POST form; a GET
+   * navigation is best-effort and may not fully clear the session in all
+   * browser contexts. See spec PR notes for details.
+   */
+  getOAuthLogoutUrl: (_account) => 'https://github.com/logout',
 };
 
 // ── Registration ───────────────────────────────────────────────────

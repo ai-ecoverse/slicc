@@ -146,6 +146,8 @@ export interface Account {
   userName?: string;
   userAvatar?: string;
   maskedValue?: string;
+  /** True when the user has explicitly logged out; token fields are cleared but the row is retained. */
+  loggedOut?: boolean;
 }
 
 // Delete legacy keys on first access
@@ -614,6 +616,15 @@ export function addAccount(
 }
 
 export async function removeAccount(providerId: string): Promise<void> {
+  // For OAuth providers, run the full logout sequence first (token revocation,
+  // IdP session clear, and replica removal). removeAccount then finishes by
+  // deleting the account entry entirely.
+  const accountToRemove = getAccounts().find((a) => a.providerId === providerId);
+  const configToRemove = getProviderConfig(providerId);
+  if (accountToRemove && configToRemove?.isOAuth) {
+    await logoutOAuthAccount(providerId);
+  }
+
   // Clear the replica BEFORE wiping the local Account
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   try {
@@ -655,6 +666,85 @@ export async function removeAccount(providerId: string): Promise<void> {
   const sep = raw.indexOf(':');
   if (sep > 0 && raw.slice(0, sep) === providerId) {
     localStorage.removeItem(MODEL_KEY);
+  }
+}
+
+/**
+ * Logs out of an OAuth provider: revokes the token at the IdP API, opens the
+ * IdP browser-session logout URL (if the provider defines one), clears local
+ * token fields, and marks the account as loggedOut: true so the UI shows a
+ * Login button instead.
+ *
+ * Does NOT remove the account row — use removeAccount for that. removeAccount
+ * calls this internally for OAuth providers so delete also logs out.
+ */
+export async function logoutOAuthAccount(providerId: string): Promise<void> {
+  const account = getAccounts().find((a) => a.providerId === providerId);
+  if (!account) return;
+  const providerConfig = getProviderConfig(providerId);
+  if (!providerConfig?.isOAuth) return;
+
+  // 1. Revoke the token at the IdP API
+  if (providerConfig.onOAuthLogout) {
+    try {
+      await providerConfig.onOAuthLogout();
+    } catch (err) {
+      log.warn('onOAuthLogout failed', {
+        providerId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // 2. Open IdP logout URL to clear browser session (Option B — see spec).
+  //    Skipped gracefully when not defined or in non-window runtimes.
+  if (providerConfig.getOAuthLogoutUrl) {
+    const logoutUrl = providerConfig.getOAuthLogoutUrl(account);
+    if (logoutUrl) {
+      const { openIdpLogoutUrl } = await import('../providers/oauth-service.js');
+      await openIdpLogoutUrl(logoutUrl).catch((err) => {
+        log.warn('IdP logout popup failed', {
+          providerId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+  }
+
+  // 3. Clear token fields, retain display info, set loggedOut: true
+  const updated = getAccounts().map((a): Account => {
+    if (a.providerId !== providerId) return a;
+    return {
+      providerId: a.providerId,
+      apiKey: '',
+      baseUrl: a.baseUrl,
+      userName: a.userName,
+      userAvatar: a.userAvatar,
+      loggedOut: true,
+    };
+  });
+  await saveAccountsAsync(updated);
+
+  // 4. Remove token replica from node-server / extension storage
+  const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  try {
+    if (isExt) {
+      await chrome.storage.local.remove([
+        `oauth.${providerId}.token`,
+        `oauth.${providerId}.token_DOMAINS`,
+      ]);
+    } else {
+      const r = await fetch(`/api/secrets/oauth/${providerId}`, { method: 'DELETE' });
+      if (!r.ok && r.status !== 404) {
+        log.warn('OAuth replica DELETE non-ok during logout', { providerId, status: r.status });
+      }
+    }
+  } catch (err) {
+    log.error('OAuth replica removal failed during logout', {
+      providerId,
+      isExtension: isExt,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -1116,6 +1206,10 @@ const ICON_PATHS = {
     'M8 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2',
     'M6 6v10a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6',
   ],
+  /** Arrow leaving a box — used for the Logout button */
+  logout: ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9'],
+  /** Arrow entering a box — used for the Login (re-connect) button */
+  login: ['M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4', 'M10 17l5-5-5-5', 'M15 12H3'],
 };
 
 export interface ShowProviderSettingsOptions {
@@ -1202,7 +1296,12 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           const detail = document.createElement('div');
           detail.style.cssText =
             'font-size: 11px; color: var(--s2-content-disabled); font-family: monospace; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-          if (account.userName) {
+          if (account.loggedOut) {
+            detail.textContent = account.userName
+              ? `Logged out — was ${account.userName}`
+              : 'Logged out';
+            detail.style.color = 'var(--s2-content-disabled)';
+          } else if (account.userName) {
             detail.textContent = account.userName;
           } else if (account.accessToken) {
             detail.textContent = 'Logged in';
@@ -1235,6 +1334,65 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
             renderAccountForm(account);
           });
           actions.appendChild(editBtn);
+
+          // Logout/Login toggle — OAuth providers only
+          if (config.isOAuth) {
+            const isLoggedOut = account.loggedOut === true;
+            const authBtn = document.createElement('button');
+            authBtn.style.cssText = iconBtnStyle;
+            if (isLoggedOut) {
+              authBtn.setAttribute('aria-label', 'Log in');
+              authBtn.setAttribute('title', 'Log in');
+              authBtn.appendChild(svgIcon(ICON_PATHS.login));
+              authBtn.addEventListener('mouseenter', () => {
+                authBtn.style.color = 'var(--s2-accent)';
+                authBtn.style.borderColor = 'var(--s2-accent)';
+              });
+              authBtn.addEventListener('mouseleave', () => {
+                authBtn.style.color = 'var(--s2-content-secondary)';
+                authBtn.style.borderColor = 'var(--s2-border-subtle)';
+              });
+              authBtn.addEventListener('click', async () => {
+                const { createOAuthLauncher, createInterceptingOAuthLauncherForCurrentRuntime } =
+                  await import('../providers/oauth-service.js');
+                // Always force re-auth when reconnecting from a logged-out
+                // state so providers with SSO (e.g. Adobe IMS) don't silently
+                // re-authorize the previous account.
+                const loginOptions = { forceReauth: true };
+                if (config.onOAuthLoginIntercepted) {
+                  const interceptingLauncher =
+                    await createInterceptingOAuthLauncherForCurrentRuntime();
+                  if (interceptingLauncher) {
+                    await config.onOAuthLoginIntercepted(
+                      interceptingLauncher,
+                      renderAccountsList,
+                      loginOptions
+                    );
+                  }
+                } else if (config.onOAuthLogin) {
+                  const launcher = createOAuthLauncher();
+                  await config.onOAuthLogin(launcher, renderAccountsList, loginOptions);
+                }
+              });
+            } else {
+              authBtn.setAttribute('aria-label', 'Log out');
+              authBtn.setAttribute('title', 'Log out');
+              authBtn.appendChild(svgIcon(ICON_PATHS.logout));
+              authBtn.addEventListener('mouseenter', () => {
+                authBtn.style.color = 'var(--s2-warning, #f59e0b)';
+                authBtn.style.borderColor = 'var(--s2-warning, #f59e0b)';
+              });
+              authBtn.addEventListener('mouseleave', () => {
+                authBtn.style.color = 'var(--s2-content-secondary)';
+                authBtn.style.borderColor = 'var(--s2-border-subtle)';
+              });
+              authBtn.addEventListener('click', async () => {
+                await logoutOAuthAccount(account.providerId);
+                renderAccountsList();
+              });
+            }
+            actions.appendChild(authBtn);
+          }
 
           const deleteBtn = document.createElement('button');
           deleteBtn.style.cssText = iconBtnStyle;
