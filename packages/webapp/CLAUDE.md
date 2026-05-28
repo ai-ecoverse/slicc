@@ -68,7 +68,7 @@ Deep reference: `docs/kernel/process-model.md`.
 ### MCP Servers
 
 - Path: `packages/webapp/src/shell/mcp/`; command in `supplemental-commands/mcp-command.ts`.
-- Subcommands: `mcp add <url> [name]`, `mcp list`, `mcp delete <name>`, `mcp invoke <name> [tool] [--flag value]`, `mcp refresh <name>`, `mcp auth <name>` (re-authenticate via silent refresh-token renewal with an interactive popup fallback; `--silent` / `--interactive` to force one path).
+- Subcommands: `mcp add <url> <name>`, `mcp list`, `mcp delete <name>`, `mcp invoke <name> [tool] [--flag value]`, `mcp refresh <name>`, `mcp auth <name>` (re-authenticate via silent refresh-token renewal with an interactive popup fallback; `--silent` / `--interactive` to force one path).
 - Each registered server is exposed as an `mcp:<name>` OAuth provider (visible in `oauth-token --list`) when the server requires auth.
 - `mcp add` auto-writes an alias shim at `/workspace/.mcp/aliases/<name>.jsh` so `<name>` resolves as a top-level command and forwards to `mcp invoke <name>`.
 - MCP Apps declared by the server via `apps/list` are materialized as sprinkles under `/workspace/.mcp/sprinkles/<name>/`.
