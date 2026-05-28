@@ -15,6 +15,12 @@ export function createE2bSubstrate(cfg: SubstrateConfig): SandboxSubstrate {
   // Capture apiKey locally to pass explicitly to every SDK call (worker-safe).
   const apiKey = cfg.apiKey;
 
+  // CF Workers' default subrequest timeout aborts fetches around 30s. e2b's
+  // Sandbox.create resolves once the VM is restored from the paused template
+  // snapshot, which can take 20-40s on a cold edge. Bump requestTimeoutMs so
+  // CF doesn't abort the fetch under our feet. Same for connect (resume path).
+  const REQUEST_TIMEOUT_MS = 120_000;
+
   return {
     id: 'e2b',
     async create(opts: CreateOpts): Promise<SandboxHandle> {
@@ -23,12 +29,16 @@ export function createE2bSubstrate(cfg: SubstrateConfig): SandboxSubstrate {
         envs: opts.envVars,
         metadata: opts.metadata,
         timeoutMs: DEFAULT_TTL_MS,
+        requestTimeoutMs: REQUEST_TIMEOUT_MS,
         ...(opts.autoPauseOnCap ? { lifecycle: { onTimeout: 'pause' } } : {}),
       });
       return wrap(sbx);
     },
     async connect(sandboxId: string): Promise<SandboxHandle> {
-      const sbx = await Sandbox.connect(sandboxId, { apiKey });
+      const sbx = await Sandbox.connect(sandboxId, {
+        apiKey,
+        requestTimeoutMs: REQUEST_TIMEOUT_MS,
+      });
       return wrap(sbx);
     },
     async list(opts?: import('../substrate.js').ListOpts): Promise<SandboxSummary[]> {
