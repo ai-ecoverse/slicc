@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { readFileSync } from 'fs';
+import { stripBiomeWasmAssetPlugin } from './vite-plugins/strip-biome-wasm-asset';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = resolve(__dirname, '../..');
@@ -61,6 +62,7 @@ export default defineConfig(({ mode }) => ({
   root: workspaceRoot,
   publicDir: resolve(workspaceRoot, 'packages/assets'),
   plugins: [
+    stripBiomeWasmAssetPlugin(),
     stubPiNodeInternalsPlugin(),
     {
       name: 'build-webapp-runtime-assets',

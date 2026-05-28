@@ -345,6 +345,14 @@ jobs:
       - run: npm ci
       - name: Build webapp for worker static assets
         run: npm run build -w @slicc/webapp
+      # Hard gate: validate the worker bundle + static-asset constraints the
+      # same way the release job does (`wrangler deploy --dry-run`). The
+      # staging deploy steps below are `continue-on-error`, so without this a
+      # webapp change that pushes a static asset past Cloudflare's 25 MiB
+      # per-file cap would pass the PR and only break in release. Runs with no
+      # secrets or network writes.
+      - name: Validate worker bundle and asset sizes (dry-run)
+        run: npm run build -w @slicc/cloudflare-worker
       - name: Typecheck
         run: tsc --noEmit -p tsconfig.worker.json
       - name: Test (with coverage threshold gate)

@@ -11,15 +11,23 @@
  *    loads the wasm bytes synchronously via `fs.readFileSync`, so
  *    `new Biome()` works the moment the dynamic import resolves.
  *
- *  - **Browser (standalone + extension)** — the ~6 MB
- *    `biome_wasm_bg.wasm` binary is NOT bundled; it is fetched from
- *    a versioned CDN URL on first call, cached through the Cache
- *    Storage API, compiled to a `WebAssembly.Module`, and handed to
- *    the wasm-bindgen entry (`@biomejs/wasm-web`'s default export).
- *    The `@biomejs/js-api/web` wrapper is then constructed over the
- *    now-initialized module. Same flow in standalone and extension
- *    floats — using a compiled `WebAssembly.Module` sidesteps the
- *    blob-URL / extension-origin CSP differences that bit esbuild.
+ *  - **Browser (standalone + extension)** — the ~33 MB
+ *    `biome_wasm_bg.wasm` binary is fetched from a versioned CDN URL
+ *    on first call, cached through the Cache Storage API, compiled to
+ *    a `WebAssembly.Module`, and handed to the wasm-bindgen entry
+ *    (`@biomejs/wasm-web`'s default export). The `@biomejs/js-api/web`
+ *    wrapper is then constructed over the now-initialized module. Same
+ *    flow in standalone and extension floats — using a compiled
+ *    `WebAssembly.Module` sidesteps the blob-URL / extension-origin CSP
+ *    differences that bit esbuild.
+ *
+ *    Because we always pass that compiled module, wasm-bindgen's
+ *    zero-config `new URL('biome_wasm_bg.wasm', import.meta.url)`
+ *    fallback is dead code — but Vite still statically emits the 33 MB
+ *    binary as a build asset, which trips Cloudflare's 25 MiB per-asset
+ *    cap on the worker deploy. `packages/webapp/vite-plugins/strip-biome-wasm-asset.ts`
+ *    strips that dead asset from the build output and repoints the
+ *    reference at this same CDN URL.
  *
  *  Memoization mirrors `esbuild-wasm.ts` — a failed init clears the
  *  cached promise so a retry re-attempts the load. Without that, a
