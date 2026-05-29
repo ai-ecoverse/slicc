@@ -1412,6 +1412,67 @@ export class Layout {
   /** Track dynamic sprinkle sections in standalone mode. */
   private dynamicSprinkles = new Map<string, HTMLElement>();
 
+  /**
+   * Register a sprinkle's rail icon without opening it. The icon
+   * acts as a launcher — clicking it fires `onSprinkleActivate`,
+   * which the SprinkleManager routes to `open()` for not-yet-open
+   * sprinkles. The placeholder container is reused by a later
+   * `addSprinkle` call so the rail entry persists across the open
+   * lifecycle. Idempotent: safe to call repeatedly for the same name.
+   */
+  registerSprinkle(name: string, title: string, iconSpec?: string, targetZone?: ZoneId): void {
+    const tabId = `sprinkle-${name}`;
+    if (this.dynamicSprinkles.has(name) && this.primaryRail.hasItem(tabId)) return;
+
+    const zone = targetZone ?? 'primary';
+    const container = document.createElement('div');
+    container.style.cssText =
+      'display: flex; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
+
+    if (!this.registry.has(tabId)) {
+      this.registry.register({
+        id: tabId,
+        label: title,
+        zone,
+        closable: true,
+        element: container,
+        onClose: () => this.onSprinkleClose?.(name),
+      });
+    }
+
+    if (!this.primaryRail.hasItem(tabId)) {
+      this.primaryRail.addItem({
+        id: tabId,
+        label: title,
+        icon: SPRINKLE_DEFAULT_ICON,
+        element: container,
+        position: 'top',
+        closable: true,
+      });
+    }
+    this.dynamicSprinkles.set(name, container);
+
+    if (iconSpec && this.resolveSprinkleIcon) {
+      this.resolveSprinkleIcon(iconSpec)
+        .then((html) => {
+          if (html) this.primaryRail.setItemIcon(tabId, html);
+        })
+        .catch(() => {
+          /* fall back to default — already rendered */
+        });
+    }
+    this.updateAddButtons();
+  }
+
+  /** Remove a registered sprinkle's rail icon and registry entry entirely. */
+  unregisterSprinkle(name: string): void {
+    const tabId = `sprinkle-${name}`;
+    this.primaryRail.removeItem(tabId);
+    this.registry.unregister(tabId);
+    this.dynamicSprinkles.delete(name);
+    this.updateAddButtons();
+  }
+
   /** Add a dynamic .shtml sprinkle to the rail. */
   addSprinkle(
     name: string,
@@ -1420,38 +1481,20 @@ export class Layout {
     targetZone?: ZoneId,
     options?: { attention?: boolean; icon?: string }
   ): void {
-    const zone = targetZone ?? 'primary';
     const tabId = `sprinkle-${name}`;
 
-    const container = document.createElement('div');
-    container.style.cssText =
-      'display: flex; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
-    container.appendChild(element);
-
-    this.registry.register({
-      id: tabId,
-      label: title,
-      zone,
-      closable: true,
-      element: container,
-      onClose: () => this.onSprinkleClose?.(name),
-    });
-
-    this.primaryRail.addItem({
-      id: tabId,
-      label: title,
-      icon: SPRINKLE_DEFAULT_ICON,
-      element: container,
-      position: 'top',
-      closable: true,
-    });
-    this.dynamicSprinkles.set(name, container);
-
-    // Resolve the per-sprinkle icon asynchronously and swap it in
-    // when ready. We add the rail item with the default icon
-    // first so the entry is clickable immediately, then upgrade
-    // the SVG once the resolver responds.
-    if (options?.icon && this.resolveSprinkleIcon) {
+    // Reuse the placeholder container created by `registerSprinkle`
+    // if present so the rail entry survives close→reopen cycles. The
+    // follower controller path skips register, so create a fresh
+    // rail entry on demand here.
+    let container = this.dynamicSprinkles.get(name);
+    const fresh = !container || !this.primaryRail.hasItem(tabId);
+    if (fresh) {
+      this.registerSprinkle(name, title, options?.icon, targetZone);
+      container = this.dynamicSprinkles.get(name)!;
+    } else if (options?.icon && this.resolveSprinkleIcon) {
+      // Icon spec may have arrived only on open (e.g. follower path);
+      // upgrade the rail glyph if so.
       this.resolveSprinkleIcon(options.icon)
         .then((html) => {
           if (html) this.primaryRail.setItemIcon(tabId, html);
@@ -1460,6 +1503,7 @@ export class Layout {
           /* fall back to default — already rendered */
         });
     }
+    container!.appendChild(element);
 
     if (options?.attention) {
       // Auto-installed sprinkle in extension mode: leave the panel
@@ -1482,6 +1526,31 @@ export class Layout {
     this.registry.unregister(tabId);
     this.dynamicSprinkles.delete(name);
     this.updateAddButtons();
+  }
+
+  /**
+   * Clear a sprinkle's content from its rail-hosted container and
+   * collapse the panel if it was active. Leaves the rail icon in
+   * place so it continues to act as a launcher. Used by the
+   * SprinkleManager's `close()` path so closing a sprinkle doesn't
+   * yank its icon from the rail.
+   */
+  closeSprinkleContent(name: string): void {
+    const tabId = `sprinkle-${name}`;
+    const container = this.dynamicSprinkles.get(name);
+    if (container) {
+      while (container.firstChild) container.firstChild.remove();
+    }
+    if (this.primaryRail?.getActiveItemId() === tabId) {
+      this.primaryRail.collapse();
+    }
+  }
+
+  /** Collapse the rail content panel without removing the sprinkle. The rail icon stays visible. */
+  minimizeSprinkle(name: string): void {
+    if (this.primaryRail?.getActiveItemId() === `sprinkle-${name}`) {
+      this.primaryRail.collapse();
+    }
   }
 
   // The legacy switchPrimaryTab/switchDrawerTab helpers were removed

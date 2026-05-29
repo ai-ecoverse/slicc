@@ -2,6 +2,8 @@
 
 A gallery of 10 ready-to-adapt patterns for inline `shtml` widgets. Each pattern is a self-contained example you can copy and modify. See `SKILL.md` for the design rules, card structure, and pre-styled elements that apply to all of them.
 
+> **Two rules apply to every example below:** (1) use S2 tokens or `light-dark()` for color — never hard-code light/dark values; (2) never set `height`, `max-height`, `min-height`, or `overflow: auto|scroll` on dip containers (the iframe auto-sizes). Canvases are the documented exception — they need pixel dimensions for the drawing buffer.
+
 ## 1. Drag-on-canvas
 
 Drag control points on `<canvas>` — live computed output.
@@ -14,6 +16,8 @@ Drag control points on `<canvas>` — live computed output.
   const cv = document.getElementById('c');
   const ctx = cv.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
+  // Canvas needs explicit pixel dimensions for its drawing buffer — this
+  // is the one allowed exception to the dip "no fixed heights" rule.
   const W = 640, H = 260;
   cv.width = W * dpr; cv.height = H * dpr;
   cv.style.height = H + 'px';
@@ -26,10 +30,10 @@ Drag control points on `<canvas>` — live computed output.
 
 ## 2. Animated step loop
 
-Async loop with speed slider — algorithm visualization.
+Async loop with speed slider — algorithm visualization. The bars container has no fixed height — the tallest bar drives the layout, and `align-items:flex-end` keeps them sitting on a common baseline.
 
 ```shtml
-<div id="bars" style="display:flex;align-items:flex-end;gap:3px;height:160px"></div>
+<div id="bars" style="display:flex;align-items:flex-end;gap:3px"></div>
 <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
   <button onclick="run()">Run</button>
   <input type="range" id="speed" min="10" max="200" value="80">

@@ -26,6 +26,7 @@ describe('parseCliRuntimeFlags', () => {
       prompt: null,
       envFile: null,
       version: false,
+      hosted: false,
     });
   });
 
@@ -48,6 +49,7 @@ describe('parseCliRuntimeFlags', () => {
       prompt: null,
       envFile: null,
       version: false,
+      hosted: false,
     });
   });
 
@@ -78,6 +80,7 @@ describe('parseCliRuntimeFlags', () => {
       prompt: null,
       envFile: null,
       version: false,
+      hosted: false,
     });
   });
 
@@ -102,6 +105,7 @@ describe('parseCliRuntimeFlags', () => {
       prompt: null,
       envFile: null,
       version: false,
+      hosted: false,
     });
   });
 
@@ -124,6 +128,7 @@ describe('parseCliRuntimeFlags', () => {
       prompt: null,
       envFile: null,
       version: false,
+      hosted: false,
     });
   });
 
@@ -146,6 +151,7 @@ describe('parseCliRuntimeFlags', () => {
       prompt: null,
       envFile: null,
       version: false,
+      hosted: false,
     });
   });
 
@@ -168,6 +174,7 @@ describe('parseCliRuntimeFlags', () => {
       prompt: null,
       envFile: null,
       version: false,
+      hosted: false,
     });
   });
 
@@ -190,6 +197,7 @@ describe('parseCliRuntimeFlags', () => {
       prompt: null,
       envFile: null,
       version: false,
+      hosted: false,
     });
   });
 
@@ -237,6 +245,7 @@ describe('parseCliRuntimeFlags', () => {
       prompt: null,
       envFile: null,
       version: false,
+      hosted: false,
     });
   });
 
@@ -259,6 +268,7 @@ describe('parseCliRuntimeFlags', () => {
       prompt: null,
       envFile: null,
       version: false,
+      hosted: false,
     });
   });
 
@@ -293,5 +303,13 @@ describe('parseCliRuntimeFlags', () => {
     expect(parseCliRuntimeFlags(['version']).version).toBe(true);
     expect(parseCliRuntimeFlags(['--version']).version).toBe(true);
     expect(parseCliRuntimeFlags(['-v']).version).toBe(true);
+  });
+
+  it('parses hosted flag', () => {
+    expect(parseCliRuntimeFlags(['--hosted'])).toMatchObject({
+      hosted: true,
+      dev: false,
+      serveOnly: false,
+    });
   });
 });

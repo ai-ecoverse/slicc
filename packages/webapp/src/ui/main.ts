@@ -27,6 +27,7 @@ import {
   applyProviderDefaults,
   resolveCurrentModel,
   resolveModelById,
+  saveOAuthAccount,
 } from './provider-settings.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { initTheme } from './theme.js';
@@ -61,6 +62,7 @@ import { SessionStore as AgentSessionStore } from '../core/session.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import {
+  IndexedDbLeaderTraySessionStore,
   LeaderTrayManager,
   createTrayFetch,
   getLeaderTrayRuntimeStatus,
@@ -98,6 +100,7 @@ import {
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
   shouldUseRuntimeModeTrayDefaults,
+  type UiRuntimeMode,
 } from './runtime-mode.js';
 import {
   setConnectedFollowersGetter,
@@ -1351,6 +1354,16 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
       addSprinkle: (name, title, element, zone, options) =>
         layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined, options),
       removeSprinkle: (name) => layout.removeSprinkle(name),
+      minimizeSprinkle: (name) => layout.minimizeSprinkle(name),
+      registerSprinkle: (name, title, opts) =>
+        layout.registerSprinkle(
+          name,
+          title,
+          opts?.icon,
+          opts?.zone as 'primary' | 'drawer' | undefined
+        ),
+      unregisterSprinkle: (name) => layout.unregisterSprinkle(name),
+      closeSprinkleContent: (name) => layout.closeSprinkleContent(name),
     },
     () => {
       const cone = client.getScoops().find((s) => s.isCone);
@@ -1365,6 +1378,7 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
       autoOpenBehavior: 'attention',
       onAttachImage: (base64, name, mimeType) =>
         layout.panels.chat.addImageAttachment(base64, name, mimeType),
+      inlineSprinkles: INLINE_DIP_SPRINKLES,
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
@@ -1442,14 +1456,16 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 
   await sprinkleManager.refresh();
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);
-  layout.onSprinkleActivate = (name) => sprinkleManager.markActivated(name);
-  layout.getAvailableSprinkles = () => {
-    const opened = new Set(sprinkleManager.opened());
-    return sprinkleManager
-      .available()
-      .filter((p) => !opened.has(p.name) && !INLINE_DIP_SPRINKLES.has(p.name))
-      .map((p) => ({ name: p.name, title: p.title }));
+  // Rail-icon clicks: the manager routes attention-mode promotions
+  // and registered-but-closed opens through a single entry point so
+  // launcher-style icons reuse the existing activation channel.
+  layout.onSprinkleActivate = (name) => {
+    void sprinkleManager.activate(name);
   };
+  // Every sprinkle now lives in the rail from boot — the [+] picker
+  // has nothing left to surface for sprinkles. Returning an empty
+  // list keeps the picker shell available for other panel types.
+  layout.getAvailableSprinkles = () => [];
   layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
   layout.resolveSprinkleIcon = (spec) => resolveSprinkleIconHtml(spec, localFs);
   layout.updateAddButtons();
@@ -1646,7 +1662,8 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
   // double-click on the new-session button leaves a `pendingEnrichment`
   // entry in `/sessions/index.json` with a heuristic title; this pass
   // re-runs the LLM calls and rewrites the archive title + appends the
-  // extracted memories to `/shared/CLAUDE.md`. Deferred behind
+  // extracted memories to `/workspace/CLAUDE.md` (the cone-private memory
+  // sink — `/shared/CLAUDE.md` is left untouched). Deferred behind
   // `requestIdleCallback` (or `setTimeout(0)` as a fallback) so a slow
   // enrichment never blocks first paint.
   scheduleBackgroundEnrichment(localFs);
@@ -1683,7 +1700,8 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
 // path can't accidentally regress the inline path that ships today.
 // ---------------------------------------------------------------------------
 
-async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean): Promise<void> {
+async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode): Promise<void> {
+  const isElectronOverlay = runtimeMode === 'electron-overlay';
   log.info('starting standalone with kernel worker');
 
   const { spawnKernelWorker } = await import('../kernel/spawn.js');
@@ -2033,8 +2051,9 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     if (selectedScoop) syncThinkingButtonForScoop(selectedScoop);
   };
 
-  // Wire local VFS to client so the memory panel (which reads
-  // /shared/CLAUDE.md via `client.getGlobalMemory()`) sees the actual
+  // Wire local VFS to client so the memory panel (which surfaces
+  // `/shared/CLAUDE.md` via `client.getGlobalMemory()` and the cone-
+  // private `/workspace/CLAUDE.md` via the scoop FS) sees the actual
   // file system. Without this the panel reads empty in standalone-worker
   // mode — only the extension path was calling setLocalFS before.
   client.setLocalFS(localFs);
@@ -2438,6 +2457,16 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
       addSprinkle: (name, title, element, zone, options) =>
         layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined, options),
       removeSprinkle: (name) => layout.removeSprinkle(name),
+      minimizeSprinkle: (name) => layout.minimizeSprinkle(name),
+      registerSprinkle: (name, title, opts) =>
+        layout.registerSprinkle(
+          name,
+          title,
+          opts?.icon,
+          opts?.zone as 'primary' | 'drawer' | undefined
+        ),
+      unregisterSprinkle: (name) => layout.unregisterSprinkle(name),
+      closeSprinkleContent: (name) => layout.closeSprinkleContent(name),
     },
     () => {
       const cone = client.getScoops().find((s) => s.isCone);
@@ -2446,6 +2475,7 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
     {
       onAttachImage: (base64, name, mimeType) =>
         layout.panels.chat.addImageAttachment(base64, name, mimeType),
+      inlineSprinkles: INLINE_DIP_SPRINKLES,
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
@@ -2636,7 +2666,15 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
 
   await sprinkleManager.refresh();
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);
+  // Rail-icon clicks route to `activate`: promotes attention-mode
+  // entries, opens registered-but-closed entries, no-ops otherwise.
+  layout.onSprinkleActivate = (name) => {
+    void sprinkleManager.activate(name);
+  };
+  layout.getAvailableSprinkles = () => [];
+  layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
   layout.resolveSprinkleIcon = (spec) => resolveSprinkleIconHtml(spec, localFs);
+  layout.updateAddButtons();
   await sprinkleManager.restoreOpenSprinkles().catch((err) => {
     log.warn('Failed to restore open sprinkles', err);
   });
@@ -2660,7 +2698,113 @@ async function mainStandaloneWorker(app: HTMLElement, isElectronOverlay: boolean
   {
     const storedJoinUrl = window.localStorage.getItem(TRAY_JOIN_STORAGE_KEY);
     const storedWorkerBaseUrl = window.localStorage.getItem(TRAY_WORKER_STORAGE_KEY);
-    if (storedJoinUrl) {
+    if (runtimeMode === 'hosted-leader') {
+      // A persisted /data/profile (which survives e2b pause/resume) could carry
+      // a stale TRAY_JOIN_STORAGE_KEY from a prior follower role. For hosted-leader
+      // we ALWAYS start as leader; clear the join key so the existing branch
+      // below cannot route us into the follower path on this or any subsequent boot.
+      //
+      // NOTE: not unit-tested. main.ts has no test scaffold today; building one
+      // for this 3-line branch isn't worth the cost. The behavior is covered
+      // indirectly by the live e2b harness (Phase 5.1) — a sandbox booted with
+      // a stale TRAY_JOIN_STORAGE_KEY would join an unreachable follower and
+      // /tmp/slicc-join.json would never appear, surfacing in the start poll
+      // timeout. If a regression slips, the live harness catches it.
+      window.localStorage.removeItem(TRAY_JOIN_STORAGE_KEY);
+
+      // ALSO clear the persisted leader session from IndexedDB. After a
+      // pause/resume + leader-restart kick, Chrome's Page.reload re-runs
+      // main.ts, but IndexedDB survives. Without this clear, LeaderTrayManager
+      // would reuse the stale session, the on-worker tray would be gone
+      // (or its leaderKey expired), and either we'd silently sit on dead
+      // credentials or attachWithRecovery would create a new tray but the
+      // refresh path is fragile. Forcing a fresh tray on every hosted-leader
+      // boot guarantees onLeaderReady fires with new credentials → POST
+      // /api/cloud-status → laptop sees a fresh updatedAt and unblocks resume.
+      await new IndexedDbLeaderTraySessionStore().clear();
+
+      // resolveTrayRuntimeConfig already ran earlier in mainStandaloneWorker
+      // (~main.ts:1708) — by the time we reach the tray block, it has fetched
+      // /api/runtime-config (which node-server's --hosted mode populates from
+      // SLICC_TRAY_WORKER_BASE_URL) and seeded TRAY_WORKER_STORAGE_KEY in
+      // localStorage. Reuse that value rather than re-fetching.
+      const workerBaseUrl = window.localStorage.getItem(TRAY_WORKER_STORAGE_KEY);
+      if (!workerBaseUrl) {
+        throw new Error(
+          'hosted-leader: TRAY_WORKER_STORAGE_KEY not seeded — runtime-config resolution failed'
+        );
+      }
+
+      pageLeaderTray = startPageLeaderTray({
+        ...buildLeaderTrayOptions(workerBaseUrl),
+        runtime: 'slicc-hosted-leader',
+        kind: 'hosted',
+        onLeaderReady: (session) => {
+          // TODO: handle POST failures (currently best-effort; if the cloud orchestrator
+          // never sees this, --cloud start times out with diagnostic from start.ts polling).
+          void fetch('/api/cloud-status', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              joinUrl: session.joinUrl,
+              trayId: session.trayId,
+              controllerUrl: session.controllerUrl,
+              webhookUrl: session.webhookUrl,
+              runtime: session.runtime,
+              sliccVersion: __SLICC_VERSION__,
+            }),
+          }).catch((err) => {
+            log.error('failed to POST /api/cloud-status', { error: String(err) });
+          });
+        },
+      });
+      wireLeaderHooks(pageLeaderTray);
+
+      // Inject pre-acquired provider credentials AFTER the tray AND the first
+      // follower has had time to establish WebRTC. Writing to localStorage
+      // propagates to the kernel-worker's shim, which triggers a re-init that
+      // breaks any in-flight WebRTC peer setup → followers stuck at
+      // LEADER_CONNECTED.
+      //
+      // 5s after page boot covers the worst-case extension cold start; the
+      // user can't realistically type a message in that window, so the agent
+      // sees the Adobe account by its first lazy init.
+      void (async () => {
+        await new Promise((r) => setTimeout(r, 5000));
+        try {
+          const res = await fetch('/api/hosted-bootstrap');
+          if (!res.ok) return;
+          const bootstrap = (await res.json()) as { adobeImsToken?: string };
+          if (!bootstrap.adobeImsToken) return;
+
+          // Seed the model/provider selection before injecting the account so the
+          // first user message resolves to `adobe`. Without this, getSelectedProvider()
+          // hits the `accounts.length > 0` branch — which depends on saveOAuthAccount
+          // having already pushed the account into the kernel-worker shim. The shim
+          // write is async (panel-rpc), so a sub-second user message after this block
+          // can race the account propagation. An explicit "selected-model" write is
+          // synchronous in the kernel-worker shim and removes the race.
+          //
+          // Skip the write if already set so a paused-then-resumed cone preserves
+          // whatever model the user picked in the prior session.
+          if (!localStorage.getItem('selected-model')) {
+            localStorage.setItem('selected-model', 'adobe:claude-opus-4-6');
+          }
+
+          await saveOAuthAccount({
+            providerId: 'adobe',
+            accessToken: bootstrap.adobeImsToken,
+            tokenExpiresAt: Date.now() + 60 * 60 * 1000,
+            userName: 'cloud-injected',
+          });
+          log.info('hosted-leader: Adobe IMS token injected from secrets.env');
+        } catch (err) {
+          log.warn('hosted-leader: bootstrap fetch failed; provider needs manual login', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+    } else if (storedJoinUrl) {
       pageFollowerTray = startPageFollowerTray({
         joinUrl: storedJoinUrl,
         onSnapshot: (messages) => layout.panels.chat.loadMessages(messages),
@@ -3194,7 +3338,7 @@ async function main(): Promise<void> {
   // model). If we ever need to roll back, restore the pre-removal
   // commit (see git log for "remove legacy inline-orchestrator
   // path").
-  return mainStandaloneWorker(app, runtimeMode === 'electron-overlay');
+  return mainStandaloneWorker(app, runtimeMode);
 }
 
 main().catch((err) => {

@@ -22,6 +22,85 @@ function createMockCtx(opts: { files?: Record<string, Uint8Array>; cwd?: string 
   };
 }
 
+// Build a minimal PNG with IHDR color_type = 6 (RGBA, has alpha).
+function pngWithAlphaBytes(): Uint8Array {
+  const b = new Uint8Array(26);
+  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  b.set([0x00, 0x00, 0x00, 0x0d], 8); // length
+  b.set([0x49, 0x48, 0x44, 0x52], 12); // 'IHDR'
+  // width(4) + height(4) + bit_depth(1) zeroed; color_type at offset 25
+  b[25] = 6;
+  return b;
+}
+
+function pngOpaqueBytes(): Uint8Array {
+  const b = pngWithAlphaBytes();
+  b[25] = 2; // RGB, no alpha
+  return b;
+}
+
+function webpLosslessBytes(): Uint8Array {
+  // RIFF....WEBPVP8L
+  const b = new Uint8Array(16);
+  b.set([0x52, 0x49, 0x46, 0x46], 0); // 'RIFF'
+  b.set([0x57, 0x45, 0x42, 0x50], 8); // 'WEBP'
+  b.set([0x56, 0x50, 0x38, 0x4c], 12); // 'VP8L'
+  return b;
+}
+
+interface MockResize {
+  createImageBitmap: ReturnType<typeof vi.fn>;
+  canvasArgs: { width: number; height: number }[];
+  convertCalls: { type: string; quality?: number }[];
+  bitmapCloseSpies: ReturnType<typeof vi.fn>[];
+  outputBytes: Uint8Array;
+  convertToBlobOverride?: (opts: { type: string; quality?: number }) => Promise<Blob>;
+}
+
+function installImageMocks(
+  bitmapWidth: number,
+  bitmapHeight: number,
+  outputBytes: Uint8Array = new Uint8Array([0xaa, 0xbb, 0xcc])
+): MockResize {
+  const state: MockResize = {
+    createImageBitmap: vi.fn(),
+    canvasArgs: [],
+    convertCalls: [],
+    bitmapCloseSpies: [],
+    outputBytes,
+  };
+  state.createImageBitmap.mockImplementation(async () => {
+    const close = vi.fn();
+    state.bitmapCloseSpies.push(close);
+    return { width: bitmapWidth, height: bitmapHeight, close };
+  });
+  (globalThis as any).createImageBitmap = state.createImageBitmap;
+  (globalThis as any).OffscreenCanvas = class {
+    width: number;
+    height: number;
+    constructor(w: number, h: number) {
+      this.width = w;
+      this.height = h;
+      state.canvasArgs.push({ width: w, height: h });
+    }
+    getContext(kind: string) {
+      if (kind !== '2d') return null;
+      return { drawImage: vi.fn() };
+    }
+    async convertToBlob(opts: { type: string; quality?: number }) {
+      state.convertCalls.push({ type: opts.type, quality: opts.quality });
+      if (state.convertToBlobOverride) return state.convertToBlobOverride(opts);
+      return new Blob([state.outputBytes], { type: opts.type });
+    }
+  };
+  return state;
+}
+
+function uninstallImageMocks(): void {
+  delete (globalThis as any).createImageBitmap;
+  delete (globalThis as any).OffscreenCanvas;
+}
+
 describe('open command', () => {
   let originalWindow: typeof globalThis.window;
   let originalDocument: typeof globalThis.document;
@@ -211,56 +290,285 @@ describe('open command', () => {
     expect(result.stderr).toContain('failed to read');
   });
 
-  it('returns inline image with --view flag', async () => {
-    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    const cmd = createOpenCommand();
-    const ctx = createMockCtx({ files: { '/workspace/image.png': pngBytes } });
-    const result = await cmd.execute(['--view', '/workspace/image.png'], ctx as any);
+  describe('--view (image inlining)', () => {
+    afterEach(() => {
+      uninstallImageMocks();
+    });
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('<img:data:image/png;base64,');
-    expect(result.stdout).toContain('/workspace/image.png');
-    expect(openSpy).not.toHaveBeenCalled(); // should not open a tab
-  });
+    it('without --size prints dimensions + mime + size hint and exits 1', async () => {
+      const png = pngWithAlphaBytes();
+      const mocks = installImageMocks(1024, 768);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/image.png': png } });
+      const result = await cmd.execute(['--view', '/workspace/image.png'], ctx as any);
 
-  it('returns inline image with -v flag', async () => {
-    const jpgBytes = new Uint8Array([0xff, 0xd8, 0xff]);
-    const cmd = createOpenCommand();
-    const ctx = createMockCtx({ files: { '/workspace/photo.jpg': jpgBytes } });
-    const result = await cmd.execute(['-v', '/workspace/photo.jpg'], ctx as any);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('1024x768');
+      expect(result.stderr).toContain('image/png');
+      expect(result.stderr).toContain('--size');
+      expect(result.stderr).toContain('low');
+      expect(result.stderr).toContain('medium');
+      expect(result.stderr).toContain('high');
+      expect(result.stderr).toContain('WxH');
+      expect(result.stdout).not.toContain('<img:data:');
+      // No --size: must not allocate a canvas or invoke convertToBlob.
+      expect(mocks.canvasArgs).toEqual([]);
+      expect(mocks.convertCalls).toEqual([]);
+      // The bitmap acquired for dimension-only decode must still be released.
+      expect(mocks.bitmapCloseSpies).toHaveLength(1);
+      expect(mocks.bitmapCloseSpies[0]).toHaveBeenCalledTimes(1);
+    });
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('<img:data:image/jpeg;base64,');
-  });
+    it('APNG input is re-encoded as image/png (canvas does not support image/apng)', async () => {
+      // pngWithAlphaBytes() produces bytes whose IHDR color_type = 6, so
+      // sourceHasAlpha() returns true. The .apng extension drives
+      // detectMimeType → 'image/apng'.
+      const apng = pngWithAlphaBytes();
+      const mocks = installImageMocks(500, 500);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/anim.apng': apng } });
+      const result = await cmd.execute(
+        ['--view', '--size', '256x256', '/workspace/anim.apng'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('<img:data:image/png;base64,');
+      expect(mocks.convertCalls[0]).toEqual({ type: 'image/png', quality: undefined });
+    });
 
-  it('fails --view gracefully when file does not exist', async () => {
-    const cmd = createOpenCommand();
-    const ctx = createMockCtx();
-    const result = await cmd.execute(['--view', '/workspace/missing.png'], ctx as any);
+    it('releases the bitmap when convertToBlob rejects', async () => {
+      const png = pngWithAlphaBytes();
+      const mocks = installImageMocks(500, 500);
+      mocks.convertToBlobOverride = async () => {
+        throw new Error('encode failed');
+      };
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/image.png': png } });
+      const result = await cmd.execute(
+        ['--view', '--size', '256x256', '/workspace/image.png'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('encode failed');
+      expect(mocks.bitmapCloseSpies).toHaveLength(1);
+      expect(mocks.bitmapCloseSpies[0]).toHaveBeenCalledTimes(1);
+    });
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('no such file');
-  });
+    it('with --size WxH inlines only the resized image (image/jpeg for opaque source)', async () => {
+      const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0xaa, 0xbb, 0xcc, 0xdd]);
+      const mocks = installImageMocks(2048, 1024);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/photo.jpg': jpg } });
+      const result = await cmd.execute(
+        ['--view', '--size', '256x256', '/workspace/photo.jpg'],
+        ctx as any
+      );
 
-  it('fails --view for directory', async () => {
-    const cmd = createOpenCommand();
-    const ctx = createMockCtx();
-    ctx.fs.stat.mockResolvedValueOnce({ isFile: false, isDirectory: true });
-    const result = await cmd.execute(['--view', '/workspace/somedir'], ctx as any);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('<img:data:image/jpeg;base64,');
+      expect(mocks.canvasArgs).toHaveLength(1);
+      // Aspect-preserving fit into 256x256: scale = 256/2048 = 0.125
+      expect(mocks.canvasArgs[0]).toEqual({ width: 256, height: 128 });
+      expect(mocks.convertCalls[0]).toEqual({ type: 'image/jpeg', quality: 0.85 });
+      // The inlined base64 must match the resize output, NOT the source bytes.
+      const base64Source = Buffer.from(jpg).toString('base64');
+      expect(result.stdout).not.toContain(base64Source);
+    });
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('not a file');
-  });
+    it('--size low maps to 256x256', async () => {
+      const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+      const mocks = installImageMocks(1000, 1000);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/photo.jpg': jpg } });
+      const result = await cmd.execute(
+        ['--view', '--size', 'low', '/workspace/photo.jpg'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(0);
+      expect(mocks.canvasArgs[0]).toEqual({ width: 256, height: 256 });
+    });
 
-  it('fails --view gracefully when read fails', async () => {
-    const cmd = createOpenCommand();
-    const ctx = createMockCtx();
-    ctx.fs.stat.mockResolvedValueOnce({ isFile: true, isDirectory: false });
-    ctx.fs.readFileBuffer.mockRejectedValueOnce(new Error('EIO'));
-    const result = await cmd.execute(['--view', '/workspace/broken.png'], ctx as any);
+    it('--size medium maps to 768x768', async () => {
+      const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+      const mocks = installImageMocks(2000, 2000);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/photo.jpg': jpg } });
+      const result = await cmd.execute(
+        ['--view', '--size', 'medium', '/workspace/photo.jpg'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(0);
+      expect(mocks.canvasArgs[0]).toEqual({ width: 768, height: 768 });
+    });
 
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('failed to read');
+    it('--size high maps to 1536x1536', async () => {
+      const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+      const mocks = installImageMocks(3000, 3000);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/photo.jpg': jpg } });
+      const result = await cmd.execute(
+        ['--view', '--size', 'high', '/workspace/photo.jpg'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(0);
+      expect(mocks.canvasArgs[0]).toEqual({ width: 1536, height: 1536 });
+    });
+
+    it('does not upscale when source is smaller than the box', async () => {
+      const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+      const mocks = installImageMocks(100, 50);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/photo.jpg': jpg } });
+      const result = await cmd.execute(
+        ['--view', '--size', '1024x1024', '/workspace/photo.jpg'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(0);
+      expect(mocks.canvasArgs[0]).toEqual({ width: 100, height: 50 });
+    });
+
+    it('preserves image/png mime when source PNG has alpha', async () => {
+      const png = pngWithAlphaBytes();
+      const mocks = installImageMocks(500, 500);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/image.png': png } });
+      const result = await cmd.execute(
+        ['--view', '--size', '256x256', '/workspace/image.png'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('<img:data:image/png;base64,');
+      expect(mocks.convertCalls[0]).toEqual({ type: 'image/png', quality: undefined });
+    });
+
+    it('re-encodes opaque PNG as image/jpeg', async () => {
+      const png = pngOpaqueBytes();
+      const mocks = installImageMocks(500, 500);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/image.png': png } });
+      const result = await cmd.execute(
+        ['--view', '--size', '256x256', '/workspace/image.png'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('<img:data:image/jpeg;base64,');
+      expect(mocks.convertCalls[0]).toEqual({ type: 'image/jpeg', quality: 0.85 });
+    });
+
+    it('preserves image/webp mime when source is lossless WebP', async () => {
+      // Map .webp extension to image/webp via detectMimeType.
+      const webp = webpLosslessBytes();
+      const mocks = installImageMocks(800, 600);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/sticker.webp': webp } });
+      const result = await cmd.execute(
+        ['--view', '--size', '256x256', '/workspace/sticker.webp'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('<img:data:image/webp;base64,');
+      expect(mocks.convertCalls[0]).toEqual({ type: 'image/webp', quality: undefined });
+    });
+
+    it('-v short flag still works with --size', async () => {
+      const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+      installImageMocks(800, 800);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/photo.jpg': jpg } });
+      const result = await cmd.execute(
+        ['-v', '--size', '256x256', '/workspace/photo.jpg'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('<img:data:image/jpeg;base64,');
+      expect(openSpy).not.toHaveBeenCalled();
+    });
+
+    it('--size garbage exits 1 with a parse error mentioning --size', async () => {
+      const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+      installImageMocks(800, 800);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/photo.jpg': jpg } });
+      const result = await cmd.execute(
+        ['--view', '--size', 'garbage', '/workspace/photo.jpg'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('--size');
+      expect(result.stdout).not.toContain('<img:data:');
+    });
+
+    it('--size with no value exits 1 with a parse error mentioning --size', async () => {
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx();
+      const result = await cmd.execute(['--view', '--size'], ctx as any);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('--size');
+    });
+
+    it('non-image target reports a decode error and does not fall back to raw base64', async () => {
+      const textBytes = new TextEncoder().encode('not an image');
+      const mocks = installImageMocks(0, 0);
+      mocks.createImageBitmap.mockRejectedValueOnce(new Error('bad image'));
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx({ files: { '/workspace/notes.txt': textBytes } });
+      const result = await cmd.execute(
+        ['--view', '--size', '256x256', '/workspace/notes.txt'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('not an image');
+      expect(result.stdout).not.toContain('<img:data:');
+    });
+
+    it('fails --view gracefully when file does not exist', async () => {
+      installImageMocks(100, 100);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx();
+      const result = await cmd.execute(
+        ['--view', '--size', '256x256', '/workspace/missing.png'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('no such file');
+    });
+
+    it('fails --view for directory', async () => {
+      installImageMocks(100, 100);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx();
+      ctx.fs.stat.mockResolvedValueOnce({ isFile: false, isDirectory: true });
+      const result = await cmd.execute(
+        ['--view', '--size', '256x256', '/workspace/somedir'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('not a file');
+    });
+
+    it('fails --view gracefully when read fails', async () => {
+      installImageMocks(100, 100);
+      const cmd = createOpenCommand();
+      const ctx = createMockCtx();
+      ctx.fs.stat.mockResolvedValueOnce({ isFile: true, isDirectory: false });
+      ctx.fs.readFileBuffer.mockRejectedValueOnce(new Error('EIO'));
+      const result = await cmd.execute(
+        ['--view', '--size', '256x256', '/workspace/broken.png'],
+        ctx as any
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('failed to read');
+    });
+
+    it('help text documents --size', async () => {
+      const cmd = createOpenCommand();
+      const result = await cmd.execute(['--help'], {} as any);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('--size');
+      expect(result.stdout).toContain('low');
+      expect(result.stdout).toContain('medium');
+      expect(result.stdout).toContain('high');
+    });
   });
 
   it('succeeds even when window.open returns null (extension mode)', async () => {

@@ -2217,3 +2217,296 @@ describe('Orchestrator handleMessage external-lick visibility', () => {
     expect(incoming).toHaveLength(1);
   });
 });
+
+describe('Orchestrator legacy cone-memory migration', () => {
+  let orch: Orchestrator;
+  let priorWindow: unknown;
+  let windowWasShimmed = false;
+
+  beforeAll(() => {
+    if (typeof (globalThis as any).window === 'undefined') {
+      priorWindow = (globalThis as any).window;
+      (globalThis as any).window = globalThis;
+      windowWasShimmed = true;
+    }
+  });
+
+  afterAll(() => {
+    if (windowWasShimmed) {
+      if (priorWindow === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = priorWindow;
+      }
+    }
+  });
+
+  beforeEach(async () => {
+    await initDB();
+    const existing = await getAllScoops();
+    const { deleteScoop } = await import('../../src/scoops/db.js');
+    for (const jid of Object.keys(existing)) {
+      await deleteScoop(jid);
+    }
+  });
+
+  afterEach(async () => {
+    const sharedFs = orch?.getSharedFS();
+    await orch?.shutdown();
+    await settleAndDisposeSharedFs(sharedFs);
+  });
+
+  function noopCallbacks() {
+    return {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    };
+  }
+
+  interface MigrationPrivate {
+    migrateLegacyConeMemory(): Promise<void>;
+  }
+
+  async function readUtf8(fs: NonNullable<ReturnType<Orchestrator['getSharedFS']>>, path: string) {
+    const raw = await fs.readFile(path, { encoding: 'utf-8' });
+    return typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+  }
+
+  it('lifts legacy ## Auto-extracted blocks from /shared/CLAUDE.md into /workspace/CLAUDE.md while leaving the bundled default intact', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+    // Capture the bundled default so we can compare after migration strips
+    // the appended auto-block.
+    const bundledDefault = await readUtf8(fs, '/shared/CLAUDE.md');
+
+    // Append a single auto-extracted block to the bundled default (the
+    // same shape `appendConeMemory` would produce), then wipe the sentinel
+    // so the migration re-runs.
+    const polluted =
+      bundledDefault + '\n## Auto-extracted (2024-01-01, compaction)\n\n- legacy bullet\n';
+    await fs.writeFile('/shared/CLAUDE.md', polluted);
+    await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
+    // Start from a clean cone-memory file to make the assertion deterministic.
+    await fs.rm('/workspace/CLAUDE.md').catch(() => {});
+
+    await (orch as unknown as MigrationPrivate).migrateLegacyConeMemory();
+
+    // /workspace/CLAUDE.md now carries the lifted block.
+    const coneMemory = await readUtf8(fs, '/workspace/CLAUDE.md');
+    expect(coneMemory).toContain('## Auto-extracted (2024-01-01, compaction)');
+    expect(coneMemory).toContain('legacy bullet');
+
+    // /shared/CLAUDE.md retains the bundled default verbatim — no reseed
+    // happened, the migration just dropped the appended auto-block.
+    const sharedAfter = await readUtf8(fs, '/shared/CLAUDE.md');
+    expect(sharedAfter).toBe(bundledDefault);
+    expect(sharedAfter).not.toMatch(/## Auto-extracted/);
+
+    // Sentinel was written so subsequent boots are no-ops.
+    await expect(fs.stat('/workspace/.cone-memory-migrated')).resolves.toBeTruthy();
+  });
+
+  it('preserves user-authored header and footer around the lifted auto-block', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+
+    // User-edited header + auto-block + user-edited footer. The footer is
+    // its own `## ` section so the block-splitting loop terminates the
+    // auto-block at the footer heading rather than swallowing it.
+    const header = ['# User Notes', '', 'Header paragraph the user wrote.', ''].join('\n');
+    const autoBlock = [
+      '## Auto-extracted (2024-01-01, compaction)',
+      '',
+      '- legacy bullet',
+      '',
+    ].join('\n');
+    const footer = ['## User Footer', '', 'Footer paragraph the user wrote.', ''].join('\n');
+    const polluted = header + autoBlock + footer;
+
+    await fs.writeFile('/shared/CLAUDE.md', polluted);
+    await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
+    await fs.rm('/workspace/CLAUDE.md').catch(() => {});
+
+    await (orch as unknown as MigrationPrivate).migrateLegacyConeMemory();
+
+    // /workspace/CLAUDE.md carries the lifted block.
+    const coneMemory = await readUtf8(fs, '/workspace/CLAUDE.md');
+    expect(coneMemory).toContain('## Auto-extracted (2024-01-01, compaction)');
+    expect(coneMemory).toContain('legacy bullet');
+
+    // /shared/CLAUDE.md preserves header and footer verbatim, with the
+    // auto-block excised. Trailing whitespace collapses to a single newline.
+    const sharedAfter = await readUtf8(fs, '/shared/CLAUDE.md');
+    expect(sharedAfter).toBe(header + footer);
+    expect(sharedAfter).not.toMatch(/## Auto-extracted/);
+    expect(sharedAfter).toContain('# User Notes');
+    expect(sharedAfter).toContain('Header paragraph the user wrote.');
+    expect(sharedAfter).toContain('## User Footer');
+    expect(sharedAfter).toContain('Footer paragraph the user wrote.');
+
+    await expect(fs.stat('/workspace/.cone-memory-migrated')).resolves.toBeTruthy();
+  });
+
+  it('terminates the auto-block at a top-level `# ` heading footer (not just `## `)', async () => {
+    // Regression for PR #770 Codex P2 review: a hand-edited file with a
+    // top-level `# Hand-written footer` after the auto block must NOT have
+    // the footer swept into the lifted block. The terminator regex must
+    // stop at any `# ` or `## ` heading, not just `## `.
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+
+    const polluted = [
+      '# User header',
+      '',
+      'Initial user notes.',
+      '',
+      '## Auto-extracted (2026-01-01, compaction)',
+      '- bullet 1',
+      '- bullet 2',
+      '',
+      '# Hand-written footer',
+      '',
+      'User footer content.',
+      '',
+    ].join('\n');
+
+    await fs.writeFile('/shared/CLAUDE.md', polluted);
+    await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
+    await fs.rm('/workspace/CLAUDE.md').catch(() => {});
+
+    await (orch as unknown as MigrationPrivate).migrateLegacyConeMemory();
+
+    // /workspace/CLAUDE.md carries the lifted block (bullets only).
+    const coneMemory = await readUtf8(fs, '/workspace/CLAUDE.md');
+    expect(coneMemory).toContain('## Auto-extracted (2026-01-01, compaction)');
+    expect(coneMemory).toContain('- bullet 1');
+    expect(coneMemory).toContain('- bullet 2');
+    // Critically: the user-authored footer must NOT have leaked into the
+    // migrated cone memory.
+    expect(coneMemory).not.toContain('# Hand-written footer');
+    expect(coneMemory).not.toContain('User footer content.');
+
+    // /shared/CLAUDE.md preserves the header AND the footer verbatim.
+    const sharedAfter = await readUtf8(fs, '/shared/CLAUDE.md');
+    expect(sharedAfter).toContain('# User header');
+    expect(sharedAfter).toContain('Initial user notes.');
+    expect(sharedAfter).toContain('# Hand-written footer');
+    expect(sharedAfter).toContain('User footer content.');
+    expect(sharedAfter).not.toMatch(/## Auto-extracted/);
+    expect(sharedAfter).not.toContain('bullet 1');
+  });
+
+  it('treats a `### Subheading` inside an auto-block as part of the block', async () => {
+    // The system never emits `### ` inside an auto block, but if a user
+    // somehow added one, the conservative behavior is to keep it as part
+    // of the block (it gets lifted along with the bullets) rather than
+    // treat it as a terminator and accidentally leave bullets behind in
+    // the shared file.
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+
+    const polluted = [
+      '## Auto-extracted (2026-01-01, compaction)',
+      '- bullet a',
+      '',
+      '### Subheading inside the auto block',
+      '- bullet b',
+      '',
+      '# Real footer',
+      '',
+      'Footer text.',
+      '',
+    ].join('\n');
+
+    await fs.writeFile('/shared/CLAUDE.md', polluted);
+    await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
+    await fs.rm('/workspace/CLAUDE.md').catch(() => {});
+
+    await (orch as unknown as MigrationPrivate).migrateLegacyConeMemory();
+
+    // Both bullets and the `### Subheading` line are lifted as one block.
+    const coneMemory = await readUtf8(fs, '/workspace/CLAUDE.md');
+    expect(coneMemory).toContain('## Auto-extracted (2026-01-01, compaction)');
+    expect(coneMemory).toContain('- bullet a');
+    expect(coneMemory).toContain('### Subheading inside the auto block');
+    expect(coneMemory).toContain('- bullet b');
+
+    // Shared file retains only the `# Real footer` region.
+    const sharedAfter = await readUtf8(fs, '/shared/CLAUDE.md');
+    expect(sharedAfter).toContain('# Real footer');
+    expect(sharedAfter).toContain('Footer text.');
+    expect(sharedAfter).not.toContain('bullet a');
+    expect(sharedAfter).not.toContain('bullet b');
+    expect(sharedAfter).not.toContain('### Subheading');
+  });
+
+  it('is a no-op (just drops the sentinel) when /shared/CLAUDE.md has no Auto-extracted blocks', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+    // init already wrote the sentinel on the first migrateLegacyConeMemory
+    // call. Drop it and ensure a second invocation against the clean bundled
+    // default re-creates the sentinel without producing /workspace/CLAUDE.md.
+    await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
+    await fs.rm('/workspace/CLAUDE.md').catch(() => {});
+
+    await (orch as unknown as MigrationPrivate).migrateLegacyConeMemory();
+
+    await expect(fs.stat('/workspace/.cone-memory-migrated')).resolves.toBeTruthy();
+    await expect(fs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' })).rejects.toBeDefined();
+  });
+
+  it('is idempotent — second call short-circuits on the sentinel', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+    // Pollute again, but DO NOT clear the sentinel. Migration must skip.
+    const polluted = '## Auto-extracted (2024-09-09, compaction)\n\n- should not move\n';
+    await fs.writeFile('/shared/CLAUDE.md', polluted);
+
+    await (orch as unknown as MigrationPrivate).migrateLegacyConeMemory();
+
+    // Shared file is left exactly as the test wrote it — no migration happened.
+    expect(await readUtf8(fs, '/shared/CLAUDE.md')).toBe(polluted);
+    // /workspace/CLAUDE.md was not created by this no-op call.
+    await expect(fs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' })).rejects.toBeDefined();
+  });
+});

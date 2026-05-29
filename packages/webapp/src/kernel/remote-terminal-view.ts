@@ -39,6 +39,7 @@ import type { FitAddon } from '@xterm/addon-fit';
 import type { OffscreenClient } from '../ui/offscreen-client.js';
 import type { TerminalEventMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
 import { TerminalSessionClient, type TerminalExecResult } from './terminal-session-client.js';
+import { storePendingHandle } from '../fs/mount-picker-popup.js';
 
 export interface RemoteTerminalViewOptions {
   client: OffscreenClient;
@@ -658,7 +659,6 @@ export class RemoteTerminalView {
         return;
       }
       try {
-        const { storePendingHandle } = await import('../fs/mount-picker-popup.js');
         await storePendingHandle(localMountIdbKey(target), handle);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);

@@ -460,7 +460,10 @@ export default defineConfig(({ mode }) => ({
     emptyOutDir: true,
     target: 'esnext',
     rollupOptions: {
-      input: resolve(__dirname, 'index.html'),
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        cloud: resolve(__dirname, 'cloud/index.html'),
+      },
     },
     // preview-sw and electron-overlay-entry are built separately via esbuild.
   },
