@@ -106,5 +106,4 @@ To add a new substrate (e.g., Modal, Fly, Daytona):
 
 - `packages/node-server/CLAUDE.md` — CLI `--cloud` subcommands (the adapter layer)
 - `packages/cloudflare-worker/CLAUDE.md` — `sliccy.ai/cloud` web feature (the other adapter layer)
-- `docs/superpowers/specs/2026-05-26-cloud-cones-on-sliccy-ai-design.md` — Plan D spec
 - `packages/dev-tools/e2b-template/` — the sandbox image cloud-core orchestrates

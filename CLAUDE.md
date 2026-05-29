@@ -148,14 +148,15 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 
 ### Build Targets
 
-- **Browser bundle** (`tsconfig.json`): `packages/webapp/`. Bundled by Vite.
+`npm run typecheck` runs five `tsc --noEmit` invocations:
+
+- **Browser bundle** (`tsconfig.json`): `packages/webapp/`. The Vite-built extension (`packages/chrome-extension/vite.config.ts`) reuses this config; its extra entries are bundle-time only, not a separate typecheck target.
 - **CLI/Electron** (`tsconfig.cli.json`): `packages/node-server/src/`. Compiled by TSC to `dist/node-server/`.
-- **Extension** (`packages/chrome-extension/vite.config.ts`): Browser bundle + extension entry points + bundled Pyodide.
 - **Tray-hub worker** (`tsconfig.worker.json`): `packages/cloudflare-worker/src/`.
 - **Kernel-worker safety guard** (`tsconfig.webapp-worker.json`): typechecks the DedicatedWorker-side webapp code against a no-DOM lib set so accidental `window` references fail at typecheck time.
 - **Cloud-core library** (`packages/cloud-core/tsconfig.json`): `@slicc/cloud-core` is built ahead of `webapp` / `node-server` / `cloudflare-worker` (which all import it) via `postinstall` and the root `build` chain.
 
-All six are wired into `npm run typecheck`.
+`@slicc/shared-ts` uses the same postinstall pre-build pattern as `@slicc/cloud-core` (it must be built before `node-server` and `webapp` can typecheck), but its own `tsc --noEmit` is invoked by its workspace `npm run typecheck` script rather than the root pipeline.
 
 ### Key Subsystems
 

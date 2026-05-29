@@ -47,6 +47,7 @@ Other:
 
 - `exploration/` — open design notes (not load-bearing reference)
 - `screenshots/` — image assets used by README and other docs
-- `superpowers/specs/` and `superpowers/plans/` — design specs and implementation plans (kept after merge as historical record)
+
+Planning artifacts (`docs/superpowers/specs/`, `docs/superpowers/plans/`) are intentionally **not** kept on `main` — they're scrubbed by the planning-artifact cleanup. Live in branches only.
 
 Keep this directory explanatory, not redundant: prefer one authoritative page per topic and link to it from the shorter `CLAUDE.md` files.
