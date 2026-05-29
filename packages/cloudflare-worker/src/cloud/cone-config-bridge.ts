@@ -21,14 +21,10 @@ export function coneConfigToBundle(input: unknown, bearer: string): ConeConfig {
     return {
       model: DEFAULT_MODEL,
       accounts: [{ providerId: 'adobe', kind: 'oauth', accessToken: bearer }],
-      secrets: [
-        { name: 'ADOBE_IMS_TOKEN', value: bearer, domains: [ADOBE_TOKEN_DOMAINS] },
-        {
-          name: 'ADOBE_IMS_TOKEN_DOMAINS',
-          value: ADOBE_TOKEN_DOMAINS,
-          domains: [ADOBE_TOKEN_DOMAINS],
-        },
-      ],
+      // One entry only: serializeSecretsEnv auto-emits the `ADOBE_IMS_TOKEN_DOMAINS`
+      // line from this secret's `domains`. Listing `_DOMAINS` as its own secret would
+      // produce a duplicate line plus a bogus `ADOBE_IMS_TOKEN_DOMAINS_DOMAINS`.
+      secrets: [{ name: 'ADOBE_IMS_TOKEN', value: bearer, domains: [ADOBE_TOKEN_DOMAINS] }],
     };
   }
   const bundle = validateConeConfig(input);

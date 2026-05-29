@@ -92,7 +92,10 @@ export function applyConeConfigDelta(
   } else {
     base = { model: DEFAULT_MODEL, accounts: [], secrets: parseSecretsEnv(secretsEnv) };
   }
-  const merged = mergeConeConfig(base, delta);
+  // Validate the MERGED result, not just the base: delta upserts arrive as
+  // unknown from the worker and are otherwise unvalidated, so this is where a
+  // newline-injecting secret value or bad name gets rejected before serialization.
+  const merged = validateConeConfig(mergeConeConfig(base, delta));
   const files = bundleToFiles(merged);
   return { ...files, index: bundleIndex(merged) };
 }

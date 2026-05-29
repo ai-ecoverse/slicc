@@ -44,6 +44,19 @@ describe('validateConeConfig', () => {
       /kind required/
     );
   });
+  it('rejects a secret name that is not an env-var identifier', () => {
+    expect(() =>
+      validateConeConfig({ ...base, secrets: [{ name: 'FOO=BAR', value: 'v', domains: [] }] })
+    ).toThrow(/identifier/);
+  });
+  it('rejects a secret value or domain with a newline (secrets.env is line-based)', () => {
+    expect(() =>
+      validateConeConfig({ ...base, secrets: [{ name: 'X', value: 'a\nb', domains: [] }] })
+    ).toThrow(/single-line/);
+    expect(() =>
+      validateConeConfig({ ...base, secrets: [{ name: 'X', value: 'v', domains: ['a,b'] }] })
+    ).toThrow(/comma-free/);
+  });
 });
 
 describe('mergeConeConfig', () => {

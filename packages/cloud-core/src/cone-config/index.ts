@@ -95,13 +95,30 @@ function validateAccount(a: unknown): Account {
   throw new Error(`cone-config: account.kind must be 'oauth' | 'apikey'`);
 }
 
+// secrets.env is line-based (NAME=value / NAME_DOMAINS=a,b) with no escaping,
+// so a newline/CR in a name or value would inject phantom lines on round-trip.
+// Names must be env-var identifiers; values and domains must be single-line.
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+function hasNewline(v: string): boolean {
+  return /[\r\n]/.test(v);
+}
+
 function validateSecret(s: unknown): SecretEntry {
   if (!s || typeof s !== 'object') throw new Error('cone-config: secret not an object');
   const sec = s as Record<string, unknown>;
   if (!isStr(sec.name)) throw new Error('cone-config: secret.name required');
+  if (!ENV_NAME_RE.test(sec.name)) {
+    throw new Error(
+      'cone-config: secret.name must be an env-var identifier ([A-Za-z_][A-Za-z0-9_]*)'
+    );
+  }
   if (!isStr(sec.value)) throw new Error('cone-config: secret.value required');
+  if (hasNewline(sec.value)) throw new Error('cone-config: secret.value must be single-line');
   if (!Array.isArray(sec.domains) || !sec.domains.every(isStr)) {
     throw new Error('cone-config: secret.domains must be string[]');
+  }
+  if ((sec.domains as string[]).some((d) => hasNewline(d) || d.includes(','))) {
+    throw new Error('cone-config: secret.domains entries must be single-line and comma-free');
   }
   return { name: sec.name, value: sec.value, domains: sec.domains as string[] };
 }

@@ -266,16 +266,32 @@ export class CloudSessionsDurableObject {
 
     // Slow phase: no lock. substrate.connect + kick + poll + registry.update.
     try {
+      const userDelta = body.coneConfigDelta as ConeConfigDelta | undefined;
+      // Always refresh the Adobe IMS bearer, merged with any user edits, through
+      // the read-modify-write delta path. A raw refreshSecretsContents overwrite
+      // would clobber every OTHER flat secret/account in /slicc/secrets.env. User
+      // upserts come after Adobe's (so a user re-auth wins by providerId/name),
+      // and a user delete of 'adobe' still wins (merge applies upserts then deletes).
+      const mergedDelta: ConeConfigDelta = {
+        ...(userDelta?.model ? { model: userDelta.model } : {}),
+        upsert: {
+          accounts: [
+            { providerId: 'adobe', kind: 'oauth', accessToken: body.bearer },
+            ...(userDelta?.upsert?.accounts ?? []),
+          ],
+          secrets: [
+            { name: 'ADOBE_IMS_TOKEN', value: body.bearer, domains: [ADOBE_TOKEN_DOMAINS] },
+            ...(userDelta?.upsert?.secrets ?? []),
+          ],
+        },
+        ...(userDelta?.delete ? { delete: userDelta.delete } : {}),
+      };
       const result = await resumeCone(
         { substrate, registry },
         {
           query: body.sandboxId,
           localSliccVersion: body.localSliccVersion,
-          refreshSecretsContents: [
-            `ADOBE_IMS_TOKEN=${body.bearer}`,
-            `ADOBE_IMS_TOKEN_DOMAINS=${ADOBE_TOKEN_DOMAINS}`,
-          ].join('\n'),
-          coneConfigDelta: body.coneConfigDelta as ConeConfigDelta | undefined,
+          coneConfigDelta: mergedDelta,
           skipStateCheck: true, // Already checked + reserved under lock
         }
       );

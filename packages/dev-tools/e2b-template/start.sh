@@ -26,6 +26,9 @@ elif [ -n "$ADOBE_IMS_TOKEN" ] && [ ! -f /slicc/secrets.env ]; then
     printf 'ADOBE_IMS_TOKEN_DOMAINS=%s\n' "$ADOBE_IMS_TOKEN_DOMAINS"
   } > /slicc/secrets.env
 fi
+# The bearer now lives in /slicc/secrets.env; don't leave it in node-server's
+# process env (printenv / /proc/self/environ) for the cone's lifetime.
+unset ADOBE_IMS_TOKEN ADOBE_IMS_TOKEN_DOMAINS
 
 if [ -n "$SLICC_CONE_CONFIG_B64" ]; then
   printf '%s' "$SLICC_CONE_CONFIG_B64" | base64 -d > /slicc/cone-config.json
