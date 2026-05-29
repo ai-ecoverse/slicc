@@ -122,3 +122,17 @@ describe('runtime-mode — hosted-leader', () => {
     expect(resolveUiRuntimeMode('http://localhost:5710/', false)).toBe('standalone');
   });
 });
+
+describe('cherry runtime mode', () => {
+  it('detects cherry from ?cherry=1 in standalone (non-extension)', () => {
+    expect(resolveUiRuntimeMode('https://app.example/?cherry=1', false)).toBe('cherry');
+  });
+  it('does not treat a bare URL as cherry', () => {
+    expect(resolveUiRuntimeMode('https://app.example/', false)).not.toBe('cherry');
+  });
+  it('extension flag wins over ?cherry=1', () => {
+    expect(resolveUiRuntimeMode('chrome-extension://abc/index.html?cherry=1', true)).toBe(
+      'extension'
+    );
+  });
+});

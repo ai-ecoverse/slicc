@@ -54,7 +54,7 @@ import {
   scheduleBackgroundEnrichment,
 } from './new-session.js';
 import { frozenSessionPath, parseFrozenArchive } from './session-freezer.js';
-import { BrowserAPI } from '../cdp/index.js';
+import { type BrowserAPI } from '../cdp/index.js';
 import { type Orchestrator } from '../scoops/index.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
 import { clearAllMessages as clearOrchestratorMessages } from '../scoops/db.js';
@@ -1859,16 +1859,25 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // `CDPClient` is still in `disconnected` state at that moment, the
   // send throws "CDP client is not connected" and the agent sees
   // confusing errors for `playwright`, `open`, etc.
-  const browser = new BrowserAPI();
-  const realCdpTransport = browser.getTransport();
-  try {
-    await browser.connect();
-  } catch (err) {
-    log.warn(
-      'Initial CDP connect failed; worker-forwarded commands will retry on demand',
-      err instanceof Error ? err.message : String(err)
-    );
+  let browser: BrowserAPI;
+  let cherryJoinUrl: string | undefined;
+  if (runtimeMode === 'cherry') {
+    const { setupCherryFollower } = await import('./main-cherry.js');
+    const cherry = await setupCherryFollower();
+    browser = cherry.browser;
+    cherryJoinUrl = cherry.joinUrl;
+  } else {
+    browser = new BrowserAPI();
+    try {
+      await browser.connect();
+    } catch (err) {
+      log.warn(
+        'Initial CDP connect failed; worker-forwarded commands will retry on demand',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
   }
+  const realCdpTransport = browser.getTransport();
 
   // Expose the page-side BrowserAPI so the OAuth intercept launcher
   // (active-transport.ts) can resolve a CDP transport from the main
@@ -2840,6 +2849,26 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
           });
         }
       })();
+    } else if (runtimeMode === 'cherry' && cherryJoinUrl) {
+      pageFollowerTray = startPageFollowerTray({
+        joinUrl: cherryJoinUrl,
+        runtime: 'slicc-cherry',
+        onSnapshot: (messages) => layout.panels.chat.loadMessages(messages),
+        onUserMessage: (text, _messageId, _scoopJid, attachments) =>
+          layout.panels.chat.addUserMessage(text, attachments),
+        onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
+        setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
+        browserAPI: browser,
+        addSprinkle: (name, title, element, zone, options) =>
+          layout.addSprinkle(
+            name,
+            title,
+            element,
+            zone as 'primary' | 'drawer' | undefined,
+            options
+          ),
+        removeSprinkle: (name) => layout.removeSprinkle(name),
+      });
     } else if (storedJoinUrl) {
       pageFollowerTray = startPageFollowerTray({
         joinUrl: storedJoinUrl,

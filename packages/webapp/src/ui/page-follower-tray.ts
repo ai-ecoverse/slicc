@@ -48,6 +48,9 @@ export interface StartPageFollowerTrayOptions {
   /** The leader's join URL (from the `TRAY_JOIN_STORAGE_KEY` constant — `slicc.trayJoinUrl` — in localStorage). */
   joinUrl: string;
 
+  /** Tray runtime tag (default 'slicc-standalone'). Cherry passes 'slicc-cherry' so leader selection can distinguish it. */
+  runtime?: string;
+
   // --- FollowerSyncManager callbacks (forwarded directly) ---
   /** Replace the follower's chat panel with the snapshot from the leader. */
   onSnapshot: (messages: ChatMessage[], scoopJid: string) => void;
@@ -240,7 +243,7 @@ export function startPageFollowerTray(
   reconnectHandle = startFollowerWithAutoReconnect(
     {
       joinUrl: options.joinUrl,
-      runtime: 'slicc-standalone',
+      runtime: options.runtime ?? 'slicc-standalone',
       fetchImpl: options._fetchImpl,
       peerConnectionFactory: options._peerConnectionFactory,
       sleep: options._sleep,
