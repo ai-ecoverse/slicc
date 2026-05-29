@@ -18,32 +18,32 @@
  * secrets are hardcoded; the proxy endpoint (base URL) must be configured at runtime.
  */
 
-import type { ProviderConfig, OAuthLauncher } from '../src/providers/types.js';
+import type {
+  AnthropicOptions,
+  Api,
+  Context,
+  Model,
+  OpenAICompletionsOptions,
+  SimpleStreamOptions,
+} from '@earendil-works/pi-ai';
 import {
-  registerApiProvider,
-  streamAnthropic,
-  streamSimpleAnthropic,
-  streamOpenAICompletions,
-  streamSimpleOpenAICompletions,
+  createAssistantMessageEventStream,
   getModels,
   getProviders,
-  createAssistantMessageEventStream,
+  registerApiProvider,
+  streamAnthropic,
+  streamOpenAICompletions,
+  streamSimpleAnthropic,
+  streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai';
-import type {
-  Api,
-  Model,
-  Context,
-  SimpleStreamOptions,
-  AnthropicOptions,
-  OpenAICompletionsOptions,
-} from '@earendil-works/pi-ai';
+import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
+import type { OAuthLauncher, ProviderConfig } from '../src/providers/types.js';
+import { getDailyAdobeUuid } from '../src/scoops/llm-session-id.js';
 import {
-  saveOAuthAccount,
   getAccounts,
   getBaseUrlForProvider,
+  saveOAuthAccount,
 } from '../src/ui/provider-settings.js';
-import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
-import { getDailyAdobeUuid } from '../src/scoops/llm-session-id.js';
 
 // ── Config ──────────────────────────────────────────────────────────
 

@@ -1,8 +1,7 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { VirtualFS } from '../../fs/index.js';
-import { getSharedState } from './playwright-command.js';
 import { isSafeServeEntry, resolveServeEntryPath, toPreviewUrl } from './shared.js';
 
 function serveHelp(): { stdout: string; stderr: string; exitCode: number } {

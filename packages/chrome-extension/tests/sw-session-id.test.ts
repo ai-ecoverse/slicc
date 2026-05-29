@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readOrCreateSwSessionId } from '../src/sw-session-id.js';
 
 describe('readOrCreateSwSessionId', () => {

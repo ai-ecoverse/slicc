@@ -1,19 +1,19 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import {
-  readServersFile,
-  writeServersFile,
-  getServer,
-  setServer,
-  deleteServer,
-  listServers,
-  readMcpAuthEntry,
-  readMcpAuthEntries,
-  _testOnly_resetStoreCache,
-  MCP_STORE_PATH,
-} from '../../../src/shell/mcp/store.js';
-import { VirtualFS } from '../../../src/fs/virtual-fs.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GLOBAL_FS_DB_NAME } from '../../../src/fs/global-db.js';
+import { VirtualFS } from '../../../src/fs/virtual-fs.js';
+import {
+  _testOnly_resetStoreCache,
+  deleteServer,
+  getServer,
+  listServers,
+  MCP_STORE_PATH,
+  readMcpAuthEntries,
+  readMcpAuthEntry,
+  readServersFile,
+  setServer,
+  writeServersFile,
+} from '../../../src/shell/mcp/store.js';
 import type { McpServerEntry } from '../../../src/shell/mcp/types.js';
 
 describe('mcp store', () => {

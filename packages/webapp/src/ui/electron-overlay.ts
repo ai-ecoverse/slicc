@@ -1,19 +1,3 @@
-import {
-  createElectronOverlayShellState,
-  isEdgePosition,
-  normalizeElectronOverlayLauncherCorner,
-  resolveElectronOverlayLauncherCorner,
-  setElectronOverlayCorner,
-  setElectronOverlayOpen,
-  setElectronOverlayTab,
-  shouldSnapElectronOverlayLauncher,
-  toggleElectronOverlay,
-  type ElectronOverlayLauncherCorner,
-  type ElectronOverlayShellState,
-} from './overlay-shell-state.js';
-import { ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE } from './runtime-mode.js';
-import { EXTENSION_TAB_SPECS, normalizeExtensionTabId, type ExtensionTabId } from './tabbed-ui.js';
-
 // Monochrome Sliccy logos inlined at build time.
 // Dark variant: dark fill + white strokes (shows on light backgrounds).
 // Light variant: white fill + dark strokes (shows on dark backgrounds — appears as light icon).
@@ -23,6 +7,20 @@ import { EXTENSION_TAB_SPECS, normalizeExtensionTabId, type ExtensionTabId } fro
 // "light" SVG = white fill + black outlines → visible on light backgrounds.
 import sliccyDarkSvg from '../../../assets/logos/sliccy-mono-dark-1scoops.svg?raw';
 import sliccyLightSvg from '../../../assets/logos/sliccy-mono-light-1scoops.svg?raw';
+import {
+  createElectronOverlayShellState,
+  type ElectronOverlayLauncherCorner,
+  type ElectronOverlayShellState,
+  normalizeElectronOverlayLauncherCorner,
+  resolveElectronOverlayLauncherCorner,
+  setElectronOverlayCorner,
+  setElectronOverlayOpen,
+  setElectronOverlayTab,
+  shouldSnapElectronOverlayLauncher,
+  toggleElectronOverlay,
+} from './overlay-shell-state.js';
+import { ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE } from './runtime-mode.js';
+import { EXTENSION_TAB_SPECS, type ExtensionTabId, normalizeExtensionTabId } from './tabbed-ui.js';
 
 export const ELECTRON_OVERLAY_HOST_ID = 'slicc-electron-overlay-root';
 export const ELECTRON_OVERLAY_TAG_NAME = 'slicc-electron-overlay';

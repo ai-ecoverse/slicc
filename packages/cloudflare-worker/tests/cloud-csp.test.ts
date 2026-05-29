@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { handleWorkerRequest, type WorkerEnv } from '../src/index.js';
 
 const CLOUD_HTML = '<!doctype html><html><body>cloud dashboard</body></html>';

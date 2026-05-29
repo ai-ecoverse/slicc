@@ -13,15 +13,15 @@
 
 import type {
   CdpCommandMsg,
-  CdpResponseMsg,
   CdpEventMsg,
+  CdpResponseMsg,
   ExtensionMessage,
 } from '../../../chrome-extension/src/messages.js';
 import {
-  CdpTransportBridge,
   type CdpBridgeOptions,
-  type ParsedCdpResponse,
+  CdpTransportBridge,
   type ParsedCdpEvent,
+  type ParsedCdpResponse,
 } from '../kernel/cdp-bridge.js';
 
 function isExtMsg(msg: unknown): msg is ExtensionMessage {

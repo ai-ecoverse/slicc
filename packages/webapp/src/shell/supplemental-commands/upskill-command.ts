@@ -7,15 +7,14 @@
  * in CLI mode (forbidden-header bridging) and direct fetch in extension mode
  * (CORS bypass via host_permissions).
  */
-import { defineCommand } from 'just-bash';
+
+import { unzipSync } from 'fflate';
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
+import { defineCommand } from 'just-bash';
+import type { BrowserAPI, PageInfo } from '../../cdp/index.js';
+import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { VirtualFS as SharedVirtualFS } from '../../fs/index.js';
-import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
-import type { DiscoveredSkill } from '../../skills/types.js';
-import { unzipSync } from 'fflate';
-import { consumeCachedBinaryByUrl } from '../binary-cache.js';
-import { decodeFetchBody, getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
 import {
   extractHandoff,
   isSafeUpskillBranch,
@@ -23,7 +22,9 @@ import {
   UPSKILL_REL,
 } from '../../net/handoff-link.js';
 import { parseLinkHeader } from '../../net/link-header.js';
-import type { BrowserAPI, PageInfo } from '../../cdp/index.js';
+import type { DiscoveredSkill } from '../../skills/types.js';
+import { consumeCachedBinaryByUrl } from '../binary-cache.js';
+import { decodeFetchBody, getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
 
 const TESSL_API = 'https://api.tessl.io';
 const BROWSE_SH_API = 'https://browse.sh/api/skills';
@@ -121,11 +122,6 @@ interface CatalogSkill {
   priority?: number;
 }
 
-interface SkillCatalog {
-  version: number;
-  skills: CatalogSkill[];
-}
-
 interface UserProfile {
   purpose: string;
   role: string;
@@ -161,7 +157,7 @@ interface ScoredSkill {
 }
 
 function splitField(value: string): string[] | undefined {
-  if (!value || !value.trim()) return undefined;
+  if (!value?.trim()) return undefined;
   return value
     .split(',')
     .map((s) => s.trim())
@@ -557,7 +553,7 @@ Examples:
  * Extract owner/repo from a GitHub URL.
  */
 function parseGitHubUrl(url: string): { owner: string; repo: string } | null {
-  const match = url.match(/github\.com\/([^\/?#]+)\/([^\/?#]+)/);
+  const match = url.match(/github\.com\/([^/?#]+)\/([^/?#]+)/);
   if (!match) return null;
   return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
 }
@@ -1438,7 +1434,7 @@ export function parseGitHubRef(
     return { owner: url[1], repo: url[2], branch: url[3], path: url[4] };
   }
   // Handle owner/repo or owner/repo@branch format
-  const match = ref.match(/^([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+)(?:@([a-zA-Z0-9_./\-]+))?$/);
+  const match = ref.match(/^([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+)(?:@([a-zA-Z0-9_./-]+))?$/);
   if (match) {
     return { owner: match[1], repo: match[2], branch: match[3] };
   }
@@ -1989,7 +1985,7 @@ async function discoverTabUpskill(
   for (const link of parsed) {
     if (!link.rel.includes(UPSKILL_REL)) continue;
     const single = extractHandoff([link]);
-    if (!single || single.verb !== 'upskill') continue;
+    if (single?.verb !== 'upskill') continue;
     links.push({
       target: single.target,
       branch: single.branch,

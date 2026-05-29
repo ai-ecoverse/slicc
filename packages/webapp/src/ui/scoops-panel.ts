@@ -8,11 +8,11 @@
  * - View scoop status
  */
 
-import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
-import { type Orchestrator } from '../scoops/orchestrator.js';
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/index.js';
-import { readSessionsIndex, type FrozenSessionIndexEntry } from './session-freezer.js';
+import type { Orchestrator } from '../scoops/orchestrator.js';
+import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
+import { type FrozenSessionIndexEntry, readSessionsIndex } from './session-freezer.js';
 
 const log = createLogger('scoops-panel');
 

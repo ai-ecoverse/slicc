@@ -1,6 +1,6 @@
+import { CloudError } from './errors.js';
 import type { SandboxHandle } from './substrate.js';
 import type { CloudStatus } from './types.js';
-import { CloudError } from './errors.js';
 
 export interface PollOpts {
   timeoutMs: number;

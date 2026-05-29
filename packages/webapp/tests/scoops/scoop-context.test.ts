@@ -6,14 +6,14 @@
  */
 
 import 'fake-indexeddb/auto';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  ScoopContext,
   abortableSleep,
   isImageProcessingError,
   isNonRetryableError,
   isRetryableError,
   resolveThinkingLevel,
+  ScoopContext,
   type ScoopContextCallbacks,
 } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
@@ -1848,7 +1848,6 @@ describe('ScoopContext dispose', () => {
 
     ctx.dispose();
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing private method for testing
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
 
     handler({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'hi' } });

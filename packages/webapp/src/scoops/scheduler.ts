@@ -7,9 +7,9 @@
  * - One-time tasks (ISO timestamp)
  */
 
-import type { ScheduledTask, RegisteredScoop } from './types.js';
-import * as db from './db.js';
 import { createLogger } from '../core/logger.js';
+import * as db from './db.js';
+import type { RegisteredScoop, ScheduledTask } from './types.js';
 
 const log = createLogger('scheduler');
 

@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { SecretsPipeline } from '@slicc/shared-ts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   handleFetchProxyConnection,
   handleFetchProxyConnectionAsync,
   type PortLike,
 } from '../src/fetch-proxy-shared.js';
-import { SecretsPipeline } from '@slicc/shared-ts';
 
 function makePort(
   onPost: (msg: unknown) => void

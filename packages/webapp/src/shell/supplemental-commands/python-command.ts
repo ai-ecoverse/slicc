@@ -15,15 +15,15 @@
  * follow-up). Documented in plan §Risks.
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-import { runInRealm } from '../../kernel/realm/realm-runner.js';
-import type { RealmFactory } from '../../kernel/realm/realm-runner.js';
+import { defineCommand } from 'just-bash';
+import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
 import {
   createDefaultRealmFactory,
   resolvePyodideIndexURL,
 } from '../../kernel/realm/realm-factory.js';
-import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
+import type { RealmFactory } from '../../kernel/realm/realm-runner.js';
+import { runInRealm } from '../../kernel/realm/realm-runner.js';
 
 export interface PythonCommandOptions {
   /**
@@ -189,7 +189,7 @@ function lookupGlobalPm(): ProcessManager | null {
   return null;
 }
 
-let _ephemeralPm: ProcessManager | null = null;
+let EphemeralPm: ProcessManager | null = null;
 async function runWithEphemeralPm(args: {
   realmFactory: RealmFactory;
   owner: ProcessOwner;
@@ -204,12 +204,12 @@ async function runWithEphemeralPm(args: {
   pyodideIndexURL: string;
   pyodideSyncDirs: string[];
 }) {
-  if (!_ephemeralPm) {
+  if (!EphemeralPm) {
     const { ProcessManager: PM } = await import('../../kernel/process-manager.js');
-    _ephemeralPm = new PM();
+    EphemeralPm = new PM();
   }
   return runInRealm({
-    pm: _ephemeralPm,
+    pm: EphemeralPm,
     realmFactory: args.realmFactory,
     owner: args.owner,
     kind: 'py',

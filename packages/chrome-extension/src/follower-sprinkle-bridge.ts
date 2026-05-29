@@ -23,6 +23,15 @@
  * exercised under jsdom without a real Chrome runtime.
  */
 
+import type { LeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
+import type { SprinkleSummary } from '../../../packages/webapp/src/scoops/tray-sync-protocol.js';
+import type { SprinkleFollowerSync } from '../../../packages/webapp/src/ui/sprinkle-follower-controller.js';
+import {
+  discriminateMsg,
+  type OffscreenMessageHub,
+  type PanelMessageSender,
+  type PanelMessageSubscriber,
+} from './bridge-transport.js';
 import type {
   FollowerSprinkleFetchCancelMsg,
   FollowerSprinkleFetchRequestMsg,
@@ -30,22 +39,13 @@ import type {
   FollowerSprinkleLickMsg,
   FollowerSprinklesListMsg,
   FollowerSprinkleUpdateMsg,
+  LeaderTrayResetResponseMsg,
 } from './messages.js';
-import type { SprinkleFollowerSync } from '../../../packages/webapp/src/ui/sprinkle-follower-controller.js';
-import type { SprinkleSummary } from '../../../packages/webapp/src/scoops/tray-sync-protocol.js';
-import type { LeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
-import type { LeaderTrayResetResponseMsg } from './messages.js';
-import {
-  type PanelMessageSender,
-  type PanelMessageSubscriber,
-  type OffscreenMessageHub,
-  discriminateMsg,
-} from './bridge-transport.js';
 
 // Re-export the shared transport interfaces so existing consumers
 // (offscreen.ts, follower-sprinkle-bridge.test.ts, etc.) keep importing
 // them from this module's stable public surface.
-export type { PanelMessageSender, PanelMessageSubscriber, OffscreenMessageHub };
+export type { OffscreenMessageHub, PanelMessageSender, PanelMessageSubscriber };
 
 // Compile-time invariant: the `sprinkles` array shape inside
 // `FollowerSprinklesListMsg` must remain assignable to the canonical
@@ -53,14 +53,14 @@ export type { PanelMessageSender, PanelMessageSubscriber, OffscreenMessageHub };
 // importing it) to avoid dragging tray-sync-protocol's value imports into the
 // webapp-worker tsconfig surface. This assertion fails the build if either
 // shape drifts.
-type _AssertSprinkleSummaryEnvelopeMatches =
+type AssertSprinkleSummaryEnvelopeMatches =
   FollowerSprinklesListMsg['sprinkles'] extends SprinkleSummary[]
     ? SprinkleSummary[] extends FollowerSprinklesListMsg['sprinkles']
       ? true
       : never
     : never;
 
-const _sprinkleSummaryEnvelopeMatches: _AssertSprinkleSummaryEnvelopeMatches = true;
+const _sprinkleSummaryEnvelopeMatches: AssertSprinkleSummaryEnvelopeMatches = true;
 
 // Same invariant for `LeaderTrayRuntimeStatusEnvelope` carried by
 // `LeaderTrayResetResponseMsg.status` — `messages.ts` mirrors the shape inline
@@ -69,15 +69,15 @@ const _sprinkleSummaryEnvelopeMatches: _AssertSprinkleSummaryEnvelopeMatches = t
 // either side drifting breaks the build. `LeaderTrayResetResponseMsg` is a
 // discriminated union (success/failure on `ok`); project the success branch
 // to read its `status` field.
-type _LeaderTrayResetStatus = Extract<LeaderTrayResetResponseMsg, { ok: true }>['status'];
-type _AssertLeaderTrayRuntimeStatusEnvelopeMatches =
-  _LeaderTrayResetStatus extends LeaderTrayRuntimeStatus
-    ? LeaderTrayRuntimeStatus extends _LeaderTrayResetStatus
+type LeaderTrayResetStatus = Extract<LeaderTrayResetResponseMsg, { ok: true }>['status'];
+type AssertLeaderTrayRuntimeStatusEnvelopeMatches =
+  LeaderTrayResetStatus extends LeaderTrayRuntimeStatus
+    ? LeaderTrayRuntimeStatus extends LeaderTrayResetStatus
       ? true
       : never
     : never;
 
-const _leaderTrayRuntimeStatusEnvelopeMatches: _AssertLeaderTrayRuntimeStatusEnvelopeMatches = true;
+const _leaderTrayRuntimeStatusEnvelopeMatches: AssertLeaderTrayRuntimeStatusEnvelopeMatches = true;
 
 /**
  * Default timeout for the panel-side `fetchSprinkleContent`. When the offscreen

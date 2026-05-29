@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Stub window+document at module scope so `hasLocalDom()` in
 // provider-settings.ts is true for every test in this suite — these
@@ -247,8 +247,9 @@ describe('github.ts writes masked token to /workspace/.git/github-token', () => 
       return { ok: false } as any;
     });
 
-    const { saveOAuthAccount, getOAuthAccountInfo } =
-      await import('../../src/ui/provider-settings.js');
+    const { saveOAuthAccount, getOAuthAccountInfo } = await import(
+      '../../src/ui/provider-settings.js'
+    );
     await saveOAuthAccount({
       providerId: 'github',
       accessToken: 'ghp_REAL_must_not_leak',

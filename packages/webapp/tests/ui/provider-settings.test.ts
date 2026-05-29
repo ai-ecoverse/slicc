@@ -2,7 +2,7 @@
  * Tests for provider settings — multi-account storage layer.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = new Map<string, string>();
 const mockStorage = {
@@ -164,37 +164,35 @@ vi.mock('../../src/providers/index.js', () => ({
   shouldIncludeProvider: () => true,
 }));
 
+import type { ProviderDefault } from '../../src/ui/provider-settings.js';
 import {
-  getSelectedProvider,
-  setSelectedProvider,
-  clearSelectedProvider,
-  getApiKey,
-  setApiKey,
-  clearApiKey,
-  getBaseUrl,
-  setBaseUrl,
-  clearBaseUrl,
-  getSelectedModelId,
-  setSelectedModelId,
-  clearAllSettings,
-  resolveCurrentModel,
-  getAccounts,
   addAccount,
-  removeAccount,
-  getApiKeyForProvider,
-  getBaseUrlForProvider,
-  getAllAvailableModels,
   applyProviderDefaults,
+  clearAllSettings,
+  clearApiKey,
+  clearBaseUrl,
   exportProviders,
+  getAccounts,
+  getAllAvailableModels,
+  getApiKey,
+  getApiKeyForProvider,
   getAvailableProviders,
+  getBaseUrl,
+  getBaseUrlForProvider,
+  getOAuthAccountInfo,
   getProviderConfig,
   getProviderModels,
+  getSelectedModelId,
+  getSelectedProvider,
+  migrateLegacyAuthOnlySelection,
+  removeAccount,
+  resolveCurrentModel,
   resolveModelById,
   saveOAuthAccount,
-  getOAuthAccountInfo,
-  migrateLegacyAuthOnlySelection,
+  setApiKey,
+  setBaseUrl,
+  setSelectedProvider,
 } from '../../src/ui/provider-settings.js';
-import type { ProviderDefault } from '../../src/ui/provider-settings.js';
 
 describe('multi-account storage', () => {
   beforeEach(() => {

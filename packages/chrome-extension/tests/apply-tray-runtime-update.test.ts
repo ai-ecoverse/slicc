@@ -1,9 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { applyTrayRuntimeUpdate } from '../src/apply-tray-runtime-update.js';
+import { describe, expect, it } from 'vitest';
 import {
   TRAY_JOIN_STORAGE_KEY,
   TRAY_WORKER_STORAGE_KEY,
 } from '../../webapp/src/scoops/tray-runtime-config.js';
+import { applyTrayRuntimeUpdate } from '../src/apply-tray-runtime-update.js';
 
 interface FakeStorage {
   setItem(key: string, value: string): void;

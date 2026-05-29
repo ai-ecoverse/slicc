@@ -12,10 +12,10 @@
 import {
   deleteSecret,
   listSecrets,
-  saveCustomSecret,
-  saveS3Profile,
   type SecretEntry,
   type StorageArea,
+  saveCustomSecret,
+  saveS3Profile,
 } from './secrets-storage.js';
 
 declare const chrome: {

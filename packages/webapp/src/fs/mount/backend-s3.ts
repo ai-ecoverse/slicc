@@ -23,12 +23,12 @@
 import { FsError } from '../types.js';
 import type {
   MountBackend,
+  MountDescription,
   MountDirEntry,
   MountStat,
-  MountDescription,
   RefreshReport,
 } from './backend.js';
-import { type RemoteMountCache } from './remote-cache.js';
+import type { RemoteMountCache } from './remote-cache.js';
 
 /**
  * A logical S3 request handed to the transport. The transport decides on

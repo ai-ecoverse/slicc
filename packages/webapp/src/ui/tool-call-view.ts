@@ -7,32 +7,32 @@
  */
 
 import {
-  IceCreamCone,
-  FileText,
+  BrainCog,
+  Clock,
+  Code2,
+  Cog,
   FilePen,
   FilePlus,
-  Terminal,
+  FileText,
   Globe,
-  Code2,
-  MessageCircle,
-  Send,
-  Trash2,
+  Hourglass,
+  IceCreamCone,
   List,
   ListChecks,
-  BrainCog,
+  MessageCircle,
+  Send,
+  Terminal,
+  Trash2,
   UserRoundPlus,
   UtensilsCrossed,
-  Clock,
-  VolumeX,
   Volume2,
-  Hourglass,
+  VolumeX,
   Wrench,
-  Cog,
 } from 'lucide';
-import type { ToolCall } from './types.js';
+import { ansiToHtml } from './ansi.js';
 import { escapeHtml } from './message-renderer.js';
 import { maskSecrets } from './preview-masking.js';
-import { ansiToHtml } from './ansi.js';
+import type { ToolCall } from './types.js';
 
 type IconNode = [tag: string, attrs: Record<string, string | number>][];
 

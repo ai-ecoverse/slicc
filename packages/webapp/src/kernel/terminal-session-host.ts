@@ -35,25 +35,25 @@
  */
 
 import type {
-  TerminalControlMsg,
-  TerminalEventMsg,
-  TerminalSessionId,
-  TerminalOpenMsg,
-  TerminalCloseMsg,
-  TerminalExecMsg,
-  TerminalSignalMsg,
-  TerminalStatusMsg,
-  TerminalOutputMsg,
-  TerminalExitMsg,
-} from '../shell/terminal-protocol.js';
-import type {
   ExtensionMessage,
   OffscreenToPanelMessage,
   PanelToOffscreenMessage,
 } from '../../../chrome-extension/src/messages.js';
-import type { KernelTransport } from './types.js';
+import type {
+  TerminalCloseMsg,
+  TerminalControlMsg,
+  TerminalEventMsg,
+  TerminalExecMsg,
+  TerminalExitMsg,
+  TerminalOpenMsg,
+  TerminalOutputMsg,
+  TerminalSessionId,
+  TerminalSignalMsg,
+  TerminalStatusMsg,
+} from '../shell/terminal-protocol.js';
 import type { HeadlessShellLike, HeadlessShellOptions } from '../shell/wasm-shell-headless.js';
-import type { ProcessManager, Process, ProcessOwner, Signal } from './process-manager.js';
+import type { Process, ProcessManager, ProcessOwner, Signal } from './process-manager.js';
+import type { KernelTransport } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Public API

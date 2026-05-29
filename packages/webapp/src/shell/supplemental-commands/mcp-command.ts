@@ -16,15 +16,15 @@
  * `ensureMcpProviderRegistered` so the provider survives a page reload.
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-import type { VirtualFS } from '../../fs/index.js';
-import type { McpAppDef, McpFetchLike, McpServerEntry, McpToolDef } from '../mcp/types.js';
-import type { OAuthLauncher } from '../../providers/types.js';
-import type { FetchLike } from '../mcp/oauth.js';
-import type { ScriptCatalog } from '../script-catalog.js';
-import { McpTimeoutError } from '../mcp/client.js';
+import { defineCommand } from 'just-bash';
 import { createLogger } from '../../core/logger.js';
+import type { VirtualFS } from '../../fs/index.js';
+import type { OAuthLauncher } from '../../providers/types.js';
+import { McpTimeoutError } from '../mcp/client.js';
+import type { FetchLike } from '../mcp/oauth.js';
+import type { McpAppDef, McpFetchLike, McpServerEntry, McpToolDef } from '../mcp/types.js';
+import type { ScriptCatalog } from '../script-catalog.js';
 
 const log = createLogger('mcp-command');
 
@@ -155,7 +155,7 @@ short name resolves on the PATH.
   if (!/^https?:\/\//i.test(url)) {
     return err(`mcp add: invalid URL "${url}" (must start with http:// or https://)`);
   }
-  if (!/^[A-Za-z][A-Za-z0-9_\-]*$/.test(name)) {
+  if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(name)) {
     return err(
       `mcp add: invalid name "${name}" (letters, digits, _ and - only; must start with a letter)`
     );
@@ -1124,7 +1124,7 @@ async function materializeAppSprinklesSafe(
   }
 }
 
+export type { McpAppDef };
 // Re-export for tests that need to verify content shape without
 // reaching into private symbols.
 export { aliasContent, formatTable };
-export type { McpAppDef };

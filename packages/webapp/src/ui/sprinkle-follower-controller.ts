@@ -16,12 +16,12 @@
  * limited — the leader's VFS is not addressable from here.
  */
 
-import { SprinkleRenderer } from './sprinkle-renderer.js';
-import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';
-import type { SprinkleAddOptions } from './sprinkle-manager.js';
+import { createLogger } from '../core/logger.js';
 import type { SprinkleSummary } from '../scoops/tray-sync-protocol.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
-import { createLogger } from '../core/logger.js';
+import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';
+import type { SprinkleAddOptions } from './sprinkle-manager.js';
+import { SprinkleRenderer } from './sprinkle-renderer.js';
 
 const log = createLogger('sprinkle-follower');
 

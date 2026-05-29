@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 describe('createProxiedFetch — extension branch (Port-based)', () => {
   it('opens a Port named fetch-proxy.fetch and reconstructs a streamed response', async () => {

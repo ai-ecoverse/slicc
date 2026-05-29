@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EnvSecretStore } from '../../src/secrets/env-secret-store.js';
+import { SecretProxyManager } from '../../src/secrets/proxy-manager.js';
 import { readOrCreateSessionId } from '../../src/secrets/session-id-file.js';
 
 describe('fetch-proxy Basic-auth round-trip (unit)', () => {

@@ -5,18 +5,18 @@
  * can use it as its filesystem backend.
  */
 
-import type { VirtualFS } from '../fs/index.js';
-import { normalizePath, joinPath, FsError } from '../fs/index.js';
-import { consumeCachedBinary } from './binary-cache.js';
 import type {
-  IFileSystem,
-  FsStat,
-  MkdirOptions,
-  RmOptions,
+  BufferEncoding,
   CpOptions,
   FileContent,
-  BufferEncoding,
+  FsStat,
+  IFileSystem,
+  MkdirOptions,
+  RmOptions,
 } from 'just-bash';
+import type { VirtualFS } from '../fs/index.js';
+import { FsError, joinPath, normalizePath } from '../fs/index.js';
+import { consumeCachedBinary } from './binary-cache.js';
 
 // These types are defined in just-bash's fs/interface.d.ts but not re-exported
 // from the package root. Define locally to match IFileSystem's method signatures.

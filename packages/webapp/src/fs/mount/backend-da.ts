@@ -18,16 +18,16 @@
  * reconcile via HEAD) mirrors S3MountBackend.writeFile.
  */
 
+import { getMimeType } from '../../core/mime-types.js';
 import { FsError } from '../types.js';
 import type {
   MountBackend,
+  MountDescription,
   MountDirEntry,
   MountStat,
-  MountDescription,
   RefreshReport,
 } from './backend.js';
-import { type RemoteMountCache } from './remote-cache.js';
-import { getMimeType } from '../../core/mime-types.js';
+import type { RemoteMountCache } from './remote-cache.js';
 
 /**
  * Build a multipart/form-data body with a single `data` field carrying
@@ -231,7 +231,7 @@ export class DaMountBackend implements MountBackend {
     // sent `if-match: ''` (empty header value) when the cache held a body
     // with empty etag, which is malformed. Treat empty etag as "we don't
     // know the version" and omit the conditional.
-    if (cached && cached.etag) {
+    if (cached?.etag) {
       headers['if-match'] = cached.etag;
     } else if (!cached) {
       headers['if-none-match'] = '*';

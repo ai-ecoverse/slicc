@@ -12,7 +12,7 @@
  *  - maxAttempts ceiling — final failure throws
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createHttpGlobal,
   HttpError,

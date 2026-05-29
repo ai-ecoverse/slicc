@@ -1,8 +1,8 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  openMountPickerPopup,
   loadAndClearPendingHandle,
+  openMountPickerPopup,
   reactivateHandle,
   storePendingHandle,
 } from '../../src/fs/mount-picker-popup.js';

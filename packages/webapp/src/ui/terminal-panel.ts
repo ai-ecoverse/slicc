@@ -5,8 +5,8 @@
  * a header with a preview toggle button + body container.
  */
 
-import type { WasmShell } from '../shell/index.js';
 import type { RemoteTerminalView } from '../kernel/remote-terminal-view.js';
+import type { WasmShell } from '../shell/index.js';
 
 type TerminalViewId = 'terminal' | 'preview';
 

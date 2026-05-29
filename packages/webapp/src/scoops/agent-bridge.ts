@@ -29,19 +29,19 @@
  * of bridge alone) to see the effect of that consolidation.
  */
 
-import type { Orchestrator } from './orchestrator.js';
+import { createLogger } from '../core/logger.js';
+import type { SessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath } from '../fs/path-utils.js';
-import type { SessionStore } from '../core/session.js';
+import { getAllAvailableModels } from '../ui/provider-settings.js';
+import type { Orchestrator } from './orchestrator.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
   isThinkingLevel,
-  THINKING_LEVELS,
   type RegisteredScoop,
+  THINKING_LEVELS,
   type ThinkingLevel,
 } from './types.js';
-import { createLogger } from '../core/logger.js';
-import { getAllAvailableModels } from '../ui/provider-settings.js';
 
 const log = createLogger('agent-bridge');
 

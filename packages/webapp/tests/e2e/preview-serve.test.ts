@@ -1,5 +1,5 @@
 // packages/webapp/tests/e2e/preview-serve.test.ts
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { installVfsFallbackResponder, seedSkipSwReload, seedVFS, waitForSW } from './helpers.js';
 
 test.describe('preview service worker', () => {

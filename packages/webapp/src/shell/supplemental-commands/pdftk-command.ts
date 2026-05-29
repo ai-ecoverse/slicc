@@ -1,5 +1,5 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 
 // Lazy-loaded dependencies
 let pdfLibPromise: Promise<typeof import('@cantoo/pdf-lib')> | null = null;

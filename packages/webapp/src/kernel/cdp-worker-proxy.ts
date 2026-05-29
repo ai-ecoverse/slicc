@@ -34,10 +34,10 @@
 import type { CDPTransport } from '../cdp/transport.js';
 import type { CDPEventListener } from '../cdp/types.js';
 import {
-  CdpTransportBridge,
   type CdpBridgeOptions,
-  type ParsedCdpResponse,
+  CdpTransportBridge,
   type ParsedCdpEvent,
+  type ParsedCdpResponse,
 } from './cdp-bridge.js';
 import {
   createMessageChannelTransport,

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { leaveTray } from '../../src/scoops/tray-leave.js';
 import {
   TRAY_JOIN_STORAGE_KEY,

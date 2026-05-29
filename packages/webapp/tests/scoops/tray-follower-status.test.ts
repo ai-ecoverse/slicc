@@ -1,11 +1,11 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  type FollowerTrayRuntimeStatus,
   getFollowerTrayRuntimeStatus,
-  setFollowerTrayRuntimeStatus,
   resetReconnectAttempts,
   setFollowerLastPingTime,
+  setFollowerTrayRuntimeStatus,
   subscribeToFollowerTrayRuntimeStatus,
-  type FollowerTrayRuntimeStatus,
 } from '../../src/scoops/tray-follower-status.js';
 
 /** Helper to build a status with sensible defaults for all fields. */

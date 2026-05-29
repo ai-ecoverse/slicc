@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // jsdom historically exposed `localStorage` but on Node >= 25 it falls
 // through to a node-native stub that throws. Match the pattern in
@@ -30,32 +30,32 @@ vi.mock('../../../src/providers/oauth-service.js', async (importOriginal) => {
   return { ...orig, getOAuthPageOrigin: mockGetOAuthPageOrigin };
 });
 
-import {
-  createMcpCommand,
-  coerceArgsBySchema,
-  renderToolResult,
-  aliasContent,
-  extractTimeoutFlag,
-} from '../../../src/shell/supplemental-commands/mcp-command.js';
-import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import { GLOBAL_FS_DB_NAME } from '../../../src/fs/global-db.js';
+import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import {
-  _testOnly_resetStoreCache,
-  readServersFile,
-  setServer,
-} from '../../../src/shell/mcp/store.js';
+  getRegisteredProviderConfig,
+  getRegisteredProviderIds,
+  unregisterProviderConfig,
+} from '../../../src/providers/index.js';
+import type { FetchLike } from '../../../src/shell/mcp/oauth.js';
 import {
   _testOnly_resetMcpProviderState,
   mcpProviderId,
   registerMcpProvider,
 } from '../../../src/shell/mcp/provider.js';
 import {
-  unregisterProviderConfig,
-  getRegisteredProviderConfig,
-  getRegisteredProviderIds,
-} from '../../../src/providers/index.js';
+  _testOnly_resetStoreCache,
+  readServersFile,
+  setServer,
+} from '../../../src/shell/mcp/store.js';
 import type { McpFetchLike } from '../../../src/shell/mcp/types.js';
-import type { FetchLike } from '../../../src/shell/mcp/oauth.js';
+import {
+  aliasContent,
+  coerceArgsBySchema,
+  createMcpCommand,
+  extractTimeoutFlag,
+  renderToolResult,
+} from '../../../src/shell/supplemental-commands/mcp-command.js';
 
 type RpcBody = {
   jsonrpc?: string;

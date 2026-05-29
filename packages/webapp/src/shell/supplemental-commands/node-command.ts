@@ -14,10 +14,10 @@
  * for the full list.
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command, CommandContext } from 'just-bash';
-import { NODE_VERSION } from './shared.js';
+import { defineCommand } from 'just-bash';
 import { executeJsCode } from '../jsh-executor.js';
+import { NODE_VERSION } from './shared.js';
 
 function nodeHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {

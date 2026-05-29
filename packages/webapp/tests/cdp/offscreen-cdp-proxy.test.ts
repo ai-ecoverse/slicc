@@ -2,7 +2,7 @@
  * Tests for OffscreenCdpProxy — CDP transport that routes through chrome.runtime messages.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock chrome.runtime
 const messageListeners: Array<

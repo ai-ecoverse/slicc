@@ -8,14 +8,14 @@
  * - sandbox.html, manifest.json (copied from packages/chrome-extension/)
  */
 
-import { defineConfig } from 'vite';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
+import { defineConfig } from 'vite';
 import { stripBiomeWasmAssetPlugin } from '../webapp/vite-plugins/strip-biome-wasm-asset';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(__dirname, '../..');
+const Dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(Dirname, '../..');
 const rootPkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf-8')) as {
   version: string;
 };
@@ -39,12 +39,12 @@ export default defineConfig(({ mode }) => ({
       // CJS entry imports Node crypto. Force the browser-safe ESM entry
       // instead.
       'isomorphic-git': resolve(repoRoot, 'node_modules/isomorphic-git/index.js'),
-      'node:zlib': resolve(__dirname, '../webapp/src/shims/empty.ts'),
-      'node:module': resolve(__dirname, '../webapp/src/shims/empty.ts'),
-      stream: resolve(__dirname, '../webapp/src/shims/stream.ts'),
-      http: resolve(__dirname, '../webapp/src/shims/http.ts'),
-      https: resolve(__dirname, '../webapp/src/shims/https.ts'),
-      http2: resolve(__dirname, '../webapp/src/shims/http2.ts'),
+      'node:zlib': resolve(Dirname, '../webapp/src/shims/empty.ts'),
+      'node:module': resolve(Dirname, '../webapp/src/shims/empty.ts'),
+      stream: resolve(Dirname, '../webapp/src/shims/stream.ts'),
+      http: resolve(Dirname, '../webapp/src/shims/http.ts'),
+      https: resolve(Dirname, '../webapp/src/shims/https.ts'),
+      http2: resolve(Dirname, '../webapp/src/shims/http2.ts'),
       // Deep import into pi-coding-agent's compaction submodule (see vite.config.ts)
       '@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js': resolve(
         repoRoot,
@@ -75,8 +75,8 @@ export default defineConfig(({ mode }) => ({
     target: 'esnext',
     rollupOptions: {
       input: {
-        index: resolve(__dirname, '../webapp/index.html'),
-        offscreen: resolve(__dirname, 'offscreen.html'),
+        index: resolve(Dirname, '../webapp/index.html'),
+        offscreen: resolve(Dirname, 'offscreen.html'),
       },
       output: {
         entryFileNames: 'assets/[name]-[hash].js',
@@ -92,10 +92,10 @@ export default defineConfig(({ mode }) => ({
         const normalizedImporter = importer?.replace(/\\/g, '/');
         if (normalizedImporter?.includes('@earendil-works/pi-coding-agent')) {
           if (source.endsWith('/session-manager.js')) {
-            return resolve(__dirname, '../webapp/src/stubs/pi-session-manager-stub.ts');
+            return resolve(Dirname, '../webapp/src/stubs/pi-session-manager-stub.ts');
           }
           if (source.endsWith('/config.js') || source === '../config.js') {
-            return resolve(__dirname, '../webapp/src/stubs/pi-config-stub.ts');
+            return resolve(Dirname, '../webapp/src/stubs/pi-config-stub.ts');
           }
         }
       },
@@ -108,7 +108,7 @@ export default defineConfig(({ mode }) => ({
         // never sees Rollup-generated shared-chunk imports.
         const esbuild = await import('esbuild');
         await esbuild.build({
-          entryPoints: [resolve(__dirname, 'src/service-worker.ts')],
+          entryPoints: [resolve(Dirname, 'src/service-worker.ts')],
           bundle: true,
           outfile: resolve(repoRoot, 'dist/extension/service-worker.js'),
           format: 'iife',
@@ -133,7 +133,7 @@ export default defineConfig(({ mode }) => ({
         // Rollup would code-split LightningFS into a shared chunk, which SWs can't import.
         const esbuild = await import('esbuild');
         await esbuild.build({
-          entryPoints: [resolve(__dirname, '../webapp/src/ui/preview-sw.ts')],
+          entryPoints: [resolve(Dirname, '../webapp/src/ui/preview-sw.ts')],
           bundle: true,
           outfile: resolve(repoRoot, 'dist/extension/preview-sw.js'),
           format: 'iife',
@@ -152,7 +152,7 @@ export default defineConfig(({ mode }) => ({
         // works without ES-module imports.
         const esbuild = await import('esbuild');
         await esbuild.build({
-          entryPoints: [resolve(__dirname, 'src/secrets-entry.ts')],
+          entryPoints: [resolve(Dirname, 'src/secrets-entry.ts')],
           bundle: true,
           outfile: resolve(repoRoot, 'dist/extension/secrets.js'),
           format: 'iife',
@@ -173,7 +173,7 @@ export default defineConfig(({ mode }) => ({
       async closeBundle() {
         const esbuild = await import('esbuild');
         await esbuild.build({
-          entryPoints: [resolve(__dirname, '../webapp/src/ui/slicc-editor-entry.ts')],
+          entryPoints: [resolve(Dirname, '../webapp/src/ui/slicc-editor-entry.ts')],
           bundle: true,
           outfile: resolve(repoRoot, 'dist/extension/slicc-editor.js'),
           format: 'iife',
@@ -183,7 +183,7 @@ export default defineConfig(({ mode }) => ({
         });
         // Also build lucide-icons.js for sprinkles
         await esbuild.build({
-          entryPoints: [resolve(__dirname, '../webapp/src/ui/lucide-icons.ts')],
+          entryPoints: [resolve(Dirname, '../webapp/src/ui/lucide-icons.ts')],
           bundle: true,
           outfile: resolve(repoRoot, 'dist/extension/lucide-icons.js'),
           format: 'iife',
@@ -198,7 +198,7 @@ export default defineConfig(({ mode }) => ({
       async closeBundle() {
         const esbuild = await import('esbuild');
         await esbuild.build({
-          entryPoints: [resolve(__dirname, '../webapp/src/ui/slicc-diff-entry.ts')],
+          entryPoints: [resolve(Dirname, '../webapp/src/ui/slicc-diff-entry.ts')],
           bundle: true,
           outfile: resolve(repoRoot, 'dist/extension/slicc-diff.js'),
           format: 'iife',
@@ -227,7 +227,7 @@ export default defineConfig(({ mode }) => ({
         // committed source value is a sentinel and never read at runtime.
         // SLICC_EXT_DEV=1 also strips "key" so Chrome assigns a random ID
         // (avoids stale storage from previous installs).
-        const manifestSrc = resolve(__dirname, 'manifest.json');
+        const manifestSrc = resolve(Dirname, 'manifest.json');
         const manifestDest = resolve(outDir, 'manifest.json');
         const manifest = JSON.parse(readFileSync(manifestSrc, 'utf-8'));
         manifest.version = rootPkg.version;
@@ -235,25 +235,25 @@ export default defineConfig(({ mode }) => ({
           delete manifest.key;
         }
         writeFileSync(manifestDest, JSON.stringify(manifest, null, 2));
-        copyFileSync(resolve(__dirname, 'sandbox.html'), resolve(outDir, 'sandbox.html'));
+        copyFileSync(resolve(Dirname, 'sandbox.html'), resolve(outDir, 'sandbox.html'));
         copyFileSync(
-          resolve(__dirname, 'sprinkle-sandbox.html'),
+          resolve(Dirname, 'sprinkle-sandbox.html'),
           resolve(outDir, 'sprinkle-sandbox.html')
         );
         copyFileSync(
-          resolve(__dirname, 'tool-ui-sandbox.html'),
+          resolve(Dirname, 'tool-ui-sandbox.html'),
           resolve(outDir, 'tool-ui-sandbox.html')
         );
-        copyFileSync(resolve(__dirname, 'voice-popup.html'), resolve(outDir, 'voice-popup.html'));
-        copyFileSync(resolve(__dirname, 'voice-popup.js'), resolve(outDir, 'voice-popup.js'));
-        copyFileSync(resolve(__dirname, 'mount-popup.html'), resolve(outDir, 'mount-popup.html'));
-        copyFileSync(resolve(__dirname, 'mount-popup.js'), resolve(outDir, 'mount-popup.js'));
-        copyFileSync(resolve(__dirname, 'secrets.html'), resolve(outDir, 'secrets.html'));
+        copyFileSync(resolve(Dirname, 'voice-popup.html'), resolve(outDir, 'voice-popup.html'));
+        copyFileSync(resolve(Dirname, 'voice-popup.js'), resolve(outDir, 'voice-popup.js'));
+        copyFileSync(resolve(Dirname, 'mount-popup.html'), resolve(outDir, 'mount-popup.html'));
+        copyFileSync(resolve(Dirname, 'mount-popup.js'), resolve(outDir, 'mount-popup.js'));
+        copyFileSync(resolve(Dirname, 'secrets.html'), resolve(outDir, 'secrets.html'));
         // secrets.js is built from src/secrets-entry.ts via esbuild below;
         // see the 'build-secrets-page' plugin.
 
         // Copy logo files for extension icons and header
-        const logosSrc = resolve(__dirname, '../assets/logos');
+        const logosSrc = resolve(Dirname, '../assets/logos');
         const logosDest = resolve(outDir, 'logos');
         mkdirSync(logosDest, { recursive: true });
         for (const file of readdirSync(logosSrc)) {
@@ -267,7 +267,7 @@ export default defineConfig(({ mode }) => ({
         }
 
         // Copy fonts if present (Adobe Clean — local dev only, gitignored)
-        const fontsSrc = resolve(__dirname, '../assets/fonts');
+        const fontsSrc = resolve(Dirname, '../assets/fonts');
         const fontsDest = resolve(outDir, 'fonts');
         try {
           mkdirSync(fontsDest, { recursive: true });

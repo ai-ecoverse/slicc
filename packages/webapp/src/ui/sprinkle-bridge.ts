@@ -3,7 +3,7 @@
  * communicating with the agent via lick events.
  */
 
-import type { VirtualFS, EntryType } from '../fs/index.js';
+import type { EntryType, VirtualFS } from '../fs/index.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 

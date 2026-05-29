@@ -10,9 +10,10 @@
  * load-bearing observation: removing the `stripOrphanedToolResults`
  * call at `scoop-context.ts` session-restore site must make this fail.
  */
+
+import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
-import type { AgentMessage } from '@earendil-works/pi-agent-core';
 
 type AgentCtorOptions = { initialState?: { messages?: AgentMessage[] } };
 

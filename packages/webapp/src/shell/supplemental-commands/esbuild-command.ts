@@ -23,9 +23,9 @@
  * fidelity with the upstream CLI.
  */
 
-import { defineCommand } from 'just-bash';
-import type { Command, CommandContext } from 'just-bash';
 import type { BuildOptions, Loader, Plugin, TransformOptions } from 'esbuild-wasm';
+import type { Command, CommandContext } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import { getEsbuild } from './esbuild-wasm.js';
 import { basename, dirname, joinPath } from './shared.js';
 
@@ -241,8 +241,7 @@ export function createVfsPlugin(
           args.path.startsWith('../') ||
           args.path.startsWith('/')
         ) {
-          const importerDir =
-            args.importer && args.importer.startsWith('/') ? dirname(args.importer) : cwd;
+          const importerDir = args.importer?.startsWith('/') ? dirname(args.importer) : cwd;
           const resolved = fs.resolvePath(importerDir, args.path);
           const withExt = await resolveWithExtensions(fs, resolved);
           return { path: withExt };
@@ -334,15 +333,13 @@ async function resolveWithExtensions(fs: CommandContext['fs'], candidate: string
   return candidate;
 }
 
-interface FormatMessagesFn {
-  (
-    messages: {
-      text: string;
-      location?: { file?: string; line?: number; column?: number } | null;
-    }[],
-    opts: { kind: 'error' | 'warning'; color?: boolean }
-  ): Promise<string[]>;
-}
+type FormatMessagesFn = (
+  messages: {
+    text: string;
+    location?: { file?: string; line?: number; column?: number } | null;
+  }[],
+  opts: { kind: 'error' | 'warning'; color?: boolean }
+) => Promise<string[]>;
 
 async function renderDiagnostics(
   formatMessages: FormatMessagesFn,

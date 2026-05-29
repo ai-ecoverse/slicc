@@ -17,8 +17,8 @@
  * so renames/removals on the server take effect.
  */
 
-import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
 import { createLogger } from '../../core/logger.js';
+import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
 import { FsError } from '../../fs/types.js';
 import type { McpAppDef } from './types.js';
 

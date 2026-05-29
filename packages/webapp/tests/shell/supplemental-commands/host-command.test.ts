@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { FollowerTrayRuntimeStatus } from '../../../src/scoops/tray-follower-status.js';
 import {
   createHostCommand,
+  formatDuration,
   formatFollowerOutput,
   formatLeaderOutput,
-  formatDuration,
 } from '../../../src/shell/supplemental-commands/host-command.js';
-import type { FollowerTrayRuntimeStatus } from '../../../src/scoops/tray-follower-status.js';
 
 /** Helper to build a FollowerTrayRuntimeStatus with sensible defaults for the new diagnostic fields. */
 function followerStatus(

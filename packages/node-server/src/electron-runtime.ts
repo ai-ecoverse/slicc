@@ -1,5 +1,5 @@
-import { basename, join, resolve } from 'path';
 import { accessSync, constants, readdirSync, statSync } from 'fs';
+import { basename, join, resolve } from 'path';
 
 export interface ElectronFloatFlags {
   dev: boolean;
@@ -204,9 +204,7 @@ export function resolveElectronAppExecutablePath(
           if (stat.isFile() && isExecutable(entryPath)) {
             return entryPath;
           }
-        } catch {
-          continue;
-        }
+        } catch {}
       }
     } catch {
       // Can't read directory, fall back to expected path

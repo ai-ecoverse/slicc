@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  SPRINKLE_BRIDGE_CHANNEL,
-  sprinkleBridgeChannelName,
   createSprinkleManagerProxyOverChannel,
   installSprinkleManagerHandlerOverChannel,
+  SPRINKLE_BRIDGE_CHANNEL,
+  sprinkleBridgeChannelName,
 } from '../../src/scoops/sprinkle-bridge-channel.js';
 import type { Sprinkle } from '../../src/ui/sprinkle-discovery.js';
 import type { SprinkleManager } from '../../src/ui/sprinkle-manager.js';

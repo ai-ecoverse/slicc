@@ -14,6 +14,7 @@
 
 import type { CommandContext } from 'just-bash';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
+import { createNodeFetchAdapter } from '../../shell/supplemental-commands/node-fetch-adapter.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type {
   RealmRpcRequest,
@@ -28,7 +29,6 @@ import type {
   WsSubscriberInfo,
 } from './realm-types.js';
 import type { WsSubscriberRegistry } from './ws-subscribers.js';
-import { createNodeFetchAdapter } from '../../shell/supplemental-commands/node-fetch-adapter.js';
 
 export interface RealmHostHandle {
   /** Detach the message listener. Idempotent. */

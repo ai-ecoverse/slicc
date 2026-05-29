@@ -446,7 +446,6 @@ addEventListener('message', function(e) {
       }
 
       // Render the SHTML content (trusted user/agent-authored sprinkle)
-      // eslint-disable-next-line no-unsanitized/property -- trusted content, same as CLI renderer
       document.body.innerHTML = msg.content;
 
       // Auto-set width on .fill elements

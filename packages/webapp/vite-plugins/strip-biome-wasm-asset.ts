@@ -30,14 +30,15 @@
  * not part of the browser bundle. The pure helpers are unit-tested in
  * `tests/build/strip-biome-wasm-asset.test.ts`.
  */
-import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+
 import type { Dirent } from 'node:fs';
+import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { Plugin, ResolvedConfig } from 'vite';
 // Read the version the same way biome-runtime.ts does. A JSON import keeps
 // this build-only module free of `node:module` (which the webapp vitest
 // project aliases to a browser stub).
 import wasmWebPkg from '@biomejs/wasm-web/package.json' with { type: 'json' };
+import type { Plugin, ResolvedConfig } from 'vite';
 
 /** Matches the emitted wasm-bindgen binary file name (any content hash). */
 export const BIOME_WASM_ASSET_RE = /biome_wasm_bg-[\w-]+\.wasm$/;

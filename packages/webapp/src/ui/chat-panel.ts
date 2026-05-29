@@ -6,53 +6,52 @@
  */
 
 import { Brain, File as FileIcon, FileText, Image as ImageIcon, Paperclip, X } from 'lucide';
-import { THINKING_LEVEL_CYCLE, isThinkingLevel, type ThinkingLevel } from '../scoops/types.js';
-import type { AgentHandle, AgentEvent, ChatMessage, ToolCall } from './types.js';
-import { renderAssistantMessageContent, renderMessageContent } from './message-renderer.js';
-import { SessionStore } from './session-store.js';
-import { createLogger } from '../core/logger.js';
 import type { MessageAttachment, MessageAttachmentKind } from '../core/attachments.js';
 import { formatAttachmentSize, formatAttachmentSummary } from '../core/attachments.js';
-import { getMimeType } from '../core/mime-types.js';
 import {
-  processImageContent,
-  isSupportedImageFormat,
   getImageByteSize,
+  isSupportedImageFormat,
+  processImageContent,
 } from '../core/image-processor.js';
-import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
-import {
-  hydrateDips,
-  disposeDips,
-  mountDraftDip,
-  splitContentSegments,
-  type DipInstance,
-  type DraftDipInstance,
-} from './dip.js';
-import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
-import { showImagePreview } from './image-preview.js';
+import { createLogger } from '../core/logger.js';
+import { getMimeType } from '../core/mime-types.js';
+import { isThinkingLevel, THINKING_LEVEL_CYCLE, type ThinkingLevel } from '../scoops/types.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 import {
-  getToolDescriptor,
-  createToolIcon,
-  createToolBody,
-  toolStatus,
-  groupToolCalls,
-  clusterPreview,
-  clusterPreviewFromTitles,
-  createClusterIcon,
-  TOOL_CLUSTER_MIN,
-} from './tool-call-view.js';
-import { getLickDescriptor, createLickIcon, parseLickContent } from './lick-view.js';
+  type DipInstance,
+  type DraftDipInstance,
+  disposeDips,
+  hydrateDips,
+  mountDraftDip,
+  splitContentSegments,
+} from './dip.js';
+import { showImagePreview } from './image-preview.js';
 import { isLickChannel, type LickChannel } from './lick-channels.js';
+import { createLickIcon, getLickDescriptor, parseLickContent } from './lick-view.js';
+import { renderAssistantMessageContent, renderMessageContent } from './message-renderer.js';
 import {
   getAllAvailableModels,
   getSelectedModelId,
   getSelectedProvider,
   setSelectedModelId,
-  getProviderConfig,
 } from './provider-settings.js';
 import { quickLabel } from './quick-llm.js';
+import { SessionStore } from './session-store.js';
 import { trackChatSend, trackImageView } from './telemetry.js';
+import {
+  clusterPreview,
+  clusterPreviewFromTitles,
+  createClusterIcon,
+  createToolBody,
+  createToolIcon,
+  getToolDescriptor,
+  groupToolCalls,
+  TOOL_CLUSTER_MIN,
+  toolStatus,
+} from './tool-call-view.js';
+import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
+import type { AgentEvent, AgentHandle, ChatMessage, ToolCall } from './types.js';
+import { getVoiceLang, VoiceInput } from './voice-input.js';
 // Side-effect import: registers the `<slicc-press-button>` custom element.
 import './press-button.js';
 import type { SliccPressButton } from './press-button.js';
@@ -1457,7 +1456,7 @@ export class ChatPanel {
     isError?: boolean
   ): void {
     const msg = this.findMessage(messageId);
-    if (!msg || !msg.toolCalls) return;
+    if (!msg?.toolCalls) return;
     // Find the most recent tool call matching this name that has no result yet
     const tc = [...msg.toolCalls]
       .reverse()
@@ -1483,7 +1482,7 @@ export class ChatPanel {
     retryCount = 0
   ): void {
     const msg = this.findMessage(messageId);
-    if (!msg || !msg.toolCalls) {
+    if (!msg?.toolCalls) {
       // Message/toolCalls might not be added yet - retry
       if (retryCount < 10) {
         setTimeout(
@@ -3060,7 +3059,7 @@ export class ChatPanel {
         if (anchorId && this.openClusterAnchors.has(anchorId)) {
           cluster.open = true;
         }
-        if (anchorParent && anchorParent.isConnected) {
+        if (anchorParent?.isConnected) {
           anchorParent.insertBefore(cluster, anchorNext);
         } else {
           const lastGroup = chain[chain.length - 1];

@@ -6,7 +6,7 @@
  * and is verified manually.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // --- Stub the window global for Node environment ---
 

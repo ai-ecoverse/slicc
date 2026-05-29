@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SprinkleSummary } from '../../src/scoops/tray-sync-protocol.js';
 import {
   SprinkleFollowerController,
   type SprinkleFollowerSync,
 } from '../../src/ui/sprinkle-follower-controller.js';
-import type { SprinkleSummary } from '../../src/scoops/tray-sync-protocol.js';
 
 // SprinkleRenderer is stubbed so the controller can be exercised without DOM.
 vi.mock('../../src/ui/sprinkle-renderer.js', () => {
@@ -68,6 +68,7 @@ vi.mock('../../src/ui/sprinkle-renderer.js', () => {
 
 // Bring the mock surface into the test file so we can assert against it.
 import { SprinkleRenderer } from '../../src/ui/sprinkle-renderer.js';
+
 const FakeRenderer = SprinkleRenderer as unknown as {
   instances: Array<{
     rendered: string;

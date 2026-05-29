@@ -5,7 +5,7 @@
  * the core logic patterns directly (same approach as adobe-provider.test.ts).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock localStorage
 const storage = new Map<string, string>();

@@ -1,7 +1,7 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-import { basename } from './shared.js';
+import { defineCommand } from 'just-bash';
 import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
+import { basename } from './shared.js';
 
 function screencaptureHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {

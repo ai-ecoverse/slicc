@@ -1,12 +1,12 @@
 import {
-  DEFAULT_EXTENSION_TAB_ID,
-  isBuiltinExtensionTabId,
-  type ExtensionTabId,
-} from './tabbed-ui.js';
-import {
   DETACHED_RUNTIME_QUERY_NAME,
   DETACHED_RUNTIME_QUERY_VALUE,
 } from '../../../chrome-extension/src/messages.js';
+import {
+  DEFAULT_EXTENSION_TAB_ID,
+  type ExtensionTabId,
+  isBuiltinExtensionTabId,
+} from './tabbed-ui.js';
 
 export type UiRuntimeMode =
   | 'standalone'

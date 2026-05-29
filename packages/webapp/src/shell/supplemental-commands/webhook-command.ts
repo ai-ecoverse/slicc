@@ -1,7 +1,7 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-import { getTrayWebhookUrl, getWebhookUrl } from '../../ui/runtime-mode.js';
+import { defineCommand } from 'just-bash';
 import { getLeaderTrayRuntimeStatus } from '../../scoops/tray-leader.js';
+import { getTrayWebhookUrl, getWebhookUrl } from '../../ui/runtime-mode.js';
 
 function webhookHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -59,15 +59,16 @@ function getDirectLickManager(): import('../../scoops/lick-manager.js').LickMana
 
 /** Side-panel terminal doesn't have direct access to the offscreen
  * LickManager singleton — proxy through BroadcastChannel instead. */
-let _lickProxy: ReturnType<
+let LickProxy: ReturnType<
   typeof import('../../../../chrome-extension/src/lick-manager-proxy.js').createLickManagerProxy
 > | null = null;
 async function getLickProxy() {
-  if (_lickProxy) return _lickProxy;
-  const { createLickManagerProxy } =
-    await import('../../../../chrome-extension/src/lick-manager-proxy.js');
-  _lickProxy = createLickManagerProxy();
-  return _lickProxy;
+  if (LickProxy) return LickProxy;
+  const { createLickManagerProxy } = await import(
+    '../../../../chrome-extension/src/lick-manager-proxy.js'
+  );
+  LickProxy = createLickManagerProxy();
+  return LickProxy;
 }
 
 /**
@@ -92,8 +93,9 @@ async function resolveWebhookUrlBase(): Promise<string | null> {
     return getLeaderTrayRuntimeStatus().session?.webhookUrl ?? null;
   }
   // Side-panel terminal: proxy to offscreen.
-  const { getTrayWebhookUrlAsync } =
-    await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+  const { getTrayWebhookUrlAsync } = await import(
+    '../../../../chrome-extension/src/lick-manager-proxy.js'
+  );
   return await getTrayWebhookUrlAsync();
 }
 
@@ -140,8 +142,9 @@ async function getLickManagerSurface(): Promise<{
   }
   if (!isExtension) return null;
   const proxy = await getLickProxy();
-  const { listWebhooksAsync } =
-    await import('../../../../chrome-extension/src/lick-manager-proxy.js');
+  const { listWebhooksAsync } = await import(
+    '../../../../chrome-extension/src/lick-manager-proxy.js'
+  );
   return {
     createWebhook: (name, scoop?, filter?) => proxy.createWebhook(name, scoop, filter),
     deleteWebhook: (id) => proxy.deleteWebhook(id),

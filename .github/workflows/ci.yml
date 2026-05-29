@@ -93,7 +93,9 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Format check
+      - name: Biome lint + format check
+        run: npx biome check .
+      - name: Prettier format check (docs/yaml/html only)
         run: npx prettier --check .
       - name: Check CLAUDE.md size
         run: |

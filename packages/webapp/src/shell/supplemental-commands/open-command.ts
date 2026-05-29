@@ -1,7 +1,7 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-import { basename, detectMimeType, isLikelyUrl, toPreviewUrl } from './shared.js';
+import { defineCommand } from 'just-bash';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
+import { basename, detectMimeType, isLikelyUrl, toPreviewUrl } from './shared.js';
 
 const FLAG_SET = new Set(['--download', '-d', '--view', '-v']);
 

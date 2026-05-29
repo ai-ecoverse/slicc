@@ -1,12 +1,4 @@
 import { createLogger } from '../core/logger.js';
-import type {
-  LeaderToWorkerControlMessage,
-  WorkerToLeaderControlMessage,
-  FollowerJoinRequestedMessage,
-  TrayBootstrapStatus,
-  TrayIceCandidate,
-  TraySessionDescription,
-} from './tray-types.js';
 import {
   attachTrayFollower,
   pollTrayFollowerBootstrap,
@@ -15,9 +7,17 @@ import {
   sendTrayFollowerIceCandidate,
 } from './tray-follower.js';
 import {
-  setFollowerTrayRuntimeStatus,
   getFollowerTrayRuntimeStatus,
+  setFollowerTrayRuntimeStatus,
 } from './tray-follower-status.js';
+import type {
+  FollowerJoinRequestedMessage,
+  LeaderToWorkerControlMessage,
+  TrayBootstrapStatus,
+  TrayIceCandidate,
+  TraySessionDescription,
+  WorkerToLeaderControlMessage,
+} from './tray-types.js';
 
 const log = createLogger('tray-webrtc');
 const DEFAULT_DATA_CHANNEL_LABEL = 'tray-control';

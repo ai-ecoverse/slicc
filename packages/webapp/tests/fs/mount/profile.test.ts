@@ -1,11 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  resolveS3Profile,
-  resolveDaProfile,
   ProfileNotConfiguredError,
+  resolveDaProfile,
+  resolveS3Profile,
 } from '../../../src/fs/mount/profile.js';
-import { createFakeSecretStore } from './helpers/fake-secret-store.js';
 import { createFakeImsClient } from './helpers/fake-ims-client.js';
+import { createFakeSecretStore } from './helpers/fake-secret-store.js';
 
 describe('resolveS3Profile', () => {
   it('reads a complete default profile', async () => {

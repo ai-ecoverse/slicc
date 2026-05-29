@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
-import { SprinkleRenderer, isFullDocument } from '../../src/ui/sprinkle-renderer.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SprinkleBridgeAPI } from '../../src/ui/sprinkle-bridge.js';
+import { isFullDocument, SprinkleRenderer } from '../../src/ui/sprinkle-renderer.js';
 
 function makeBridge(name: string): SprinkleBridgeAPI {
   return {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { discoverLinks } from '../../src/net/discover-links.js';
 import { parseLinkHeader } from '../../src/net/link-header.js';
 
@@ -164,8 +164,9 @@ describe('discover --follow proxied fetch routing (issue F)', () => {
       __proxiedFetchSpy: ReturnType<typeof vi.fn>;
       __proxiedFetchCalls: string[];
     };
-    const { createDiscoverCommand } =
-      await import('../../src/shell/supplemental-commands/discover-command.js');
+    const { createDiscoverCommand } = await import(
+      '../../src/shell/supplemental-commands/discover-command.js'
+    );
 
     proxiedModule.__proxiedFetchSpy.mockClear();
     proxiedModule.__proxiedFetchCalls.length = 0;

@@ -15,7 +15,7 @@
   ],
   "workspaces": {
     ".": {
-      "entry": ["vitest.config.ts", "eslint.config.js", ".releaserc.json"],
+      "entry": ["vitest.config.ts", "biome.json", ".releaserc.json"],
       "project": ["*.{js,ts,mjs}"]
     },
     "packages/webapp": {

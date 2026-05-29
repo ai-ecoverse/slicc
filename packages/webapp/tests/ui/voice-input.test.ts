@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  VoiceInput,
   getVoiceAutoSend,
-  setVoiceAutoSend,
   getVoiceLang,
+  setVoiceAutoSend,
   setVoiceLang,
+  VoiceInput,
 } from '../../src/ui/voice-input.js';
 
 // Mock SpeechRecognition

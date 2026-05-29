@@ -1,6 +1,6 @@
-import { defineConfig } from 'vitest/config';
-import { resolve } from 'path';
 import { readFileSync } from 'fs';
+import { resolve } from 'path';
+import { defineConfig } from 'vitest/config';
 
 const webappDir = resolve(__dirname, 'packages/webapp');
 const workspaceRoot = __dirname;

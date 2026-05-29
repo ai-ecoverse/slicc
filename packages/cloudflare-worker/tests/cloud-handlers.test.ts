@@ -1,19 +1,19 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { clearAll as clearAuthCache, getCached, setCached } from '../src/cloud/auth-cache.js';
+import { handleAdminStats } from '../src/cloud/handler-admin.js';
+import { handleSignOut } from '../src/cloud/handler-signout.js';
 import {
-  handleStart,
+  handleKill,
   handleList,
   handlePause,
   handleResume,
-  handleKill,
+  handleStart,
 } from '../src/cloud/handlers.js';
-import { handleSignOut } from '../src/cloud/handler-signout.js';
-import { handleAdminStats } from '../src/cloud/handler-admin.js';
-import { setCached, getCached, clearAll as clearAuthCache } from '../src/cloud/auth-cache.js';
 import { clearAll as clearRateLimit } from '../src/cloud/rate-limit.js';
 import {
+  getRecordedCalls,
   makeCloudEnv,
   resetMockNamespace,
-  getRecordedCalls,
   setMockResponse,
 } from './cloud-handlers-helpers.js';
 

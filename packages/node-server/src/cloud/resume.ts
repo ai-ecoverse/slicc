@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import { resumeCone, type ResumeResult, type SandboxSubstrate } from '@slicc/cloud-core';
+import { type ResumeResult, resumeCone, type SandboxSubstrate } from '@slicc/cloud-core';
 import { FileRegistry } from './registry-file.js';
 
 export interface RunResumeOpts {

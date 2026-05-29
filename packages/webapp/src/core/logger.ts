@@ -31,7 +31,7 @@ export interface Logger {
 }
 
 // No-op function — assigned once, shared across all prod loggers.
-const noop = () => {};
+const _noop = () => {};
 
 // ---------------------------------------------------------------------------
 // Log deduplication

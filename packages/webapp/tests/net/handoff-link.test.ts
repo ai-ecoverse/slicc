@@ -1,13 +1,13 @@
-import { describe, it, expect } from 'vitest';
-import { parseLinkHeader } from '../../src/net/link-header.js';
+import { describe, expect, it } from 'vitest';
 import {
-  HANDOFF_REL,
-  UPSKILL_REL,
   extractHandoff,
   extractHandoffFromCdpHeaders,
   extractHandoffFromFetchHeaders,
   extractHandoffFromWebRequest,
+  HANDOFF_REL,
+  UPSKILL_REL,
 } from '../../src/net/handoff-link.js';
+import { parseLinkHeader } from '../../src/net/link-header.js';
 
 describe('extractHandoff', () => {
   it('matches the upskill rel and returns the GitHub URL as target', () => {

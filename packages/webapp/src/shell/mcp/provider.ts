@@ -9,22 +9,22 @@
  * after a page reload.
  */
 
-import type { ProviderConfig, OAuthLauncher } from '../../providers/types.js';
+import { createLogger } from '../../core/logger.js';
 import {
   getRegisteredProviderConfig,
   registerProviderConfig,
   unregisterProviderConfig,
 } from '../../providers/index.js';
-import { saveOAuthAccount, getOAuthAccountInfo, getAccounts } from '../../ui/provider-settings.js';
-import { createLogger } from '../../core/logger.js';
+import type { OAuthLauncher, ProviderConfig } from '../../providers/types.js';
+import { getAccounts, getOAuthAccountInfo, saveOAuthAccount } from '../../ui/provider-settings.js';
 import {
-  discoverAuth,
-  runAuthFlow,
-  refreshAccessToken,
   type DiscoveredAuth,
+  discoverAuth,
   type FetchLike,
+  refreshAccessToken,
+  runAuthFlow,
 } from './oauth.js';
-import { readMcpAuthEntry, type McpAuthEntry } from './provider-store-access.js';
+import { type McpAuthEntry, readMcpAuthEntry } from './provider-store-access.js';
 
 const log = createLogger('mcp-provider');
 

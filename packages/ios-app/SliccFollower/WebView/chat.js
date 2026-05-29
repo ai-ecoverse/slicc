@@ -1,4 +1,3 @@
-/* eslint-disable no-undef, @typescript-eslint/no-unused-vars */
 'use strict';
 let _isStreaming = false;
 const _container = document.getElementById('messages');

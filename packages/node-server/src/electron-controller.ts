@@ -1,22 +1,21 @@
-import { execFile as nodeExecFile, spawn, type ChildProcess } from 'child_process';
+import { type ChildProcess, execFile as nodeExecFile, spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import * as http from 'http';
 import * as https from 'https';
 import { promisify } from 'util';
-import { inflateSync } from 'zlib';
-
 import { WebSocket } from 'ws';
+import { inflateSync } from 'zlib';
 
 import {
   buildElectronAppLaunchSpec,
   buildElectronOverlayAppUrl,
   buildElectronOverlayBootstrapScript,
   buildElectronOverlayEntryUrl,
+  type ElectronInspectableTarget,
   getElectronOverlayEntryDistPath,
   getElectronServeOrigin,
   selectBestOverlayTargets,
-  type ElectronInspectableTarget,
 } from './electron-runtime.js';
 
 const execFile = promisify(nodeExecFile);

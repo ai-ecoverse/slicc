@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Test the `onLocalUserMessage` hook that the standalone-leader boot
 // path in `ui/main.ts:mainStandaloneWorker` wires to

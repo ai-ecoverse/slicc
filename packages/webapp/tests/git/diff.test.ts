@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { unifiedDiff, diffStat } from '../../src/git/diff.js';
+import { describe, expect, it } from 'vitest';
+import { diffStat, unifiedDiff } from '../../src/git/diff.js';
 
 describe('unifiedDiff', () => {
   it('returns empty string for identical content', () => {

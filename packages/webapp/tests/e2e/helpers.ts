@@ -1,5 +1,5 @@
 // packages/webapp/tests/e2e/helpers.ts
-import { type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);

@@ -6,9 +6,9 @@
  * Runtime tests pin pass-through behavior.
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import { createLocalVfsClient, type LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
+import { describe, expect, it, vi } from 'vitest';
 import type { DirEntry, ReadFileOptions, Stats } from '../../src/fs/types.js';
+import { createLocalVfsClient, type LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
 
 function makeStubVfs(): {
   vfs: LocalVfsClient;

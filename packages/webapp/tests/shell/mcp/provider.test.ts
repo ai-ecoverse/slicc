@@ -1,19 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import {
-  ensureMcpProviderRegistered,
-  registerMcpProvider,
-  removeMcpProvider,
-  mcpProviderId,
-  _testOnly_resetMcpProviderState,
-} from '../../../src/shell/mcp/provider.js';
-import {
-  _testOnly_setFsModule,
-  _testOnly_resetStoreCache,
-} from '../../../src/shell/mcp/provider-store-access.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   getRegisteredProviderConfig,
   unregisterProviderConfig,
 } from '../../../src/providers/index.js';
+import {
+  _testOnly_resetMcpProviderState,
+  ensureMcpProviderRegistered,
+  mcpProviderId,
+  registerMcpProvider,
+  removeMcpProvider,
+} from '../../../src/shell/mcp/provider.js';
+import {
+  _testOnly_resetStoreCache,
+  _testOnly_setFsModule,
+} from '../../../src/shell/mcp/provider-store-access.js';
 
 // ── Stub fs module ─────────────────────────────────────────────────
 //

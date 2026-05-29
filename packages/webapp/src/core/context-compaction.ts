@@ -38,9 +38,9 @@ import { completeSimple } from '@earendil-works/pi-ai';
 // tests/core/context-compaction-real-estimator.test.ts which exercises the un-mocked
 // estimator end-to-end.
 import {
+  DEFAULT_COMPACTION_SETTINGS,
   estimateTokens,
   shouldCompact,
-  DEFAULT_COMPACTION_SETTINGS,
 } from '@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js';
 import { createLogger } from './logger.js';
 
@@ -600,7 +600,7 @@ export function createCompactContext(
               config.headers,
               signal
             );
-            if (bullets && bullets.trim() && bullets.trim() !== 'NONE') {
+            if (bullets?.trim() && bullets.trim() !== 'NONE') {
               try {
                 await config.onMemoryUpdates(bullets.trim());
                 log.info('Memory extraction applied', { bulletsLength: bullets.length });

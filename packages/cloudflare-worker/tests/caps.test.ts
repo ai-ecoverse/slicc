@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { checkCapsForRun } from '../src/cloud/caps.js';
 import type { ConeEntry } from '@slicc/cloud-core';
+import { describe, expect, it } from 'vitest';
+import { checkCapsForRun } from '../src/cloud/caps.js';
 
 const env = { CONE_CAP_RUNNING: '1', CONE_CAP_PAUSED: '5' };
 

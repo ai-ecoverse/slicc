@@ -11,38 +11,39 @@
  * Chrome extension API types provided by ./chrome.d.ts
  */
 
-import type {
-  ExtensionMessage,
-  CdpCommandMsg,
-  CdpResponseMsg,
-  CdpEventMsg,
-  NavigateLickMsg,
-  TraySocketCommandMessage,
-  TraySocketErrorMsg,
-  TraySocketMessageMsg,
-  TraySocketOpenMsg,
-  TraySocketOpenedMsg,
-  OAuthRequestMsg,
-  OAuthResultMsg,
-} from './messages.js';
-import { extractHandoffFromWebRequest } from '../../webapp/src/net/handoff-link.js';
+import { type FetchProxySecretSource, SecretsPipeline } from '@slicc/shared-ts';
 import {
-  isExtensionMessage,
-  DETACHED_RUNTIME_QUERY_NAME,
-  DETACHED_RUNTIME_QUERY_VALUE,
-} from './messages.js';
-import {
+  type DaSignAndForwardEnvelope,
   executeDaSignAndForward,
   executeS3SignAndForward,
-  type DaSignAndForwardEnvelope,
   type S3SignAndForwardEnvelope,
   type SecretGetter,
   type SignAndForwardReply,
 } from '../../webapp/src/fs/mount/sign-and-forward-shared.js';
+import { extractHandoffFromWebRequest } from '../../webapp/src/net/handoff-link.js';
 import { handleFetchProxyConnectionAsync } from './fetch-proxy-shared.js';
+import type {
+  CdpCommandMsg,
+  CdpEventMsg,
+  CdpResponseMsg,
+  ExtensionMessage,
+  NavigateLickMsg,
+  OAuthRequestMsg,
+  OAuthResultMsg,
+  TraySocketCommandMessage,
+  TraySocketErrorMsg,
+  TraySocketMessageMsg,
+  TraySocketOpenedMsg,
+  TraySocketOpenMsg,
+} from './messages.js';
+import {
+  DETACHED_RUNTIME_QUERY_NAME,
+  DETACHED_RUNTIME_QUERY_VALUE,
+  isExtensionMessage,
+} from './messages.js';
 import { deleteSecret, listSecrets, listSecretsWithValues, setSecret } from './secrets-storage.js';
 import { readOrCreateSwSessionId } from './sw-session-id.js';
-import { SecretsPipeline, type FetchProxySecretSource } from '@slicc/shared-ts';
+
 // ---------------------------------------------------------------------------
 // Detached popout state
 // ---------------------------------------------------------------------------

@@ -1,0 +1,247 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": [
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.js",
+      "**/*.jsx",
+      "**/*.mjs",
+      "**/*.cjs",
+      "**/*.json",
+      "**/*.jsonc",
+      "**/*.css",
+      "!**/dist/**",
+      "!**/node_modules/**",
+      "!**/coverage/**",
+      "!**/.vite/**",
+      "!**/playwright-report/**",
+      "!**/test-results/**",
+      "!**/artifacts/**",
+      "!**/.wrangler/**",
+      "!**/.worktrees/**",
+      "!**/.qa/**",
+      "!**/.build/**",
+      "!**/package-lock.json",
+      "!packages/assets/fonts/**",
+      "!packages/swift-launcher/**",
+      "!packages/swift-server/**",
+      "!packages/ios-app/**",
+      "!**/*.min.js",
+      "!packages/webapp/src/ui/rum.js",
+      "!packages/webapp/src/ui/lucide-icons.ts"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "lineEnding": "lf"
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always",
+      "trailingCommas": "es5",
+      "arrowParentheses": "always",
+      "bracketSpacing": true
+    },
+    "globals": ["__DEV__"]
+  },
+  "json": {
+    "formatter": {
+      "enabled": true,
+      "trailingCommas": "none"
+    },
+    "parser": {
+      "allowComments": true,
+      "allowTrailingCommas": true
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "complexity": {
+        "noExcessiveCognitiveComplexity": {
+          "level": "warn",
+          "options": { "maxAllowedComplexity": 25 }
+        },
+        "noForEach": "off",
+        "noBannedTypes": "off",
+        "noUselessConstructor": "off",
+        "noUselessSwitchCase": "off",
+        "noStaticOnlyClass": "off",
+        "noUselessFragments": "off",
+        "useArrowFunction": "off",
+        "useOptionalChain": "warn",
+        "useLiteralKeys": "off",
+        "noImportantStyles": "warn"
+      },
+      "correctness": {
+        "noUnusedVariables": {
+          "level": "warn",
+          "options": {
+            "ignoreRestSiblings": true
+          }
+        },
+        "noUnusedImports": "warn",
+        "noUnusedFunctionParameters": "off",
+        "noUnusedPrivateClassMembers": "off",
+        "useExhaustiveDependencies": "off",
+        "noNodejsModules": "off",
+        "noUndeclaredVariables": "off",
+        "noConstantCondition": "error",
+        "noInnerDeclarations": "off",
+        "noConstAssign": "error",
+        "noPrecisionLoss": "error",
+        "noSwitchDeclarations": "off",
+        "noUnreachable": "warn"
+      },
+      "style": {
+        "useNamingConvention": {
+          "level": "warn",
+          "options": {
+            "strictCase": false,
+            "requireAscii": true,
+            "conventions": [
+              {
+                "selector": { "kind": "function" },
+                "formats": ["camelCase", "PascalCase"]
+              },
+              {
+                "selector": { "kind": "classMember" },
+                "formats": ["camelCase", "PascalCase", "CONSTANT_CASE"]
+              },
+              {
+                "selector": { "kind": "objectLiteralProperty" },
+                "match": ".*"
+              },
+              {
+                "selector": { "kind": "typeProperty" },
+                "match": ".*"
+              },
+              {
+                "selector": { "kind": "enumMember" },
+                "formats": ["camelCase", "PascalCase", "CONSTANT_CASE"]
+              },
+              {
+                "selector": { "kind": "typeLike" },
+                "formats": ["PascalCase"]
+              },
+              {
+                "selector": { "kind": "variable" },
+                "formats": ["camelCase", "PascalCase", "CONSTANT_CASE"]
+              }
+            ]
+          }
+        },
+        "useImportType": "warn",
+        "useExportType": "warn",
+        "useConst": "warn",
+        "useTemplate": "off",
+        "useSingleVarDeclarator": "off",
+        "useNumberNamespace": "off",
+        "useEnumInitializers": "off",
+        "useNodejsImportProtocol": "off",
+        "useDefaultParameterLast": "off",
+        "useExponentiationOperator": "off",
+        "useLiteralEnumMembers": "off",
+        "noUselessElse": "off",
+        "noNonNullAssertion": "off",
+        "noParameterAssign": "off",
+        "noUnusedTemplateLiteral": "off",
+        "noInferrableTypes": "off"
+      },
+      "suspicious": {
+        "noExplicitAny": "warn",
+        "noEmptyBlockStatements": "off",
+        "noEmptyInterface": "off",
+        "noConfusingVoidType": "off",
+        "noAssignInExpressions": "off",
+        "noConsole": "off",
+        "noShadowRestrictedNames": "off",
+        "noImplicitAnyLet": "off",
+        "noPrototypeBuiltins": "off",
+        "noGlobalIsNan": "off",
+        "noControlCharactersInRegex": "off",
+        "noSparseArray": "error",
+        "noDoubleEquals": {
+          "level": "error",
+          "options": { "ignoreNull": true }
+        },
+        "noDebugger": "error",
+        "noDuplicateCase": "error",
+        "noIrregularWhitespace": "error",
+        "noFunctionAssign": "error",
+        "noArrayIndexKey": "off",
+        "noEvolvingTypes": "off",
+        "noAsyncPromiseExecutor": "off",
+        "noThenProperty": "off",
+        "noCatchAssign": "off",
+        "noFallthroughSwitchClause": "off",
+        "noTemplateCurlyInString": "off",
+        "useIterableCallbackReturn": "warn"
+      },
+      "performance": {
+        "noDelete": "off",
+        "noAccumulatingSpread": "off"
+      },
+      "a11y": {
+        "recommended": false
+      },
+      "security": {
+        "recommended": true
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["**/*.test.ts", "**/*.test.mjs", "**/test-*.mjs"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
+          },
+          "correctness": {
+            "noUnusedVariables": "off",
+            "noConstructorReturn": "off"
+          },
+          "style": {
+            "useNamingConvention": "off"
+          },
+          "complexity": {
+            "noExcessiveCognitiveComplexity": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "packages/webapp/providers/**/*.ts",
+        "packages/webapp/src/types/**/*.ts",
+        "packages/webapp/src/stubs/**/*.ts",
+        "packages/webapp/src/globals.d.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "useNamingConvention": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["**/*.json", "**/*.jsonc", "**/tsconfig*.json", "**/.releaserc.json"],
+      "linter": {
+        "enabled": false
+      }
+    }
+  ]
+}

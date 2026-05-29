@@ -1,10 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   getImageByteSize,
   getImageDimensions,
   isSupportedImageFormat,
-  processImageContent,
   MAX_IMAGE_BYTES,
+  processImageContent,
 } from '../../src/core/image-processor.js';
 import type { ImageContent } from '../../src/core/types.js';
 

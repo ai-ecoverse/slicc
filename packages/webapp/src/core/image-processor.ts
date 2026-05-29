@@ -6,8 +6,8 @@
  * if the image is unrecoverable (corrupt, unsupported format).
  */
 
-import type { ImageContent, TextContent } from './types.js';
 import { createLogger } from './logger.js';
+import type { ImageContent, TextContent } from './types.js';
 
 const log = createLogger('image-processor');
 

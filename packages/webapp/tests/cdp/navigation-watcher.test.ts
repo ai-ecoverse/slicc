@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  NavigationWatcher,
   extractHandoffFromHeaders,
   type NavigationEvent,
+  NavigationWatcher,
 } from '../../src/cdp/navigation-watcher.js';
 import type { CDPTransport } from '../../src/cdp/transport.js';
-import type { CDPEventListener, ConnectionState, CDPConnectOptions } from '../../src/cdp/types.js';
+import type { CDPConnectOptions, CDPEventListener, ConnectionState } from '../../src/cdp/types.js';
 
 const HANDOFF_REL = 'https://www.sliccy.ai/rel/handoff';
 const UPSKILL_REL = 'https://www.sliccy.ai/rel/upskill';

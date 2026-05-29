@@ -99,7 +99,7 @@ async function loadEsbuild(onProgress?: (msg: string) => void): Promise<typeof e
   // bumps into the extension origin's CSP; running on the offscreen
   // thread is fine because the offscreen document is already
   // dedicated to the agent runtime.
-  await esbuild.initialize({ wasmModule, worker: isExtensionRuntime() ? false : true });
+  await esbuild.initialize({ wasmModule, worker: !isExtensionRuntime() });
   log('esbuild ready');
   return esbuild;
 }

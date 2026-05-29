@@ -1,7 +1,7 @@
 // packages/webapp/tests/e2e/playwright.config.ts
 import { defineConfig } from '@playwright/test';
+import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
-import { resolve, dirname } from 'path';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 

@@ -10,7 +10,7 @@
  *    quotes funny ids, propagates stderr on non-zero exit.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createSkillGlobal,
   type SkillExecBridge,

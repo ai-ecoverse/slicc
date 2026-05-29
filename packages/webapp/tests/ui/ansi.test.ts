@@ -2,7 +2,7 @@
  * Tests for the ANSI-to-HTML renderer used by the bash tool body.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ansiToHtml } from '../../src/ui/ansi.js';
 
 describe('ansiToHtml', () => {

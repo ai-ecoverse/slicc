@@ -1,5 +1,5 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 
 function unameHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {

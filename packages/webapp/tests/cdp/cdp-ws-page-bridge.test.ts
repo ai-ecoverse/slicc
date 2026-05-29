@@ -15,17 +15,17 @@
  *  - `register`/`update`/`unregister` map to in-page
  *    `__sliccWsRouter.*` calls via `Runtime.evaluate`.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import type { BrowserAPI } from '../../src/cdp/browser-api.js';
 import { CdpWsPageBridge } from '../../src/cdp/cdp-ws-page-bridge.js';
+import type { CDPTransport } from '../../src/cdp/transport.js';
+import type { CDPConnectOptions, CDPEventListener, ConnectionState } from '../../src/cdp/types.js';
+import { WS_ROUTER_SOURCE } from '../../src/kernel/realm/ws-router-page.js';
 import {
-  WsSubscriberRegistry,
   type WsSinkDispatcher,
+  WsSubscriberRegistry,
   type WsWebhookResolver,
 } from '../../src/kernel/realm/ws-subscribers.js';
-import { WS_ROUTER_SOURCE } from '../../src/kernel/realm/ws-router-page.js';
-import type { CDPTransport } from '../../src/cdp/transport.js';
-import type { CDPEventListener, ConnectionState, CDPConnectOptions } from '../../src/cdp/types.js';
-import type { BrowserAPI } from '../../src/cdp/browser-api.js';
 
 class FakeTransport implements CDPTransport {
   state: ConnectionState = 'connected';

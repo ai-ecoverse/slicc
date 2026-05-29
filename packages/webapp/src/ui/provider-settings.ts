@@ -4,27 +4,28 @@
  * provider-specific options, and dynamic model population.
  */
 
-import { getProviders, getModels, getModel, createLogger } from '../core/index.js';
-import type { Model } from '../core/index.js';
 import type { Api } from '@earendil-works/pi-ai';
-import { storeTrayJoinUrl, hasStoredTrayJoinUrl } from '../scoops/tray-runtime-config.js';
+import type { Model } from '../core/index.js';
+import { createLogger, getModel, getModels, getProviders } from '../core/index.js';
+import { hasStoredTrayJoinUrl, storeTrayJoinUrl } from '../scoops/tray-runtime-config.js';
 import { describeInvalidJoinUrl } from './tray-join-url.js';
 
 export { describeInvalidJoinUrl };
-import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
+
 import type { RefreshTrayRuntimeMsg } from '../../../chrome-extension/src/messages.js';
+import {
+  bedrockCampRegionFromBaseUrl,
+  isBedrockCampCompatible,
+} from '../providers/built-in/bedrock-camp.js';
+import type { ProviderConfig } from '../providers/index.js';
 import {
   getRegisteredProviderConfig,
   getRegisteredProviderIds,
   shouldIncludeProvider,
 } from '../providers/index.js';
-import type { ProviderConfig } from '../providers/index.js';
 import type { CompatOverrides, DeviceCodePrompter } from '../providers/types.js';
+import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { copyTextToClipboard } from './clipboard.js';
-import {
-  isBedrockCampCompatible,
-  bedrockCampRegionFromBaseUrl,
-} from '../providers/built-in/bedrock-camp.js';
 import { trackSettingsOpen } from './telemetry.js';
 
 export type { ProviderConfig } from '../providers/index.js';
@@ -162,10 +163,10 @@ export interface Account {
 }
 
 // Delete legacy keys on first access
-let _legacyCleaned = false;
+let LegacyCleaned = false;
 function cleanLegacyKeys(): void {
-  if (_legacyCleaned) return;
-  _legacyCleaned = true;
+  if (LegacyCleaned) return;
+  LegacyCleaned = true;
   for (const key of LEGACY_KEYS) {
     try {
       localStorage.removeItem(key);
@@ -202,12 +203,12 @@ export function migrateLegacyAuthOnlySelection(): void {
   }
 }
 
-function _resetLegacyCleanup(): void {
-  _legacyCleaned = false;
+function ResetLegacyCleanup(): void {
+  LegacyCleaned = false;
 }
 
 /** Test-only exports */
-export const __test__ = { _resetLegacyCleanup };
+export const __test__ = { _resetLegacyCleanup: ResetLegacyCleanup };
 
 // Provider configs are now loaded dynamically from packages/webapp/src/providers/index.ts
 // (built-in providers in packages/webapp/src/providers/built-in/ + external providers in /packages/webapp/providers/)
@@ -577,9 +578,9 @@ export function getAccounts(): Account[] {
  * kept in sync by `installPageStorageSync`.
  */
 import {
+  type OAuthExtraDomainsStore,
   readOAuthExtras as sharedReadOAuthExtras,
   writeOAuthExtras as sharedWriteOAuthExtras,
-  type OAuthExtraDomainsStore,
 } from '@slicc/shared-ts';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 
@@ -1638,8 +1639,9 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         oauthStatus.textContent = 'Opening login window...';
         try {
           if (providerConfig.onOAuthLoginIntercepted) {
-            const { createInterceptingOAuthLauncherForCurrentRuntime } =
-              await import('../providers/oauth-service.js');
+            const { createInterceptingOAuthLauncherForCurrentRuntime } = await import(
+              '../providers/oauth-service.js'
+            );
             const launcher = await createInterceptingOAuthLauncherForCurrentRuntime();
             if (!launcher) {
               throw new Error(

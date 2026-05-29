@@ -26,43 +26,43 @@
  */
 
 import { ChatPanel } from './chat-panel.js';
-import { TerminalPanel } from './terminal-panel.js';
 import { FileBrowserPanel } from './file-browser-panel.js';
 import { MemoryPanel } from './memory-panel.js';
+import { ScoopSwitcher } from './scoop-switcher.js';
 import { ScoopsPanel } from './scoops-panel.js';
 import type { FrozenSessionIndexEntry } from './session-freezer.js';
-import { ScoopSwitcher } from './scoop-switcher.js';
+import { TerminalPanel } from './terminal-panel.js';
 // Side-effect import: registers the `<slicc-press-button>` custom element.
 import './press-button.js';
+import { createLogger } from '../core/logger.js';
+import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
+import { getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import { initialsFromLabel } from './avatar-initials.js';
+import { copyTextToClipboard } from './clipboard.js';
 import type { SliccPressButton } from './press-button.js';
 import {
-  getApiKey,
   clearAllSettings,
-  getSelectedModelId,
-  setSelectedModelId,
-  showProviderSettings,
-  getAllAvailableModels,
   getAccounts,
+  getAllAvailableModels,
+  getApiKey,
   getProviderConfig,
   removeAccount,
+  setSelectedModelId,
+  showProviderSettings,
 } from './provider-settings.js';
-import { getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
-import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
-import { copyTextToClipboard } from './clipboard.js';
 import { computeTrayMenuModel } from './tray-join-url.js';
-import { initialsFromLabel } from './avatar-initials.js';
-import { createLogger } from '../core/logger.js';
 
 const layoutLog = createLogger('ui.layout');
-import { showSyncEnabledDialog } from './sync-dialog.js';
-import { getTrayResetter } from '../shell/supplemental-commands/host-command.js';
-import { type ExtensionTabId } from './tabbed-ui.js';
-import { RailZone } from './rail-zone.js';
-import { PanelRegistry } from './panel-registry.js';
-import { showSprinklePicker } from './sprinkle-picker.js';
-import type { ZoneId } from './panel-types.js';
+
 // ChatMessage import removed — copy chat moved to feedback row
 import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
+import { getTrayResetter } from '../shell/supplemental-commands/host-command.js';
+import { PanelRegistry } from './panel-registry.js';
+import type { ZoneId } from './panel-types.js';
+import { RailZone } from './rail-zone.js';
+import { showSprinklePicker } from './sprinkle-picker.js';
+import { showSyncEnabledDialog } from './sync-dialog.js';
+import type { ExtensionTabId } from './tabbed-ui.js';
 
 export interface LayoutPanels {
   chat: ChatPanel;
@@ -337,7 +337,7 @@ export class Layout {
    * header is a detached node.
    */
   setThreadHeaderName(text: string): void {
-    if (this.threadHeaderName && this.threadHeaderName.isConnected) {
+    if (this.threadHeaderName?.isConnected) {
       this.threadHeaderName.textContent = text;
     }
   }
@@ -377,7 +377,7 @@ export class Layout {
   openTerminal(): void {
     // Don't steal focus from an active sprinkle.
     const active = this.primaryRail.getActiveItemId();
-    if (active && active.startsWith('sprinkle-')) return;
+    if (active?.startsWith('sprinkle-')) return;
     this.primaryRail.activateItem('terminal');
   }
 
@@ -786,8 +786,8 @@ export class Layout {
       // `never` and this assignment fails to compile. Without it,
       // a new kind would silently flow into the trailing `else` and
       // ship with wrong styling + an unintended leave button.
-      const _exhaustive: never = model;
-      void _exhaustive;
+      const Exhaustive: never = model;
+      void Exhaustive;
     }
 
     // "Leave" affordance: previously the only way out was DevTools

@@ -9,11 +9,11 @@
     "directory": "../../dist/ui/",
     "binding": "ASSETS",
     "run_worker_first": true,
-    "not_found_handling": "single-page-application",
+    "not_found_handling": "single-page-application"
   },
   "routes": [
     { "pattern": "www.sliccy.ai/*", "zone_name": "sliccy.ai" },
-    { "pattern": "sliccy.ai/*", "zone_name": "sliccy.ai" },
+    { "pattern": "sliccy.ai/*", "zone_name": "sliccy.ai" }
   ],
   "vars": {
     "CLOUDFLARE_TURN_KEY_ID": "6c2201a0453bd6695ecb24a00b2b6ed1",
@@ -30,7 +30,7 @@
     "CONE_CAP_RUNNING": "1",
     "CONE_CAP_PAUSED": "5",
     // OAuth relay allowlist for remote origins (staging/preview deploys)
-    "ALLOWED_CLOUD_DASHBOARD_ORIGINS": "https://www.sliccy.ai,https://slicc-tray-hub-staging.minivelos.workers.dev",
+    "ALLOWED_CLOUD_DASHBOARD_ORIGINS": "https://www.sliccy.ai,https://slicc-tray-hub-staging.minivelos.workers.dev"
   },
   // Secrets must be set via: npx wrangler secret put <SECRET_NAME>
   // - CLOUDFLARE_TURN_API_TOKEN
@@ -39,23 +39,23 @@
     "bindings": [
       {
         "name": "TRAY_HUB",
-        "class_name": "SessionTrayDurableObject",
+        "class_name": "SessionTrayDurableObject"
       },
       {
         "name": "CLOUD_SESSIONS",
-        "class_name": "CloudSessionsDurableObject",
-      },
-    ],
+        "class_name": "CloudSessionsDurableObject"
+      }
+    ]
   },
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["SessionTrayDurableObject"],
+      "new_sqlite_classes": ["SessionTrayDurableObject"]
     },
     {
       "tag": "v2-cloud-sessions",
-      "new_classes": ["CloudSessionsDurableObject"],
-    },
+      "new_classes": ["CloudSessionsDurableObject"]
+    }
   ],
   "env": {
     "staging": {
@@ -65,7 +65,7 @@
         "directory": "../../dist/ui/",
         "binding": "ASSETS",
         "run_worker_first": true,
-        "not_found_handling": "single-page-application",
+        "not_found_handling": "single-page-application"
       },
       "routes": [],
       "vars": {
@@ -82,20 +82,20 @@
         "CONE_CAP_RUNNING": "1",
         "CONE_CAP_PAUSED": "5",
         // OAuth relay allowlist for remote origins (staging/preview deploys)
-        "ALLOWED_CLOUD_DASHBOARD_ORIGINS": "https://slicc-tray-hub-staging.minivelos.workers.dev,https://www.sliccy.ai",
+        "ALLOWED_CLOUD_DASHBOARD_ORIGINS": "https://slicc-tray-hub-staging.minivelos.workers.dev,https://www.sliccy.ai"
       },
       "durable_objects": {
         "bindings": [
           {
             "name": "TRAY_HUB",
-            "class_name": "SessionTrayDurableObject",
+            "class_name": "SessionTrayDurableObject"
           },
           {
             "name": "CLOUD_SESSIONS",
-            "class_name": "CloudSessionsDurableObject",
-          },
-        ],
-      },
-    },
-  },
+            "class_name": "CloudSessionsDurableObject"
+          }
+        ]
+      }
+    }
+  }
 }

@@ -249,7 +249,7 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 These are the repo's CI gates and the default full verification pass before commit:
 
 ```bash
-npx prettier --write <changed-files>   # Format FIRST — CI fails on unformatted code
+npm run lint                           # Format + lint FIRST — CI fails on unformatted code
 npm run typecheck
 npm run test
 npm run test:coverage                  # Enforces minimum coverage thresholds
@@ -257,6 +257,6 @@ npm run build
 npm run build -w @slicc/chrome-extension
 ```
 
-**Always run Prettier before committing.** CI runs `npx prettier --check .` as a lint gate and will reject unformatted code. Run `npx prettier --write <files>` on every file you touch. This is the most common CI failure — don't skip it.
+**Always run `npm run lint` before committing.** It runs `biome check --write .` over JS/TS/JSON/CSS and `prettier --write .` over the remaining doc / config-text formats (Markdown, YAML, HTML). CI runs the check-only equivalents as a hard gate and will reject any unformatted code. This is the most common CI failure — don't skip it.
 
 CI runs these gates in `.github/workflows/ci.yml`.

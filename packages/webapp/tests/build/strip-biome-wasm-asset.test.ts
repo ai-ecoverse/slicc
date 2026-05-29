@@ -1,13 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   BIOME_WASM_ASSET_RE,
-  rewriteBiomeWasmReference,
   resolveBiomeWasmCdnUrl,
-  stripBiomeWasmFromDir,
+  rewriteBiomeWasmReference,
   stripBiomeWasmAssetPlugin,
+  stripBiomeWasmFromDir,
 } from '../../vite-plugins/strip-biome-wasm-asset';
 
 /** Minimal structural view of the build-only hooks we drive directly. */

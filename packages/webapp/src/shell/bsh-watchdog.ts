@@ -8,11 +8,11 @@
  * 3. Executes matching scripts in the target page via CDP Runtime.evaluate
  */
 
-import type { CDPTransport } from '../cdp/transport.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
-import type { BshEntry, BshDiscoveryFS } from './bsh-discovery.js';
-import type { ScriptCatalog } from './script-catalog.js';
+import type { CDPTransport } from '../cdp/transport.js';
 import { createLogger } from '../core/logger.js';
+import type { BshDiscoveryFS, BshEntry } from './bsh-discovery.js';
+import type { ScriptCatalog } from './script-catalog.js';
 
 const log = createLogger('bsh-watchdog');
 
