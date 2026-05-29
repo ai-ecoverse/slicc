@@ -1,6 +1,7 @@
 import { CloudError } from '../errors.js';
 import { filterSecretsEnv } from '../secrets-filter.js';
 import { pollCloudStatus } from '../polling.js';
+import { encodeBundleEnv } from '../cone-config/index.js';
 import type { Registry } from '../registry.js';
 import type { SandboxSubstrate, SandboxHandle } from '../substrate.js';
 import type { ConeEntry, StartResult } from '../types.js';
@@ -31,6 +32,9 @@ export interface StartConeOpts {
   /** Optional reservation ID from reserveSlot(); if provided, updates that
    * placeholder entry instead of appending a new one. */
   reservationId?: string;
+  /** Optional cone config JSON; injected as SLICC_CONE_CONFIG_B64 env and
+   * written to /slicc/cone-config.json after create. */
+  coneConfigJson?: string;
 }
 
 export interface StartConeDeps {
@@ -169,6 +173,10 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
       autoPauseOnCap: opts.autoPauseOnCap ?? true,
       envVars: {
         SLICC_TRAY_WORKER_BASE_URL: opts.workerBaseUrl,
+        SLICC_SECRETS_ENV_B64: encodeBundleEnv(safeSecrets),
+        ...(opts.coneConfigJson
+          ? { SLICC_CONE_CONFIG_B64: encodeBundleEnv(opts.coneConfigJson) }
+          : {}),
         ...(opts.envs ?? {}),
       },
       metadata: {
@@ -239,6 +247,9 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
     //      because the page-side bootstrap polls /api/hosted-bootstrap after a 5s
     //      delay, by which time this writeFile has landed.
     await handle.writeFile('/slicc/secrets.env', safeSecrets);
+    if (opts.coneConfigJson) {
+      await handle.writeFile('/slicc/cone-config.json', opts.coneConfigJson);
+    }
 
     let status: Awaited<ReturnType<typeof pollCloudStatus>>;
     try {
