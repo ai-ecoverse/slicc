@@ -13,7 +13,16 @@ cd packages/swift-server
 swift build
 swift test
 swift run slicc-server --help
+npm run lint -w @slicc/swift-server   # SwiftLint
 ```
+
+## Linting
+
+`packages/swift-server/.swiftlint.yml` inherits the shared rule set from the
+repo-root `.swiftlint.yml` (via `parent_config`) and excludes this package's
+`.build`. Warnings surface code-quality issues; only `error`-severity violations
+fail CI. Run `npm run lint:fix -w @slicc/swift-server` to auto-correct fixable
+violations.
 
 ## Main Package Layout
 

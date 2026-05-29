@@ -53,6 +53,7 @@
     "test:e2e": "npx playwright test --config packages/webapp/tests/e2e/playwright.config.ts",
     "start:extension": "npm run build -w @slicc/chrome-extension && npm run dev -- --profile=extension",
     "lint": "prettier --write . && eslint . --fix",
+    "lint:swift": "npm run lint -w @slicc/swift-server && npm run lint -w @slicc/swift-launcher && cd packages/ios-app && swiftlint lint",
     "deadcode": "knip --include files,dependencies,devDependencies,unlisted,binaries,unresolved,duplicates",
     "deadcode:full": "knip",
     "deadcode:files": "knip --include files",
