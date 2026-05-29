@@ -18,7 +18,7 @@
  * secrets are hardcoded; the proxy endpoint (base URL) must be configured at runtime.
  */
 
-import type { ProviderConfig, OAuthLauncher } from '../src/providers/types.js';
+import type { ProviderConfig, OAuthLauncher, OAuthLoginOptions } from '../src/providers/types.js';
 import {
   registerApiProvider,
   streamAnthropic,
@@ -305,7 +305,11 @@ export const config: ProviderConfig = {
     return [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }];
   },
 
-  onOAuthLogin: async (launcher: OAuthLauncher, onSuccess: () => void) => {
+  onOAuthLogin: async (
+    launcher: OAuthLauncher,
+    onSuccess: () => void,
+    options?: OAuthLoginOptions
+  ) => {
     const proxyEndpoint = getProxyEndpoint();
     const proxyConfig = await fetchProxyConfig(proxyEndpoint);
 
@@ -341,6 +345,9 @@ export const config: ProviderConfig = {
       redirect_uri: redirectUri,
     });
     if (oauthState) params.set('state', oauthState);
+    // Force re-authentication when reconnecting from a logged-out state so
+    // IMS doesn't silently re-authorize the previous account via SSO.
+    if (options?.forceReauth) params.set('prompt', 'login');
     const authorizeUrl = `${imsHost(imsEnv)}/ims/authorize/v2?${params}`;
 
     const redirectUrl = await launcher(authorizeUrl);
@@ -429,6 +436,11 @@ export const config: ProviderConfig = {
     }
     await saveOAuthAccount({ providerId: 'adobe', accessToken: '' });
   },
+
+  // Note: getOAuthLogoutUrl is intentionally absent for Adobe IMS. The IMS
+  // logout/v1 endpoint requires the access_token in the POST body (not as a
+  // query parameter), so it cannot be driven via a browser popup URL. Token
+  // revocation is handled by onOAuthLogout above via POST /ims/revoke.
 
   onSilentRenew: async () => {
     const account = getAdobeAccount();

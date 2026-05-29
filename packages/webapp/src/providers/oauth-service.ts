@@ -125,6 +125,7 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
 
     let resolved = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let closedTimer: ReturnType<typeof setInterval> | null = null;
 
     const cleanup = () => {
       if (resolved) return;
@@ -132,6 +133,7 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
       window.removeEventListener('message', handler);
       clearTimeout(timer);
       if (pollTimer) clearInterval(pollTimer);
+      if (closedTimer) clearInterval(closedTimer);
     };
 
     const handler = (event: MessageEvent) => {
@@ -184,6 +186,31 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
       }
     }, 1000);
 
+    // Resolve null when the user closes the popup (cancelled flow).
+    //
+    // Important: the callback page fires `fetch(POST /api/oauth-result)` and
+    // then calls `window.close()` synchronously, so the POST may still be
+    // in-flight when `popup.closed` first becomes true. Resolving null
+    // immediately would race against the 1000ms poll timer that reads the
+    // stored redirect — cancelling login before the server result arrives.
+    //
+    // Fix: stop the closed-poll but let pollTimer run for one extra grace
+    // period (1500ms > one poll interval). If the result lands in that window
+    // pollTimer resolves first; otherwise we resolve null after the grace.
+    if (popup) {
+      closedTimer = setInterval(() => {
+        if (!popup.closed) return;
+        clearInterval(closedTimer!);
+        closedTimer = null;
+        setTimeout(() => {
+          if (!resolved) {
+            cleanup();
+            resolve(null);
+          }
+        }, 1500);
+      }, 500);
+    }
+
     // Timeout after 2 minutes
     const timer = setTimeout(() => {
       cleanup();
@@ -194,6 +221,46 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
       }
       resolve(null);
     }, 120000);
+  });
+}
+
+/**
+ * Opens a URL in a popup for a fixed duration to clear an IdP browser session,
+ * then closes the popup. Fire-and-forget — does not wait for any OAuth callback.
+ *
+ * Only runs in CLI (window-based) runtime; skipped silently in extension/worker
+ * runtimes where popup control is not available.
+ */
+export async function openIdpLogoutUrl(
+  url: string,
+  timeoutMs = 3 * 60 * 1000 // 3 minutes: generous enough for the user to sign out
+): Promise<void> {
+  if (typeof window === 'undefined') return; // worker runtime — skip
+  if (isExtension) return; // extension runtime — skip
+  const popup = window.open(url, '_blank', 'width=500,height=600,popup=yes');
+  if (!popup) {
+    console.warn('[oauth-service] Could not open IdP logout popup — popups may be blocked');
+    return;
+  }
+  // Wait for the user to close the popup themselves (e.g. after clicking Sign Out
+  // on the IdP page). Auto-close after timeoutMs as a fallback.
+  await new Promise<void>((resolve) => {
+    const deadline = setTimeout(() => {
+      clearInterval(poll);
+      try {
+        popup.close();
+      } catch {
+        /* best-effort */
+      }
+      resolve();
+    }, timeoutMs);
+    const poll = setInterval(() => {
+      if (popup.closed) {
+        clearTimeout(deadline);
+        clearInterval(poll);
+        resolve();
+      }
+    }, 500);
   });
 }
 
