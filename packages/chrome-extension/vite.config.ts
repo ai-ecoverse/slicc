@@ -223,6 +223,32 @@ export default defineConfig(({ mode }) => ({
       closeBundle() {
         const outDir = resolve(repoRoot, 'dist/extension');
         mkdirSync(outDir, { recursive: true });
+        // DEBUG: recursively list everything Rolldown emitted into outDir
+        // before the copyFileSync that's failing on Linux CI.
+        const walk = (dir: string, prefix = ''): string[] => {
+          const out: string[] = [];
+          let entries: import('fs').Dirent[] = [];
+          try {
+            entries = readdirSync(dir, { withFileTypes: true });
+          } catch (err) {
+            out.push(`${prefix}<readdirSync error: ${(err as Error).message}>`);
+            return out;
+          }
+          for (const e of entries) {
+            const rel = prefix ? `${prefix}/${e.name}` : e.name;
+            if (e.isDirectory()) {
+              out.push(`${rel}/`);
+              out.push(...walk(resolve(dir, e.name), rel));
+            } else {
+              out.push(rel);
+            }
+          }
+          return out;
+        };
+        console.error('[debug copy-extension-assets] outDir =', outDir);
+        for (const entry of walk(outDir)) {
+          console.error('[debug copy-extension-assets]   ' + entry);
+        }
         // Always override manifest.version from root package.json — the
         // committed source value is a sentinel and never read at runtime.
         // SLICC_EXT_DEV=1 also strips "key" so Chrome assigns a random ID
@@ -312,11 +338,22 @@ export default defineConfig(({ mode }) => ({
           /* @imagemagick/magick-wasm not installed */
         }
 
-        copyFileSync(resolve(outDir, 'packages/webapp/index.html'), resolve(outDir, 'index.html'));
-        copyFileSync(
-          resolve(outDir, 'packages/chrome-extension/offscreen.html'),
-          resolve(outDir, 'offscreen.html')
-        );
+        try {
+          copyFileSync(
+            resolve(outDir, 'packages/webapp/index.html'),
+            resolve(outDir, 'index.html')
+          );
+        } catch (err) {
+          console.error('[debug copy-extension-assets] index.html copy FAILED:', err);
+        }
+        try {
+          copyFileSync(
+            resolve(outDir, 'packages/chrome-extension/offscreen.html'),
+            resolve(outDir, 'offscreen.html')
+          );
+        } catch (err) {
+          console.error('[debug copy-extension-assets] offscreen.html copy FAILED:', err);
+        }
       },
     },
   ],
