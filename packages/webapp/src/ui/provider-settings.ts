@@ -285,6 +285,7 @@ function applyModelMetadata(
     reasoning?: boolean;
     input?: string[];
     compat?: CompatOverrides;
+    thinkingLevelMap?: Record<string, string | null>;
   }
 ): void {
   if (metadata.context_window !== undefined) model.contextWindow = metadata.context_window;
@@ -301,6 +302,16 @@ function applyModelMetadata(
     model.compat = {
       ...((model.compat as Record<string, unknown> | undefined) ?? {}),
       ...(metadata.compat as Record<string, unknown>),
+    };
+  }
+  // Same per-level merge for thinkingLevelMap: pi-ai's stream functions read
+  // `model.thinkingLevelMap[effort]` to translate the reasoning level, so a
+  // provider override (e.g. Codex's `minimal` → `low`) must land on the model
+  // rather than being silently dropped in favor of the base map.
+  if (metadata.thinkingLevelMap !== undefined) {
+    model.thinkingLevelMap = {
+      ...((model.thinkingLevelMap as Record<string, string | null> | undefined) ?? {}),
+      ...metadata.thinkingLevelMap,
     };
   }
 }

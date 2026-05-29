@@ -73,16 +73,15 @@ const CODEX_API: Api = `${PROVIDER_ID}-openai` as Api;
 // ── Models ─────────────────────────────────────────────────────────
 //
 // Mirrors the `openai-codex` catalog shipped in pi-ai's
-// `models.generated`. `thinkingLevelMap` is forwarded as an extra key —
-// the metadata layer in `provider-settings.ts` spreads unknown keys onto
-// the model record, and the codex stream reads `model.thinkingLevelMap`
-// to map reasoning effort.
+// `models.generated`. `thinkingLevelMap` is a `ModelMetadata` field that
+// `applyModelMetadata` (in `provider-settings.ts`) merges onto the model
+// record — the codex stream reads `model.thinkingLevelMap` to translate
+// the reasoning effort, so the `minimal` → `low` remap below must survive
+// the metadata merge (the chatgpt Codex backend rejects `minimal`).
 
-type CodexModelDef = { id: string; name: string } & ModelMetadata & {
-    thinkingLevelMap?: Record<string, string>;
-  };
+type CodexModelDef = { id: string; name: string } & ModelMetadata;
 
-const CODEX_THINKING_LEVEL_MAP: Record<string, string> = { xhigh: 'xhigh', minimal: 'low' };
+const CODEX_THINKING_LEVEL_MAP: Record<string, string | null> = { xhigh: 'xhigh', minimal: 'low' };
 
 const CODEX_MODELS: CodexModelDef[] = [
   { id: 'gpt-5.5', name: 'GPT-5.5', input: ['text', 'image'] },
@@ -195,36 +194,40 @@ async function refreshAccessToken(refresh: string): Promise<TokenResponse | null
 // The stream function re-derives the account id from the token itself, so
 // we only persist a human-friendly label here.
 
-function getEmail(accessToken: string): string | undefined {
+// JWT segments are base64url (RFC 7515): `-`/`_` instead of `+`/`/` and no
+// padding. `atob` only accepts standard base64, so restore the alphabet and
+// pad before decoding — otherwise valid tokens whose payload happens to
+// contain those characters throw and we silently drop the profile metadata.
+function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
   try {
-    const parts = accessToken.split('.');
+    const parts = token.split('.');
     if (parts.length !== 3) return undefined;
-    const payload = JSON.parse(atob(parts[1]!)) as Record<string, unknown>;
-    const profile = payload['https://api.openai.com/profile'] as { email?: unknown } | undefined;
-    return typeof profile?.email === 'string' ? profile.email : undefined;
+    let b64 = parts[1]!.replace(/-/g, '+').replace(/_/g, '/');
+    if (b64.length % 4) b64 += '='.repeat(4 - (b64.length % 4));
+    return JSON.parse(atob(b64)) as Record<string, unknown>;
   } catch {
     return undefined;
   }
 }
 
+function getEmail(accessToken: string): string | undefined {
+  const payload = decodeJwtPayload(accessToken);
+  const profile = payload?.['https://api.openai.com/profile'] as { email?: unknown } | undefined;
+  return typeof profile?.email === 'string' ? profile.email : undefined;
+}
+
 function getDisplayName(accessToken: string): string | undefined {
-  try {
-    const parts = accessToken.split('.');
-    if (parts.length !== 3) return undefined;
-    const payload = JSON.parse(atob(parts[1]!)) as Record<string, unknown>;
-    const auth = payload['https://api.openai.com/auth'] as
-      | { chatgpt_plan_type?: unknown }
-      | undefined;
-    const email = getEmail(accessToken);
-    const plan = typeof auth?.chatgpt_plan_type === 'string' ? auth.chatgpt_plan_type : undefined;
-    const planLabel = plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : undefined;
-    if (email && planLabel) return `${email} (${planLabel})`;
-    if (email) return email;
-    if (planLabel) return `ChatGPT ${planLabel}`;
-    return undefined;
-  } catch {
-    return undefined;
-  }
+  const payload = decodeJwtPayload(accessToken);
+  const auth = payload?.['https://api.openai.com/auth'] as
+    | { chatgpt_plan_type?: unknown }
+    | undefined;
+  const email = getEmail(accessToken);
+  const plan = typeof auth?.chatgpt_plan_type === 'string' ? auth.chatgpt_plan_type : undefined;
+  const planLabel = plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : undefined;
+  if (email && planLabel) return `${email} (${planLabel})`;
+  if (email) return email;
+  if (planLabel) return `ChatGPT ${planLabel}`;
+  return undefined;
 }
 
 // ── Profile picture (Gravatar) ─────────────────────────────────────
@@ -379,16 +382,13 @@ export const config: ProviderConfig = {
   id: PROVIDER_ID,
   name: 'OpenAI Codex (ChatGPT Subscription)',
   description:
-    'GPT-5 Codex via your ChatGPT Plus/Pro/Business subscription — OAuth login, no API key needed. Default model is GPT-5.3 Codex.',
+    'GPT-5 Codex via your ChatGPT Plus/Pro/Business subscription — OAuth login, no API key needed. Default model is GPT-5.5.',
   requiresApiKey: false,
   requiresBaseUrl: false,
   isOAuth: true,
-  defaultModelId: 'gpt-5.3-codex',
+  defaultModelId: 'gpt-5.5',
   oauthTokenDomains: ['chatgpt.com', '*.chatgpt.com', 'auth.openai.com', 'api.openai.com'],
-  getModelIds: () =>
-    CODEX_MODELS.map((m) =>
-      m.thinkingLevelMap ? { ...m, thinkingLevelMap: m.thinkingLevelMap } : m
-    ),
+  getModelIds: () => CODEX_MODELS,
 
   onOAuthLoginIntercepted: async (
     launcher: InterceptingOAuthLauncher,
@@ -427,7 +427,11 @@ export const config: ProviderConfig = {
     if (!code) {
       throw new Error('OpenAI Codex OAuth redirect did not include a code');
     }
-    if (returnedState && returnedState !== state) {
+    // Strict equality (matching the Codex CLI): a callback without `state` —
+    // e.g. a stray or forged navigation to the loopback redirect during a
+    // pending login — must be rejected exactly like a mismatched value, or
+    // the CSRF binding for this intercepted browser redirect is lost.
+    if (returnedState !== state) {
       throw new Error('OpenAI Codex OAuth state mismatch — possible CSRF, aborting');
     }
 

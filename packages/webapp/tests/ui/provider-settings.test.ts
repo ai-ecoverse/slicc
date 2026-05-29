@@ -1280,6 +1280,57 @@ describe('getProviderModels with getModelIds', () => {
     expect(models[0].name).toBe('My Custom Model');
     expect(models[0].provider).toBe('custom-oauth');
   });
+
+  it('merges thinkingLevelMap from getModelIds over the pi-ai base map', () => {
+    // Regression for the Codex bug: applyModelMetadata previously copied only
+    // a fixed set of fields and dropped thinkingLevelMap, so a provider's
+    // `minimal` → `low` remap silently lost out to the base model's map and
+    // the wrong reasoning effort reached the backend.
+    mockGetProviders.mockReturnValue(['openai']);
+    mockGetModels.mockImplementation((providerId: string) => {
+      if (providerId === 'openai') {
+        return [
+          {
+            id: 'gpt-5.3-codex',
+            name: 'GPT-5.3 Codex',
+            provider: 'openai',
+            api: 'openai-responses',
+            reasoning: true,
+            // pi-ai base map — no `minimal` remap.
+            thinkingLevelMap: { off: null, xhigh: 'xhigh' },
+          },
+        ];
+      }
+      return [];
+    });
+
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('codexy', {
+      id: 'codexy',
+      name: 'Codexy',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [
+        {
+          id: 'gpt-5.3-codex',
+          name: 'GPT-5.3 Codex',
+          api: 'openai',
+          thinkingLevelMap: { xhigh: 'xhigh', minimal: 'low' },
+        },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('codexy');
+    expect(models).toHaveLength(1);
+    expect(
+      (models[0] as { thinkingLevelMap?: Record<string, string | null> }).thinkingLevelMap
+    ).toEqual({ off: null, xhigh: 'xhigh', minimal: 'low' });
+  });
 });
 
 describe('Adobe sonnet model preference', () => {

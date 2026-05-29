@@ -27,7 +27,7 @@ describe('openai-codex provider config', () => {
         minimal: 'low',
       });
     }
-    expect(config.defaultModelId).toBe('gpt-5.3-codex');
+    expect(config.defaultModelId).toBe('gpt-5.5');
   });
 });
 
@@ -72,6 +72,10 @@ describe('openai-codex onOAuthLoginIntercepted', () => {
 
   it('builds a PKCE codex authorize URL, exchanges the code, and saves the account', async () => {
     // Fake JWT access token carrying account id, plan, and profile email.
+    // Encoded as real base64url (RFC 7515): the `_marker` field forces a
+    // `+` and `/` into the standard base64, which become `-`/`_` here — so
+    // this exercises decodeJwtPayload's base64url handling (plain `atob`
+    // would throw on these characters).
     const jwtPayload = btoa(
       JSON.stringify({
         'https://api.openai.com/auth': {
@@ -79,8 +83,13 @@ describe('openai-codex onOAuthLoginIntercepted', () => {
           chatgpt_plan_type: 'team',
         },
         'https://api.openai.com/profile': { email: 'dev@example.com' },
+        _marker: '>>>???',
       })
-    );
+    )
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    expect(jwtPayload).toMatch(/[-_]/);
     const accessToken = `header.${jwtPayload}.sig`;
 
     let tokenBody: URLSearchParams | undefined;
@@ -160,6 +169,20 @@ describe('openai-codex onOAuthLoginIntercepted', () => {
     const fakeLauncher = vi.fn(
       async () => `http://localhost:1455/auth/callback?code=c&state=WRONG_STATE`
     );
+
+    await expect(
+      config.onOAuthLoginIntercepted!(fakeLauncher, () => {}, undefined)
+    ).rejects.toThrow(/state mismatch/i);
+  });
+
+  it('throws when the OAuth callback omits state entirely (strict CSRF binding)', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('token endpoint must not be called when state is missing');
+    }) as typeof globalThis.fetch;
+
+    // Callback with a code but no `state` — must be rejected exactly like a
+    // mismatch, not silently accepted.
+    const fakeLauncher = vi.fn(async () => `http://localhost:1455/auth/callback?code=c`);
 
     await expect(
       config.onOAuthLoginIntercepted!(fakeLauncher, () => {}, undefined)
