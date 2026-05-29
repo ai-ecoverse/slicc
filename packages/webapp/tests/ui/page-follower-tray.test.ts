@@ -94,4 +94,15 @@ describe('startPageFollowerTray', () => {
       handle.stop();
     }
   });
+
+  it('accepts an onForwardingToggle option without throwing', () => {
+    const toggle = vi.fn();
+    const opts = { ...makeBaseOptions(), onForwardingToggle: toggle };
+    const handle = startPageFollowerTray(opts);
+    try {
+      expect(handle.currentSync).toBeNull();
+    } finally {
+      handle.stop();
+    }
+  });
 });

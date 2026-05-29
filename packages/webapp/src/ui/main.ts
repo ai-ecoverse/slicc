@@ -2526,6 +2526,17 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   let pageLeaderTray: PageLeaderTrayHandle | null = null;
   let pageFollowerTray: PageFollowerTrayHandle | null = null;
 
+  // Register a handler so the kernel worker's forward-lick messages
+  // reach the live follower sync. The handler reads `pageFollowerTray`
+  // lazily — at registration time the handle is null (not yet assigned),
+  // but the handler body runs only after a follower connection goes live
+  // and the worker starts emitting forward-lick events.
+  client.setForwardLickHandler((event) => {
+    const sync = pageFollowerTray?.currentSync;
+    if (sync) sync.forwardLick(event);
+    else log.warn('forward-lick dropped: no active follower sync');
+  });
+
   /**
    * Build the full `StartPageLeaderTrayOptions` for the in-scope deps
    * (layout, client, sprinkleManager, browser, etc.). Used by the boot
@@ -2848,6 +2859,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
         setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
         browserAPI: browser,
+        onForwardingToggle: (enabled) => client.sendSetFollowerForwarding(enabled),
         // Follower-side sprinkle rendering: the leader broadcasts `sprinkles.list`,
         // and the `SprinkleFollowerController` (inside `startPageFollowerTray`)
         // mirrors the open-state by fetching `.shtml` content over the data
@@ -2966,6 +2978,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
         setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
         browserAPI: browser,
+        onForwardingToggle: (enabled) => client.sendSetFollowerForwarding(enabled),
         addSprinkle: (name, title, element, zone, options) =>
           layout.addSprinkle(
             name,
