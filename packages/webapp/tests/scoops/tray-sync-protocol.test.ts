@@ -153,6 +153,19 @@ describe('tray-sync-protocol', () => {
       const result = sync.send({ type: 'status', scoopStatus: 'idle' });
       expect(result).toBe(false);
     });
+
+    it('round-trips a generic lick message follower→leader', () => {
+      const dc = new FakeSyncDataChannel();
+      const sync = new TraySyncChannel<FollowerToLeaderMessage, LeaderToFollowerMessage>(dc);
+      sync.send({
+        type: 'lick',
+        event: { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: { v: 1 } },
+      });
+      expect(JSON.parse(dc.sent[0])).toEqual({
+        type: 'lick',
+        event: { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: { v: 1 } },
+      });
+    });
   });
 
   describe('createLeaderSyncChannel', () => {
