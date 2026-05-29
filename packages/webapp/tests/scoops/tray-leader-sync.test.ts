@@ -2174,5 +2174,17 @@ describe('LeaderSyncManager', () => {
       const [event] = onForwardedLick.mock.calls[0];
       expect(event.targetScoop).toBeUndefined();
     });
+
+    it('ignores a lick message with a missing event without crashing or forwarding', () => {
+      const onForwardedLick = vi.fn();
+      const { manager } = createManager({ onForwardedLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel, { runtime: 'slicc-extension-offscreen' });
+
+      expect(() =>
+        channel.simulateMessage({ type: 'lick' } as unknown as FollowerToLeaderMessage)
+      ).not.toThrow();
+      expect(onForwardedLick).not.toHaveBeenCalled();
+    });
   });
 });

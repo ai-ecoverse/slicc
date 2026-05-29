@@ -655,10 +655,10 @@ export class LeaderSyncManager {
       }
       case 'lick': {
         const incoming = message.event;
-        if (!FORWARDABLE_TO_LEADER.has(incoming.type)) {
-          log.warn('Rejecting non-forwardable lick from follower', {
+        if (!incoming || !FORWARDABLE_TO_LEADER.has(incoming.type)) {
+          log.warn('Rejecting malformed or non-forwardable lick from follower', {
             bootstrapId,
-            type: incoming.type,
+            type: incoming?.type,
           });
           break;
         }
