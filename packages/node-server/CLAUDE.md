@@ -21,7 +21,7 @@ npm run package:release
 - **Serve-only**: reuses an already-running CDP target.
 - **Electron mode**: launches or attaches to an Electron app and injects the overlay shell.
 - **Hosted mode (`--hosted`)**: bundled with the e2b template at `packages/dev-tools/e2b-template/`. node-server boots headless Chromium against `?runtime=hosted-leader`, persists `--user-data-dir=/data/profile`, exposes `/api/cloud-status` and `/api/leader-restart`, reads `SLICC_TRAY_WORKER_BASE_URL`.
-- **Cloud subcommands (`--cloud start/list/pause/resume/kill`)**: laptop-side orchestration over an e2b sandbox. Code in `src/cloud/`. Goes through the `SandboxSubstrate` interface; e2b SDK is imported only by `cloud/substrates/e2b.ts`. Mutually exclusive with `--hosted`.
+- **Cloud subcommands (`--cloud start/list/pause/resume/kill`)**: laptop-side orchestration over an e2b sandbox. The lifecycle logic lives in `@slicc/cloud-core` (`packages/cloud-core/`); the files in `src/cloud/` are thin adapters that wire the file-backed registry (`~/.slicc/cloud-sessions.json`) and the e2b substrate to the matching cloud-core operation. `src/cloud/dispatch.ts` owns argv parsing; each `src/cloud/<op>.ts` is a 1:1 adapter over the corresponding `cloud-core/src/operations/<op>.ts`. Mutually exclusive with `--hosted`. See [`packages/cloud-core/CLAUDE.md`](../cloud-core/CLAUDE.md).
 
 `packages/node-server/src/runtime-flags.ts` is the source of truth for supported flags such as `--serve-only`, `--cdp-port`, `--electron`, `--profile`, `--lead`, `--join`, and `--prompt`.
 
@@ -80,5 +80,6 @@ Node-server includes `OauthSecretStore` (in-memory writable store for OAuth toke
 
 - `packages/webapp/CLAUDE.md` for the browser code being served
 - `packages/chrome-extension/CLAUDE.md` for the extension float
+- `packages/cloud-core/CLAUDE.md` for the sandbox lifecycle logic used by `--cloud`
 - `packages/shared-ts/CLAUDE.md` for secret masking primitives
 - `docs/development.md` and `docs/electron.md` for longer-form workflows

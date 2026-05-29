@@ -8,12 +8,25 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 
 ## Main Files
 
-- `src/index.ts` — worker entry point and public HTTP routing
-- `src/session-tray.ts` — `SessionTrayDurableObject` state machine
-- `src/tray-signaling.ts` — shared signaling message types
-- `src/turn-credentials.ts` — Cloudflare TURN credential fetcher
-- `src/shared.ts` — capability token and response helpers
-- `wrangler.jsonc` — Wrangler config, Durable Object binding, staging env
+| Path                                                                                                                 | Purpose                                                                                                                         |
+| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `src/index.ts`                                                                                                       | Worker entry point and public HTTP routing                                                                                      |
+| `src/session-tray.ts`                                                                                                | `SessionTrayDurableObject` state machine                                                                                        |
+| `src/tray-signaling.ts`                                                                                              | Shared signaling message types                                                                                                  |
+| `src/turn-credentials.ts`                                                                                            | Cloudflare TURN credential fetcher                                                                                              |
+| `src/shared.ts`                                                                                                      | Capability token + response helpers; `reclaimMsForTray`; the `TRAY_RECLAIM_TTL_MS` / `HOSTED_TRAY_RECLAIM_TTL_MS` consts        |
+| `src/links.ts`                                                                                                       | `applySliccLinks` — adds the standard RFC 8288 `Link` rel set to every response                                                 |
+| `src/handoff-page.ts`                                                                                                | `/handoff` route handler — converts `?upskill=` / `?handoff=` / `?msg=` into a `Link` response header                           |
+| `src/api-catalog.ts`                                                                                                 | `/.well-known/api-catalog` (RFC 9264 linkset) response builder                                                                  |
+| `src/llms-txt.ts`                                                                                                    | `/llms.txt` response builder                                                                                                    |
+| `src/rel-docs.ts`                                                                                                    | `/rel/:name` response builder — dereferenceable docs for SLICC custom rels                                                      |
+| `src/oauth-exchange.ts`, `src/oauth-registry.ts`                                                                     | OAuth callback relay (`/auth/callback`) — decodes the `state` envelope and routes to localhost / extension / allowlisted remote |
+| `src/auth/cloud-callback.ts`                                                                                         | `/auth/cloud-callback` IMS popup callback for the cloud dashboard                                                               |
+| `src/cloud/cloud-sessions-do.ts`                                                                                     | `CloudSessionsDurableObject` — per-user state for `/api/cloud/*`. Wraps `@slicc/cloud-core` ops under `blockConcurrencyWhile`   |
+| `src/cloud/handlers.ts`, `src/cloud/handler-signout.ts`, `src/cloud/handler-admin.ts`, `src/cloud/handler-config.ts` | HTTP handlers for the `/api/cloud/*` routes; delegate to the DO                                                                 |
+| `wrangler.jsonc`                                                                                                     | Wrangler config, Durable Object bindings (`TRAY_HUB`, `CLOUD_SESSIONS`), staging env, asset binding                             |
+
+This package depends on `@slicc/cloud-core` (see [`packages/cloud-core/CLAUDE.md`](../cloud-core/CLAUDE.md)) for sandbox lifecycle logic. The worker-local `src/cloud/` files are adapter glue (auth, DO storage, HTTP plumbing) — operation logic lives in cloud-core.
 
 ## Tray Hub Architecture
 

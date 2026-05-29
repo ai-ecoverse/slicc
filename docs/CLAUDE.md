@@ -18,11 +18,35 @@ This file covers the documentation surface in `docs/`.
 
 ## Common Destinations in `docs/`
 
-- `architecture.md` — detailed subsystem/file maps
+Architecture and build:
+
+- `architecture.md` — detailed subsystem/file maps, layer stack, IndexedDB inventory, tray/sync matrix
 - `development.md` — build, run, and debug workflows
-- `shell-reference.md` — shell command reference
 - `testing.md` — testing patterns and command selection
-- `tools-reference.md` — tool/reference behavior
-- `pitfalls.md` — runtime and extension gotchas
+- `adding-features.md` — how to add a new shell command, tool, provider, sprinkle, etc.
+- `kernel/process-model.md` — kernel-host / process-manager deep reference
+
+Subsystems:
+
+- `shell-reference.md` — shell command reference (authoritative per-command list)
+- `tools-reference.md` — agent tool surface reference
+- `mounts.md` — `mount` setup for local FS Access, S3/R2/MinIO, and Adobe da.live
+- `secrets.md` — secrets storage, masking, and domain-scoped injection
+- `oauth-intercept.md` — provider OAuth intercept and silent renewal
+- `operational-telemetry.md` — Helix RUM beacons and debug sampling
+- `slicc-handoff.md` — external handoff protocol (RFC 8288 `Link` header + `navigate` lick)
+- `link-discovery.md` — `--discover` flag behavior for `playwright-cli` / `fetch` / `goto`
+- `urls.md` — production URL inventory
+- `electron.md` — Electron float workflow
+
+Gotchas:
+
+- `pitfalls.md` — runtime and extension gotchas (CSP, dual-mode runtime detection, WASM heap views, etc.)
+
+Other:
+
+- `exploration/` — open design notes (not load-bearing reference)
+- `screenshots/` — image assets used by README and other docs
+- `superpowers/specs/` and `superpowers/plans/` — design specs and implementation plans (kept after merge as historical record)
 
 Keep this directory explanatory, not redundant: prefer one authoritative page per topic and link to it from the shorter `CLAUDE.md` files.
