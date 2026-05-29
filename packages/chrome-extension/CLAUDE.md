@@ -49,6 +49,7 @@ Mirror of `page-leader-tray.ts` for the offscreen runtime.
   `EXTERNAL_LICK_CHANNELS` (`lick-formatting.ts:29-37`). Orchestrator
   dispatch runs in a fire-and-forget IIFE so the wire signature stays
   `void`.
+- **Lick forwarding**: The follower installs `lickManager.setForwarder((e) => sync.forwardLick(e))` on the offscreen lick manager while connected (cleared on detach). The leader passes the offscreen `lickManager` into `startExtensionLeaderTray` and wires `onForwardedLick → lickManager.emitEvent`. (Standalone bridge messages — `set-follower-forwarding`, `forward-lick`, `inject-forwarded-lick` — are shared via `messages.ts`.)
 
 ### Leaving a tray
 

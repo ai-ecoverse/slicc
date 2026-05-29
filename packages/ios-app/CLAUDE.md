@@ -61,6 +61,10 @@ Both followers now implement sprinkle rendering (the TS implementation landed in
 - Multi-scoop: `selectScoop`, `swipeToNextScoop` / `swipeToPreviousScoop`, per-scoop `messagesByScoop` buffer + scheduled flush throttling
 - Agent events: `handleAgentEvent(_:scoopJid:)` with the same scoop-targeted buffer update + per-render-loop throttle
 
+### Lick Forwarding (leader-side origin stamping)
+
+The native iOS follower's sprinkle licks now display their origin label in the leader's cone via leader-side origin stamping (no iOS change was required). The leader's `onSprinkleLick` callback gained a 4th `originLabel` parameter and routes sprinkle lick content through the shared `formatLickEventForCone`, so follower sprinkle licks (including from iOS) display their origin. Migrating iOS from the legacy `sprinkle.lick` envelope to the generic `lick` follower→leader message (for `navigate` / handoff licks) remains a documented follow-up.
+
 ## Build
 
 ```bash
