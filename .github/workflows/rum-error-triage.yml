@@ -90,8 +90,17 @@ jobs:
           # fails on auth, fall back to `anthropic_api_key` below.)
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          # claude-code-action does NOT expose a token to the Bash tool's `gh`,
+          # so set it explicitly or `gh issue create` / `gh pr create` fail.
+          # The job's top-level permissions (issues/pull-requests/contents:
+          # write) scope this token appropriately.
+          GH_TOKEN: ${{ github.token }}
         with:
           use_bedrock: 'true'
+          # Print Claude's full turn-by-turn output to the Actions log on manual
+          # dispatch (to inspect its reasoning); kept off for the nightly cron so
+          # routine runs don't log tool output that may contain sensitive data.
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
           # Anthropic-API fallback — uncomment and remove the Bedrock env above
           # to use a direct Anthropic key instead:
           # anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
