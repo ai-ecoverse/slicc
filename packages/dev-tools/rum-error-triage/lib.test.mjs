@@ -178,8 +178,23 @@ describe('buildErrorQuery', () => {
     expect(sql).toContain('"localhost"');
     expect(sql).toContain('"extid"');
     expect(sql).toContain('checkpoint = "error"');
-    expect(sql).toContain('generation LIKE "slicc%"');
+    // Matches telemetry.ts RUM_GENERATION format exactly (hyphen), not a loose prefix.
+    expect(sql).toContain('generation LIKE "slicc-%"');
+    expect(sql).not.toContain('generation LIKE "slicc%"');
     expect(sql).toContain('NOT LIKE "%@vite/client%"');
+  });
+
+  it('classifies floats by navigate target before the generation marker', () => {
+    const sql = buildErrorQuery();
+    // CLI/Electron must be matched on their navigate target ahead of the
+    // generation fallback, so a slicc-* generation never mislabels them.
+    const cliIdx = sql.indexOf('target="cli"');
+    const electronIdx = sql.indexOf('target="electron"');
+    const genIdx = sql.indexOf('generation LIKE "slicc-%") THEN "extension"');
+    expect(cliIdx).toBeGreaterThan(-1);
+    expect(genIdx).toBeGreaterThan(-1);
+    expect(cliIdx).toBeLessThan(genIdx);
+    expect(electronIdx).toBeLessThan(genIdx);
   });
 
   it('defaults to a 1-day window over the default hosts', () => {

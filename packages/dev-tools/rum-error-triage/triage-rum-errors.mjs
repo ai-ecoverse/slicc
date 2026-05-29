@@ -23,10 +23,13 @@ import { writeFileSync, appendFileSync } from 'node:fs';
 import { DEFAULT_HOSTS, buildErrorQuery, parseFingerprints, selectNewCandidates } from './lib.mjs';
 
 const SINCE_DAYS = Number(process.env.SINCE_DAYS) || 1;
-const HOSTS =
-  process.env.SLICC_RUM_HOSTS?.split(',')
-    .map((h) => h.trim())
-    .filter(Boolean) ?? DEFAULT_HOSTS;
+// Parse the env override into a clean list; fall back to DEFAULT_HOSTS when it
+// is unset OR empty (an empty/whitespace value must not yield zero hosts).
+const envHosts = (process.env.SLICC_RUM_HOSTS ?? '')
+  .split(',')
+  .map((h) => h.trim())
+  .filter(Boolean);
+const HOSTS = envHosts.length ? envHosts : DEFAULT_HOSTS;
 const PROJECT = process.env.RUM_BQ_PROJECT || 'helix-225321';
 const LABEL = process.env.TRIAGE_LABEL || 'rum-error';
 const OUTPUT_PATH = process.env.OUTPUT_PATH || 'rum-error-candidates.json';

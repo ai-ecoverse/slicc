@@ -154,12 +154,17 @@ DECLARE since TIMESTAMP DEFAULT TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${si
 DECLARE hosts ARRAY<STRING> DEFAULT [${hostList}];
 WITH sess AS (
   SELECT id,
-    CASE WHEN LOGICAL_OR(generation LIKE "slicc%") THEN "extension"
-         WHEN LOGICAL_OR(checkpoint="navigate" AND target="cli") THEN "cli"
-         WHEN LOGICAL_OR(checkpoint="navigate" AND target="electron") THEN "electron" END AS float
+    -- Navigate target wins. telemetry.ts sets RUM_GENERATION="slicc-\${mode}"
+    -- for every float, so a CLI/Electron session can carry a slicc-* generation
+    -- too; classify by the navigate target first and treat the generation
+    -- marker as the extension-only fallback. Match "slicc-%" (with hyphen) to
+    -- mirror the RUM_GENERATION format exactly.
+    CASE WHEN LOGICAL_OR(checkpoint="navigate" AND target="cli") THEN "cli"
+         WHEN LOGICAL_OR(checkpoint="navigate" AND target="electron") THEN "electron"
+         WHEN LOGICAL_OR(generation LIKE "slicc-%") THEN "extension" END AS float
   FROM \`${table}\`
   WHERE time >= since AND hostname IN UNNEST(hosts)
-    AND (generation LIKE "slicc%" OR (checkpoint="navigate" AND target IN ("cli","electron")))
+    AND (generation LIKE "slicc-%" OR (checkpoint="navigate" AND target IN ("cli","electron")))
   GROUP BY id
   HAVING float IS NOT NULL
 )
