@@ -35,7 +35,7 @@ Subsystems:
 - `oauth-intercept.md` — provider OAuth intercept and silent renewal
 - `operational-telemetry.md` — Helix RUM beacons and debug sampling
 - `slicc-handoff.md` — external handoff protocol (RFC 8288 `Link` header + `navigate` lick)
-- `link-discovery.md` — `--discover` flag behavior for `playwright-cli` / `fetch` / `goto`
+- `link-discovery.md` — the standalone `discover` shell command and the `--discover` flag on `playwright-cli` subcommands (`fetch`, `goto`, `navigate`, `open`, `tab-new`); covers RFC 8288 / RFC 9727 parsing, emission, and the SLICC handoff/upskill rels
 - `urls.md` — production URL inventory
 - `electron.md` — Electron float workflow
 
