@@ -39,9 +39,18 @@ Usage: cherry-emit <name> [--detail <json>] [--runtime <id>]
     let detailJson: string | undefined;
     let runtime: string | undefined;
     for (let i = 0; i < args.length; i++) {
-      if (args[i] === '--detail') detailJson = args[++i];
-      else if (args[i] === '--runtime') runtime = args[++i];
-      else positionals.push(args[i]!);
+      const arg = args[i];
+      if (arg === '--detail' || arg === '--runtime') {
+        const next = args[i + 1];
+        if (next === undefined || next.startsWith('--')) {
+          return { stdout: '', stderr: `cherry-emit: ${arg} requires a value\n`, exitCode: 1 };
+        }
+        if (arg === '--detail') detailJson = next;
+        else runtime = next;
+        i++;
+      } else {
+        positionals.push(arg!);
+      }
     }
 
     const name = positionals[0];

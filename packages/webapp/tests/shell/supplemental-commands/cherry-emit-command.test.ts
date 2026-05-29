@@ -60,4 +60,48 @@ describe('cherry-emit command', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toMatch(/no .*runtime/i);
   });
+
+  it('errors (exit 1) when --detail is the final token with no value', async () => {
+    const reg = runtimeRegistry(['follower-a']);
+    const result = await createCherryEmitCommand({ registry: reg }).execute(
+      ['ping', '--detail'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/--detail requires a value/i);
+    expect(reg.emitSliccEvent).not.toHaveBeenCalled();
+  });
+
+  it('errors (exit 1) when --runtime is the final token with no value', async () => {
+    const reg = runtimeRegistry(['follower-a']);
+    const result = await createCherryEmitCommand({ registry: reg }).execute(
+      ['ping', '--runtime'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/--runtime requires a value/i);
+    expect(reg.emitSliccEvent).not.toHaveBeenCalled();
+  });
+
+  it('errors (exit 1) when --detail JSON is invalid', async () => {
+    const reg = runtimeRegistry(['follower-a']);
+    const result = await createCherryEmitCommand({ registry: reg }).execute(
+      ['ping', '--detail', '{bad'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/valid JSON/i);
+    expect(reg.emitSliccEvent).not.toHaveBeenCalled();
+  });
+
+  it('errors (exit 1) when --runtime id is not in the registry', async () => {
+    const reg = runtimeRegistry(['follower-a', 'follower-b']);
+    const result = await createCherryEmitCommand({ registry: reg }).execute(
+      ['ping', '--runtime', 'follower-z'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/follower-a, follower-b/);
+    expect(reg.emitSliccEvent).not.toHaveBeenCalled();
+  });
 });
