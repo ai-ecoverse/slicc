@@ -39,4 +39,31 @@ describe('createCdpHostHandler', () => {
       CherryUnsupportedError
     );
   });
+
+  it('Page.navigate rejects with CherryUnsupportedError when navigate capability is off', async () => {
+    const denied = createCdpHostHandler({
+      capabilities: { navigate: false, screenshot: 'none', openUrl: true },
+    });
+    await expect(denied('Page.navigate', { url: 'https://x.example' })).rejects.toBeInstanceOf(
+      CherryUnsupportedError
+    );
+  });
+
+  it('Target.createTarget rejects with CherryUnsupportedError when openUrl capability is off', async () => {
+    const denied = createCdpHostHandler({
+      capabilities: { navigate: true, screenshot: 'none', openUrl: false },
+    });
+    await expect(
+      denied('Target.createTarget', { url: 'https://x.example' })
+    ).rejects.toBeInstanceOf(CherryUnsupportedError);
+  });
+
+  it('DOM.querySelector returns the node id of a matching element', async () => {
+    const doc = await handle('DOM.getDocument', {});
+    const rootId = (doc as any).root.nodeId;
+    const match = await handle('DOM.querySelector', { nodeId: rootId, selector: '#b' });
+    expect((match as any).nodeId).toBeGreaterThan(0);
+    const miss = await handle('DOM.querySelector', { nodeId: rootId, selector: '#nope' });
+    expect((miss as any).nodeId).toBe(0);
+  });
 });

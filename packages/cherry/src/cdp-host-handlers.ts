@@ -23,6 +23,9 @@ type Handler = (
 
 export function createCdpHostHandler(opts: CdpHostHandlerOptions): Handler {
   const nodeIds = new WeakMap<Node, number>();
+  // Strong node ref by id: unbounded by design for the session lifetime. A very
+  // long-lived host session pins every queried node; acceptable for typical
+  // short embed sessions. A prune/LRU is a future option if sessions grow long.
   const nodesById = new Map<number, Node>();
   let nextNodeId = 1;
 
@@ -56,6 +59,15 @@ export function createCdpHostHandler(opts: CdpHostHandlerOptions): Handler {
   const evalInRealm = indirectEval as (src: string) => unknown;
 
   return async function handle(method, params) {
+    // Two-tier gating model (by design, not an oversight):
+    //  - The `capabilities` booleans gate side effects that ESCAPE the page
+    //    sandbox — navigate (top-level navigation), screenshot (screen capture),
+    //    openUrl (new window/tab). These are checked here and fail closed.
+    //  - DOM read/query and Input (clicking/typing WITHIN the embedded page) are
+    //    the baseline driveable-CDP-target contract the host opted into by
+    //    calling mountSlicc. Per-domain authorization (including denying the
+    //    whole Input/DOM domain) is enforced UPSTREAM via onPermissionRequest at
+    //    the mount layer (Task 12), so we intentionally do not re-gate them here.
     switch (method) {
       case 'Runtime.evaluate': {
         const expression = String(params.expression ?? '');
