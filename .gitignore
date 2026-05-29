@@ -2,6 +2,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 .DS_STORE
+.env
+.env.local
+.env.*.local
 /workspace/
 coverage/
 .worktrees/
