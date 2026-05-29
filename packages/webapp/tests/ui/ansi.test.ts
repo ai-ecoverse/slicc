@@ -57,9 +57,24 @@ describe('ansiToHtml', () => {
     expect(out).toBe('abcd');
   });
 
+  it('strips CSI sequences with non-letter final bytes (~, @, `)', () => {
+    // Bracketed paste markers (\x1b[200~ / \x1b[201~) and other final
+    // bytes in 0x40-0x7E must be stripped, not leaked into the output.
+    const out = ansiToHtml('a\x1b[200~paste\x1b[201~b\x1b[5@c\x1b[2`d');
+    expect(out).toBe('apastebcd');
+  });
+
   it('strips OSC sequences terminated by BEL', () => {
     const out = ansiToHtml('pre\x1b]0;title\x07post');
     expect(out).toBe('prepost');
+  });
+
+  it('ignores unknown 38/<mode> extended-color sequences without leaking the mode byte', () => {
+    // `\x1b[38;1m` is an unknown extended-color mode. The 1 must NOT be
+    // re-interpreted as the standalone "bold" SGR code after the 38 is
+    // skipped — the entire sequence should be a no-op style-wise.
+    expect(ansiToHtml('\x1b[38;1mx\x1b[0m')).toBe('x');
+    expect(ansiToHtml('\x1b[48;4mx\x1b[0m')).toBe('x');
   });
 
   it('escapes HTML inside a styled span', () => {

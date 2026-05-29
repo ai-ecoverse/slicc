@@ -81,7 +81,9 @@ function extendedColor(params: number[], i: number): { color: string | null; con
     const b = clamp(params[i + 4] ?? 0);
     return { color: `rgb(${r},${g},${b})`, consumed: 5 };
   }
-  return { color: null, consumed: 1 };
+  // Unknown extended-color mode: skip the 38/48 and the mode byte together
+  // so the mode parameter is not re-interpreted as a standalone SGR code.
+  return { color: null, consumed: 2 };
 }
 
 function applyParams(prev: SgrState, params: number[]): SgrState {
@@ -150,7 +152,9 @@ const wrap = (chunk: string, state: SgrState): string => {
   return hasStyle(state) ? `<span style="${styleFor(state)}">${safe}</span>` : safe;
 };
 
-const ESC_PATTERN = /\x1b\[[?!#>]?[\d;]*[A-Za-z]|\x1b\][\s\S]*?(?:\x07|\x1b\\)/g;
+// CSI final byte per ECMA-48 is any 0x40-0x7E (`@` through `~`), which
+// covers letters plus `~` (bracketed paste, function keys), `@`, `` ` ``, etc.
+const ESC_PATTERN = /\x1b\[[?!#>]?[\d;]*[@-~]|\x1b\][\s\S]*?(?:\x07|\x1b\\)/g;
 const SGR_PATTERN = /^\x1b\[([\d;]*)m$/;
 
 /**
