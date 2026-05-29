@@ -104,7 +104,7 @@ export type FollowerToLeaderMessage =
       body: unknown;
       targetScoop?: string;
     }
-  | { type: 'lick'; event: LickEvent }
+  | { type: 'lick'; event: Omit<LickEvent, 'originFollowerId' | 'originLabel'> }
   | { type: 'targets.advertise'; targets: RemoteTargetInfo[]; runtimeId: string }
   | {
       type: 'cdp.request';

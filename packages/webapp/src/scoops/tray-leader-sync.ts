@@ -663,10 +663,12 @@ export class LeaderSyncManager {
           break;
         }
         const follower = this.followers.get(bootstrapId);
-        // Strip follower-sent origin AND routing fields — the leader is the
-        // sole authority on both. Forwarded licks (navigate) always target
-        // the leader's cone, so a follower-supplied `targetScoop` is ignored.
-        const { originFollowerId: _o1, originLabel: _o2, targetScoop: _o3, ...rest } = incoming;
+        // Strip follower-sent routing — the leader is the sole authority on
+        // origin AND routing. The wire type omits origin fields, and the
+        // stamp below overrides any that a malformed peer sneaks through at
+        // runtime (later keys win over `...rest`). Forwarded licks (navigate)
+        // always target the leader's cone, so a follower `targetScoop` is dropped.
+        const { targetScoop: _droppedTarget, ...rest } = incoming;
         const stamped: LickEvent = {
           ...rest,
           originFollowerId: bootstrapId,

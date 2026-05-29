@@ -27,6 +27,7 @@ import type {
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
+  ForwardedLickEvent,
 } from '../../../chrome-extension/src/messages.js';
 import { createLogger } from '../core/logger.js';
 import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
@@ -37,6 +38,18 @@ import type { TerminalEventMsg } from '../shell/terminal-protocol.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 
 const log = createLogger('offscreen-client');
+
+// Compile-time guard: the real `LickEvent`'s carrier fields must stay
+// assignable to the wire mirror `ForwardedLickEvent` (messages.ts can't import
+// LickEvent directly). `ForwardedLickEvent` is intentionally a loose carrier
+// (`[key: string]: unknown`) that an `interface` source can't satisfy
+// wholesale, so we assert the named carrier fields with NO cast — if
+// `type` / `timestamp` / `body` drift, this fails the build instead of
+// silently breaking the `as unknown as LickEvent` casts at the boundary.
+const _assertLickWireCarrier: (
+  e: LickEvent
+) => Pick<ForwardedLickEvent, 'type' | 'timestamp' | 'body'> = (e) => e;
+void _assertLickWireCarrier;
 
 export interface OffscreenClientCallbacks {
   onStatusChange: (scoopJid: string, status: ScoopTabState['status']) => void;
