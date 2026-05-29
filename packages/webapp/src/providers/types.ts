@@ -176,6 +176,15 @@ export interface ModelMetadata {
    * See {@link CompatOverrides} for the full list of supported keys per API.
    */
   compat?: CompatOverrides;
+  /**
+   * Per-model thinking-level mapping; matches pi-ai's `Model.thinkingLevelMap`.
+   * Keys are pi thinking levels (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`);
+   * a string value is forwarded to the provider as the reasoning effort and
+   * `null` marks the level unsupported. Merged over any map the pi-ai base
+   * model already declared, so a provider can add or override individual
+   * levels (e.g. Codex maps `minimal` → `low`).
+   */
+  thinkingLevelMap?: Record<string, string | null>;
 }
 
 export interface ProviderConfig {

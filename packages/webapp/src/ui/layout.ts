@@ -50,6 +50,7 @@ import { getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { copyTextToClipboard } from './clipboard.js';
 import { computeTrayMenuModel } from './tray-join-url.js';
+import { initialsFromLabel } from './avatar-initials.js';
 import { createLogger } from '../core/logger.js';
 
 const layoutLog = createLogger('ui.layout');
@@ -623,9 +624,7 @@ export class Layout {
   }
 
   private getInitials(name: string): string {
-    const parts = name.trim().split(/\s+/);
-    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-    return name.slice(0, 2).toUpperCase();
+    return initialsFromLabel(name);
   }
 
   /**
