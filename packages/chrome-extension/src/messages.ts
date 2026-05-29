@@ -36,6 +36,20 @@ export interface SprinkleSummaryEnvelope {
 }
 
 /**
+ * Structural mirror of webapp's `LickEvent`. `messages.ts` cannot import
+ * the real type from `scoops/lick-manager.ts` — doing so pulls
+ * `core/logger.ts` (which references the Vite-only `__DEV__` global) into
+ * a tsconfig that doesn't declare it, breaking `tsc`. The carrier only
+ * needs the fields below; consumers cast to the real `LickEvent`.
+ */
+export interface ForwardedLickEvent {
+  type: string;
+  timestamp: string;
+  body: unknown;
+  [key: string]: unknown;
+}
+
+/**
  * Local mirror of `LeaderTrayRuntimeStatus` from
  * `packages/webapp/src/scoops/tray-leader.ts`. Mirrored (not imported) for the
  * same reason as `SprinkleSummaryEnvelope` above — `tray-leader.ts` references
@@ -266,6 +280,24 @@ export interface WebhookEventMsg {
   body: unknown;
 }
 
+/** Page→worker (standalone follower): toggle the worker LickManager's forwarder. */
+export interface SetFollowerForwardingMsg {
+  type: 'set-follower-forwarding';
+  enabled: boolean;
+}
+
+/** Page→worker (standalone leader): inject a follower-forwarded lick into the worker LickManager. */
+export interface InjectForwardedLickMsg {
+  type: 'inject-forwarded-lick';
+  event: ForwardedLickEvent;
+}
+
+/** Worker→page (standalone follower): a forwardable lick the page must relay to the leader. */
+export interface ForwardLickMsg {
+  type: 'forward-lick';
+  event: ForwardedLickEvent;
+}
+
 /** Request skill reload after upskill install. */
 export interface ReloadSkillsMsg {
   type: 'reload-skills';
@@ -465,6 +497,8 @@ export type PanelToOffscreenMessage =
   | FollowerSprinkleFetchCancelMsg
   | FollowerSprinkleLickMsg
   | WebhookEventMsg
+  | SetFollowerForwardingMsg
+  | InjectForwardedLickMsg
   | ReloadSkillsMsg
   | ToolUIActionMsg
   | LocalStorageSetMsg
@@ -792,6 +826,7 @@ export type OffscreenToPanelMessage =
   | FollowerSprinklesListMsg
   | FollowerSprinkleUpdateMsg
   | FollowerSprinkleFetchResultMsg
+  | ForwardLickMsg
   // Terminal session events emitted by the worker's `TerminalSessionHost`.
   // Consumed by the panel's `TerminalSessionClient`.
   | TerminalEventMsg
