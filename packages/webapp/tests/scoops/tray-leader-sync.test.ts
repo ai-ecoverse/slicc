@@ -3,6 +3,8 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import {
   LeaderSyncManager,
+  isCherryTarget,
+  selectTeleportPool,
   type LeaderSyncManagerOptions,
 } from '../../src/scoops/tray-leader-sync.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
@@ -2077,5 +2079,29 @@ describe('LeaderSyncManager', () => {
       });
       expect(onSprinkleLick).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+describe('cherry teleport selection', () => {
+  const browserTarget = { targetId: 'b', kind: 'browser' as const };
+  const cherryTarget = {
+    targetId: 'c',
+    kind: 'cherry' as const,
+    capabilities: { navigate: true, network: false, screenshot: true },
+  };
+
+  it('isCherryTarget detects cherry kind', () => {
+    expect(isCherryTarget(cherryTarget)).toBe(true);
+    expect(isCherryTarget(browserTarget)).toBe(false);
+  });
+
+  it('selectTeleportPool excludes cherry targets when network is required', () => {
+    const pool = selectTeleportPool([browserTarget, cherryTarget], { requireNetwork: true });
+    expect(pool.map((t) => t.targetId)).toEqual(['b']);
+  });
+
+  it('selectTeleportPool includes cherry targets when network is not required', () => {
+    const pool = selectTeleportPool([browserTarget, cherryTarget], { requireNetwork: false });
+    expect(pool.map((t) => t.targetId).sort()).toEqual(['b', 'c']);
   });
 });

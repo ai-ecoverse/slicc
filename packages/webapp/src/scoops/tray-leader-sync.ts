@@ -21,7 +21,10 @@ import {
   type TrayFsResponse,
   type ScoopSummary,
   type SprinkleSummary,
+  type CherryHostEventMessage,
+  isCherryHostEventMessage,
 } from './tray-sync-protocol.js';
+import type { LickManager } from './lick-manager.js';
 import { handleFsRequest } from './tray-fs-handler.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import { TrayTargetRegistry } from './tray-target-registry.js';
@@ -62,6 +65,12 @@ export interface LeaderSyncManagerOptions {
   vfs?: VirtualFS;
   /** Called whenever a follower is added or removed (incl. via dead detection or stop). */
   onFollowerCountChanged?: (count: number) => void;
+  /**
+   * Lick manager for routing inbound cherry host events (`cherry.host_event`)
+   * to the cone as `'cherry'` licks. Optional — when omitted, host events are
+   * dropped (no cone-side delivery).
+   */
+  lickManager?: Pick<LickManager, 'emitEvent'>;
 }
 
 /** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
@@ -74,6 +83,31 @@ function deriveFloatType(runtime?: string): FloatType {
   if (runtime.includes('extension')) return 'extension';
   if (runtime.includes('electron')) return 'electron';
   return 'unknown';
+}
+
+/**
+ * True when a target is a cooperative cherry host page rather than a real
+ * browser page. Cherry targets only lend the capabilities they advertise, so
+ * teleport routing must treat them specially (see `selectTeleportPool`).
+ */
+export function isCherryTarget(t: Pick<RemoteTargetInfo, 'kind'>): boolean {
+  return t.kind === 'cherry';
+}
+
+/**
+ * Filter a list of advertised targets down to those eligible for a teleport.
+ * Real browser targets always qualify. Cherry host pages are excluded when the
+ * teleport needs `Network.*` CDP (`requireNetwork: true`) because a cooperative
+ * host page does not serve the network domain; otherwise they are kept.
+ */
+export function selectTeleportPool<
+  T extends Pick<RemoteTargetInfo, 'kind' | 'capabilities'> & { targetId: string },
+>(targets: T[], opts: { requireNetwork: boolean }): T[] {
+  return targets.filter((t) => {
+    if (!isCherryTarget(t)) return true;
+    if (opts.requireNetwork) return false;
+    return true;
+  });
 }
 
 interface ConnectedFollower {
@@ -696,6 +730,10 @@ export class LeaderSyncManager {
         this.handleFsResponse(message.requestId, message.response);
         break;
       }
+      case 'cherry.host_event': {
+        this.routeCherryHostEvent(bootstrapId, message);
+        break;
+      }
       case 'ping': {
         // Follower is pinging us — respond with pong and treat as liveness signal
         const follower = this.followers.get(bootstrapId);
@@ -1035,9 +1073,89 @@ export class LeaderSyncManager {
     }
   }
 
+  /** Resolve the advertised runtimeId for a follower's bootstrapId, if known. */
+  private runtimeIdForBootstrap(bootstrapId: string): string | undefined {
+    for (const [runtimeId, bId] of this.runtimeToBootstrap) {
+      if (bId === bootstrapId) return runtimeId;
+    }
+    return undefined;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cherry event routing
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Route an inbound `cherry.host_event` (a named event emitted by a cherry
+   * host page on a follower) to the cone as a `'cherry'` lick. The host origin
+   * is not carried at this protocol layer, so it is left undefined.
+   */
+  private routeCherryHostEvent(bootstrapId: string, message: CherryHostEventMessage): void {
+    if (!isCherryHostEventMessage(message)) return;
+    const lickManager = this.options.lickManager;
+    if (!lickManager) {
+      log.debug('cherry.host_event received but no lickManager wired', {
+        bootstrapId,
+        name: message.name,
+      });
+      return;
+    }
+    const cherryRuntimeId = this.runtimeIdForBootstrap(bootstrapId);
+    try {
+      lickManager.emitEvent({
+        // Task 7 adds 'cherry' to LickEvent's type union
+        type: 'cherry',
+        cherryRuntimeId,
+        cherryName: message.name,
+        cherryOrigin: undefined,
+        body: message.detail,
+        timestamp: new Date().toISOString(),
+      } as unknown as Parameters<typeof lickManager.emitEvent>[0]);
+    } catch (err) {
+      log.warn('Failed to route cherry.host_event to lick manager', {
+        bootstrapId,
+        name: message.name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Send a `cherry.slicc_event` (cone → host page) to the follower that owns
+   * `targetId`. The composite `targetId` is `{runtimeId}:{localTargetId}`; the
+   * leader resolves the owning runtime and forwards the named event with its
+   * optional detail. Returns true if the message was sent, false if the owning
+   * follower is not connected.
+   */
+  emitCherrySliccEvent(targetId: string, name: string, detail?: unknown): boolean {
+    const sep = targetId.indexOf(':');
+    const targetRuntimeId = sep >= 0 ? targetId.slice(0, sep) : targetId;
+    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
+    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
+    if (!targetFollower) {
+      log.warn('emitCherrySliccEvent: owning follower not connected', { targetId, name });
+      return false;
+    }
+    return targetFollower.sync.send({ type: 'cherry.slicc_event', targetId, name, detail });
+  }
+
   // ---------------------------------------------------------------------------
   // Tab open routing
   // ---------------------------------------------------------------------------
+
+  /**
+   * Whether a runtime can honor a generic `tab.open`. A runtime whose only
+   * advertised targets are cherry host pages cannot — a cooperative host page
+   * is not a tab spawner and the tray `capabilities` shape (navigate/network/
+   * screenshot) carries no `openUrl` capability, so we refuse rather than emit
+   * a `tab.open` the cherry host can't honor. Runtimes with at least one real
+   * browser target (or no registry entry yet) are allowed through unchanged.
+   */
+  private canRuntimeOpenTab(targetRuntimeId: string): boolean {
+    const entries = this.registry.getEntries().filter((e) => e.runtimeId === targetRuntimeId);
+    if (entries.length === 0) return true;
+    return entries.some((e) => !isCherryTarget(e));
+  }
 
   /**
    * Open a tab on a remote runtime from the leader's own code.
@@ -1049,6 +1167,12 @@ export class LeaderSyncManager {
 
     if (!targetFollower) {
       return Promise.reject(new Error(`Target runtime "${targetRuntimeId}" not connected`));
+    }
+
+    if (!this.canRuntimeOpenTab(targetRuntimeId)) {
+      return Promise.reject(
+        new Error(`Target runtime "${targetRuntimeId}" is a cherry host that cannot open tabs`)
+      );
     }
 
     const requestId = `tab-open-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1112,6 +1236,17 @@ export class LeaderSyncManager {
           type: 'tab.open.error',
           requestId,
           error: `Target runtime "${targetRuntimeId}" not connected`,
+        });
+      }
+      return;
+    }
+
+    if (!this.canRuntimeOpenTab(targetRuntimeId)) {
+      if (requester) {
+        requester.sync.send({
+          type: 'tab.open.error',
+          requestId,
+          error: `Target runtime "${targetRuntimeId}" is a cherry host that cannot open tabs`,
         });
       }
       return;
