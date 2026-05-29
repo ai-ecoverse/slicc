@@ -19,6 +19,7 @@ final class SyncProtocolCherryTests: XCTestCase {
         XCTAssertEqual(target.kind, "cherry")
         XCTAssertEqual(target.capabilities?.network, false)
         XCTAssertEqual(target.capabilities?.navigate, true)
+        XCTAssertEqual(target.capabilities?.screenshot, true)
     }
 
     func testCherrySliccEventMessageDecodes() throws {
@@ -26,10 +27,11 @@ final class SyncProtocolCherryTests: XCTestCase {
         {"type":"cherry.slicc_event","targetId":"c","name":"open-url","detail":{"url":"https://x"}}
         """.data(using: .utf8)!
         let msg = try JSONDecoder().decode(LeaderToFollowerMessage.self, from: json)
-        guard case let .cherrySliccEvent(targetId, name, _) = msg else {
+        guard case let .cherrySliccEvent(targetId, name, detail) = msg else {
             return XCTFail("expected cherrySliccEvent, got \(msg)")
         }
         XCTAssertEqual(targetId, "c")
         XCTAssertEqual(name, "open-url")
+        XCTAssertNotNil(detail, "detail should decode the {\"url\":...} payload")
     }
 }
