@@ -25,6 +25,7 @@ import {
   handlePause,
   handleResume,
   handleKill,
+  handleConeConfig,
 } from './cloud/handlers.js';
 import { handleSignOut } from './cloud/handler-signout.js';
 import { handleAdminStats } from './cloud/handler-admin.js';
@@ -157,6 +158,8 @@ export async function handleWorkerRequest(
         return handleResume(request, cloudEnv);
       case 'kill':
         return handleKill(request, cloudEnv);
+      case 'cone-config':
+        return handleConeConfig(request, cloudEnv);
       case 'sign-out':
         return handleSignOut(request);
       case 'admin/stats':
@@ -391,6 +394,7 @@ export async function handleWorkerRequest(
         'POST /api/cloud/pause',
         'POST /api/cloud/resume',
         'POST /api/cloud/kill',
+        'GET /api/cloud/cone-config',
         'POST /api/cloud/sign-out',
         'GET /api/cloud/admin/stats',
         'GET /auth/cloud-callback',
