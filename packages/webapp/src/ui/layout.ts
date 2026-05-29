@@ -830,9 +830,11 @@ export class Layout {
     el.setAttribute('aria-label', 'Account');
     el.dataset.tooltip = 'Account';
 
-    // Find first account with user info
+    // Find first account with user info — skip loggedOut rows (userName/userAvatar
+    // are intentionally retained after OAuth logout for "re-login as X" UX, but
+    // a logged-out account must not drive the avatar display).
     const accounts = getAccounts();
-    const account = accounts.find((a) => a.userName || a.userAvatar);
+    const account = accounts.find((a) => !a.loggedOut && (a.userName || a.userAvatar));
 
     if (account?.userAvatar) {
       // Avatar URL
@@ -885,9 +887,11 @@ export class Layout {
     const popover = document.createElement('div');
     popover.className = 'avatar-popover';
 
-    // Find current account info
+    // Find current account info — exclude loggedOut rows for the same reason
+    // as buildUserAvatar: userName is retained post-logout but must not drive
+    // the popover's signed-in state.
     const accounts = getAccounts();
-    const account = accounts.find((a) => a.userName || a.accessToken || a.apiKey);
+    const account = accounts.find((a) => !a.loggedOut && (a.userName || a.accessToken || a.apiKey));
 
     if (account) {
       const userSection = document.createElement('div');

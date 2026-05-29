@@ -1779,4 +1779,20 @@ describe('logoutOAuthAccount', () => {
     expect(accounts[0].loggedOut).toBe(true);
     expect(mockLog.warn).toHaveBeenCalledWith('onOAuthLogout failed', expect.anything());
   });
+
+  it('buildUserAvatar selector skips logged-out account even though userName/userAvatar are retained', async () => {
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    // This is the exact finder used in buildUserAvatar — must return undefined after logout.
+    const found = accounts.find((a) => !a.loggedOut && (a.userName || a.userAvatar));
+    expect(found).toBeUndefined();
+  });
+
+  it('showAvatarPopover selector skips logged-out account even though userName is retained', async () => {
+    await logoutOAuthAccount('test-oauth');
+    const accounts = getAccounts();
+    // This is the exact finder used in showAvatarPopover — must return undefined after logout.
+    const found = accounts.find((a) => !a.loggedOut && (a.userName || a.accessToken || a.apiKey));
+    expect(found).toBeUndefined();
+  });
 });
