@@ -28,6 +28,9 @@ import {
   resolveCurrentModel,
   resolveModelById,
   saveOAuthAccount,
+  addAccount,
+  removeAccount,
+  getAccounts,
 } from './provider-settings.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import { initTheme } from './theme.js';
@@ -2809,30 +2812,35 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         try {
           const res = await fetch('/api/hosted-bootstrap');
           if (!res.ok) return;
-          const bootstrap = (await res.json()) as { adobeImsToken?: string };
-          if (!bootstrap.adobeImsToken) return;
-
-          // Seed the model/provider selection before injecting the account so the
-          // first user message resolves to `adobe`. Without this, getSelectedProvider()
-          // hits the `accounts.length > 0` branch — which depends on saveOAuthAccount
-          // having already pushed the account into the kernel-worker shim. The shim
-          // write is async (panel-rpc), so a sub-second user message after this block
-          // can race the account propagation. An explicit "selected-model" write is
-          // synchronous in the kernel-worker shim and removes the race.
-          //
-          // Skip the write if already set so a paused-then-resumed cone preserves
-          // whatever model the user picked in the prior session.
-          if (!localStorage.getItem('selected-model')) {
+          const boot = (await res.json()) as {
+            model?: string;
+            accounts?: import('@slicc/cloud-core/cone-config').Account[];
+            adobeImsToken?: string;
+          };
+          const accounts =
+            boot.accounts ??
+            (boot.adobeImsToken
+              ? [{ providerId: 'adobe', kind: 'oauth' as const, accessToken: boot.adobeImsToken }]
+              : []);
+          if (boot.model) localStorage.setItem('selected-model', boot.model);
+          else if (!localStorage.getItem('selected-model'))
             localStorage.setItem('selected-model', 'adobe:claude-opus-4-6');
-          }
-
-          await saveOAuthAccount({
-            providerId: 'adobe',
-            accessToken: bootstrap.adobeImsToken,
-            tokenExpiresAt: Date.now() + 60 * 60 * 1000,
-            userName: 'cloud-injected',
+          const { applyHostedAccounts } = await import('./hosted-config-apply.js');
+          const prevManaged = JSON.parse(
+            localStorage.getItem('slicc_cloud_managed') ?? '[]'
+          ) as string[];
+          await applyHostedAccounts(accounts, {
+            saveOAuthAccount,
+            addAccount,
+            removeAccount,
+            currentProviderIds: () => getAccounts().map((a) => a.providerId),
+            previouslyManaged: () => prevManaged,
           });
-          log.info('hosted-leader: Adobe IMS token injected from secrets.env');
+          localStorage.setItem(
+            'slicc_cloud_managed',
+            JSON.stringify(accounts.map((a) => a.providerId))
+          );
+          log.info('hosted-leader: cone config applied', { count: accounts.length });
         } catch (err) {
           log.warn('hosted-leader: bootstrap fetch failed; provider needs manual login', {
             error: err instanceof Error ? err.message : String(err),
