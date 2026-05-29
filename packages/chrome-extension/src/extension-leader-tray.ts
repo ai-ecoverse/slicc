@@ -30,6 +30,7 @@ import {
   setConnectedFollowersGetter,
   setTrayResetter,
 } from '../../webapp/src/shell/supplemental-commands/host-command.js';
+import type { LickManager } from '../../webapp/src/scoops/lick-manager.js';
 import type { OffscreenLeaderSyncBridgeHandle } from './leader-sync-bridge.js';
 import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
 import type { LeaderTrayResetRequestMsg, LeaderTrayResetResponseMsg } from './messages.js';
@@ -107,6 +108,9 @@ export interface StartExtensionLeaderTrayOptions {
   log: Logger;
   leaderBridge: OffscreenLeaderSyncBridgeHandle;
 
+  /** Offscreen LickManager — used to route follower-forwarded licks into the leader's cone. */
+  lickManager: LickManager;
+
   /** @internal */ _trayLeaderFactory?: (
     cfg: ConstructorParameters<typeof LeaderTrayManager>[0]
   ) => LeaderTrayManager;
@@ -120,7 +124,8 @@ export interface StartExtensionLeaderTrayOptions {
 export function startExtensionLeaderTray(
   options: StartExtensionLeaderTrayOptions
 ): ExtensionLeaderTrayHandle {
-  const { workerBaseUrl, bridge, orchestrator, sharedFs, browser, leaderBridge } = options;
+  const { workerBaseUrl, bridge, orchestrator, sharedFs, browser, leaderBridge, lickManager } =
+    options;
   const refreshIntervalMs = options._refreshIntervalMs ?? 5000;
 
   let sync!: LeaderSyncManager;
@@ -176,6 +181,12 @@ export function startExtensionLeaderTray(
           error: err instanceof Error ? err.message : String(err),
         });
       });
+    },
+    onForwardedLick: (event) => {
+      // Leader-side: route the forwarded lick through our own LickManager
+      // so it hits defaultLickEventHandler → formatLickEventForCone (with
+      // the stamped origin label) → the cone.
+      lickManager.emitEvent(event);
     },
     onFollowerMessage: (text, messageId, attachments) => {
       const activeJid = getActiveJid();

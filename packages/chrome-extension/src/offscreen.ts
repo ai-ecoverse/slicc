@@ -489,6 +489,7 @@ async function init(): Promise<void> {
         browser,
         log,
         leaderBridge,
+        lickManager,
       });
 
       // REGRESSION-SENSITIVE SITE: clearing `activeTrayRuntimeKey` and
