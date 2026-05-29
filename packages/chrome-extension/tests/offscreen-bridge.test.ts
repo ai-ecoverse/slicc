@@ -1416,4 +1416,21 @@ describe('OffscreenBridge follower-forwarding bridge', () => {
     await (bridge as any).handlePanelMessage({ type: 'inject-forwarded-lick', event });
     expect(emitEvent).toHaveBeenCalledWith(event);
   });
+
+  it('inject-forwarded-lick is a no-op (no throw) when the worker LickManager is absent', async () => {
+    delete (globalThis as any).__slicc_lickManager;
+    await expect(
+      (bridge as any).handlePanelMessage({
+        type: 'inject-forwarded-lick',
+        event: { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: {} },
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it('set-follower-forwarding is a no-op (no throw) when the worker LickManager is absent', async () => {
+    delete (globalThis as any).__slicc_lickManager;
+    await expect(
+      (bridge as any).handlePanelMessage({ type: 'set-follower-forwarding', enabled: true })
+    ).resolves.toBeUndefined();
+  });
 });

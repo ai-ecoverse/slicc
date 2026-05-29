@@ -1263,7 +1263,12 @@ export class OffscreenBridge implements KernelFacade {
         const lm = (globalThis as Record<string, unknown>).__slicc_lickManager as
           | { setForwarder(fn: ((e: ForwardedLickEvent) => void) | null): void }
           | undefined;
-        if (!lm) break;
+        if (!lm) {
+          console.warn(
+            '[offscreen-bridge] set-follower-forwarding ignored: worker LickManager unavailable'
+          );
+          break;
+        }
         if (msg.enabled) {
           lm.setForwarder((event) => this.emit({ type: 'forward-lick', event }));
         } else {
@@ -1275,10 +1280,19 @@ export class OffscreenBridge implements KernelFacade {
       case 'inject-forwarded-lick': {
         // Standalone leader: route a follower-forwarded lick into the
         // worker's LickManager (→ defaultLickEventHandler → cone).
+        // Re-emitting through emitEvent is TERMINAL here only because a
+        // leader never has a forwarder installed (see set-follower-forwarding).
         const lm = (globalThis as Record<string, unknown>).__slicc_lickManager as
           | { emitEvent(e: ForwardedLickEvent): void }
           | undefined;
-        lm?.emitEvent(msg.event);
+        if (!lm) {
+          console.warn(
+            '[offscreen-bridge] inject-forwarded-lick dropped: worker LickManager unavailable',
+            { type: msg.event.type }
+          );
+          break;
+        }
+        lm.emitEvent(msg.event);
         break;
       }
 

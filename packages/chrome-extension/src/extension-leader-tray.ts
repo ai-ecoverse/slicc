@@ -190,7 +190,8 @@ export function startExtensionLeaderTray(
     onForwardedLick: (event) => {
       // Leader-side: route the forwarded lick through our own LickManager
       // so it hits defaultLickEventHandler → formatLickEventForCone (with
-      // the stamped origin label) → the cone.
+      // the stamped origin label) → the cone. Terminal (no re-forward) only
+      // because a leader never has a forwarder installed.
       lickManager.emitEvent(event);
     },
     onFollowerMessage: (text, messageId, attachments) => {
