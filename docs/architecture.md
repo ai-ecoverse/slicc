@@ -14,8 +14,8 @@ SLICC runs in multiple runtime environments ("floats"):
   - `onLeaderReady` callback POSTs join info to localhost `/api/cloud-status`
   - `/api/leader-restart` recovers a stuck leader via CDP `Page.reload()`
   - `SLICC_TRAY_WORKER_BASE_URL` env drives `/api/runtime-config`
-  - Substrate abstraction: `packages/node-server/src/cloud/substrate.ts` defines `SandboxSubstrate`; MVP impl at `cloud/substrates/e2b.ts`.
-  - Template: `packages/dev-tools/e2b-template/` (Dockerfile + e2b.toml + start.sh + build/verify scripts).
+  - Substrate abstraction: `SandboxSubstrate` interface lives in `@slicc/cloud-core` (`packages/cloud-core/src/substrate.ts`); MVP impl at `packages/cloud-core/src/substrates/e2b.ts`. Node-server and the worker both consume cloud-core; `packages/node-server/src/cloud/` is thin adapter glue.
+  - Template: `packages/dev-tools/e2b-template/` — `template.ts` (e2b TypeScript template definition), `start.sh`, `scripts/build-template.sh`, `scripts/verify-template.sh`, `runtime-package.json`, and `README.md`.
 
 ## Layer Stack Table
 

@@ -6,6 +6,7 @@ Platform-agnostic primitives shared across `@slicc/webapp`, `@slicc/node-server`
 
 - `secret-masking.ts` — HMAC-SHA256 masking, domain matching, scrubbing.
 - `secrets-pipeline.ts` — stateful unmask/scrub class; Basic-auth-aware, URL-credential-aware, byte-safe body unmask.
+- `oauth-extra-domains-storage.ts` — pure-JS read/write helpers over the `slicc_oauth_extra_domains` localStorage key. Lets the extension options page (`secrets.html`) share the per-provider extra-domains store with the webapp's `provider-settings.ts` without dragging in the heavier provider module.
 
 ## Conventions
 
