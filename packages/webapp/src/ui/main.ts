@@ -2582,8 +2582,12 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         return null;
       }
     },
-    onSprinkleLick: (sprinkleName: string, body: unknown, targetScoop?: string) =>
-      client.sendSprinkleLick(sprinkleName, body, targetScoop),
+    onSprinkleLick: (
+      sprinkleName: string,
+      body: unknown,
+      targetScoop?: string,
+      originLabel?: string
+    ) => client.sendSprinkleLick(sprinkleName, body, targetScoop, originLabel),
     onForwardedLick: (event) => client.sendForwardedLick(event),
     onFollowerMessage: (text, messageId, attachments) => {
       layout.panels.chat.addUserMessage(text, attachments);

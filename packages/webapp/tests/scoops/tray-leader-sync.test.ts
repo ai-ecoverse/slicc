@@ -2033,23 +2033,24 @@ describe('LeaderSyncManager', () => {
       expect(sent[0].error).toBe('disk full');
     });
 
-    it('sprinkle.lick invokes onSprinkleLick with name, body, and targetScoop', () => {
+    it('sprinkle.lick invokes onSprinkleLick with name, body, targetScoop, and origin label', () => {
       const onSprinkleLick = vi.fn();
       const { manager } = createManager({ onSprinkleLick });
       const channel = new FakeChannel();
-      manager.addFollower('b1', channel);
+      manager.addFollower('b1', channel, { runtime: 'slicc-ios' });
 
       channel.simulateMessage({
         type: 'sprinkle.lick',
         sprinkleName: 'welcome',
-        body: { action: 'click', data: { x: 1 } },
+        body: { action: 'click' },
         targetScoop: 'scoop-1',
       });
 
       expect(onSprinkleLick).toHaveBeenCalledWith(
         'welcome',
-        { action: 'click', data: { x: 1 } },
-        'scoop-1'
+        { action: 'click' },
+        'scoop-1',
+        'iOS follower'
       );
     });
 

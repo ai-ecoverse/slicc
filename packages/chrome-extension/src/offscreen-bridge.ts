@@ -40,6 +40,7 @@ import { createLogger } from '../../../packages/webapp/src/core/logger.js';
 import { getLeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
 import { getFollowerTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-follower-status.js';
 import { HIDDEN_TOOL_NAMES } from '../../../packages/webapp/src/scoops/hidden-tools.js';
+import { formatLickEventForCone } from '../../../packages/webapp/src/scoops/lick-formatting.js';
 import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
 import { toolUIRegistry } from '../../../packages/webapp/src/tools/tool-ui.js';
 import type { AgentEvent, ChatMessage } from '../../../packages/webapp/src/ui/types.js';
@@ -674,7 +675,8 @@ export class OffscreenBridge implements KernelFacade {
   async routeSprinkleLick(
     sprinkleName: string,
     body: unknown,
-    targetScoop?: string
+    targetScoop?: string,
+    originLabel?: string
   ): Promise<void> {
     if (!this.orchestrator) return;
     const scoops = this.orchestrator.getScoops();
@@ -691,7 +693,16 @@ export class OffscreenBridge implements KernelFacade {
     }
     if (!target) return;
     const msgId = `sprinkle-${sprinkleName}-${Date.now()}`;
-    const content = `[Sprinkle Event: ${sprinkleName}]\n\`\`\`json\n${JSON.stringify(body, null, 2)}\n\`\`\``;
+    const formatted = formatLickEventForCone({
+      type: 'sprinkle',
+      sprinkleName,
+      timestamp: new Date().toISOString(),
+      body,
+      originLabel,
+    } as Parameters<typeof formatLickEventForCone>[0]);
+    const content =
+      formatted?.content ??
+      `[Sprinkle Event: ${sprinkleName}]\n\`\`\`json\n${JSON.stringify(body, null, 2)}\n\`\`\``;
     const channelMsg: ChannelMessage = {
       id: msgId,
       chatJid: target.jid,
@@ -1226,7 +1237,12 @@ export class OffscreenBridge implements KernelFacade {
         // shared `routeSprinkleLick` so `startExtensionLeaderTray`'s
         // `onSprinkleLick` callback can share the same routing.
         const lickMsg = msg as any;
-        await this.routeSprinkleLick(lickMsg.sprinkleName, lickMsg.body, lickMsg.targetScoop);
+        await this.routeSprinkleLick(
+          lickMsg.sprinkleName,
+          lickMsg.body,
+          lickMsg.targetScoop,
+          lickMsg.originLabel
+        );
         break;
       }
 

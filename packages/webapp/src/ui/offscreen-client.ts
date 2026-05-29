@@ -373,12 +373,18 @@ export class OffscreenClient implements KernelClientFacade {
   private forwardLickHandler: ((event: LickEvent) => void) | null = null;
 
   /** Send a sprinkle lick event to the offscreen orchestrator. */
-  sendSprinkleLick(sprinkleName: string, body: unknown, targetScoop?: string): void {
+  sendSprinkleLick(
+    sprinkleName: string,
+    body: unknown,
+    targetScoop?: string,
+    originLabel?: string
+  ): void {
     this.send({
       type: 'sprinkle-lick',
       sprinkleName,
       body,
       targetScoop,
+      originLabel,
     } as PanelToOffscreenMessage);
   }
 

@@ -1219,6 +1219,15 @@ describe('OffscreenBridge.routeSprinkleLick', () => {
     // Nothing throws; mock orchestrator on the bound bridge is unaffected.
     expect(mockOrchestrator.handleMessage).not.toHaveBeenCalled();
   });
+
+  it('includes the forwarded origin label in the lick content', async () => {
+    await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'helper', 'iOS follower');
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('Forwarded from iOS follower'),
+      })
+    );
+  });
 });
 
 describe('OffscreenBridge.onAgentEvent tap', () => {

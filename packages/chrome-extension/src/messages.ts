@@ -219,6 +219,8 @@ export interface SprinkleLickMsg {
   body: unknown;
   /** Optional target scoop for routed sprinkle lick events. */
   targetScoop?: string;
+  /** Optional origin label for follower-forwarded licks. */
+  originLabel?: string;
 }
 
 /**

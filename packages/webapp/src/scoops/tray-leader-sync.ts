@@ -48,7 +48,12 @@ export interface LeaderSyncManagerOptions {
   /** Resolve a sprinkle's raw .shtml content for follower-side rendering. */
   readSprinkleContent?: (sprinkleName: string) => Promise<string | null> | string | null;
   /** Forward a sprinkle lick (from a follower's open or inline sprinkle) to the leader's lick router. */
-  onSprinkleLick?: (sprinkleName: string, body: unknown, targetScoop?: string) => void;
+  onSprinkleLick?: (
+    sprinkleName: string,
+    body: unknown,
+    targetScoop?: string,
+    originLabel?: string
+  ) => void;
   /**
    * Handle a generic lick (e.g. `navigate`) forwarded by a follower.
    * The event arrives already validated, scrubbed, and stamped with
@@ -627,19 +632,27 @@ export class LeaderSyncManager {
       case 'sprinkle.fetch':
         void this.handleSprinkleFetch(bootstrapId, message.requestId, message.sprinkleName);
         break;
-      case 'sprinkle.lick':
+      case 'sprinkle.lick': {
         log.info('Follower sprinkle lick received', {
           bootstrapId,
           sprinkleName: message.sprinkleName,
         });
+        const follower = this.followers.get(bootstrapId);
+        const originLabel = labelForFollower(follower?.floatType ?? 'unknown', follower?.runtime);
         try {
-          this.options.onSprinkleLick?.(message.sprinkleName, message.body, message.targetScoop);
+          this.options.onSprinkleLick?.(
+            message.sprinkleName,
+            message.body,
+            message.targetScoop,
+            originLabel
+          );
         } catch (err) {
           log.warn('onSprinkleLick handler threw', {
             error: err instanceof Error ? err.message : String(err),
           });
         }
         break;
+      }
       case 'lick': {
         const incoming = message.event;
         if (!FORWARDABLE_TO_LEADER.has(incoming.type)) {

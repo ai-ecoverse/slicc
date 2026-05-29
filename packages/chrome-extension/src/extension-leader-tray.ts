@@ -94,7 +94,12 @@ export interface ExtensionLeaderBridge {
    *  push new entries, which is all `BufferLike` exposes. */
   getBuffer(jid: string): BufferLike;
   persistScoop(jid: string): void;
-  routeSprinkleLick(name: string, body: unknown, targetScoop?: string): Promise<void>;
+  routeSprinkleLick(
+    name: string,
+    body: unknown,
+    targetScoop?: string,
+    originLabel?: string
+  ): Promise<void>;
   notifyPanelIncomingMessage(jid: string, msg: ChannelMessage): void;
   onAgentEvent(handler: (scoopJid: string, event: AgentEvent) => void): () => void;
 }
@@ -173,8 +178,8 @@ export function startExtensionLeaderTray(
         return null;
       }
     },
-    onSprinkleLick: (name, body, targetScoop) => {
-      void bridge.routeSprinkleLick(name, body, targetScoop).catch((err) => {
+    onSprinkleLick: (name, body, targetScoop, originLabel) => {
+      void bridge.routeSprinkleLick(name, body, targetScoop, originLabel).catch((err) => {
         options.log.error('routeSprinkleLick failed', {
           name,
           targetScoop,
