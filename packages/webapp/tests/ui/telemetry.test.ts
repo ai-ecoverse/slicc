@@ -22,7 +22,9 @@ const mockLocalStorage = {
     delete localStorageMock[key];
   },
   clear: () => {
-    Object.keys(localStorageMock).forEach((k) => delete localStorageMock[k]);
+    Object.keys(localStorageMock).forEach((k) => {
+      delete localStorageMock[k];
+    });
   },
 };
 

@@ -1,5 +1,6 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "plugins": ["./.biome-plugins/no-innerhtml-electron-overlay.grit"],
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -80,18 +81,18 @@
         "noStaticOnlyClass": "off",
         "noUselessFragments": "off",
         "useArrowFunction": "off",
-        "useOptionalChain": "warn",
+        "useOptionalChain": "error",
         "useLiteralKeys": "off",
-        "noImportantStyles": "warn"
+        "noImportantStyles": "error"
       },
       "correctness": {
         "noUnusedVariables": {
-          "level": "warn",
+          "level": "error",
           "options": {
             "ignoreRestSiblings": true
           }
         },
-        "noUnusedImports": "warn",
+        "noUnusedImports": "error",
         "noUnusedFunctionParameters": "off",
         "noUnusedPrivateClassMembers": "off",
         "useExhaustiveDependencies": "off",
@@ -102,7 +103,7 @@
         "noConstAssign": "error",
         "noPrecisionLoss": "error",
         "noSwitchDeclarations": "off",
-        "noUnreachable": "warn"
+        "noUnreachable": "error"
       },
       "style": {
         "useNamingConvention": {
@@ -113,10 +114,12 @@
             "conventions": [
               {
                 "selector": { "kind": "function" },
+                "match": "_*(.+?)_*",
                 "formats": ["camelCase", "PascalCase"]
               },
               {
                 "selector": { "kind": "classMember" },
+                "match": "_*(.+?)_*",
                 "formats": ["camelCase", "PascalCase", "CONSTANT_CASE"]
               },
               {
@@ -137,14 +140,15 @@
               },
               {
                 "selector": { "kind": "variable" },
+                "match": "_*\\$?(.+?)_*",
                 "formats": ["camelCase", "PascalCase", "CONSTANT_CASE"]
               }
             ]
           }
         },
-        "useImportType": "warn",
-        "useExportType": "warn",
-        "useConst": "warn",
+        "useImportType": "error",
+        "useExportType": "error",
+        "useConst": "error",
         "useTemplate": "off",
         "useSingleVarDeclarator": "off",
         "useNumberNamespace": "off",
@@ -187,7 +191,7 @@
         "noCatchAssign": "off",
         "noFallthroughSwitchClause": "off",
         "noTemplateCurlyInString": "off",
-        "useIterableCallbackReturn": "warn"
+        "useIterableCallbackReturn": "error"
       },
       "performance": {
         "noDelete": "off",

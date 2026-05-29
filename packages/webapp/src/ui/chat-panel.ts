@@ -975,7 +975,9 @@ export class ChatPanel {
           if (node.tagName === 'IMG') {
             trackImageView('chat');
           } else {
-            node.querySelectorAll?.('img').forEach(() => trackImageView('chat'));
+            node.querySelectorAll?.('img').forEach(() => {
+              trackImageView('chat');
+            });
           }
         });
       }
@@ -2427,9 +2429,9 @@ export class ChatPanel {
     // If this new message is itself a real user turn, any previously-
     // rendered tool calls should become stale — retint them now.
     if (this.isRealUserTurn(msg)) {
-      this.messagesInner
-        .querySelectorAll('.tool-call, .tool-call-cluster')
-        .forEach((el) => el.classList.add('tool-call--stale'));
+      this.messagesInner.querySelectorAll('.tool-call, .tool-call-cluster').forEach((el) => {
+        el.classList.add('tool-call--stale');
+      });
     }
     const el = this.createMessageEl(msg, showLabel, isLastAssistant);
     // Don't inject an empty wrapper into the flex container — the gap: 16px
@@ -3038,7 +3040,9 @@ export class ChatPanel {
           runs.push(current);
           current = [];
         }
-        grp.querySelectorAll<HTMLElement>(':scope > .tool-call').forEach((el) => current.push(el));
+        grp.querySelectorAll<HTMLElement>(':scope > .tool-call').forEach((el) => {
+          current.push(el);
+        });
       }
       if (current.length > 0) runs.push(current);
 

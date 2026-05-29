@@ -20,7 +20,9 @@ describe('showImagePreview', () => {
 
   afterEach(() => {
     originEl.remove();
-    document.querySelectorAll('.image-preview-overlay').forEach((el) => el.remove());
+    document.querySelectorAll('.image-preview-overlay').forEach((el) => {
+      el.remove();
+    });
   });
 
   it('creates an overlay element in the DOM', () => {

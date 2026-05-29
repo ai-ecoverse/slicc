@@ -59,11 +59,14 @@ function createStyle(doc: Document, css: string): HTMLStyleElement {
   return style;
 }
 
-/**
- * Strip the XML declaration from an SVG string so it can be injected as innerHTML.
- */
 function stripXmlDeclaration(svg: string): string {
   return svg.replace(/<\?xml[^?]*\?>\s*/i, '');
+}
+
+function parseSvgFragment(doc: Document, svg: string): Node {
+  const parsed = new DOMParser().parseFromString(svg, 'image/svg+xml');
+  const root = parsed.documentElement;
+  return doc.importNode(root, true);
 }
 
 const BASE_TOKENS = `
@@ -270,12 +273,12 @@ class SliccElectronLauncherElement extends HTMLElement {
 
     const forDark = doc.createElement('div');
     forDark.className = 'logo-icon logo-for-dark';
-    forDark.innerHTML = stripXmlDeclaration(sliccyDarkSvg);
+    forDark.appendChild(parseSvgFragment(doc, stripXmlDeclaration(sliccyDarkSvg)));
     forDark.setAttribute('aria-hidden', 'true');
 
     const forLight = doc.createElement('div');
     forLight.className = 'logo-icon logo-for-light';
-    forLight.innerHTML = stripXmlDeclaration(sliccyLightSvg);
+    forLight.appendChild(parseSvgFragment(doc, stripXmlDeclaration(sliccyLightSvg)));
     forLight.setAttribute('aria-hidden', 'true');
 
     const tabLabel = doc.createElement('span');

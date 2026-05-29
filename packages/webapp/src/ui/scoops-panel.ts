@@ -69,7 +69,9 @@ export class ScoopsPanel {
     this.eyesSvg = null;
     this.leftPupilGroup = null;
     this.rightPupilGroup = null;
-    document.querySelectorAll('.scoop-fixed-tooltip').forEach((t) => t.remove());
+    document.querySelectorAll('.scoop-fixed-tooltip').forEach((t) => {
+      t.remove();
+    });
   }
 
   /** Toggle the nav rail expanded/collapsed state */
@@ -276,7 +278,9 @@ export class ScoopsPanel {
     if (!this.orchestrator) return;
 
     // Clean up any stale tooltips from previous render
-    document.querySelectorAll('.scoop-fixed-tooltip').forEach((t) => t.remove());
+    document.querySelectorAll('.scoop-fixed-tooltip').forEach((t) => {
+      t.remove();
+    });
 
     const allScoops = this.orchestrator.getScoops();
     const cone = allScoops.find((s) => s.isCone);

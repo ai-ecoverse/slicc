@@ -105,7 +105,9 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
       postMessage: vi.fn(),
     };
     // Trigger the connect handler. handleFetchProxyConnection adds onMessage + onDisconnect listeners.
-    connectListeners.forEach((l) => l(fakePort));
+    connectListeners.forEach((l) => {
+      l(fakePort);
+    });
     await new Promise((r) => setTimeout(r, 30)); // allow async pipeline build
     expect(fakePort.onMessage.addListener).toHaveBeenCalled();
     expect(fakePort.onDisconnect.addListener).toHaveBeenCalled();
@@ -119,7 +121,9 @@ describe('service-worker fetch-proxy.fetch + secrets handlers', () => {
       onDisconnect: { addListener: vi.fn() },
       postMessage: vi.fn(),
     };
-    connectListeners.forEach((l) => l(other));
+    connectListeners.forEach((l) => {
+      l(other);
+    });
     await new Promise((r) => setTimeout(r, 10));
     // We just assert we don't crash and don't attach the fetch-proxy listeners to other ports.
     // The handler should return early for non-fetch-proxy.fetch ports.

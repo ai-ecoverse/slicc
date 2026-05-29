@@ -64,7 +64,9 @@ describe('ChatPanel image preview integration', () => {
 
   afterEach(() => {
     container.remove();
-    document.querySelectorAll('.image-preview-overlay').forEach((el) => el.remove());
+    document.querySelectorAll('.image-preview-overlay').forEach((el) => {
+      el.remove();
+    });
     vi.unstubAllGlobals();
   });
 

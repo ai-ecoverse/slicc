@@ -384,7 +384,9 @@ describe('Voice settings (localStorage)', () => {
 
   beforeEach(() => {
     // Mock localStorage for Node test environment
-    Object.keys(store).forEach((k) => delete store[k]);
+    Object.keys(store).forEach((k) => {
+      delete store[k];
+    });
     (globalThis as any).localStorage = {
       getItem: (key: string) => store[key] ?? null,
       setItem: (key: string, value: string) => {
@@ -393,7 +395,10 @@ describe('Voice settings (localStorage)', () => {
       removeItem: (key: string) => {
         delete store[key];
       },
-      clear: () => Object.keys(store).forEach((k) => delete store[k]),
+      clear: () =>
+        Object.keys(store).forEach((k) => {
+          delete store[k];
+        }),
     };
   });
 

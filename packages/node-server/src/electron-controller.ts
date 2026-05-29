@@ -826,7 +826,9 @@ export class ElectronOverlayInjector {
                   continue;
                 }
                 if (Array.isArray(value)) {
-                  value.forEach((v) => responseHeaders.push({ name, value: v }));
+                  value.forEach((v) => {
+                    responseHeaders.push({ name, value: v });
+                  });
                 } else if (value) {
                   responseHeaders.push({ name, value });
                 }

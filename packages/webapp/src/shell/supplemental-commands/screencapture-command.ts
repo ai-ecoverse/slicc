@@ -93,7 +93,9 @@ async function captureLocally(
     });
     return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType };
   } finally {
-    stream.getTracks().forEach((t) => t.stop());
+    stream.getTracks().forEach((t) => {
+      t.stop();
+    });
   }
 }
 

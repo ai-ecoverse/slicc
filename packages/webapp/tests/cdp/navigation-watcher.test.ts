@@ -54,7 +54,9 @@ class MockCDPTransport implements CDPTransport {
     return {};
   }
   emit(event: string, params: Record<string, unknown>): void {
-    this.listeners.get(event)?.forEach((l) => l(params));
+    this.listeners.get(event)?.forEach((l) => {
+      l(params);
+    });
   }
 }
 

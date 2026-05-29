@@ -34,7 +34,9 @@ function installBroadcastChannelPolyfill(): { cleanup: () => void } {
       if (!peers) return;
       for (const peer of peers) {
         if (peer === this) continue;
-        peer.listeners.forEach((cb) => cb({ data }));
+        peer.listeners.forEach((cb) => {
+          cb({ data });
+        });
         peer.onmessage?.({ data });
       }
     }
