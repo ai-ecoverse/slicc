@@ -27,6 +27,7 @@ import type { CDPTransport } from '../cdp/transport.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
+import type { LickEvent } from './lick-manager.js';
 import {
   setFollowerTrayRuntimeStatus,
   getFollowerTrayRuntimeStatus,
@@ -414,7 +415,19 @@ export class FollowerSyncManager implements AgentHandle {
 
   /** Forward a sprinkle lick (from a follower-rendered sprinkle) to the leader. */
   sendSprinkleLick(sprinkleName: string, body: unknown, targetScoop?: string): void {
-    this.sync.send({ type: 'sprinkle.lick', sprinkleName, body, targetScoop });
+    const ok = this.sync.send({ type: 'sprinkle.lick', sprinkleName, body, targetScoop });
+    if (!ok) log.warn('sendSprinkleLick dropped: tray channel closed', { sprinkleName });
+  }
+
+  /**
+   * Forward a generic lick (e.g. `navigate`) to the leader's agent.
+   * Returns false (and drops) if the channel is closed/failed — never
+   * falls back to local handling (that is the phantom-cone bug).
+   */
+  forwardLick(event: LickEvent): boolean {
+    const ok = this.sync.send({ type: 'lick', event });
+    if (!ok) log.warn('forwardLick dropped: tray channel closed', { type: event.type });
+    return ok;
   }
 
   /** Invalidate the cached .shtml content for one sprinkle (or all). */
