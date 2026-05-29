@@ -34,6 +34,43 @@ export function assembleBundle({ model, selectedProviderIds, allAccounts, secret
   return { model, accounts, secrets };
 }
 
+// Explain which selected entries assembleBundle will silently drop, so the
+// dashboard can warn the user instead of letting an item that's visible in the
+// UI vanish from the cone. Returns human-readable strings (empty = nothing dropped).
+export function bundleDropWarnings({ selectedProviderIds, allAccounts, secretRows }) {
+  const warnings = [];
+  const selected = new Set(selectedProviderIds);
+  const credentialLess = allAccounts
+    .filter((a) => selected.has(a.providerId) && !(a.accessToken || a.apiKey))
+    .map((a) => a.providerId);
+  if (credentialLess.length > 0) {
+    warnings.push(
+      `Skipping ${credentialLess.join(', ')}: no credential (re-connect the provider first).`
+    );
+  }
+  // A blank row (every field empty) is an unused placeholder, not an error.
+  // Flag only rows the user partially filled but left missing name/value/domain.
+  const incomplete = secretRows
+    .map((r) => ({
+      name: (r.name || '').trim(),
+      value: r.value || '',
+      domains: (r.domains || '')
+        .split(',')
+        .map((d) => d.trim())
+        .filter(Boolean),
+    }))
+    .filter(
+      (r) => (r.name || r.value || r.domains.length) && !(r.name && r.value && r.domains.length)
+    )
+    .map((r) => r.name || '(unnamed)');
+  if (incomplete.length > 0) {
+    warnings.push(
+      `Skipping incomplete secret${incomplete.length > 1 ? 's' : ''} ${incomplete.join(', ')}: each needs a name, value, and at least one domain.`
+    );
+  }
+  return warnings;
+}
+
 export function validateModelHasAccount(model, selectedProviderIds, authOptionalProviders) {
   const provider = model.split(':')[0];
   if (authOptionalProviders.includes(provider)) return true;

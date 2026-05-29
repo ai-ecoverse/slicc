@@ -1,4 +1,9 @@
-import { assembleBundle, validateModelHasAccount, assembleDelta } from './cone-config-client.js';
+import {
+  assembleBundle,
+  validateModelHasAccount,
+  assembleDelta,
+  bundleDropWarnings,
+} from './cone-config-client.js';
 
 const TOKEN_KEY = 'cloud-ims-token';
 const TOKEN_EXP_KEY = 'cloud-ims-token-exp';
@@ -483,6 +488,15 @@ async function showManagePanel(li, sandboxId) {
         // In a more refined UX, we could show checkboxes for each account
         const upsertAccounts = allAccounts;
 
+        // Same warn-don't-block surface as create: assembleDelta drops
+        // credential-less accounts / domain-less secrets, so tell the user.
+        const dropWarnings = bundleDropWarnings({
+          selectedProviderIds: upsertAccounts.map((a) => a.providerId),
+          allAccounts: upsertAccounts,
+          secretRows: upsertSecretRows,
+        });
+        if (dropWarnings.length > 0) showToast(dropWarnings.join(' '));
+
         const coneConfigDelta = assembleDelta({
           model: newModel,
           upsertAccounts,
@@ -633,6 +647,11 @@ createBtn.addEventListener('click', async () => {
     showToast('Selected model needs a connected account for its provider.');
     return;
   }
+
+  // Warn (don't block) about selected entries that will be dropped as unusable,
+  // so a credential-less account or domain-less secret doesn't vanish silently.
+  const warnings = bundleDropWarnings({ selectedProviderIds, allAccounts, secretRows });
+  if (warnings.length > 0) showToast(warnings.join(' '));
 
   const coneConfig = assembleBundle({ model, selectedProviderIds, allAccounts, secretRows });
 

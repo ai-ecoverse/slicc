@@ -24,10 +24,13 @@ if [ -n "$SLICC_SECRETS_ENV_B64" ]; then
   unset SLICC_SECRETS_ENV_B64
 elif [ -n "$ADOBE_IMS_TOKEN" ] && [ ! -f /slicc/secrets.env ]; then
   # Back-compat: older worker images only pass ADOBE_IMS_TOKEN.
-  {
+  if ! {
     printf 'ADOBE_IMS_TOKEN=%s\n' "$ADOBE_IMS_TOKEN"
     printf 'ADOBE_IMS_TOKEN_DOMAINS=%s\n' "$ADOBE_IMS_TOKEN_DOMAINS"
-  } > /slicc/secrets.env
+  } > /slicc/secrets.env; then
+    echo "FATAL: failed to write /slicc/secrets.env (back-compat path)" >&2
+    exit 1
+  fi
 fi
 # The bearer now lives in /slicc/secrets.env; don't leave it in node-server's
 # process env (printenv / /proc/self/environ) for the cone's lifetime.

@@ -3,6 +3,7 @@ import {
   assembleBundle,
   validateModelHasAccount,
   assembleDelta,
+  bundleDropWarnings,
 } from '../../cloud/cone-config-client.js';
 
 describe('assembleBundle', () => {
@@ -45,6 +46,46 @@ describe('assembleBundle', () => {
       secretRows: [],
     });
     expect(bundle.accounts).toEqual([{ providerId: 'anthropic', kind: 'apikey', apiKey: 'k' }]);
+  });
+});
+
+describe('bundleDropWarnings (surface what assembleBundle silently drops)', () => {
+  it('returns no warnings when every selected entry is usable', () => {
+    expect(
+      bundleDropWarnings({
+        selectedProviderIds: ['anthropic'],
+        allAccounts: [{ providerId: 'anthropic', apiKey: 'k', accessToken: '' }],
+        secretRows: [{ name: 'OK', value: 'v', domains: 'x.com' }],
+      })
+    ).toEqual([]);
+  });
+
+  it('warns about a selected account with no credential', () => {
+    const w = bundleDropWarnings({
+      selectedProviderIds: ['adobe', 'anthropic'],
+      allAccounts: [
+        { providerId: 'adobe', apiKey: '', accessToken: '' },
+        { providerId: 'anthropic', apiKey: 'k', accessToken: '' },
+      ],
+      secretRows: [],
+    });
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain('adobe');
+    expect(w[0]).not.toContain('anthropic'); // the usable one isn't flagged
+  });
+
+  it('warns about a partially-filled secret row but ignores a fully-blank row', () => {
+    const w = bundleDropWarnings({
+      selectedProviderIds: [],
+      allAccounts: [],
+      secretRows: [
+        { name: 'NO_DOM', value: 'v', domains: '' }, // incomplete → warn
+        { name: '', value: '', domains: '' }, // blank placeholder → ignored
+        { name: 'OK', value: 'v', domains: 'x.com' }, // usable → ignored
+      ],
+    });
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain('NO_DOM');
   });
 });
 

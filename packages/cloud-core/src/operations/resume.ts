@@ -245,6 +245,9 @@ const RELOAD_CMD =
 // window like the leader kick. Throws if it never succeeds — a stale fetch-proxy
 // would silently serve old flat secrets.
 async function reloadSecretsProxyUntilReady(handle: SandboxHandle): Promise<void> {
+  // Track why the last attempt didn't succeed so the exhaustion error is
+  // actionable (HTTP 503 cold-start vs. a connection-level curl failure).
+  let lastError = 'no attempt made';
   for (let i = 0; i < 5; i++) {
     const result = await handle.run(RELOAD_CMD);
     if (result.exitCode === 0) {
@@ -256,11 +259,14 @@ async function reloadSecretsProxyUntilReady(handle: SandboxHandle): Promise<void
           `/api/secrets/reload returned unexpected status ${status}`
         );
       }
+      lastError = `HTTP ${status}`;
+    } else {
+      lastError = `curl exit ${result.exitCode}: ${result.stderr.trim()}`;
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
   throw new CloudError(
     'INTERNAL',
-    'Failed to reload secrets proxy after 5 retries (changed secrets may be stale)'
+    `Failed to reload secrets proxy after 5 retries (changed secrets may be stale; last: ${lastError})`
   );
 }
