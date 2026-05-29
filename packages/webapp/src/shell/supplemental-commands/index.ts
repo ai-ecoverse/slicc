@@ -10,9 +10,12 @@ import { createOpenCommand } from './open-command.js';
 import { createPdftkCommand } from './pdftk-command.js';
 import { createPlaywrightCommand, PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
 import { createPython3LikeCommand } from './python-command.js';
+import { createEsbuildCommand } from './esbuild-command.js';
 import { createFfmpegCommand } from './ffmpeg-command.js';
 import { createServeCommand } from './serve-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
+import { createTscCommand } from './tsc-command.js';
+import { createTestCommand } from './test-command.js';
 import { createUnameCommand } from './uname-command.js';
 import { createManCommand } from './man-command.js';
 import { createUnzipCommand } from './unzip-command.js';
@@ -44,6 +47,7 @@ import { createAgentCommand } from './agent-command.js';
 import { createDiscoverCommand } from './discover-command.js';
 import { createPsCommand } from './ps-command.js';
 import { createKillCommand } from './kill-command.js';
+import { createBiomeCommand } from './biome-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import type { ProcessManager } from '../../kernel/process-manager.js';
@@ -89,9 +93,13 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createUnzipCommand(),
     createSqliteCommand('sqlite3'),
     createSqliteCommand('sqllite'),
+    createTscCommand(),
+    createTestCommand(),
+    createBiomeCommand(),
     createNodeCommand(),
     createPython3LikeCommand('python3'),
     createPython3LikeCommand('python'),
+    createEsbuildCommand(),
     createFfmpegCommand(),
     createWebhookCommand(),
     createWebsocatCommand(),

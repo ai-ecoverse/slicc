@@ -20,6 +20,8 @@ type InitSqlJs = (options?: { locateFile?: (file: string) => string }) => Promis
 
 const SQLJS_WASM_CDN = 'https://sql.js.org/dist/';
 
+export type TypeScriptModule = typeof import('typescript');
+
 export function resolvePinnedPackageVersion(packageName: string, versionSpec: unknown): string {
   if (typeof versionSpec !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(versionSpec)) {
     throw new Error(`${packageName} must use an exact semver version in package.json`);
@@ -30,6 +32,7 @@ export function resolvePinnedPackageVersion(packageName: string, versionSpec: un
 export const NODE_VERSION = 'v20.0.0-js-shim';
 
 let sqlJsPromise: Promise<SqlJsModule> | null = null;
+let typeScriptPromise: Promise<TypeScriptModule> | null = null;
 
 export function basename(path: string): string {
   const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
@@ -151,4 +154,22 @@ export async function getSqlJs(): Promise<SqlJsModule> {
     })();
   }
   return sqlJsPromise;
+}
+
+/**
+ * Lazy singleton for the bundled `typescript` package. Pure JS (no
+ * WASM init), so the loader only has to handle ESM/CJS interop:
+ * Node + Vite both expose the module as a namespace whose `default`
+ * is the real `ts` API surface. Shared with the upcoming `test`
+ * command so a single transpiler instance powers both `tsc` and
+ * `.ts` test files.
+ */
+export async function getTypeScript(): Promise<TypeScriptModule> {
+  if (!typeScriptPromise) {
+    typeScriptPromise = (async () => {
+      const mod = await import('typescript');
+      return ((mod as { default?: TypeScriptModule }).default ?? mod) as TypeScriptModule;
+    })();
+  }
+  return typeScriptPromise;
 }

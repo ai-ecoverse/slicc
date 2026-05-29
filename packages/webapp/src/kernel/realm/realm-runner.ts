@@ -135,7 +135,14 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
     return { stdout: '', stderr: `realm-runner: ${message}\n`, exitCode: 1 };
   }
 
-  const host: RealmHostHandle = attachRealmHost(realm.controlPort, opts.ctx);
+  // Stamp `scoopJid` onto the host so the `wsObserve` op can tag
+  // every subscriber with its owning scoop. Without this thread,
+  // `Orchestrator.unregisterScoop → dropForScoop(jid)` matches no
+  // subscribers and page routers keep forwarding after the scoop is
+  // gone. The owner record is the single trusted source.
+  const host: RealmHostHandle = attachRealmHost(realm.controlPort, opts.ctx, {
+    ...(opts.owner.scoopJid !== undefined ? { scoopJid: opts.owner.scoopJid } : {}),
+  });
 
   return new Promise<RealmResult>((resolve) => {
     let settled = false;

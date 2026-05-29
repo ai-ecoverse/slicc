@@ -1,0 +1,302 @@
+/**
+ * Tests for `browser.fetch(tab, url, opts)` — Wave 3.1. Verifies the
+ * page-context script the bridge injects via `evalAsync` is a single
+ * self-contained function (no temp-file, no base64 chunking, no
+ * realm-side closures) and that the response shape matches the spec.
+ *
+ * The realm-side bridge calls `browser.evalAsync(targetId, script)`
+ * under the hood. Tests capture the injected script via a custom
+ * mock `evaluate`, returning a synthetic structured response so the
+ * round-trip through `unwrapEvalResult` is exercised end-to-end.
+ */
+
+import { describe, it, expect } from 'vitest';
+import type { CommandContext, IFileSystem, FsStat } from 'just-bash';
+import type { BrowserAPI } from '../../../src/cdp/browser-api.js';
+import { RealmRpcClient, type RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
+import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
+import {
+  buildBrowserFetchScript,
+  type BrowserFetchResult,
+} from '../../../src/kernel/realm/js-realm-shared.js';
+
+describe('buildBrowserFetchScript — page-context script shape', () => {
+  it('emits a single self-calling async IIFE (no temp file, no base64)', () => {
+    const script = buildBrowserFetchScript('/api/x');
+    expect(script.startsWith('(async () => {')).toBe(true);
+    expect(script.endsWith('})()')).toBe(true);
+    expect(script).toContain('await fetch(');
+    // Defensive: the dance the spec calls out as fragile (temp-file
+    // write + base64 chunking) must not appear in the injected page
+    // script. Catches accidental regressions to the old shape.
+    expect(script).not.toMatch(/writeFile|fs\.|base64|btoa\(|atob\(/);
+    // Single function — no semicolons separating top-level
+    // statements outside the IIFE.
+    expect(script.match(/^\(async \(\) => \{/g)?.length).toBe(1);
+  });
+
+  it('defaults credentials to "include" so session cookies travel', () => {
+    const script = buildBrowserFetchScript('/api/x');
+    expect(script).toContain('"credentials":"include"');
+  });
+
+  it('honors explicit credentials override (same-origin / omit)', () => {
+    expect(buildBrowserFetchScript('/x', { credentials: 'same-origin' })).toContain(
+      '"credentials":"same-origin"'
+    );
+    expect(buildBrowserFetchScript('/x', { credentials: 'omit' })).toContain(
+      '"credentials":"omit"'
+    );
+  });
+
+  it('serializes a plain-object body as JSON and sets Content-Type', () => {
+    const script = buildBrowserFetchScript('/api/conversations.list', {
+      method: 'POST',
+      body: { channel: 'C123' },
+    });
+    expect(script).toContain('"method":"POST"');
+    expect(script).toContain('"Content-Type":"application/json"');
+    expect(script).toContain('"body":"{\\"channel\\":\\"C123\\"}"');
+  });
+
+  it('preserves caller-provided Content-Type for non-object bodies', () => {
+    const script = buildBrowserFetchScript('/api/x', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'a=1&b=2',
+    });
+    // String body passes through verbatim, no auto Content-Type.
+    expect(script).toContain('"body":"a=1&b=2"');
+    expect(script).toContain('"content-type":"application/x-www-form-urlencoded"');
+    expect(script).not.toContain('"Content-Type":"application/json"');
+  });
+
+  it('preserves custom request headers in both directions', () => {
+    const script = buildBrowserFetchScript('/api/x', {
+      headers: { Authorization: 'Bearer abc', 'X-Custom': 'v' },
+    });
+    expect(script).toContain('"Authorization":"Bearer abc"');
+    expect(script).toContain('"X-Custom":"v"');
+  });
+
+  it('safely escapes adversarial url + body content via JSON encoding', () => {
+    // Defends against a malicious url breaking out of the injected
+    // string. JSON.stringify is the only escape boundary.
+    const url = '"</script><script>alert(1)</script>';
+    const script = buildBrowserFetchScript(url, { body: { x: '"); alert(1); //' } });
+    // Both must round-trip through JSON.parse(<extracted>) cleanly.
+    const urlMatch = /await fetch\((".*?"),/.exec(script);
+    expect(urlMatch).not.toBeNull();
+    expect(JSON.parse(urlMatch![1])).toBe(url);
+  });
+
+  it('returns parsed JSON / text / headers via the page-side script', async () => {
+    // Execute the script in-process: it only references `fetch` and
+    // a Response-like surface, so a thin stub is enough to drive
+    // the entire response-assembly branch without a real browser.
+    const fakeResponse = {
+      ok: true,
+      status: 200,
+      headers: new Map<string, string>([['content-type', 'application/json']]),
+    };
+    const headersStub = {
+      forEach: (cb: (v: string, k: string) => void) => {
+        for (const [k, v] of fakeResponse.headers) cb(v, k);
+      },
+      get: (k: string) => fakeResponse.headers.get(k.toLowerCase()) ?? null,
+    };
+    const captured: { url?: string; init?: RequestInit } = {};
+    const fakeFetch = async (u: string, init: RequestInit) => {
+      captured.url = u;
+      captured.init = init;
+      return {
+        ok: fakeResponse.ok,
+        status: fakeResponse.status,
+        headers: headersStub,
+        json: async () => ({ hello: 'world' }),
+        text: async () => '{"hello":"world"}',
+      };
+    };
+    const script = buildBrowserFetchScript('/api/x', {
+      method: 'POST',
+      body: { channel: 'C1' },
+    });
+    const result = (await new Function('fetch', `return ${script};`)(
+      fakeFetch
+    )) as BrowserFetchResult;
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe(200);
+    expect(result.headers).toEqual({ 'content-type': 'application/json' });
+    expect(result.body).toEqual({ hello: 'world' });
+    expect(captured.url).toBe('/api/x');
+    expect(captured.init?.method).toBe('POST');
+    expect((captured.init?.headers as Record<string, string>)['Content-Type']).toBe(
+      'application/json'
+    );
+    expect(captured.init?.credentials).toBe('include');
+    expect(captured.init?.body).toBe('{"channel":"C1"}');
+  });
+
+  it('falls back to text when content-type is not JSON', async () => {
+    const headersStub = {
+      forEach: (cb: (v: string, k: string) => void) => cb('text/html', 'content-type'),
+      get: (k: string) => (k.toLowerCase() === 'content-type' ? 'text/html' : null),
+    };
+    const fakeFetch = async () => ({
+      ok: true,
+      status: 200,
+      headers: headersStub,
+      text: async () => '<html></html>',
+      json: async () => {
+        throw new Error('should not be called');
+      },
+    });
+    const script = buildBrowserFetchScript('/page');
+    const result = (await new Function('fetch', `return ${script};`)(
+      fakeFetch
+    )) as BrowserFetchResult;
+    expect(result.body).toBe('<html></html>');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration: realm-side bridge → RPC → host → mock browser.evaluate
+// ---------------------------------------------------------------------------
+
+interface PortPair {
+  realm: RealmPortLike;
+  host: RealmPortLike;
+}
+
+function makePortPair(): PortPair {
+  const realmListeners = new Set<(event: MessageEvent) => void>();
+  const hostListeners = new Set<(event: MessageEvent) => void>();
+  const realm: RealmPortLike = {
+    postMessage: (msg) => {
+      for (const h of [...hostListeners]) h({ data: msg } as MessageEvent);
+    },
+    addEventListener: (_t, h) => {
+      realmListeners.add(h);
+    },
+    removeEventListener: (_t, h) => {
+      realmListeners.delete(h);
+    },
+  };
+  const host: RealmPortLike = {
+    postMessage: (msg) => {
+      for (const h of [...realmListeners]) h({ data: msg } as MessageEvent);
+    },
+    addEventListener: (_t, h) => {
+      hostListeners.add(h);
+    },
+    removeEventListener: (_t, h) => {
+      hostListeners.delete(h);
+    },
+  };
+  return { realm, host };
+}
+
+function makeNoopFs(): IFileSystem {
+  const stub = async (): Promise<never> => {
+    throw new Error('not implemented');
+  };
+  return {
+    readFile: stub,
+    readFileBuffer: stub,
+    writeFile: stub,
+    appendFile: stub,
+    exists: async () => false,
+    stat: stub as unknown as (p: string) => Promise<FsStat>,
+    mkdir: stub,
+    readdir: async () => [],
+    rm: stub,
+    cp: stub,
+    mv: stub,
+    resolvePath: (base, p) => (p.startsWith('/') ? p : `${base}/${p}`),
+    getAllPaths: () => [],
+    chmod: stub,
+    symlink: stub,
+    link: stub,
+    readlink: stub,
+    lstat: stub as unknown as (p: string) => Promise<FsStat>,
+    realpath: async (p: string) => p,
+    utimes: stub,
+  } as unknown as IFileSystem;
+}
+
+describe('realm RPC: browser.fetch — round-trip through evalAsync', () => {
+  it('captures the injected script and returns the structured response', async () => {
+    const captured: string[] = [];
+    const cannedResponse: BrowserFetchResult = {
+      ok: true,
+      status: 201,
+      headers: { 'content-type': 'application/json', 'x-trace': 'abc' },
+      body: { ok: true, channel: 'C123' },
+    };
+    const browser = {
+      async withTab<T>(_targetId: string, fn: () => Promise<T>): Promise<T> {
+        return fn();
+      },
+      async evaluate(expression: string): Promise<unknown> {
+        captured.push(expression);
+        // Return the structured-clone shape browser.fetch promises;
+        // unwrapEvalResult passes objects through untouched.
+        return cannedResponse;
+      },
+    } as unknown as BrowserAPI;
+
+    const ctx = {
+      fs: makeNoopFs(),
+      cwd: '/workspace',
+      env: new Map(),
+      stdin: '',
+    } as CommandContext;
+    const { realm, host } = makePortPair();
+    const handle = attachRealmHost(host, ctx, { browser });
+    const client = new RealmRpcClient(realm);
+    try {
+      // Mirror what `browserBridge.fetch` does internally: build the
+      // page-context script and dispatch through evalAsync.
+      const script = buildBrowserFetchScript('/api/post', {
+        method: 'POST',
+        body: { channel: 'C123' },
+      });
+      const result = await client.call<BrowserFetchResult>('browser', 'evalAsync', ['t1', script]);
+      expect(result).toEqual(cannedResponse);
+      expect(captured).toHaveLength(1);
+      // The script the host evaluated must be exactly the one we built —
+      // no realm-side mutation, no JSON.parse(JSON.parse(...)) ceremony.
+      expect(captured[0]).toBe(script);
+      expect(captured[0]).toContain('await fetch(');
+      expect(captured[0]).toContain('"credentials":"include"');
+    } finally {
+      client.dispose();
+      handle.dispose();
+    }
+  });
+});
+
+describe('sandbox.html ↔ js-realm-shared parity — browser.fetch', () => {
+  it('both surfaces wire browser.fetch through evalAsync', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { fileURLToPath } = await import('node:url');
+    const path = await import('node:path');
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const repoRoot = path.resolve(here, '..', '..', '..', '..', '..');
+    const [sandbox, shared] = await Promise.all([
+      readFile(path.join(repoRoot, 'packages/chrome-extension/sandbox.html'), 'utf8'),
+      readFile(path.join(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'), 'utf8'),
+    ]);
+    // Both must expose `fetch:` on the bridge, both must build the
+    // page-context script via a `buildBrowserFetchScript` helper, and
+    // both must dispatch through the `evalAsync` RPC op (no new
+    // browser channel verb introduced).
+    expect(shared).toMatch(/fetch:\s*\(\s*tab/);
+    expect(sandbox).toMatch(/fetch:\s*\(tab/);
+    expect(shared).toMatch(/buildBrowserFetchScript\s*\(/);
+    expect(sandbox).toMatch(/buildBrowserFetchScript\s*\(/);
+    // Default credentials: 'include' is the cross-cutting guarantee.
+    expect(shared).toContain("'include'");
+    expect(sandbox).toContain("'include'");
+  });
+});

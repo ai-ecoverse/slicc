@@ -144,6 +144,8 @@ export class SprinkleRenderer {
         this.bridge.setState(msg.data);
       } else if (msg.type === 'sprinkle-close') {
         this.bridge.close();
+      } else if (msg.type === 'sprinkle-minimize') {
+        this.bridge.minimize();
       } else if (msg.type === 'sprinkle-stop-cone') {
         this.bridge.stopCone();
       } else if (msg.type === 'sprinkle-storage-set') {
@@ -487,6 +489,7 @@ export class SprinkleRenderer {
     setState: function(data) { _state = data; parent.postMessage({ type: 'sprinkle-set-state', data: data }, '*'); },
     getState: function() { return _state; },
     close: function() { parent.postMessage({ type: 'sprinkle-close' }, '*'); },
+    minimize: function() { parent.postMessage({ type: 'sprinkle-minimize' }, '*'); },
     stopCone: function() { parent.postMessage({ type: 'sprinkle-stop-cone' }, '*'); },
     attachImage: function(base64, name, mimeType) { parent.postMessage({ type: 'sprinkle-attach-image', base64: base64, name: name, mimeType: mimeType }, '*'); },
     name: ''
@@ -589,6 +592,8 @@ export class SprinkleRenderer {
         this.bridge.setState(msg.data);
       } else if (msg.type === 'sprinkle-close') {
         this.bridge.close();
+      } else if (msg.type === 'sprinkle-minimize') {
+        this.bridge.minimize();
       } else if (msg.type === 'sprinkle-stop-cone') {
         this.bridge.stopCone();
       } else if (msg.type === 'sprinkle-attach-image') {

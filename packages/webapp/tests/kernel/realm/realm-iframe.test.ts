@@ -211,3 +211,31 @@ describe('createIframeRealm', () => {
     }
   });
 });
+
+describe('sandbox.html ↔ js-realm-shared parity', () => {
+  // Static parity check — sandbox.html is a copy-only bundle asset
+  // (not part of the TS module graph), so changes to the worker
+  // realm's exec/fs surface easily drift from the iframe mirror.
+  // Both files are read as text and scanned for the agreed-upon
+  // tokens; the comment in sandbox.html already declares it's a
+  // mirror, this enforces it.
+  it('sandbox.html exposes exec.spawn matching js-realm-shared.ts', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { fileURLToPath } = await import('node:url');
+    const path = await import('node:path');
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const repoRoot = path.resolve(here, '..', '..', '..', '..', '..');
+    const [sandbox, shared] = await Promise.all([
+      readFile(path.join(repoRoot, 'packages/chrome-extension/sandbox.html'), 'utf8'),
+      readFile(path.join(repoRoot, 'packages/webapp/src/kernel/realm/js-realm-shared.ts'), 'utf8'),
+    ]);
+    // Both surfaces must wire spawn through the same `'exec','spawn'`
+    // RPC tuple so the host's switch case matches in both floats.
+    expect(shared).toMatch(/rpc\.call\(\s*'exec'\s*,\s*'spawn'\s*,/);
+    expect(sandbox).toMatch(/rpcCall\(\s*'exec'\s*,\s*'spawn'\s*,/);
+    // And expose it on the `exec` bridge as `.spawn` so user code
+    // can call `await exec.spawn(['cmd', …])`.
+    expect(shared).toMatch(/spawn:\s*\(argv/);
+    expect(sandbox).toMatch(/execBridge\.spawn\s*=/);
+  });
+});

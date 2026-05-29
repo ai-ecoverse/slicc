@@ -63,9 +63,13 @@ export class MemoryPanel {
         const scoopSection = document.createElement('div');
         scoopSection.className = 'memory-panel__section';
 
+        const memoryPath = scoop.isCone
+          ? '/workspace/CLAUDE.md'
+          : `/scoops/${scoop.folder}/CLAUDE.md`;
+
         const scoopHeader = document.createElement('div');
         scoopHeader.className = 'memory-panel__section-header';
-        scoopHeader.textContent = `${scoop.isCone ? 'Cone' : 'Scoop'}: ${scoop.assistantLabel}`;
+        scoopHeader.textContent = `${scoop.isCone ? 'Cone' : 'Scoop'}: ${scoop.assistantLabel} (${memoryPath})`;
         scoopSection.appendChild(scoopHeader);
 
         const scoopContent = document.createElement('div');
@@ -74,9 +78,6 @@ export class MemoryPanel {
         try {
           const fs = context.getFS();
           if (fs) {
-            const memoryPath = scoop.isCone
-              ? '/workspace/CLAUDE.md'
-              : `/scoops/${scoop.folder}/CLAUDE.md`;
             const content = await fs.readFile(memoryPath, { encoding: 'utf-8' });
             scoopContent.textContent =
               typeof content === 'string' ? content : new TextDecoder().decode(content);

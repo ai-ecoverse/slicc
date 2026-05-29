@@ -32,6 +32,7 @@ import {
 import type { ToolCall } from './types.js';
 import { escapeHtml } from './message-renderer.js';
 import { maskSecrets } from './preview-masking.js';
+import { ansiToHtml } from './ansi.js';
 
 type IconNode = [tag: string, attrs: Record<string, string | number>][];
 
@@ -453,7 +454,7 @@ function renderBashBody(tc: ToolCall): HTMLElement {
   if (tc.result !== undefined) {
     const out = document.createElement('pre');
     out.className = `tool-call__terminal-output${tc.isError ? ' tool-call__terminal-output--error' : ''}`;
-    out.textContent = tc.result;
+    out.innerHTML = ansiToHtml(tc.result);
     body.appendChild(out);
   } else {
     const pending = document.createElement('div');

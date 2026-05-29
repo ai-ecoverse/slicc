@@ -1,6 +1,6 @@
 {
   "name": "sliccy",
-  "version": "3.5.1",
+  "version": "3.16.0",
   "description": "Browser-based coding agent with thin CLI server",
   "license": "Apache-2.0",
   "type": "module",
@@ -25,6 +25,7 @@
   },
   "workspaces": [
     "packages/shared-ts",
+    "packages/cloud-core",
     "packages/webapp",
     "packages/node-server",
     "packages/chrome-extension",
@@ -35,12 +36,12 @@
   "scripts": {
     "dev": "tsx packages/node-server/src/index.ts --dev",
     "dev:electron": "tsx packages/node-server/src/index.ts --dev --electron",
-    "build": "npm run build -w @slicc/shared-ts && npm run build -w @slicc/webapp && npm run build -w @slicc/node-server && npm run build -w @slicc/chrome-extension && npm run build -w @slicc/cloudflare-worker && npm run build -w @slicc/swift-server && npm run build -w @slicc/swift-launcher",
+    "build": "npm run build -w @slicc/shared-ts && npm run build -w @slicc/cloud-core && npm run build -w @slicc/webapp && npm run build -w @slicc/node-server && npm run build -w @slicc/chrome-extension && npm run build -w @slicc/cloudflare-worker && npm run build -w @slicc/swift-server && npm run build -w @slicc/swift-launcher",
     "start": "node dist/node-server/index.js",
     "start:electron": "node dist/node-server/index.js --electron",
     "preflight": "node packages/dev-tools/tools/preflight-deps.mjs",
     "pretypecheck": "npm run preflight",
-    "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.webapp-worker.json",
+    "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.webapp-worker.json && tsc --noEmit -p packages/cloud-core/tsconfig.json",
     "pretest": "npm run preflight",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -59,11 +60,12 @@
     "deadcode:swift": "npm run deadcode -w @slicc/swift-server && npm run deadcode -w @slicc/swift-launcher",
     "package:release": "node dist/node-server/release-package.js",
     "publish:chrome": "node dist/node-server/publish-chrome-web-store.js",
-    "publish:worker": "echo \"$CLOUDFLARE_TURN_API_TOKEN\" | npx wrangler secret put CLOUDFLARE_TURN_API_TOKEN --config packages/cloudflare-worker/wrangler.jsonc && echo \"$GITHUB_CLIENT_SECRET\" | npx wrangler secret put GITHUB_CLIENT_SECRET --config packages/cloudflare-worker/wrangler.jsonc && npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc && MAX_ATTEMPTS=6; for attempt in $(seq 1 \"$MAX_ATTEMPTS\"); do if npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/deployed.test.ts; then exit 0; fi; if [ \"$attempt\" -eq \"$MAX_ATTEMPTS\" ]; then echo \"Deployed smoke test failed after $MAX_ATTEMPTS attempts\"; exit 1; fi; echo \"Deployed smoke test failed on attempt $attempt; waiting for edge propagation before retrying...\"; sleep 15; done",
-    "postinstall": "if [ -d packages/shared-ts ]; then npm run build -w @slicc/shared-ts; fi",
+    "publish:worker": "bash packages/cloudflare-worker/scripts/publish-worker.sh",
+    "postinstall": "if [ -d packages/shared-ts ]; then npm run build -w @slicc/shared-ts; fi && if [ -d packages/cloud-core ]; then npm run build -w @slicc/cloud-core; fi",
     "prepare": "husky"
   },
   "dependencies": {
+    "e2b": "^2.23.0",
     "express": "^5.0.0",
     "pyodide": "0.29.4",
     "ws": "^8.18.0"
@@ -76,19 +78,19 @@
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "^4.1.5",
     "esbuild": "0.28.0",
-    "eslint": "10.3.0",
+    "eslint": "10.4.0",
     "eslint-config-prettier": "10.1.8",
     "globals": "17.6.0",
     "husky": "9.1.7",
     "knip": "^6.11.0",
-    "lint-staged": "17.0.4",
+    "lint-staged": "17.0.5",
     "prettier": "3.8.3",
     "semantic-release": "25.0.3",
-    "tsx": "4.22.0",
+    "tsx": "4.22.3",
     "typescript": "^6.0.0",
-    "typescript-eslint": "8.59.3",
-    "vite": "8.0.13",
-    "vitest": "4.1.6"
+    "typescript-eslint": "8.59.4",
+    "vite": "8.0.14",
+    "vitest": "4.1.7"
   },
   "lint-staged": {
     "**/*.{ts,js,mjs}": [

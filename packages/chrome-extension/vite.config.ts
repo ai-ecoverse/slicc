@@ -12,6 +12,7 @@ import { defineConfig } from 'vite';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { stripBiomeWasmAssetPlugin } from '../webapp/vite-plugins/strip-biome-wasm-asset';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../..');
@@ -83,6 +84,7 @@ export default defineConfig(({ mode }) => ({
     },
   },
   plugins: [
+    stripBiomeWasmAssetPlugin(),
     {
       name: 'stub-pi-node-internals',
       enforce: 'pre' as const,

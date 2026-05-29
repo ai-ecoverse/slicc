@@ -8,6 +8,7 @@
  *   invoke <name> [tool] …     Run a tool through the persisted server.
  *   search <query>             Find cached tools by name/description match.
  *   refresh <name>             Re-fetch tools/apps + AS discovery.
+ *   auth <name>                Re-authenticate (silent renewal → popup fallback).
  *
  * Library modules in `../mcp/` do the heavy lifting; this file only orchestrates
  * persistence, OAuth, and CLI ergonomics (help text, schema-driven flag
@@ -78,12 +79,18 @@ Commands:
   invoke <name> [tool] …     Call a tool through a configured server.
   search <query>             Find cached tools by name/description match.
   refresh <name>             Re-fetch tools/apps and AS metadata.
+  auth <name>                Re-authenticate an MCP server (silent renewal,
+                             with an interactive popup fallback). Use this
+                             when a token has expired; \`refresh\` only
+                             reloads the tool catalog and does not touch
+                             OAuth.
 
 Examples:
   mcp add https://mcp.example.com/sse weather
   mcp list
   mcp invoke weather get-forecast --lat 51.5 --lon -0.12
   mcp search forecast
+  mcp auth weather
   mcp delete weather
 `;
 }
@@ -111,6 +118,8 @@ export function createMcpCommand(deps: McpCommandDeps = {}): Command {
           return await cmdSearch(rest, deps);
         case 'refresh':
           return await cmdRefresh(rest, deps);
+        case 'auth':
+          return await cmdAuth(rest, deps);
         default:
           return err(`mcp: unknown subcommand "${sub}" (try \`mcp --help\`)`);
       }
@@ -789,7 +798,13 @@ async function cmdRefresh(args: string[], deps: McpCommandDeps): Promise<ExecRes
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     return args.length === 0
       ? err('mcp refresh: expected <name>')
-      : ok('usage: mcp refresh <name>\n');
+      : ok(
+          `usage: mcp refresh <name>
+
+Re-fetches the tool catalog and \`apps/list\` for <name>. Does NOT refresh
+OAuth tokens — for OAuth token refresh use \`mcp auth <name>\`.
+`
+        );
   }
   const name = args[0];
   const { ensureMcpProviderRegistered } = await import('../mcp/provider.js');
@@ -799,14 +814,23 @@ async function cmdRefresh(args: string[], deps: McpCommandDeps): Promise<ExecRes
   const entry = await getServer(name, deps.fs);
   if (!entry) return err(`mcp refresh: unknown server "${name}"`);
 
-  const { McpClient } = await import('../mcp/client.js');
+  const { McpClient, McpAuthRequiredError } = await import('../mcp/client.js');
   const client = new McpClient({
     url: entry.url,
     fetchImpl: deps.fetchImpl,
     headers: entry.headers,
     getAuthHeader: entry.auth ? () => getMcpBearerHeader(name) : undefined,
   });
-  await client.initialize();
+  try {
+    await client.initialize();
+  } catch (e) {
+    if (e instanceof McpAuthRequiredError) {
+      return err(
+        `mcp refresh: server "${name}" returned 401 — token may have expired. Run \`mcp auth ${name}\` to re-authenticate.`
+      );
+    }
+    throw e;
+  }
   const tools = await client.toolsList();
   const apps = await client.appsList();
   // Drop any previously persisted `sessionId` — it's per-process state on
@@ -825,6 +849,115 @@ async function cmdRefresh(args: string[], deps: McpCommandDeps): Promise<ExecRes
   return ok(
     `Refreshed "${name}" — tools: ${tools.length}, apps: ${apps.length} (${sprinkles} sprinkle${sprinkles === 1 ? '' : 's'})\n`
   );
+}
+
+// ── auth ────────────────────────────────────────────────────────────
+
+async function cmdAuth(args: string[], deps: McpCommandDeps): Promise<ExecResult> {
+  if (args.includes('--help') || args.includes('-h')) {
+    return ok(`usage: mcp auth <name> [--silent | --interactive]
+
+Re-authenticate an existing MCP server. By default, attempts a silent
+token renewal using the persisted refresh_token; if that returns no
+token, falls back to an interactive popup flow.
+
+Options:
+  -s, --silent        Only attempt silent renewal. Exit non-zero if it
+                      fails (no popup). Useful in scripts.
+  -i, --interactive   Skip silent renewal and open the OAuth popup
+                      directly. Use after revoking a refresh token or
+                      when the AS no longer accepts the cached one.
+`);
+  }
+  const positional = args.filter((a) => !a.startsWith('-'));
+  if (positional.length === 0) {
+    return err('mcp auth: expected <name>');
+  }
+  const name = positional[0];
+  const silent = args.includes('--silent') || args.includes('-s');
+  const interactive = args.includes('--interactive') || args.includes('-i');
+  if (silent && interactive) {
+    return err('mcp auth: --silent and --interactive are mutually exclusive');
+  }
+
+  const { ensureMcpProviderRegistered } = await import('../mcp/provider.js');
+  const registered = await ensureMcpProviderRegistered(name);
+
+  const { getServer } = await import('../mcp/store.js');
+  const entry = await getServer(name, deps.fs);
+  if (!entry) {
+    return err(`mcp auth: unknown server "${name}" (run \`mcp list\` to see configured servers)`);
+  }
+  if (!entry.auth) {
+    return err(`mcp auth: server "${name}" does not use OAuth`);
+  }
+  if (!registered) {
+    // ensureMcpProviderRegistered returned false despite an auth block;
+    // surface a clear error rather than silently failing on the next step.
+    return err(`mcp auth: failed to register provider for "${name}"`);
+  }
+
+  const providerId = `mcp:${name}`;
+  const { getRegisteredProviderConfig } = await import('../../providers/index.js');
+  const cfg = getRegisteredProviderConfig(providerId);
+  if (!cfg) {
+    return err(`mcp auth: provider "${providerId}" is not registered`);
+  }
+
+  if (interactive) {
+    return await runInteractiveAuth(name, cfg, deps);
+  }
+
+  // Default + --silent: try silent renewal first.
+  if (!cfg.onSilentRenew) {
+    if (silent) {
+      return err(
+        `mcp auth: provider "${providerId}" does not support silent renewal; retry without --silent`
+      );
+    }
+    return await runInteractiveAuth(name, cfg, deps);
+  }
+
+  let renewed: string | null = null;
+  try {
+    renewed = await cfg.onSilentRenew();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (silent) {
+      return err(
+        `mcp auth: silent renewal for "${name}" failed (${msg}); retry without --silent to run the interactive flow`
+      );
+    }
+    log.debug('mcp auth: silent renewal threw, falling back to interactive', { name, error: msg });
+  }
+  if (renewed) {
+    return ok(`Re-authenticated "${name}" via silent renewal (provider ${providerId})\n`);
+  }
+  if (silent) {
+    return err(
+      `mcp auth: silent renewal for "${name}" returned no token; retry without --silent to run the interactive flow`
+    );
+  }
+  return await runInteractiveAuth(name, cfg, deps);
+}
+
+async function runInteractiveAuth(
+  name: string,
+  cfg: import('../../providers/types.js').ProviderConfig,
+  deps: McpCommandDeps
+): Promise<ExecResult> {
+  if (!cfg.onOAuthLogin) {
+    return err(`mcp auth: provider "${cfg.id}" does not support interactive OAuth login`);
+  }
+  const launcher = deps.oauthLauncher ?? (await defaultLauncher());
+  let success = false;
+  await cfg.onOAuthLogin(launcher, () => {
+    success = true;
+  });
+  if (!success) {
+    return err(`mcp auth: interactive login for "${name}" did not complete`);
+  }
+  return ok(`Re-authenticated "${name}" via interactive login (provider ${cfg.id})\n`);
 }
 
 // ── helpers ─────────────────────────────────────────────────────────

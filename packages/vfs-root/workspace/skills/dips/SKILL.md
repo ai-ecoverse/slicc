@@ -59,13 +59,27 @@ Multiple cards in one message: each is a separate `.sprinkle-action-card`. The i
 Inside dips, bare HTML form elements are pre-styled to match S2:
 
 - `<input type="range">` — 4px track, 18px accent thumb.
-- `<input type="text">`, `<textarea>` — S2 layer-2 background, accent focus ring.
+- `<input type="text">`, `<textarea>` — S2 layer-2 background, accent focus ring. `rows` is fine as an initial size; never add `overflow:auto` or a fixed pixel height — the dip auto-sizes (see "Sizing").
 - `<select>` — S2 styled with focus ring.
 - `<button>` — pill-rounded, 28px height, hover state. Use `.sprinkle-btn--primary` class for the accent fill.
 - `<canvas>` — full-width, rounded corners.
 - `<mark>` — accent-tinted highlight.
 
 No custom CSS needed for basic widgets. Just write bare HTML.
+
+## Sizing
+
+The dip iframe auto-sizes to its content via `ResizeObserver` on `document.body`. **Your content's natural height becomes the iframe height. Don't fight it.**
+
+Never set `height`, `max-height`, `min-height`, `overflow: auto`, or `overflow: scroll` on dip containers. The outer iframe has `overflow: hidden`, so any internal scroller or fixed height clips content instead of growing the iframe. Let content flow and grow.
+
+The one exception is `<canvas>`: canvases need explicit pixel `width`/`height` for the drawing buffer. That's a drawing surface, not a scrollable container — set the pixel dimensions you need.
+
+If content is long enough that it would want to scroll, it belongs in a sprinkle.
+
+## Light & dark mode
+
+Dips inherit the parent's theme automatically. The parent injects its S2 tokens and toggles a `.theme-light` class on the iframe's `<html>` whenever the user flips themes; every `var(--s2-*)` token swaps in lockstep. **Never hard-code dark colors** — always use S2 tokens, or `light-dark()` for one-off custom colors (set `color-scheme: light dark` on an ancestor). **Do not use `@media (prefers-color-scheme: ...)`** — the parent toggle is class-based, so media queries desync. See `/workspace/skills/sprinkles/style-guide.md` for the full S2 token reference and a `light-dark()` example.
 
 ## Color palette for charts
 
@@ -118,7 +132,9 @@ result=$(agent /tmp "curl,jq" "Fetch <url>, return field 'price' as a number.")
 
 ## Don't
 
-- Don't hardcode hex colors — use S2 CSS variables.
+- Don't hardcode hex colors or theme-specific values — use S2 tokens or `light-dark()` (see "Light & dark mode").
+- Don't use `@media (prefers-color-scheme: ...)` to swap colors — the parent's theme toggle is class-based and the media query desyncs.
+- Don't set `height`, `max-height`, `min-height`, `overflow: auto`, or `overflow: scroll` on dip containers — the iframe auto-sizes to content; fixed heights and internal scrollers clip it. Canvases are the one exception (they need pixel dimensions for the drawing buffer). Long content belongs in a sprinkle.
 - Don't build custom progress bars — use `.sprinkle-progress-bar`.
 - Don't build custom status dots — use `.sprinkle-status-light`.
 - Don't use numbered headings (1. File Operations) inside cards — the `__header` IS the heading.

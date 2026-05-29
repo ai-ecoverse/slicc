@@ -156,7 +156,7 @@ Pure logic lives in `src/secrets-storage.ts` (testable; `tests/secrets-storage.t
 
 ## Telemetry
 
-The side panel emits Helix RUM beacons via the inlined `packages/webapp/src/ui/rum.js` (extension-only). CLI/Electron use `@adobe/helix-rum-js` instead; the choice is made by `telemetry.ts:initTelemetry()` based on `getModeLabel()`. Offscreen and the service worker are not instrumented. Force 100% sampling for debugging by setting `localStorage.setItem('slicc-rum-debug', '1')` in the side panel's DevTools and reloading. See `docs/operational-telemetry.md`.
+Both the side panel AND the offscreen document emit Helix RUM beacons via the inlined `packages/webapp/src/ui/rum.js` (extension-only). CLI/Electron use `@adobe/helix-rum-js` instead; the choice is made by `telemetry.ts:initTelemetry()` based on `getModeLabel()`. The two extension realms are independent — the panel captures user-typed shell commands and chat sends; the offscreen realm captures the agent's bash tool calls (including `agent` scoop delegations from the cone, which is why this realm needs telemetry to track delegation activity). The service worker is not instrumented. Force 100% sampling for debugging by setting `localStorage.setItem('slicc-rum-debug', '1')` in DevTools for the realm you want to debug (side panel inspect, or right-click → Inspect on `chrome-extension://<id>/offscreen.html`) and reloading. See `docs/operational-telemetry.md`.
 
 ## Build Notes
 
