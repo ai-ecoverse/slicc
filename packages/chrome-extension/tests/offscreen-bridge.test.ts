@@ -1367,3 +1367,44 @@ describe('OffscreenBridge.notifyPanelIncomingMessage', () => {
     expect(sent.payload.message.channel).toBe('webhook');
   });
 });
+
+describe('OffscreenBridge follower-forwarding bridge', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+  let setForwarder: ReturnType<typeof vi.fn>;
+  let emitEvent: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+    setForwarder = vi.fn();
+    emitEvent = vi.fn();
+    (globalThis as any).__slicc_lickManager = { setForwarder, emitEvent };
+    bridge = new OffscreenBridge();
+    await bridge.bind({
+      getScoops: vi.fn(() => []),
+      handleMessage: vi.fn().mockResolvedValue(undefined),
+    } as any);
+  });
+
+  it('set-follower-forwarding(true) installs a forwarder that emits forward-lick to the page', async () => {
+    const emitSpy = vi.spyOn(bridge as any, 'emit');
+    await (bridge as any).handlePanelMessage({ type: 'set-follower-forwarding', enabled: true });
+    expect(setForwarder).toHaveBeenCalledTimes(1);
+    const fwd = setForwarder.mock.calls[0][0] as (e: unknown) => void;
+    const event = { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: {} };
+    fwd(event);
+    expect(emitSpy).toHaveBeenCalledWith({ type: 'forward-lick', event });
+  });
+
+  it('set-follower-forwarding(false) clears the forwarder', async () => {
+    await (bridge as any).handlePanelMessage({ type: 'set-follower-forwarding', enabled: false });
+    expect(setForwarder).toHaveBeenCalledWith(null);
+  });
+
+  it('inject-forwarded-lick emits the event into the worker LickManager', async () => {
+    const event = { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: {} };
+    await (bridge as any).handlePanelMessage({ type: 'inject-forwarded-lick', event });
+    expect(emitEvent).toHaveBeenCalledWith(event);
+  });
+});

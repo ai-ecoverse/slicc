@@ -34,6 +34,7 @@ import type {
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
   OffscreenToPanelMessage,
+  ForwardedLickEvent,
 } from './messages.js';
 import { createLogger } from '../../../packages/webapp/src/core/logger.js';
 import { getLeaderTrayRuntimeStatus } from '../../../packages/webapp/src/scoops/tray-leader.js';
@@ -1235,6 +1236,33 @@ export class OffscreenBridge implements KernelFacade {
         // worker-side LickManager via the orchestrator. Fire-and-forget;
         // matches the pre-regression direct-call semantics.
         this.orchestrator.handleWebhookEvent(msg.webhookId, msg.headers, msg.body);
+        break;
+      }
+
+      case 'set-follower-forwarding': {
+        // Standalone follower: install/clear a forwarder on the worker's
+        // LickManager that relays forwardable licks to the page (which hands
+        // them to the FollowerSyncManager). Extension never sends this — it
+        // installs the forwarder directly in offscreen.ts.
+        const lm = (globalThis as Record<string, unknown>).__slicc_lickManager as
+          | { setForwarder(fn: ((e: ForwardedLickEvent) => void) | null): void }
+          | undefined;
+        if (!lm) break;
+        if (msg.enabled) {
+          lm.setForwarder((event) => this.emit({ type: 'forward-lick', event }));
+        } else {
+          lm.setForwarder(null);
+        }
+        break;
+      }
+
+      case 'inject-forwarded-lick': {
+        // Standalone leader: route a follower-forwarded lick into the
+        // worker's LickManager (→ defaultLickEventHandler → cone).
+        const lm = (globalThis as Record<string, unknown>).__slicc_lickManager as
+          | { emitEvent(e: ForwardedLickEvent): void }
+          | undefined;
+        lm?.emitEvent(msg.event);
         break;
       }
 
