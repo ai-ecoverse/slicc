@@ -11,4 +11,7 @@ describe('canonicalRuntimeId', () => {
   it('throws on empty input', () => {
     expect(() => canonicalRuntimeId('')).toThrow();
   });
+  it('only treats a leading follower- as already-canonical (startsWith, not includes)', () => {
+    expect(canonicalRuntimeId('x-follower-1')).toBe('follower-x-follower-1');
+  });
 });

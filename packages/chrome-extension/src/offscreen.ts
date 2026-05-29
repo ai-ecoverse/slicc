@@ -56,6 +56,7 @@ import { OFFSCREEN_SET_TRAY_RUNTIME_HOOK } from '../../../packages/webapp/src/sc
 import { createLogger } from '../../../packages/webapp/src/core/index.js';
 import type { ExtensionMessage } from './messages.js';
 import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
+import { canonicalRuntimeId } from '../../../packages/webapp/src/ui/runtime-identity.js';
 
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: Keep in sync with packages/webapp/src/ui/main.ts — both
@@ -313,7 +314,7 @@ async function init(): Promise<void> {
           onConnected: (connection) => {
             log.info('Extension follower connected', { trayId: connection.trayId });
             detachSync();
-            const runtimeId = `follower-${connection.bootstrapId}`;
+            const runtimeId = canonicalRuntimeId(connection.bootstrapId);
             // Track our sprinkle bridge ahead of time so the FollowerSyncManager
             // callbacks can forward `sprinkles.list` / `sprinkle.update` to the
             // panel without a forward declaration. Bind is wrapped in a closure
