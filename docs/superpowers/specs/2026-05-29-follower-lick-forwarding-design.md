@@ -2,271 +2,292 @@
 
 **Date:** 2026-05-29
 **Branch:** `feat/follower-lick-forwarding`
-**Status:** Design approved; spec under review before plan.
+**Status:** Design approved; revised after code-grounded review; spec under review before plan.
 
 ## Problem
 
-When a SLICC instance runs as a tray **follower**, a lick that originates locally
-on the follower has no path to the agent. The agent (cone) only runs on the
-**leader** — a follower is a thin view (`FollowerSyncManager implements AgentHandle`,
-`packages/webapp/src/scoops/tray-follower-sync.ts`) with no orchestrator and no
-required model/provider. The lick fires where the event lands (the follower), but
-the only agent that can act on it lives on the leader.
+When a SLICC instance runs as a tray **follower**, a lick that originates locally on
+the follower has no path to the agent. The agent (cone) only runs on the **leader** —
+a follower is a thin view (`FollowerSyncManager implements AgentHandle`,
+`packages/webapp/src/scoops/tray-follower-sync.ts`) and routes the user's chat to the
+leader. The lick fires where the event lands (the follower), but the only agent that
+can act on it lives on the leader.
 
 This is most visible for the **handoff feature** (the `navigate` lick), because a
-follower's user keeps browsing freely while the panel follows the leader's session.
+follower's user keeps browsing while the panel follows the leader's session.
 
 ### Root asymmetry
 
-Two lick paths exist, and only one is follower-aware:
+Two lick paths exist, and only one reaches the leader:
 
 - **Sprinkle licks already forward to the leader.** A follower's sprinkle/dip click
   goes `FollowerSyncManager.sendSprinkleLick` → `sprinkle.lick` over the WebRTC data
-  channel → leader's inbound handler (`tray-leader-sync.ts`, ~lines 605–616) →
-  leader's `defaultLickEventHandler`. The lick reaches the leader's agent.
-- **Navigate (handoff) licks do not forward.** They go through the _local_
+  channel → leader's inbound handler (`tray-leader-sync.ts:611`, `onSprinkleLick`).
+  The lick reaches the leader's agent — but the leader **discards the origin**.
+- **Navigate (handoff) licks do not forward.** They go through the local
   `lickManager.emitEvent`, which has zero follower-awareness.
 
-### Exact failure path (extension follower)
+### Exact failure path
+
+**Extension follower:**
 
 1. `packages/chrome-extension/src/service-worker.ts:434` observes the handoff `Link`
    header via `chrome.webRequest.onHeadersReceived` and sends a `navigate-lick`
    message to the offscreen document.
 2. `packages/chrome-extension/src/offscreen.ts:239–261` receives it and calls
-   `lickManager.emitEvent({ type: 'navigate', ... })` **unconditionally** — no check
-   for follower mode.
+   `lickManager.emitEvent({ type: 'navigate', ... })` **unconditionally** — no
+   follower check.
 3. The offscreen builds a full kernel host at `offscreen.ts:115–124` _before_ it
-   decides it is a follower (the `joinUrl` branch is at `offscreen.ts:286`). So a
+   decides it is a follower (the `joinUrl` branch is at `offscreen.ts:286`). So the
    follower has a local `lickManager`, orchestrator, and (sometimes) a cone.
 
 Two sub-cases, both observed:
 
 - **No API key** (`allowProviderlessTrayJoin`, `offscreen.ts:108`): cone bootstrap is
-  skipped (`skipConeBootstrap: true`). The navigate lick routes to a cone that does
-  not exist, so the handler logs "target not found" and **silently drops it**.
-- **API key present**: a _local_ cone exists, but the panel displays the _leader's_
-  session through `FollowerSyncManager` (`bridge.setFollowerSync(sync)`,
-  `offscreen.ts:426`). The lick fires a turn in the **invisible local cone** —
-  phantom work, burning the follower's own tokens, and the leader never hears of it.
+  skipped. The navigate lick routes to a cone that does not exist → handler logs
+  "target not found" and **silently drops it**.
+- **API key present**: a _local_ cone exists, but the panel shows the _leader's_
+  session through `FollowerSyncManager` (`offscreen.ts:426`). The lick fires a turn in
+  the **invisible local cone** — phantom work, the follower's own tokens, leader never
+  hears of it.
+
+**Standalone (page) follower — confirmed by review:** `mainStandaloneWorker`
+(`main.ts:1722`) always calls `spawnKernelWorker` (`main.ts:1943`) _before_ the
+tray-role branch (`main.ts:2842`). So a standalone follower **always** runs a kernel
+worker; that worker builds a kernel host (`kernel-worker.ts:213`) which, for any
+non-extension runtime, starts a `NavigationWatcher` (`host.ts:455`) that fires
+navigate licks via the worker's `lickManager.emitEvent`. **Crucial twist:** the
+worker's `lickManager` and the page's `FollowerSyncManager` (`page-follower-tray.ts`)
+live in different execution contexts (DedicatedWorker vs page), so forwarding requires
+a worker→page bridge — there is no single place to install a forwarder.
 
 Only the follower can ever observe the handoff header: it rides on a main-frame
-navigation in the follower's own browser. The leader is a different instance driving
-a different (or no) browser, so "just have the leader watch for it" is physically
+navigation in the follower's own browser. The leader is a different instance driving a
+different (or no) browser, so "just have the leader watch for it" is physically
 impossible. **Forwarding is the only available fix.**
 
 ### Per-float reality
 
-| Float                                | Navigate / handoff lick                                                                                 | Sprinkle lick                                                    |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| **Extension follower**               | Broken (drop or phantom cone). Most exposed.                                                            | Forwards, but no origin                                          |
-| **Browser-page follower**            | No CDP → cannot generate it at all                                                                      | Forwards, but no origin                                          |
-| **Standalone CLI/Electron follower** | Has CDP — _verify in impl_ whether a follower even runs the nav watcher; either same bug or never fires | Forwards, but no origin                                          |
-| **iOS follower**                     | No handoff concept whatsoever                                                                           | Forwards via `sprinkleLick`, origin known only by WebRTC channel |
+| Float                          | Navigate / handoff lick                                                                                | Sprinkle lick                          |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| **Extension follower**         | Broken (drop or phantom cone). Most exposed.                                                           | Forwards, no origin                    |
+| **Standalone (page) follower** | Fires in the kernel **worker**'s lickManager → phantom local cone; needs worker→page bridge to forward | Forwards (page-side), no origin        |
+| **iOS follower**               | No handoff concept whatsoever                                                                          | Forwards via `sprinkleLick`, no origin |
 
-### Secondary gap: origin is discarded
+(Pure browser-page-without-worker followers do not exist as a separate float — the
+standalone page always spawns the worker.)
 
-Even where sprinkle licks already forward, the leader throws away the origin.
-`onSprinkleLick(sprinkleName, body, targetScoop)` carries no follower identity (the
-`bootstrapId` is in scope at the receive site but discarded), and any `sprinkle.update`
-the agent pushes back **broadcasts to every follower**, not the one who clicked.
+## Decisions
 
-## Goals
-
-1. Forward follower-observed user/world licks (`navigate` now, `sprinkle` migrated
-   onto the same path) to the leader's agent.
-2. Tag each forwarded lick with its origin: an opaque `followerId` (for future
-   response-routing) and a human-readable `originLabel` the agent can see.
-3. Unify the two forward paths through a **single chokepoint** so a future lick type
-   cannot regress into the navigate bug.
+1. **Scope:** cover the **extension and standalone** followers in v1, including the
+   worker→page navigate-lick bridge.
+2. **Unify leader-side only.** Do not migrate the follower-side sprinkle path through
+   `emitEvent`. Sprinkle licks keep their existing dedicated forward path; the leader
+   unifies navigate and sprinkle into one origin-stamping + formatting path on receipt.
+3. **Origin tag:** opaque `originFollowerId` (reserved for future response-routing) +
+   human-readable `originLabel` surfaced to the agent.
+4. **iOS:** keep accepting the legacy `sprinkle.lick`; stamp origin leader-side. No iOS
+   rebuild now. Generic-envelope migration is a documented follow-up.
+5. **Forward failure:** log and drop (never fall back to local handling).
 
 ## Non-goals (explicit deferrals)
 
-- **Per-follower response routing.** Approval cards and `sprinkle.update`s continue to
-  broadcast to all followers. Correct for the common single-follower case; multi-
-  follower noise (everyone sees the card) is a follow-up.
-- **iOS migration to the generic envelope.** The leader keeps accepting the legacy
-  `sprinkle.lick` and stamps origin on it, so iOS needs no rebuild now. Migration to
-  the generic `lick` envelope is a documented follow-up (iOS has no navigate concept,
-  so nothing is urgent).
-- **Queue-until-reconnect.** If forwarding fails (channel down), log and drop.
-- **Suppressing the phantom local cone.** Out of scope; the chokepoint already stops
-  feeding it. "Always skip cone bootstrap in follower mode" is a noted optional cleanup
-  (it touches leave-tray transitions).
+- **Per-follower response routing.** Approval cards and `sprinkle.update`s keep
+  broadcasting to all followers. Correct for single-follower; multi-follower noise is a
+  follow-up using `originFollowerId`.
+- **Follower-side sprinkle→emitEvent migration** (see decision 2).
+- **iOS migration to the generic `lick` envelope.**
+- **Queue-until-reconnect** for forwarded licks.
+- **Suppressing the phantom local cone** (the chokepoint already stops feeding it).
 
 ## Design
 
-### 1. Chokepoint: `lickManager.emitEvent()` decides forward-vs-local
+### 1. `LickManager`: a true single dispatch chokepoint
 
-Add an optional forwarder to `LickManager` (`packages/webapp/src/scoops/lick-manager.ts`):
+The premise "every lick funnels through `emitEvent`" is currently false — webhook
+(`lick-manager.ts:197`) and cron (`:324`) call `this.eventHandler` directly, bypassing
+`emitEvent` (`:105`). Fix this cheaply by funneling all internal emit sites through one
+private method:
 
 ```ts
 setForwarder(fn: ((e: LickEvent) => void) | null): void; // null = handle locally (leader/standalone)
 
-// inside emitEvent():
-if (this.forwarder && FORWARDABLE_TO_LEADER.has(event.type)) {
-  this.forwarder(event); // serialize + ship to leader
-  return;                // never touches the local handler
+private dispatch(event: LickEvent): void {
+  if (this.forwarder && FORWARDABLE_TO_LEADER.has(event.type)) {
+    this.forwarder(event); // ship to leader; never touches the local handler
+    return;
+  }
+  this.eventHandler?.(event);
 }
-// ...existing local handler path (setEventHandler → defaultLickEventHandler)
+// emitEvent(), the webhook handler, and the cron scheduler all call dispatch(event).
 ```
-
-Because every lick already funnels through `emitEvent`, this one change fixes the
-whole class. The extension navigate-lick listener at `offscreen.ts:239` needs **no
-change** — it already calls `emitEvent`, so it forwards automatically once a forwarder
-is installed.
-
-The forwarder is installed/cleared in the follower connection lifecycle (mirrors the
-existing `detachSync` at `offscreen.ts:291–305` and the standalone equivalent in
-`page-follower-tray.ts`):
-
-- On follower connect: `lickManager.setForwarder((e) => followerSync.forwardLick(e))`.
-- On detach/disconnect: `lickManager.setForwarder(null)`.
-
-A leader never installs a forwarder, so `emitEvent` is always local for it. When a
-follower leaves the tray and becomes standalone, the forwarder clears and licks are
-handled locally again.
-
-**Scope of the chokepoint.** This mechanism lives wherever a follower float has a
-local `lickManager`. That is confirmed for the **extension offscreen** follower (it
-builds a full kernel host at `offscreen.ts:115`). Whether the **standalone page
-follower** has a local `lickManager` is a _verify-during-implementation_ item (see
-below). The universally-applicable part of this design is the wire protocol and
-leader-side origin stamping in §3 — that applies to every follower float (including
-iOS) regardless of whether the follower runs a `lickManager`.
-
-### 2. Forward allowlist (explicit, not `EXTERNAL_LICK_CHANNELS`)
-
-`EXTERNAL_LICK_CHANNELS` (`lick-formatting.ts:29`) contains all seven types, including
-local-lifecycle ones — it is **not** the right gate. Add a narrower, purpose-built set:
 
 ```ts
-const FORWARDABLE_TO_LEADER: ReadonlySet<LickEvent['type']> = new Set(['navigate', 'sprinkle']);
+const FORWARDABLE_TO_LEADER: ReadonlySet<LickEvent['type']> = new Set(['navigate']);
 ```
 
-Classification rationale (does this describe the external world / a user action →
-leader's agent, or this runtime's own lifecycle → stays local?):
+`navigate` is the only emitEvent-emitted type that belongs to the leader's agent.
+Sprinkle is _also_ a leader's-agent lick, but it travels on its own dedicated path
+(`sprinkle.lick`), not through `emitEvent`, so it is not in this set. webhook/cron run
+local (and never originate on a follower); `fswatch`/`session-reload`/`upgrade` are
+local-runtime lifecycle.
 
-| Type             | Decision | Why                                                    |
-| ---------------- | -------- | ------------------------------------------------------ |
-| `navigate`       | forward  | external/user action (handoff)                         |
-| `sprinkle`       | forward  | user action in a rendered sprinkle/dip                 |
-| `session-reload` | local    | this runtime's lifecycle (mount-recovery, bridge-down) |
-| `upgrade`        | local    | this runtime detected a bundle upgrade                 |
-| `fswatch`        | local    | this runtime's local VFS                               |
-| `webhook`        | n/a      | originates from the leader's node-server only          |
-| `cron`           | n/a      | leader-owned scheduling; never created on a follower   |
+**No-regression test:** assert every `LickEvent['type']` is classified as either
+`FORWARDABLE_TO_LEADER`, forwarded via a dedicated path (`sprinkle`), or local — so a
+future type forces a deliberate decision and cannot silently regress.
 
-A test asserts **every** `LickEvent['type']` is classified as forwardable or
-explicitly local, so adding an eighth type forces a deliberate decision and cannot
-silently regress.
+### 2. Follower-side: install the forwarder
 
-### 3. Wire protocol: one generic `lick` message; leader stamps origin
+**Extension follower** — `lickManager` and `FollowerSyncManager` both live in the
+offscreen document. Install directly in the `joinUrl` connect lifecycle (mirrors the
+existing `detachSync` at `offscreen.ts:291–305`):
 
-New follower→leader message in `packages/webapp/src/scoops/tray-sync-protocol.ts`:
+- connect: `lickManager.setForwarder((e) => sync.forwardLick(e))`
+- detach/disconnect: `lickManager.setForwarder(null)`
+
+**Standalone (page) follower** — `lickManager` is in the kernel worker;
+`FollowerSyncManager` is page-side. Bridge over the existing kernel transport
+(`OffscreenClient`), mirroring the existing navigate-lick / sprinkle-lick relays:
+
+- **page → worker** control message `set-follower-forwarding: boolean`. On `true`, the
+  worker installs `lickManager.setForwarder((e) => postToPage({ type: 'forward-lick', event: e }))`;
+  on `false`, it clears it.
+- **worker → page** message `forward-lick { event }`. The page handler calls
+  `pageFollowerTray`'s `FollowerSyncManager.forwardLick(event)`.
+- `startPageFollowerTray` sends `set-follower-forwarding: true` on start; the leave/stop
+  path sends `false` so the worker stops forwarding to a dead page handler.
+
+`FollowerSyncManager.forwardLick(event)` sends `{ type: 'lick', event }` and **inspects
+the `send()` boolean** (`tray-sync-protocol.ts:479` returns `false` on a closed/failed
+channel): on `false`, log and drop (F7). Today's `sendSprinkleLick` (`:416`) ignores
+this return; the same drop-on-`false` discipline is applied there.
+
+### 3. Wire protocol: generic `lick` message; leader stamps origin
+
+New follower→leader message in `tray-sync-protocol.ts`:
 
 ```ts
-{ type: 'lick', event: LickEvent } // raw serialized event; no identity in the payload
+{ type: 'lick', event: LickEvent } // raw serialized event; follower sends NO identity
 ```
 
-- `FollowerSyncManager.forwardLick(event)` is the single wire mechanism for forwarding
-  any lick. Where a follower has a local `lickManager` (extension offscreen), the
-  sprinkle bridge routes through `emitEvent({ type: 'sprinkle', ... })` → forwarder →
-  `forwardLick`, so sprinkles and navigate share one path. On a float without a local
-  `lickManager`, the existing sprinkle source may call `forwardLick` (or its legacy
-  equivalent) directly — the wire format and leader handling are identical either way.
-- The **leader** never trusts the payload for identity. At the inbound receive site it
-  already holds the `ConnectedFollower` (`tray-leader-sync.ts` ~lines 79–94), which
-  carries `bootstrapId` and `floatType`. It reconstructs the event and stamps:
+Legacy `sprinkle.lick` is retained (existing extension path + iOS). Both inbound paths
+are stamped with origin leader-side.
 
-  ```ts
-  localLickManager.emitEvent({
-    ...event,
-    originFollowerId: follower.bootstrapId,
-    originLabel: labelFor(follower.floatType), // e.g. "extension follower", "iOS follower"
-  });
-  ```
+### 4. Leader-side: receive, validate, stamp, unify
 
-- Two new **optional** `LickEvent` fields, set only by the leader:
-  `originFollowerId?: string`, `originLabel?: string`.
-- **Legacy `sprinkle.lick` stays accepted** on the leader and gets the same origin
-  stamp from the channel identity — so iOS sprinkle licks gain origin **with no iOS
-  change**. iOS migration to the generic `lick` envelope is a follow-up via the
-  package's 5-step protocol checklist.
+`LeaderSyncManager` exposes only `onSprinkleLick` today (`tray-leader-sync.ts:50`).
+Add a generic-lick option:
 
-### 4. Agent sees the origin: `formatLickEventForCone`
+```ts
+onForwardedLick?: (event: LickEvent, originBootstrapId: string) => void;
+```
 
-When `originLabel` is present, `formatLickEventForCone`
-(`lick-formatting.ts:50–124`) surfaces it (e.g. a `Source: extension follower` line in
-the content, or a label suffix). The handoff approval card can then read "Handoff
-requested from your extension follower." The opaque `originFollowerId` is **not** shown
-to the agent — reserved for response-routing later.
+Inbound `lick` handler:
 
-### 5. End-to-end handoff trace (works today with broadcast)
+1. **Validate (F6):** if `event.type ∉ FORWARDABLE_TO_LEADER`, log and drop — rejects a
+   malformed or version-skewed peer sending `webhook` / `cron` / `session-reload` / etc.
+2. **Scrub (F6):** strip any follower-sent `originFollowerId` / `originLabel`.
+3. **Stamp:** `originFollowerId = bootstrapId`, `originLabel = labelFor(follower.floatType, follower.runtime)`
+   — the leader already holds the `ConnectedFollower` (`:79`) with `bootstrapId` and
+   `floatType`.
+4. Call `onForwardedLick(stampedEvent, bootstrapId)`.
+
+Both leader adapters wire `onForwardedLick` to the leader's `lickManager.emitEvent`:
+
+- **Extension leader** (`extension-leader-tray.ts`): offscreen `lickManager.emitEvent(stampedEvent)`.
+- **Standalone leader** (`main.ts:2574` region): relay to the worker's
+  `lickManager.emitEvent` over the existing `client` path.
+
+**Sprinkle unification (resolves F5).** Today the leader's inbound `sprinkle.lick`
+routes through a bespoke `routeSprinkleLick` (`offscreen-bridge.ts:673`) that builds its
+own content string and never calls `formatLickEventForCone`. Change the leader's
+`onSprinkleLick` to stamp origin and route through `lickManager.emitEvent({ type: 'sprinkle', sprinkleName, body, targetScoop, originFollowerId, originLabel })`
+→ the shared formatter. This unifies navigate and sprinkle on the leader, gives sprinkle
+origin display, and gives iOS sprinkle licks origin for free (stamped from the channel).
+
+### 5. Float labels (resolves F8)
+
+`FloatType` (`tray-leader-sync.ts:68`) is `standalone | extension | electron | unknown`
+— no `ios`, so `deriveFloatType('slicc-ios')` returns `unknown`. Add `'ios'` to the
+union and a `runtime.includes('ios')` case to `deriveFloatType`. Add
+`labelFor(floatType, runtime)` returning readable labels (`"extension follower"`,
+`"standalone follower"`, `"iOS follower"`, …) with a raw-runtime-string fallback for
+`unknown`.
+
+### 6. Agent sees the origin (`formatLickEventForCone`)
+
+Add optional `originFollowerId?` / `originLabel?` to `LickEvent`, set **only** by the
+leader. When `originLabel` is present, `formatLickEventForCone`
+(`lick-formatting.ts:50`) surfaces it (e.g. a `Source: extension follower` line). The
+opaque `originFollowerId` is not shown to the agent — reserved for response-routing.
+
+### 7. End-to-end handoff trace
 
 ```
 follower user navigates
-  → service-worker webRequest observes Link header
-  → offscreen emitEvent({ navigate })
-  → forwarder → `lick` over data channel
-  → leader stamps originFollowerId + originLabel
-  → leader localLickManager.emitEvent → defaultLickEventHandler → leader's cone
-  → handoff skill renders approval card
-  → leader broadcasts the cone message to all followers (snapshot / agent_event)
-  → originating follower sees the card
-  → user clicks Accept → sprinkle lick → forwarder → leader
-  → leader's cone runs `upskill` / `curl` on the leader's workspace  (correct — leader owns the agent)
+  → header observed (extension: webRequest; standalone: worker NavigationWatcher)
+  → lickManager.emitEvent({ navigate })
+  → dispatch → forwarder
+       (extension: sync.forwardLick directly;
+        standalone: worker → page `forward-lick` → FollowerSyncManager.forwardLick)
+  → `lick` message over data channel
+  → leader validates type, scrubs + stamps origin
+  → onForwardedLick → leader lickManager.emitEvent → defaultLickEventHandler → cone
+  → handoff skill renders approval card (with "from <originLabel>")
+  → leader broadcasts the cone message to all followers
+  → originating follower sees the card; user clicks Accept
+  → sprinkle lick (existing path) → leader stamps origin → lickManager.emitEvent({ sprinkle })
+  → cone runs `upskill` / `curl` on the leader's workspace
 ```
 
-End-to-end correct for a single follower. Multi-follower noise (the card appears on the
-leader and all followers) is the deferred response-routing item.
-
-### 6. Failure handling
-
-If `forwardLick` throws or the channel is closed at emit time: **log a warning and
-drop** the lick. Never fall back to local handling — that re-creates the phantom-cone
-bug. The user can re-trigger (re-navigate, re-click). Queue-until-reconnect is a noted
-robustness follow-up.
+Correct for a single follower. Multi-follower card noise is the deferred
+response-routing item.
 
 ## Affected files
 
-| File                                               | Change                                                                                                                                                                                                |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/webapp/src/scoops/lick-manager.ts`       | `setForwarder`, forward branch in `emitEvent`, `FORWARDABLE_TO_LEADER`, optional `originFollowerId`/`originLabel` on `LickEvent`                                                                      |
-| `packages/webapp/src/scoops/lick-formatting.ts`    | surface `originLabel` in `formatLickEventForCone`                                                                                                                                                     |
-| `packages/webapp/src/scoops/tray-sync-protocol.ts` | new generic `lick` follower→leader message                                                                                                                                                            |
-| `packages/webapp/src/scoops/tray-follower-sync.ts` | `forwardLick(event)`; route sprinkle bridge through `emitEvent`                                                                                                                                       |
-| `packages/webapp/src/scoops/tray-leader-sync.ts`   | inbound `lick` handler; origin stamping; same stamp on legacy `sprinkle.lick`; `labelFor(floatType)`                                                                                                  |
-| `packages/chrome-extension/src/offscreen.ts`       | install/clear forwarder in the follower connect/detach lifecycle                                                                                                                                      |
-| `packages/webapp/src/ui/page-follower-tray.ts`     | install/clear forwarder **iff** this float has a local `lickManager` (verify). Otherwise no change: its existing sprinkle path already forwards, and navigate cannot originate without a nav watcher. |
+| File                                                                             | Change                                                                                                                                                                                                                       |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/webapp/src/scoops/lick-manager.ts`                                     | private `dispatch`; `setForwarder`; `FORWARDABLE_TO_LEADER`; route `emitEvent`/webhook/cron through `dispatch`; optional `originFollowerId`/`originLabel` on `LickEvent`                                                     |
+| `packages/webapp/src/scoops/lick-formatting.ts`                                  | surface `originLabel` in `formatLickEventForCone`                                                                                                                                                                            |
+| `packages/webapp/src/scoops/tray-sync-protocol.ts`                               | generic `lick` follower→leader message                                                                                                                                                                                       |
+| `packages/webapp/src/scoops/tray-follower-sync.ts`                               | `forwardLick` (inspects `send()` return); apply drop-on-`false` to `sendSprinkleLick`                                                                                                                                        |
+| `packages/webapp/src/scoops/tray-leader-sync.ts`                                 | `onForwardedLick` option; inbound `lick` handler (validate + scrub + stamp); `FloatType` `'ios'` + `deriveFloatType` + `labelFor`; stamp origin on the `sprinkle.lick` path                                                  |
+| `packages/chrome-extension/src/offscreen.ts`                                     | install/clear forwarder on the offscreen `lickManager` in the follower lifecycle                                                                                                                                             |
+| `packages/chrome-extension/src/offscreen-bridge.ts` / `extension-leader-tray.ts` | wire `onForwardedLick` → `lickManager.emitEvent`; route inbound `sprinkle.lick` through `emitEvent` (replace bespoke `routeSprinkleLick` content-builder) with origin                                                        |
+| `packages/webapp/src/kernel/kernel-worker.ts` + `kernel/host.ts`                 | worker side of the bridge: `set-follower-forwarding` handler installs/clears a forwarder that posts `forward-lick` to the page                                                                                               |
+| `packages/webapp/src/ui/page-follower-tray.ts` + `main.ts`                       | page side of the bridge: send `set-follower-forwarding` on start/stop; handle `forward-lick` → `FollowerSyncManager.forwardLick`; wire standalone leader `onForwardedLick`/`onSprinkleLick` through the worker `lickManager` |
 
-The extension `service-worker.ts` and the `offscreen.ts` navigate-lick listener
-need **no logic change** — they already route through `emitEvent`.
+The extension `service-worker.ts` and the `offscreen.ts:239` navigate-lick listener
+need **no logic change** — they already route through `emitEvent`/`dispatch`.
 
 ## Tests
 
-- `lick-manager`: `emitEvent` forwards forwardable types when a forwarder is installed;
-  runs the local handler for non-forwardable types; runs local when no forwarder
-  (leader); exhaustive assertion that every `LickEvent['type']` is classified.
-- `lick-formatting`: `formatLickEventForCone` renders `originLabel` when present and is
-  unchanged when absent.
-- `tray-leader-sync`: inbound `lick` reconstructs the event and stamps
-  `originFollowerId` + `originLabel` from the connection; legacy `sprinkle.lick` gets
-  the same stamp.
-- `tray-follower-sync`: `forwardLick` emits the correct wire message; sprinkle bridge
-  routes through `emitEvent` (no direct `sendSprinkleLick`).
-- `tray-sync-protocol`: the generic `lick` message round-trips.
+- `lick-manager`: `dispatch` is the single chokepoint (emitEvent + webhook + cron all
+  funnel through it); forwarder gates only `FORWARDABLE_TO_LEADER`; runs local when no
+  forwarder; exhaustive type classification.
+- `tray-follower-sync`: `forwardLick` emits the correct wire message and drops on
+  `send() === false`.
+- `tray-leader-sync`: inbound generic `lick` stamps `originFollowerId`/`originLabel`;
+  rejects a non-forwardable type; strips follower-sent origin fields; `sprinkle.lick`
+  gains origin; `labelFor` covers `ios` + the raw-runtime fallback.
+- `tray-sync-protocol`: generic `lick` round-trips.
+- `lick-formatting`: renders `originLabel` when present; unchanged when absent.
+- **Standalone bridge**: `set-follower-forwarding` installs/clears the worker forwarder;
+  a worker navigate lick produces a page `forward-lick` that reaches
+  `FollowerSyncManager.forwardLick`.
+- **Extension split**: panel sprinkle click still forwards; leader-side gains origin.
 
 Per-package coverage floors must hold (`webapp` global default; see root `CLAUDE.md`).
 
 ## Docs
 
 - Root `CLAUDE.md` (Licks / Tray addendum), `packages/webapp/CLAUDE.md` (Tray Sync),
-  `packages/chrome-extension/CLAUDE.md` (offscreen follower wiring).
+  `packages/chrome-extension/CLAUDE.md` (offscreen follower + leader wiring).
 - `docs/architecture.md` tray protocol matrix — add the generic `lick` message and the
   follower-origin stamping note.
 - `packages/ios-app/CLAUDE.md` — record the deferred iOS migration to the generic
-  envelope.
-- Handoff `SKILL.md` (`packages/vfs-root/workspace/skills/handoff/`) only if the
+  envelope (and that iOS sprinkle licks now show origin via leader-side stamping).
+- Handoff `SKILL.md` (`packages/vfs-root/workspace/skills/handoff/`) if the
   approval-card copy changes to mention the origin.
 - Agent-facing `/shared/CLAUDE.md` (`packages/vfs-root/shared/CLAUDE.md`) if follower
   handoff behavior is documented for the agent.
@@ -282,15 +303,6 @@ npm run build
 npm run build -w @slicc/chrome-extension
 ```
 
-## Verify during implementation
-
-- Whether the **standalone page/CLI follower** runs a navigation watcher and a
-  `lickManager` at all. If it does, the chokepoint fixes it identically; if it has no
-  `lickManager`, the navigate lick cannot originate there anyway.
-- Confirm `ConnectedFollower.floatType` is populated for every follower runtime string
-  (`slicc-extension-offscreen`, `slicc-ios`, standalone page) so `labelFor` has a
-  sensible mapping with a safe default.
-
 ## Follow-ups (out of scope)
 
 1. Per-follower response routing (approval card / `sprinkle.update` to the originating
@@ -299,3 +311,13 @@ npm run build -w @slicc/chrome-extension
 3. Queue-until-reconnect for forwarded licks.
 4. Optionally always skip cone bootstrap in follower mode (removes the dormant phantom
    cone entirely).
+
+## Review history
+
+Revised after a code-grounded review. All eight findings verified against the codebase
+and incorporated: standalone worker/page coverage + bridge (F1), `onForwardedLick`
+leader integration point (F2), single `dispatch` chokepoint (F3), descope of the
+follower-side sprinkle→emitEvent migration (F4), leader-side sprinkle routing through
+the shared formatter (F5), inbound type validation + origin scrubbing (F6),
+`send()`-return checking on `forwardLick` (F7), and `FloatType`/`labelFor` iOS support
+(F8).
