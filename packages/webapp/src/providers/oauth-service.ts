@@ -186,13 +186,28 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
       }
     }, 1000);
 
-    // Resolve null immediately when the user closes the popup (cancelled flow).
+    // Resolve null when the user closes the popup (cancelled flow).
+    //
+    // Important: the callback page fires `fetch(POST /api/oauth-result)` and
+    // then calls `window.close()` synchronously, so the POST may still be
+    // in-flight when `popup.closed` first becomes true. Resolving null
+    // immediately would race against the 1000ms poll timer that reads the
+    // stored redirect — cancelling login before the server result arrives.
+    //
+    // Fix: stop the closed-poll but let pollTimer run for one extra grace
+    // period (1500ms > one poll interval). If the result lands in that window
+    // pollTimer resolves first; otherwise we resolve null after the grace.
     if (popup) {
       closedTimer = setInterval(() => {
-        if (popup.closed) {
-          cleanup();
-          resolve(null);
-        }
+        if (!popup.closed) return;
+        clearInterval(closedTimer!);
+        closedTimer = null;
+        setTimeout(() => {
+          if (!resolved) {
+            cleanup();
+            resolve(null);
+          }
+        }, 1500);
       }, 500);
     }
 

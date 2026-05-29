@@ -133,7 +133,7 @@ describe('createOAuthLauncher', () => {
     expect(mockPopup.close).toHaveBeenCalled();
   });
 
-  it('resolves null immediately when the user closes the OAuth popup (cancelled flow)', async () => {
+  it('resolves null when the user closes the OAuth popup (cancelled flow)', async () => {
     // Provide a popup with a mutable `closed` property so we can simulate
     // the user dismissing the window mid-flow.
     let popupClosed = false;
@@ -145,15 +145,62 @@ describe('createOAuthLauncher', () => {
     };
     mockWindow.open.mockReturnValueOnce(cancelPopup);
 
+    // Server never has a result (pure user-cancel, no COOP race).
+    vi.mocked(fetch).mockResolvedValue({ status: 204 } as Response);
+
     const launcher = createOAuthLauncher();
     const promise = launcher('https://idp.example.com/authorize');
 
-    // Simulate user closing the popup, then advance past one poll interval
+    // Simulate user closing the popup, then advance past the closed-detect
+    // interval (500ms) plus the 1500ms grace period that lets the poll timer
+    // run one final cycle before giving up.
     popupClosed = true;
-    vi.advanceTimersByTime(500);
+    await vi.advanceTimersByTimeAsync(2100);
 
     const result = await promise;
     expect(result).toBeNull();
+  });
+
+  it('resolves with the server result when popup closes mid-COOP relay (race fix)', async () => {
+    // Simulate the COOP/Electron race: callback page fires POST to
+    // /api/oauth-result then calls window.close() synchronously.  The popup
+    // is already closed when the 500ms poll detects it, but the server-side
+    // result arrives within the 1500ms grace period.
+    let popupClosed = false;
+    const cancelPopup = {
+      close: vi.fn(),
+      get closed() {
+        return popupClosed;
+      },
+    };
+    mockWindow.open.mockReturnValueOnce(cancelPopup);
+
+    const mockFetch = vi.mocked(fetch);
+    // First server poll (fires at t=1000ms): no result yet — POST still in-flight.
+    mockFetch.mockResolvedValueOnce({ status: 204 } as Response);
+    // Second server poll (fires at t=2000ms, within the 1500ms grace): result landed.
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          redirectUrl: 'http://localhost:5710/auth/callback#token=coop',
+        }),
+    } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    // t=500ms: closed-poll detects popup closed, starts 1500ms grace.
+    popupClosed = true;
+    await vi.advanceTimersByTimeAsync(500);
+    // t=1000ms: first pollTimer fires → 204, keeps polling.
+    await vi.advanceTimersByTimeAsync(500);
+    // t=2000ms: second pollTimer fires → result, resolves before grace expires.
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=coop');
   });
 
   it('cleans up message listener after successful callback', async () => {
