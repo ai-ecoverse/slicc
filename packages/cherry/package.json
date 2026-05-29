@@ -15,6 +15,9 @@
   "files": [
     "dist"
   ],
+  "dependencies": {
+    "html2canvas": "^1.4.1"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --root ../.. --config vitest.config.ts --project cherry"
