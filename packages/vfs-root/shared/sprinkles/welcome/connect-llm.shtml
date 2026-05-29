@@ -166,6 +166,24 @@
         margin-top: 6px;
         line-height: 1.4;
       }
+
+      /* Device-code box — matches the settings dialog's inline code
+         box so the welcome flow and Add Account flow look identical. */
+      .device-code {
+        margin-top: 14px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: var(--s2-bg-elevated, #161b22);
+        border: 1px solid var(--s2-border-default, #30363d);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-weight: 600;
+        font-size: 22px;
+        letter-spacing: 2px;
+        text-align: center;
+        color: var(--s2-content-default, #e6edf3);
+        user-select: all;
+        cursor: text;
+      }
     </style>
   </head>
   <body>
@@ -210,6 +228,23 @@
         <button id="connectBtn" class="btn btn--primary" type="button">Connect</button>
       </div>
       <div class="meta" id="meta"></div>
+    </section>
+
+    <!-- Step 2.5: device-code prompt (GitHub Copilot, future device flows). -->
+    <section id="sDeviceCode" class="step">
+      <div class="step-heading" id="deviceCodeHeading">Verification code</div>
+      <div class="step-sub" id="deviceCodeSub">
+        Copy the code, then click Continue. We'll open the authorization page in a new tab —
+        paste the code there if it isn't pre-filled.
+      </div>
+      <div class="device-code" id="deviceCode">XXXX-XXXX</div>
+      <div class="actions">
+        <button id="deviceCancelBtn" class="btn" type="button">Cancel</button>
+        <span class="spacer"></span>
+        <button id="deviceContinueBtn" class="btn btn--primary" type="button">
+          Copy &amp; Continue
+        </button>
+      </div>
     </section>
 
     <!-- Step 3: success -->
@@ -292,10 +327,50 @@
       }
 
       function go(stepId) {
-        ['sProvider', 'sCreds', 'sDone'].forEach(function (id) {
+        ['sProvider', 'sCreds', 'sDeviceCode', 'sDone'].forEach(function (id) {
           document.getElementById(id).classList.toggle('active', id === stepId);
         });
       }
+
+      // Cache device-code DOM up front so the message handler can flip
+      // between steps without re-querying every time.
+      var deviceCodeEl = document.getElementById('deviceCode');
+      var deviceCancelBtn = document.getElementById('deviceCancelBtn');
+      var deviceContinueBtn = document.getElementById('deviceContinueBtn');
+      function emitDeviceDecision(decision) {
+        // Lock both buttons immediately so we never send two decisions
+        // for the same prompt (e.g. double-clicks).
+        deviceCancelBtn.disabled = true;
+        deviceContinueBtn.disabled = true;
+        slicc.lick({
+          action: 'device-code-decision',
+          data: { decision: decision },
+        });
+      }
+      deviceCancelBtn.onclick = function () {
+        emitDeviceDecision('cancel');
+        // Return to the credential step — the host will broadcast a
+        // `slicc-connect-result` shortly with the cancellation message,
+        // which the existing handler renders into the status row.
+        go('sCreds');
+      };
+      deviceContinueBtn.onclick = function () {
+        // Best-effort clipboard copy — the host's prompter will retry
+        // server-side too, but doing it here lets the user paste even
+        // if the host clipboard call gets blocked by the sandbox.
+        try {
+          var text = deviceCodeEl.textContent || '';
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text);
+          }
+        } catch (e) {
+          /* ignore — code is still visible on the box */
+        }
+        emitDeviceDecision('continue');
+        statusEl.className = 'status busy';
+        statusEl.textContent = 'Waiting for you to authorize in the new tab…';
+        go('sCreds');
+      };
 
       function selectProvider(p) {
         current.provider = p.id;
@@ -444,6 +519,16 @@
           // model dropdown; that responsibility now lives in the chat
           // header so we deliberately ignore the models map.
           renderProviders();
+        } else if (msg.type === 'slicc-device-code') {
+          // Host is asking us to render the device-flow verification
+          // code (GitHub Copilot today; future device-flow providers
+          // can reuse this same message). Show the code + Cancel /
+          // Copy & Continue and wait for the user's pick — the host
+          // won't open any auth tab until we emit `device-code-decision`.
+          deviceCodeEl.textContent = msg.userCode || 'XXXX-XXXX';
+          deviceCancelBtn.disabled = false;
+          deviceContinueBtn.disabled = false;
+          go('sDeviceCode');
         } else if (msg.type === 'slicc-already-connected') {
           // Reload of a chat that already finished onboarding —
           // skip the provider list entirely and show a finished card.

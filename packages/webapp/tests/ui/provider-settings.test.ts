@@ -192,6 +192,7 @@ import {
   resolveModelById,
   saveOAuthAccount,
   getOAuthAccountInfo,
+  migrateLegacyAuthOnlySelection,
 } from '../../src/ui/provider-settings.js';
 import type { ProviderDefault } from '../../src/ui/provider-settings.js';
 
@@ -289,6 +290,51 @@ describe('selected model encodes provider', () => {
     storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
     setSelectedProvider('openai');
     expect(storage.get('selected-model')).toBe('openai:claude-sonnet-4-0');
+  });
+});
+
+describe('migrateLegacyAuthOnlySelection — clears stale auth-only selections', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('clears selected-model when it points at github (auth-only after 3.13)', () => {
+    storage.set('selected-model', 'github:gpt-4.1');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBeUndefined();
+  });
+
+  it('preserves selected-model for providers that still expose LLM models', () => {
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-6');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('anthropic:claude-sonnet-4-6');
+  });
+
+  it('preserves selected-model when prefix is github-copilot (LLM provider)', () => {
+    // github-copilot lives next to the legacy github prefix but still
+    // offers LLM models; the migration must not collateral-damage it.
+    storage.set('selected-model', 'github-copilot:claude-sonnet-4.6');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('github-copilot:claude-sonnet-4.6');
+  });
+
+  it('is a no-op when selected-model is unset', () => {
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBeUndefined();
+  });
+
+  it('is a no-op when selected-model has no provider prefix', () => {
+    storage.set('selected-model', 'claude-sonnet-4-6');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('claude-sonnet-4-6');
+  });
+
+  it('is idempotent', () => {
+    storage.set('selected-model', 'github:gpt-4.1');
+    migrateLegacyAuthOnlySelection();
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBeUndefined();
   });
 });
 

@@ -19,7 +19,8 @@ import {
   shouldIncludeProvider,
 } from '../providers/index.js';
 import type { ProviderConfig } from '../providers/index.js';
-import type { CompatOverrides } from '../providers/types.js';
+import type { CompatOverrides, DeviceCodePrompter } from '../providers/types.js';
+import { copyTextToClipboard } from './clipboard.js';
 import {
   isBedrockCampCompatible,
   bedrockCampRegionFromBaseUrl,
@@ -132,6 +133,18 @@ const LEGACY_KEYS = [
   'bedrock_region',
 ] as const;
 
+// Provider ids that used to expose LLM models but no longer do — `selected-model`
+// entries pointing at any of these are stale after the upgrade and must be
+// cleared, otherwise `resolveCurrentModel()` falls through to its Anthropic
+// default while `getApiKey()` still returns the unrelated OAuth token (e.g.
+// GitHub PAT) and the next cone turn fails with an opaque auth error.
+//
+// We migrate eagerly on module load — `ensureModelSelected()` in layout.ts
+// also catches the broader "stored selection no longer resolves" case, but
+// it only runs on the page boot path; the worker context can `import` this
+// module first and call `resolveCurrentModel()` before layout has booted.
+const LEGACY_AUTH_ONLY_PROVIDERS = new Set(['github']);
+
 // Account entry in the slicc_accounts array
 export interface Account {
   providerId: string;
@@ -160,6 +173,33 @@ function cleanLegacyKeys(): void {
       /* noop */
     }
   }
+  migrateLegacyAuthOnlySelection();
+}
+
+/**
+ * Clear `selected-model` when it points at a provider that used to expose
+ * LLM models but no longer does (currently: `github`, after the 3.13.0
+ * Copilot split). Idempotent; never throws.
+ *
+ * Exported only for tests — the production path runs this through
+ * `cleanLegacyKeys()` so the migration fires on the first call to
+ * `getAccounts()` in both the panel and worker contexts.
+ */
+export function migrateLegacyAuthOnlySelection(): void {
+  try {
+    const raw = localStorage.getItem(MODEL_KEY);
+    if (!raw) return;
+    const sep = raw.indexOf(':');
+    if (sep <= 0) return;
+    const provider = raw.slice(0, sep);
+    if (LEGACY_AUTH_ONLY_PROVIDERS.has(provider)) {
+      localStorage.removeItem(MODEL_KEY);
+    }
+  } catch {
+    /* localStorage may be unavailable in some contexts — leave the
+       selection alone; layout.ts:ensureModelSelected() will catch
+       the mismatch on the next boot. */
+  }
 }
 
 function _resetLegacyCleanup(): void {
@@ -172,12 +212,52 @@ export const __test__ = { _resetLegacyCleanup };
 // Provider configs are now loaded dynamically from packages/webapp/src/providers/index.ts
 // (built-in providers in packages/webapp/src/providers/built-in/ + external providers in /packages/webapp/providers/)
 
-// Get all available providers — pi-ai providers (filtered by build config) + registered configs
+// Get all available providers — pi-ai providers (filtered by build config) + registered configs.
+// Hidden providers (config.hidden) are participants in the registry but never
+// surfaced to the user (see ProviderConfig.hidden — used by storage-slot
+// providers like the GitHub Copilot token cache).
 export function getAvailableProviders(): string[] {
   const piProviders = (getProviders() as string[]).filter(shouldIncludeProvider);
   const registeredIds = getRegisteredProviderIds(); // external + built-in extensions, already filtered
   const merged = new Set([...piProviders, ...registeredIds]);
-  return [...merged];
+  return [...merged].filter((id) => !getRegisteredProviderConfig(id)?.hidden);
+}
+
+/**
+ * Whether a provider exposes any LLM models the user could actually pick.
+ *
+ * Used to keep auth-only providers (e.g. plain `github`, which exists solely
+ * for git push/pull and the `oauth-token github` shell command) out of the
+ * "Add Account" picker. Login-gated LLM providers like `github-copilot`
+ * still pass because pi-ai's static registry advertises their catalog even
+ * before the user authenticates.
+ *
+ * Checked sources, in order:
+ *   1. `getProviderModels(id)` — covers providers that proxy another pi-ai
+ *      registry (bedrock-camp → amazon-bedrock) and providers whose
+ *      `getModelIds()` already resolves to a non-empty list.
+ *   2. Pi-ai's static `getModels(id)` — catches providers that advertise a
+ *      static catalog but resolve dynamic models only after login
+ *      (github-copilot pre-login).
+ *   3. The provider's `modelOverrides` declaration — explicit intent that
+ *      models will be offered, even if both look-ups above are empty in
+ *      the current state.
+ */
+export function providerOffersLlmModels(providerId: string): boolean {
+  try {
+    if (getProviderModels(providerId).length > 0) return true;
+  } catch {
+    /* fall through */
+  }
+  try {
+    const piModels = (getModels as (id: string) => unknown[])(providerId);
+    if (piModels.length > 0) return true;
+  } catch {
+    /* provider not registered with pi-ai */
+  }
+  const cfg = getRegisteredProviderConfig(providerId);
+  if (cfg?.modelOverrides && Object.keys(cfg.modelOverrides).length > 0) return true;
+  return false;
 }
 
 // Get provider config with fallback for unknown providers
@@ -431,9 +511,13 @@ export function getAllAvailableModels(): GroupedModels[] {
   const seen = new Map<string, GroupedModels>();
   for (const account of accounts) {
     if (seen.has(account.providerId)) continue;
+    const config = getProviderConfig(account.providerId);
+    // Hidden providers (e.g. internal Copilot token slot) participate in the
+    // registry for token storage but must not surface in the picker even when
+    // they have an active account.
+    if (config.hidden) continue;
     const models = pickerVisible(getProviderModels(account.providerId));
     if (models.length === 0) continue;
-    const config = getProviderConfig(account.providerId);
     const group: GroupedModels = {
       providerId: account.providerId,
       providerName: config.name,
@@ -1367,6 +1451,16 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         providerSelect.disabled = true;
         providerSelect.style.opacity = '0.7';
       } else {
+        // Placeholder so nothing is silently pre-selected — users must
+        // explicitly pick a provider before any auth/key UI shows up.
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Select a provider…';
+        placeholder.disabled = true;
+        placeholder.selected = true;
+        placeholder.hidden = true;
+        providerSelect.appendChild(placeholder);
+
         const providers = getAvailableProviders();
         const existingProviders = new Set(getAccounts().map((a) => a.providerId));
         const sorted = [...providers].sort((a, b) => {
@@ -1376,6 +1470,10 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         });
         for (const providerId of sorted) {
           if (existingProviders.has(providerId)) continue;
+          // Skip auth-only providers (no LLM models to expose) — they're
+          // useful as accounts the user might already have, but not as
+          // something to "add" from this dialog.
+          if (!providerOffersLlmModels(providerId)) continue;
           const config = getProviderConfig(providerId);
           const opt = document.createElement('option');
           opt.value = providerId;
@@ -1408,7 +1506,105 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         'font-size: 12px; color: var(--s2-content-secondary); text-align: center;';
       oauthSection.appendChild(oauthStatus);
 
-      // OAuth login handler — calls the provider's onOAuthLogin callback with a generic launcher
+      // OAuth login handler — calls the provider's onOAuthLogin callback with a generic launcher.
+      // Device-flow providers (e.g. github-copilot) also receive a `presentDeviceCode` prompter
+      // that renders the verification code inline in this dialog instead of via a floating overlay.
+      const createDialogDeviceCodePrompter = (): DeviceCodePrompter => {
+        const host = oauthSection;
+        const status = oauthStatus;
+        const loginBtn = oauthLoginBtn;
+        return (input) =>
+          new Promise<'continue' | 'cancel'>((resolve) => {
+            // Hide the default login UI while the prompt is active so the
+            // dialog only shows the code + the continue/cancel pair. The
+            // original elements are restored on resolution.
+            const wasLoginHidden = loginBtn.style.display;
+            const wasStatusHidden = status.style.display;
+            loginBtn.style.display = 'none';
+            status.style.display = 'none';
+
+            const prompt = document.createElement('div');
+            prompt.setAttribute('data-slicc-device-code-prompt', '');
+            prompt.style.cssText = 'display:flex;flex-direction:column;gap:8px';
+
+            const label = document.createElement('div');
+            label.className = 'dialog__desc';
+            label.textContent = 'Verification code';
+            label.style.cssText = 'font-size: 11px; color: var(--s2-content-tertiary);';
+
+            const code = document.createElement('div');
+            code.textContent = input.userCode;
+            code.style.cssText = [
+              'font: 600 22px ui-monospace, SFMono-Regular, Menlo, monospace',
+              'letter-spacing: 2px',
+              'color: var(--s2-content-primary, #e6edf3)',
+              'background: var(--s2-bg-secondary, #161b22)',
+              'border: 1px solid var(--s2-border, #30363d)',
+              'border-radius: 6px',
+              'padding: 10px 12px',
+              'text-align: center',
+              'user-select: all',
+              'cursor: text',
+            ].join(';');
+
+            const hint = document.createElement('div');
+            hint.className = 'dialog__desc';
+            hint.style.cssText = 'font-size: 12px; color: var(--s2-content-secondary);';
+            hint.textContent =
+              'Click Copy & Continue — we will open the GitHub authorization page in a new tab. Paste this code there if it is not already filled in.';
+
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:4px';
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'dialog__btn';
+            cancelBtn.textContent = 'Cancel';
+
+            const continueBtn = document.createElement('button');
+            continueBtn.type = 'button';
+            continueBtn.className = 'dialog__btn dialog__btn--primary';
+            continueBtn.textContent = 'Copy & Continue';
+
+            const cleanup = () => {
+              try {
+                prompt.remove();
+              } catch {
+                /* already removed */
+              }
+              loginBtn.style.display = wasLoginHidden;
+              status.style.display = wasStatusHidden;
+            };
+
+            cancelBtn.addEventListener('click', () => {
+              cleanup();
+              resolve('cancel');
+            });
+            continueBtn.addEventListener('click', () => {
+              void (async () => {
+                try {
+                  await copyTextToClipboard(input.userCode);
+                } catch {
+                  /* user can still copy manually from the displayed code */
+                }
+                cleanup();
+                status.style.display = wasStatusHidden;
+                status.textContent = 'Waiting for you to authorize in the new tab…';
+                resolve('continue');
+              })();
+            });
+
+            row.appendChild(cancelBtn);
+            row.appendChild(continueBtn);
+
+            prompt.appendChild(label);
+            prompt.appendChild(code);
+            prompt.appendChild(hint);
+            prompt.appendChild(row);
+            host.appendChild(prompt);
+          });
+      };
+
       oauthLoginBtn.addEventListener('click', async () => {
         const pid = providerSelect.value;
         if (!pid) return;
@@ -1439,7 +1635,9 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
                 'No controlled-browser CDP transport available — open SLICC in standalone mode or the Chrome extension.'
               );
             }
-            await providerConfig.onOAuthLoginIntercepted(launcher, renderAccountsList);
+            await providerConfig.onOAuthLoginIntercepted(launcher, renderAccountsList, {
+              presentDeviceCode: createDialogDeviceCodePrompter(),
+            });
           } else if (providerConfig.onOAuthLogin) {
             const { createOAuthLauncher } = await import('../providers/oauth-service.js');
             const launcher = createOAuthLauncher();
@@ -1574,7 +1772,18 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       function updateFormFields() {
         const pid = providerSelect.value;
-        if (!pid) return;
+        if (!pid) {
+          // Placeholder state — hide everything so the dialog only shows
+          // the dropdown until the user makes a choice.
+          providerDesc.textContent = '';
+          oauthSection.style.display = 'none';
+          apiKeySection.style.display = 'none';
+          baseUrlSection.style.display = 'none';
+          deploymentSection.style.display = 'none';
+          apiVersionSection.style.display = 'none';
+          saveBtn.style.display = 'none';
+          return;
+        }
         const providerConfig = getProviderConfig(pid);
 
         providerDesc.textContent = providerConfig.description;

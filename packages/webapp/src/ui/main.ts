@@ -1004,9 +1004,14 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
     setSelectedModelId: setSelectedModelIdExt,
     getAccounts: getAccountsExt,
     isModelHiddenFromPicker: isModelHiddenFromPickerExt,
+    providerOffersLlmModels: providerOffersLlmModelsExt,
   } = await import('./provider-settings.js');
+  const {
+    createSprinkleDeviceCodePrompter: createSprinkleDeviceCodePrompterExt,
+    resolveDeviceCodeDecision: resolveDeviceCodeDecisionExt,
+  } = await import('../providers/device-code-bridge.js');
   const buildExtProviderCatalogue = () => {
-    const ids = getAvailableProvidersExt();
+    const ids = getAvailableProvidersExt().filter((id) => providerOffersLlmModelsExt(id));
     const providers = ids
       .map((id) => {
         const cfg = getProviderConfigExt(id);
@@ -1097,7 +1102,11 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
                   'Intercepted OAuth requires the controlled-browser transport — open SLICC in standalone or extension mode.',
               };
             }
-            await cfg.onOAuthLoginIntercepted(launcher, () => undefined);
+            await cfg.onOAuthLoginIntercepted(launcher, () => undefined, {
+              presentDeviceCode: createSprinkleDeviceCodePrompterExt({
+                broadcastToDip: broadcastToDipsExt,
+              }),
+            });
           } else if (cfg.onOAuthLogin) {
             const { createOAuthLauncher } = await import('../providers/oauth-service.js');
             const launcher = createOAuthLauncher();
@@ -1161,12 +1170,22 @@ async function mainExtension(app: HTMLElement, options?: { detached?: boolean })
       welcomeAction === 'connect-ready' ||
       welcomeAction === 'connect-attempt' ||
       welcomeAction === 'oauth-attempt' ||
+      welcomeAction === 'device-code-decision' ||
       welcomeAction === 'shortcut-migrate';
     if (!isWelcomeFlowAction) return false;
 
     const body = event.body as Record<string, unknown> | null;
     const action = welcomeAction;
 
+    if (action === 'device-code-decision') {
+      // Sprinkle relayed the user's Cancel / Copy & Continue click —
+      // resolve the pending DeviceCodePrompter so the provider's
+      // device-flow login proceeds or aborts. Always intercept the
+      // lick so it never reaches the cone.
+      const decision = (body?.data as { decision?: unknown } | undefined)?.decision;
+      resolveDeviceCodeDecisionExt(decision === 'cancel' ? 'cancel' : 'continue');
+      return true;
+    }
     if (action === 'first-run') {
       getExtOnboardingOrchestrator().handleFirstRun();
       return true;
@@ -2223,7 +2242,10 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
     getProviderModels,
     isModelHiddenFromPicker,
     setSelectedModelId,
+    providerOffersLlmModels,
   } = await import('./provider-settings.js');
+  const { createSprinkleDeviceCodePrompter, resolveDeviceCodeDecision } =
+    await import('../providers/device-code-bridge.js');
   let workerOnboardingOrchestrator: InstanceType<typeof OnboardingOrchestratorWorker> | null = null;
   // `sprinkleManager` is assigned just below; closures reference the
   // binding, not the value, so the orchestrator's lazy construction
@@ -2277,7 +2299,11 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
                   'Intercepted OAuth requires the controlled-browser transport — open SLICC in standalone or extension mode.',
               };
             }
-            await cfg.onOAuthLoginIntercepted(launcher, () => undefined);
+            await cfg.onOAuthLoginIntercepted(launcher, () => undefined, {
+              presentDeviceCode: createSprinkleDeviceCodePrompter({
+                broadcastToDip: (payload) => broadcastToDips(payload),
+              }),
+            });
           } else if (cfg.onOAuthLogin) {
             const { createOAuthLauncher } = await import('../providers/oauth-service.js');
             const launcher = createOAuthLauncher();
@@ -2322,12 +2348,21 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       welcomeAction === 'connect-ready' ||
       welcomeAction === 'connect-attempt' ||
       welcomeAction === 'oauth-attempt' ||
+      welcomeAction === 'device-code-decision' ||
       welcomeAction === 'shortcut-migrate';
     if (!isWelcomeFlowAction) return false;
 
     const body = event.body as Record<string, unknown> | null;
     const action = welcomeAction;
 
+    if (action === 'device-code-decision') {
+      // See `mainExtension`'s mirror branch for the rationale — resolves
+      // the pending DeviceCodePrompter so the github-copilot device flow
+      // proceeds (Copy & Continue) or aborts (Cancel).
+      const decision = (body?.data as { decision?: unknown } | undefined)?.decision;
+      resolveDeviceCodeDecision(decision === 'cancel' ? 'cancel' : 'continue');
+      return true;
+    }
     if (action === 'first-run') {
       getOnboardingOrchestrator().handleFirstRun();
       return true;
@@ -3050,7 +3085,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
 
   // Worker-side provider catalogue (same shape as `buildExtProviderCatalogue`).
   function buildWorkerProviderCatalogue() {
-    const ids = getAvailableProviders();
+    const ids = getAvailableProviders().filter((id) => providerOffersLlmModels(id));
     const providers = ids
       .map((id) => {
         const cfg = getProviderConfig(id);

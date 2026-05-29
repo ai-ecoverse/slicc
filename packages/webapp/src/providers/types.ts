@@ -71,6 +71,39 @@ export interface InterceptOAuthConfig {
  */
 export type InterceptingOAuthLauncher = (config: InterceptOAuthConfig) => Promise<string | null>;
 
+/**
+ * Input handed to a {@link DeviceCodePrompter}. Surfaces the user-friendly
+ * code (the part the user types/pastes on the verification page) plus the
+ * full verification URL with `?user_code=` pre-filled, so the prompter can
+ * offer both a copy action and an "open authorization tab" action.
+ */
+export interface DeviceCodePromptInput {
+  /** Human-readable code GitHub displays, e.g. `XXXX-XXXX`. */
+  userCode: string;
+  /** Verification URL with `user_code` already in the query string. */
+  verificationUrl: string;
+  /** Device-code lifetime as reported by the OAuth server, in seconds. */
+  expiresInSeconds: number;
+}
+
+/**
+ * Caller-supplied UI hook that displays the device-flow user code and waits
+ * for explicit user confirmation before the provider opens any auth tab.
+ *
+ * Why a caller-supplied hook: the device code MUST be visible to the user
+ * (it's their only way to verify the request is genuine), but where to render
+ * it depends on the surrounding UI surface — the settings dialog wants to
+ * inject into its own DOM, the welcome sprinkle would render into its own
+ * iframe, and the `oauth-token` shell command can only print to stdout.
+ *
+ * The prompter is responsible for its own DOM/teardown. It should resolve
+ * with `'continue'` when the user has acknowledged the code (typically via
+ * a "Copy & Continue" button — auto-copying to clipboard is a nice touch)
+ * and `'cancel'` if the user backed out before authorizing. Providers may
+ * fall back to a default in-page overlay when no prompter is supplied.
+ */
+export type DeviceCodePrompter = (input: DeviceCodePromptInput) => Promise<'continue' | 'cancel'>;
+
 /** Options passed to onOAuthLogin from the caller (e.g. oauth-token command). */
 export interface OAuthLoginOptions {
   /**
@@ -80,6 +113,14 @@ export interface OAuthLoginOptions {
    * space-separated). The provider is responsible for any normalization.
    */
   scopes?: string;
+  /**
+   * UI hook for device-code OAuth flows. When present, the provider MUST
+   * await its resolution before navigating any auth tab, so the user
+   * always sees (and can copy) the verification code first. See
+   * {@link DeviceCodePrompter}. Providers ignore this option for
+   * non-device-flow logins.
+   */
+  presentDeviceCode?: DeviceCodePrompter;
 }
 
 /**
@@ -158,6 +199,16 @@ export interface ProviderConfig {
   requiresBaseUrl: boolean;
   baseUrlPlaceholder?: string;
   baseUrlDescription?: string;
+  /**
+   * Internal-only providers hidden from the picker / settings dialog. The
+   * config still participates in the registry (so OAuth token storage,
+   * fetch-proxy unmasking, and any associated stream functions still work),
+   * but the provider does not appear as a user-selectable account.
+   *
+   * Use for storage-slot providers that piggy-back on another provider's
+   * login flow (e.g. the Copilot token slot bootstrapped by the GitHub login).
+   */
+  hidden?: boolean;
   /** OAuth providers show a login button instead of an API key input. */
   isOAuth?: boolean;
   /**
