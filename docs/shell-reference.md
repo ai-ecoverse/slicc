@@ -388,6 +388,8 @@ exports: module.exports   // Alias
 
 ### jsh runtime extensions
 
+> Companion file for in-VFS agents: `packages/vfs-root/workspace/skills/skill-authoring/jsh-runtime-extensions.md`. Keep both in sync when the API changes.
+
 The following globals were added in PR #786 and are available in the jsh realm in both standalone and extension floats. They were extracted from cross-skill duplication analysis (see the workspace spec at `analyze-skills`); skills SHOULD prefer them over hand-rolled equivalents. Test availability with `node -e "console.log(typeof process.argv.parseFlags, typeof browser, typeof http, typeof skill)"`.
 
 #### `process.argv.parseFlags()`

@@ -84,7 +84,7 @@ Rules of thumb:
 
 ### `.jsh` — JavaScript shell scripts
 
-`.jsh` files are auto-discovered as shell commands anywhere on the VFS. **Full reference: `docs/shell-reference.md` (sections "Globals API" and "jsh runtime extensions").**
+`.jsh` files are auto-discovered as shell commands anywhere on the VFS. **Full reference: `./jsh-runtime-extensions.md`.**
 
 - **Auto-discovery**: registered as callable commands by filename (without the extension). A skill can ship its own commands by including a `.jsh` next to `SKILL.md`. Priority root `/workspace/skills/` wins on basename collisions.
 - **Dual-mode**: works in both the CLI server and the Chrome extension (sandbox iframe). Don't rely on CLI-only Node modules.
@@ -103,7 +103,7 @@ Rules of thumb:
 
 #### Runtime extensions (live — prefer these over hand-rolled equivalents)
 
-The globals below ship in the jsh realm. Full reference: `docs/shell-reference.md` ("jsh runtime extensions"). Use them instead of reimplementing the cross-skill patterns they replace.
+The globals below ship in the jsh realm. Full reference: `./jsh-runtime-extensions.md`. Use them instead of reimplementing the cross-skill patterns they replace.
 
 - **`process.argv.parseFlags()`** — returns `{ positional, flags, subcommand }`. Replaces the per-skill `--flag=val` / `--flag val` parsing loop.
 - **`browser.*`** — `findTab({ domain | urlMatch })`, `ensureTab(url)`, `eval(tab, fn)`, `evalAsync(tab, fn)`, `cookie(tab, name)`, `localStorage(tab, key)`. Replaces shelling out to `playwright-cli tab-list` and regex-parsing its output.
