@@ -27,6 +27,12 @@ describe('isCherryEnvelope', () => {
     expect(isCherryEnvelope(null)).toBe(false);
     expect(isCherryEnvelope('x')).toBe(false);
   });
+  it('rejects an envelope missing channelId', () => {
+    expect(isCherryEnvelope({ ...make(), channelId: undefined })).toBe(false);
+  });
+  it('rejects an unknown kind', () => {
+    expect(isCherryEnvelope({ ...make(), kind: 'bogus.kind' })).toBe(false);
+  });
 });
 
 describe('acceptEnvelope three-factor pinning', () => {
@@ -80,5 +86,23 @@ describe('acceptEnvelope three-factor pinning', () => {
       data: make({ kind: 'handshake.hello', channelId: 'cherry-new' }),
     } as MessageEvent;
     expect(acceptEnvelope(ev, { ...ctx, channelId: null })).toBe(true);
+  });
+
+  it('rejects a malformed (non-cherry) payload even when origin + source match', () => {
+    const ev = {
+      origin: 'https://host.example',
+      source: expectedSource,
+      data: { foo: 1 },
+    } as unknown as MessageEvent;
+    expect(acceptEnvelope(ev, ctx)).toBe(false);
+  });
+
+  it('accepts a foreign source when ctx.expectedSource is null', () => {
+    const ev = {
+      origin: 'https://host.example',
+      source: {} as MessageEventSource,
+      data: make(),
+    } as MessageEvent;
+    expect(acceptEnvelope(ev, { ...ctx, expectedSource: null })).toBe(true);
   });
 });

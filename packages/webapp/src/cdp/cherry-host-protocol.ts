@@ -128,7 +128,12 @@ export function isCherryEnvelope(value: unknown): value is CherryEnvelope {
 export interface AcceptContext {
   /** Allowlisted origins of the counterpart frame. */
   allowOrigins: string[];
-  /** The MessageEventSource we expect (iframe.contentWindow or window.parent). */
+  /**
+   * The MessageEventSource we expect (iframe.contentWindow or window.parent).
+   * `null` means "accept any source" — callers MUST pass the real expectedSource
+   * once known; `null` is only for an initial pre-handshake window where the
+   * source isn't yet pinned (mirrors how `channelId: null` disables the nonce factor).
+   */
   expectedSource: MessageEventSource | null;
   /** Pinned channel nonce. null only during pre-handshake (accept any). */
   channelId: string | null;
