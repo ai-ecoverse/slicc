@@ -52,6 +52,11 @@ export interface ConeEntry {
    * filtering and by CLI for tracking.
    */
   metadata?: Record<string, string>;
+  /**
+   * Names-only index of the cone's config bundle (model, account provider IDs,
+   * secret names). Persisted on the registry; NO secret values stored.
+   */
+  coneConfigIndex?: ConeConfigIndex;
 }
 
 /**
