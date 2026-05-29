@@ -87,6 +87,7 @@ export type LeaderToFollowerMessage =
   | { type: 'tab.open.error'; requestId: string; error: string }
   | { type: 'fs.request'; requestId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
+  | CherrySliccEventMessage
   | { type: 'ping' }
   | { type: 'pong' };
 
@@ -128,6 +129,7 @@ export type FollowerToLeaderMessage =
   | { type: 'tab.open.error'; requestId: string; error: string }
   | { type: 'fs.request'; requestId: string; targetRuntimeId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
+  | CherryHostEventMessage
   | { type: 'ping' }
   | { type: 'pong' };
 
@@ -139,6 +141,42 @@ export interface RemoteTargetInfo {
   targetId: string;
   title: string;
   url: string;
+  /** Distinguishes a real browser page from a cooperative cherry host page. */
+  kind?: 'browser' | 'cherry';
+  /** Only present for kind === 'cherry'. What the host page lends to the leader. */
+  capabilities?: { navigate: boolean; network: boolean; screenshot: boolean };
+}
+
+// ---------------------------------------------------------------------------
+// Cherry event-passing messages
+// ---------------------------------------------------------------------------
+
+/** Host page → cone: a named event emitted by the cherry host page. */
+export interface CherryHostEventMessage {
+  type: 'cherry.host_event';
+  targetId: string;
+  name: string;
+  detail?: unknown;
+}
+
+/** Cone → host page: a named event sent to the cherry host page. */
+export interface CherrySliccEventMessage {
+  type: 'cherry.slicc_event';
+  targetId: string;
+  name: string;
+  detail?: unknown;
+}
+
+export function isCherryHostEventMessage(m: unknown): m is CherryHostEventMessage {
+  return (
+    typeof m === 'object' && m !== null && (m as { type?: string }).type === 'cherry.host_event'
+  );
+}
+
+export function isCherrySliccEventMessage(m: unknown): m is CherrySliccEventMessage {
+  return (
+    typeof m === 'object' && m !== null && (m as { type?: string }).type === 'cherry.slicc_event'
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +214,10 @@ export interface TrayTargetEntry {
   title: string;
   url: string;
   isLocal: boolean; // True if owned by the receiving runtime (set by consumer, not registry)
+  /** Distinguishes a real browser page from a cooperative cherry host page. */
+  kind?: 'browser' | 'cherry';
+  /** Only present for kind === 'cherry'. What the host page lends to the leader. */
+  capabilities?: { navigate: boolean; network: boolean; screenshot: boolean };
 }
 
 // ---------------------------------------------------------------------------

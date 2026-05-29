@@ -177,6 +177,8 @@ export class BrowserAPI {
         targetId: t.targetId,
         title: t.title,
         url: t.url,
+        kind: t.kind,
+        capabilities: t.capabilities,
       }));
 
     return [...local, ...remote];

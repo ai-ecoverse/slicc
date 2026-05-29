@@ -8,10 +8,12 @@ import {
   reassembleCDPResponse,
   sendSnapshot,
   reassembleSnapshot,
+  isCherrySliccEventMessage,
   CDP_CHUNK_THRESHOLD,
   type LeaderToFollowerMessage,
   type FollowerToLeaderMessage,
   type TraySyncMessage,
+  type RemoteTargetInfo,
 } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
 import type { ChatMessage } from '../../src/ui/types.js';
@@ -717,6 +719,32 @@ describe('tray-sync-protocol', () => {
       expect(result).not.toBeNull();
       expect(result!.messages).toEqual(messages);
       expect(result!.scoopJid).toBe('test-scoop');
+    });
+  });
+
+  describe('cherry target tagging', () => {
+    it('RemoteTargetInfo carries kind and capabilities', () => {
+      const t: RemoteTargetInfo = {
+        targetId: 't1',
+        title: 'Host',
+        url: 'https://host.example',
+        kind: 'cherry',
+        capabilities: { navigate: true, network: false, screenshot: true },
+      };
+      expect(t.kind).toBe('cherry');
+      expect(t.capabilities?.network).toBe(false);
+    });
+
+    it('isCherrySliccEventMessage narrows the union', () => {
+      expect(
+        isCherrySliccEventMessage({
+          type: 'cherry.slicc_event',
+          targetId: 't1',
+          name: 'open-url',
+          detail: { url: 'https://x' },
+        })
+      ).toBe(true);
+      expect(isCherrySliccEventMessage({ type: 'cdp.request' })).toBe(false);
     });
   });
 });
