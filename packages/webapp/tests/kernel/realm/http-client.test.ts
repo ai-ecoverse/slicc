@@ -407,3 +407,121 @@ describe('http.client — methods', () => {
     expect(Object.isFrozen(http)).toBe(true);
   });
 });
+
+describe('http.client — raw responses', () => {
+  it('returns { body, headers, status } when raw: true', async () => {
+    const deps = makeDeps(() =>
+      jsonResponse(
+        { ok: true },
+        { status: 201, headers: { 'content-type': 'application/json', 'x-trace': 'abc' } }
+      )
+    );
+    const client = createHttpGlobal(deps).client({ baseUrl: 'https://api.example.com' });
+    const resp = (await client.get('/x', { raw: true })) as {
+      body: unknown;
+      headers: Record<string, string>;
+      status: number;
+    };
+    expect(resp.status).toBe(201);
+    expect(resp.body).toEqual({ ok: true });
+    expect(resp.headers['x-trace']).toBe('abc');
+    expect(resp.headers['content-type']).toBe('application/json');
+  });
+
+  it('returns body directly when raw is omitted', async () => {
+    const deps = makeDeps(() => jsonResponse({ ok: true }));
+    const client = createHttpGlobal(deps).client({ baseUrl: 'https://api.example.com' });
+    const resp = await client.get('/x');
+    expect(resp).toEqual({ ok: true });
+  });
+});
+
+describe('http.client — token request context', () => {
+  it('passes { method, path, url } to the token function', async () => {
+    const seen: Array<{ method: string; path: string; url: string } | undefined> = [];
+    const deps = makeDeps(() => jsonResponse({}));
+    const client = createHttpGlobal(deps).client({
+      baseUrl: 'https://api.example.com',
+      token: (req) => {
+        seen.push(req);
+        return 'tok';
+      },
+    });
+    await client.get('/users/1', { params: { x: '1' } });
+    await client.post('/items');
+    expect(seen[0]).toEqual({
+      method: 'GET',
+      path: '/users/1',
+      url: 'https://api.example.com/users/1?x=1',
+    });
+    expect(seen[1]).toEqual({
+      method: 'POST',
+      path: '/items',
+      url: 'https://api.example.com/items',
+    });
+  });
+
+  it('still works when token ignores the request argument (back-compat)', async () => {
+    const deps = makeDeps(() => jsonResponse({}));
+    const client = createHttpGlobal(deps).client({
+      baseUrl: 'https://api.example.com',
+      token: () => 'legacy-tok',
+    });
+    await client.get('/x');
+    const h = deps.fetch.calls[0].init?.headers as Record<string, string>;
+    expect(h['Authorization']).toBe('Bearer legacy-tok');
+  });
+});
+
+describe('http.client — timeoutMs', () => {
+  it('aborts the request when the per-attempt timeout fires', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps: HttpGlobalDeps = {
+        fetch: vi.fn(async (_url: string, init?: RequestInit) => {
+          return await new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(init.signal!.reason ?? new Error('aborted'));
+            });
+          });
+        }),
+        sleep: async () => {},
+      };
+      const client = createHttpGlobal(deps).client({
+        baseUrl: 'https://api.example.com',
+        timeoutMs: 50,
+      });
+      const p = client.get('/slow');
+      const caught = p.catch((e) => e);
+      await vi.advanceTimersByTimeAsync(60);
+      const err = await caught;
+      expect(err).toBeInstanceOf(Error);
+      expect(String((err as Error).message)).toMatch(/timeout|abort/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('http.client — caller signal', () => {
+  it('aborts when the caller signal fires', async () => {
+    const ctl = new AbortController();
+    const deps: HttpGlobalDeps = {
+      fetch: vi.fn(async (_url: string, init?: RequestInit) => {
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(init.signal!.reason ?? new Error('aborted'));
+          });
+        });
+      }),
+      sleep: async () => {},
+    };
+    const client = createHttpGlobal(deps).client({ baseUrl: 'https://api.example.com' });
+    const p = client.get('/slow', { signal: ctl.signal });
+    const caught = p.catch((e) => e);
+    ctl.abort(new Error('user-cancel'));
+    const err = await caught;
+    expect(err).toBeInstanceOf(Error);
+    expect(String((err as Error).message)).toMatch(/cancel|abort/i);
+  });
+});

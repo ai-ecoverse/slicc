@@ -24,24 +24,45 @@ export interface HttpRetryConfig {
   maxAttempts: number;
 }
 
+export interface HttpTokenRequest {
+  method: string;
+  path: string;
+  url: string;
+}
+
 export interface HttpClientConfig {
   baseUrl?: string;
-  token?: () => string | undefined | null | Promise<string | undefined | null>;
+  token?: (
+    req?: HttpTokenRequest
+  ) => string | undefined | null | Promise<string | undefined | null>;
   headers?: Record<string, string>;
   retry?: HttpRetryConfig;
+  timeoutMs?: number;
 }
 
 export interface HttpRequestOpts {
   params?: Record<string, unknown>;
   headers?: Record<string, string>;
   body?: unknown;
+  raw?: boolean;
+  signal?: AbortSignal;
+}
+
+export interface HttpResponse<T = unknown> {
+  body: T;
+  headers: Record<string, string>;
+  status: number;
 }
 
 export interface HttpClient {
-  get(path: string, opts?: HttpRequestOpts): Promise<unknown>;
-  post(path: string, opts?: HttpRequestOpts): Promise<unknown>;
-  put(path: string, opts?: HttpRequestOpts): Promise<unknown>;
-  delete(path: string, opts?: HttpRequestOpts): Promise<unknown>;
+  get(path: string, opts: HttpRequestOpts & { raw: true }): Promise<HttpResponse>;
+  get(path: string, opts?: HttpRequestOpts & { raw?: false }): Promise<unknown>;
+  post(path: string, opts: HttpRequestOpts & { raw: true }): Promise<HttpResponse>;
+  post(path: string, opts?: HttpRequestOpts & { raw?: false }): Promise<unknown>;
+  put(path: string, opts: HttpRequestOpts & { raw: true }): Promise<HttpResponse>;
+  put(path: string, opts?: HttpRequestOpts & { raw?: false }): Promise<unknown>;
+  delete(path: string, opts: HttpRequestOpts & { raw: true }): Promise<HttpResponse>;
+  delete(path: string, opts?: HttpRequestOpts & { raw?: false }): Promise<unknown>;
 }
 
 export interface HttpGlobal {
@@ -201,7 +222,7 @@ export function createHttpGlobal(deps: HttpGlobalDeps): HttpGlobal {
       const url = buildUrl(config.baseUrl, path, opts.params);
       const headers = mergeHeaders(config.headers, opts.headers);
       if (config.token) {
-        const tok = await config.token();
+        const tok = await config.token({ method, path, url });
         if (tok) {
           const hasAuth = Object.keys(headers).some((k) => k.toLowerCase() === 'authorization');
           if (!hasAuth) headers['Authorization'] = `Bearer ${tok}`;
@@ -213,10 +234,35 @@ export function createHttpGlobal(deps: HttpGlobalDeps): HttpGlobal {
 
       let lastResponse: Response | null = null;
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        const resp = await deps.fetch(url, init);
+        const timeoutCtl = config.timeoutMs ? new AbortController() : null;
+        const timeoutId = timeoutCtl
+          ? setTimeout(() => timeoutCtl.abort(new Error('timeout')), config.timeoutMs!)
+          : null;
+        // Combine caller signal + per-attempt timeout signal.
+        const combinedSignal =
+          opts.signal && timeoutCtl?.signal
+            ? AbortSignal.any([opts.signal, timeoutCtl.signal])
+            : (opts.signal ?? timeoutCtl?.signal);
+        const attemptInit: RequestInit = combinedSignal
+          ? { ...init, signal: combinedSignal }
+          : init;
+        let resp: Response;
+        try {
+          resp = await deps.fetch(url, attemptInit);
+        } finally {
+          if (timeoutId !== null) clearTimeout(timeoutId);
+        }
         lastResponse = resp;
         if (resp.ok) {
-          return readBody(resp);
+          const respBody = await readBody(resp);
+          if (opts.raw) {
+            return {
+              body: respBody,
+              headers: Object.fromEntries(resp.headers.entries()),
+              status: resp.status,
+            } satisfies HttpResponse;
+          }
+          return respBody;
         }
         const willRetry = attempt + 1 < maxAttempts && retryOn.has(resp.status);
         if (!willRetry) {
@@ -237,12 +283,17 @@ export function createHttpGlobal(deps: HttpGlobalDeps): HttpGlobal {
       throw new Error(`http: no attempts made for ${method} ${url}`);
     }
 
-    return Object.freeze({
-      get: (path: string, opts?: HttpRequestOpts) => request('GET', path, opts),
-      post: (path: string, opts?: HttpRequestOpts) => request('POST', path, opts),
-      put: (path: string, opts?: HttpRequestOpts) => request('PUT', path, opts),
-      delete: (path: string, opts?: HttpRequestOpts) => request('DELETE', path, opts),
-    });
+    const client: HttpClient = {
+      get: ((path: string, opts?: HttpRequestOpts) =>
+        request('GET', path, opts)) as HttpClient['get'],
+      post: ((path: string, opts?: HttpRequestOpts) =>
+        request('POST', path, opts)) as HttpClient['post'],
+      put: ((path: string, opts?: HttpRequestOpts) =>
+        request('PUT', path, opts)) as HttpClient['put'],
+      delete: ((path: string, opts?: HttpRequestOpts) =>
+        request('DELETE', path, opts)) as HttpClient['delete'],
+    };
+    return Object.freeze(client);
   }
 
   return Object.freeze({ client: makeClient });

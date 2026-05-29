@@ -426,10 +426,22 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     e[NODE_EXIT] = Number.isFinite(code) ? Number(code) : 0;
     throw e;
   };
+  const formatCliPrefixed = (colorFn, prefix, text) => {
+    if (prefix === undefined) return colorFn('Error:') + ' ' + text + '\n';
+    if (prefix === '') return colorFn(text) + '\n';
+    return colorFn(prefix + ':') + ' ' + text + '\n';
+  };
+  const formatCliWarn = (prefix, text) => {
+    if (prefix === undefined) return colorApi.yellow('Warning:') + ' ' + text + '\n';
+    if (prefix === '') return colorApi.yellow(text) + '\n';
+    return colorApi.yellow(prefix + ':') + ' ' + text + '\n';
+  };
   const cliApi = {
-    die(msg, exitCode) {
-      writeStderr(colorApi.red('Error:') + ' ' + toCliLine(msg) + '\n');
-      cliExit(exitCode === undefined ? 1 : exitCode);
+    die(msg, opts) {
+      const exitCode = typeof opts === 'number' ? opts : (opts && opts.exitCode !== undefined ? opts.exitCode : 1);
+      const customPrefix = typeof opts === 'object' && opts !== null && 'prefix' in opts ? opts.prefix : undefined;
+      writeStderr(formatCliPrefixed(colorApi.red, customPrefix, toCliLine(msg)));
+      cliExit(exitCode);
     },
     out(value) {
       if (typeof value === 'string') {
@@ -439,7 +451,10 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       try { writeStdout(JSON.stringify(value, null, 2) + '\n'); }
       catch { writeStdout(String(value) + '\n'); }
     },
-    warn(msg) { writeStderr(colorApi.yellow('Warning:') + ' ' + toCliLine(msg) + '\n'); },
+    warn(msg, opts) {
+      const customPrefix = typeof opts === 'object' && opts !== null && 'prefix' in opts ? opts.prefix : undefined;
+      writeStderr(formatCliWarn(customPrefix, toCliLine(msg)));
+    },
     help(text) { writeStdout(text.endsWith('\n') ? text : text + '\n'); cliExit(0); },
   };
 
@@ -503,6 +518,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     const d = value instanceof Date ? value : new Date(value);
     if (Number.isNaN(d.getTime())) return String(value);
     if (style === 'iso') return d.toISOString();
+    if (style === 'locale') return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(d);
     if (style === 'human') {
       const diff = Date.now() - d.getTime();
       const abs = Math.abs(diff);
@@ -709,7 +725,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
         const url = buildUrl(config.baseUrl, path, opts.params);
         const headers = mergeHeaders(config.headers, opts.headers);
         if (config.token) {
-          const tok = await config.token();
+          const tok = await config.token({ method, path, url });
           if (tok) {
             const hasAuth = Object.keys(headers).some((k) => k.toLowerCase() === 'authorization');
             if (!hasAuth) headers['Authorization'] = 'Bearer ' + tok;
@@ -720,9 +736,43 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
         if (body !== undefined) init.body = body;
         let lastResponse = null;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
-          const resp = await realmFetch(url, init);
+          const timeoutCtl = config.timeoutMs ? new AbortController() : null;
+          const timeoutId = timeoutCtl ? setTimeout(() => timeoutCtl.abort(new Error('timeout')), config.timeoutMs) : null;
+          const combinedSignal = opts.signal && timeoutCtl && timeoutCtl.signal
+            ? AbortSignal.any([opts.signal, timeoutCtl.signal])
+            : (opts.signal || (timeoutCtl && timeoutCtl.signal));
+          const attemptInit = combinedSignal ? Object.assign({}, init, { signal: combinedSignal }) : init;
+          let resp;
+          try {
+            // Signal can't cross postMessage to the parent; honor it locally
+            // by racing the realmFetch against an abort rejection so the
+            // caller sees cancellation even if the parent still completes.
+            if (combinedSignal) {
+              if (combinedSignal.aborted) {
+                throw combinedSignal.reason || new Error('aborted');
+              }
+              resp = await new Promise((resolve, reject) => {
+                const onAbort = () => reject(combinedSignal.reason || new Error('aborted'));
+                combinedSignal.addEventListener('abort', onAbort, { once: true });
+                realmFetch(url, attemptInit).then(
+                  (r) => { combinedSignal.removeEventListener('abort', onAbort); resolve(r); },
+                  (e) => { combinedSignal.removeEventListener('abort', onAbort); reject(e); },
+                );
+              });
+            } else {
+              resp = await realmFetch(url, attemptInit);
+            }
+          } finally {
+            if (timeoutId !== null) clearTimeout(timeoutId);
+          }
           lastResponse = resp;
-          if (resp.ok) return readBody(resp);
+          if (resp.ok) {
+            const respBody = await readBody(resp);
+            if (opts.raw) {
+              return { body: respBody, headers: Object.fromEntries(resp.headers.entries()), status: resp.status };
+            }
+            return respBody;
+          }
           const willRetry = attempt + 1 < maxAttempts && retryOn.has(resp.status);
           if (!willRetry) {
             const errBody = await readBody(resp).catch(() => null);

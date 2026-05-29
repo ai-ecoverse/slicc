@@ -104,10 +104,19 @@ export interface CliDeps {
   color: ColorApi;
 }
 
+export interface CliDieOpts {
+  exitCode?: number;
+  prefix?: string;
+}
+
+export interface CliWarnOpts {
+  prefix?: string;
+}
+
 export interface CliApi {
-  die(msg: unknown, exitCode?: number): never;
+  die(msg: unknown, opts?: number | CliDieOpts): never;
   out(value: unknown): void;
-  warn(msg: unknown): void;
+  warn(msg: unknown, opts?: CliWarnOpts): void;
   help(text: string): never;
 }
 
@@ -122,10 +131,27 @@ export function createCli(deps: CliDeps): CliApi {
       return String(v);
     }
   };
+  const formatPrefixed = (
+    color: (s: string) => string,
+    prefix: string | undefined,
+    text: string
+  ): string => {
+    if (prefix === undefined) return `${color('Error:')} ${text}\n`;
+    if (prefix === '') return `${color(text)}\n`;
+    return `${color(`${prefix}:`)} ${text}\n`;
+  };
+  const formatWarn = (prefix: string | undefined, text: string): string => {
+    if (prefix === undefined) return `${deps.color.yellow('Warning:')} ${text}\n`;
+    if (prefix === '') return `${deps.color.yellow(text)}\n`;
+    return `${deps.color.yellow(`${prefix}:`)} ${text}\n`;
+  };
   return {
-    die(msg: unknown, exitCode: number = 1): never {
+    die(msg: unknown, opts?: number | CliDieOpts): never {
+      const exitCode = typeof opts === 'number' ? opts : (opts?.exitCode ?? 1);
+      const customPrefix =
+        typeof opts === 'object' && opts !== null && 'prefix' in opts ? opts.prefix : undefined;
       const text = toLine(msg);
-      deps.writeStderr(`${deps.color.red('Error:')} ${text}\n`);
+      deps.writeStderr(formatPrefixed(deps.color.red, customPrefix, text));
       deps.exit(exitCode);
       throw new Error('unreachable');
     },
@@ -140,8 +166,10 @@ export function createCli(deps: CliDeps): CliApi {
         deps.writeStdout(`${String(value)}\n`);
       }
     },
-    warn(msg: unknown): void {
-      deps.writeStderr(`${deps.color.yellow('Warning:')} ${toLine(msg)}\n`);
+    warn(msg: unknown, opts?: CliWarnOpts): void {
+      const customPrefix =
+        typeof opts === 'object' && opts !== null && 'prefix' in opts ? opts.prefix : undefined;
+      deps.writeStderr(formatWarn(customPrefix, toLine(msg)));
     },
     help(text: string): never {
       deps.writeStdout(text.endsWith('\n') ? text : `${text}\n`);
@@ -278,7 +306,7 @@ export interface FmtApi {
   trunc(s: string, n: number): string;
   col(s: string, width: number): string;
   table(rows: ReadonlyArray<ReadonlyArray<unknown>>, widths?: ReadonlyArray<number>): string;
-  date(value: Date | string | number, style?: 'short' | 'iso' | 'human'): string;
+  date(value: Date | string | number, style?: 'short' | 'iso' | 'human' | 'locale'): string;
 }
 
 function trunc(s: string, n: number): string {
@@ -336,11 +364,14 @@ function toDate(value: Date | string | number): Date {
 
 function fmtDate(
   value: Date | string | number,
-  style: 'short' | 'iso' | 'human' = 'short'
+  style: 'short' | 'iso' | 'human' | 'locale' = 'short'
 ): string {
   const d = toDate(value);
   if (Number.isNaN(d.getTime())) return String(value);
   if (style === 'iso') return d.toISOString();
+  if (style === 'locale') {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(d);
+  }
   if (style === 'human') {
     const diff = Date.now() - d.getTime();
     const abs = Math.abs(diff);

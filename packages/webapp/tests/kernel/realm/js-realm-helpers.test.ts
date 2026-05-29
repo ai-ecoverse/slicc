@@ -119,6 +119,40 @@ describe('createCli', () => {
     expect(exit).toHaveBeenCalledWith(42);
   });
 
+  it('die({ prefix }) replaces the default Error: label', () => {
+    const { cli, stderr } = makeCli();
+    expect(() => cli.die('boom', { prefix: 'FATAL' })).toThrow('__exit_1');
+    expect(stderr.join('')).toContain('FATAL:');
+    expect(stderr.join('')).not.toContain('Error:');
+  });
+
+  it('die({ prefix: "" }) suppresses the label entirely', () => {
+    const { cli, stderr } = makeCli();
+    expect(() => cli.die('plain', { prefix: '' })).toThrow('__exit_1');
+    expect(stderr.join('')).not.toContain(':');
+    expect(stderr.join('')).toContain('plain');
+  });
+
+  it('die({ exitCode, prefix }) uses both', () => {
+    const { cli, exit } = makeCli();
+    expect(() => cli.die('x', { exitCode: 7, prefix: 'FATAL' })).toThrow('__exit_7');
+    expect(exit).toHaveBeenCalledWith(7);
+  });
+
+  it('warn({ prefix }) replaces the default Warning: label', () => {
+    const { cli, stderr } = makeCli();
+    cli.warn('careful', { prefix: 'NOTICE' });
+    expect(stderr.join('')).toContain('NOTICE:');
+    expect(stderr.join('')).not.toContain('Warning:');
+  });
+
+  it('warn({ prefix: "" }) suppresses the label entirely', () => {
+    const { cli, stderr } = makeCli();
+    cli.warn('plain', { prefix: '' });
+    expect(stderr.join('')).not.toContain(':');
+    expect(stderr.join('')).toContain('plain');
+  });
+
   it('out(string) ensures a trailing newline; out(object) pretty-prints JSON', () => {
     const { cli, stdout } = makeCli();
     cli.out('hi');
@@ -208,6 +242,15 @@ describe('fmt', () => {
     expect(fmt.date(d, 'short')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     // 'human' is relative-to-now; just assert it stays a string.
     expect(typeof fmt.date(d, 'human')).toBe('string');
+  });
+
+  it("date('locale') uses Intl.DateTimeFormat medium style", () => {
+    const d = new Date('2026-05-28T12:34:56.000Z');
+    const out = fmt.date(d, 'locale');
+    expect(typeof out).toBe('string');
+    expect(out.length).toBeGreaterThan(0);
+    // Should match what Intl would have produced for the same input.
+    expect(out).toBe(new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(d));
   });
 });
 
