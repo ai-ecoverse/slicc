@@ -8,6 +8,12 @@ export * from './substrate-factory.js';
 export * from './polling.js';
 export { createE2bSubstrate } from './substrates/e2b.js';
 export { filterSecretsEnv } from './secrets-filter.js';
+// Re-export the side-effect-free cone-config contract from the root too, so
+// Node/worker consumers (which go through node-server's inline-workspaces
+// packaging that only rewrites the bare '@slicc/cloud-core' specifier) can
+// import it from the root. The browser webapp must still import the
+// './cone-config' subpath to avoid pulling e2b into its bundle.
+export * from './cone-config/index.js';
 export type { Registry } from './registry.js';
 export { startCone, reserveSlot } from './operations/start.js';
 export type { StartConeOpts, StartConeDeps, ReserveSlotOpts } from './operations/start.js';
