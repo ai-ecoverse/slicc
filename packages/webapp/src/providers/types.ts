@@ -260,9 +260,8 @@ export interface ProviderConfig {
    * re-authentication. When defined, the URL is opened during logout (not login)
    * so that a subsequent Login always gets a fresh account selection.
    *
-   * Design note (Option B): This is intentionally disruptive — it signs the user
-   * out of the provider in their browser. See the spec at
-   * docs/superpowers/specs/2026-05-28-oauth-logout-account-switching-design.md.
+   * Design note: This is intentionally disruptive because it signs the user
+   * out of the provider in their browser.
    *
    * If undefined, IdP session logout is skipped for this provider (token revocation
    * via onOAuthLogout still runs).
