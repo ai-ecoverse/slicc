@@ -1,30 +1,5 @@
-# Default owners — reviewed when no more specific rule matches.
-*                                       @trieloff @karlpauls @catalan-adobe
-
-# Workflow / release / repo-config changes need a maintainer review.
-/.github/                               @trieloff @karlpauls
-/.releaserc.json                        @trieloff @karlpauls
-/renovate.json                          @trieloff @karlpauls
-
-# Native macOS launcher + server.
-/packages/swift-launcher/               @trieloff @karlpauls
-/packages/swift-server/                 @trieloff @karlpauls
-
-# iOS follower app.
-/packages/ios-app/                      @trieloff @karlpauls
-
-# Cloudflare worker (tray hub / signaling / TURN).
-/packages/cloudflare-worker/            @trieloff @karlpauls
-
-# Browser app core + UI.
-/packages/webapp/                       @trieloff @karlpauls @catalan-adobe
+# Default owner.
+*                               @trieloff
 
 # Chrome extension.
-/packages/chrome-extension/             @trieloff @karlpauls @catalan-adobe
-
-# Node CLI / Electron server.
-/packages/node-server/                  @trieloff @karlpauls
-
-# Shared libs.
-/packages/shared-ts/                    @trieloff @karlpauls
-/packages/cloud-core/                   @trieloff @karlpauls
+/packages/chrome-extension/     @karlpauls
