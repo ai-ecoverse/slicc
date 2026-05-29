@@ -19,7 +19,7 @@ This is an extension of the existing hosted-cone provisioning path, not a new ru
 
 A cloud cone is an e2b sandbox running `node-server --hosted`; the webapp boots in `hosted-leader` mode. Today the worker ships only `ADOBE_IMS_TOKEN` (+ `_DOMAINS`) and the hosted boot hardcodes the model and one Adobe account. Constraints:
 
-1. **No preboot file write.** `substrate.create()` accepts only env vars (`packages/cloud-core/src/substrates/e2b.ts:27`); `startCone` writes `/slicc/secrets.env` only *after* `create()` returns (`packages/cloud-core/src/operations/start.ts:167`,`:241`). The race-free preboot channel is an **env var** that `start.sh` writes to a file before launching node-server (`packages/dev-tools/e2b-template/start.sh:26`).
+1. **No preboot file write.** `substrate.create()` accepts only env vars (`packages/cloud-core/src/substrates/e2b.ts:27`); `startCone` writes `/slicc/secrets.env` only _after_ `create()` returns (`packages/cloud-core/src/operations/start.ts:167`,`:241`). The race-free preboot channel is an **env var** that `start.sh` writes to a file before launching node-server (`packages/dev-tools/e2b-template/start.sh:26`).
 2. **`saveOAuthAccount` is OAuth-only.** `Account.apiKey` is required (`packages/webapp/src/ui/provider-settings.ts:151`); `saveOAuthAccount` hardcodes `apiKey: ''` (`:768`). API-key path is `addAccount(...)` (`:695`); removal is `removeAccount(...)` (`:711`). In non-extension mode `saveOAuthAccount` also POSTs `/api/secrets/oauth-update` (`:843`) — a node-server route absent on `www.sliccy.ai`.
 3. **Secrets read path.** `EnvSecretStore.get()` re-reads its env file (`/slicc/secrets.env`) each call (`packages/node-server/src/secrets/env-secret-store.ts:27`,`:82`). `SecretProxyManager` builds the fetch-proxy masking from a live source and exposes `reload()` (`packages/node-server/src/secrets/proxy-manager.ts:30`,`:68`); the fetch-proxy calls the live instance per request (`packages/node-server/src/index.ts:1323`+). `reload()` is the established in-process refresh (`/api/secrets/oauth-update` uses it live, `:1182`). **No node-server process restart is needed for secret changes.**
 4. **Resume = page reload.** `/api/leader-restart` does only a CDP `Page.reload` (`packages/node-server/src/leader-restart.ts:175`); resume currently just curls it (`packages/cloud-core/src/operations/resume.ts:30`).
@@ -63,12 +63,18 @@ Interactive OAuth runs in the user's **real browser** (`?connect=1`) — the con
 {
   "model": "anthropic:claude-opus-4-6",
   "accounts": [
-    { "providerId": "adobe",     "kind": "oauth",  "accessToken": "…", "tokenExpiresAt": 0, "userName": "…" },
-    { "providerId": "anthropic", "kind": "apikey", "apiKey": "…" }
+    {
+      "providerId": "adobe",
+      "kind": "oauth",
+      "accessToken": "…",
+      "tokenExpiresAt": 0,
+      "userName": "…",
+    },
+    { "providerId": "anthropic", "kind": "apikey", "apiKey": "…" },
   ],
   "secrets": [
-    { "name": "GITHUB_TOKEN", "value": "…", "domains": ["api.github.com", "github.com"] }
-  ]
+    { "name": "GITHUB_TOKEN", "value": "…", "domains": ["api.github.com", "github.com"] },
+  ],
 }
 ```
 
@@ -149,17 +155,17 @@ Reuse the real webapp for logins, exploiting same-origin (`/cloud` and `/` are b
 
 ## File-level change inventory
 
-| Area | File(s) | Change |
-| --- | --- | --- |
-| Bundle types | `packages/cloud-core/src/cone-config.*` + `package.json` `exports` | side-effect-free `./cone-config` subpath: `ConeConfig`/delta types + validate/merge (no e2b/Node) |
-| Webapp import | `packages/webapp` boot code | import the `@slicc/cloud-core/cone-config` subpath (type + helpers only) |
-| Worker API | `packages/cloudflare-worker/src/cloud/*`, `cloud-sessions-do.ts`, `index.ts` routes | `start` accepts `coneConfig`; NEW auth'd `GET /api/cloud/cone-config?sandboxId`; `resume` delta; base64 envs + size cap + redacted errors; F5 default + narrow F6 re-validate; no value persistence/logging |
-| DO index | `cloud-sessions-do.ts` | names-only index `{ model, accountProviderIds, accountMeta, secretNames }` |
-| Cloud-core ops | `operations/start.ts`, `resume.ts` | start: two base64 envs; resume: read-modify-write **both** files + ordered hook (reload endpoint then leader-restart); F3 migration |
-| Template | `e2b-template/start.sh` | base64-decode both envs → `secrets.env` + `cone-config.json` preboot; UNSET envs after |
-| node-server | `hosted-bootstrap.ts`, NEW `/api/secrets/reload`, secret load | `EnvSecretStore` reads worker-written `secrets.env`; `/api/hosted-bootstrap` → `{ model, accounts }`; loopback reload endpoint |
-| connect mode | `packages/webapp/src/ui/` (+ `runtime-mode.ts`, provider-settings replica guard) | slim `?connect=1` boot; suppress `/api/secrets/oauth-update` replica sync |
-| dashboard | `packages/webapp/cloud/app.js`, `index.html`, `styles.css` | create form (auth + secrets + model); resume manager (index keys, add/delete/reauth); bundle/delta assembly; F6 validation |
+| Area           | File(s)                                                                             | Change                                                                                                                                                                                                      |
+| -------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bundle types   | `packages/cloud-core/src/cone-config.*` + `package.json` `exports`                  | side-effect-free `./cone-config` subpath: `ConeConfig`/delta types + validate/merge (no e2b/Node)                                                                                                           |
+| Webapp import  | `packages/webapp` boot code                                                         | import the `@slicc/cloud-core/cone-config` subpath (type + helpers only)                                                                                                                                    |
+| Worker API     | `packages/cloudflare-worker/src/cloud/*`, `cloud-sessions-do.ts`, `index.ts` routes | `start` accepts `coneConfig`; NEW auth'd `GET /api/cloud/cone-config?sandboxId`; `resume` delta; base64 envs + size cap + redacted errors; F5 default + narrow F6 re-validate; no value persistence/logging |
+| DO index       | `cloud-sessions-do.ts`                                                              | names-only index `{ model, accountProviderIds, accountMeta, secretNames }`                                                                                                                                  |
+| Cloud-core ops | `operations/start.ts`, `resume.ts`                                                  | start: two base64 envs; resume: read-modify-write **both** files + ordered hook (reload endpoint then leader-restart); F3 migration                                                                         |
+| Template       | `e2b-template/start.sh`                                                             | base64-decode both envs → `secrets.env` + `cone-config.json` preboot; UNSET envs after                                                                                                                      |
+| node-server    | `hosted-bootstrap.ts`, NEW `/api/secrets/reload`, secret load                       | `EnvSecretStore` reads worker-written `secrets.env`; `/api/hosted-bootstrap` → `{ model, accounts }`; loopback reload endpoint                                                                              |
+| connect mode   | `packages/webapp/src/ui/` (+ `runtime-mode.ts`, provider-settings replica guard)    | slim `?connect=1` boot; suppress `/api/secrets/oauth-update` replica sync                                                                                                                                   |
+| dashboard      | `packages/webapp/cloud/app.js`, `index.html`, `styles.css`                          | create form (auth + secrets + model); resume manager (index keys, add/delete/reauth); bundle/delta assembly; F6 validation                                                                                  |
 
 ## Explicit non-goals (v1)
 

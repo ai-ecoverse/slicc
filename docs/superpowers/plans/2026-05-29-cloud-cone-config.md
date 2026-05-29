@@ -19,6 +19,7 @@
 A side-effect-free module (no `e2b`/Node imports) usable by the worker, node-server, and the browser webapp.
 
 **Files:**
+
 - Create: `packages/cloud-core/src/cone-config/index.ts`
 - Test: `packages/cloud-core/tests/cone-config/cone-config.test.ts`
 
@@ -322,6 +323,7 @@ git commit -m "feat(cloud-core): add cone-config contract types + helpers"
 ### Task 2: Expose the `@slicc/cloud-core/cone-config` subpath
 
 **Files:**
+
 - Modify: `packages/cloud-core/package.json` (the `exports` map)
 
 - [ ] **Step 1: Add the subpath export**
@@ -370,6 +372,7 @@ git commit -m "build(cloud-core): export side-effect-free ./cone-config subpath"
 Lets the worker tell a running node-server to rebuild the fetch-proxy masking after secrets change — no process restart.
 
 **Files:**
+
 - Modify: `packages/node-server/src/index.ts` (near the other `/api/secrets/*` endpoints, ~line 1185)
 - Test: `packages/node-server/tests/secrets-reload-endpoint.test.ts`
 
@@ -433,7 +436,7 @@ export function registerSecretsReloadEndpoint(app: Express, deps: SecretsReloadD
 In `packages/node-server/src/index.ts`, in the `if (RUNTIME_FLAGS.hosted) { … }` block that registers `registerCloudStatusEndpoint` and `registerHostedBootstrapEndpoint` (~line 1202), add:
 
 ```typescript
-    registerSecretsReloadEndpoint(app, { secretProxy });
+registerSecretsReloadEndpoint(app, { secretProxy });
 ```
 
 and add the import near the other secret imports:
@@ -460,6 +463,7 @@ git commit -m "feat(node-server): add /api/secrets/reload loopback endpoint"
 ### Task 4: Extend `/api/hosted-bootstrap` to `{ model, accounts }`
 
 **Files:**
+
 - Modify: `packages/node-server/src/hosted-bootstrap.ts`
 - Test: `packages/node-server/tests/hosted-bootstrap.test.ts`
 
@@ -601,6 +605,7 @@ git commit -m "feat(node-server): hosted-bootstrap returns {model, accounts} fro
 The substrate `create()` only carries env vars, so the bundle must arrive as env and be materialized to files before node-server boots.
 
 **Files:**
+
 - Modify: `packages/dev-tools/e2b-template/start.sh`
 
 - [ ] **Step 1: Read the current preboot block**
@@ -640,10 +645,12 @@ Expected: no syntax errors.
 - [ ] **Step 4: Manually verify the decode locally**
 
 Run:
+
 ```bash
 SLICC_CONE_CONFIG_B64=$(printf '{"model":"m","accounts":[]}' | base64) bash -c '
   printf "%s" "$SLICC_CONE_CONFIG_B64" | base64 -d'
 ```
+
 Expected output: `{"model":"m","accounts":[]}`
 
 - [ ] **Step 5: Commit**
@@ -660,6 +667,7 @@ git commit -m "feat(e2b-template): decode cone-config + secrets base64 envs preb
 ### Task 6: `startCone` accepts cone-config + secrets and writes both files
 
 **Files:**
+
 - Modify: `packages/cloud-core/src/operations/start.ts`
 - Test: `packages/cloud-core/tests/operations/start-cone-config.test.ts`
 
@@ -747,9 +755,9 @@ In the `substrate.create({ … })` call, extend `envVars` with the base64 payloa
 After the existing `await handle.writeFile('/slicc/secrets.env', safeSecrets);` (line 241), add the authoritative cone-config write:
 
 ```typescript
-    if (opts.coneConfigJson) {
-      await handle.writeFile('/slicc/cone-config.json', opts.coneConfigJson);
-    }
+if (opts.coneConfigJson) {
+  await handle.writeFile('/slicc/cone-config.json', opts.coneConfigJson);
+}
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -770,6 +778,7 @@ git commit -m "feat(cloud-core): startCone injects cone-config + secrets (env pr
 ### Task 7: `resumeCone` merges a delta into both files + ordered reload hook
 
 **Files:**
+
 - Modify: `packages/cloud-core/src/operations/resume.ts`
 - Test: `packages/cloud-core/tests/operations/resume-cone-config.test.ts`
 
@@ -845,7 +854,13 @@ function parseSecretsEnv(text: string): SecretEntry[] {
     if (eq < 0) continue;
     const key = l.slice(0, eq);
     if (key.endsWith('_DOMAINS')) {
-      domains.set(key.slice(0, -'_DOMAINS'.length), l.slice(eq + 1).split(',').filter(Boolean));
+      domains.set(
+        key.slice(0, -'_DOMAINS'.length),
+        l
+          .slice(eq + 1)
+          .split(',')
+          .filter(Boolean)
+      );
     }
   }
   const out: SecretEntry[] = [];
@@ -902,31 +917,31 @@ export interface ResumeConeOpts {
 In `resumeCone`, after `connect` and BEFORE the leader-restart kick loop, replace the existing `if (opts.refreshSecretsContents !== undefined) { … }` block with a delta-aware merge that writes BOTH files and triggers the secret-proxy reload before the page reload:
 
 ```typescript
-  if (opts.coneConfigDelta) {
-    let existingConeConfig: string | null = null;
-    try {
-      existingConeConfig = await handle.readFile('/slicc/cone-config.json');
-    } catch {
-      existingConeConfig = null;
-    }
-    let existingSecretsEnv = '';
-    try {
-      existingSecretsEnv = await handle.readFile('/slicc/secrets.env');
-    } catch {
-      existingSecretsEnv = '';
-    }
-    const out = applyConeConfigDelta(existingConeConfig, existingSecretsEnv, opts.coneConfigDelta);
-    await handle.writeFile('/slicc/secrets.env', out.secretsEnv);
-    await handle.writeFile('/slicc/cone-config.json', out.coneConfigJson);
-    // Ordered reload: secret proxy first, then page reload (masks must match).
-    await handle.run(
-      'curl -sS -X POST http://localhost:5710/api/secrets/reload -o /dev/null -w "%{http_code}"'
-    );
-    // Surface the merged index to the caller so the DO can update its index.
-    resumeIndex = out.index;
-  } else if (opts.refreshSecretsContents !== undefined) {
-    await handle.writeFile('/slicc/secrets.env', opts.refreshSecretsContents);
+if (opts.coneConfigDelta) {
+  let existingConeConfig: string | null = null;
+  try {
+    existingConeConfig = await handle.readFile('/slicc/cone-config.json');
+  } catch {
+    existingConeConfig = null;
   }
+  let existingSecretsEnv = '';
+  try {
+    existingSecretsEnv = await handle.readFile('/slicc/secrets.env');
+  } catch {
+    existingSecretsEnv = '';
+  }
+  const out = applyConeConfigDelta(existingConeConfig, existingSecretsEnv, opts.coneConfigDelta);
+  await handle.writeFile('/slicc/secrets.env', out.secretsEnv);
+  await handle.writeFile('/slicc/cone-config.json', out.coneConfigJson);
+  // Ordered reload: secret proxy first, then page reload (masks must match).
+  await handle.run(
+    'curl -sS -X POST http://localhost:5710/api/secrets/reload -o /dev/null -w "%{http_code}"'
+  );
+  // Surface the merged index to the caller so the DO can update its index.
+  resumeIndex = out.index;
+} else if (opts.refreshSecretsContents !== undefined) {
+  await handle.writeFile('/slicc/secrets.env', opts.refreshSecretsContents);
+}
 ```
 
 Declare `let resumeIndex: ConeConfigIndex | undefined;` near the top of `resumeCone`, and add `coneConfigIndex: resumeIndex` to the object `resumeCone` returns (extend its return type accordingly). The existing `kickLeaderUntilReady`/`KICK_CMD` leader-restart `Page.reload` runs after this block, completing the ordered hook.
@@ -956,6 +971,7 @@ git commit -m "feat(cloud-core): resume merges cone-config delta into both files
 ### Task 8: DurableObject — names-only index, start with `coneConfig`, resume delta, migration
 
 **Files:**
+
 - Modify: `packages/cloudflare-worker/src/cloud/cloud-sessions-do.ts`
 - Test: `packages/cloudflare-worker/tests/cloud-sessions-cone-config.test.ts`
 
@@ -969,7 +985,11 @@ import { buildStartConeArgs, coneConfigToBundle } from '../src/cloud/cone-config
 describe('coneConfigToBundle (worker-side default + validation)', () => {
   it('uses the supplied bundle when present', () => {
     const bundle = coneConfigToBundle(
-      { model: 'anthropic:claude-opus-4-6', accounts: [{ providerId: 'anthropic', kind: 'apikey', apiKey: 'k' }], secrets: [] },
+      {
+        model: 'anthropic:claude-opus-4-6',
+        accounts: [{ providerId: 'anthropic', kind: 'apikey', apiKey: 'k' }],
+        secrets: [],
+      },
       'bearer-x'
     );
     expect(bundle.model).toBe('anthropic:claude-opus-4-6');
@@ -984,7 +1004,11 @@ describe('coneConfigToBundle (worker-side default + validation)', () => {
   it('rejects a bundle whose model provider has no account (narrow F6)', () => {
     expect(() =>
       coneConfigToBundle(
-        { model: 'openai:gpt-x', accounts: [{ providerId: 'anthropic', kind: 'apikey', apiKey: 'k' }], secrets: [] },
+        {
+          model: 'openai:gpt-x',
+          accounts: [{ providerId: 'anthropic', kind: 'apikey', apiKey: 'k' }],
+          secrets: [],
+        },
         'bearer-x'
       )
     ).toThrow(/provider 'openai' has no account/);
@@ -994,7 +1018,11 @@ describe('coneConfigToBundle (worker-side default + validation)', () => {
 describe('buildStartConeArgs', () => {
   it('produces envContents (secrets.env) + coneConfigJson ({model,accounts})', () => {
     const args = buildStartConeArgs(
-      { model: 'm', accounts: [{ providerId: 'adobe', kind: 'oauth', accessToken: 't' }], secrets: [{ name: 'S', value: 'v', domains: ['x.com'] }] },
+      {
+        model: 'm',
+        accounts: [{ providerId: 'adobe', kind: 'oauth', accessToken: 't' }],
+        secrets: [{ name: 'S', value: 'v', domains: ['x.com'] }],
+      },
       'bearer'
     );
     expect(args.envContents).toContain('S=v');
@@ -1012,11 +1040,7 @@ Expected: FAIL — `../src/cloud/cone-config-bridge.js` not found.
 
 ```typescript
 // packages/cloudflare-worker/src/cloud/cone-config-bridge.ts
-import {
-  bundleToFiles,
-  validateConeConfig,
-  type ConeConfig,
-} from '@slicc/cloud-core/cone-config';
+import { bundleToFiles, validateConeConfig, type ConeConfig } from '@slicc/cloud-core/cone-config';
 
 const ADOBE_TOKEN_DOMAINS = 'adobe-llm-proxy.paolo-moz.workers.dev'; // mirror existing constant
 const DEFAULT_MODEL = 'adobe:claude-opus-4-6';
@@ -1039,7 +1063,11 @@ export function coneConfigToBundle(input: unknown, bearer: string): ConeConfig {
       accounts: [{ providerId: 'adobe', kind: 'oauth', accessToken: bearer }],
       secrets: [
         { name: 'ADOBE_IMS_TOKEN', value: bearer, domains: [ADOBE_TOKEN_DOMAINS] },
-        { name: 'ADOBE_IMS_TOKEN_DOMAINS', value: ADOBE_TOKEN_DOMAINS, domains: [ADOBE_TOKEN_DOMAINS] },
+        {
+          name: 'ADOBE_IMS_TOKEN_DOMAINS',
+          value: ADOBE_TOKEN_DOMAINS,
+          domains: [ADOBE_TOKEN_DOMAINS],
+        },
       ],
     };
   }
@@ -1155,6 +1183,7 @@ git commit -m "feat(worker): cone-config bridge + names-only DO index + default/
 ### Task 9: Worker routes/handlers — `coneConfig` on start/resume, auth'd `GET /api/cloud/cone-config`, validation + size cap
 
 **Files:**
+
 - Modify: `packages/cloudflare-worker/src/cloud/handlers.ts`
 - Modify: `packages/cloudflare-worker/src/index.ts` (route switch + routes list)
 - Test: `packages/cloudflare-worker/tests/index.test.ts`, `packages/cloudflare-worker/tests/deployed.test.ts` (routes list)
@@ -1185,11 +1214,19 @@ import { validateStartBody } from '../src/cloud/handlers.js';
 
 describe('validateStartBody (size cap + shape)', () => {
   it('rejects an oversized coneConfig', () => {
-    const huge = { coneConfig: { model: 'm', accounts: [], secrets: [{ name: 'X', value: 'v'.repeat(300_000), domains: [] }] } };
+    const huge = {
+      coneConfig: {
+        model: 'm',
+        accounts: [],
+        secrets: [{ name: 'X', value: 'v'.repeat(300_000), domains: [] }],
+      },
+    };
     expect(() => validateStartBody(huge)).toThrow(/too large/i);
   });
   it('accepts a normal body', () => {
-    expect(() => validateStartBody({ name: 'x', coneConfig: { model: 'm', accounts: [], secrets: [] } })).not.toThrow();
+    expect(() =>
+      validateStartBody({ name: 'x', coneConfig: { model: 'm', accounts: [], secrets: [] } })
+    ).not.toThrow();
   });
 });
 ```
@@ -1228,34 +1265,37 @@ export async function handleConeConfig(request: Request, env: CloudEnv): Promise
 In `handleStart`, after parsing the body, call the validator and forward `coneConfig`:
 
 ```typescript
-  const body = (await request.json().catch(() => ({}))) as { name?: string; coneConfig?: unknown };
-  try {
-    validateStartBody(body);
-  } catch (e) {
-    return errorResponse(400, 'BAD_REQUEST', (e as Error).message); // message is shape-only, not values
-  }
-  // …
-  return forwardToDo(stub, '/start-cone', {
-    bearer,
-    name: body.name,
-    userId: auth.userId,
-    workerOrigin: new URL(request.url).origin,
-    coneConfig: body.coneConfig,
-  });
+const body = (await request.json().catch(() => ({}))) as { name?: string; coneConfig?: unknown };
+try {
+  validateStartBody(body);
+} catch (e) {
+  return errorResponse(400, 'BAD_REQUEST', (e as Error).message); // message is shape-only, not values
+}
+// …
+return forwardToDo(stub, '/start-cone', {
+  bearer,
+  name: body.name,
+  userId: auth.userId,
+  workerOrigin: new URL(request.url).origin,
+  coneConfig: body.coneConfig,
+});
 ```
 
 In `handleResume`, forward the delta:
 
 ```typescript
-  const body = (await request.json().catch(() => ({}))) as { sandboxId?: string; coneConfigDelta?: unknown };
-  // … existing sandboxId check …
-  return forwardToDo(stub, '/resume-cone', {
-    bearer,
-    sandboxId: body.sandboxId,
-    localSliccVersion: 'web-' + new Date().toISOString().slice(0, 10),
-    userId: auth.userId,
-    coneConfigDelta: body.coneConfigDelta,
-  });
+const body = (await request.json().catch(() => ({}))) as {
+  sandboxId?: string;
+  coneConfigDelta?: unknown;
+};
+// … existing sandboxId check …
+return forwardToDo(stub, '/resume-cone', {
+  bearer,
+  sandboxId: body.sandboxId,
+  localSliccVersion: 'web-' + new Date().toISOString().slice(0, 10),
+  userId: auth.userId,
+  coneConfigDelta: body.coneConfigDelta,
+});
 ```
 
 Add a `/cone-config-index` route to the DO's `fetch()` dispatch that returns `getConeConfigIndex(sandboxId)` as JSON (404 if null).
@@ -1287,6 +1327,7 @@ git commit -m "feat(worker): cone-config on start/resume + auth'd GET /api/cloud
 ### Task 10: Hosted-leader boot consumes `{ model, accounts }` and reconciles (managed-only)
 
 **Files:**
+
 - Create: `packages/webapp/src/ui/hosted-config-apply.ts`
 - Modify: `packages/webapp/src/ui/main.ts` (hosted-leader block ~2807-2841)
 - Test: `packages/webapp/tests/ui/hosted-config-apply.test.ts`
@@ -1458,6 +1499,7 @@ git commit -m "feat(webapp): hosted-leader applies cone-config (model + managed-
 ### Task 11: `?connect=1` runtime mode + slim boot + suppress replica sync
 
 **Files:**
+
 - Modify: `packages/webapp/src/ui/runtime-mode.ts`
 - Modify: `packages/webapp/src/ui/main.ts` (boot dispatch)
 - Modify: `packages/webapp/src/ui/provider-settings.ts` (replica-sync guard)
@@ -1500,10 +1542,10 @@ export type UiRuntimeMode =
 ```
 
 ```typescript
-  // inside the non-extension branch of resolveUiRuntimeMode, before standalone fallback:
-    if (url.searchParams.get('connect') === '1') {
-      return 'connect';
-    }
+// inside the non-extension branch of resolveUiRuntimeMode, before standalone fallback:
+if (url.searchParams.get('connect') === '1') {
+  return 'connect';
+}
 ```
 
 - [ ] **Step 4: Add the slim boot + replica guard**
@@ -1511,12 +1553,12 @@ export type UiRuntimeMode =
 In `main.ts`, where `resolveUiRuntimeMode` drives the boot path, add a `connect` branch that boots only the provider-settings/accounts/model-picker UI (no kernel/orchestrator). Reuse the existing accounts/provider settings rendering entrypoint; do NOT start the orchestrator or kernel worker. Set a module flag so `provider-settings.ts` can detect connect mode:
 
 ```typescript
-  if (mode === 'connect') {
-    (globalThis as Record<string, unknown>).__slicc_connect_mode = true;
-    const { mountConnectSurface } = await import('./connect-surface.js');
-    await mountConnectSurface(document.getElementById('app')!);
-    return;
-  }
+if (mode === 'connect') {
+  (globalThis as Record<string, unknown>).__slicc_connect_mode = true;
+  const { mountConnectSurface } = await import('./connect-surface.js');
+  await mountConnectSurface(document.getElementById('app')!);
+  return;
+}
 ```
 
 Create `packages/webapp/src/ui/connect-surface.ts` that mounts the existing provider-settings + accounts UI + model picker components into the given root (reusing the same functions the settings panel uses; no new OAuth code).
@@ -1552,6 +1594,7 @@ git commit -m "feat(webapp): ?connect=1 slim login mode; suppress replica sync i
 ### Task 12: Dashboard create flow — assemble + validate the bundle
 
 **Files:**
+
 - Create: `packages/webapp/cloud/cone-config-client.js` (pure helpers; importable by tests)
 - Modify: `packages/webapp/cloud/app.js` (create handler ~317-346)
 - Modify: `packages/webapp/cloud/index.html` (model picker + secret rows + "Connect" button)
@@ -1626,7 +1669,10 @@ export function assembleBundle({ model, selectedProviderIds, allAccounts, secret
     .map((r) => ({
       name: r.name,
       value: r.value,
-      domains: r.domains.split(',').map((d) => d.trim()).filter(Boolean),
+      domains: r.domains
+        .split(',')
+        .map((d) => d.trim())
+        .filter(Boolean),
     }));
   return { model, accounts, secrets };
 }
@@ -1643,6 +1689,7 @@ export function validateModelHasAccount(model, selectedProviderIds, authOptional
 In `index.html`, add to the create form: a model `<select id="cone-model">`, a container `<div id="secret-rows">` with an "Add secret" button, a "Connect a provider / set model" button (`id="connect-btn"`), and a list of selectable accounts (`id="account-list"`).
 
 In `app.js`:
+
 - On dashboard load, read `slicc_accounts` from `localStorage` (same-origin) and render them as checkboxes in `#account-list`; populate `#cone-model` from a static model list (or from the selected accounts' providers).
 - `#connect-btn` opens `window.open('/?connect=1', 'slicc-connect', 'width=520,height=720')`; on focus/return, re-read `slicc_accounts` and re-render.
 - In the existing create handler (`app.js:317-346`), build the bundle and validate before POST:
@@ -1689,6 +1736,7 @@ git commit -m "feat(dashboard): create flow assembles+validates cone-config bund
 ### Task 13: Dashboard resume manager — show keys, add/delete/reauth, send delta
 
 **Files:**
+
 - Modify: `packages/webapp/cloud/cone-config-client.js` (add `assembleDelta`)
 - Modify: `packages/webapp/cloud/app.js` (resume action + a "Manage" panel)
 - Test: `packages/webapp/tests/cloud/cone-config-client.test.ts` (add cases)
@@ -1759,6 +1807,7 @@ export function assembleDelta({
 - [ ] **Step 4: Wire the Manage panel into `app.js`**
 
 Add a "Manage" button per cone row that:
+
 - `GET`s the names-only index: `await api('/api/cloud/cone-config?sandboxId=' + encodeURIComponent(sandboxId), { method: 'GET' })`.
 - Renders the provisioned keys (account providerIds + secret names) with delete checkboxes, an "Add secret" form, and a "Reconnect / set model" button (opens `/?connect=1`).
 - On "Apply on resume", builds the delta with `assembleDelta` and calls resume with it:
@@ -1792,6 +1841,7 @@ git commit -m "feat(dashboard): resume manager (show keys, add/delete/reauth →
 ### Task 14: Full verification + docs
 
 **Files:**
+
 - Modify: `packages/cloudflare-worker/CLAUDE.md`, `packages/webapp/CLAUDE.md`, `docs/shell-reference.md` (if cone config surfaces any command), `README.md` (cloud cones section if user-facing)
 
 - [ ] **Step 1: Full gates**
@@ -1803,6 +1853,7 @@ npm run test
 npm run build
 npm run build -w @slicc/chrome-extension
 ```
+
 Expected: all pass. Fix any failures before continuing.
 
 - [ ] **Step 2: Coverage gates for touched packages**
@@ -1813,6 +1864,7 @@ npm run test:coverage:node-server
 npm run test:coverage:cloudflare-worker
 npm run test:coverage:webapp
 ```
+
 Expected: all at or above each package's floor.
 
 - [ ] **Step 3: Manual QA (real cone)**
