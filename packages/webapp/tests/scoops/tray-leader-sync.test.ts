@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import {
   LeaderSyncManager,
+  labelForFollower,
   type LeaderSyncManagerOptions,
 } from '../../src/scoops/tray-leader-sync.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
@@ -78,6 +79,19 @@ function createManager(overrides?: Partial<LeaderSyncManagerOptions>) {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+describe('labelForFollower', () => {
+  it('maps known float types to readable labels', () => {
+    expect(labelForFollower('extension')).toBe('extension follower');
+    expect(labelForFollower('standalone')).toBe('standalone follower');
+    expect(labelForFollower('electron')).toBe('Electron follower');
+    expect(labelForFollower('ios')).toBe('iOS follower');
+  });
+  it('falls back to the raw runtime string for unknown', () => {
+    expect(labelForFollower('unknown', 'slicc-weird')).toBe('follower (slicc-weird)');
+    expect(labelForFollower('unknown')).toBe('follower');
+  });
+});
 
 describe('LeaderSyncManager', () => {
   it('sends a snapshot on addFollower', () => {

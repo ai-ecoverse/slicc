@@ -65,15 +65,32 @@ export interface LeaderSyncManagerOptions {
 }
 
 /** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
-export type FloatType = 'standalone' | 'extension' | 'electron' | 'unknown';
+export type FloatType = 'standalone' | 'extension' | 'electron' | 'ios' | 'unknown';
 
 /** Derive a FloatType from the follower's runtime string. */
 function deriveFloatType(runtime?: string): FloatType {
   if (!runtime) return 'unknown';
+  if (runtime.includes('ios')) return 'ios';
   if (runtime.includes('standalone')) return 'standalone';
   if (runtime.includes('extension')) return 'extension';
   if (runtime.includes('electron')) return 'electron';
   return 'unknown';
+}
+
+/** Human-readable origin label for a forwarded lick, for the agent. */
+export function labelForFollower(floatType: FloatType, runtime?: string): string {
+  switch (floatType) {
+    case 'extension':
+      return 'extension follower';
+    case 'standalone':
+      return 'standalone follower';
+    case 'electron':
+      return 'Electron follower';
+    case 'ios':
+      return 'iOS follower';
+    default:
+      return runtime ? `follower (${runtime})` : 'follower';
+  }
 }
 
 interface ConnectedFollower {
