@@ -87,6 +87,7 @@ import {
 import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
 import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import { TabPersistenceGuard } from '../scoops/tab-persistence-guard.js';
+import { canonicalRuntimeId } from './runtime-identity.js';
 import { startPageLeaderTray } from './page-leader-tray.js';
 import type { PageLeaderTrayHandle, StartPageLeaderTrayOptions } from './page-leader-tray.js';
 import type { TrayLeaveResult } from '../scoops/tray-leave.js';
@@ -2585,7 +2586,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         'slicc.leaderTrayFollowers',
         JSON.stringify(
           followerPeers.map((p) => ({
-            runtimeId: p.bootstrapId,
+            runtimeId: canonicalRuntimeId(p.bootstrapId),
             runtime: p.runtime,
             connectedAt: p.connectedAt ?? undefined,
           }))
@@ -2608,7 +2609,7 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   const wireLeaderHooks = (handle: PageLeaderTrayHandle): void => {
     setConnectedFollowersGetter(() =>
       handle.peers.getPeers().map((p) => ({
-        runtimeId: p.bootstrapId,
+        runtimeId: canonicalRuntimeId(p.bootstrapId),
         runtime: p.runtime,
         connectedAt: p.connectedAt ?? undefined,
       }))

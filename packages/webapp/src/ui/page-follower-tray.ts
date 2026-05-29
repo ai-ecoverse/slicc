@@ -38,6 +38,7 @@ import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { SprinkleSummary } from '../scoops/tray-sync-protocol.js';
 import type { SprinkleAddOptions } from './sprinkle-manager.js';
 import { SprinkleFollowerController } from './sprinkle-follower-controller.js';
+import { canonicalRuntimeId } from './runtime-identity.js';
 import { createLogger } from '../core/logger.js';
 import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 
@@ -158,7 +159,7 @@ export function startPageFollowerTray(
 
   const wireFollowerSync = (connection: FollowerTrayConnection): void => {
     detachSync();
-    const runtimeId = `follower-${connection.bootstrapId}`;
+    const runtimeId = canonicalRuntimeId(connection.bootstrapId);
 
     // The sprinkle controller (if the caller wired sprinkle layout callbacks)
     // is constructed lazily here so it shares the lifecycle of this sync
