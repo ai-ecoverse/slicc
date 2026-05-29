@@ -12,6 +12,7 @@ This file covers the repo's developer-tooling surface.
 - **Build configs**: `packages/webapp/vite.config.ts`, `packages/chrome-extension/vite.config.ts`, `eslint.config.js`
 - **QA setup**: `packages/node-server/src/qa-setup.ts` plus the root `npm run qa:*` scripts
 - **Visual/integration helpers**: `tests/test-dips.mjs` and related targeted test utilities
+- **RUM error triage** (error-to-insight pipeline): `packages/dev-tools/rum-error-triage/` — run `node packages/dev-tools/rum-error-triage/triage-rum-errors.mjs` to query RUM for new SLICC errors and write triage candidates; pure logic in `lib.mjs` (tested via the `dev-tools` vitest project). Driven nightly by `.github/workflows/rum-error-triage.yml`. See its `README.md`.
 
 ## What Lives Here Conceptually
 
