@@ -139,6 +139,16 @@ export default defineConfig({
           include: ['packages/cloud-core/tests/**/*.test.ts'],
         },
       },
+      {
+        // Repo-level tooling under packages/dev-tools/ (plain .mjs, not a
+        // workspace). Co-located *.test.mjs so `npm test` covers the triage
+        // logic; no per-package coverage gate applies to this project.
+        extends: true,
+        test: {
+          name: 'dev-tools',
+          include: ['packages/dev-tools/**/*.test.mjs'],
+        },
+      },
     ],
   },
 });

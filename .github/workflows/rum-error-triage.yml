@@ -1,0 +1,121 @@
+name: RUM Error Triage
+
+# Error-to-insight pipeline. SLICC has no Sentry — operational errors land in
+# the helix RUM `cluster` table as `error` checkpoints (see
+# packages/webapp/src/ui/telemetry.ts). Each night this workflow:
+#   1. queries RUM for recent SLICC errors (filtering dev/Vite noise),
+#   2. deduplicates them against errors that already have an issue, and
+#   3. hands the new candidates to claude-code-action, which investigates each
+#      against the codebase and opens a GitHub issue (and, when the fix is
+#      clear, a draft PR) for the genuine bugs.
+#
+# Required repository secrets:
+#   RUM_BQ_SA_KEY    GCP service-account JSON with BigQuery Job User + Data
+#                    Viewer on project `helix-225321` (the RUM dataset).
+#                    (Workload Identity Federation can replace this — see
+#                    google-github-actions/auth — and is preferred long-term.)
+#   ANTHROPIC_API_KEY  API key for claude-code-action.
+# Until both secrets are set the scheduled run will fail fast at the auth /
+# classify steps; the query+dedup logic is covered by unit tests in
+# packages/dev-tools/rum-error-triage/lib.test.mjs.
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # nightly at 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      since_days:
+        description: 'Look-back window in days'
+        required: false
+        default: '1'
+      dry_run:
+        description: 'Query + dedup only; do not open issues'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: rum-error-triage
+  cancel-in-progress: false
+
+permissions:
+  contents: write # claude-code-action may push a draft-fix branch
+  issues: write # file error issues
+  pull-requests: write # open draft fix PRs
+  id-token: write # for GCP Workload Identity Federation (if adopted)
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.RUM_BQ_SA_KEY }}
+
+      - name: Set up Cloud SDK (provides bq)
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Ensure triage labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create rum-error --color B60205 --description "Surfaced from RUM error telemetry" --force
+          gh label create bug --color D73A4A --description "Something isn't working" --force
+
+      - name: Query RUM and select new error candidates
+        id: query
+        env:
+          SINCE_DAYS: ${{ github.event.inputs.since_days || '1' }}
+          GH_TOKEN: ${{ github.token }}
+        run: node packages/dev-tools/rum-error-triage/triage-rum-errors.mjs
+
+      - name: Classify candidates and file issues
+        if: steps.query.outputs.has_candidates == 'true' && github.event.inputs.dry_run != 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: |
+            --allowedTools "Read,Grep,Glob,Bash(gh issue:*),Bash(gh pr:*),Bash(gh label:*),Bash(git:*),Edit,Write"
+            --max-turns 40
+          prompt: |
+            You are triaging production errors for the SLICC codebase. A nightly
+            job queried RUM (Real User Monitoring) telemetry and wrote the new,
+            already-deduplicated error candidates to `rum-error-candidates.json`
+            in the repo root.
+
+            For EACH candidate in that file:
+
+            1. Read the candidate's `signature`, `exampleSource`, `exampleTarget`,
+               `float` (cli/extension/electron), occurrence stats (`sampled`,
+               `estimated`), and `firstSeen`/`lastSeen`.
+            2. Investigate the codebase (Grep/Glob/Read) to locate where this
+               error originates and judge whether it is a REAL, ACTIONABLE SLICC
+               bug. Skip and explain (do not file) if it is: dev-server/tooling
+               noise, a transient/network blip with no code fix, or an
+               environmental/browser-policy condition the app cannot reasonably
+               handle.
+            3. Before filing, double-check it is not already tracked:
+               `gh issue list --search "rum-fp:<fingerprint> in:body" --state all`.
+            4. For each genuine bug, open an issue with `gh issue create`:
+               - Title: a concise description of the bug (not the raw stack frame).
+               - Body: what the error is, the suspected root cause with
+                 `file:line` references you found, the float it occurs on, the
+                 occurrence stats and first/last-seen window, and a proposed fix.
+                 You MUST include, on its own line, the exact marker:
+                 `<!-- rum-fp:<fingerprint> -->` using the candidate's
+                 `fingerprint` — this is how future runs avoid duplicates.
+               - Labels: `--label rum-error --label bug`.
+            5. If — and only if — the fix is small, clear, and low-risk, also
+               open a DRAFT pull request implementing it on a new branch and link
+               it to the issue. Otherwise leave the fix to a human.
+
+            Be conservative: a wrong or noisy issue is worse than no issue. End by
+            printing a short summary of what you filed and what you skipped (with
+            reasons).
