@@ -117,8 +117,9 @@ export function formatLickEventForCone(event: LickEvent): FormattedLick | null {
   }
 
   // Generic fallback: webhook / sprinkle / fswatch / navigate / cron.
+  const origin = event.originLabel ? `_Forwarded from ${event.originLabel}._\n\n` : '';
   return {
     label,
-    content: `[${label}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``,
+    content: `${origin}[${label}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``,
   };
 }
