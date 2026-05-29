@@ -92,4 +92,58 @@ describe('ansiToHtml', () => {
     expect(out).toContain('<span style="color:#cd3131;background-color:#2472c8">ab</span>');
     expect(out).toContain('<span style="background-color:#2472c8">c</span>');
   });
+
+  // Ampersand handling — these guard against two failure modes:
+  //   1) "swallowed": innerHTML parses an unescaped `&foo;` as an HTML entity.
+  //   2) "double-escaped": user sees literal `&amp;` on screen because the
+  //      renderer escapes an already-escaped string twice.
+  // The renderer's contract is "raw text in, escape exactly once" — so a
+  // literal `&amp;` in the source IS expected to render as `&amp;` on screen
+  // (the source said so). The cases below pin that contract.
+  describe('ampersand handling', () => {
+    it('escapes a bare & once between chunks', () => {
+      expect(ansiToHtml('foo & bar')).toBe('foo &amp; bar');
+    });
+
+    it('escapes & that opens an entity-shaped name (no swallowing)', () => {
+      expect(ansiToHtml('AT&T &copy; &#65;')).toBe('AT&amp;T &amp;copy; &amp;#65;');
+    });
+
+    it('escapes & in a URL query string', () => {
+      expect(ansiToHtml('curl http://x?a=1&b=2&c=3')).toBe('curl http://x?a=1&amp;b=2&amp;c=3');
+    });
+
+    it('escapes literal &amp; from source exactly once (no double-escape regression)', () => {
+      // The source bytes are literally `&amp;`. Escaping them once yields
+      // `&amp;amp;`, which the browser renders as the visible text `&amp;`
+      // — matching what the user typed. Escaping twice would surface
+      // `&amp;amp;` on screen, which is the bug we are guarding against.
+      expect(ansiToHtml('foo &amp; bar')).toBe('foo &amp;amp; bar');
+    });
+
+    it('escapes & at the boundary just before a CSI sequence', () => {
+      expect(ansiToHtml('foo &\x1b[31mbar\x1b[0m')).toBe(
+        'foo &amp;<span style="color:#cd3131">bar</span>'
+      );
+    });
+
+    it('escapes & at the boundary just after a CSI reset', () => {
+      expect(ansiToHtml('\x1b[31mfoo\x1b[0m& bar')).toBe(
+        '<span style="color:#cd3131">foo</span>&amp; bar'
+      );
+    });
+
+    it('escapes & sitting alone inside a styled span', () => {
+      expect(ansiToHtml('\x1b[33m&\x1b[0m')).toBe('<span style="color:#e5e510">&amp;</span>');
+    });
+
+    it('escapes & at the very start and very end of input', () => {
+      expect(ansiToHtml('& foo')).toBe('&amp; foo');
+      expect(ansiToHtml('foo &')).toBe('foo &amp;');
+    });
+
+    it('escapes adjacent &s without merging or dropping any', () => {
+      expect(ansiToHtml('A&&B&&&C')).toBe('A&amp;&amp;B&amp;&amp;&amp;C');
+    });
+  });
 });
