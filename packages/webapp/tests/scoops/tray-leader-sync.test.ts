@@ -2152,5 +2152,27 @@ describe('LeaderSyncManager', () => {
       expect(event.originFollowerId).toBe('b1');
       expect(event.originLabel).toBe('extension follower');
     });
+
+    it('drops a follower-supplied targetScoop so forwarded licks target the cone', () => {
+      const onForwardedLick = vi.fn();
+      const { manager } = createManager({ onForwardedLick });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel, { runtime: 'slicc-extension-offscreen' });
+
+      channel.simulateMessage({
+        type: 'lick',
+        event: {
+          type: 'navigate',
+          navigateUrl: 'https://x',
+          timestamp: 't',
+          body: {},
+          targetScoop: 'some-scoop',
+        },
+      } as unknown as FollowerToLeaderMessage);
+
+      expect(onForwardedLick).toHaveBeenCalledTimes(1);
+      const [event] = onForwardedLick.mock.calls[0];
+      expect(event.targetScoop).toBeUndefined();
+    });
   });
 });

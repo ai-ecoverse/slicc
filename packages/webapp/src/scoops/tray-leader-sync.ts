@@ -663,9 +663,10 @@ export class LeaderSyncManager {
           break;
         }
         const follower = this.followers.get(bootstrapId);
-        // Strip any follower-sent origin fields — the leader is the sole
-        // authority on origin.
-        const { originFollowerId: _o1, originLabel: _o2, ...rest } = incoming;
+        // Strip follower-sent origin AND routing fields — the leader is the
+        // sole authority on both. Forwarded licks (navigate) always target
+        // the leader's cone, so a follower-supplied `targetScoop` is ignored.
+        const { originFollowerId: _o1, originLabel: _o2, targetScoop: _o3, ...rest } = incoming;
         const stamped: LickEvent = {
           ...rest,
           originFollowerId: bootstrapId,
