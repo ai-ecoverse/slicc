@@ -2108,3 +2108,31 @@ describe('SessionTrayDurableObject — kind persistence', () => {
     expect(reclaimMsForTray(stored)).toBe(TRAY_RECLAIM_TTL_MS);
   });
 });
+
+describe('cherry framing policy', () => {
+  it('default SPA forbids framing and is not no-store', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://app.example/'), env);
+    expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(res.headers.get('cache-control') ?? '').not.toContain('no-store');
+  });
+
+  it('cherry boot allows configured ancestors and is uncacheable', async () => {
+    const env = {
+      ...createTestHarness().env,
+      ALLOWED_CHERRY_HOST_ORIGINS: 'https://host.example',
+    };
+    const res = await worker.fetch(new Request('https://app.example/?cherry=1'), env);
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toContain('frame-ancestors https://host.example');
+    expect(csp).not.toContain("frame-ancestors 'none'");
+    expect(res.headers.get('cache-control')).toContain('no-store');
+    expect(res.headers.get('vary') ?? '').toContain('Sec-Fetch-Dest');
+  });
+
+  it('cherry boot with no configured ancestors falls back to none', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://app.example/?cherry=1'), env);
+    expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+  });
+});
