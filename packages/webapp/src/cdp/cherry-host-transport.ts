@@ -16,6 +16,7 @@ import type { CDPEventListener, CDPConnectOptions, ConnectionState } from './typ
 import {
   CHERRY_PROTOCOL_VERSION,
   acceptEnvelope,
+  isCherryEnvelope,
   type CherryEnvelope,
 } from './cherry-host-protocol.js';
 import { createLogger } from '../core/logger.js';
@@ -67,8 +68,8 @@ export class CherryHostTransport implements CDPTransport {
 
   /**
    * The leader join URL the host SDK supplied in handshake.welcome, if any.
-   * The cherry boot path (Task 13) reads this to start the follower against
-   * the same leader the host provisioned.
+   * The cherry boot path reads this to start the follower against the same
+   * leader the host provisioned.
    */
   get joinUrl(): string | null {
     return this._joinUrl;
@@ -76,9 +77,9 @@ export class CherryHostTransport implements CDPTransport {
 
   /**
    * Provisioning payload from handshake.welcome when the host handed an IMS
-   * token instead of a join URL. The cherry boot path (Task 13) runs the
-   * same-origin `/api/cloud/*` orchestration against it iframe-side. Held in
-   * memory only — never persisted, never re-emitted.
+   * token instead of a join URL. The cherry boot path runs the same-origin
+   * `/api/cloud/*` orchestration against it iframe-side. Held in memory only —
+   * never persisted, never re-emitted.
    */
   get provisioningAuth(): { token: string; coneName?: string; createIfMissing?: boolean } | null {
     return this._provisioningAuth;
@@ -309,6 +310,16 @@ export class CherryHostTransport implements CDPTransport {
         channelId: this.channelId,
       })
     ) {
+      // A well-formed cherry envelope rejected by the gate signals a
+      // misconfiguration (wrong host origin, source/channel mismatch) rather
+      // than unrelated postMessage noise — log it so it doesn't surface only as
+      // an opaque 30s connect timeout. Plain noise is filtered out silently.
+      if (isCherryEnvelope(event.data)) {
+        log.warn('Rejected a cherry envelope (origin/source/channel mismatch)', {
+          origin: event.origin,
+          allowOrigins: this.opts.allowOrigins,
+        });
+      }
       return;
     }
     const env = event.data as CherryEnvelope;

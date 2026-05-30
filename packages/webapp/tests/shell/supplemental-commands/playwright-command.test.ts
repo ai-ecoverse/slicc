@@ -2730,6 +2730,59 @@ describe('playwright-cli teleport trigger and capture', () => {
     // Await the caught promise to ensure rejection is handled
     await completionCatch;
   });
+
+  it('rejects an explicit --runtime that names a cherry host (no Network.* access)', async () => {
+    setPlaywrightTeleportConnectedFollowers(() => () => [
+      { runtimeId: 'f-runtime', runtime: 'slicc-standalone', floatType: 'standalone' as any },
+      { runtimeId: 'cherry-rt', runtime: 'slicc-cherry', floatType: 'cherry' as any },
+    ]);
+
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      'https://app.example.com/dashboard'
+    );
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+
+    const armResult = await cmd.execute(
+      ['teleport', '--tab=tab-1', '--start=login', '--return=app', '--runtime=cherry-rt'],
+      {} as any
+    );
+
+    expect(armResult.exitCode).toBe(1);
+    expect(armResult.stderr).toContain('cherry host');
+    expect(armResult.stderr).toContain('cherry-rt');
+
+    // No watcher should have been armed — the guard fails closed before arming.
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatchers.size).toBe(0);
+  });
+
+  it('allows an explicit --runtime that names a non-cherry follower', async () => {
+    // beforeEach wires f-runtime as a standalone follower.
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      'https://app.example.com/dashboard'
+    );
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+
+    const armResult = await cmd.execute(
+      ['teleport', '--tab=tab-1', '--start=login', '--return=app', '--runtime=f-runtime'],
+      {} as any
+    );
+
+    expect(armResult.exitCode).toBe(0);
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatchers.size).toBe(1);
+    expect(state.teleportWatchers.values().next().value!.runtimeId).toBe('f-runtime');
+
+    // Cleanup armed watcher timers.
+    const w = state.teleportWatchers.values().next().value!;
+    w.completionPromise?.catch(() => {});
+    if (w.pollInterval) clearInterval(w.pollInterval);
+    if (w.timeoutTimer) clearTimeout(w.timeoutTimer);
+  });
 });
 
 describe('playwright-cli open/goto with --teleport-start and --teleport-return', () => {

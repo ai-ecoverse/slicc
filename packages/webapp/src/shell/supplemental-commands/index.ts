@@ -82,7 +82,7 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    * works with either.
    */
   processManager?: ProcessManager;
-  /** Leader-side cherry runtime registry (Task 6). Absent outside leader contexts. */
+  /** Leader-side cherry runtime registry. Absent outside leader contexts. */
   cherryRuntimeRegistry?: CherryRuntimeRegistry;
 }
 

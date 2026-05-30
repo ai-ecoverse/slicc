@@ -105,8 +105,9 @@ export function isCherryTarget(t: Pick<RemoteTargetInfo, 'kind'>): boolean {
  * not need network, cherry targets are always kept.
  *
  * Consumed by `getBestFollowerForTeleport` (auto-select) via
- * `canRuntimeServeTeleport`. The explicit `--runtime` path is gated separately
- * by `canRuntimeOpenTab`, since teleport opens a fresh tab on the follower.
+ * `canRuntimeServeTeleport`. The explicit `teleport --runtime <id>` path is
+ * gated separately in `playwright-command.ts` at arm time, which rejects a
+ * runtime advertising the `CHERRY_RUNTIME_TAG` before any watcher is created.
  */
 export function selectTeleportPool<
   T extends Pick<RemoteTargetInfo, 'kind' | 'capabilities'> & { targetId: string },
@@ -1134,7 +1135,6 @@ export class LeaderSyncManager {
     const cherryRuntimeId = this.runtimeIdForBootstrap(bootstrapId);
     try {
       lickManager.emitEvent({
-        // Task 7 adds 'cherry' to LickEvent's type union
         type: 'cherry',
         cherryRuntimeId,
         cherryName: message.name,

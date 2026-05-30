@@ -2,10 +2,15 @@ import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 
 /**
- * Leader-side registry the `cherry-emit` command drives. Bound to the same
- * object that calls `emitCherrySliccEvent` from Task 6 (the leader's cherry
- * runtime registry). `listRuntimeIds()` returns canonical ids
- * (`follower-<bootstrapId>`, see Task 8).
+ * Leader-side registry the `cherry-emit` command drives to push a `slicc.event`
+ * out to a cherry host page through a connected follower runtime.
+ * `listRuntimeIds()` returns canonical ids (`follower-<bootstrapId>`);
+ * `emitSliccEvent` forwards the named event over that runtime's tray channel.
+ *
+ * The registry is injected via `CommandDeps.cherryRuntimeRegistry`. It is only
+ * meaningful in a leader context that has cherry followers connected; when it is
+ * absent (or no cherry runtime is connected) `cherry-emit` reports that and
+ * exits non-zero rather than silently succeeding.
  */
 export interface CherryRuntimeRegistry {
   listRuntimeIds(): string[];

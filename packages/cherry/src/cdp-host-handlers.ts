@@ -67,7 +67,7 @@ export function createCdpHostHandler(opts: CdpHostHandlerOptions): Handler {
     //    the baseline driveable-CDP-target contract the host opted into by
     //    calling mountSlicc. Per-domain authorization (including denying the
     //    whole Input/DOM domain) is enforced UPSTREAM via onPermissionRequest at
-    //    the mount layer (Task 12), so we intentionally do not re-gate them here.
+    //    the mount layer, so we intentionally do not re-gate them here.
     switch (method) {
       case 'Runtime.evaluate': {
         const expression = String(params.expression ?? '');

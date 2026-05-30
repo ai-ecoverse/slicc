@@ -1,6 +1,11 @@
 import type { MountSliccOptions, SliccHandle } from './index.js';
 import { createCdpHostHandler, CherryUnsupportedError } from './cdp-host-handlers.js';
-import { CHERRY_PROTOCOL_VERSION, acceptEnvelope, type CherryEnvelope } from './protocol.js';
+import {
+  CHERRY_PROTOCOL_VERSION,
+  acceptEnvelope,
+  isCherryEnvelope,
+  type CherryEnvelope,
+} from './protocol.js';
 
 interface CdpResponseShape {
   result?: Record<string, unknown>;
@@ -45,13 +50,13 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
     env: Extract<CherryEnvelope, { kind: 'cdp.request' }>
   ): Promise<CdpResponseShape> => {
     const domain = env.method.split('.')[0] ?? env.method;
-    const granted = options.hooks?.onPermissionRequest
-      ? await options.hooks.onPermissionRequest(domain)
-      : true;
-    if (!granted) {
-      return { error: { code: -32601, message: `Cherry: permission denied for ${domain}` } };
-    }
     try {
+      const granted = options.hooks?.onPermissionRequest
+        ? await options.hooks.onPermissionRequest(domain)
+        : true;
+      if (!granted) {
+        return { error: { code: -32601, message: `Cherry: permission denied for ${domain}` } };
+      }
       const result = await hostHandler(env.method, env.params ?? {});
       return { result };
     } catch (err) {
@@ -121,9 +126,24 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
         channelId,
       })
     ) {
+      // A well-formed cherry envelope that still fails the gate is almost
+      // always a misconfiguration (wrong sliccOrigin, source/channel mismatch).
+      // Surface it — otherwise it manifests downstream as an opaque 30s
+      // handshake/CDP timeout. Non-cherry postMessage noise stays silent.
+      if (isCherryEnvelope(event.data)) {
+        console.warn('[cherry] rejected a cherry envelope (origin/source/channel mismatch)', {
+          origin: event.origin,
+          expectedOrigin: options.sliccOrigin,
+        });
+      }
       return;
     }
-    void handleEnvelope(event.data as CherryEnvelope);
+    void handleEnvelope(event.data as CherryEnvelope).catch((err) => {
+      // handleEnvelope already converts cdp.request failures into a posted
+      // cdp.response.error. A reject here means a handshake/event handler threw
+      // unexpectedly — log so it doesn't vanish as a silent 30s leader timeout.
+      console.error('[cherry] envelope handling failed', err);
+    });
   };
   window.addEventListener('message', onMessage);
 

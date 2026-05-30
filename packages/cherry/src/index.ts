@@ -36,7 +36,7 @@ export interface MountSliccOptions {
    * IMS bearer forwarded into the iframe over the handshake for same-origin
    * /api/cloud provisioning. Browser-resident only; never forwarded to
    * third-party or E2B. The SDK does NOT call /api/cloud itself — the iframe
-   * (same-origin with the worker) does (Task 13 `resolveCherryJoinUrl`).
+   * (same-origin with the worker) does (`main-cherry.ts:resolveCherryJoinUrl`).
    */
   imsToken?: string;
   /** Target cone name to resume/start during iframe-side provisioning. */

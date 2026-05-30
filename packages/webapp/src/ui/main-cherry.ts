@@ -4,7 +4,7 @@ import { createLogger } from '../core/logger.js';
 
 const log = createLogger('cherry-boot');
 
-/** Provisioning payload the host SDK forwards over the handshake (Task 3 captures it). */
+/** Provisioning payload the host SDK forwards over the handshake. */
 export interface CherryProvisioningAuth {
   token: string;
   coneName?: string;
@@ -83,7 +83,7 @@ export async function setupCherryFollower(): Promise<CherryBootResult> {
 
   // joinUrl arrives directly in the handshake, OR is provisioned iframe-side
   // from an IMS token. Both `transport.joinUrl` and `transport.provisioningAuth`
-  // are captured in Task 3's handshake.welcome handler.
+  // are captured by the transport's handshake.welcome handler.
   let joinUrl = transport.joinUrl;
   if (!joinUrl && transport.provisioningAuth) {
     joinUrl = await resolveCherryJoinUrl(transport.provisioningAuth);
