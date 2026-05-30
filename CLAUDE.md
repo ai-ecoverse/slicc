@@ -6,18 +6,19 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 
 ### Packages
 
-| Path                          | Purpose                                                                              |
-| ----------------------------- | ------------------------------------------------------------------------------------ |
-| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops              |
-| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                 |
-| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, and TURN credentials            |
-| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving                   |
-| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                |
-| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                     |
-| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                     |
-| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC       |
-| `packages/dev-tools/`         | Repo-level tooling guidance for build helpers, QA setup, configs, and test utilities |
-| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages                |
+| Path                          | Purpose                                                                               |
+| ----------------------------- | ------------------------------------------------------------------------------------- |
+| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops               |
+| `packages/cherry/`            | Host-side embed SDK (`mountSlicc`) lending a third-party page to a leader as a target |
+| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                  |
+| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, and TURN credentials             |
+| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving                    |
+| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                 |
+| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                      |
+| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                      |
+| `packages/ios-app/`           | Native iOS SwiftUI follower app (`SliccFollower`) — joins a leader over WebRTC        |
+| `packages/dev-tools/`         | Repo-level tooling guidance for build helpers, QA setup, configs, and test utilities  |
+| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages                 |
 
 ### Other Top-Level Directories
 
@@ -42,6 +43,7 @@ npm run dev                              # Dev mode with Vite HMR + Chrome + CDP
 For runtime-specific commands, use the nearest guide:
 
 - [`packages/webapp/CLAUDE.md`](packages/webapp/CLAUDE.md)
+- [`packages/cherry/CLAUDE.md`](packages/cherry/CLAUDE.md)
 - [`packages/chrome-extension/CLAUDE.md`](packages/chrome-extension/CLAUDE.md)
 - [`packages/cloudflare-worker/CLAUDE.md`](packages/cloudflare-worker/CLAUDE.md)
 - [`packages/node-server/CLAUDE.md`](packages/node-server/CLAUDE.md)
@@ -76,7 +78,7 @@ Prefer the helper in `.agents/skills/slicc-handoff/scripts/slicc-handoff` when i
 - **Cone**: the main agent.
 - **Scoops**: isolated sub-agents with sandboxed filesystems.
 - **Licks**: external events such as webhooks or cron tasks.
-- **Floats**: runtime environments such as CLI, extension, Electron, and cloud.
+- **Floats**: runtime environments such as CLI, extension, Electron, cloud, and Cherry (an embedded follower garnish — the webapp running `?cherry=1` inside a third-party host page's iframe).
 
 Use the ice cream terms in code review comments and docs when they match the domain.
 
@@ -119,7 +121,7 @@ Each instance gets an isolated Chrome profile (keyed by port) and separate CDP p
 - **Cone**: Main agent ("sliccy"). Full filesystem access, all tools. Code: `orchestrator.ts`, `RegisteredScoop` with `isCone: true`.
 - **Scoops**: Isolated sub-agents with sandboxed filesystem (`/scoops/{name}/` + `/shared/`), own shell/conversation. Tools: `scoop_scoop`, `feed_scoop`, `drop_scoop`. Code: `scoop-context.ts`, `restricted-fs.ts`.
 - **Licks**: External events triggering scoops (webhooks, cron tasks). Code: `LickManager`, `LickEvent`. Shell: `webhook`, `crontask`.
-- **Floats**: Runtime environments — CLI (`packages/node-server/src/`), Extension (`packages/chrome-extension/src/`), Electron (`packages/node-server/src/electron-main.ts`), Sliccstart (`packages/swift-launcher/` — native macOS launcher), **hosted-leader (cloud)** (`packages/node-server/src/cloud/` orchestrates an e2b sandbox running `node-server --hosted`; see `packages/dev-tools/e2b-template/`).
+- **Floats**: Runtime environments — CLI (`packages/node-server/src/`), Extension (`packages/chrome-extension/src/`), Electron (`packages/node-server/src/electron-main.ts`), Sliccstart (`packages/swift-launcher/` — native macOS launcher), **hosted-leader (cloud)** (`packages/node-server/src/cloud/` orchestrates an e2b sandbox running `node-server --hosted`; see `packages/dev-tools/e2b-template/`), **Cherry (embedded follower garnish)** (`packages/cherry/` host SDK `mountSlicc` embeds the webapp with `?cherry=1` in a third-party page's iframe and lends that page to a remote leader as a capability-limited synthetic-CDP target).
 
 Use ice cream terms over technical jargon (e.g., "feed_scoop" not "delegate_to_scoop").
 
