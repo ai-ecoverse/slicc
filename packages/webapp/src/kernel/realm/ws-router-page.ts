@@ -144,7 +144,7 @@ export function installWsRouter(win: typeof globalThis): void {
   const origSend = WS.prototype.send;
   WS.prototype.send = function patchedSend(this: WebSocket, data: unknown): void {
     wrapInstance(this);
-    return origSend.call(this, data as string);
+    origSend.call(this, data as string);
   };
 
   const router = {

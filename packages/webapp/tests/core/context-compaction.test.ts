@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { Api, Model } from '@earendil-works/pi-ai';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  setLogLevel,
   getLogLevel,
   LogLevel,
   resetLoggerDedupForTests,
+  setLogLevel,
 } from '../../src/core/logger.js';
 
 /** Structural views used in test helpers and assertions to avoid `any`. */
@@ -69,12 +69,12 @@ vi.mock('@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js', ()
 }));
 
 import {
-  compactContext,
-  createCompactContext,
-  stripOrphanedToolResults,
-  runOneOffCompactionCall,
   COMPACTION_MEMORY_INSTRUCTION,
   COMPACTION_TITLE_INSTRUCTION,
+  compactContext,
+  createCompactContext,
+  runOneOffCompactionCall,
+  stripOrphanedToolResults,
 } from '../../src/core/context-compaction.js';
 
 /** Cast helper used in assertions where a typed AgentMessage view of an array of content blocks is needed. */

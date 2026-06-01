@@ -1,22 +1,22 @@
-import { defineConfig } from 'vite';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import { readFileSync } from 'fs';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
+import { defineConfig } from 'vite';
 import { stripBiomeWasmAssetPlugin } from './vite-plugins/strip-biome-wasm-asset';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const workspaceRoot = resolve(__dirname, '../..');
+const Dirname = dirname(fileURLToPath(import.meta.url));
+const workspaceRoot = resolve(Dirname, '../..');
 const rootPkg = JSON.parse(readFileSync(resolve(workspaceRoot, 'package.json'), 'utf-8')) as {
   version: string;
 };
 const sliccReleasedAt = process.env['SLICC_RELEASED_AT'] ?? null;
 const uiOutDir = resolve(workspaceRoot, 'dist/ui');
-const previewSwEntry = resolve(__dirname, 'src/ui/preview-sw.ts');
-const llmProxySwEntry = resolve(__dirname, 'src/ui/llm-proxy-sw.ts');
-const electronOverlayEntry = resolve(__dirname, 'src/ui/electron-overlay-entry.ts');
-const sliccEditorEntry = resolve(__dirname, 'src/ui/slicc-editor-entry.ts');
-const sliccDiffEntry = resolve(__dirname, 'src/ui/slicc-diff-entry.ts');
-const lucideIconsEntry = resolve(__dirname, 'src/ui/lucide-icons.ts');
+const previewSwEntry = resolve(Dirname, 'src/ui/preview-sw.ts');
+const llmProxySwEntry = resolve(Dirname, 'src/ui/llm-proxy-sw.ts');
+const electronOverlayEntry = resolve(Dirname, 'src/ui/electron-overlay-entry.ts');
+const sliccEditorEntry = resolve(Dirname, 'src/ui/slicc-editor-entry.ts');
+const sliccDiffEntry = resolve(Dirname, 'src/ui/slicc-diff-entry.ts');
+const lucideIconsEntry = resolve(Dirname, 'src/ui/lucide-icons.ts');
 
 /** esbuild plugin: resolve @pierre/diffs internal imports that aren't in the exports map. */
 function pierreDiffsPlugin() {
@@ -47,10 +47,10 @@ function stubPiNodeInternalsPlugin() {
       const normalizedImporter = importer?.replace(/\\/g, '/');
       if (normalizedImporter?.includes('@earendil-works/pi-coding-agent')) {
         if (source.endsWith('/session-manager.js')) {
-          return resolve(__dirname, 'src/stubs/pi-session-manager-stub.ts');
+          return resolve(Dirname, 'src/stubs/pi-session-manager-stub.ts');
         }
         if (source.endsWith('/config.js') || source === '../config.js') {
-          return resolve(__dirname, 'src/stubs/pi-config-stub.ts');
+          return resolve(Dirname, 'src/stubs/pi-config-stub.ts');
         }
       }
       return undefined;
@@ -358,7 +358,7 @@ export default defineConfig(({ mode }) => ({
         // `worker.plugins` block below where we re-pass the stub plugin.
         // No standalone esbuild call needed.
         copyFileSync(
-          resolve(__dirname, '../assets/logos/favicon.png'),
+          resolve(Dirname, '../assets/logos/favicon.png'),
           resolve(uiOutDir, 'favicon.png')
         );
         // Vite preserves the nested HTML path when the repo root is the Vite root.
@@ -395,15 +395,15 @@ export default defineConfig(({ mode }) => ({
       // just-bash's browser bundle references node:zlib and node:module for
       // gzip/gunzip commands that aren't functional in browsers anyway.
       // Alias to empty stubs so the bundled JS never tries to fetch them.
-      'node:zlib': resolve(__dirname, 'src/shims/empty.ts'),
-      'node:module': resolve(__dirname, 'src/shims/empty.ts'),
+      'node:zlib': resolve(Dirname, 'src/shims/empty.ts'),
+      'node:module': resolve(Dirname, 'src/shims/empty.ts'),
       // @smithy/node-http-handler imports named exports from Node builtins
       // (without node: prefix). Vite's browser-external can't provide named
       // exports, so alias to stubs with the required exports.
-      stream: resolve(__dirname, 'src/shims/stream.ts'),
-      http: resolve(__dirname, 'src/shims/http.ts'),
-      https: resolve(__dirname, 'src/shims/https.ts'),
-      http2: resolve(__dirname, 'src/shims/http2.ts'),
+      stream: resolve(Dirname, 'src/shims/stream.ts'),
+      http: resolve(Dirname, 'src/shims/http.ts'),
+      https: resolve(Dirname, 'src/shims/https.ts'),
+      http2: resolve(Dirname, 'src/shims/http2.ts'),
       // Deep import into pi-coding-agent's compaction submodule — the main entry
       // re-exports 113 Node-only modules that break Vite's browser bundle.
       // The compaction submodule only depends on @earendil-works/pi-ai (browser-safe).
@@ -463,8 +463,8 @@ export default defineConfig(({ mode }) => ({
     target: 'esnext',
     rollupOptions: {
       input: {
-        main: resolve(__dirname, 'index.html'),
-        cloud: resolve(__dirname, 'cloud/index.html'),
+        main: resolve(Dirname, 'index.html'),
+        cloud: resolve(Dirname, 'cloud/index.html'),
       },
     },
     // preview-sw and electron-overlay-entry are built separately via esbuild.

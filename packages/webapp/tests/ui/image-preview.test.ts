@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { showImagePreview } from '../../src/ui/image-preview.js';
 
 describe('showImagePreview', () => {
@@ -20,7 +20,9 @@ describe('showImagePreview', () => {
 
   afterEach(() => {
     originEl.remove();
-    document.querySelectorAll('.image-preview-overlay').forEach((el) => el.remove());
+    document.querySelectorAll('.image-preview-overlay').forEach((el) => {
+      el.remove();
+    });
   });
 
   it('creates an overlay element in the DOM', () => {

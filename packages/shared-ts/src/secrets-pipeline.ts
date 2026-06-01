@@ -1,6 +1,6 @@
 import {
-  mask as cryptoMask,
   buildScrubber,
+  mask as cryptoMask,
   matchesDomains,
   type SecretPair,
 } from './secret-masking.js';

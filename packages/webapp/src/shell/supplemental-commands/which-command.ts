@@ -1,5 +1,5 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { discoverJshCommands } from '../jsh-discovery.js';
 import type { ScriptCatalog } from '../script-catalog.js';

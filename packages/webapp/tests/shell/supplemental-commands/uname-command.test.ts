@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem } from 'just-bash';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createUnameCommand } from '../../../src/shell/supplemental-commands/uname-command.js';
 
 function createMockCtx() {

@@ -25,26 +25,23 @@
  * Spec: `docs/superpowers/specs/2026-05-17-multi-browser-sync-page-side-restoration.md`.
  */
 
-import {
-  startFollowerWithAutoReconnect,
-  type FollowerAutoReconnectHandle,
-  type FollowerTrayConnection,
-  type TrayPeerConnectionFactory,
-} from '../scoops/tray-webrtc.js';
-import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
-import type { AgentHandle, ChatMessage } from './types.js';
-import type { MessageAttachment } from '../core/attachments.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
-import {
-  CHERRY_RUNTIME_TAG,
-  type RemoteTargetInfo,
-  type SprinkleSummary,
-} from '../scoops/tray-sync-protocol.js';
-import type { SprinkleAddOptions } from './sprinkle-manager.js';
-import { SprinkleFollowerController } from './sprinkle-follower-controller.js';
+import type { MessageAttachment } from '../core/attachments.js';
+import { CHERRY_RUNTIME_TAG, type RemoteTargetInfo } from '../scoops/tray-sync-protocol.js';
 import { canonicalRuntimeId } from './runtime-identity.js';
 import { createLogger } from '../core/logger.js';
 import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
+import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
+import type { SprinkleSummary } from '../scoops/tray-sync-protocol.js';
+import {
+  type FollowerAutoReconnectHandle,
+  type FollowerTrayConnection,
+  startFollowerWithAutoReconnect,
+  type TrayPeerConnectionFactory,
+} from '../scoops/tray-webrtc.js';
+import { SprinkleFollowerController } from './sprinkle-follower-controller.js';
+import type { SprinkleAddOptions } from './sprinkle-manager.js';
+import type { AgentHandle, ChatMessage } from './types.js';
 
 const log = createLogger('page-follower-tray');
 

@@ -27,15 +27,15 @@
  *     a real DOM (extension offscreen, standalone non-worker).
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-import { getFfmpeg } from './ffmpeg-wasm.js';
+import { defineCommand } from 'just-bash';
+import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
 import {
-  captureCamera,
   type CameraCaptureRequest,
   type CameraCaptureResult,
+  captureCamera,
 } from '../../ui/panel-rpc-handlers.js';
-import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
+import { getFfmpeg } from './ffmpeg-wasm.js';
 
 interface MediaDeviceSummary {
   videoinputs: Array<{ deviceId: string; label: string; groupId?: string }>;

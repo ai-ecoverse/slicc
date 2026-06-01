@@ -5,9 +5,9 @@
  * API calls and maps Target.* commands to chrome.tabs/chrome.debugger.
  */
 
-import type { CDPConnectOptions, CDPEventListener, ConnectionState } from './types.js';
-import type { CDPTransport } from './transport.js';
 import { createLogger } from '../core/logger.js';
+import type { CDPTransport } from './transport.js';
+import type { CDPConnectOptions, CDPEventListener, ConnectionState } from './types.js';
 
 const log = createLogger('cdp:debugger');
 

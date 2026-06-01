@@ -7,9 +7,9 @@
  * `mount-recovery` list).
  */
 
-import type { LickEvent } from './lick-manager.js';
-import { formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
 import type { MountRecoveryEntry } from '../fs/mount-recovery.js';
+import { formatMountRecoveryPrompt } from '../fs/mount-recovery.js';
+import type { LickEvent } from './lick-manager.js';
 
 export interface FormattedLick {
   label: string;

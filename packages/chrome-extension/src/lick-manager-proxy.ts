@@ -10,7 +10,7 @@
  *   awaits results
  */
 
-import type { LickManager, CronTaskEntry, WebhookEntry } from './types.js';
+import type { CronTaskEntry, LickManager, WebhookEntry } from './types.js';
 
 const CHANNEL_NAME = 'slicc-lick-manager';
 const TIMEOUT = 5000;
@@ -38,7 +38,7 @@ export function startLickManagerHost(
   const ch = new BroadcastChannel(CHANNEL_NAME);
   ch.onmessage = async (event: MessageEvent) => {
     const msg = event.data;
-    if (!msg || msg.type !== 'lick-op') return;
+    if (msg?.type !== 'lick-op') return;
 
     const { id, op, args } = msg;
     try {
@@ -115,7 +115,7 @@ function request(op: string, args: unknown[] = []): Promise<unknown> {
 
     ch.onmessage = (event: MessageEvent) => {
       const msg = event.data;
-      if (!msg || msg.type !== 'lick-op-response' || msg.id !== id) return;
+      if (msg?.type !== 'lick-op-response' || msg.id !== id) return;
       clearTimeout(timer);
       ch.close();
       if (msg.error) reject(new Error(msg.error));

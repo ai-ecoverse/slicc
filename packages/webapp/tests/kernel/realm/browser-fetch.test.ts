@@ -10,15 +10,15 @@
  * round-trip through `unwrapEvalResult` is exercised end-to-end.
  */
 
-import { describe, it, expect } from 'vitest';
-import type { CommandContext, IFileSystem, FsStat } from 'just-bash';
+import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
+import { describe, expect, it } from 'vitest';
 import type { BrowserAPI } from '../../../src/cdp/browser-api.js';
-import { RealmRpcClient, type RealmPortLike } from '../../../src/kernel/realm/realm-rpc.js';
-import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
 import {
-  buildBrowserFetchScript,
   type BrowserFetchResult,
+  buildBrowserFetchScript,
 } from '../../../src/kernel/realm/js-realm-shared.js';
+import { attachRealmHost } from '../../../src/kernel/realm/realm-host.js';
+import { type RealmPortLike, RealmRpcClient } from '../../../src/kernel/realm/realm-rpc.js';
 
 describe('buildBrowserFetchScript — page-context script shape', () => {
   it('emits a single self-calling async IIFE (no temp file, no base64)', () => {

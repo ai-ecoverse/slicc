@@ -1,7 +1,6 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { SessionStore } from '../../src/core/session.js';
-import type { SessionData } from '../../src/core/types.js';
 
 describe('SessionStore', () => {
   let store: SessionStore;

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { LocalMountBackend } from '../../../src/fs/mount/backend-local.js';
 import { createDirectoryHandle, createMutableDirectoryHandle } from '../fsa-test-helpers.js';
 

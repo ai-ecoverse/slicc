@@ -16,13 +16,7 @@ function normalizeMockPath(path: string): string {
   return `/${resolved.join('/')}`;
 }
 
-function createMockCtx(
-  opts: {
-    directories?: string[];
-    files?: string[];
-    cwd?: string;
-  } = {}
-) {
+function createMockCtx(opts: { directories?: string[]; files?: string[]; cwd?: string } = {}) {
   const directories = new Set((opts.directories ?? []).map(normalizeMockPath));
   const files = new Set((opts.files ?? []).map(normalizeMockPath));
 

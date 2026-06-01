@@ -22,29 +22,32 @@
  * keeps the helper's import graph small.
  */
 
-import { LeaderTrayManager } from '../scoops/tray-leader.js';
+import type { BrowserAPI } from '../cdp/browser-api.js';
+import type { CDPTransport } from '../cdp/transport.js';
+import { createLogger } from '../core/logger.js';
+import type { VirtualFS } from '../fs/virtual-fs.js';
+import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 import type {
   LeaderTraySession,
   LeaderTraySessionStore,
   LeaderTrayWebSocket,
   TrayKind,
 } from '../scoops/tray-leader.js';
-import { LeaderTrayPeerManager } from '../scoops/tray-webrtc.js';
-import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
+import {
+  getLeaderTrayRuntimeStatus,
+  LeaderTrayManager,
+  type LeaderTrayRuntimeStatus,
+} from '../scoops/tray-leader.js';
 import type { LeaderSyncManagerOptions } from '../scoops/tray-leader-sync.js';
+import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
+import { buildTrayLaunchUrl } from '../scoops/tray-runtime-config.js';
 import type {
+  RemoteTargetInfo,
   ScoopSummary,
   SprinkleSummary,
-  RemoteTargetInfo,
 } from '../scoops/tray-sync-protocol.js';
+import { LeaderTrayPeerManager } from '../scoops/tray-webrtc.js';
 import type { AgentEvent } from './types.js';
-import type { BrowserAPI } from '../cdp/browser-api.js';
-import type { CDPTransport } from '../cdp/transport.js';
-import type { VirtualFS } from '../fs/virtual-fs.js';
-import { buildTrayLaunchUrl } from '../scoops/tray-runtime-config.js';
-import { getLeaderTrayRuntimeStatus, type LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
-import { createLogger } from '../core/logger.js';
-import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 
 const log = createLogger('page-leader-tray');
 

@@ -279,7 +279,7 @@ export function createPanelRpcClient(options: { instanceId?: string } = {}): Pan
 
   channel.addEventListener('message', (event: MessageEvent) => {
     const msg = event.data as PanelRpcResponseMsg | undefined;
-    if (!msg || msg.type !== 'panel-rpc-response') return;
+    if (msg?.type !== 'panel-rpc-response') return;
     const slot = pending.get(msg.id);
     if (!slot) return;
     pending.delete(msg.id);
@@ -366,7 +366,7 @@ export function installPanelRpcHandler(options: {
 
   const listener = async (event: MessageEvent): Promise<void> => {
     const msg = event.data as PanelRpcRequestMsg | undefined;
-    if (!msg || msg.type !== 'panel-rpc-request') return;
+    if (msg?.type !== 'panel-rpc-request') return;
     const handler = (options.handlers as Record<string, ((p: unknown) => unknown) | undefined>)[
       msg.op
     ];

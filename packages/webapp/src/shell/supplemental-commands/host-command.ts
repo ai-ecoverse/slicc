@@ -1,14 +1,14 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
+import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
+import {
+  type FollowerTrayRuntimeStatus,
+  getFollowerTrayRuntimeStatus,
+} from '../../scoops/tray-follower-status.js';
 import {
   getLeaderTrayRuntimeStatus,
   type LeaderTrayRuntimeStatus,
 } from '../../scoops/tray-leader.js';
-import {
-  getFollowerTrayRuntimeStatus,
-  type FollowerTrayRuntimeStatus,
-} from '../../scoops/tray-follower-status.js';
-import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 import { leaveTray as defaultLeaveTray, type TrayLeaveResult } from '../../scoops/tray-leave.js';
 import { normalizeTrayWorkerBaseUrl } from '../../scoops/tray-runtime-config.js';
 

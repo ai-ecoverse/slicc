@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  SecretsPipeline,
   type FetchProxySecretSource,
   type ForbiddenInfo,
+  SecretsPipeline,
 } from '../src/secrets-pipeline.js';
 
 function source(

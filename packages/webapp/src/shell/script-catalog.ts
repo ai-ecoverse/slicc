@@ -1,9 +1,9 @@
 import type { FsWatcher } from '../fs/index.js';
 import {
-  discoverBshScripts,
-  findMatchingScripts,
   type BshDiscoveryFS,
   type BshEntry,
+  discoverBshScripts,
+  findMatchingScripts,
 } from './bsh-discovery.js';
 import { discoverJshCommands, type JshDiscoveryFS } from './jsh-discovery.js';
 

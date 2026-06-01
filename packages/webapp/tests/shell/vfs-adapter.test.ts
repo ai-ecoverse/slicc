@@ -3,7 +3,7 @@
  */
 
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import { VfsAdapter } from '../../src/shell/vfs-adapter.js';
 

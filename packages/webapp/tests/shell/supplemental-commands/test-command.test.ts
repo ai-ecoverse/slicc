@@ -1,12 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
 import type { IFileSystem } from 'just-bash';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  _resetTstHarnessForTests,
   createTestCommand,
   expandBraces,
   globToRegExp,
   parseTestArgs,
   resolveTestFiles,
-  _resetTstHarnessForTests,
 } from '../../../src/shell/supplemental-commands/test-command.js';
 
 function createMockCtx(

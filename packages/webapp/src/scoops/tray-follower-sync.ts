@@ -3,36 +3,36 @@
  * and provides an AgentHandle for the follower's ChatPanel.
  */
 
-import type { AgentEvent, AgentHandle, ChatMessage } from '../ui/types.js';
-import { stripLocalPathsForRemote } from '../core/attachments.js';
-import type { MessageAttachment } from '../core/attachments.js';
-import type { TrayDataChannelLike } from './tray-webrtc.js';
-import {
-  createFollowerSyncChannel,
-  sendCDPResponse,
-  reassembleCDPResponse,
-  reassembleSnapshot,
-  type LeaderToFollowerMessage,
-  type FollowerToLeaderMessage,
-  type TraySyncChannel,
-  type RemoteTargetInfo,
-  type TrayTargetEntry,
-  type TrayFsRequest,
-  type TrayFsResponse,
-  type SprinkleSummary,
-} from './tray-sync-protocol.js';
-import { handleFsRequest } from './tray-fs-handler.js';
-import type { VirtualFS } from '../fs/virtual-fs.js';
-import type { CDPTransport } from '../cdp/transport.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
-import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
+import { type RemoteCDPSender, RemoteCDPTransport } from '../cdp/remote-cdp-transport.js';
+import type { CDPTransport } from '../cdp/transport.js';
+import type { MessageAttachment } from '../core/attachments.js';
+import { stripLocalPathsForRemote } from '../core/attachments.js';
+import { createLogger } from '../core/logger.js';
+import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { AgentEvent, AgentHandle, ChatMessage } from '../ui/types.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import {
-  setFollowerTrayRuntimeStatus,
   getFollowerTrayRuntimeStatus,
   setFollowerLastPingTime,
+  setFollowerTrayRuntimeStatus,
 } from './tray-follower-status.js';
-import { createLogger } from '../core/logger.js';
+import { handleFsRequest } from './tray-fs-handler.js';
+import {
+  createFollowerSyncChannel,
+  type FollowerToLeaderMessage,
+  type LeaderToFollowerMessage,
+  type RemoteTargetInfo,
+  reassembleCDPResponse,
+  reassembleSnapshot,
+  type SprinkleSummary,
+  sendCDPResponse,
+  type TrayFsRequest,
+  type TrayFsResponse,
+  type TraySyncChannel,
+  type TrayTargetEntry,
+} from './tray-sync-protocol.js';
+import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 const log = createLogger('tray-follower-sync');
 

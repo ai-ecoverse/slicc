@@ -1,13 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import {
+  TRAY_JOIN_STORAGE_KEY,
+  TRAY_WORKER_STORAGE_KEY,
+} from '../../src/scoops/tray-runtime-config.js';
 import {
   performTrayLeave,
   type TrayLeaveDeps,
   type TrayLeaveStoppable,
 } from '../../src/ui/tray-leave-runtime.js';
-import {
-  TRAY_JOIN_STORAGE_KEY,
-  TRAY_WORKER_STORAGE_KEY,
-} from '../../src/scoops/tray-runtime-config.js';
 
 interface RecordingHandle extends TrayLeaveStoppable {
   id: string;

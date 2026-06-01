@@ -1,12 +1,13 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 // Wrap isomorphic-git in a mutable object so vi.spyOn can redefine exports.
 // The ESM namespace is frozen by spec; spreading importOriginal creates a
 // plain object whose properties are configurable.
 vi.mock('isomorphic-git', async (importOriginal) => ({ ...(await importOriginal()) }));
+
 import * as isoGit from 'isomorphic-git';
-import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { GLOBAL_FS_DB_NAME } from '../../src/fs/global-db.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { GitCommands } from '../../src/git/git-commands.js';
 
 describe('GitCommands', () => {

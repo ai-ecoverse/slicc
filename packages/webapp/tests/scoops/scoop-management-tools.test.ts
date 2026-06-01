@@ -5,7 +5,7 @@
  * relied on MUST be injected here.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createScoopManagementTools } from '../../src/scoops/scoop-management-tools.js';
 import { CURRENT_SCOOP_CONFIG_VERSION, type RegisteredScoop } from '../../src/scoops/types.js';
 

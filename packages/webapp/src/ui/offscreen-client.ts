@@ -8,32 +8,32 @@
  * - State sync on reconnect with retry logic
  */
 
-import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
-import type { MessageAttachment } from '../core/attachments.js';
-import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
-import type { VirtualFS } from '../fs/index.js';
 import type {
-  ExtensionMessage,
-  PanelToOffscreenMessage,
-  OffscreenToPanelMessage,
-  StateSnapshotMsg,
   AgentEventMsg,
-  ScoopStatusMsg,
-  ScoopCreatedMsg,
   ErrorMsg,
+  ExtensionMessage,
   IncomingMessageMsg,
+  OffscreenToPanelMessage,
+  PanelToOffscreenMessage,
+  ScoopCreatedMsg,
   ScoopListMsg,
   ScoopMessagesReplacedMsg,
+  ScoopStatusMsg,
+  StateSnapshotMsg,
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
 } from '../../../chrome-extension/src/messages.js';
+import type { MessageAttachment } from '../core/attachments.js';
 import { createLogger } from '../core/logger.js';
-import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
-import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
-import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
+import type { VirtualFS } from '../fs/index.js';
 import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
+import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
+import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
+import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
 import type { TerminalEventMsg } from '../shell/terminal-protocol.js';
+import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
 
 const log = createLogger('offscreen-client');
 

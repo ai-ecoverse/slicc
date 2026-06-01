@@ -5,20 +5,20 @@
  * Uses the DB layer directly to verify message persistence and routing.
  */
 
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import {
-  initDB,
-  saveScoop,
-  getMessagesForScoop,
   clearAllMessages,
   getAllScoops,
+  getMessagesForScoop,
+  initDB,
+  saveScoop,
 } from '../../src/scoops/db.js';
 import { Orchestrator, SCOOP_IDLE_TIMEOUT_MS } from '../../src/scoops/orchestrator.js';
 import {
+  type ChannelMessage,
   CURRENT_SCOOP_CONFIG_VERSION,
   type RegisteredScoop,
-  type ChannelMessage,
 } from '../../src/scoops/types.js';
 
 // Test helpers — we can't instantiate a full Orchestrator (needs VirtualFS, DOM, etc.)
@@ -2119,29 +2119,32 @@ describe('Orchestrator handleMessage external-lick visibility', () => {
     expect(incoming[0].msg.channel).toBe('webhook');
   });
 
-  it.each([['cron'], ['sprinkle'], ['fswatch'], ['session-reload'], ['upgrade']] as const)(
-    'fires onIncomingMessage once for %s channel',
-    async (channel) => {
-      const incoming: ChannelMessage[] = [];
-      orch = await makeOrch((_jid, msg) => incoming.push(msg));
+  it.each([
+    ['cron'],
+    ['sprinkle'],
+    ['fswatch'],
+    ['session-reload'],
+    ['upgrade'],
+  ] as const)('fires onIncomingMessage once for %s channel', async (channel) => {
+    const incoming: ChannelMessage[] = [];
+    orch = await makeOrch((_jid, msg) => incoming.push(msg));
 
-      const msg: ChannelMessage = {
-        id: `${channel}-test-1`,
-        chatJid: cone.jid,
-        senderId: channel,
-        senderName: `${channel}:demo`,
-        content: `[${channel}]`,
-        timestamp: new Date().toISOString(),
-        fromAssistant: false,
-        channel: channel as ChannelMessage['channel'],
-      };
+    const msg: ChannelMessage = {
+      id: `${channel}-test-1`,
+      chatJid: cone.jid,
+      senderId: channel,
+      senderName: `${channel}:demo`,
+      content: `[${channel}]`,
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: channel as ChannelMessage['channel'],
+    };
 
-      await orch.handleMessage(msg);
+    await orch.handleMessage(msg);
 
-      expect(incoming).toHaveLength(1);
-      expect(incoming[0].channel).toBe(channel);
-    }
-  );
+    expect(incoming).toHaveLength(1);
+    expect(incoming[0].channel).toBe(channel);
+  });
 
   it('does NOT fire onIncomingMessage from inside handleMessage for scoop-notify (avoids double-fire with upstream)', async () => {
     const incoming: ChannelMessage[] = [];

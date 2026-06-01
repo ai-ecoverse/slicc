@@ -19,10 +19,10 @@
  * `restricted-fs-sync.test.ts`.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
-import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { RestrictedFS } from '../../src/fs/restricted-fs.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { WasmShell } from '../../src/shell/wasm-shell.js';
 
 describe('RestrictedFS async lstat rejects ancestor-symlink escape (VAL-FS-019 parity)', () => {

@@ -15,16 +15,16 @@
  */
 
 import type {
-  PanelCdpCommandMsg,
-  PanelCdpResponseMsg,
   CdpEventMsg,
   ExtensionMessage,
+  PanelCdpCommandMsg,
+  PanelCdpResponseMsg,
 } from '../../../chrome-extension/src/messages.js';
 import {
-  CdpTransportBridge,
   type CdpBridgeOptions,
-  type ParsedCdpResponse,
+  CdpTransportBridge,
   type ParsedCdpEvent,
+  type ParsedCdpResponse,
 } from '../kernel/cdp-bridge.js';
 
 function isExtMsg(msg: unknown): msg is ExtensionMessage {

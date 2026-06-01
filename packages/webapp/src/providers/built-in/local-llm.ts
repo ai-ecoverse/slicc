@@ -36,23 +36,23 @@
  *   injects a placeholder when the user didn't set one.
  */
 
-import type { ProviderConfig } from '../types.js';
-import { registerApiProvider, createAssistantMessageEventStream } from '@earendil-works/pi-ai';
+import type {
+  Api,
+  AssistantMessage,
+  AssistantMessageEventStream,
+  Context,
+  Model,
+  SimpleStreamOptions,
+  StreamOptions,
+} from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream, registerApiProvider } from '@earendil-works/pi-ai';
 import {
   streamOpenAICompletions,
   streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai/openai-completions';
-import type {
-  Api,
-  Model,
-  Context,
-  StreamOptions,
-  SimpleStreamOptions,
-  AssistantMessage,
-  AssistantMessageEventStream,
-} from '@earendil-works/pi-ai';
-import { getDeploymentForProvider } from '../../ui/provider-settings.js';
 import { createLogger } from '../../core/logger.js';
+import { getDeploymentForProvider } from '../../ui/provider-settings.js';
+import type { ProviderConfig } from '../types.js';
 
 const log = createLogger('local-llm');
 

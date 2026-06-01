@@ -24,15 +24,8 @@
 
 /// <reference lib="webworker" />
 
-import { BrowserAPI } from '../cdp/browser-api.js';
 import { OffscreenBridge } from '../../../chrome-extension/src/offscreen-bridge.js';
-import { createKernelHost, type KernelHost } from './host.js';
-import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
-import { WorkerCdpProxy } from './cdp-worker-proxy.js';
-import { createPanelTerminalHost } from './panel-terminal-host.js';
-import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
-import { makeSameOriginBypassFetch } from './kernel-worker-fetch-bypass.js';
-
+import { BrowserAPI } from '../cdp/browser-api.js';
 // Provider registration is async-explicit (not side-effect import).
 // `providers/index.ts` switched to lazy `import.meta.glob` to break a
 // circular import chain (providers/index → built-in/azure-openai →
@@ -41,6 +34,12 @@ import { makeSameOriginBypassFetch } from './kernel-worker-fetch-bypass.js';
 // `registerProviders()` during boot before any code that reads from
 // the registry runs.
 import { registerProviders } from '../providers/index.js';
+import { WorkerCdpProxy } from './cdp-worker-proxy.js';
+import { createKernelHost, type KernelHost } from './host.js';
+import { makeSameOriginBypassFetch } from './kernel-worker-fetch-bypass.js';
+import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
+import { createPanelTerminalHost } from './panel-terminal-host.js';
+import { createBridgeMessageChannelTransport } from './transport-message-channel.js';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -98,8 +97,7 @@ export interface KernelWorkerReadyMsg {
 function installFetchBypass(): void {
   const orig = globalThis.fetch;
   if (!orig) return;
-  const selfOrigin =
-    typeof self !== 'undefined' && self.location ? self.location.origin : undefined;
+  const selfOrigin = self?.location ? self.location.origin : undefined;
   globalThis.fetch = makeSameOriginBypassFetch(orig.bind(globalThis), selfOrigin);
 }
 
@@ -227,8 +225,9 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
   // the matching handler under the same id. Extension offscreen has
   // its own chrome.runtime-based proxy in `offscreen.ts` and never
   // goes through this path.
-  const { createSprinkleManagerProxyOverChannel } =
-    await import('../scoops/sprinkle-bridge-channel.js');
+  const { createSprinkleManagerProxyOverChannel } = await import(
+    '../scoops/sprinkle-bridge-channel.js'
+  );
   (globalThis as Record<string, unknown>).__slicc_sprinkleManager =
     createSprinkleManagerProxyOverChannel({ instanceId: init.instanceId });
 

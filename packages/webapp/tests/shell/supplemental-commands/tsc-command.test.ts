@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
 import type { IFileSystem } from 'just-bash';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createTscCommand,
   deriveOutputPath,

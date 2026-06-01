@@ -53,7 +53,7 @@
   padding: 0;
 }
 .terminal-panel__terminal-host .xterm-viewport {
-  background-color: var(--s2-bg-sunken) !important;
+  background-color: var(--s2-bg-sunken);
 }
 .terminal-panel__terminal-host .xterm-viewport::-webkit-scrollbar {
   width: 6px;

@@ -5,12 +5,12 @@
  * All messages flow through the service worker as a relay.
  */
 
-import type { ScoopTabState } from './types.js';
 import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
 import type {
   TerminalControlMsg,
   TerminalEventMsg,
 } from '../../webapp/src/shell/terminal-protocol.js';
+import type { ScoopTabState } from './types.js';
 
 /**
  * Local mirror of `SprinkleSummary` from

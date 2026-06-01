@@ -19,14 +19,13 @@
  * tst `tap`, `--reporter=spec` → tst `pretty`.
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command, CommandContext } from 'just-bash';
-import { getTypeScript, type TypeScriptModule } from './shared.js';
-import { executeJsCode } from '../jsh-executor.js';
-import { dirname as posixDirname } from './shared.js';
-import { normalizePath } from '../../fs/path-utils.js';
-import tstSource from 'tst/tst.js?raw';
+import { defineCommand } from 'just-bash';
 import assertSource from 'tst/assert.js?raw';
+import tstSource from 'tst/tst.js?raw';
+import { normalizePath } from '../../fs/path-utils.js';
+import { executeJsCode } from '../jsh-executor.js';
+import { getTypeScript, dirname as posixDirname, type TypeScriptModule } from './shared.js';
 
 const HELP_TEXT = `test - run *.test.{js,ts} files with the bundled tst runner
 

@@ -21,10 +21,10 @@
  * checklist.
  */
 
-import type { AgentEvent, ChatMessage } from '../ui/types.js';
 import type { MessageAttachment } from '../core/attachments.js';
-import type { TrayDataChannelLike } from './tray-webrtc.js';
 import { createLogger } from '../core/logger.js';
+import type { AgentEvent, ChatMessage } from '../ui/types.js';
+import type { TrayDataChannelLike } from './tray-webrtc.js';
 
 const log = createLogger('tray-sync');
 

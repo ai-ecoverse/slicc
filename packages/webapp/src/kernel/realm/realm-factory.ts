@@ -15,17 +15,17 @@
  * thread it into `runInRealm` so tests can substitute mocks.
  */
 
-import { createIframeRealm } from './realm-iframe.js';
-import { createInProcessJsRealmFactory, createInProcessPyRealmFactory } from './realm-inprocess.js';
 import {
   isExtensionRuntime,
   isNodeRuntime,
   resolveNodePackageBaseUrl,
 } from '../../shell/supplemental-commands/shared.js';
 import { PYODIDE_CDN } from './py-realm-shared.js';
+import { createIframeRealm } from './realm-iframe.js';
+import { createInProcessJsRealmFactory, createInProcessPyRealmFactory } from './realm-inprocess.js';
+import type { RealmPortLike } from './realm-rpc.js';
 import type { Realm, RealmFactory } from './realm-runner.js';
 import type { RealmKind } from './realm-types.js';
-import type { RealmPortLike } from './realm-rpc.js';
 
 /**
  * Production realm factory. Inspects runtime + `kind` and returns
@@ -138,4 +138,4 @@ export function resolvePyodideIndexURL(): string {
   return PYODIDE_CDN;
 }
 
-export type { RealmFactory, Realm, RealmKind };
+export type { Realm, RealmFactory, RealmKind };

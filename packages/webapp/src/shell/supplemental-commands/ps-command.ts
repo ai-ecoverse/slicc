@@ -31,8 +31,8 @@
  * to a configurable width (80 chars by default).
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import type { Process, ProcessManager, ProcessStatus } from '../../kernel/process-manager.js';
 
 export interface PsCommandOptions {

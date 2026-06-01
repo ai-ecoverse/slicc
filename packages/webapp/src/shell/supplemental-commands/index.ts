@@ -1,58 +1,59 @@
 import type { Command } from 'just-bash';
+import type { BrowserAPI } from '../../cdp/index.js';
 import type { VirtualFS } from '../../fs/index.js';
-import { createCommandsCommand } from './help-command.js';
-import { createConvertCommand } from './convert-command.js';
-import { createHostCommand } from './host-command.js';
-import { createImgcatCommand } from './imgcat-command.js';
-import type { ImgcatCommandOptions } from './imgcat-command.js';
-import { createNodeCommand } from './node-command.js';
-import { createOpenCommand } from './open-command.js';
-import { createPdftkCommand } from './pdftk-command.js';
-import { createPlaywrightCommand, PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
-import { createPython3LikeCommand } from './python-command.js';
-import { createEsbuildCommand } from './esbuild-command.js';
-import { createFfmpegCommand } from './ffmpeg-command.js';
-import { createServeCommand } from './serve-command.js';
-import { createSqliteCommand } from './sqlite-command.js';
-import { createTscCommand } from './tsc-command.js';
-import { createTestCommand } from './test-command.js';
-import { createUnameCommand } from './uname-command.js';
-import { createManCommand } from './man-command.js';
-import { createUnzipCommand } from './unzip-command.js';
-import { createWebhookCommand } from './webhook-command.js';
-import { createWebsocatCommand } from './websocat-command.js';
-import { createCrontaskCommand } from './crontask-command.js';
-import { createMcpCommand } from './mcp-command.js';
-import { createFsWatchCommand } from './fswatch-command.js';
-import { createSprinkleCommand } from './sprinkle-command.js';
-import { createOAuthTokenCommand } from './oauth-token-command.js';
-import { createLocalLlmCommand } from './local-llm-command.js';
-import { createSecretCommand } from './secret-command.js';
-import { createOAuthDomainCommand } from './oauth-domain-command.js';
-import { createRsyncCommand } from './rsync-command.js';
-import { createWhichCommand } from './which-command.js';
-import { createZipCommand } from './zip-command.js';
-import { createScreencaptureCommand } from './screencapture-command.js';
-import {
-  createPbcopyCommand,
-  createPbpasteCommand,
-  createClipboardAutoCommand,
-} from './clipboard-commands.js';
-import { createSayCommand } from './say-command.js';
+import type { ProcessManager } from '../../kernel/process-manager.js';
+import type { ScriptCatalog } from '../script-catalog.js';
 import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
-import { createModelsCommand } from './models-command.js';
-import { createCostCommand } from './cost-command.js';
-import { createNukeCommand } from './nuke-command.js';
 import { createAgentCommand } from './agent-command.js';
-import { createDiscoverCommand } from './discover-command.js';
-import { createPsCommand } from './ps-command.js';
-import { createKillCommand } from './kill-command.js';
 import { createBiomeCommand } from './biome-command.js';
 import { createCherryEmitCommand } from './cherry-emit-command.js';
 import type { CherryRuntimeRegistry } from './cherry-emit-command.js';
-import type { BrowserAPI } from '../../cdp/index.js';
-import type { ScriptCatalog } from '../script-catalog.js';
-import type { ProcessManager } from '../../kernel/process-manager.js';
+import {
+  createClipboardAutoCommand,
+  createPbcopyCommand,
+  createPbpasteCommand,
+} from './clipboard-commands.js';
+import { createConvertCommand } from './convert-command.js';
+import { createCostCommand } from './cost-command.js';
+import { createCrontaskCommand } from './crontask-command.js';
+import { createDiscoverCommand } from './discover-command.js';
+import { createEsbuildCommand } from './esbuild-command.js';
+import { createFfmpegCommand } from './ffmpeg-command.js';
+import { createFsWatchCommand } from './fswatch-command.js';
+import { createCommandsCommand } from './help-command.js';
+import { createHostCommand } from './host-command.js';
+import type { ImgcatCommandOptions } from './imgcat-command.js';
+import { createImgcatCommand } from './imgcat-command.js';
+import { createKillCommand } from './kill-command.js';
+import { createLocalLlmCommand } from './local-llm-command.js';
+import { createManCommand } from './man-command.js';
+import { createMcpCommand } from './mcp-command.js';
+import { createModelsCommand } from './models-command.js';
+import { createNodeCommand } from './node-command.js';
+import { createNukeCommand } from './nuke-command.js';
+import { createOAuthDomainCommand } from './oauth-domain-command.js';
+import { createOAuthTokenCommand } from './oauth-token-command.js';
+import { createOpenCommand } from './open-command.js';
+import { createPdftkCommand } from './pdftk-command.js';
+import { createPlaywrightCommand, PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
+import { createPsCommand } from './ps-command.js';
+import { createPython3LikeCommand } from './python-command.js';
+import { createRsyncCommand } from './rsync-command.js';
+import { createSayCommand } from './say-command.js';
+import { createScreencaptureCommand } from './screencapture-command.js';
+import { createSecretCommand } from './secret-command.js';
+import { createServeCommand } from './serve-command.js';
+import { createSprinkleCommand } from './sprinkle-command.js';
+import { createSqliteCommand } from './sqlite-command.js';
+import { createTestCommand } from './test-command.js';
+import { createTscCommand } from './tsc-command.js';
+import { createUnameCommand } from './uname-command.js';
+import { createUnzipCommand } from './unzip-command.js';
+import { createWebhookCommand } from './webhook-command.js';
+import { createWebsocatCommand } from './websocat-command.js';
+import { createWhichCommand } from './which-command.js';
+import { createZipCommand } from './zip-command.js';
+
 export type {
   ImgcatCommandOptions as SupplementalCommandOptions,
   MediaPreviewItem,

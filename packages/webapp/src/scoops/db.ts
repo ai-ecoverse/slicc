@@ -3,8 +3,8 @@
  * Schema v3: added webhooks and crontasks stores.
  */
 
-import type { RegisteredScoop, ChannelMessage, ScheduledTask } from './types.js';
-import type { WebhookEntry, CronTaskEntry } from './lick-manager.js';
+import type { CronTaskEntry, WebhookEntry } from './lick-manager.js';
+import type { ChannelMessage, RegisteredScoop, ScheduledTask } from './types.js';
 
 const DB_NAME = 'slicc-groups';
 const DB_VERSION = 3;

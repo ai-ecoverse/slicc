@@ -25,8 +25,8 @@
  *   2  — argument parse error.
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import type { ProcessManager, Signal } from '../../kernel/process-manager.js';
 
 export interface KillCommandOptions {

@@ -25,9 +25,9 @@
  * directory yields a diagnostic.
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command, CommandContext } from 'just-bash';
-import { getBiome, type BiomeRuntime } from './biome-runtime.js';
+import { defineCommand } from 'just-bash';
+import { type BiomeRuntime, getBiome } from './biome-runtime.js';
 
 const LINTABLE_EXTENSIONS = new Set([
   'js',

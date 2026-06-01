@@ -16,8 +16,8 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { makeSignedFetchS3 } from '../../../src/fs/mount/signed-fetch.js';
 import type { SignAndForwardReply } from '../../../src/fs/mount/sign-and-forward-shared.js';
+import { makeSignedFetchS3 } from '../../../src/fs/mount/signed-fetch.js';
 
 // ----------------- helpers -----------------
 

@@ -6,8 +6,8 @@
  * Spec: docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md
  */
 
-import type { OffscreenClient } from './offscreen-client.js';
 import type { Layout } from './layout.js';
+import type { OffscreenClient } from './offscreen-client.js';
 
 export function enterDetachedActiveState(client: OffscreenClient, layout: Layout): void {
   // Order: close → lock → overlay.

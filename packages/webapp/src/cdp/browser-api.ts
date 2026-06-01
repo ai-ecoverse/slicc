@@ -5,22 +5,22 @@
  * click, type, waitForSelector, getAccessibilityTree.
  */
 
+import { createLogger } from '../core/logger.js';
+import type { TrayTargetEntry } from '../scoops/tray-sync-protocol.js';
 import { CDPClient } from './cdp-client.js';
+import { INJECTED_ARIA_SNAPSHOT_SCRIPT } from './injected-aria-snapshot.js';
+import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
 import type { CDPTransport } from './transport.js';
 import type {
+  AccessibilityNode,
+  BoundingBox,
   CDPConnectOptions,
+  EvaluateOptions,
+  FrameInfo,
   PageInfo,
   TargetInfo,
-  EvaluateOptions,
   WaitForSelectorOptions,
-  BoundingBox,
-  AccessibilityNode,
-  FrameInfo,
 } from './types.js';
-import type { TrayTargetEntry } from '../scoops/tray-sync-protocol.js';
-import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
-import { INJECTED_ARIA_SNAPSHOT_SCRIPT } from './injected-aria-snapshot.js';
-import { createLogger } from '../core/logger.js';
 
 /**
  * Provider of remote tray targets and transport factory.
@@ -482,7 +482,7 @@ export class BrowserAPI {
       let result: Record<string, unknown>;
       try {
         result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
-      } catch (err: unknown) {
+      } catch (_err: unknown) {
         // Background/throttled tabs have a suspended renderer — wake it and retry once
         await this.client.send('Page.bringToFront', {}, this.sessionId!);
         result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);

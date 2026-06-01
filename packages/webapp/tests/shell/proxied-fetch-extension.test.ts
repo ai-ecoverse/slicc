@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 describe('createProxiedFetch — extension branch (Port-based)', () => {
   it('opens a Port named fetch-proxy.fetch and reconstructs a streamed response', async () => {
@@ -22,17 +22,23 @@ describe('createProxiedFetch — extension branch (Port-based)', () => {
     // Allow the proxiedFetch to install its listeners first
     await new Promise((r) => setTimeout(r, 0));
 
-    msgListeners.forEach((l) =>
+    msgListeners.forEach((l) => {
       l({
         type: 'response-head',
         status: 200,
         statusText: 'OK',
         headers: { 'content-type': 'application/json' },
-      })
-    );
-    msgListeners.forEach((l) => l({ type: 'response-chunk', dataBase64: btoa('hello ') }));
-    msgListeners.forEach((l) => l({ type: 'response-chunk', dataBase64: btoa('world') }));
-    msgListeners.forEach((l) => l({ type: 'response-end' }));
+      });
+    });
+    msgListeners.forEach((l) => {
+      l({ type: 'response-chunk', dataBase64: btoa('hello ') });
+    });
+    msgListeners.forEach((l) => {
+      l({ type: 'response-chunk', dataBase64: btoa('world') });
+    });
+    msgListeners.forEach((l) => {
+      l({ type: 'response-end' });
+    });
 
     const resp = await fetchPromise;
     expect(resp.status).toBe(200);
@@ -58,7 +64,9 @@ describe('createProxiedFetch — extension branch (Port-based)', () => {
 
     const fetchPromise = proxiedFetch('https://api.github.com/user', {});
     await new Promise((r) => setTimeout(r, 0));
-    discListeners.forEach((l) => l());
+    discListeners.forEach((l) => {
+      l();
+    });
     await expect(fetchPromise).rejects.toThrow(/port disconnected/i);
   });
 
@@ -77,7 +85,9 @@ describe('createProxiedFetch — extension branch (Port-based)', () => {
 
     const fetchPromise = proxiedFetch('https://api.github.com/user', {});
     await new Promise((r) => setTimeout(r, 0));
-    msgListeners.forEach((l) => l({ type: 'response-error', error: 'forbidden: GITHUB_TOKEN' }));
+    msgListeners.forEach((l) => {
+      l({ type: 'response-error', error: 'forbidden: GITHUB_TOKEN' });
+    });
     await expect(fetchPromise).rejects.toThrow(/forbidden/);
   });
 });

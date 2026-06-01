@@ -1,18 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
-  createLeaderSyncChannel,
-  createFollowerSyncChannel,
-  TraySyncChannel,
-  sendCDPResponse,
-  reassembleCDPResponse,
-  sendSnapshot,
-  reassembleSnapshot,
-  isCherrySliccEventMessage,
   isCherryHostEventMessage,
+  isCherrySliccEventMessage,
   CDP_CHUNK_THRESHOLD,
-  type LeaderToFollowerMessage,
+  createFollowerSyncChannel,
+  createLeaderSyncChannel,
   type FollowerToLeaderMessage,
+  type LeaderToFollowerMessage,
+  reassembleCDPResponse,
+  reassembleSnapshot,
+  sendCDPResponse,
+  sendSnapshot,
+  TraySyncChannel,
   type TraySyncMessage,
   type RemoteTargetInfo,
 } from '../../src/scoops/tray-sync-protocol.js';

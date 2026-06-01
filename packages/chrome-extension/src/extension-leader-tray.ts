@@ -9,30 +9,30 @@
  * no createKernelHost).
  */
 
-import { LeaderSyncManager } from '../../webapp/src/scoops/tray-leader-sync.js';
-import type { LeaderSyncManagerOptions } from '../../webapp/src/scoops/tray-leader-sync.js';
-import { LeaderTrayManager } from '../../webapp/src/scoops/tray-leader.js';
+import type { BrowserAPI } from '../../webapp/src/cdp/browser-api.js';
+import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
+import type { Logger } from '../../webapp/src/core/logger.js';
+import type { VirtualFS } from '../../webapp/src/fs/virtual-fs.js';
+import type { Orchestrator } from '../../webapp/src/scoops/orchestrator.js';
+import { ThrottledErrorTracker } from '../../webapp/src/scoops/throttled-error-tracker.js';
 import {
   getLeaderTrayRuntimeStatus,
+  LeaderTrayManager,
   type LeaderTrayRuntimeStatus,
 } from '../../webapp/src/scoops/tray-leader.js';
-import { LeaderTrayPeerManager } from '../../webapp/src/scoops/tray-webrtc.js';
-import type { Orchestrator } from '../../webapp/src/scoops/orchestrator.js';
-import type { BrowserAPI } from '../../webapp/src/cdp/browser-api.js';
-import type { VirtualFS } from '../../webapp/src/fs/virtual-fs.js';
-import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
-import type { ChatMessage, AgentEvent } from '../../webapp/src/ui/types.js';
-import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
+import type { LeaderSyncManagerOptions } from '../../webapp/src/scoops/tray-leader-sync.js';
+import { LeaderSyncManager } from '../../webapp/src/scoops/tray-leader-sync.js';
 import type { SprinkleSummary } from '../../webapp/src/scoops/tray-sync-protocol.js';
-import type { Logger } from '../../webapp/src/core/logger.js';
-import { ThrottledErrorTracker } from '../../webapp/src/scoops/throttled-error-tracker.js';
+import { LeaderTrayPeerManager } from '../../webapp/src/scoops/tray-webrtc.js';
+import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
 import {
   setConnectedFollowersGetter,
   setTrayResetter,
 } from '../../webapp/src/shell/supplemental-commands/host-command.js';
+import type { AgentEvent, ChatMessage } from '../../webapp/src/ui/types.js';
 import type { OffscreenLeaderSyncBridgeHandle } from './leader-sync-bridge.js';
-import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
 import type { LeaderTrayResetRequestMsg, LeaderTrayResetResponseMsg } from './messages.js';
+import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
 
 export interface ExtensionLeaderTrayHandle {
   /** Canonical teardown — runs the full sequence documented on the

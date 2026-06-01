@@ -1,5 +1,5 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 
 function helpText(): string {
   return `oauth-domain — manage extra allowed domains for OAuth-issued tokens

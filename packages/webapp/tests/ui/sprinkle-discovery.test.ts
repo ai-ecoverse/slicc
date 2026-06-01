@@ -1,11 +1,11 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   discoverSprinkles,
-  extractTitle,
   extractAutoOpen,
   extractIcon,
+  extractTitle,
 } from '../../src/ui/sprinkle-discovery.js';
 
 describe('discoverSprinkles', () => {

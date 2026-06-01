@@ -24,40 +24,10 @@
  */
 
 import { BrowserAPI, OffscreenCdpProxy } from '../../../packages/webapp/src/cdp/index.js';
+import { createLogger } from '../../../packages/webapp/src/core/index.js';
 import { createKernelHost } from '../../../packages/webapp/src/kernel/host.js';
 import { createPanelTerminalHost } from '../../../packages/webapp/src/kernel/panel-terminal-host.js';
 import { createOffscreenChromeRuntimeTransport } from '../../../packages/webapp/src/kernel/transport-chrome-runtime.js';
-import {
-  AGENT_SPAWN_REQUEST_TYPE,
-  type AgentSpawnOptions,
-  type AgentSpawnResult,
-} from '../../../packages/webapp/src/scoops/agent-bridge.js';
-import {
-  DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
-  DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
-  hasStoredTrayJoinUrl,
-  resolveTrayRuntimeConfig,
-} from '../../../packages/webapp/src/scoops/tray-runtime-config.js';
-import { startFollowerWithAutoReconnect } from '../../../packages/webapp/src/scoops/tray-webrtc.js';
-import { FollowerSyncManager } from '../../../packages/webapp/src/scoops/tray-follower-sync.js';
-import { ThrottledErrorTracker } from '../../../packages/webapp/src/scoops/throttled-error-tracker.js';
-import {
-  connectOffscreenFollowerSprinkleBridge,
-  type OffscreenMessageHub,
-} from './follower-sprinkle-bridge.js';
-import { connectOffscreenLeaderSyncBridge } from './leader-sync-bridge.js';
-import {
-  startExtensionLeaderTray,
-  type ExtensionLeaderTrayHandle,
-} from './extension-leader-tray.js';
-import { OffscreenBridge } from './offscreen-bridge.js';
-import { applyTrayRuntimeUpdate as applyTrayRuntimeUpdateHelper } from './apply-tray-runtime-update.js';
-import { OFFSCREEN_SET_TRAY_RUNTIME_HOOK } from '../../../packages/webapp/src/scoops/tray-leave.js';
-import { createLogger } from '../../../packages/webapp/src/core/index.js';
-import type { ExtensionMessage } from './messages.js';
-import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
-import { canonicalRuntimeId } from '../../../packages/webapp/src/ui/runtime-identity.js';
-
 // Auto-discover and register all providers (built-in + external).
 // IMPORTANT: Keep in sync with packages/webapp/src/ui/main.ts — both
 // entry points need all providers. Registration is explicit (not
@@ -65,6 +35,36 @@ import { canonicalRuntimeId } from '../../../packages/webapp/src/ui/runtime-iden
 // kernel worker; the offscreen entry awaits `registerProviders()` in
 // `init()`.
 import { registerProviders } from '../../../packages/webapp/src/providers/index.js';
+import {
+  AGENT_SPAWN_REQUEST_TYPE,
+  type AgentSpawnOptions,
+  type AgentSpawnResult,
+} from '../../../packages/webapp/src/scoops/agent-bridge.js';
+import { ThrottledErrorTracker } from '../../../packages/webapp/src/scoops/throttled-error-tracker.js';
+import { FollowerSyncManager } from '../../../packages/webapp/src/scoops/tray-follower-sync.js';
+import { OFFSCREEN_SET_TRAY_RUNTIME_HOOK } from '../../../packages/webapp/src/scoops/tray-leave.js';
+import {
+  DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+  DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
+  hasStoredTrayJoinUrl,
+  resolveTrayRuntimeConfig,
+} from '../../../packages/webapp/src/scoops/tray-runtime-config.js';
+import { startFollowerWithAutoReconnect } from '../../../packages/webapp/src/scoops/tray-webrtc.js';
+import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
+import { canonicalRuntimeId } from '../../../packages/webapp/src/ui/runtime-identity.js';
+import { initTelemetry } from '../../../packages/webapp/src/ui/telemetry.js';
+import { applyTrayRuntimeUpdate as applyTrayRuntimeUpdateHelper } from './apply-tray-runtime-update.js';
+import {
+  type ExtensionLeaderTrayHandle,
+  startExtensionLeaderTray,
+} from './extension-leader-tray.js';
+import {
+  connectOffscreenFollowerSprinkleBridge,
+  type OffscreenMessageHub,
+} from './follower-sprinkle-bridge.js';
+import { connectOffscreenLeaderSyncBridge } from './leader-sync-bridge.js';
+import type { ExtensionMessage } from './messages.js';
+import { OffscreenBridge } from './offscreen-bridge.js';
 
 const log = createLogger('offscreen');
 
@@ -79,6 +79,15 @@ console.log('[slicc-offscreen] Script loaded');
 
 async function init(): Promise<void> {
   console.log('[slicc-offscreen] init() starting...');
+
+  // Initialize RUM telemetry so beacons fire from the offscreen WasmShell
+  // — `trackShellCommand` and friends silently no-op until `sampleRUM` is
+  // bound here. Without this, agent-initiated `bash` invocations from the
+  // extension (including `agent ...` scoop delegations from the cone)
+  // never reach RUM, which is why extension users showed cone-prompt
+  // beacons but zero shell-command beacons in the data. Fire-and-forget
+  // — telemetry init must never block the boot.
+  initTelemetry().catch(() => {});
 
   // Register providers BEFORE the kernel host — the host's
   // construction reaches into the provider registry via

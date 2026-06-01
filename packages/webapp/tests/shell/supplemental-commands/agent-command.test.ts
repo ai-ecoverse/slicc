@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem } from 'just-bash';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAgentCommand } from '../../../src/shell/supplemental-commands/agent-command.js';
 
 interface SpawnArgs {

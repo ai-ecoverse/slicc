@@ -10,9 +10,10 @@
  *
  * Requires E2B_API_KEY in env, scoped to the team you want to push to.
  */
-import { Template, waitForFile, defaultBuildLogger } from 'e2b';
-import { fileURLToPath } from 'node:url';
+
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { defaultBuildLogger, Template, waitForFile } from 'e2b';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 

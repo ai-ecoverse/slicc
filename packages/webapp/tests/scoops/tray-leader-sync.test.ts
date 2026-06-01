@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   LeaderSyncManager,
   isCherryTarget,
@@ -8,14 +8,12 @@ import {
   type LeaderSyncManagerOptions,
 } from '../../src/scoops/tray-leader-sync.js';
 import { CHERRY_RUNTIME_TAG } from '../../src/scoops/tray-sync-protocol.js';
+import type {
+  FollowerToLeaderMessage,
+  LeaderToFollowerMessage,
+} from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
 import type { AgentEvent, ChatMessage } from '../../src/ui/types.js';
-import type {
-  LeaderToFollowerMessage,
-  FollowerToLeaderMessage,
-  TrayTargetEntry,
-} from '../../src/scoops/tray-sync-protocol.js';
-import { VirtualFS } from '../../src/fs/virtual-fs.js';
 
 // ---------------------------------------------------------------------------
 // Fake data channel

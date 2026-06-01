@@ -25,8 +25,8 @@
  * once the navigation flow is plumbed for response headers.
  */
 
-import { defineCommand } from 'just-bash';
 import type { Command, SecureFetch } from 'just-bash';
+import { defineCommand } from 'just-bash';
 import { discoverLinks } from '../../net/discover-links.js';
 import { extractHandoff } from '../../net/handoff-link.js';
 import { parseLinkHeader } from '../../net/link-header.js';

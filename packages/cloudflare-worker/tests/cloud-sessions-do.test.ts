@@ -1,5 +1,3 @@
-import { describe, it, expect } from 'vitest';
-import { CloudSessionsDurableObject } from '../src/cloud/cloud-sessions-do.js';
 import type {
   CreateOpts,
   RunResult,
@@ -8,6 +6,8 @@ import type {
   SandboxSubstrate,
   SandboxSummary,
 } from '@slicc/cloud-core';
+import { describe, expect, it } from 'vitest';
+import { CloudSessionsDurableObject } from '../src/cloud/cloud-sessions-do.js';
 
 // Substrate states only — 'reserved' is a registry-only state, never reported
 // by the substrate (e2b). Mirrors SandboxSummary.state in cloud-core.

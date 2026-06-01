@@ -28,8 +28,8 @@
  * open | close | send | openNewAutoOpen`.
  */
 
-import type { SprinkleManager } from '../ui/sprinkle-manager.js';
 import type { Sprinkle } from '../ui/sprinkle-discovery.js';
+import type { SprinkleManager } from '../ui/sprinkle-manager.js';
 
 /**
  * Base BroadcastChannel name. Each tab/worker pair appends an
@@ -101,7 +101,7 @@ export function createSprinkleManagerProxyOverChannel(
 
   channel.addEventListener('message', (event: MessageEvent) => {
     const msg = event.data as SprinkleBridgeResponseMsg | undefined;
-    if (!msg || msg.type !== 'sprinkle-op-response') return;
+    if (msg?.type !== 'sprinkle-op-response') return;
     const slot = pending.get(msg.id);
     if (!slot) return;
     pending.delete(msg.id);
@@ -225,7 +225,7 @@ export function installSprinkleManagerHandlerOverChannel(
 
   const handler = (event: MessageEvent): void => {
     const req = event.data as SprinkleBridgeRequestMsg | undefined;
-    if (!req || req.type !== 'sprinkle-op-request') return;
+    if (req?.type !== 'sprinkle-op-request') return;
     void (async () => {
       try {
         const { op, name, data, id } = req;

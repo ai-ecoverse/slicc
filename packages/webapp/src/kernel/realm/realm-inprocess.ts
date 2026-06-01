@@ -19,7 +19,7 @@ import { runJsRealm } from './js-realm-shared.js';
 import { runPyRealm } from './py-realm-shared.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type { Realm, RealmFactory } from './realm-runner.js';
-import type { RealmInitMsg, RealmErrorMsg } from './realm-types.js';
+import type { RealmErrorMsg, RealmInitMsg } from './realm-types.js';
 
 interface PortPair {
   realmSide: RealmPortLike;

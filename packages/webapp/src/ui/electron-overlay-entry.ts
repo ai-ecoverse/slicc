@@ -1,7 +1,7 @@
 import {
+  type InjectElectronOverlayOptions,
   injectElectronOverlayShell,
   removeElectronOverlayShell,
-  type InjectElectronOverlayOptions,
 } from './electron-overlay.js';
 
 declare global {

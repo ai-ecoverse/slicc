@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeAll, vi, afterEach } from 'vitest';
-import { SignJWT, exportJWK, generateKeyPair, type CryptoKey } from 'jose';
-import { validateBearer, AuthError, extractBearer } from '../src/cloud/auth.js';
+import { type CryptoKey, exportJWK, generateKeyPair, SignJWT } from 'jose';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { AuthError, extractBearer, validateBearer } from '../src/cloud/auth.js';
 import { clearProxyConfigCache } from '../src/cloud/proxy-config.js';
 
 const ENV = {

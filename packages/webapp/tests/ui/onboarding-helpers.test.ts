@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { flushCredentialsToWorker, resolveDefaultModel } from '../../src/ui/onboarding-helpers.js';
+import { describe, expect, it } from 'vitest';
 import type { ProviderConfig } from '../../src/providers/index.js';
+import { flushCredentialsToWorker, resolveDefaultModel } from '../../src/ui/onboarding-helpers.js';
 
 // ---------------------------------------------------------------------------
 // flushCredentialsToWorker

@@ -11,7 +11,7 @@
  * console alone.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { synthesizeForwardResponse } from '../../src/ui/llm-proxy-response.js';
 
 describe('synthesizeForwardResponse', () => {

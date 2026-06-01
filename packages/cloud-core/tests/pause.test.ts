@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { pauseCone, CloudError } from '../src/index.js';
-import type { SubstrateId, SandboxInfo, RunResult, SandboxHandle } from '../src/index.js';
+import { describe, expect, it } from 'vitest';
+import type { RunResult, SandboxHandle, SandboxInfo, SubstrateId } from '../src/index.js';
+import { CloudError, pauseCone } from '../src/index.js';
 import { MemRegistry, makeFakeSubstrate } from './fixtures/index.js';
 
 // Specialized handle for pause tests: tracks paused state separately and reflects in getInfo.

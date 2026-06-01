@@ -5,9 +5,9 @@
  * folders and auto-refresh every 3 seconds.
  */
 
-import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
-import { isTerminalPreviewableMediaPath } from '../core/mime-types.js';
 import { zipSync } from 'fflate';
+import { isTerminalPreviewableMediaPath } from '../core/mime-types.js';
+import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 
 /** Format byte size into human-readable string. */
 function formatSize(bytes: number): string {

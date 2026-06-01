@@ -96,7 +96,9 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Format check
+      - name: Biome lint + format check
+        run: npx biome check .
+      - name: Prettier format check (docs/yaml/html only)
         run: npx prettier --check .
       - name: Check CLAUDE.md size
         run: |
@@ -295,6 +297,8 @@ jobs:
         run: npm run build -w @slicc/webapp
       - name: Build extension
         run: npm run build -w @slicc/chrome-extension
+      - name: Check bundle for forbidden CDN URL literals (MV3 RHC guard)
+        run: bash packages/dev-tools/tools/check-extension-rhc.sh
       - name: Check bundle for Node-only APIs
         run: |
           # Scan extension bundles for Node-only APIs that should never be bundled.
@@ -328,6 +332,20 @@ jobs:
             exit 1
           fi
           echo "✓ No Node-only APIs found in dev-optimized deps (extension)"
+      - name: Install Chrome for Testing
+        run: npx --yes @puppeteer/browsers install chrome@stable
+      - name: Install xvfb
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
+      - name: Extension smoke test (CDP)
+        env:
+          SLICC_CI: '1'
+        # MV3 extensions with side panels need headed Chrome; xvfb provides
+        # the required display on a headless runner. The test is permitted
+        # to fail loudly while the ffmpeg-core.js bundling work lands —
+        # `continue-on-error: true` keeps CI green during the rollout but
+        # surfaces the artifact so the breakage stays visible.
+        continue-on-error: true
+        run: xvfb-run -a npm run test:extension-smoke -w @slicc/chrome-extension
 
   cloudflare-worker:
     needs: changes

@@ -2,18 +2,18 @@ import { spawnSync } from 'child_process';
 import {
   existsSync,
   mkdirSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'fs';
-import { resolve, relative, join } from 'path';
+import { join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { deflateRawSync } from 'zlib';
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const PROJECT_ROOT = resolve(__dirname, '..', '..');
+const Dirname = fileURLToPath(new URL('.', import.meta.url));
+const PROJECT_ROOT = resolve(Dirname, '..', '..');
 const RELEASE_DIR = resolve(PROJECT_ROOT, 'artifacts', 'release');
 const FIXED_ZIP_DATE = new Date(Date.UTC(1980, 0, 1, 0, 0, 0));
 const ZIP_VERSION = 20;

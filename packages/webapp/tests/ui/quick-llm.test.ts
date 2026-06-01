@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Api, Model } from '@earendil-works/pi-ai';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const completeSimple = vi.fn();
 
@@ -21,8 +21,8 @@ vi.mock('../../src/ui/provider-settings.js', () => ({
   getProviderModels: () => providerSettings.models,
 }));
 
-import { quickLabel, __test__ } from '../../src/ui/quick-llm.js';
 import { __resetAdobeSessionIdCacheForTests } from '../../src/scoops/llm-session-id.js';
+import { __test__, quickLabel } from '../../src/ui/quick-llm.js';
 
 function makeModel(
   id: string,

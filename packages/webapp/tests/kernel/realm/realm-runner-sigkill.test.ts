@@ -14,11 +14,11 @@
  * extension floats — see plan §Manual smoke tests.
  */
 
-import { describe, it, expect } from 'vitest';
 import type { CommandContext } from 'just-bash';
+import { describe, expect, it } from 'vitest';
 import { ProcessManager } from '../../../src/kernel/process-manager.js';
-import { runInRealm } from '../../../src/kernel/realm/realm-runner.js';
 import { createInProcessJsRealmFactory } from '../../../src/kernel/realm/realm-inprocess.js';
+import { runInRealm } from '../../../src/kernel/realm/realm-runner.js';
 
 const ctx = {} as CommandContext;
 

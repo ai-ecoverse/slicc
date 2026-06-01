@@ -14,8 +14,8 @@
 
 // @vitest-environment jsdom
 
-import { describe, it, expect, vi } from 'vitest';
 import type { CommandContext } from 'just-bash';
+import { describe, expect, it, vi } from 'vitest';
 import { createIframeRealm } from '../../../src/kernel/realm/realm-iframe.js';
 
 const ctx = {} as CommandContext;

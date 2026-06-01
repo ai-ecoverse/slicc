@@ -1,12 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { S3MountBackend } from '../../../src/fs/mount/backend-s3.js';
+import type { S3Profile } from '../../../src/fs/mount/profile.js';
 import { RemoteMountCache } from '../../../src/fs/mount/remote-cache.js';
 import { installFetchMock } from './helpers/mock-fetch.js';
 import { createSignedFetchS3Stub } from './helpers/signed-fetch-stub.js';
-import type { S3Profile } from '../../../src/fs/mount/profile.js';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
 const TEST_PROFILE: S3Profile = {
   accessKeyId: 'AKIA1',

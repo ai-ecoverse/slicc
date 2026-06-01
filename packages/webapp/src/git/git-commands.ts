@@ -9,17 +9,17 @@
 import '../shims/buffer-polyfill.js';
 
 import * as git from 'isomorphic-git';
-import { VirtualFS } from '../fs/index.js';
 import { GLOBAL_FS_DB_NAME } from '../fs/global-db.js';
-import { gitHttp } from './git-http.js';
-import { unifiedDiff, diffStat } from './diff.js';
-import { createIsomorphicGitFs, type IsoGitFsPromises } from './vfs-fs-adapter.js';
+import { VirtualFS } from '../fs/index.js';
+import { diffStat, unifiedDiff } from './diff.js';
 import {
   GLOBAL_GITCONFIG_PATH,
   readGlobalGitConfigValue,
-  writeGlobalGitConfigValue,
   removeGitConfigKey,
+  writeGlobalGitConfigValue,
 } from './git-config.js';
+import { gitHttp } from './git-http.js';
+import { createIsomorphicGitFs, type IsoGitFsPromises } from './vfs-fs-adapter.js';
 
 export interface GitCommandResult {
   stdout: string;
@@ -309,7 +309,7 @@ Available commands:
 
     // Extract repo name from URL if dir not specified
     if (!dir) {
-      const match = url.match(/\/([^\/]+?)(\.git)?$/);
+      const match = url.match(/\/([^/]+?)(\.git)?$/);
       dir = match ? match[1] : 'repo';
     }
 
@@ -1201,7 +1201,7 @@ Available commands:
     }
 
     // Handle <commit>:<path> syntax — show file content at a commit
-    if (ref && ref.includes(':')) {
+    if (ref?.includes(':')) {
       return await this.showFileAtCommit(cwd, ref);
     }
 
@@ -2194,7 +2194,7 @@ Available commands:
       let current = root;
       for (let i = 0; i < parts.length - 1; i++) {
         let node = current.get(parts[i]);
-        if (!node || node.type !== 'tree') {
+        if (node?.type !== 'tree') {
           node = { type: 'tree', children: new Map() };
           current.set(parts[i], node);
         }

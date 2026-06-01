@@ -7,7 +7,7 @@
  */
 
 import type { VirtualFS } from '../fs/virtual-fs.js';
-import type { TrayFsRequest, TrayFsResponse, TrayFsResponseData } from './tray-sync-protocol.js';
+import type { TrayFsRequest, TrayFsResponse } from './tray-sync-protocol.js';
 
 /**
  * Chunk size threshold in serialized characters.

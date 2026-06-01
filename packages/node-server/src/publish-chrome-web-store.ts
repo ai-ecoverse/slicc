@@ -1,10 +1,10 @@
 import { createSign } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
-import { resolve, relative } from 'path';
+import { relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const PROJECT_ROOT = resolve(__dirname, '..', '..');
+const Dirname = fileURLToPath(new URL('.', import.meta.url));
+const PROJECT_ROOT = resolve(Dirname, '..', '..');
 const DEFAULT_RELEASE_MANIFEST_PATH = resolve(
   PROJECT_ROOT,
   'artifacts',

@@ -1,7 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-
-import { createStandalonePanelRpcHandlers } from '../../src/ui/panel-rpc-handlers.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { LeaderTrayRuntimeStatus } from '../../src/scoops/tray-leader.js';
+import { createStandalonePanelRpcHandlers } from '../../src/ui/panel-rpc-handlers.js';
 
 /**
  * Targeted tests for the `tray-reset` panel-RPC handler. The factory

@@ -10,9 +10,9 @@
  *   - custom `onError` / `onDuplicate` hooks fire instead of console
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import { makeKernelWorkerInitGuard } from '../../src/kernel/kernel-worker-init-guard.js';
+import { describe, expect, it, vi } from 'vitest';
 import type { KernelWorkerInitMsg } from '../../src/kernel/kernel-worker.js';
+import { makeKernelWorkerInitGuard } from '../../src/kernel/kernel-worker-init-guard.js';
 
 function makeInit(): KernelWorkerInitMsg {
   // The guard never inspects the payload — only routes it to bootFn.

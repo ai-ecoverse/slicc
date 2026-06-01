@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createConvertCommand } from '../../../src/shell/supplemental-commands/convert-command.js';
 import type { IFileSystem } from 'just-bash';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createConvertCommand } from '../../../src/shell/supplemental-commands/convert-command.js';
 import * as magickWasm from '../../../src/shell/supplemental-commands/magick-wasm.js';
 
 function createMockCtx(overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string }> = {}) {

@@ -510,7 +510,9 @@ export async function captureCamera(req: CameraCaptureRequest): Promise<CameraCa
       durationMs,
     };
   } finally {
-    stream.getTracks().forEach((t) => t.stop());
+    stream.getTracks().forEach((t) => {
+      t.stop();
+    });
   }
 }
 
@@ -729,7 +731,9 @@ async function captureScreen(mimeType: string, quality: number): Promise<Blob> {
       );
     });
   } finally {
-    stream.getTracks().forEach((t) => t.stop());
+    stream.getTracks().forEach((t) => {
+      t.stop();
+    });
   }
 }
 

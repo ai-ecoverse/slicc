@@ -1,12 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
-import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { GLOBAL_FS_DB_NAME } from '../../src/fs/global-db.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   GLOBAL_GITCONFIG_PATH,
   readGlobalGitConfigValue,
-  writeGlobalGitConfigValue,
   removeGitConfigKey,
+  writeGlobalGitConfigValue,
 } from '../../src/git/git-config.js';
 
 let dbCounter = 0;

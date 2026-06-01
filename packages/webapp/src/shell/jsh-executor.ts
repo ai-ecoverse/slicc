@@ -17,10 +17,10 @@
 
 import type { CommandContext } from 'just-bash';
 import { ProcessManager, type ProcessOwner } from '../kernel/process-manager.js';
-import { runInRealm } from '../kernel/realm/realm-runner.js';
-import type { RealmFactory } from '../kernel/realm/realm-runner.js';
 import { createDefaultRealmFactory } from '../kernel/realm/realm-factory.js';
 import { createInProcessJsRealmFactory } from '../kernel/realm/realm-inprocess.js';
+import type { RealmFactory } from '../kernel/realm/realm-runner.js';
+import { runInRealm } from '../kernel/realm/realm-runner.js';
 
 export interface JshResult {
   stdout: string;
@@ -143,12 +143,12 @@ function pickDefaultRealmFactory(): RealmFactory {
   return createInProcessJsRealmFactory();
 }
 
-let _ephemeralPm: ProcessManager | null = null;
+let EphemeralPm: ProcessManager | null = null;
 function lazyEphemeralPm(): ProcessManager {
-  if (!_ephemeralPm) {
-    _ephemeralPm = new ProcessManager();
+  if (!EphemeralPm) {
+    EphemeralPm = new ProcessManager();
   }
-  return _ephemeralPm;
+  return EphemeralPm;
 }
 
 function lookupGlobalPm(): ProcessManager | null {

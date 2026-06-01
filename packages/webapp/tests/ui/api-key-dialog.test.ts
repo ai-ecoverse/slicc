@@ -2,20 +2,20 @@
  * Tests for the API key dialog (localStorage persistence).
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  getApiKey,
-  setApiKey,
   clearApiKey,
-  getProvider,
-  setProvider,
-  clearProvider,
-  getAzureResource,
-  setAzureResource,
   clearAzureResource,
-  getBedrockRegion,
-  setBedrockRegion,
   clearBedrockRegion,
+  clearProvider,
+  getApiKey,
+  getAzureResource,
+  getBedrockRegion,
+  getProvider,
+  setApiKey,
+  setAzureResource,
+  setBedrockRegion,
+  setProvider,
 } from '../../src/ui/api-key-dialog.js';
 
 // Mock localStorage

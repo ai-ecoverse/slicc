@@ -20,9 +20,9 @@
 
 /// <reference lib="webworker" />
 
+import { runPyRealm } from './py-realm-shared.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type { RealmErrorMsg, RealmInitMsg } from './realm-types.js';
-import { runPyRealm } from './py-realm-shared.js';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -44,5 +44,3 @@ self.addEventListener('message', (event: MessageEvent) => {
     self.postMessage(errMsg);
   });
 });
-
-export {};

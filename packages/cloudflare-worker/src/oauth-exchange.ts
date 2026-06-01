@@ -6,8 +6,8 @@
  * upstream OAuth provider. The browser never sees the client secret.
  */
 
-import { jsonResponse } from './shared.js';
 import { OAUTH_PROVIDERS, type OAuthProviderDef } from './oauth-registry.js';
+import { jsonResponse } from './shared.js';
 
 // ── CORS helper ────────────────────────────────────────────────────
 

@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  hydrateDips,
-  disposeDips,
-  mountDraftDip,
-  extractShtmlBlocks,
-  splitContentSegments,
   type DipInstance,
+  disposeDips,
+  extractShtmlBlocks,
+  hydrateDips,
+  mountDraftDip,
+  splitContentSegments,
 } from '../../src/ui/dip.js';
 
 // Mock collectThemeCSS — avoid needing a real DOM with stylesheets

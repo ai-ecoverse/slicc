@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem } from 'just-bash';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createNukeCommand,
   installNukeReloadListener,
@@ -45,7 +45,9 @@ function installBroadcastChannelPolyfill(): { cleanup: () => void } {
       if (!peers) return;
       for (const peer of peers) {
         if (peer === this) continue;
-        peer.listeners.forEach((cb) => cb({ data }));
+        peer.listeners.forEach((cb) => {
+          cb({ data });
+        });
         peer.onmessage?.({ data });
       }
     }

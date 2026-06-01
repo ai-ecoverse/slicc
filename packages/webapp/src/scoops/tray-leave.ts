@@ -26,8 +26,8 @@
  * join URL on next reload otherwise.
  */
 
-import { TRAY_JOIN_STORAGE_KEY, TRAY_WORKER_STORAGE_KEY } from './tray-runtime-config.js';
 import { createLogger } from '../core/logger.js';
+import { TRAY_JOIN_STORAGE_KEY, TRAY_WORKER_STORAGE_KEY } from './tray-runtime-config.js';
 
 const log = createLogger('scoops.tray-leave');
 
