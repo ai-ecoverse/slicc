@@ -119,35 +119,4 @@ describe('mountSliccImpl', () => {
     expect(welcome?.auth).toBeUndefined();
     handle.destroy();
   });
-
-  it('forwards IMS auth in the welcome envelope when no joinToken is given', async () => {
-    const container = document.createElement('div');
-    const posted: unknown[] = [];
-    const handle = mountSliccImpl({
-      container,
-      sliccOrigin: 'https://app.example',
-      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
-      imsToken: 'tok',
-      coneName: 'demo',
-      createIfMissing: true,
-      __test_post: (env) => posted.push(env),
-    });
-    await handle.__test_receive({
-      cherry: 1,
-      channelId: 'ch-1',
-      kind: 'handshake.hello',
-    } as never);
-    const welcome = posted.find(
-      (
-        e
-      ): e is {
-        kind: string;
-        joinUrl?: string;
-        auth?: { token: string; coneName?: string; createIfMissing?: boolean };
-      } => (e as { kind?: string }).kind === 'handshake.welcome'
-    );
-    expect(welcome?.joinUrl).toBeUndefined();
-    expect(welcome?.auth).toEqual({ token: 'tok', coneName: 'demo', createIfMissing: true });
-    handle.destroy();
-  });
 });

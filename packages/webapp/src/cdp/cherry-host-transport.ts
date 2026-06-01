@@ -51,11 +51,6 @@ export class CherryHostTransport implements CDPTransport {
   private connectResolve: (() => void) | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private _joinUrl: string | null = null;
-  private _provisioningAuth: {
-    token: string;
-    coneName?: string;
-    createIfMissing?: boolean;
-  } | null = null;
   private boundHandler = (ev: MessageEvent) => this.handleMessage(ev);
 
   constructor(opts: CherryHostTransportOptions) {
@@ -73,16 +68,6 @@ export class CherryHostTransport implements CDPTransport {
    */
   get joinUrl(): string | null {
     return this._joinUrl;
-  }
-
-  /**
-   * Provisioning payload from handshake.welcome when the host handed an IMS
-   * token instead of a join URL. The cherry boot path runs the same-origin
-   * `/api/cloud/*` orchestration against it iframe-side. Held in memory only —
-   * never persisted, never re-emitted.
-   */
-  get provisioningAuth(): { token: string; coneName?: string; createIfMissing?: boolean } | null {
-    return this._provisioningAuth;
   }
 
   async connect(options?: CDPConnectOptions): Promise<void> {
@@ -354,7 +339,6 @@ export class CherryHostTransport implements CDPTransport {
         }
         this._state = 'connected';
         this._joinUrl = env.joinUrl ?? null;
-        this._provisioningAuth = env.auth ?? null;
         log.info('Cherry handshake complete', { channelId: this.channelId });
         this.connectResolve?.();
         this.connectResolve = null;

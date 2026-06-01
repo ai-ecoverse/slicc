@@ -45,38 +45,6 @@ describe('CherryHostTransport', () => {
     expect(h.transport.joinUrl).toBe('https://app.example/join?t=Z');
   });
 
-  it('captures provisioning auth (and leaves joinUrl null) when welcome carries auth', async () => {
-    const p = h.transport.connect();
-    const hello = h.posted.find((m) => m.kind === 'handshake.hello');
-    h.inbound({
-      cherry: CHERRY_PROTOCOL_VERSION,
-      channelId: hello.channelId,
-      kind: 'handshake.welcome',
-      auth: { token: 'ims-secret', coneName: 'cone-a', createIfMissing: true },
-    });
-    await expect(p).resolves.toBeUndefined();
-    expect(h.transport.joinUrl).toBeNull();
-    expect(h.transport.provisioningAuth).toEqual({
-      token: 'ims-secret',
-      coneName: 'cone-a',
-      createIfMissing: true,
-    });
-  });
-
-  it('leaves provisioningAuth null when welcome carries a joinUrl', async () => {
-    const p = h.transport.connect();
-    const hello = h.posted.find((m) => m.kind === 'handshake.hello');
-    h.inbound({
-      cherry: CHERRY_PROTOCOL_VERSION,
-      channelId: hello.channelId,
-      kind: 'handshake.welcome',
-      joinUrl: 'https://app.example/join?t=Z',
-    });
-    await p;
-    expect(h.transport.joinUrl).toBe('https://app.example/join?t=Z');
-    expect(h.transport.provisioningAuth).toBeNull();
-  });
-
   it('synthesizes Target.getTargets locally without a host round-trip', async () => {
     await connectHelper(h);
     const res = await h.transport.send('Target.getTargets');

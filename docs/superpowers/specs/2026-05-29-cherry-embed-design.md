@@ -5,6 +5,25 @@
 **Owner:** Karl
 **Spec:** this document
 
+> **Descope note (2026-06-01):** The shipped PR implements **embedding only** —
+> the host (or its own backend) supplies a ready tray join URL as the required
+> `joinToken`, and the follower embeds against that already-provisioned leader.
+> The **cloud-cone creation / provisioning** path documented below (the
+> `imsToken` / `coneName` / `createIfMissing` options, `handshake.welcome.auth`,
+> the iframe-side `/api/cloud/*` orchestration in `resolveCherryJoinUrl`, and the
+> `CherryHostTransport.provisioningAuth` field) was **removed before merge** and
+> is deferred to a separate future PR.
+>
+> Two reasons drove the descope: (1) a third-party host's IMS token is issued to
+> a different client than the cloud LLM proxy, so it fails `validateBearer`
+> (`packages/cloudflare-worker/src/cloud/auth.ts`) and cannot double as the
+> sandbox inference credential; and (2) passing any secret through the browser
+> handshake exposes it to the host page's user. A future creation PR must solve
+> identity-vs-inference-credential decoupling and a server-side secret-hiding
+> path (e.g. a worker-side per-user vault + claim-check) before reintroducing
+> provisioning. The provisioning design below is retained as the historical
+> record for that future work.
+
 ## Summary
 
 Cherry lets a third-party web page embed a live SLICC follower inside an

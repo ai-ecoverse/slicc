@@ -8,6 +8,18 @@
 
 **Tech Stack:** TypeScript, Vitest (jsdom for SDK/transport, node elsewhere), postMessage, existing tray WebRTC data channel, Cloudflare Worker static asset serving, isomorphic git workspace tooling. No new runtime deps in the SDK; `html2canvas` is a lazy optional peer for screenshots.
 
+> **Descope note (2026-06-01):** The shipped PR implements **embedding only**.
+> `joinToken` is the **required** mounting mechanism — the host (or its backend)
+> supplies a ready tray join URL and the follower embeds against it. Every
+> **cloud-cone creation / provisioning** step in the tasks below
+> (`imsToken` / `coneName` / `createIfMissing`, `handshake.welcome.auth`, the
+> iframe-side `/api/cloud/*` orchestration in `resolveCherryJoinUrl`, and the
+> `CherryHostTransport.provisioningAuth` field + its tests) was **removed before
+> merge** and is deferred to a separate future PR (a third-party host's IMS token
+> fails the cloud proxy's `validateBearer`, and secrets must not transit the
+> browser handshake). Those task fragments are retained as the historical record
+> for that future creation PR; ignore them when reading the as-shipped behavior.
+
 ---
 
 ## File Structure

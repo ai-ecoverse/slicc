@@ -33,18 +33,11 @@ export interface MountSliccOptions {
   /** Optional host-side hooks. */
   hooks?: HostHooks;
   /**
-   * IMS bearer forwarded into the iframe over the handshake for same-origin
-   * /api/cloud provisioning. Browser-resident only; never forwarded to
-   * third-party or E2B. The SDK does NOT call /api/cloud itself — the iframe
-   * (same-origin with the worker) does (`main-cherry.ts:resolveCherryJoinUrl`).
+   * Existing tray/session join URL the leader was provisioned with. Required:
+   * the host (or its backend) supplies a ready join URL and the follower embeds
+   * against it. Cone creation/provisioning from the SDK is not yet supported.
    */
-  imsToken?: string;
-  /** Target cone name to resume/start during iframe-side provisioning. */
-  coneName?: string;
-  /** When true and no matching cone exists, the iframe starts a new one. */
-  createIfMissing?: boolean;
-  /** Existing tray/session join URL to use, bypassing provisioning entirely. */
-  joinToken?: string;
+  joinToken: string;
 }
 
 export interface SliccHandle {

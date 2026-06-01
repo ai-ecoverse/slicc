@@ -156,9 +156,7 @@ const handle = mountSlicc({
     screenshot: 'html2canvas', // 'html2canvas' (best-effort) or 'none'
     openUrl: true, // allow the leader to request opening URLs in new tabs
   },
-  imsToken, // browser-resident IMS bearer for same-origin provisioning
-  coneName: 'my-cone',
-  createIfMissing: true,
+  joinToken, // REQUIRED: a ready tray join URL the host (or its backend) provisioned
   hooks: {
     onOpenUrl: (url) => window.open(url, '_blank'),
     onPermissionRequest: (domain) => domain !== 'Input', // deny a domain by returning false
@@ -168,7 +166,7 @@ const handle = mountSlicc({
 // later: handle.destroy();
 ```
 
-The IMS token is browser-resident only — the SDK never calls the cloud API itself; the same-origin iframe runs provisioning. Pass `joinToken` instead of `imsToken` to attach to an existing tray session and skip provisioning entirely. See [`packages/cherry/CLAUDE.md`](packages/cherry/CLAUDE.md).
+The SDK **embeds** against an already-provisioned leader: the host (or its own backend) obtains a tray join URL and passes it as the required `joinToken`. Creating/provisioning a cloud cone from the SDK is not yet supported — it is deferred to future work. See [`packages/cherry/CLAUDE.md`](packages/cherry/CLAUDE.md).
 
 ## Screenshots and proof
 

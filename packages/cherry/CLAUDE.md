@@ -36,12 +36,15 @@ mountSlicc({
   sliccOrigin, // origin serving the worker-hosted webapp, e.g. https://app.sliccy.ai
   capabilities, // { navigate: boolean; screenshot: 'html2canvas' | 'none'; openUrl: boolean }
   hooks, // { onOpenUrl?, onSliccEvent?, onPermissionRequest? }
-  imsToken, // optional IMS bearer forwarded into the iframe for provisioning
-  coneName, // target cone to resume/start
-  createIfMissing, // start a new cone when none matches
-  joinToken, // existing tray join URL — bypasses provisioning entirely
+  joinToken, // REQUIRED: existing tray join URL the host (or its backend) provisioned
 }): SliccHandle; // { iframe, destroy() }
 ```
+
+> **Scope:** this SDK only **embeds** against an already-provisioned leader —
+> the host supplies a ready `joinToken` (a tray join URL). Creating/provisioning
+> a cloud cone from the SDK (the old `imsToken` / `coneName` / `createIfMissing`
+> path) is deliberately **out of scope** and tracked as future work. See the
+> design doc's descope note.
 
 - `HostCapabilities.screenshot` is `'html2canvas' | 'none'` — a strategy, not a
   boolean. The host SDK lazily `import()`s `html2canvas` only when a screenshot
@@ -89,26 +92,23 @@ independent factors before any synthetic CDP is acted on:
    nonce (the iframe mints `cherry-<uuid>` in `handshake.hello`). `null` skips
    this factor, only during the pre-handshake window.
 
-## Provisioning runs iframe-side, same-origin
+## Embedding only — the host supplies the join URL
 
-The SDK **never calls `/api/cloud/*` itself** — that would be a cross-origin call
-from the third-party host carrying a third-party `Authorization` header. Instead:
+The SDK forwards the host-supplied `joinToken` over the handshake
+(→ `handshake.welcome.joinUrl`); the follower embeds against that
+already-provisioned leader. The SDK **never calls `/api/cloud/*` itself** — that
+would be a cross-origin call from the third-party host carrying a third-party
+`Authorization` header.
 
-- The host SDK forwards either a ready `joinToken` (→ `handshake.welcome.joinUrl`)
-  OR the `imsToken` + `coneName` + `createIfMissing` (→ `handshake.welcome.auth`)
-  into the iframe over the handshake.
-- The iframe is **same-origin with the worker**, so it runs the `/api/cloud/*`
-  orchestration (`packages/webapp/src/ui/main-cherry.ts:resolveCherryJoinUrl`):
-  `list` → resume/use-running → start-if-missing → join URL.
-
-### IMS-token-never-leaves-the-browser invariant
-
-The IMS bearer is **browser-resident only**. It flows from the host page into the
-iframe over the handshake and is used solely for the iframe's same-origin
-`/api/cloud/*` calls. It is **never persisted, never logged, never re-emitted**,
-and **never forwarded to any third-party origin or E2B sandbox**. On the iframe
-side it is held in memory on `CherryHostTransport.provisioningAuth` and consumed
-once.
+Cone creation/provisioning from the SDK is **out of scope** for now. The host
+page (or its own backend) is responsible for obtaining a join URL and passing it
+in as `joinToken`. The earlier in-iframe provisioning path (forwarding an IMS
+bearer + `coneName` + `createIfMissing` so the same-origin iframe could drive
+`/api/cloud/*`) was removed because a third-party host's IMS token is issued to a
+different client than the cloud LLM proxy and so fails `validateBearer`, and
+because passing secrets through the browser handshake exposes them to the host
+page's user. Reintroducing creation is tracked as a separate future PR; see the
+design doc's descope note.
 
 ## Protocol mirror invariant
 

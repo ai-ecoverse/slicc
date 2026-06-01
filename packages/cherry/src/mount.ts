@@ -73,24 +73,15 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
     switch (env.kind) {
       case 'handshake.hello': {
         channelId = env.channelId;
-        // The SDK forwards either a ready joinToken OR the IMS auth for the
-        // iframe to provision with (same-origin /api/cloud/*). It never calls
-        // the cloud API itself — that would be a cross-origin request from the
-        // third-party host with a third-party Authorization header.
+        // The SDK forwards the ready joinToken the host supplied. The follower
+        // embeds against that already-provisioned leader; the SDK never calls
+        // the cloud API itself.
         const welcome: Extract<CherryEnvelope, { kind: 'handshake.welcome' }> = {
           cherry: CHERRY_PROTOCOL_VERSION,
           channelId,
           kind: 'handshake.welcome',
+          joinUrl: options.joinToken,
         };
-        if (options.joinToken) {
-          welcome.joinUrl = options.joinToken;
-        } else if (options.imsToken) {
-          welcome.auth = {
-            token: options.imsToken,
-            coneName: options.coneName,
-            createIfMissing: options.createIfMissing,
-          };
-        }
         post(welcome);
         return undefined;
       }

@@ -20,15 +20,8 @@ export interface CherryHandshakeWelcome {
   cherry: typeof CHERRY_PROTOCOL_VERSION;
   channelId: string;
   kind: 'handshake.welcome';
-  /** Direct tray join URL when the host supplied one (no provisioning needed). */
+  /** Tray join URL the host supplied; the follower embeds against it. */
   joinUrl?: string;
-  /**
-   * Provisioning payload forwarded by the host SDK when it supplied an IMS token
-   * instead of a join URL. The iframe (same-origin with the worker) runs the
-   * `/api/cloud/*` orchestration; see `main-cherry.ts:resolveCherryJoinUrl`.
-   * Exactly one of `joinUrl` / `auth` is expected.
-   */
-  auth?: { token: string; coneName?: string; createIfMissing?: boolean };
 }
 
 export interface CherryCdpRequest {
