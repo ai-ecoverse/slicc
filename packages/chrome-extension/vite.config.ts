@@ -312,11 +312,68 @@ export default defineConfig(({ mode }) => ({
           /* @imagemagick/magick-wasm not installed */
         }
 
+        // Bundle @ffmpeg/core ESM glue (~112 KB) for the extension.
+        // Chrome Web Store MV3 review forbids hosting executable JS
+        // off-package, so the loader pulls it from `vendor/` via
+        // `chrome.runtime.getURL`. The much larger `ffmpeg-core.wasm`
+        // continues to stream from the CDN on first run.
+        const vendorDest = resolve(outDir, 'vendor');
+        mkdirSync(vendorDest, { recursive: true });
+        copyFileSync(
+          resolve(repoRoot, 'node_modules/@ffmpeg/core/dist/esm/ffmpeg-core.js'),
+          resolve(vendorDest, 'ffmpeg-core.js')
+        );
+
         copyFileSync(resolve(outDir, 'packages/webapp/index.html'), resolve(outDir, 'index.html'));
         copyFileSync(
           resolve(outDir, 'packages/chrome-extension/offscreen.html'),
           resolve(outDir, 'offscreen.html')
         );
+      },
+    },
+    {
+      // Chrome Web Store MV3 reviewers string-match full CDN URLs in
+      // built JS. The `@ffmpeg/ffmpeg` package's `dist/esm/const.js`
+      // exports `CORE_URL` as a literal
+      // `https://unpkg.com/@ffmpeg/core@<ver>/dist/umd/ffmpeg-core.js`,
+      // which Vite/Rolldown bundles into the output even though our
+      // loader always passes its own `coreURL` explicitly. The
+      // override at runtime is not enough — the literal cannot
+      // survive in built JS. Sweep `dist/extension/` after the
+      // bundle is written and blank out any surviving full-path
+      // unpkg `@ffmpeg/core` URLs.
+      name: 'strip-ffmpeg-core-cdn-literal',
+      enforce: 'post' as const,
+      closeBundle() {
+        const outDir = resolve(repoRoot, 'dist/extension');
+        const literalRe = /https:\/\/unpkg\.com\/@ffmpeg\/core@[^"'`\s]*?\/ffmpeg-core\.js/g;
+        let rewrittenCount = 0;
+        const walk = (dir: string): void => {
+          let entries: ReturnType<typeof readdirSync>;
+          try {
+            entries = readdirSync(dir, { withFileTypes: true });
+          } catch {
+            return;
+          }
+          for (const entry of entries) {
+            const full = resolve(dir, entry.name);
+            if (entry.isDirectory()) {
+              walk(full);
+            } else if (entry.isFile() && entry.name.endsWith('.js')) {
+              const code = readFileSync(full, 'utf-8');
+              if (!literalRe.test(code)) continue;
+              literalRe.lastIndex = 0;
+              writeFileSync(full, code.replace(literalRe, ''));
+              rewrittenCount++;
+            }
+          }
+        };
+        walk(outDir);
+        if (rewrittenCount > 0) {
+          console.log(
+            `[strip-ffmpeg-core-cdn-literal] sanitized ${rewrittenCount} file(s) in dist/extension/`
+          );
+        }
       },
     },
   ],

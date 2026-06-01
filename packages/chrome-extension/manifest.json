@@ -30,6 +30,12 @@
   "sandbox": {
     "pages": ["sandbox.html", "sprinkle-sandbox.html", "tool-ui-sandbox.html"]
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["vendor/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "background": {
     "service_worker": "service-worker.js"
   },
