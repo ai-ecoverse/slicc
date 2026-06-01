@@ -291,6 +291,8 @@ jobs:
         run: npm run build -w @slicc/webapp
       - name: Build extension
         run: npm run build -w @slicc/chrome-extension
+      - name: Check bundle for forbidden CDN URL literals (MV3 RHC guard)
+        run: bash packages/dev-tools/tools/check-extension-rhc.sh
       - name: Check bundle for Node-only APIs
         run: |
           # Scan extension bundles for Node-only APIs that should never be bundled.

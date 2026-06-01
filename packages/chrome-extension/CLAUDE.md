@@ -121,7 +121,8 @@ and self-close, but DO NOT count as the canonical detached tab.
 - `tool-ui-sandbox.html` and related HTML shells exist for specialized extension UI surfaces.
 - When loading bundled assets, prefer `chrome.runtime.getURL(...)`.
 - **External CDN scripts in sprinkles** are fetch-and-inlined by `sprinkle-renderer.ts` (full-doc) or via `sprinkle-fetch-script` parent relay (partial-content). Never use `<script src="https://...">` directly in sandbox HTML.
-- **npm packages in `node -e`** are pre-fetched by the per-task realm iframe via `cdn.jsdelivr.net/npm/<id>` + indirect `Function` constructor (the sandbox CSP allows `Function` but not cross-origin `import()`). The realm runtime owns this path now (see `kernel/realm/`), not the legacy inline node-command code.
+- **npm packages in `node -e`** are pre-fetched by the per-task realm iframe via `cdn.jsdelivr.net/npm/<id>` + indirect `Function` constructor (the sandbox CSP allows `Function` but not cross-origin `import()`). The realm runtime owns this path now (see `kernel/realm/`), not the legacy inline node-command code. Chrome Web Store MV3 review string-matches full CDN URLs in built JS, so both the inline `sandbox.html` builder and the bundled code construct hosts via the token-array pattern in `packages/webapp/src/shell/supplemental-commands/cdn-url-builder.ts`.
+- **Bundled vendor JS (ffmpeg-core)** lives under `dist/extension/vendor/` alongside `pyodide/` and `magick.wasm`. The 112 KB `ffmpeg-core.js` Emscripten glue is copied by the `closeBundle` hook in `vite.config.ts` and loaded via `chrome.runtime.getURL('vendor/ffmpeg-core.js')`; the manifest's `web_accessible_resources` exposes `vendor/*`. The same hook strips the leftover `unpkg.com/@ffmpeg/core@…/ffmpeg-core.js` literal that `@ffmpeg/ffmpeg/dist/esm/const.js` bundles into the output, so the reviewer's substring scan stays clean.
 - **Extension-relative scripts** must load statically in `<head>`, not via dynamic `createElement('script').src` (opaque origin blocks runtime loads).
 - See `docs/pitfalls.md` "Extension Sandbox: External Scripts & Opaque Origin" for the full reference.
 
@@ -163,6 +164,25 @@ Both the side panel AND the offscreen document emit Helix RUM beacons via the in
 - `packages/chrome-extension/vite.config.ts` builds the side panel UI, service worker, offscreen document, and copied static assets into `dist/extension/`.
 - The extension consumes shared browser code from `packages/webapp/` rather than duplicating core runtime logic.
 - `manifest.json` ships a stable `key` (so the production ID is fixed). For local debugging that key triggers `Content verify job failed for extension … at path: index.html` and the extension refuses to load. Build with `SLICC_EXT_DEV=1 npm run build -w @slicc/chrome-extension` to strip `key` so Chrome assigns a path-derived ID instead.
+
+## MV3 Remote Hosted Code Guard
+
+Chrome Web Store rejects MV3 submissions when its reviewer string-matches a full third-party CDN URL in the built bundle (violation reference Blue Argon). Even a literal that the runtime overrides — e.g. the `https://unpkg.com/@ffmpeg/core@.../ffmpeg-core.js` baked into `@ffmpeg/ffmpeg`'s worker source — is enough to fail review.
+
+`packages/dev-tools/tools/check-extension-rhc.sh` scans `dist/extension/` (recursively, across `.js`/`.html`/`.json`/`.css`, excluding `.map` files) and exits non-zero if any of these patterns appear:
+
+- `https://unpkg.com/<path>` (scoped or non-scoped — anything followed by a `/<package-path>`)
+- `https://esm.sh/<path>`
+- `https://cdn.jsdelivr.net/npm/<path>`
+
+Bare hostnames (`unpkg.com`, `esm.sh`, `cdn.jsdelivr.net`) and the host-only form `https://unpkg.com` (no path) are allowed — that's the form the runtime URL builder leaves behind.
+
+The check is wired in two places:
+
+- `npm run postbuild:check -w @slicc/chrome-extension` invokes it from the package
+- the `chrome-extension` CI job runs it after `Build extension` in `.github/workflows/ci.yml`
+
+**Debugging a failure:** the script prints `file:line:URL` for every match. Open the cited file, find the call site that constructed the URL, and migrate it to `packages/webapp/src/shell/cdn-url-builder.ts` so only the bare host appears as a string literal and the path is composed at runtime via `new URL(path, ...)`.
 
 ## Local QA: dedicated profile preinstalled with the extension
 
