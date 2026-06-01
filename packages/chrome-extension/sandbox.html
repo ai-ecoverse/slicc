@@ -264,6 +264,18 @@ function bootstrapRealmPort(port) {
     puppeteer: ' Use the built-in browser-automation shell commands.',
   };
   const LOAD_MODULE_TIMEOUT_MS = 15000;
+  // Mirror of `resolveLoadModuleTimeoutMs` in require-guards.ts —
+  // honors `SLICC_REALM_PREFETCH_BUDGET_MS` from init.env so the CDP
+  // smoke test can extend the pre-fetch budget without touching
+  // user-facing defaults.
+  function resolveTimeoutMs(env) {
+    const raw = env && env['SLICC_REALM_PREFETCH_BUDGET_MS'];
+    if (typeof raw === 'string' && raw.length > 0) {
+      const parsed = parseInt(raw, 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return LOAD_MODULE_TIMEOUT_MS;
+  }
   function nativeError(id, bareId) {
     const hint = NATIVE_PACKAGE_HINTS[bareId] || '';
     return new Error("require('" + id + "'): '" + bareId + "' is a Node native module (C++ bindings) — it cannot run in the browser sandbox." + hint);
@@ -290,7 +302,7 @@ function bootstrapRealmPort(port) {
       return;
     }
     if (data.type === 'realm-init') {
-      runRealm(data, port, pending, () => nextId++, NODE_BUILTINS_UNAVAILABLE, BUILTINS_LOCAL, NODE_NATIVE_PACKAGES, NATIVE_PACKAGE_HINTS, LOAD_MODULE_TIMEOUT_MS, nativeError, withTimeout)
+      runRealm(data, port, pending, () => nextId++, NODE_BUILTINS_UNAVAILABLE, BUILTINS_LOCAL, NODE_NATIVE_PACKAGES, NATIVE_PACKAGE_HINTS, resolveTimeoutMs, nativeError, withTimeout)
         .catch((err) => {
           const message = err instanceof Error ? err.message : String(err);
           port.postMessage({ type: 'realm-error', message });
@@ -300,7 +312,7 @@ function bootstrapRealmPort(port) {
   port.start();
 }
 
-async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE, BUILTINS_LOCAL, NODE_NATIVE_PACKAGES, NATIVE_PACKAGE_HINTS, LOAD_MODULE_TIMEOUT_MS, nativeError, withTimeout) {
+async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE, BUILTINS_LOCAL, NODE_NATIVE_PACKAGES, NATIVE_PACKAGE_HINTS, resolveTimeoutMs, nativeError, withTimeout) {
   if (init.kind !== 'js') {
     port.postMessage({ type: 'realm-error', message: 'realm-iframe: only kind:js supported' });
     return;
@@ -848,6 +860,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
   // for non-import paths in the sandbox context (matches the legacy
   // extension behavior).
   const requireCache = Object.create(null);
+  const loadModuleTimeoutMs = resolveTimeoutMs(init.env);
   const re = /\brequire\s*\(\s*(['"`])([^'"`\s]+)\1\s*\)/g;
   const idsFound = new Set();
   let m;
@@ -871,7 +884,13 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
     const results = await Promise.allSettled(loadable.map(async (id) => {
       const fetchAndEval = async () => {
         const url = new URL('/npm/' + id, 'https://' + JSDELIVR_HOST).toString();
-        const resp = await fetch(url);
+        // Use realmFetch (RPC to realm-host on offscreen) rather than
+        // global window.fetch — the latter is overridden to the
+        // legacy `parent.postMessage` proxiedFetch which has no
+        // receiver in the per-task realm-iframe protocol, so a bare
+        // `fetch()` here hangs forever on cross-origin URLs until
+        // withTimeout kicks in.
+        const resp = await realmFetch(url);
         if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
         const text = await resp.text();
         const mod = { exports: {} };
@@ -890,7 +909,7 @@ async function runRealm(init, port, pending, nextIdFn, NODE_BUILTINS_UNAVAILABLE
       // 15s ceiling per require — CDN stubs that chain into
       // unresolvable transitive imports (the original sharp hang)
       // are now bounded instead of parking the realm.
-      requireCache[id] = await withTimeout(fetchAndEval(), LOAD_MODULE_TIMEOUT_MS, "require('" + id + "')");
+      requireCache[id] = await withTimeout(fetchAndEval(), loadModuleTimeoutMs, "require('" + id + "')");
     }));
     for (let i = 0; i < results.length; i++) {
       if (results[i].status === 'rejected') {

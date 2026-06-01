@@ -13,6 +13,16 @@ import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { BshEntry, BshDiscoveryFS } from './bsh-discovery.js';
 import type { ScriptCatalog } from './script-catalog.js';
 import { createLogger } from '../core/logger.js';
+import { esmShUrl } from './supplemental-commands/cdn-url-builder.js';
+
+/**
+ * esm.sh base URL the injected `.bsh` wrapper concatenates against
+ * (`__esmShBase + id`). Resolved once at module load via the CDN
+ * builder so the literal CDN URL never appears inline in the
+ * wrapper template below — only the runtime value embedded via
+ * `JSON.stringify` does.
+ */
+const ESM_SH_BASE = esmShUrl('').toString();
 
 const log = createLogger('bsh-watchdog');
 
@@ -227,6 +237,7 @@ export class BshWatchdog {
     p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
   });
   const __requireCache = Object.create(null);
+  const __esmShBase = ${JSON.stringify(ESM_SH_BASE)};
   const __uncached = __requireSpecifiers.filter(id => {
     const bare = id.startsWith('node:') ? id.slice(5) : id;
     return !__NODE_BUILTINS_UNAVAILABLE.has(bare) && bare !== 'buffer' && !__NODE_NATIVE_PACKAGES.has(bare);
@@ -236,7 +247,7 @@ export class BshWatchdog {
       // 15s ceiling per require — CDN stubs that chain into
       // unresolvable transitive imports (the original sharp hang)
       // are now bounded instead of parking the realm.
-      const mod = await __withTimeout(import('https://esm.sh/' + id), 15000, "require('" + id + "')");
+      const mod = await __withTimeout(import(__esmShBase + id), 15000, "require('" + id + "')");
       __requireCache[id] = mod.default !== undefined ? mod.default : mod;
     } catch(e) {
       // Surface the failure (especially the timeout error) so the
@@ -260,7 +271,7 @@ export class BshWatchdog {
     }
     if (bareId in __requireCache) return __requireCache[bareId];
     if (id in __requireCache) return __requireCache[id];
-    throw new Error("require('" + id + "'): module not pre-loaded. Use a string literal or await import('https://esm.sh/" + id + "') directly.");
+    throw new Error("require('" + id + "'): module not pre-loaded. Use a string literal or await import('" + __esmShBase + id + "') directly.");
   };
   try {
     ${scriptContent}

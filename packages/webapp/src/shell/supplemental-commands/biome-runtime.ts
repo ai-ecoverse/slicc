@@ -41,6 +41,7 @@
  */
 
 import wasmWebPkg from '@biomejs/wasm-web/package.json' with { type: 'json' };
+import { unpkgUrl } from './cdn-url-builder.js';
 import { isNodeRuntime, resolvePinnedPackageVersion } from './shared.js';
 import type { Biome } from '@biomejs/js-api';
 import type { ProjectKey } from '@biomejs/wasm-web';
@@ -50,7 +51,11 @@ export const BIOME_VERSION = resolvePinnedPackageVersion(
   (wasmWebPkg as { version?: unknown }).version
 );
 
-export const BIOME_WASM_CDN_URL = `https://unpkg.com/@biomejs/wasm-web@${BIOME_VERSION}/biome_wasm_bg.wasm`;
+export const BIOME_WASM_CDN_URL = unpkgUrl(
+  '@biomejs/wasm-web',
+  BIOME_VERSION,
+  'biome_wasm_bg.wasm'
+).toString();
 
 const CACHE_NAME = `slicc-biome-${BIOME_VERSION}`;
 

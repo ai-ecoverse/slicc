@@ -11,6 +11,7 @@
  * also matches DedicatedWorkers, which still need the CDN path.
  */
 
+import { jsdelivrNpmUrl } from './cdn-url-builder.js';
 import { isNodeRuntime } from './shared.js';
 
 export interface ImageMagickModule {
@@ -61,7 +62,11 @@ export const MIME_TO_MAGICK_FORMAT: Record<string, string> = {
 };
 
 let magickPromise: Promise<ImageMagickModule> | null = null;
-export const MAGICK_WASM_CDN = 'https://cdn.jsdelivr.net/npm/@imagemagick/magick-wasm@0.0.38/dist/';
+export const MAGICK_WASM_CDN = jsdelivrNpmUrl(
+  '@imagemagick/magick-wasm',
+  '0.0.38',
+  'dist/'
+).toString();
 export const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
 export async function getMagick(): Promise<ImageMagickModule> {

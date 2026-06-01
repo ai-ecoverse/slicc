@@ -30,6 +30,7 @@
  */
 
 import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { unpkgUrl } from './cdn-url-builder.js';
 // Vite `?raw` inlines the wrapper worker source at build time using
 // the package's public `./worker` subpath export, so the extension's
 // blob-URL path always serves bytes that match the installed wrapper
@@ -55,7 +56,8 @@ const FFMPEG_CORE_VERSION = '0.12.10';
 // build is a side-effecting IIFE with no exports and therefore
 // surfaces as `ERROR_IMPORT_FAILURE` ("failed to import
 // ffmpeg-core.js"). Always point at /esm/.
-export const FFMPEG_CORE_CDN_BASE = `https://unpkg.com/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm/`;
+export const FFMPEG_CORE_CDN_BASE_URL = unpkgUrl('@ffmpeg/core', FFMPEG_CORE_VERSION, 'dist/esm/');
+export const FFMPEG_CORE_CDN_BASE = FFMPEG_CORE_CDN_BASE_URL.toString();
 
 const CACHE_NAME = `slicc-ffmpeg-${FFMPEG_CORE_VERSION}`;
 
