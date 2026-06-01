@@ -5,6 +5,7 @@ import {
   extractHandoffFromFetchHeaders,
   extractHandoffFromWebRequest,
   HANDOFF_REL,
+  handoffFingerprint,
   UPSKILL_REL,
 } from '../../src/net/handoff-link.js';
 import { parseLinkHeader } from '../../src/net/link-header.js';
@@ -336,5 +337,49 @@ describe('extractHandoffFrom* adapters', () => {
     const result = extractHandoffFromFetchHeaders(headers);
     expect(result.match?.verb).toBe('upskill');
     expect(result.match?.target).toBe('https://github.com/o/r');
+  });
+});
+
+describe('handoffFingerprint', () => {
+  it('is stable across different page URLs for the same upskill payload', () => {
+    // Same site-wide upskill rel, advertised on two different page URLs.
+    const a = handoffFingerprint({ verb: 'upskill', target: 'https://github.com/o/r' });
+    const b = handoffFingerprint({ verb: 'upskill', target: 'https://github.com/o/r' });
+    expect(a).toBe(b);
+  });
+
+  it('distinguishes branch and path', () => {
+    const base = handoffFingerprint({ verb: 'upskill', target: 'https://github.com/o/r' });
+    const branched = handoffFingerprint({
+      verb: 'upskill',
+      target: 'https://github.com/o/r',
+      branch: 'next',
+    });
+    const subpath = handoffFingerprint({
+      verb: 'upskill',
+      target: 'https://github.com/o/r',
+      path: 'skills/foo',
+    });
+    expect(new Set([base, branched, subpath]).size).toBe(3);
+  });
+
+  it('distinguishes verb and instruction', () => {
+    const handoffA = handoffFingerprint({
+      verb: 'handoff',
+      target: 'https://example.com/p',
+      instruction: 'do A',
+    });
+    const handoffB = handoffFingerprint({
+      verb: 'handoff',
+      target: 'https://example.com/p',
+      instruction: 'do B',
+    });
+    expect(handoffA).not.toBe(handoffB);
+  });
+
+  it('treats omitted and empty optional fields identically', () => {
+    expect(handoffFingerprint({ verb: 'upskill', target: 't' })).toBe(
+      handoffFingerprint({ verb: 'upskill', target: 't', branch: '', path: '', instruction: '' })
+    );
   });
 });

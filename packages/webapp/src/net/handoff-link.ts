@@ -162,6 +162,38 @@ export function extractHandoff(links: ParsedLink[]): HandoffMatch | null {
   return null;
 }
 
+/**
+ * Stable identity for a handoff/upskill payload, independent of the page URL
+ * that advertised it.
+ *
+ * A site can emit the same SLICC `Link` rel on every page response (e.g. a
+ * site-wide upskill pointing at one repo). Keying dedup on the page URL would
+ * never collapse those because the path changes on every navigation, while the
+ * payload (`verb` + `target` repo + `branch` + `path`, or for the prose
+ * `handoff` verb the page `target` + `instruction`) stays constant. Keying on
+ * this fingerprint lets callers process a given handoff once and silently drop
+ * repeat sightings of the same payload within a session.
+ *
+ * The NUL separator can't appear in any of the parts (URLs, git refs, paths,
+ * and the RFC 8187-decoded title are all NUL-free), so concatenation is
+ * collision-free without hashing.
+ */
+export function handoffFingerprint(input: {
+  verb: string;
+  target: string;
+  branch?: string;
+  path?: string;
+  instruction?: string;
+}): string {
+  return [
+    input.verb,
+    input.target,
+    input.branch ?? '',
+    input.path ?? '',
+    input.instruction ?? '',
+  ].join('\u0000');
+}
+
 /* ────────── header-shape adapters that go straight to a verb match ────────── */
 
 export function extractHandoffFromCdpHeaders(
