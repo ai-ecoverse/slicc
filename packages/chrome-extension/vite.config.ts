@@ -332,6 +332,31 @@ export default defineConfig(({ mode }) => ({
       },
     },
     {
+      // Bundle the @ffmpeg/ffmpeg wrapper worker into a single
+      // self-contained ESM file at dist/extension/vendor/ffmpeg-worker.js.
+      // The wrapper worker source uses bare ESM imports (./const.js,
+      // ./errors.js) which a ?raw blob-URL load cannot resolve at
+      // runtime — the worker module then fails to parse silently, the
+      // LOAD reply never arrives, and ffmpeg.load() hangs forever.
+      // A pre-bundled file at the extension origin sidesteps that
+      // entirely: same-scheme import() of the core JS works without
+      // CSP / cross-scheme weirdness.
+      name: 'build-ffmpeg-worker',
+      async closeBundle() {
+        const esbuild = await import('esbuild');
+        const vendorDest = resolve(repoRoot, 'dist/extension/vendor');
+        mkdirSync(vendorDest, { recursive: true });
+        await esbuild.build({
+          entryPoints: [resolve(repoRoot, 'node_modules/@ffmpeg/ffmpeg/dist/esm/worker.js')],
+          bundle: true,
+          outfile: resolve(vendorDest, 'ffmpeg-worker.js'),
+          format: 'esm',
+          target: 'esnext',
+          minify: true,
+        });
+      },
+    },
+    {
       // Chrome Web Store MV3 reviewers string-match full CDN URLs in
       // built JS. The `@ffmpeg/ffmpeg` package's `dist/esm/const.js`
       // exports `CORE_URL` as a literal
