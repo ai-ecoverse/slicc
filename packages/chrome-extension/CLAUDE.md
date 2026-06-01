@@ -182,7 +182,7 @@ The check is wired in two places:
 - `npm run postbuild:check -w @slicc/chrome-extension` invokes it from the package
 - the `chrome-extension` CI job runs it after `Build extension` in `.github/workflows/ci.yml`
 
-**Debugging a failure:** the script prints `file:line:URL` for every match. Open the cited file, find the call site that constructed the URL, and migrate it to `packages/webapp/src/shell/cdn-url-builder.ts` so only the bare host appears as a string literal and the path is composed at runtime via `new URL(path, ...)`.
+**Debugging a failure:** the script prints `file:line:URL` for every match. Open the cited file, find the call site that constructed the URL, and migrate it to `packages/webapp/src/shell/supplemental-commands/cdn-url-builder.ts` so only the bare host appears as a string literal and the path is composed at runtime via `new URL(path, ...)`.
 
 ## Local QA: dedicated profile preinstalled with the extension
 

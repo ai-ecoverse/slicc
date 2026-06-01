@@ -116,7 +116,6 @@ describe('buildBiomeWasmRuntimeUrlExpr', () => {
   });
 
   it('evaluates to the same URL `resolveBiomeWasmCdnUrl` returns', () => {
-     
     const evaluated = new Function(`return ${buildBiomeWasmRuntimeUrlExpr()};`)() as string;
     expect(evaluated).toBe(resolveBiomeWasmCdnUrl());
   });

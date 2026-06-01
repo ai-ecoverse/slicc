@@ -7,7 +7,7 @@ import {
   unpkgUrl,
   esmShUrl,
   jsdelivrNpmUrl,
-} from '../../../src/shell/supplemental-commands/cdn-url-builder';
+} from '../../../src/shell/supplemental-commands/cdn-url-builder.js';
 
 describe('cdn-url-builder host constants', () => {
   it('resolves the three CDN hosts', () => {

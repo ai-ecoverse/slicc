@@ -44,7 +44,7 @@ MATCHES=$(
     \( -name '*.js' -o -name '*.html' -o -name '*.json' -o -name '*.css' \) \
     ! -name '*.map' \
     -print0 \
-  | xargs -0 grep -HonE "${FORBIDDEN_PATTERN}[^\"'\`)[:space:]]*" 2>/dev/null || true
+  | xargs -0 grep -HonE "${FORBIDDEN_PATTERN}[^\"'\`)[[:space:]]]*" 2>/dev/null || true
 )
 
 if [[ -z "$MATCHES" ]]; then
@@ -63,7 +63,7 @@ echo "Found $COUNT forbidden URL literal match(es) across $FILE_COUNT file(s)." 
 echo "" >&2
 echo "These literals will trip Chrome Web Store's MV3 RHC scanner." >&2
 echo "Migrate the call site to construct URLs at runtime via:" >&2
-echo "  packages/webapp/src/shell/cdn-url-builder.ts" >&2
+echo "  packages/webapp/src/shell/supplemental-commands/cdn-url-builder.ts" >&2
 echo "" >&2
 echo "Only bare hostnames (\`unpkg.com\`, \`esm.sh\`, \`cdn.jsdelivr.net\`)" >&2
 echo "are allowed as string literals in the built extension." >&2
