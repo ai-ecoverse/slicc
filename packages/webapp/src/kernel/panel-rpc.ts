@@ -172,6 +172,18 @@ export type PanelRpcRequest =
       // mirror it into its shim immediately. See issue #701.
       op: 'save-oauth-accounts';
       payload: { accountsJson: string };
+    }
+  | {
+      // Push a `cherry.slicc_event` (cone → host page) out through the
+      // page-side LeaderSyncManager. The `cherry-emit` shell command runs
+      // in the kernel worker, but the leader tray's WebRTC data channels
+      // live on the page, so the worker bridges here. `runtimeId` is the
+      // canonical follower id (a bare runtime id, no `:localTarget`
+      // suffix). Result `delivered` is false when the owning follower is
+      // not connected, letting the command surface a clear failure rather
+      // than silently succeeding.
+      op: 'cherry-emit';
+      payload: { runtimeId: string; name: string; detail?: unknown };
     };
 
 export interface PanelRpcResults {
@@ -201,6 +213,7 @@ export interface PanelRpcResults {
   'tray-leave': TrayLeaveResult;
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
   'save-oauth-accounts': { storedJson: string };
+  'cherry-emit': { delivered: boolean };
 }
 
 export type PanelRpcOp = PanelRpcRequest['op'];

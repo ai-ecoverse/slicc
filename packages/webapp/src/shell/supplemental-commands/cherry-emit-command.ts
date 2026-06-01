@@ -1,5 +1,11 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { getConnectedFollowersWithFallback, type ConnectedFollowerInfo } from './host-command.js';
+import { getPanelRpcClient, type PanelRpcClient } from '../../kernel/panel-rpc.js';
+import { CHERRY_RUNTIME_TAG } from '../../scoops/tray-sync-protocol.js';
+import { createLogger } from '../../core/logger.js';
+
+const log = createLogger('cherry-emit');
 
 /**
  * Leader-side registry the `cherry-emit` command drives to push a `slicc.event`
@@ -7,10 +13,11 @@ import type { Command } from 'just-bash';
  * `listRuntimeIds()` returns canonical ids (`follower-<bootstrapId>`);
  * `emitSliccEvent` forwards the named event over that runtime's tray channel.
  *
- * The registry is injected via `CommandDeps.cherryRuntimeRegistry`. It is only
- * meaningful in a leader context that has cherry followers connected; when it is
- * absent (or no cherry runtime is connected) `cherry-emit` reports that and
- * exits non-zero rather than silently succeeding.
+ * Tests inject a fake registry; production uses `buildDefaultCherryRegistry()`,
+ * which reads the leader's connected followers and bridges the emit to the
+ * page-side LeaderSyncManager via panel-RPC. When no cherry runtime is
+ * connected `cherry-emit` reports that and exits non-zero rather than silently
+ * succeeding.
  */
 export interface CherryRuntimeRegistry {
   listRuntimeIds(): string[];
@@ -18,12 +25,70 @@ export interface CherryRuntimeRegistry {
 }
 
 export interface CherryEmitCommandOptions {
-  /** Leader-side registry; absent in non-leader contexts (command still discoverable, reports no runtime). */
+  /** Registry override for tests. Production defaults to `buildDefaultCherryRegistry()`. */
   registry?: CherryRuntimeRegistry;
 }
 
+/** Injectable seams for `buildDefaultCherryRegistry` (production defaults read live state). */
+export interface DefaultCherryRegistryDeps {
+  getFollowers?: () => ConnectedFollowerInfo[];
+  getPanelRpc?: () => PanelRpcClient | null;
+}
+
+/**
+ * The production `CherryRuntimeRegistry`. `listRuntimeIds()` returns the
+ * canonical ids of connected followers whose runtime tag is `slicc-cherry`
+ * (only those can receive a `slicc.event`); `emitSliccEvent` bridges to the
+ * page-side `LeaderSyncManager.emitCherrySliccEvent` over panel-RPC, since the
+ * `cherry-emit` command runs in the kernel worker but the leader tray's WebRTC
+ * channels live on the page.
+ */
+export function buildDefaultCherryRegistry(
+  deps: DefaultCherryRegistryDeps = {}
+): CherryRuntimeRegistry {
+  const getFollowers = deps.getFollowers ?? getConnectedFollowersWithFallback;
+  const getPanelRpc = deps.getPanelRpc ?? getPanelRpcClient;
+  return {
+    listRuntimeIds(): string[] {
+      return getFollowers()
+        .filter((f) => f.runtime === CHERRY_RUNTIME_TAG)
+        .map((f) => f.runtimeId);
+    },
+    emitSliccEvent(runtimeId: string, name: string, detail: unknown): void {
+      const client = getPanelRpc();
+      if (!client) {
+        // No page bridge — the leader tray lives on the page, so without a
+        // panel-RPC client there's no way to reach it. Surface it loudly
+        // rather than dropping the event silently.
+        log.warn('no panel-RPC client; cannot reach the page-side leader tray', {
+          runtimeId,
+          name,
+        });
+        return;
+      }
+      void client
+        .call('cherry-emit', { runtimeId, name, detail })
+        .then((res) => {
+          if (!res?.delivered) {
+            log.warn('leader reported the follower runtime was not connected', {
+              runtimeId,
+              name,
+            });
+          }
+        })
+        .catch((err: unknown) => {
+          log.warn('panel-RPC delivery failed', {
+            runtimeId,
+            name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    },
+  };
+}
+
 export function createCherryEmitCommand(options: CherryEmitCommandOptions = {}): Command {
-  const { registry } = options;
+  const registry = options.registry ?? buildDefaultCherryRegistry();
   return defineCommand('cherry-emit', async (args) => {
     if (args.includes('--help') || args.includes('-h')) {
       return {
@@ -63,7 +128,7 @@ Usage: cherry-emit <name> [--detail <json>] [--runtime <id>]
       return { stdout: '', stderr: 'cherry-emit: event name is required\n', exitCode: 1 };
     }
 
-    const ids = registry?.listRuntimeIds() ?? [];
+    const ids = registry.listRuntimeIds();
     if (ids.length === 0) {
       return {
         stdout: '',
@@ -97,7 +162,7 @@ Usage: cherry-emit <name> [--detail <json>] [--runtime <id>]
       }
     }
 
-    registry!.emitSliccEvent(runtime!, name, detail);
+    registry.emitSliccEvent(runtime!, name, detail);
     return { stdout: `cherry-emit: sent '${name}' to ${runtime}\n`, stderr: '', exitCode: 0 };
   });
 }

@@ -67,6 +67,13 @@ export interface FollowerSyncManagerOptions {
   /** Called when the leader sends a `sprinkle.update` payload (mirrors `SprinkleManager.sendToSprinkle`). */
   onSprinkleUpdate?: (sprinkleName: string, data: unknown) => void;
   /**
+   * Called when the leader sends a `cherry.slicc_event` (cone → host page). Only
+   * a cherry follower wires this — it forwards the event to the host SDK via
+   * `CherryHostTransport.emitSliccEventToHost`. Non-cherry followers leave it
+   * unset, so the event falls through harmlessly.
+   */
+  onCherrySliccEvent?: (targetId: string, name: string, detail?: unknown) => void;
+  /**
    * Bound on every `fetchSprinkleContent` call. If the leader never
    * answers a `sprinkle.fetch` (deadlocked agent, partial chunked
    * transfer abandoned, leader still connected but stuck), the
@@ -627,6 +634,13 @@ export class FollowerSyncManager implements AgentHandle {
       case 'sprinkle.update':
         log.debug('Sprinkle update received', { sprinkleName: message.sprinkleName });
         this.options.onSprinkleUpdate?.(message.sprinkleName, message.data);
+        break;
+
+      case 'cherry.slicc_event':
+        // Cone → host page event. A cherry follower forwards it to the host
+        // SDK; non-cherry followers leave `onCherrySliccEvent` unset and it
+        // falls through harmlessly.
+        this.options.onCherrySliccEvent?.(message.targetId, message.name, message.detail);
         break;
 
       case 'ping': {

@@ -214,6 +214,29 @@ export class CherryHostTransport implements CDPTransport {
     this.handleMessage(event);
   }
 
+  /**
+   * Push a `slicc.event` (cone → host page) out to the host SDK. This is the
+   * iframe-side terminus of the `cherry-emit` outbound path: the leader sends a
+   * `cherry.slicc_event` over the tray channel, the follower invokes this, and
+   * the host SDK's `onSliccEvent` hook fires in `mountSlicc`.
+   *
+   * Drops the event before the handshake completes (no `channelId` to pin it to
+   * the host's three-factor gate) rather than posting a malformed envelope.
+   */
+  emitSliccEventToHost(name: string, detail?: unknown): void {
+    if (!this.channelId) {
+      log.warn('Dropping slicc.event before handshake (no channelId yet)', { name });
+      return;
+    }
+    this.post({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId: this.channelId,
+      kind: 'slicc.event',
+      name,
+      detail,
+    });
+  }
+
   // ---------------------------------------------------------------------------
 
   private post(env: CherryEnvelope): void {

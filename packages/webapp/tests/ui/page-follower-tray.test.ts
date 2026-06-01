@@ -86,6 +86,16 @@ describe('startPageFollowerTray', () => {
     expect(() => handle.stop()).not.toThrow();
   });
 
+  it('accepts an onCherrySliccEvent option (cherry outbound bridge) without throwing', () => {
+    const opts: StartPageFollowerTrayOptions = {
+      ...makeBaseOptions(),
+      runtime: CHERRY_RUNTIME_TAG,
+      onCherrySliccEvent: vi.fn(),
+    };
+    const handle = startPageFollowerTray(opts);
+    expect(() => handle.stop()).not.toThrow();
+  });
+
   it('uses the supplied joinUrl when starting the follower', async () => {
     const opts = makeBaseOptions();
     const handle = startPageFollowerTray(opts);

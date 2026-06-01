@@ -130,6 +130,25 @@ describe('CherryHostTransport', () => {
     } as MessageEvent);
     expect(h.posted.length).toBe(before); // no reaction
   });
+
+  it('emitSliccEventToHost posts a slicc.event envelope to the host', async () => {
+    await connectHelper(h);
+    const channelId = lastChannelId(h);
+    h.transport.emitSliccEventToHost('build.done', { ok: true });
+    const env = h.posted.find((m) => m.kind === 'slicc.event');
+    expect(env).toBeTruthy();
+    expect(env.cherry).toBe(CHERRY_PROTOCOL_VERSION);
+    expect(env.channelId).toBe(channelId);
+    expect(env.name).toBe('build.done');
+    expect(env.detail).toEqual({ ok: true });
+  });
+
+  it('emitSliccEventToHost drops (no post) before the handshake completes', () => {
+    // Never connected → channelId is null. Must not post a malformed envelope.
+    const before = h.posted.length;
+    h.transport.emitSliccEventToHost('too.early');
+    expect(h.posted.length).toBe(before);
+  });
 });
 
 async function connectHelper(h: ReturnType<typeof makeTransport>) {

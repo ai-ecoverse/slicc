@@ -55,6 +55,7 @@ import {
 } from './new-session.js';
 import { frozenSessionPath, parseFrozenArchive } from './session-freezer.js';
 import { type BrowserAPI } from '../cdp/index.js';
+import type { CherryHostTransport } from '../cdp/cherry-host-transport.js';
 import { type Orchestrator } from '../scoops/index.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
 import { clearAllMessages as clearOrchestratorMessages } from '../scoops/db.js';
@@ -1861,11 +1862,13 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
   // confusing errors for `playwright`, `open`, etc.
   let browser: BrowserAPI;
   let cherryJoinUrl: string | undefined;
+  let cherryTransport: CherryHostTransport | undefined;
   if (runtimeMode === 'cherry') {
     const { setupCherryFollower } = await import('./main-cherry.js');
     const cherry = await setupCherryFollower();
     browser = cherry.browser;
     cherryJoinUrl = cherry.joinUrl;
+    cherryTransport = cherry.transport;
   } else {
     browser = new BrowserAPI();
     try {
@@ -2702,6 +2705,13 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       // non-transferable WebRTC resources and live on the page.
       leaveTray: async ({ workerBaseUrl, requestId }) =>
         await performTrayLeaveLocally({ workerBaseUrl, requestId }),
+      // Worker-side `cherry-emit` bridges here so a cone → host
+      // `slicc.event` reaches the page-side LeaderSyncManager. Reads the
+      // live `pageLeaderTray` binding so it picks up a leader started
+      // after install; returns false when no leader is active (the
+      // command already gates on a connected cherry runtime).
+      emitCherrySliccEvent: (runtimeId, name, detail) =>
+        pageLeaderTray?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,
     }),
   });
   // Tear down on session reload so the handler doesn't outlive its
@@ -2857,6 +2867,12 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
         onUserMessage: (text, _messageId, _scoopJid, attachments) =>
           layout.panels.chat.addUserMessage(text, attachments),
         onStatus: (status) => layout.panels.chat.setProcessing(status === 'processing'),
+        // Outbound cone → host bridge: the leader's `cherry-emit` lands here as a
+        // `cherry.slicc_event`; forward it to the host page's `onSliccEvent` hook
+        // via the iframe transport. `targetId` is irrelevant on this side — the
+        // iframe only ever lends its own single host page.
+        onCherrySliccEvent: (_targetId, name, detail) =>
+          cherryTransport?.emitSliccEventToHost(name, detail),
         setChatAgent: (agent) => layout.panels.chat.setAgent(agent),
         browserAPI: browser,
         addSprinkle: (name, title, element, zone, options) =>

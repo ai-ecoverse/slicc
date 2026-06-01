@@ -101,6 +101,13 @@ export interface StartPageFollowerTrayOptions {
   ) => void;
   /** Update the chat panel's processing indicator from the leader's scoop status. */
   onStatus: (scoopStatus: string) => void;
+  /**
+   * Forward a leader-sent `cherry.slicc_event` (cone → host page) onward. Only
+   * the cherry boot path wires this — it routes the event to the host SDK via
+   * the iframe's `CherryHostTransport.emitSliccEventToHost`. Omitted by ordinary
+   * followers, where the event has no host page to reach.
+   */
+  onCherrySliccEvent?: (targetId: string, name: string, detail?: unknown) => void;
 
   // --- Page-side wiring callbacks ---
   /**
@@ -214,6 +221,7 @@ export function startPageFollowerTray(
       onSnapshot: options.onSnapshot,
       onUserMessage: options.onUserMessage,
       onStatus: options.onStatus,
+      onCherrySliccEvent: options.onCherrySliccEvent,
       onTargetsChanged: () => void refreshTargets(),
       onSprinklesList: (sprinkles) => {
         options.onSprinklesList?.(sprinkles);

@@ -71,6 +71,17 @@ function getLeaderStatusWithFallback(): LeaderTrayRuntimeStatus {
   return moduleStatus;
 }
 
+/**
+ * Fallback-aware connected-follower list, exported for the `cherry-emit`
+ * command's default registry. Unlike `getConnectedFollowers` (page-thread
+ * getter only), this also reads the `slicc.leaderTrayFollowers` localStorage
+ * shim that `main.ts` keeps current, so the kernel-worker shell sees the
+ * leader's followers too.
+ */
+export function getConnectedFollowersWithFallback(): ConnectedFollowerInfo[] {
+  return getFollowersWithFallback();
+}
+
 // Same reason: the module-level getter is only set on the page thread.
 // Fall back to the localStorage shim value written by onFollowerCountChanged.
 function getFollowersWithFallback(): ConnectedFollowerInfo[] {
