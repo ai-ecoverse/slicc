@@ -240,6 +240,7 @@ describe('SprinkleBridge', () => {
       mockFs,
       lickHandler,
       closeHandler,
+      minimizeHandlerMock,
       stopConeHandlerMock,
       attachImageHandlerMock,
       customCaptureScreenHandler
