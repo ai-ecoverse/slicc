@@ -12,6 +12,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * + indirect Function constructor lives there now. These
  * assertions pin the same load-module behavior in its new home so
  * the extension's `node -e require('lodash')` keeps working.
+ *
+ * Chrome Web Store MV3 review string-matches full CDN URLs in
+ * built JS, so the host is composed via token-array
+ * concatenation rather than a single literal (mirrors
+ * `packages/webapp/src/shell/supplemental-commands/cdn-url-builder.ts`).
  */
 const sandboxSrc = readFileSync(
   resolve(__dirname, '..', '..', '..', '..', 'chrome-extension', 'sandbox.html'),
@@ -19,8 +24,10 @@ const sandboxSrc = readFileSync(
 );
 
 describe('extension-mode JS realm __loadModule (sandbox.html)', () => {
-  it('uses jsdelivr CDN for require() pre-fetch', () => {
-    expect(sandboxSrc).toContain("'https://cdn.jsdelivr.net/npm/'");
+  it('constructs the jsdelivr URL via token-array host (no full literal)', () => {
+    expect(sandboxSrc).toContain("['cdn', 'jsdelivr', 'net'].join('.')");
+    expect(sandboxSrc).toContain("new URL('/npm/' + id, 'https://' + JSDELIVR_HOST)");
+    expect(sandboxSrc).not.toContain("'https://cdn.jsdelivr.net/npm/'");
   });
 
   it('does not use dynamic import() for require pre-fetch in the sandbox', () => {

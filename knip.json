@@ -61,6 +61,7 @@
       "ignore": ["src/chrome.d.ts"],
       "ignoreDependencies": [
         "@imagemagick/magick-wasm",
+        "@ffmpeg/core",
         "@earendil-works/pi-ai",
         "@earendil-works/pi-coding-agent"
       ]

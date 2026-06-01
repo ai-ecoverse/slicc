@@ -1,13 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  isNoise,
-  normalizeSignature,
-  fingerprint,
-  parseFingerprints,
   aggregateCandidates,
-  selectNewCandidates,
   buildErrorQuery,
   DEFAULT_HOSTS,
+  fingerprint,
+  isNoise,
+  normalizeSignature,
+  parseFingerprints,
+  selectNewCandidates,
 } from './lib.mjs';
 
 describe('isNoise', () => {

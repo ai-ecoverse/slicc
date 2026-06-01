@@ -19,8 +19,8 @@
  * Writes `count` and `has_candidates` to $GITHUB_OUTPUT when present.
  */
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, appendFileSync } from 'node:fs';
-import { DEFAULT_HOSTS, buildErrorQuery, parseFingerprints, selectNewCandidates } from './lib.mjs';
+import { appendFileSync, writeFileSync } from 'node:fs';
+import { buildErrorQuery, DEFAULT_HOSTS, parseFingerprints, selectNewCandidates } from './lib.mjs';
 
 const SINCE_DAYS = Number(process.env.SINCE_DAYS) || 1;
 // Parse the env override into a clean list; fall back to DEFAULT_HOSTS when it

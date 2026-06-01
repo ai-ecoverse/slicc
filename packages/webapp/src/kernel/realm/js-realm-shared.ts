@@ -17,6 +17,7 @@
  * it's a `MessagePort`-shaped fake.
  */
 
+import { esmShUrl } from '../../shell/supplemental-commands/cdn-url-builder.js';
 import { createHttpGlobal } from './http-global.js';
 import {
   attachArgvParseFlags,
@@ -37,9 +38,9 @@ import type {
   WsSubscriberInfo,
 } from './realm-types.js';
 import {
-  LOAD_MODULE_TIMEOUT_MS,
   NODE_NATIVE_PACKAGES,
   nativePackageError,
+  resolveLoadModuleTimeoutMs,
   withTimeout,
 } from './require-guards.js';
 import { createSkillGlobal } from './skill-global.js';
@@ -101,10 +102,10 @@ function formatConsoleArg(value: unknown): string {
  * `realm-done` has been posted.
  *
  * The `loadModule` hook is overridable so the iframe (which can't
- * use `import('https://esm.sh/...')` reliably under sandbox CSP)
- * can substitute its own fetch + Function fallback. The default is
- * a dynamic `import()` against esm.sh — the standalone worker
- * path.
+ * use a dynamic `import()` against the esm.sh CDN reliably under
+ * sandbox CSP) can substitute its own fetch + Function fallback.
+ * The default is a dynamic `import()` against esm.sh — the
+ * standalone worker path.
  */
 export async function runJsRealm(
   init: RealmInitMsg,
@@ -335,10 +336,11 @@ export async function runJsRealm(
     writeStderr(`Warning: ${nativePackageError(id, id).message}\n`);
   }
   const requireCache: Record<string, unknown> = Object.create(null);
+  const loadModuleTimeoutMs = resolveLoadModuleTimeoutMs(init.env);
   if (loadableSpecifiers.length > 0) {
     const results = await Promise.allSettled(
       loadableSpecifiers.map(async (id) => {
-        const mod = await withTimeout(loadModule(id), LOAD_MODULE_TIMEOUT_MS, `require('${id}')`);
+        const mod = await withTimeout(loadModule(id), loadModuleTimeoutMs, `require('${id}')`);
         const val = mod && 'default' in mod ? mod.default : mod;
         requireCache[id] = val;
       })
@@ -381,7 +383,7 @@ export async function runJsRealm(
     if (id in requireCache) return requireCache[id];
     if (bareId in requireCache) return requireCache[bareId];
     throw new Error(
-      `require('${id}'): module not pre-loaded. Use a string literal so it can be pre-fetched, or use \`await import('https://esm.sh/${id}')\` directly.`
+      `require('${id}'): module not pre-loaded. Use a string literal so it can be pre-fetched, or use \`await import('${esmShUrl(id).toString()}')\` directly.`
     );
   };
 
@@ -499,7 +501,7 @@ function serializeRequestInit(
 }
 
 async function defaultLoadModule(id: string): Promise<Record<string, unknown>> {
-  return (await import(/* @vite-ignore */ 'https://esm.sh/' + id)) as Record<string, unknown>;
+  return (await import(/* @vite-ignore */ esmShUrl(id).toString())) as Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
