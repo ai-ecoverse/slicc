@@ -25,7 +25,6 @@ import {
   isCherryHostEventMessage,
   CHERRY_RUNTIME_TAG,
 } from './tray-sync-protocol.js';
-import type { LickManager } from './lick-manager.js';
 import { handleFsRequest } from './tray-fs-handler.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import { TrayTargetRegistry } from './tray-target-registry.js';
@@ -67,11 +66,14 @@ export interface LeaderSyncManagerOptions {
   /** Called whenever a follower is added or removed (incl. via dead detection or stop). */
   onFollowerCountChanged?: (count: number) => void;
   /**
-   * Lick manager for routing inbound cherry host events (`cherry.host_event`)
-   * to the cone as `'cherry'` licks. Optional — when omitted, host events are
-   * dropped (no cone-side delivery).
+   * Deliver an inbound cherry host event (`cherry.host_event`) to the cone as a
+   * `'cherry'` lick. The sync manager resolves the owning follower's runtime id
+   * and hands it off; the callback owns reaching the LickManager (which lives in
+   * the kernel worker — standalone bridges page→worker via `OffscreenClient`,
+   * the extension calls the in-process orchestrator). Optional — when omitted,
+   * host events are dropped (no cone-side delivery).
    */
-  lickManager?: Pick<LickManager, 'emitEvent'>;
+  onCherryHostEvent?: (cherryRuntimeId: string | undefined, name: string, detail?: unknown) => void;
 }
 
 /** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
@@ -1124,9 +1126,9 @@ export class LeaderSyncManager {
    */
   private routeCherryHostEvent(bootstrapId: string, message: CherryHostEventMessage): void {
     if (!isCherryHostEventMessage(message)) return;
-    const lickManager = this.options.lickManager;
-    if (!lickManager) {
-      log.debug('cherry.host_event received but no lickManager wired', {
+    const onCherryHostEvent = this.options.onCherryHostEvent;
+    if (!onCherryHostEvent) {
+      log.debug('cherry.host_event received but no onCherryHostEvent wired', {
         bootstrapId,
         name: message.name,
       });
@@ -1134,16 +1136,9 @@ export class LeaderSyncManager {
     }
     const cherryRuntimeId = this.runtimeIdForBootstrap(bootstrapId);
     try {
-      lickManager.emitEvent({
-        type: 'cherry',
-        cherryRuntimeId,
-        cherryName: message.name,
-        cherryOrigin: undefined,
-        body: message.detail,
-        timestamp: new Date().toISOString(),
-      } as unknown as Parameters<typeof lickManager.emitEvent>[0]);
+      onCherryHostEvent(cherryRuntimeId, message.name, message.detail);
     } catch (err) {
-      log.warn('Failed to route cherry.host_event to lick manager', {
+      log.warn('Failed to route cherry.host_event to cone', {
         bootstrapId,
         name: message.name,
         error: err instanceof Error ? err.message : String(err),

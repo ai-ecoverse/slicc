@@ -233,6 +233,12 @@ export function startExtensionLeaderTray(
       const jid = getActiveJid();
       if (jid) orchestrator.stopScoop(jid);
     },
+    // Cherry host events route straight into the in-process LickManager via the
+    // orchestrator — no `lick-cherry-host-event` bridge hop, because the
+    // extension's lickManager is in-offscreen (parity with the `webhook.event`
+    // direct call below).
+    onCherryHostEvent: (cherryRuntimeId, name, detail) =>
+      orchestrator.handleCherryHostEvent(cherryRuntimeId, name, detail),
     browserAPI: browser,
     browserTransport: browser.getTransport?.() ?? undefined,
     vfs: sharedFs ?? undefined,

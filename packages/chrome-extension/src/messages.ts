@@ -266,6 +266,23 @@ export interface WebhookEventMsg {
   body: unknown;
 }
 
+/**
+ * Cherry host event relayed from the page-side `LeaderSyncManager` into the
+ * worker-side `LickManager`. The page-side leader receives `cherry.host_event`
+ * over a follower's data channel (its embedded cherry host page called
+ * `emitHostEvent`) and forwards it here so the lick manager (which lives in the
+ * kernel worker) can emit a `'cherry'` lick to the cone. Fire-and-forget;
+ * matches `Orchestrator.handleCherryHostEvent` (the `'cherry'` lick `timestamp`
+ * is generated worker-side). `cherryRuntimeId` is the owning follower's runtime
+ * id, resolved leader-side; `undefined` when the follower is no longer mapped.
+ */
+export interface CherryHostEventMsg {
+  type: 'lick-cherry-host-event';
+  cherryRuntimeId: string | undefined;
+  name: string;
+  detail?: unknown;
+}
+
 /** Request skill reload after upskill install. */
 export interface ReloadSkillsMsg {
   type: 'reload-skills';
@@ -465,6 +482,7 @@ export type PanelToOffscreenMessage =
   | FollowerSprinkleFetchCancelMsg
   | FollowerSprinkleLickMsg
   | WebhookEventMsg
+  | CherryHostEventMsg
   | ReloadSkillsMsg
   | ToolUIActionMsg
   | LocalStorageSetMsg

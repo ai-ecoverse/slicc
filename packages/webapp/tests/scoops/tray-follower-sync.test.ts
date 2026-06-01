@@ -2179,6 +2179,35 @@ describe('FollowerSyncManager', () => {
     });
   });
 
+  describe('sendCherryHostEvent', () => {
+    it('sends a cherry.host_event stamped with the configured selfRuntimeId', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel, { selfRuntimeId: 'rt-9' });
+
+      follower.sendCherryHostEvent('checkout-done', { id: 7 });
+
+      const sent = channel.parseSent();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toEqual({
+        type: 'cherry.host_event',
+        targetId: 'rt-9',
+        name: 'checkout-done',
+        detail: { id: 7 },
+      });
+    });
+
+    it('falls back to an empty targetId when no selfRuntimeId is set', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      follower.sendCherryHostEvent('ping');
+
+      const sent = channel.parseSent() as Array<{ type: string; targetId: string }>;
+      expect(sent[0].type).toBe('cherry.host_event');
+      expect(sent[0].targetId).toBe('');
+    });
+  });
+
   describe('protocol drift safety', () => {
     it('logs but does not throw on an unknown leader message type', () => {
       const channel = new FakeChannel();

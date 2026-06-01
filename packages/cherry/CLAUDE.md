@@ -37,7 +37,7 @@ mountSlicc({
   capabilities, // { navigate: boolean; screenshot: 'html2canvas' | 'none'; openUrl: boolean }
   hooks, // { onOpenUrl?, onSliccEvent?, onPermissionRequest? }
   joinToken, // REQUIRED: existing tray join URL the host (or its backend) provisioned
-}): SliccHandle; // { iframe, destroy() }
+}): SliccHandle; // { iframe, emitHostEvent(name, detail?), destroy() }
 ```
 
 > **Scope:** this SDK only **embeds** against an already-provisioned leader —
@@ -51,7 +51,8 @@ mountSlicc({
   is requested under the `'html2canvas'` strategy.
 - `hooks.onPermissionRequest(domain)` gates each synthetic CDP domain the leader
   tries to use (return `false` to deny — the SDK answers `-32601`).
-- `hooks.onSliccEvent(name, detail)` observes `slicc.event` envelopes (telemetry, plus the host's `open-url` convenience path).
+- `hooks.onSliccEvent(name, detail)` observes `slicc.event` envelopes (telemetry, plus the host's `open-url` convenience path) — the **cone → host** direction.
+- `SliccHandle.emitHostEvent(name, detail?)` is the **host → cone** direction: the host page emits a named event that posts a `host.event` envelope to the follower, which forwards it over the tray channel as `cherry.host_event`; the leader turns it into a `cherry` lick (labeled **Cherry Event**) on the cone. No-ops with a warning before the handshake completes (no `channelId` to pin it to).
 
 ## Host-SDK ↔ iframe synthetic-CDP boundary
 
@@ -129,6 +130,29 @@ npm test -w @slicc/cherry        # vitest (jsdom)
 `mountSliccImpl` and `CherryHostTransport` both expose `__test_*` seams (e.g.
 `__test_post`, `__test_receive`) so the postMessage round-trip can be exercised
 without a real cross-origin window.
+
+### Manual end-to-end embed harness
+
+`examples/host.html` is a throwaway host page for exercising a real embed. It
+imports the built SDK (`../dist/index.js`), so run `npm run build -w @slicc/cherry`
+first. Steps:
+
+1. `npm run dev` (webapp at `http://localhost:5710`); in that browser, avatar
+   popover → **Enable multi-browser sync** to become a tray **leader**, and copy
+   the `/join/…` URL it shows — that string is the `joinToken`.
+2. Serve the repo root on a **different** origin (`npx http-server . -p 8080`)
+   and open `http://localhost:8080/packages/cherry/examples/host.html`.
+3. Paste the join URL, press **Mount**. The right-hand log shows handshake
+   progress and `onSliccEvent` / `onOpenUrl` / `onPermissionRequest` callbacks.
+   The **send event** row drives `handle.emitHostEvent(name, detail)` (detail is
+   parsed as JSON, falling back to a string) so you can exercise the host → cone
+   direction and watch the `[cherry]` lick land on the leader.
+
+The host-page origin must differ from `sliccOrigin`, and `sliccOrigin` must
+exactly match where the webapp is served — a mismatch fails the three-factor
+`acceptEnvelope` gate (surfaces as a 30s handshake timeout, now logged). The dev
+server does not apply the `frame-ancestors` CSP (only the worker does), so local
+framing works without worker config.
 
 ## Related Guides
 

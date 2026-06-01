@@ -119,4 +119,45 @@ describe('mountSliccImpl', () => {
     expect(welcome?.auth).toBeUndefined();
     handle.destroy();
   });
+
+  it('emitHostEvent posts a host.event envelope once the handshake pins a channelId', async () => {
+    const container = document.createElement('div');
+    const posted: { kind?: string; name?: string; detail?: unknown; channelId?: string }[] = [];
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+      __test_post: (env) => posted.push(env as never),
+    });
+    await handle.__test_receive({
+      cherry: 1,
+      channelId: 'ch-host',
+      kind: 'handshake.hello',
+    } as never);
+    handle.emitHostEvent('checkout-done', { id: 7 });
+    const evt = posted.find((e) => e.kind === 'host.event');
+    expect(evt?.name).toBe('checkout-done');
+    expect(evt?.detail).toEqual({ id: 7 });
+    expect(evt?.channelId).toBe('ch-host');
+    handle.destroy();
+  });
+
+  it('emitHostEvent drops (with a warning) before the handshake completes', () => {
+    const container = document.createElement('div');
+    const posted: unknown[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const handle = mountSliccImpl({
+      container,
+      sliccOrigin: 'https://app.example',
+      capabilities: { navigate: true, screenshot: 'none', openUrl: true },
+      joinToken: 'https://app.example/join?t=X',
+      __test_post: (env) => posted.push(env),
+    });
+    handle.emitHostEvent('too-early');
+    expect(posted.find((e) => (e as { kind?: string }).kind === 'host.event')).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+    handle.destroy();
+  });
 });

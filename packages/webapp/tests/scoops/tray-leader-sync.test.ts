@@ -2148,9 +2148,9 @@ describe('LeaderSyncManager', () => {
   // ---------------------------------------------------------------------------
 
   describe('cherry leader-side methods', () => {
-    it('routes cherry.host_event to lickManager.emitEvent as a cherry lick', () => {
-      const emitEvent = vi.fn();
-      const { manager } = createManager({ lickManager: { emitEvent } });
+    it('routes cherry.host_event to onCherryHostEvent with the owning runtime id', () => {
+      const onCherryHostEvent = vi.fn();
+      const { manager } = createManager({ onCherryHostEvent });
       const channel = new FakeChannel();
       manager.addFollower('b1', channel);
 
@@ -2168,16 +2168,12 @@ describe('LeaderSyncManager', () => {
         detail: { items: 3 },
       });
 
-      expect(emitEvent).toHaveBeenCalledTimes(1);
-      const evt = emitEvent.mock.calls[0][0] as Record<string, unknown>;
-      expect(evt.type).toBe('cherry');
-      expect(evt.cherryName).toBe('cart.updated');
-      expect(evt.body).toEqual({ items: 3 });
-      expect(evt.cherryRuntimeId).toBe('follower-b1');
+      expect(onCherryHostEvent).toHaveBeenCalledTimes(1);
+      expect(onCherryHostEvent).toHaveBeenCalledWith('follower-b1', 'cart.updated', { items: 3 });
     });
 
-    it('drops cherry.host_event without throwing when no lickManager is wired', () => {
-      const { manager } = createManager(); // No lickManager.
+    it('drops cherry.host_event without throwing when no onCherryHostEvent is wired', () => {
+      const { manager } = createManager(); // No onCherryHostEvent.
       const channel = new FakeChannel();
       manager.addFollower('b1', channel);
 

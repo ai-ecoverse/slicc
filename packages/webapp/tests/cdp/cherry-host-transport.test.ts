@@ -149,6 +149,35 @@ describe('CherryHostTransport', () => {
     h.transport.emitSliccEventToHost('too.early');
     expect(h.posted.length).toBe(before);
   });
+
+  it('invokes onHostEvent for an inbound host.event envelope', async () => {
+    await connectHelper(h);
+    const channelId = lastChannelId(h);
+    const seen: Array<{ name: string; detail?: unknown }> = [];
+    h.transport.onHostEvent = (name, detail) => seen.push({ name, detail });
+    h.inbound({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId,
+      kind: 'host.event',
+      name: 'checkout-done',
+      detail: { id: 7 },
+    });
+    expect(seen).toEqual([{ name: 'checkout-done', detail: { id: 7 } }]);
+  });
+
+  it('ignores an inbound host.event when no onHostEvent is wired', async () => {
+    await connectHelper(h);
+    const channelId = lastChannelId(h);
+    const before = h.posted.length;
+    // No onHostEvent set — must not throw or react.
+    h.inbound({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId,
+      kind: 'host.event',
+      name: 'noop',
+    });
+    expect(h.posted.length).toBe(before);
+  });
 });
 
 async function connectHelper(h: ReturnType<typeof makeTransport>) {

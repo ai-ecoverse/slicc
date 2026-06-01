@@ -1238,6 +1238,15 @@ export class OffscreenBridge implements KernelFacade {
         break;
       }
 
+      case 'lick-cherry-host-event': {
+        // Page-side LeaderSyncManager received a `cherry.host_event` over a
+        // follower's data channel (its embedded cherry host page called
+        // `emitHostEvent`) and relayed it here. Dispatch into the worker-side
+        // LickManager via the orchestrator as a `'cherry'` lick.
+        this.orchestrator.handleCherryHostEvent(msg.cherryRuntimeId, msg.name, msg.detail);
+        break;
+      }
+
       case 'reload-skills': {
         this.orchestrator.reloadAllSkills().catch((err) => {
           console.warn('[offscreen-bridge] Skill reload failed:', err);

@@ -2606,6 +2606,8 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
       );
     },
     sendWebhookEvent: (id, headers, body) => client.sendWebhookEvent(id, headers, body),
+    onCherryHostEvent: (runtimeId, name, detail) =>
+      client.sendCherryHostEvent(runtimeId, name, detail),
     onAgentEvent: (handler) => agentHandle.onEvent(handler),
     browserAPI: browser,
     browserTransport: realCdpTransport,
@@ -2884,6 +2886,14 @@ async function mainStandaloneWorker(app: HTMLElement, runtimeMode: UiRuntimeMode
           ),
         removeSprinkle: (name) => layout.removeSprinkle(name),
       });
+      // Inbound host → cone bridge: the host page's `handle.emitHostEvent` posts
+      // a `host.event` to the iframe transport; forward it to the leader as a
+      // `cherry.host_event` so it surfaces as a `cherry` lick on the cone. Read
+      // `currentSync` lazily so a reconnect (new sync instance) still routes.
+      if (cherryTransport) {
+        cherryTransport.onHostEvent = (name, detail) =>
+          pageFollowerTray?.currentSync?.sendCherryHostEvent(name, detail);
+      }
     } else if (storedJoinUrl) {
       pageFollowerTray = startPageFollowerTray({
         joinUrl: storedJoinUrl,

@@ -53,6 +53,13 @@ export class CherryHostTransport implements CDPTransport {
   private _joinUrl: string | null = null;
   private boundHandler = (ev: MessageEvent) => this.handleMessage(ev);
 
+  /**
+   * Invoked when the host SDK emits a `host.event` (host page → cone). The
+   * cherry boot path wires this to forward the event to the leader over the
+   * tray channel, where it surfaces as a `cherry` lick.
+   */
+  onHostEvent: ((name: string, detail?: unknown) => void) | null = null;
+
   constructor(opts: CherryHostTransportOptions) {
     this.opts = opts;
   }
@@ -357,6 +364,9 @@ export class CherryHostTransport implements CDPTransport {
           ...(env.params ?? {}),
           sessionId: env.sessionId ?? SYNTHETIC_SESSION,
         });
+        return;
+      case 'host.event':
+        this.onHostEvent?.(env.name, env.detail);
         return;
       default:
         return;

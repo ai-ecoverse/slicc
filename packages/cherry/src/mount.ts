@@ -140,6 +140,19 @@ export function mountSliccImpl(options: MountSliccImplOptions): CherrySliccHandl
 
   return {
     iframe,
+    emitHostEvent(name, detail) {
+      if (channelId === null) {
+        console.warn('[cherry] emitHostEvent dropped before handshake completed', { name });
+        return;
+      }
+      post({
+        cherry: CHERRY_PROTOCOL_VERSION,
+        channelId,
+        kind: 'host.event',
+        name,
+        detail,
+      });
+    },
     destroy() {
       window.removeEventListener('message', onMessage);
       iframe.remove();

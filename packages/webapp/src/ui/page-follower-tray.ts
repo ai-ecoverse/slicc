@@ -222,6 +222,7 @@ export function startPageFollowerTray(
       onUserMessage: options.onUserMessage,
       onStatus: options.onStatus,
       onCherrySliccEvent: options.onCherrySliccEvent,
+      selfRuntimeId: runtimeId,
       onTargetsChanged: () => void refreshTargets(),
       onSprinklesList: (sprinkles) => {
         options.onSprinklesList?.(sprinkles);

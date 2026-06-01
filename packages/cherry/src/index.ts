@@ -43,6 +43,11 @@ export interface MountSliccOptions {
 export interface SliccHandle {
   /** The mounted iframe element. */
   iframe: HTMLIFrameElement;
+  /**
+   * Emit a host-originated event up to the remote leader (delivered as a
+   * `cherry` lick). No-ops with a warning if the handshake has not completed.
+   */
+  emitHostEvent(name: string, detail?: unknown): void;
   /** Tear down the channel and remove the iframe. */
   destroy(): void;
 }

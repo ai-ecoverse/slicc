@@ -76,6 +76,13 @@ export interface FollowerSyncManagerOptions {
    */
   onCherrySliccEvent?: (name: string, detail?: unknown) => void;
   /**
+   * This follower's own runtime id, stamped onto outbound `cherry.host_event`
+   * messages (host page → cone) so the cone-side lick records which cherry
+   * runtime emitted it. The leader routes the event by connection identity, not
+   * by this field, so it is informational only. Only a cherry follower sets it.
+   */
+  selfRuntimeId?: string;
+  /**
    * Bound on every `fetchSprinkleContent` call. If the leader never
    * answers a `sprinkle.fetch` (deadlocked agent, partial chunked
    * transfer abandoned, leader still connected but stuck), the
@@ -328,6 +335,21 @@ export class FollowerSyncManager implements AgentHandle {
   /** Get the stored target registry entries from the leader. */
   getTargets(): TrayTargetEntry[] {
     return this.targetEntries;
+  }
+
+  /**
+   * Send a host-originated `cherry.host_event` (host page → cone) to the leader,
+   * where it surfaces as a `cherry` lick. Only a cherry follower calls this —
+   * its `CherryHostTransport.onHostEvent` is wired to forward host SDK
+   * `emitHostEvent` calls here.
+   */
+  sendCherryHostEvent(name: string, detail?: unknown): void {
+    this.sync.send({
+      type: 'cherry.host_event',
+      targetId: this.options.selfRuntimeId ?? '',
+      name,
+      detail,
+    });
   }
 
   // ---------------------------------------------------------------------------
