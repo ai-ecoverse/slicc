@@ -14,7 +14,27 @@
 
 import type { CommandContext } from 'just-bash';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
+import {
+  type HidBackend,
+  resolveHidBackend,
+} from '../../shell/supplemental-commands/hid-backends.js';
 import { createNodeFetchAdapter } from '../../shell/supplemental-commands/node-fetch-adapter.js';
+import {
+  resolveSerialBackend,
+  type SerialBackend,
+} from '../../shell/supplemental-commands/serial-backends.js';
+import {
+  resolveUsbBackend,
+  type UsbBackend,
+} from '../../shell/supplemental-commands/usb-backends.js';
+import type { HidDeviceFilter } from '../hid-device-registry.js';
+import { getPanelRpcClient, hasLocalDom } from '../panel-rpc.js';
+import type {
+  SerialFilter,
+  SerialOpenOptions,
+  SerialOutputSignals,
+} from '../serial-port-registry.js';
+import type { UsbControlSetup, UsbDeviceFilter } from '../usb-device-registry.js';
 import type { RealmPortLike } from './realm-rpc.js';
 import type {
   RealmRpcRequest,
@@ -57,6 +77,17 @@ export interface RealmHostOptions {
    * trusted host side.
    */
   scoopJid?: string;
+  /**
+   * Optional overrides for the WebUSB / Web Serial / WebHID backends
+   * used by the `usb` / `serial` / `hid` channels. Production callers
+   * omit them and the host resolves the same dual-path backend the
+   * shell commands use (`resolve*Backend(hasLocalDom, getPanelRpcClient)`):
+   * the local `navigator.*` in a DOM realm, the panel-RPC bridge in the
+   * kernel worker. Tests inject in-memory backends directly.
+   */
+  usbBackend?: UsbBackend;
+  serialBackend?: SerialBackend;
+  hidBackend?: HidBackend;
 }
 
 /**
@@ -122,6 +153,12 @@ async function dispatch(
       return dispatchFetch(req.op, req.args, ctx);
     case 'browser':
       return dispatchBrowser(req.op, req.args, resolveBrowser(opts), opts);
+    case 'usb':
+      return dispatchUsb(req.op, req.args, resolveUsbBackendForHost(opts));
+    case 'serial':
+      return dispatchSerial(req.op, req.args, resolveSerialBackendForHost(opts));
+    case 'hid':
+      return dispatchHid(req.op, req.args, resolveHidBackendForHost(opts));
     default:
       throw new Error(`realm-host: unknown channel '${req.channel}'`);
   }
@@ -153,6 +190,35 @@ function resolveWsSubscribers(opts: RealmHostOptions): WsSubscriberRegistry {
   const g = globalThis as { __slicc_wsSubscribers?: WsSubscriberRegistry };
   if (g.__slicc_wsSubscribers) return g.__slicc_wsSubscribers;
   throw new Error('browser.websocket is not available in this runtime');
+}
+
+/**
+ * Resolve the WebUSB / Web Serial / WebHID backend for the device
+ * channels. Tests inject one through `opts`; production paths resolve
+ * the same dual-path backend the shell commands use — the local
+ * `navigator.*` in a DOM realm (extension), the panel-RPC bridge in the
+ * kernel worker (standalone). A missing backend throws a clear
+ * "unavailable in this runtime" error.
+ */
+function resolveUsbBackendForHost(opts: RealmHostOptions): UsbBackend {
+  if (opts.usbBackend) return opts.usbBackend;
+  const backend = resolveUsbBackend(hasLocalDom(), getPanelRpcClient());
+  if (!backend) throw new Error('usb is not available in this runtime');
+  return backend;
+}
+
+function resolveSerialBackendForHost(opts: RealmHostOptions): SerialBackend {
+  if (opts.serialBackend) return opts.serialBackend;
+  const backend = resolveSerialBackend(hasLocalDom(), getPanelRpcClient());
+  if (!backend) throw new Error('serial is not available in this runtime');
+  return backend;
+}
+
+function resolveHidBackendForHost(opts: RealmHostOptions): HidBackend {
+  if (opts.hidBackend) return opts.hidBackend;
+  const backend = resolveHidBackend(hasLocalDom(), getPanelRpcClient());
+  if (!backend) throw new Error('hid is not available in this runtime');
+  return backend;
 }
 
 // ---------------------------------------------------------------------------
@@ -630,26 +696,132 @@ function safeOrigin(url: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Channels: usb / serial / hid
+// ---------------------------------------------------------------------------
+
+/**
+ * Dispatch a `usb` channel RPC against the resolved backend. Op names
+ * match the realm-side device-method semantics; binary results (`bytes`)
+ * are handed back to the realm verbatim and transferred by
+ * `collectTransferables`. The realm bridge re-wraps them as `DataView`s.
+ */
+async function dispatchUsb(op: string, args: unknown[], backend: UsbBackend): Promise<unknown> {
+  switch (op) {
+    case 'list':
+      return backend.list();
+    case 'request':
+      return backend.request((args[0] as UsbDeviceFilter[]) ?? []);
+    case 'info':
+      return backend.info(args[0] as string);
+    case 'open':
+      return backend.open(args[0] as string);
+    case 'close':
+      return backend.close(args[0] as string);
+    case 'reset':
+      return backend.reset(args[0] as string);
+    case 'selectConfig':
+      return backend.selectConfig(args[0] as string, args[1] as number);
+    case 'claim':
+      return backend.claim(args[0] as string, args[1] as number);
+    case 'release':
+      return backend.release(args[0] as string, args[1] as number);
+    case 'controlIn':
+      return backend.controlIn(args[0] as string, args[1] as UsbControlSetup, args[2] as number);
+    case 'controlOut':
+      return backend.controlOut(
+        args[0] as string,
+        args[1] as UsbControlSetup,
+        args[2] as Uint8Array
+      );
+    case 'transferIn':
+      return backend.transferIn(args[0] as string, args[1] as number, args[2] as number);
+    case 'transferOut':
+      return backend.transferOut(args[0] as string, args[1] as number, args[2] as Uint8Array);
+    default:
+      throw new Error(`realm-host: unknown usb op '${op}'`);
+  }
+}
+
+/** Dispatch a `serial` channel RPC against the resolved backend. */
+async function dispatchSerial(
+  op: string,
+  args: unknown[],
+  backend: SerialBackend
+): Promise<unknown> {
+  switch (op) {
+    case 'list':
+      return backend.list();
+    case 'request':
+      return backend.request((args[0] as SerialFilter[]) ?? []);
+    case 'info':
+      return backend.info(args[0] as string);
+    case 'open':
+      return backend.open(args[0] as string, args[1] as SerialOpenOptions);
+    case 'close':
+      return backend.close(args[0] as string);
+    case 'read': {
+      const params =
+        (args[1] as { maxBytes?: number; until?: Uint8Array; timeoutMs?: number } | undefined) ??
+        {};
+      return backend.read(args[0] as string, params);
+    }
+    case 'write':
+      return backend.write(args[0] as string, args[1] as Uint8Array);
+    case 'getSignals':
+      return backend.getSignals(args[0] as string);
+    case 'setSignals':
+      return backend.setSignals(args[0] as string, args[1] as SerialOutputSignals);
+    default:
+      throw new Error(`realm-host: unknown serial op '${op}'`);
+  }
+}
+
+/** Dispatch a `hid` channel RPC against the resolved backend. */
+async function dispatchHid(op: string, args: unknown[], backend: HidBackend): Promise<unknown> {
+  switch (op) {
+    case 'list':
+      return backend.list();
+    case 'request':
+      return backend.request((args[0] as HidDeviceFilter[]) ?? []);
+    case 'info':
+      return backend.info(args[0] as string);
+    case 'open':
+      return backend.open(args[0] as string);
+    case 'close':
+      return backend.close(args[0] as string);
+    case 'sendReport':
+      return backend.sendReport(args[0] as string, args[1] as number, args[2] as Uint8Array);
+    case 'sendFeatureReport':
+      return backend.sendFeatureReport(args[0] as string, args[1] as number, args[2] as Uint8Array);
+    case 'receiveFeatureReport':
+      return backend.receiveFeatureReport(args[0] as string, args[1] as number);
+    default:
+      throw new Error(`realm-host: unknown hid op '${op}'`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Transferables
 // ---------------------------------------------------------------------------
 
 /**
- * Collect transferable buffers from a result tree. Currently only
- * walks `Uint8Array` / `ArrayBuffer` at the top level and inside
- * `SerializedFetchResponse.body` — the only places we hand back
- * binary data today.
+ * Collect transferable buffers from a result tree. Walks `Uint8Array` /
+ * `ArrayBuffer` at the top level (e.g. `serial read`) and inside the
+ * `body` (`SerializedFetchResponse`) / `bytes` (USB/HID in-transfers)
+ * fields — the only places we hand back binary data today.
  */
 function collectTransferables(result: unknown): Transferable[] {
   if (result instanceof Uint8Array) {
     return [result.buffer as Transferable];
   }
-  if (
-    result &&
-    typeof result === 'object' &&
-    'body' in result &&
-    (result as { body?: unknown }).body instanceof Uint8Array
-  ) {
-    return [(result as { body: Uint8Array }).body.buffer as Transferable];
+  if (result && typeof result === 'object') {
+    const obj = result as { body?: unknown; bytes?: unknown };
+    if (obj.body instanceof Uint8Array) {
+      return [obj.body.buffer as Transferable];
+    }
+    if (obj.bytes instanceof Uint8Array) {
+      return [obj.bytes.buffer as Transferable];
+    }
   }
   return [];
 }

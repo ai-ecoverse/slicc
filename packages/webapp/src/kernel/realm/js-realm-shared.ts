@@ -18,6 +18,15 @@
  */
 
 import { esmShUrl } from '../../shell/supplemental-commands/cdn-url-builder.js';
+import type { HidDeviceFilter, HidDeviceInfo } from '../hid-device-registry.js';
+import type {
+  SerialDeviceInfo,
+  SerialFilter,
+  SerialInputSignals,
+  SerialOpenOptions,
+  SerialOutputSignals,
+} from '../serial-port-registry.js';
+import type { UsbControlSetup, UsbDeviceFilter, UsbDeviceInfo } from '../usb-device-registry.js';
 import { createHttpGlobal } from './http-global.js';
 import {
   attachArgvParseFlags,
@@ -31,6 +40,7 @@ import { type RealmPortLike, RealmRpcClient } from './realm-rpc.js';
 import type {
   RealmDoneMsg,
   RealmInitMsg,
+  RealmRpcChannel,
   SerializedFetchResponse,
   TabHandle,
   WsSelector,
@@ -280,6 +290,16 @@ export async function runJsRealm(
     websocket: createWsObserverApi(rpc),
   };
 
+  // `usb` / `serial` / `hid` mirror the underlying WebUSB / Web Serial /
+  // WebHID APIs. `request` / `list` resolve device objects whose methods
+  // carry the opaque handle and forward every op over the matching
+  // realm-RPC channel — the kernel host runs the real device op against
+  // the page-side registry (worker float, panel-RPC bridge) or the local
+  // `navigator.*` (extension float), same dual-path as `browser`.
+  const usbBridge = createUsbBridge(rpc);
+  const serialBridge = createSerialBridge(rpc);
+  const hidBridge = createHidBridge(rpc);
+
   // `http` is the standard API-client builder; see `http-global.ts`. It
   // wraps `realmFetch` so it inherits the kernel-side fetch-proxy + the
   // secret masking that goes with it. The realm needs only one instance:
@@ -407,6 +427,9 @@ export async function runJsRealm(
       skill: typeof skillGlobal,
       http: typeof httpGlobal,
       browser: typeof browserBridge,
+      usb: typeof usbBridge,
+      serial: typeof serialBridge,
+      hid: typeof hidBridge,
       cli: typeof cliApi,
       c: typeof colorApi,
       timeApi: typeof time,
@@ -425,6 +448,9 @@ export async function runJsRealm(
       'skill',
       'http',
       'browser',
+      'usb',
+      'serial',
+      'hid',
       'cli',
       'c',
       'time',
@@ -444,6 +470,9 @@ export async function runJsRealm(
       skillGlobal,
       httpGlobal,
       browserBridge,
+      usbBridge,
+      serialBridge,
+      hidBridge,
       cliApi,
       colorApi,
       time,
@@ -758,5 +787,208 @@ function createWsObserverApi(rpc: RealmRpcClient): WsObserverApi {
     async list() {
       return rpc.call<WsSubscriberInfo[]>('browser', 'wsList', []);
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// `usb` / `serial` / `hid` device globals
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal RPC surface the device bridges need. A structural slice of
+ * `RealmRpcClient` so tests can inject a recording mock without booting
+ * a worker / port pair.
+ */
+export interface DeviceRpc {
+  call<T = unknown>(channel: RealmRpcChannel, op: string, args?: unknown[]): Promise<T>;
+}
+
+/** Binary payloads cross the bridge as `Uint8Array`; coerce any view. */
+function toRealmBytes(data: ArrayBuffer | ArrayBufferView): Uint8Array {
+  if (data instanceof Uint8Array) return data;
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  throw new TypeError('expected an ArrayBuffer or typed array');
+}
+
+/** Wrap returned bytes as a `DataView`, mirroring the browser device APIs. */
+function bytesToDataView(bytes: Uint8Array): DataView {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+}
+
+/** Accept a single filter object or an array; normalize to an array. */
+function asFilterArray<T>(filters: T | T[] | undefined): T[] {
+  if (filters === undefined || filters === null) return [];
+  return Array.isArray(filters) ? filters : [filters];
+}
+
+/** Host-side in/out transfer result shapes (pre-DataView wrapping). */
+interface WireInResult {
+  status: string;
+  bytes: Uint8Array;
+}
+interface WireOutResult {
+  status: string;
+  bytesWritten: number;
+}
+
+/** A realm-facing WebUSB device. Methods carry the opaque handle. */
+export interface RealmUsbDevice extends UsbDeviceInfo {
+  open(): Promise<void>;
+  close(): Promise<void>;
+  reset(): Promise<void>;
+  selectConfiguration(value: number): Promise<void>;
+  claimInterface(interfaceNumber: number): Promise<void>;
+  releaseInterface(interfaceNumber: number): Promise<void>;
+  controlTransferIn(
+    setup: UsbControlSetup,
+    length: number
+  ): Promise<{ status: string; data: DataView }>;
+  controlTransferOut(
+    setup: UsbControlSetup,
+    data: ArrayBuffer | ArrayBufferView
+  ): Promise<WireOutResult>;
+  transferIn(endpointNumber: number, length: number): Promise<{ status: string; data: DataView }>;
+  transferOut(endpointNumber: number, data: ArrayBuffer | ArrayBufferView): Promise<WireOutResult>;
+}
+
+export interface RealmUsbApi {
+  list(): Promise<RealmUsbDevice[]>;
+  request(filters?: UsbDeviceFilter | UsbDeviceFilter[]): Promise<RealmUsbDevice>;
+}
+
+function makeUsbDevice(rpc: DeviceRpc, info: UsbDeviceInfo): RealmUsbDevice {
+  const h = info.handle;
+  const toData = (r: WireInResult) => ({ status: r.status, data: bytesToDataView(r.bytes) });
+  return {
+    ...info,
+    open: () => rpc.call<void>('usb', 'open', [h]),
+    close: () => rpc.call<void>('usb', 'close', [h]),
+    reset: () => rpc.call<void>('usb', 'reset', [h]),
+    selectConfiguration: (value) => rpc.call<void>('usb', 'selectConfig', [h, value]),
+    claimInterface: (n) => rpc.call<void>('usb', 'claim', [h, n]),
+    releaseInterface: (n) => rpc.call<void>('usb', 'release', [h, n]),
+    controlTransferIn: async (setup, length) =>
+      toData(await rpc.call<WireInResult>('usb', 'controlIn', [h, setup, length])),
+    controlTransferOut: (setup, data) =>
+      rpc.call<WireOutResult>('usb', 'controlOut', [h, setup, toRealmBytes(data)]),
+    transferIn: async (ep, length) =>
+      toData(await rpc.call<WireInResult>('usb', 'transferIn', [h, ep, length])),
+    transferOut: (ep, data) =>
+      rpc.call<WireOutResult>('usb', 'transferOut', [h, ep, toRealmBytes(data)]),
+  };
+}
+
+/** Build the realm `usb` global. Exported for parity / unit tests. */
+export function createUsbBridge(rpc: DeviceRpc): RealmUsbApi {
+  return {
+    list: async () =>
+      (await rpc.call<UsbDeviceInfo[]>('usb', 'list', [])).map((i) => makeUsbDevice(rpc, i)),
+    request: async (filters) =>
+      makeUsbDevice(rpc, await rpc.call<UsbDeviceInfo>('usb', 'request', [asFilterArray(filters)])),
+  };
+}
+
+/** Params accepted by `port.read()`. `bytes` is an alias for `maxBytes`. */
+export interface RealmSerialReadParams {
+  bytes?: number;
+  maxBytes?: number;
+  until?: ArrayBuffer | ArrayBufferView;
+  timeoutMs?: number;
+}
+
+/** A realm-facing Web Serial port. Methods carry the opaque handle. */
+export interface RealmSerialPort extends SerialDeviceInfo {
+  open(options: SerialOpenOptions): Promise<void>;
+  close(): Promise<void>;
+  read(params?: RealmSerialReadParams): Promise<Uint8Array>;
+  write(data: ArrayBuffer | ArrayBufferView): Promise<number>;
+  getSignals(): Promise<SerialInputSignals>;
+  setSignals(signals: SerialOutputSignals): Promise<void>;
+}
+
+export interface RealmSerialApi {
+  list(): Promise<RealmSerialPort[]>;
+  request(filters?: SerialFilter | SerialFilter[]): Promise<RealmSerialPort>;
+}
+
+function makeSerialPort(rpc: DeviceRpc, info: SerialDeviceInfo): RealmSerialPort {
+  const h = info.handle;
+  return {
+    ...info,
+    open: (options) => rpc.call<void>('serial', 'open', [h, options]),
+    close: () => rpc.call<void>('serial', 'close', [h]),
+    read: (params = {}) =>
+      rpc.call<Uint8Array>('serial', 'read', [
+        h,
+        {
+          maxBytes: params.maxBytes ?? params.bytes,
+          until: params.until ? toRealmBytes(params.until) : undefined,
+          timeoutMs: params.timeoutMs,
+        },
+      ]),
+    write: (data) => rpc.call<number>('serial', 'write', [h, toRealmBytes(data)]),
+    getSignals: () => rpc.call<SerialInputSignals>('serial', 'getSignals', [h]),
+    setSignals: (signals) => rpc.call<void>('serial', 'setSignals', [h, signals]),
+  };
+}
+
+/** Build the realm `serial` global. Exported for parity / unit tests. */
+export function createSerialBridge(rpc: DeviceRpc): RealmSerialApi {
+  return {
+    list: async () =>
+      (await rpc.call<SerialDeviceInfo[]>('serial', 'list', [])).map((i) => makeSerialPort(rpc, i)),
+    request: async (filters) =>
+      makeSerialPort(
+        rpc,
+        await rpc.call<SerialDeviceInfo>('serial', 'request', [asFilterArray(filters)])
+      ),
+  };
+}
+
+/** A realm-facing WebHID device. Methods carry the opaque handle. */
+export interface RealmHidDevice extends HidDeviceInfo {
+  open(): Promise<void>;
+  close(): Promise<void>;
+  sendReport(reportId: number, data: ArrayBuffer | ArrayBufferView): Promise<void>;
+  sendFeatureReport(reportId: number, data: ArrayBuffer | ArrayBufferView): Promise<void>;
+  receiveFeatureReport(reportId: number): Promise<DataView>;
+}
+
+export interface RealmHidApi {
+  list(): Promise<RealmHidDevice[]>;
+  request(filters?: HidDeviceFilter | HidDeviceFilter[]): Promise<RealmHidDevice>;
+}
+
+function makeHidDevice(rpc: DeviceRpc, info: HidDeviceInfo): RealmHidDevice {
+  const h = info.handle;
+  return {
+    ...info,
+    open: () => rpc.call<void>('hid', 'open', [h]),
+    close: () => rpc.call<void>('hid', 'close', [h]),
+    sendReport: (reportId, data) =>
+      rpc.call<void>('hid', 'sendReport', [h, reportId, toRealmBytes(data)]),
+    sendFeatureReport: (reportId, data) =>
+      rpc.call<void>('hid', 'sendFeatureReport', [h, reportId, toRealmBytes(data)]),
+    receiveFeatureReport: async (reportId) => {
+      const r = await rpc.call<{ reportId: number; bytes: Uint8Array }>(
+        'hid',
+        'receiveFeatureReport',
+        [h, reportId]
+      );
+      return bytesToDataView(r.bytes);
+    },
+  };
+}
+
+/** Build the realm `hid` global. Exported for parity / unit tests. */
+export function createHidBridge(rpc: DeviceRpc): RealmHidApi {
+  return {
+    list: async () =>
+      (await rpc.call<HidDeviceInfo[]>('hid', 'list', [])).map((i) => makeHidDevice(rpc, i)),
+    request: async (filters) =>
+      makeHidDevice(rpc, await rpc.call<HidDeviceInfo>('hid', 'request', [asFilterArray(filters)])),
   };
 }

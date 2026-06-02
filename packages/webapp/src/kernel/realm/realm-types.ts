@@ -77,7 +77,7 @@ export interface RealmErrorMsg {
 }
 
 /** Channels the kernel host exposes to user code. */
-export type RealmRpcChannel = 'vfs' | 'exec' | 'fetch' | 'browser';
+export type RealmRpcChannel = 'vfs' | 'exec' | 'fetch' | 'browser' | 'usb' | 'serial' | 'hid';
 
 /**
  * Tab handle returned to realm code by `browser.findTab` /
