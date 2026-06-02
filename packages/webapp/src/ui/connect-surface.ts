@@ -7,11 +7,11 @@
  */
 
 import {
-  showProviderSettings,
-  getAllAvailableModels,
   getAccounts,
+  getAllAvailableModels,
   getProviderConfig,
   removeAccount,
+  showProviderSettings,
 } from './provider-settings.js';
 
 // Must match cone-config-client.js MODEL_CATALOG_KEY (separate bundle, so the

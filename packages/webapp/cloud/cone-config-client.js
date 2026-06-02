@@ -42,7 +42,7 @@ export function parseModelCatalog(raw) {
 // Friendly display name for a provider, from the catalog if known.
 export function providerLabel(providerId, catalog) {
   const g = catalog.find((x) => x.providerId === providerId);
-  return (g && g.providerName) || providerId;
+  return g?.providerName || providerId;
 }
 
 // The model groups the dashboard should offer: one per connected provider,

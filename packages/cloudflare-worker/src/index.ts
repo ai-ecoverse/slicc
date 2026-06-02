@@ -5,12 +5,12 @@ import { handleAdminStats } from './cloud/handler-admin.js';
 import { handleCloudConfig } from './cloud/handler-config.js';
 import { handleSignOut } from './cloud/handler-signout.js';
 import {
+  handleConeConfig,
   handleKill,
   handleList,
   handlePause,
   handleResume,
   handleStart,
-  handleConeConfig,
 } from './cloud/handlers.js';
 import { buildHandoffResponse } from './handoff-page.js';
 import { applySliccLinks } from './links.js';

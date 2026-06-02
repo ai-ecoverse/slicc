@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
-import { applyHostedAccounts } from '../../src/ui/hosted-config-apply.js';
 import type { Account } from '@slicc/cloud-core/cone-config';
+import { describe, expect, it, vi } from 'vitest';
+import { applyHostedAccounts } from '../../src/ui/hosted-config-apply.js';
 
 describe('applyHostedAccounts (managed-only reconcile)', () => {
   it('saves oauth via saveOAuthAccount, apikey via addAccount, removes managed-absent', async () => {

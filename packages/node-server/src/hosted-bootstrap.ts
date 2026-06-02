@@ -14,13 +14,13 @@
  * orchestrator talks to the leader through the tray-worker tunnel, not http.
  */
 import { readFileSync } from 'node:fs';
-import type { Express } from 'express';
-import { requireLoopback } from './cloud-status.js';
-import type { SecretStore } from './secrets/types.js';
 // Import from the package root (not the './cone-config' subpath): node-server's
 // inline-workspaces packaging only rewrites the bare '@slicc/cloud-core'
 // specifier, so a subpath import leaks an un-inlined workspace reference.
 import type { Account } from '@slicc/cloud-core';
+import type { Express } from 'express';
+import { requireLoopback } from './cloud-status.js';
+import type { SecretStore } from './secrets/types.js';
 
 const CONE_CONFIG_PATH = '/slicc/cone-config.json';
 const DEFAULT_MODEL = 'adobe:claude-opus-4-6';

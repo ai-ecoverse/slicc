@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { startCone } from '../src/operations/start.js';
+import { describe, expect, it } from 'vitest';
 import type { CreateOpts, SandboxHandle, SandboxSubstrate, SubstrateId } from '../src/index.js';
+import { startCone } from '../src/operations/start.js';
 import { MemRegistry, makeFakeHandle } from './fixtures/index.js';
 
 describe('startCone with coneConfigJson', () => {

@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { validateStartBody, validateResumeBody } from '../src/cloud/handlers.js';
+import { describe, expect, it } from 'vitest';
+import { validateResumeBody, validateStartBody } from '../src/cloud/handlers.js';
 
 describe('validateStartBody (size cap + shape)', () => {
   it('rejects an oversized coneConfig', () => {

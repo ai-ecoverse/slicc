@@ -1,12 +1,12 @@
 import {
   assembleBundle,
-  validateModelHasAccount,
   assembleDelta,
   bundleDropWarnings,
+  MODEL_CATALOG_KEY,
+  modelsForConnected,
   parseModelCatalog,
   providerLabel,
-  modelsForConnected,
-  MODEL_CATALOG_KEY,
+  validateModelHasAccount,
 } from './cone-config-client.js';
 
 const TOKEN_KEY = 'cloud-ims-token';
@@ -344,7 +344,7 @@ function effectiveCatalog() {
   const catalog = readCatalog();
   const adobeModels = (
     CONFIG && Array.isArray(CONFIG.adobeModels) ? CONFIG.adobeModels : []
-  ).filter((m) => m && m.id);
+  ).filter((m) => m?.id);
   if (adobeModels.length === 0) return catalog;
   const others = catalog.filter((g) => g.providerId !== ADOBE_PROVIDER_ID);
   return [

@@ -24,7 +24,6 @@ import {
 import { CliLogDedup } from './cli-log-dedup.js';
 import { type ParsedCloudArgs, parseCloudArgs } from './cloud/dispatch.js';
 import { runKill } from './cloud/kill.js';
-import { registerSecretsReloadEndpoint } from './secrets-reload-endpoint.js';
 import { runList } from './cloud/list.js';
 import { runPause } from './cloud/pause.js';
 import { FileRegistry } from './cloud/registry-file.js';
@@ -49,6 +48,7 @@ import { OauthSecretStore } from './secrets/oauth-secret-store.js';
 import { SecretProxyManager } from './secrets/proxy-manager.js';
 import { readOrCreateSessionId } from './secrets/session-id-file.js';
 import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
+import { registerSecretsReloadEndpoint } from './secrets-reload-endpoint.js';
 
 const Dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(Dirname, '..', '..');

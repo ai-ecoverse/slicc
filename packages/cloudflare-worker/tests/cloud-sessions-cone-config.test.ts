@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { buildStartConeArgs, coneConfigToBundle } from '../src/cloud/cone-config-bridge.js';
 
 describe('coneConfigToBundle (worker-side default + validation)', () => {

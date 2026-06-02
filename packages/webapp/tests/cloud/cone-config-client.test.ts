@@ -1,12 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   assembleBundle,
-  validateModelHasAccount,
   assembleDelta,
   bundleDropWarnings,
+  modelsForConnected,
   parseModelCatalog,
   providerLabel,
-  modelsForConnected,
+  validateModelHasAccount,
 } from '../../cloud/cone-config-client.js';
 
 describe('assembleBundle', () => {

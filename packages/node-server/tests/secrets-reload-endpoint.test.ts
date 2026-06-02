@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { registerSecretsReloadEndpoint } from '../src/secrets-reload-endpoint.js';
 
 describe('POST /api/secrets/reload', () => {

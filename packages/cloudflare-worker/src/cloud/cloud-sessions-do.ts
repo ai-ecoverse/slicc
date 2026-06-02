@@ -9,15 +9,11 @@ import {
   type SandboxSubstrate,
   startCone,
 } from '@slicc/cloud-core';
-import {
-  bundleIndex,
-  type ConeConfigIndex,
-  type ConeConfigDelta,
-} from '@slicc/cloud-core/cone-config';
+import { bundleIndex, type ConeConfigDelta } from '@slicc/cloud-core/cone-config';
 import { checkCapsForRun } from './caps.js';
+import { buildStartConeArgs, coneConfigToBundle } from './cone-config-bridge.js';
 import { errorResponse, okResponse } from './error-envelope.js';
 import { LocalRegistry } from './local-registry.js';
-import { coneConfigToBundle, buildStartConeArgs } from './cone-config-bridge.js';
 
 interface DoEnv {
   E2B_API_KEY: string;
