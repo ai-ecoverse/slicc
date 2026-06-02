@@ -330,6 +330,9 @@ The SW also exposes message handlers:
 - `secrets.list-masked-entries` — used by the page's `fetchSecretEnvVars()` to populate the agent shell env with masked values
 - `secrets.mask-oauth-token` — round-trip mask for an OAuth provider after `saveOAuthAccount`
 - `secrets.list` / `secrets.set` / `secrets.delete` — management ops for the panel-terminal `secret` shell command. Offscreen documents don't expose `chrome.storage` (MV3 quirk), so these proxy the storage call through the SW. See `docs/pitfalls.md` "Offscreen Documents: Smaller chrome.\* Surface than the SW".
+- `secrets.session.set` / `secrets.session.list` — in-memory **session-only** secrets held in a module-level `SessionSecretStore` (never written to `chrome.storage`; vanish when the SW is evicted). Layered into every `buildSecretsPipeline()` so the fetch proxy unmasks them like persisted ones. The agent sets these with `secret set <name> <value>` (no sudo prompt).
+- `secrets.peek` — returns a redacted preview (first/last chars, middle elided) of a session or persisted value; the full value never leaves the SW.
+- `secrets.set-domains` — scope edit (the sudo-gated `secret scope` op); updates a session secret's domains or rewrites a persisted secret's `_DOMAINS` while preserving its value.
 
 The webapp's `createProxiedFetch()` extension branch uses the Port handler instead of direct fetch, providing full secret injection equivalent to CLI mode.
 

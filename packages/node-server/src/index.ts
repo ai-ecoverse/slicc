@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { promises as fsPromises } from 'node:fs';
 import { createSubstrate } from '@slicc/cloud-core';
+import { previewSecret } from '@slicc/shared-ts';
 import { type ChildProcess, spawn } from 'child_process';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { existsSync, readFileSync } from 'fs';
@@ -1092,6 +1093,96 @@ async function main() {
         .status(500)
         .json({ error: err instanceof Error ? err.message : 'Failed to list secrets' });
     }
+  });
+
+  // Persisted-set — write a secret to ~/.slicc/secrets.env. Gated by the agent's
+  // intrinsic sudo prompt before the request is ever sent.
+  app.post('/api/secrets', express.json(), async (req, res) => {
+    const { name, value, domains } = req.body ?? {};
+    if (
+      typeof name !== 'string' ||
+      typeof value !== 'string' ||
+      !Array.isArray(domains) ||
+      domains.some((d) => typeof d !== 'string')
+    ) {
+      return res.status(400).json({ error: 'bad-request' });
+    }
+    try {
+      secretStore.set(name, value, domains);
+      await secretProxy.reload();
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to set secret' });
+    }
+  });
+
+  // Scope edit — update the allowed domains of an existing secret (persisted or
+  // session), preserving the value. Gated by the agent before sending.
+  app.post('/api/secrets/scope', express.json(), async (req, res) => {
+    const { name, domains } = req.body ?? {};
+    if (
+      typeof name !== 'string' ||
+      !Array.isArray(domains) ||
+      domains.some((d) => typeof d !== 'string')
+    ) {
+      return res.status(400).json({ error: 'bad-request' });
+    }
+    try {
+      if (secretProxy.sessionStore.has(name)) {
+        secretProxy.sessionStore.setDomains(name, domains);
+      } else {
+        const existing = secretStore.get(name);
+        if (!existing) return res.status(404).json({ error: `no secret named "${name}"` });
+        secretStore.set(name, existing.value, domains);
+      }
+      await secretProxy.reload();
+      res.json({ ok: true });
+    } catch (err) {
+      res
+        .status(500)
+        .json({ error: err instanceof Error ? err.message : 'Failed to update scope' });
+    }
+  });
+
+  // Session secrets — in-memory only, never written to disk. Free for the agent
+  // to create; the masking pipeline picks them up on the reload below.
+  app.get('/api/secrets/session', (_req, res) => {
+    res.json(secretProxy.sessionStore.list());
+  });
+
+  app.post('/api/secrets/session', express.json(), async (req, res) => {
+    const { name, value, domains } = req.body ?? {};
+    if (
+      typeof name !== 'string' ||
+      typeof value !== 'string' ||
+      (domains !== undefined &&
+        (!Array.isArray(domains) || domains.some((d) => typeof d !== 'string')))
+    ) {
+      return res.status(400).json({ error: 'bad-request' });
+    }
+    secretProxy.sessionStore.set(name, value, Array.isArray(domains) ? domains : []);
+    await secretProxy.reload();
+    res.json({ ok: true });
+  });
+
+  // Peek — elided preview of the unmasked value (session or persisted). The
+  // full value never leaves the server.
+  app.get('/api/secrets/peek', (req, res) => {
+    const name = typeof req.query.name === 'string' ? req.query.name : '';
+    if (!name) return res.status(400).json({ error: 'bad-request' });
+    const session = secretProxy.sessionStore.getRecord(name);
+    if (session) {
+      return res.json({ name, preview: previewSecret(session.value), domains: session.domains });
+    }
+    const persisted = secretStore.get(name);
+    if (persisted) {
+      return res.json({
+        name,
+        preview: previewSecret(persisted.value),
+        domains: persisted.domains,
+      });
+    }
+    return res.status(404).json({ error: `no secret named "${name}"` });
   });
 
   // S3 sign-and-forward — browser-side mount backend posts envelopes here;

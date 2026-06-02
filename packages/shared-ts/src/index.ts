@@ -3,3 +3,4 @@
 export * from './oauth-extra-domains-storage.js';
 export * from './secret-masking.js';
 export * from './secrets-pipeline.js';
+export * from './session-secret-store.js';
