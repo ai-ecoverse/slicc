@@ -7,6 +7,8 @@ import type { ShellSudoConfig } from '../../../src/shell/wasm-shell-headless.js'
 import type { SudoBroker, SudoDecision } from '../../../src/sudo/types.js';
 
 const POLICY = parseSudoers('Cmnd  touch /workspace/gated*');
+const GIT_POLICY = parseSudoers('Cmnd  git push*');
+const RM_POLICY = parseSudoers('Cmnd  rm -rf *');
 
 function brokerReturning(decision: SudoDecision): SudoBroker {
   return { requestApproval: vi.fn(async () => decision) };
@@ -90,5 +92,67 @@ describe('WasmShell command-level sudo enforcement', () => {
 
     expect(result.exitCode).toBe(0);
     expect(broker.requestApproval).not.toHaveBeenCalled();
+  });
+
+  it('gates a nested git push run via command substitution $(...)', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => GIT_POLICY, broker });
+
+    await shell.executeCommand('echo $(git push origin main)');
+
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'git push origin main',
+    });
+  });
+
+  it('gates a nested git push run via backticks', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => GIT_POLICY, broker });
+
+    await shell.executeCommand('echo `git push origin main`');
+
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'git push origin main',
+    });
+  });
+
+  it('gates a piped command on the consuming side of a pipeline', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => RM_POLICY, broker });
+
+    await shell.executeCommand('echo hi | rm -rf /tmp/zzz');
+
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'rm -rf /tmp/zzz',
+    });
+  });
+
+  it('still gates a git push that an eval re-dispatches through the registry', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => GIT_POLICY, broker });
+
+    await shell.executeCommand("eval 'git push origin main'");
+
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'git push origin main',
+    });
+  });
+
+  it('sanitizes a newline-bearing "Always" pattern before persisting', async () => {
+    const broker = brokerReturning({
+      decision: 'always',
+      pattern: 'touch /workspace/gated*\nNOPASSWD Cmnd  /etc/sudoers',
+    });
+    const shell = makeShell({ getPolicy: () => POLICY, broker });
+
+    await shell.executeCommand('touch /workspace/gated.txt');
+
+    const granted = (await fs.readFile('/etc/sudoers.d/granted')) as string;
+    expect(granted).toContain('NOPASSWD Cmnd  touch /workspace/gated*');
+    expect(granted).not.toContain('/etc/sudoers');
   });
 });

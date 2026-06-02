@@ -143,4 +143,27 @@ describe('secret command — gated ops', () => {
     expect(broker.calls()).toBe(1);
     expect(backend.setScope).toHaveBeenCalledTimes(2);
   });
+
+  it('"Always" with an edited wildcard pattern covers later matching ops', async () => {
+    const backend = makeBackend();
+    const broker = makeBroker({ decision: 'always', pattern: 'secret:scope:*' });
+    const grants = new Set<string>();
+    const deps = { backend, broker: broker.broker, grants, isExtension: false };
+    await createSecretCommand(deps).execute(['scope', 'TOKEN', '--domain', 'a.com'], ctx());
+    await createSecretCommand(deps).execute(['scope', 'OTHER', '--domain', 'b.com'], ctx());
+    expect(broker.calls()).toBe(1);
+    expect(backend.setScope).toHaveBeenCalledTimes(2);
+  });
+
+  it('"Always" with a never-match pattern falls back to the exact subject', async () => {
+    const backend = makeBackend();
+    const broker = makeBroker({ decision: 'always', pattern: 'totally:unrelated' });
+    const grants = new Set<string>();
+    const deps = { backend, broker: broker.broker, grants, isExtension: false };
+    await createSecretCommand(deps).execute(['scope', 'TOKEN', '--domain', 'a.com'], ctx());
+    await createSecretCommand(deps).execute(['scope', 'TOKEN', '--domain', 'b.com'], ctx());
+    expect(broker.calls()).toBe(1);
+    expect(grants.has('secret:scope:TOKEN')).toBe(true);
+    expect(grants.has('totally:unrelated')).toBe(false);
+  });
 });

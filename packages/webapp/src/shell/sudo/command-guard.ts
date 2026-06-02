@@ -1,19 +1,29 @@
 /**
  * Command-level sudo enforcement.
  *
- * Pure, framework-free guard run at the shell dispatch chokepoint
- * (`WasmShell.runCommand`). It splits a command line into top-level segments,
- * matches each against the sudoers `Cmnd` policy, and routes any
- * `require-approval` match through the trusted-realm {@link SudoBroker}. A deny
- * blocks the whole command line; an "Always" grant is persisted as a
- * `NOPASSWD Cmnd` rule via the injected `persistGrant` sink.
+ * Pure, framework-free matcher run at the just-bash DISPATCH chokepoint: the
+ * shell decorates every registered command's `execute(args, ctx)` so this
+ * check fires when a command actually dispatches, not on a pre-parse of the
+ * raw command line. The decorated subject is the already-tokenized
+ * `name + ' ' + args.join(' ')`, so command substitution `$(...)`, backticks,
+ * and pipelines — which just-bash routes back through the command registry —
+ * are gated for free, with no string parsing here. A `require-approval` match
+ * routes through the trusted-realm {@link SudoBroker}; a deny blocks the
+ * single dispatch; an "Always" grant is persisted as a `NOPASSWD Cmnd` rule
+ * via the injected `persistGrant` sink.
+ *
+ * Coverage note: interpreter builtins (`cd`, `export`, `eval`, `source`, etc.)
+ * bypass the command registry, so a `Cmnd` rule never matches them directly.
+ * That is acceptable — those builtins either only mutate shell state (not
+ * `Cmnd`-matchable) or, like `eval`/`source`, re-dispatch their sub-commands
+ * back through the registry, where the real gated command (`git`, `rm`, …) is
+ * still caught at its own dispatch.
  *
  * No FS, no shell wiring — the shell injects the policy, broker, and grant
  * sink so this module stays unit-testable in isolation.
  */
 
 import type { SudoBroker } from '../../sudo/types.js';
-import { splitCommandSegments } from '../../tools/bash-tool.js';
 import { matchCommand, type SudoersPolicy } from './sudoers.js';
 
 /** stderr message emitted (and shown to the agent) when approval is denied. */
@@ -34,37 +44,39 @@ export interface CommandSudoDeps {
 
 /** Outcome of an enforcement pass. */
 export interface CommandSudoResult {
-  /** True when every gated segment was approved (or none were gated). */
+  /** True when the subject was approved (or was not gated). */
   allowed: boolean;
   /** stderr message to emit when `allowed` is false. */
   message?: string;
 }
 
 /**
- * Evaluate `command` against the policy. Each gated segment triggers one native
- * approval prompt; a single deny short-circuits and blocks the command line.
- * Segments matching a `NOPASSWD` grant (or no rule) run with no prompt.
+ * Evaluate a single already-tokenized command `subject`
+ * (`name + ' ' + args.join(' ')`) against the policy. A gated subject triggers
+ * one native approval prompt; a deny blocks this dispatch. A subject matching a
+ * `NOPASSWD` grant (or no rule) runs with no prompt. No splitting happens here —
+ * chained/nested/piped commands are each dispatched (and so each gated)
+ * separately by just-bash.
  */
 export async function enforceCommandSudo(
-  command: string,
+  subject: string,
   deps: CommandSudoDeps
 ): Promise<CommandSudoResult> {
-  const segments = splitCommandSegments(command)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  const trimmed = subject.trim();
+  if (!trimmed) return { allowed: true };
 
-  for (const segment of segments) {
-    if (matchCommand(deps.policy, segment) !== 'require-approval') continue;
+  if (matchCommand(deps.policy, trimmed) !== 'require-approval') {
+    return { allowed: true };
+  }
 
-    const decision = await deps.broker.requestApproval({ kind: 'command', detail: segment });
+  const decision = await deps.broker.requestApproval({ kind: 'command', detail: trimmed });
 
-    if (decision.decision === 'deny') {
-      return { allowed: false, message: COMMAND_DENIED_MESSAGE };
-    }
-    if (decision.decision === 'always') {
-      const pattern = decision.pattern?.trim() || segment;
-      await deps.persistGrant(pattern);
-    }
+  if (decision.decision === 'deny') {
+    return { allowed: false, message: COMMAND_DENIED_MESSAGE };
+  }
+  if (decision.decision === 'always') {
+    const pattern = decision.pattern?.trim() || trimmed;
+    await deps.persistGrant(pattern);
   }
 
   return { allowed: true };

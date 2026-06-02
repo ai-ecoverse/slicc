@@ -98,28 +98,31 @@ describe('enforceCommandSudo', () => {
     expect(broker.requestApproval).not.toHaveBeenCalled();
   });
 
-  it('gates each gated segment of a chained command line', async () => {
+  it('matches a single tokenized subject (no splitting on separators)', async () => {
+    // The dispatch-time model hands one already-tokenized subject at a time; the
+    // matcher does not split, so a `&&`/`|` in the subject is opaque text.
     const broker = brokerReturning({ decision: 'allow' });
 
-    await enforceCommandSudo('ls && git push && rm -rf /tmp', {
+    const result = await enforceCommandSudo('git push origin main', {
       policy: GATED,
       broker,
       persistGrant: vi.fn(async () => {}),
     });
 
-    expect(broker.requestApproval).toHaveBeenCalledTimes(2);
+    expect(result.allowed).toBe(true);
+    expect(broker.requestApproval).toHaveBeenCalledTimes(1);
   });
 
-  it('a single deny short-circuits later segments', async () => {
+  it('treats an empty subject as ungated (no prompt)', async () => {
     const broker = brokerReturning({ decision: 'deny' });
 
-    const result = await enforceCommandSudo('git push && rm -rf /tmp', {
+    const result = await enforceCommandSudo('   ', {
       policy: GATED,
       broker,
       persistGrant: vi.fn(async () => {}),
     });
 
-    expect(result.allowed).toBe(false);
-    expect(broker.requestApproval).toHaveBeenCalledTimes(1);
+    expect(result.allowed).toBe(true);
+    expect(broker.requestApproval).not.toHaveBeenCalled();
   });
 });

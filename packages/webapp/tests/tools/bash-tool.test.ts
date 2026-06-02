@@ -13,6 +13,10 @@ describe('splitCommandSegments', () => {
     expect(segments).toEqual(['a', 'b', 'c', 'd', 'e']);
   });
 
+  it('splits "a || b" into two segments with no spurious empty segment', () => {
+    expect(splitCommandSegments('a || b').map((s) => s.trim())).toEqual(['a', 'b']);
+  });
+
   it('does not split a lone & (background)', () => {
     expect(splitCommandSegments('git push & echo done').map((s) => s.trim())).toEqual([
       'git push & echo done',
