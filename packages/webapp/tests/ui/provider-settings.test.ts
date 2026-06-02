@@ -2,7 +2,7 @@
  * Tests for provider settings — multi-account storage layer.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const storage = new Map<string, string>();
 const mockStorage = {
@@ -75,6 +75,14 @@ vi.mock('../../src/core/index.js', () => ({
   getModels: mockGetModels,
   getModel: mockGetModel,
   createLogger: mockCreateLogger,
+}));
+
+// `shouldIncludeProvider` defaults to allow-all so the bulk of the suite is
+// unaffected, but is a vi.fn so the build-exclusion tests can swap in a real
+// exclusion (e.g. dropping `amazon-bedrock`). Reset to allow-all in each
+// relevant beforeEach since vi.clearAllMocks() wipes the implementation.
+const { mockShouldIncludeProvider } = vi.hoisted(() => ({
+  mockShouldIncludeProvider: vi.fn((_id: string) => true),
 }));
 
 // Mock the providers/index.js module — return a minimal set of registered providers
@@ -161,7 +169,7 @@ const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoi
 vi.mock('../../src/providers/index.js', () => ({
   getRegisteredProviderConfig: mockGetRegisteredProviderConfig,
   getRegisteredProviderIds: mockGetRegisteredProviderIds,
-  shouldIncludeProvider: () => true,
+  shouldIncludeProvider: mockShouldIncludeProvider,
 }));
 
 vi.mock('../../src/providers/oauth-service.js', () => ({
@@ -552,6 +560,71 @@ describe('getAllAvailableModels', () => {
     const groups = getAllAvailableModels();
     expect(groups).toHaveLength(1);
     expect(groups[0].providerId).toBe('anthropic');
+  });
+});
+
+describe('build-excluded pi-ai providers', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+    // Exercise the real exclusion: `amazon-bedrock` is a pi-ai provider whose
+    // pi browser stream is unsupported, so the build config drops it.
+    mockShouldIncludeProvider.mockImplementation((id: string) => id !== 'amazon-bedrock');
+  });
+
+  afterEach(() => {
+    // Restore allow-all so the leaked implementation doesn't affect other suites.
+    mockShouldIncludeProvider.mockImplementation(() => true);
+  });
+
+  it('getAllAvailableModels skips a stored amazon-bedrock account', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('amazon-bedrock', 'bedrock-key');
+    const groups = getAllAvailableModels();
+    expect(groups.map((g) => g.providerId)).toEqual(['anthropic']);
+  });
+
+  it('leaves bedrock-camp untouched (registered, not a pi-ai provider)', () => {
+    // bedrock-camp is not in getProviders(), so the pi-provider exclusion must
+    // not drop its account row or clear its selection — it still resolves via
+    // amazon-bedrock's catalog elsewhere.
+    storage.set('selected-model', 'bedrock-camp:some-model');
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([{ providerId: 'bedrock-camp', apiKey: 'camp-key' }])
+    );
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('bedrock-camp:some-model');
+    const remaining = JSON.parse(storage.get('slicc_accounts') as string);
+    expect(remaining.map((a: { providerId: string }) => a.providerId)).toEqual(['bedrock-camp']);
+  });
+
+  it('migrateLegacyAuthOnlySelection clears a selected-model on amazon-bedrock', () => {
+    storage.set('selected-model', 'amazon-bedrock:anthropic.claude-3-sonnet');
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBeUndefined();
+  });
+
+  it('migrateLegacyAuthOnlySelection drops a stored amazon-bedrock account row', () => {
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: 'anthropic', apiKey: 'ant-key' },
+        { providerId: 'amazon-bedrock', apiKey: 'bedrock-key' },
+      ])
+    );
+    migrateLegacyAuthOnlySelection();
+    const remaining = JSON.parse(storage.get('slicc_accounts') as string);
+    expect(remaining.map((a: { providerId: string }) => a.providerId)).toEqual(['anthropic']);
+  });
+
+  it('migrateLegacyAuthOnlySelection preserves selection + account for an included provider', () => {
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-6');
+    storage.set('slicc_accounts', JSON.stringify([{ providerId: 'anthropic', apiKey: 'ant-key' }]));
+    migrateLegacyAuthOnlySelection();
+    expect(storage.get('selected-model')).toBe('anthropic:claude-sonnet-4-6');
+    const remaining = JSON.parse(storage.get('slicc_accounts') as string);
+    expect(remaining.map((a: { providerId: string }) => a.providerId)).toEqual(['anthropic']);
   });
 });
 
