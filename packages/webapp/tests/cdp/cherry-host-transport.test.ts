@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { CherryHostTransport } from '../../src/cdp/cherry-host-transport.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CHERRY_PROTOCOL_VERSION } from '../../src/cdp/cherry-host-protocol.js';
+import { CherryHostTransport } from '../../src/cdp/cherry-host-transport.js';
 
 function makeTransport() {
   const posted: any[] = [];

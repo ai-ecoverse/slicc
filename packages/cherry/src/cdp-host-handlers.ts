@@ -55,6 +55,7 @@ export function createCdpHostHandler(opts: CdpHostHandlerOptions): Handler {
   // direct call site — so it is governed entirely by the host page's CSP. If
   // the host CSP forbids dynamic eval, this throws natively and we surface it
   // as exceptionDetails — Cherry adds no escape hatch of its own.
+  // biome-ignore lint/security/noGlobalEval: intentional indirect eval — runs in the host page's global scope and is governed entirely by the host's own CSP (see comment above).
   const indirectEval: typeof eval = eval;
   const evalInRealm = indirectEval as (src: string) => unknown;
 

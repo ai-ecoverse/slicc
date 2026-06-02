@@ -59,7 +59,6 @@ SLICC is for you if:
 - **Turn one-off wins into reusable workflows.** Package behavior as skills, build interactive sprinkles, and react to external events with webhooks and cron-driven licks.
 - **Mount your local file system.** By default, SLICC is confined to your browser. But you can ask it to mount folders from your local file system, so it can read and write from there. Mount into an empty path such as `/mnt/myproject` so you do not hide existing skills or scripts.
 - **Mount remote storage as if it were local.** Beyond local folders, `mount --source` bridges S3 buckets, S3-compatible services like Cloudflare R2 and MinIO, and Adobe da.live repositories into the same VFS surface. Reads use TTL+ETag caching with conditional revalidation; writes use ETag-conditional PUTs that surface concurrent-edit conflicts as `EBUSY`. Credentials live server-side (`~/.slicc/secrets.env` in CLI, `chrome.storage.local` in the extension via the **Extension options** page) and never reach the agent. After setup: `mount --source s3://my-bucket --profile r2 /mnt/r2` or `mount --source da://my-org/my-repo /mnt/da`. See [docs/mounts.md](docs/mounts.md) for the full guide.
-- **Embed SLICC in your own web page and lend it to a remote agent.** Drop the `@slicc/cherry` SDK on a third-party page and a remote cloud-cone leader can drive that page as a capability-limited browser target — navigate it, read its DOM, and (optionally) screenshot it — while raw network access is never exposed. See the Cherry section below.
 
 ## Getting started
 
@@ -138,35 +137,6 @@ npm run dev:electron -- /Applications/Slack.app
 ```
 
 For the full Electron workflow, see [docs/electron.md](docs/electron.md).
-
-### 7. Cherry — embed SLICC in your own web page
-
-`@slicc/cherry` is a tiny host-side SDK a third-party page embeds. It mounts a SLICC follower in an iframe (the webapp loaded with `?cherry=1`) and lends the host page to a remote cloud-cone leader as a driveable, **capability-limited** browser target over cooperative, postMessage-backed synthetic CDP. The remote agent can navigate, read the DOM, click/type, and (optionally) screenshot the host page — but it can **never** drive raw `Network.*` against it.
-
-A minimal embed:
-
-```ts
-import { mountSlicc } from '@slicc/cherry';
-
-const handle = mountSlicc({
-  container: document.getElementById('slicc-mount')!,
-  sliccOrigin: 'https://app.sliccy.ai',
-  capabilities: {
-    navigate: true, // allow the leader to navigate this page's top frame
-    screenshot: 'html2canvas', // 'html2canvas' (best-effort) or 'none'
-    openUrl: true, // allow the leader to request opening URLs in new tabs
-  },
-  joinToken, // REQUIRED: a ready tray join URL the host (or its backend) provisioned
-  hooks: {
-    onOpenUrl: (url) => window.open(url, '_blank'),
-    onPermissionRequest: (domain) => domain !== 'Input', // deny a domain by returning false
-  },
-});
-
-// later: handle.destroy();
-```
-
-The SDK **embeds** against an already-provisioned leader: the host (or its own backend) obtains a tray join URL and passes it as the required `joinToken`. Creating/provisioning a cloud cone from the SDK is not yet supported — it is deferred to future work. See [`packages/cherry/CLAUDE.md`](packages/cherry/CLAUDE.md).
 
 ## Screenshots and proof
 

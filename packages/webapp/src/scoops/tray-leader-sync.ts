@@ -14,16 +14,16 @@ import type { AgentEvent, ChatMessage } from '../ui/types.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import { handleFsRequest } from './tray-fs-handler.js';
 import {
+  CHERRY_RUNTIME_TAG,
+  type CherryHostEventMessage,
   createLeaderSyncChannel,
   type FollowerToLeaderMessage,
+  isCherryHostEventMessage,
   type LeaderToFollowerMessage,
   type RemoteTargetInfo,
   reassembleCDPResponse,
   type ScoopSummary,
   type SprinkleSummary,
-  type CherryHostEventMessage,
-  isCherryHostEventMessage,
-  CHERRY_RUNTIME_TAG,
   sendCDPResponse,
   sendSnapshot,
   type TrayFsRequest,

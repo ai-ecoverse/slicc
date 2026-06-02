@@ -11,15 +11,15 @@
  * resolves so `BrowserAPI.navigate()` doesn't hang.
  */
 
-import type { CDPTransport } from './transport.js';
-import type { CDPEventListener, CDPConnectOptions, ConnectionState } from './types.js';
-import {
-  CHERRY_PROTOCOL_VERSION,
-  acceptEnvelope,
-  isCherryEnvelope,
-  type CherryEnvelope,
-} from './cherry-host-protocol.js';
 import { createLogger } from '../core/logger.js';
+import {
+  acceptEnvelope,
+  CHERRY_PROTOCOL_VERSION,
+  type CherryEnvelope,
+  isCherryEnvelope,
+} from './cherry-host-protocol.js';
+import type { CDPTransport } from './transport.js';
+import type { CDPConnectOptions, CDPEventListener, ConnectionState } from './types.js';
 
 const log = createLogger('cherry-transport');
 

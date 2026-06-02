@@ -27,18 +27,18 @@
 
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { MessageAttachment } from '../core/attachments.js';
-import { CHERRY_RUNTIME_TAG, type RemoteTargetInfo } from '../scoops/tray-sync-protocol.js';
-import { canonicalRuntimeId } from './runtime-identity.js';
 import { createLogger } from '../core/logger.js';
 import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import type { SprinkleSummary } from '../scoops/tray-sync-protocol.js';
+import { CHERRY_RUNTIME_TAG, type RemoteTargetInfo } from '../scoops/tray-sync-protocol.js';
 import {
   type FollowerAutoReconnectHandle,
   type FollowerTrayConnection,
   startFollowerWithAutoReconnect,
   type TrayPeerConnectionFactory,
 } from '../scoops/tray-webrtc.js';
+import { canonicalRuntimeId } from './runtime-identity.js';
 import { SprinkleFollowerController } from './sprinkle-follower-controller.js';
 import type { SprinkleAddOptions } from './sprinkle-manager.js';
 import type { AgentHandle, ChatMessage } from './types.js';

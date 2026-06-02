@@ -2,16 +2,16 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
-  LeaderSyncManager,
   isCherryTarget,
-  selectTeleportPool,
+  LeaderSyncManager,
   type LeaderSyncManagerOptions,
+  selectTeleportPool,
 } from '../../src/scoops/tray-leader-sync.js';
-import { CHERRY_RUNTIME_TAG } from '../../src/scoops/tray-sync-protocol.js';
 import type {
   FollowerToLeaderMessage,
   LeaderToFollowerMessage,
 } from '../../src/scoops/tray-sync-protocol.js';
+import { CHERRY_RUNTIME_TAG } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
 import type { AgentEvent, ChatMessage } from '../../src/ui/types.js';
 

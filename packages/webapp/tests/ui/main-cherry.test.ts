@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Shared, per-test-mutable control surface for the mocked CDP layer. Declared
 // via vi.hoisted so the vi.mock factories below (hoisted above imports) can

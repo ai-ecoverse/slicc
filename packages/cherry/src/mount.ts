@@ -1,10 +1,10 @@
+import { CherryUnsupportedError, createCdpHostHandler } from './cdp-host-handlers.js';
 import type { MountSliccOptions, SliccHandle } from './index.js';
-import { createCdpHostHandler, CherryUnsupportedError } from './cdp-host-handlers.js';
 import {
-  CHERRY_PROTOCOL_VERSION,
   acceptEnvelope,
-  isCherryEnvelope,
+  CHERRY_PROTOCOL_VERSION,
   type CherryEnvelope,
+  isCherryEnvelope,
 } from './protocol.js';
 
 interface CdpResponseShape {

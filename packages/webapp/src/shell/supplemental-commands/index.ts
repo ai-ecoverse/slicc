@@ -6,8 +6,8 @@ import type { ScriptCatalog } from '../script-catalog.js';
 import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
 import { createAgentCommand } from './agent-command.js';
 import { createBiomeCommand } from './biome-command.js';
-import { createCherryEmitCommand } from './cherry-emit-command.js';
 import type { CherryRuntimeRegistry } from './cherry-emit-command.js';
+import { createCherryEmitCommand } from './cherry-emit-command.js';
 import {
   createClipboardAutoCommand,
   createPbcopyCommand,

@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { createCdpHostHandler, CherryUnsupportedError } from '../src/cdp-host-handlers.js';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { CherryUnsupportedError, createCdpHostHandler } from '../src/cdp-host-handlers.js';
 
 describe('createCdpHostHandler', () => {
   let handle: ReturnType<typeof createCdpHostHandler>;

@@ -1,20 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  isCherryHostEventMessage,
-  isCherrySliccEventMessage,
   CDP_CHUNK_THRESHOLD,
   createFollowerSyncChannel,
   createLeaderSyncChannel,
   type FollowerToLeaderMessage,
+  isCherryHostEventMessage,
+  isCherrySliccEventMessage,
   type LeaderToFollowerMessage,
+  type RemoteTargetInfo,
   reassembleCDPResponse,
   reassembleSnapshot,
   sendCDPResponse,
   sendSnapshot,
   TraySyncChannel,
   type TraySyncMessage,
-  type RemoteTargetInfo,
 } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
 import type { ChatMessage } from '../../src/ui/types.js';

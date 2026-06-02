@@ -1,13 +1,13 @@
-import { describe, it, expect, vi } from 'vitest';
 import type { IFileSystem } from 'just-bash';
+import { describe, expect, it, vi } from 'vitest';
+import type { PanelRpcClient } from '../../../src/kernel/panel-rpc.js';
+import { CHERRY_RUNTIME_TAG } from '../../../src/scoops/tray-sync-protocol.js';
 import {
-  createCherryEmitCommand,
   buildDefaultCherryRegistry,
   type CherryRuntimeRegistry,
+  createCherryEmitCommand,
 } from '../../../src/shell/supplemental-commands/cherry-emit-command.js';
-import { CHERRY_RUNTIME_TAG } from '../../../src/scoops/tray-sync-protocol.js';
 import type { ConnectedFollowerInfo } from '../../../src/shell/supplemental-commands/host-command.js';
-import type { PanelRpcClient } from '../../../src/kernel/panel-rpc.js';
 
 function createMockCtx() {
   return {

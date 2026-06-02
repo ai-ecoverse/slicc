@@ -27,6 +27,8 @@ import type {
   PanelMessageSubscriber,
 } from '../../../chrome-extension/src/bridge-transport.js';
 import { isExtensionMessage } from '../../../chrome-extension/src/messages.js';
+import type { CherryHostTransport } from '../cdp/cherry-host-transport.js';
+import type { BrowserAPI } from '../cdp/index.js';
 import { createLogger } from '../core/index.js';
 import { SessionStore as AgentSessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
@@ -43,8 +45,6 @@ import { getAllMountEntries } from '../fs/mount-table-store.js';
 // IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
 import { registerProviders } from '../providers/index.js';
-import type { BrowserAPI } from '../cdp/index.js';
-import type { CherryHostTransport } from '../cdp/cherry-host-transport.js';
 import { clearAllMessages as clearOrchestratorMessages } from '../scoops/db.js';
 import type { Orchestrator } from '../scoops/index.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
@@ -64,7 +64,6 @@ import {
   TRAY_WORKER_STORAGE_KEY,
 } from '../scoops/tray-runtime-config.js';
 import type { RegisteredScoop } from '../scoops/types.js';
-import { canonicalRuntimeId } from './runtime-identity.js';
 import {
   detectWelcomeFirstRun,
   hasOnboardingFinalLickInHistory,
@@ -103,6 +102,7 @@ import {
   resolveModelById,
   saveOAuthAccount,
 } from './provider-settings.js';
+import { canonicalRuntimeId } from './runtime-identity.js';
 import {
   getElectronOverlayInitialTab,
   isElectronOverlaySetTabMessage,

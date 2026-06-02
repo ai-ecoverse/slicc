@@ -1,8 +1,8 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-import { getConnectedFollowersWithFallback, type ConnectedFollowerInfo } from './host-command.js';
+import { defineCommand } from 'just-bash';
 import { getPanelRpcClient, type PanelRpcClient } from '../../kernel/panel-rpc.js';
 import { CHERRY_RUNTIME_TAG } from '../../scoops/tray-sync-protocol.js';
+import { type ConnectedFollowerInfo, getConnectedFollowersWithFallback } from './host-command.js';
 
 /**
  * Outcome of an `emitSliccEvent` attempt. `delivered` is true once the event

@@ -1,9 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  CHERRY_PROTOCOL_VERSION,
-  isCherryEnvelope,
   acceptEnvelope,
+  CHERRY_PROTOCOL_VERSION,
   type CherryEnvelope,
+  isCherryEnvelope,
 } from '../../src/cdp/cherry-host-protocol.js';
 
 const make = (over: Partial<CherryEnvelope> = {}): CherryEnvelope =>

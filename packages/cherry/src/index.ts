@@ -53,7 +53,7 @@ export interface SliccHandle {
 }
 
 export function mountSlicc(options: MountSliccOptions): SliccHandle {
-  if (!options || !options.container) {
+  if (!options?.container) {
     throw new Error('mountSlicc: options.container is required');
   }
   return mountSliccImpl(options);
