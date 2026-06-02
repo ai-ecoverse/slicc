@@ -50,6 +50,10 @@ import {
   resolveTrayRuntimeConfig,
 } from '../../../packages/webapp/src/scoops/tray-runtime-config.js';
 import { startFollowerWithAutoReconnect } from '../../../packages/webapp/src/scoops/tray-webrtc.js';
+import {
+  setPlaywrightTeleportBestFollower,
+  setPlaywrightTeleportConnectedFollowers,
+} from '../../../packages/webapp/src/shell/supplemental-commands/playwright-command.js';
 import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
 import { initTelemetry } from '../../../packages/webapp/src/ui/telemetry.js';
 import { applyTrayRuntimeUpdate as applyTrayRuntimeUpdateHelper } from './apply-tray-runtime-update.js';
@@ -494,6 +498,19 @@ async function init(): Promise<void> {
         leaderBridge,
       });
 
+      // Wire playwright-cli teleport follower selection to the in-process
+      // LeaderSyncManager. getPanelRpcClient() is null in offscreen (no RPC
+      // bridge — the offscreen has a DOM), so the getter path is the only
+      // way teleport can reach follower state in extension mode.
+      setPlaywrightTeleportBestFollower(() => {
+        const h = activeHandle;
+        return h ? () => h.sync.getBestFollowerForTeleport() : null;
+      });
+      setPlaywrightTeleportConnectedFollowers(() => {
+        const h = activeHandle;
+        return h ? () => h.sync.getConnectedFollowers() : null;
+      });
+
       // REGRESSION-SENSITIVE SITE: clearing `activeTrayRuntimeKey` and
       // `stopTrayRuntime` in the catch handler is load-bearing. Without
       // them, a retry with the SAME `workerBaseUrl` (which produces the
@@ -512,6 +529,8 @@ async function init(): Promise<void> {
         // Tear down the now-dead handle so any user retry starts cleanly.
         activeHandle?.stop();
         activeHandle = null;
+        setPlaywrightTeleportBestFollower(null);
+        setPlaywrightTeleportConnectedFollowers(null);
         // Clear the runtime key + stopTrayRuntime so a retry with the SAME
         // worker URL re-enters syncTrayRuntime instead of early-outing at
         // the `nextTrayRuntimeKey === activeTrayRuntimeKey` guard.
@@ -522,6 +541,8 @@ async function init(): Promise<void> {
       stopTrayRuntime = () => {
         activeHandle?.stop();
         activeHandle = null;
+        setPlaywrightTeleportBestFollower(null);
+        setPlaywrightTeleportConnectedFollowers(null);
       };
       return;
     }

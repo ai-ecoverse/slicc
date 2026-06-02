@@ -17,6 +17,7 @@ import { getPanelRpcClient, type PanelRpcResults } from '../../kernel/panel-rpc.
 import { discoverLinks } from '../../net/discover-links.js';
 import { extractHandoff, type HandoffMatch } from '../../net/handoff-link.js';
 import { type ParsedLink, parseLinkHeader } from '../../net/link-header.js';
+import type { FloatType } from '../../scoops/tray-leader-sync.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
 import { normalizeHeadersInit } from '../proxy-headers.js';
 import {
@@ -30,6 +31,44 @@ const log = createLogger('playwright-teleport');
 // ---------------------------------------------------------------------------
 // Teleport watcher types and module-level getters
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Extension-mode getter injection for follower selection.
+//
+// In extension offscreen, getPanelRpcClient() returns null (the offscreen
+// already has a DOM — no RPC bridge needed). The LeaderSyncManager lives
+// in-process in the offscreen. offscreen.ts wires these setters when a
+// leader tray starts/stops so teleport can reach follower state directly.
+// ---------------------------------------------------------------------------
+
+export type GetBestFollowerFn = () => {
+  runtimeId: string;
+  bootstrapId: string;
+  floatType: FloatType;
+} | null;
+
+export type GetConnectedFollowersFn = () => {
+  runtimeId: string;
+  runtime?: string;
+  connectedAt?: string;
+  lastActivity?: number;
+  floatType?: FloatType;
+}[];
+
+let getBestFollowerGetter: (() => GetBestFollowerFn | null) | null = null;
+let getConnectedFollowersGetter: (() => GetConnectedFollowersFn | null) | null = null;
+
+export function setPlaywrightTeleportBestFollower(
+  getter: (() => GetBestFollowerFn | null) | null
+): void {
+  getBestFollowerGetter = getter;
+}
+
+export function setPlaywrightTeleportConnectedFollowers(
+  getter: (() => GetConnectedFollowersFn | null) | null
+): void {
+  getConnectedFollowersGetter = getter;
+}
 
 /** Teleport watcher state machine phases. */
 export type TeleportPhase =
@@ -1103,14 +1142,24 @@ async function triggerTeleport(
       log.warn('Could not capture leader storage', { error: String(err) });
     }
 
-    // 2. Select follower via panel-RPC (page-side LeaderSyncManager owns follower state)
+    // 2. Select follower.
+    // Getter path: extension offscreen wires getBestFollowerGetter directly to
+    // LeaderSyncManager (getPanelRpcClient() is null there — no RPC bridge).
+    // RPC path: standalone worker can't reach page-side LeaderSyncManager directly.
     let runtimeId = watcher.runtimeId;
     if (!runtimeId) {
-      const rpc = getPanelRpcClient();
-      if (!rpc) throw new Error('No follower selection available — not connected to a tray');
-      const resp = await rpc.call('list-tray-followers', undefined, { timeoutMs: 3000 });
-      if (!resp.bestRuntimeId) throw new Error('No followers connected to teleport to');
-      runtimeId = resp.bestRuntimeId;
+      const getBestFollower = getBestFollowerGetter?.();
+      if (getBestFollower) {
+        const best = getBestFollower();
+        if (!best) throw new Error('No followers connected to teleport to');
+        runtimeId = best.runtimeId;
+      } else {
+        const rpc = getPanelRpcClient();
+        if (!rpc) throw new Error('No follower selection available — not connected to a tray');
+        const resp = await rpc.call('list-tray-followers', undefined, { timeoutMs: 3000 });
+        if (!resp.bestRuntimeId) throw new Error('No followers connected to teleport to');
+        runtimeId = resp.bestRuntimeId;
+      }
     }
     log.info('Selected follower for teleport');
     log.debug('Selected follower for teleport details', { runtimeId });
@@ -1923,19 +1972,33 @@ export function createPlaywrightCommand(
           // --list: list available follower runtimes
           if (flags['list'] === 'true') {
             log.info('Listing available follower runtimes');
-            // Follower list lives on page-side LeaderSyncManager; bridge via panel-RPC.
-            const rpc = getPanelRpcClient();
-            if (!rpc) {
-              result = { stdout: '', stderr: 'teleport: not connected to a tray\n', exitCode: 1 };
-              break;
-            }
+            // Getter path: extension offscreen has LeaderSyncManager in-process.
+            // RPC fallback: standalone worker bridges to page-side LeaderSyncManager.
             let followers: PanelRpcResults['list-tray-followers']['followers'];
-            try {
-              const resp = await rpc.call('list-tray-followers', undefined, { timeoutMs: 3000 });
-              followers = resp.followers;
-            } catch {
-              result = { stdout: '', stderr: 'teleport: not connected to a tray\n', exitCode: 1 };
-              break;
+            const getFollowers = getConnectedFollowersGetter?.();
+            if (getFollowers) {
+              followers = getFollowers();
+            } else {
+              const rpc = getPanelRpcClient();
+              if (!rpc) {
+                result = {
+                  stdout: '',
+                  stderr: 'teleport: not connected to a tray\n',
+                  exitCode: 1,
+                };
+                break;
+              }
+              try {
+                const resp = await rpc.call('list-tray-followers', undefined, { timeoutMs: 3000 });
+                followers = resp.followers;
+              } catch {
+                result = {
+                  stdout: '',
+                  stderr: 'teleport: not connected to a tray\n',
+                  exitCode: 1,
+                };
+                break;
+              }
             }
             if (followers.length === 0) {
               result = { stdout: 'No followers connected to the tray.\n', stderr: '', exitCode: 0 };
