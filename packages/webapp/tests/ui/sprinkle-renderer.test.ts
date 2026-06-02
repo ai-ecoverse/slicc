@@ -441,8 +441,7 @@ describe('full document rendering', () => {
     dom.window.dispatchEvent(event);
 
     // Wait for the async captureScreen to resolve
-    await new Promise((r) => setTimeout(r, 10));
-
+    await Promise.resolve();
     expect(bridge.captureScreen).toHaveBeenCalled();
     expect(postMessageSpy).toHaveBeenCalledWith(
       {
