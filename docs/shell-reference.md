@@ -516,6 +516,33 @@ browser.fetch(tab: TabHandle, url: string, opts?: {
 
 Runs inside the tab's origin, so session cookies and same-origin headers are automatic. Response body is JSON-parsed when content-type permits.
 
+#### `http.client({ baseUrl, token, headers, retry, timeoutMs })`
+
+Standard API-client builder for the jsh realm. `token` is lazy (resolved freshly per request); `Retry-After` (seconds or HTTP date) takes precedence over exponential backoff.
+
+```typescript
+http.client(config: {
+  baseUrl?: string;
+  token?: (req?: { method: string; path: string; url: string }) =>
+    | string
+    | null
+    | undefined
+    | Promise<string | null | undefined>;
+  headers?: Record<string, string>;
+  retry?: { on: number[]; maxAttempts: number };
+  timeoutMs?: number;
+}): {
+  get(path, opts?):    Promise<unknown>;
+  post(path, opts?):   Promise<unknown>;
+  put(path, opts?):    Promise<unknown>;
+  patch(path, opts?):  Promise<unknown>;
+  delete(path, opts?): Promise<unknown>;
+}
+// opts: { params?, headers?, body?, signal?: AbortSignal, raw?: boolean }
+//  - body object → JSON, params → querystring
+//  - raw: when true, returns { body, headers, status } instead of just body
+```
+
 ### Example .jsh Script
 
 ```javascript
