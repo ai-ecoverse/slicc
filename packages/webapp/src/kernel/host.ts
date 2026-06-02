@@ -54,23 +54,23 @@
  * their float.
  */
 
-import type {
-  Orchestrator as OrchestratorType,
-  OrchestratorCallbacks,
-} from '../scoops/orchestrator.js';
-import { Orchestrator } from '../scoops/orchestrator.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { NavigationWatcher } from '../cdp/navigation-watcher.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
-import type { LickEvent, LickManager } from '../scoops/lick-manager.js';
-import type { ChannelMessage, RegisteredScoop } from '../scoops/types.js';
-import type { KernelFacade } from './types.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
-import { ProcessManager } from './process-manager.js';
-import { ProcMountBackend } from './proc-mount.js';
-import { subscribeToLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
-import { subscribeToFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { formatLickEventForCone } from '../scoops/lick-formatting.js';
+import type { LickEvent, LickManager } from '../scoops/lick-manager.js';
+import type {
+  OrchestratorCallbacks,
+  Orchestrator as OrchestratorType,
+} from '../scoops/orchestrator.js';
+import { Orchestrator } from '../scoops/orchestrator.js';
+import { subscribeToFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
+import { subscribeToLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import type { ChannelMessage, RegisteredScoop } from '../scoops/types.js';
+import { ProcMountBackend } from './proc-mount.js';
+import { ProcessManager } from './process-manager.js';
+import type { KernelFacade } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -341,8 +341,9 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   }
 
   // 6. Register session-costs provider for the `cost` shell command.
-  const { registerSessionCostsProvider } =
-    await import('../shell/supplemental-commands/cost-command.js');
+  const { registerSessionCostsProvider } = await import(
+    '../shell/supplemental-commands/cost-command.js'
+  );
   registerSessionCostsProvider(() => orchestrator.getSessionCosts());
 
   // 7. LickManager init + lick→cone routing.

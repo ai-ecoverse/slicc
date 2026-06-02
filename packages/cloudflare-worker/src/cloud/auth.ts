@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify, errors } from 'jose';
+import { createRemoteJWKSet, errors, jwtVerify } from 'jose';
 import { getProxyConfig } from './proxy-config.js';
 
 const JWKS_URLS: Record<string, string> = {
@@ -78,7 +78,7 @@ async function fetchImsProfile(token: string, environment: string): Promise<IMSP
   }
   try {
     return (await res.json()) as IMSProfile;
-  } catch (err) {
+  } catch (_err) {
     throw new AuthError('UPSTREAM_UNAVAILABLE', 'IMS profile returned non-JSON body');
   }
 }

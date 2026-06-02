@@ -157,7 +157,7 @@ export class MountIndex {
    */
   getFiles(mountPath: string, filter?: (path: string) => boolean): string[] | undefined {
     const data = this.mounts.get(mountPath);
-    if (!data || data.state.status !== 'ready') {
+    if (data?.state.status !== 'ready') {
       return undefined;
     }
 
@@ -183,7 +183,7 @@ export class MountIndex {
     dirPath: string
   ): Array<{ name: string; type: 'file' | 'directory' }> | undefined {
     const data = this.mounts.get(mountPath);
-    if (!data || data.state.status !== 'ready') {
+    if (data?.state.status !== 'ready') {
       return undefined;
     }
 
@@ -217,7 +217,7 @@ export class MountIndex {
    */
   hasPath(mountPath: string, absolutePath: string): boolean | undefined {
     const data = this.mounts.get(mountPath);
-    if (!data || data.state.status !== 'ready') {
+    if (data?.state.status !== 'ready') {
       return undefined;
     }
     return data.files.has(absolutePath) || data.directories.has(absolutePath);
@@ -232,7 +232,7 @@ export class MountIndex {
     if (!mountPath) return;
 
     const data = this.mounts.get(mountPath);
-    if (!data || data.state.status !== 'ready') return;
+    if (data?.state.status !== 'ready') return;
 
     data.files.add(absolutePath);
 
@@ -257,7 +257,7 @@ export class MountIndex {
     if (!mountPath) return;
 
     const data = this.mounts.get(mountPath);
-    if (!data || data.state.status !== 'ready') return;
+    if (data?.state.status !== 'ready') return;
 
     // Remove the path and all children
     data.files.delete(absolutePath);
@@ -284,7 +284,7 @@ export class MountIndex {
     if (!mountPath) return;
 
     const data = this.mounts.get(mountPath);
-    if (!data || data.state.status !== 'ready') return;
+    if (data?.state.status !== 'ready') return;
 
     // Handle file rename
     if (data.files.has(oldPath)) {

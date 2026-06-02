@@ -14,23 +14,23 @@
  *   .setGutterMarkers(markers)      gutter annotations
  */
 
-import { EditorState, Compartment, type Extension } from '@codemirror/state';
-import {
-  EditorView,
-  keymap,
-  placeholder,
-  lineNumbers,
-  gutter,
-  GutterMarker,
-} from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import {
   defaultHighlightStyle,
-  syntaxHighlighting,
+  HighlightStyle,
   StreamLanguage,
   type StreamParser,
+  syntaxHighlighting,
 } from '@codemirror/language';
-import { HighlightStyle } from '@codemirror/language';
+import { Compartment, EditorState, type Extension } from '@codemirror/state';
+import {
+  EditorView,
+  GutterMarker,
+  gutter,
+  keymap,
+  lineNumbers,
+  placeholder,
+} from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 
 // Built-in language imports (lazy-loaded via compartment swap)

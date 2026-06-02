@@ -1,13 +1,13 @@
 import {
   createSubstrate,
   isCloudError,
-  startCone,
-  reserveSlot,
+  killCone,
   listCones,
   pauseCone,
+  reserveSlot,
   resumeCone,
-  killCone,
   type SandboxSubstrate,
+  startCone,
 } from '@slicc/cloud-core';
 import {
   bundleIndex,

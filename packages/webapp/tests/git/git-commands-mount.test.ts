@@ -10,11 +10,11 @@
 
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
+import { newMountId } from '../../src/fs/mount/mount-id.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { GitCommands } from '../../src/git/git-commands.js';
 import { createDirectoryHandle } from '../fs/fsa-test-helpers.js';
-import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
-import { newMountId } from '../../src/fs/mount/mount-id.js';
 
 let dbCounter = 0;
 

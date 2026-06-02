@@ -1,6 +1,6 @@
-import { type Express } from 'express';
-import { requireLoopback } from './cloud-status.js';
+import type { Express } from 'express';
 import { WebSocket } from 'ws';
+import { requireLoopback } from './cloud-status.js';
 
 export interface CdpTargetInfo {
   id?: string;

@@ -1,4 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+import type { SecureFetch } from 'just-bash';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { BrowserAPI } from '../../../src/cdp/index.js';
+import type { VirtualFS } from '../../../src/fs/index.js';
+import { asWebFetch as asWebFetchDiscover } from '../../../src/shell/supplemental-commands/discover-command.js';
 import {
   asWebFetch as asWebFetchPlaywright,
   createPlaywrightCommand,
@@ -6,11 +10,7 @@ import {
   setPlaywrightTeleportBestFollower,
   setPlaywrightTeleportConnectedFollowers,
 } from '../../../src/shell/supplemental-commands/playwright-command.js';
-import { asWebFetch as asWebFetchDiscover } from '../../../src/shell/supplemental-commands/discover-command.js';
-import type { SecureFetch } from 'just-bash';
 import { _resetBrowseShCatalogCache } from '../../../src/shell/supplemental-commands/upskill-command.js';
-import type { BrowserAPI } from '../../../src/cdp/index.js';
-import type { VirtualFS } from '../../../src/fs/index.js';
 
 /** Minimal mock BrowserAPI. */
 function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
@@ -2363,7 +2363,7 @@ describe('playwright-cli teleport trigger and capture', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
     await cmd.execute(
-      ['teleport', '--tab=tab-1', '--start=login\.example\.com', '--return=app\.example\.com'],
+      ['teleport', '--tab=tab-1', '--start=login.example.com', '--return=app.example.com'],
       {} as any
     );
 
@@ -3108,19 +3108,19 @@ describe('iframe support', () => {
 // Integration tests — real Chrome + real CDP + real HTML with iframes
 // ---------------------------------------------------------------------------
 
+import { type ChildProcess, spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket as NodeWebSocket } from 'ws';
-import { BrowserAPI as RealBrowserAPI } from '../../../src/cdp/browser-api.js';
 import {
   findChromeExecutable,
   getDefaultCdpLaunchTimeoutMs,
   waitForCdpPort,
 } from '../../../../node-server/src/chrome-launch.js';
+import { BrowserAPI as RealBrowserAPI } from '../../../src/cdp/browser-api.js';
 import type { CDPTransport } from '../../../src/cdp/transport.js';
 import type {
   CDPConnectOptions,
@@ -3767,11 +3767,7 @@ describe('playwright-cli --discover surfaces browse.sh skills', () => {
   };
 
   function makeProxyFetch(
-    opts: {
-      catalogStatus?: number;
-      catalog?: unknown;
-      catalogThrow?: boolean;
-    } = {}
+    opts: { catalogStatus?: number; catalog?: unknown; catalogThrow?: boolean } = {}
   ): ReturnType<typeof vi.fn> {
     return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;

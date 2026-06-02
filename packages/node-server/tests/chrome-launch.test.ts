@@ -1,12 +1,8 @@
-import { type existsSync, type readdirSync } from 'fs';
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { type existsSync, existsSync as fsExistsSync, type readdirSync } from 'fs';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-
 import { afterEach, describe, expect, it } from 'vitest';
-
-import { existsSync as fsExistsSync } from 'fs';
-import { stat } from 'fs/promises';
 
 import {
   buildChromeLaunchArgs,

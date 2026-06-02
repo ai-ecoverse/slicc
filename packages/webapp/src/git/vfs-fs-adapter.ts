@@ -12,7 +12,7 @@
  */
 
 import type FS from '@isomorphic-git/lightning-fs';
-import { type VirtualFS } from '../fs/index.js';
+import type { VirtualFS } from '../fs/index.js';
 import { FsError } from '../fs/types.js';
 
 export type PromiseFsClient = { promises: IsoGitFsPromises };

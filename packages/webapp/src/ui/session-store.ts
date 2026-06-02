@@ -2,7 +2,7 @@
  * Session persistence — save/restore conversations to IndexedDB.
  */
 
-import type { Session, ChatMessage } from './types.js';
+import type { ChatMessage, Session } from './types.js';
 
 const DB_NAME = 'browser-coding-agent';
 const DB_VERSION = 1;

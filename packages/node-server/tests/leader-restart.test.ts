@@ -1,7 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
-import { findSliccPageTarget, restartLeader, createHttpCdp } from '../src/leader-restart.js';
-import { WebSocketServer } from 'ws';
 import { createServer } from 'node:http';
+import { describe, expect, it, vi } from 'vitest';
+import { WebSocketServer } from 'ws';
+import { createHttpCdp, findSliccPageTarget, restartLeader } from '../src/leader-restart.js';
 
 describe('findSliccPageTarget', () => {
   it('returns the page target whose URL starts with the local URL', () => {

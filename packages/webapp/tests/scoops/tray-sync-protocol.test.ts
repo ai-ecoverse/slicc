@@ -1,16 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
-  createLeaderSyncChannel,
-  createFollowerSyncChannel,
-  TraySyncChannel,
-  sendCDPResponse,
-  reassembleCDPResponse,
-  sendSnapshot,
-  reassembleSnapshot,
   CDP_CHUNK_THRESHOLD,
-  type LeaderToFollowerMessage,
+  createFollowerSyncChannel,
+  createLeaderSyncChannel,
   type FollowerToLeaderMessage,
+  type LeaderToFollowerMessage,
+  reassembleCDPResponse,
+  reassembleSnapshot,
+  sendCDPResponse,
+  sendSnapshot,
+  TraySyncChannel,
   type TraySyncMessage,
 } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';

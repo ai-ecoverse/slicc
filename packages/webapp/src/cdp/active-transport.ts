@@ -11,8 +11,8 @@
  * to drive a controlled tab without owning the transport itself.
  */
 
-import type { CDPTransport } from './transport.js';
 import type { BrowserAPI } from './browser-api.js';
+import type { CDPTransport } from './transport.js';
 
 interface BrowserHolder {
   __slicc_browser?: BrowserAPI;

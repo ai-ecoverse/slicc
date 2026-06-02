@@ -97,11 +97,12 @@ Chrome's side panel cannot host macOS TCC (Transparency, Consent, and Control) p
 
 Extension CSP also blocks CDN fetches and dynamic asset loading. ImageMagick WASM and Pyodide must be bundled and loaded via `chrome.runtime.getURL()`.
 
-| Asset                | Solution                                                                                                                                                                                    |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ImageMagick WASM** | Bundled at `dist/extension/magick.wasm`. Fetch as bytes: `const bytes = await fetch(chrome.runtime.getURL('magick.wasm')).then(r => r.arrayBuffer())`. Pass as Uint8Array to initialization |
-| **Pyodide**          | Bundled at `dist/extension/pyodide/`. Load path: `chrome.runtime.getURL('pyodide/')` (trailing slash required)                                                                              |
-| **Sandbox HTML**     | Loaded via `chrome.runtime.getURL('sandbox.html')` as iframe src                                                                                                                            |
+| Asset                | Solution                                                                                                                                                                                                                      |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ImageMagick WASM** | Bundled at `dist/extension/magick.wasm`. Fetch as bytes: `const bytes = await fetch(chrome.runtime.getURL('magick.wasm')).then(r => r.arrayBuffer())`. Pass as Uint8Array to initialization                                   |
+| **Pyodide**          | Bundled at `dist/extension/pyodide/`. Load path: `chrome.runtime.getURL('pyodide/')` (trailing slash required)                                                                                                                |
+| **ffmpeg-core JS**   | Bundled at `dist/extension/vendor/ffmpeg-core.js` (~112 KB). Load via `chrome.runtime.getURL('vendor/ffmpeg-core.js')`. The `ffmpeg-core.wasm` binary still streams from the CDN on first run and is cached via Cache Storage |
+| **Sandbox HTML**     | Loaded via `chrome.runtime.getURL('sandbox.html')` as iframe src                                                                                                                                                              |
 
 Standalone browser mode loads Pyodide assets from jsdelivr. Keep `pyodide` pinned to an exact version in `package.json`; `packages/webapp/src/shell/supplemental-commands/shared.ts` derives the CDN URL from the installed `pyodide/package.json` version so Renovate updates the npm loader and browser assets together.
 
@@ -111,7 +112,8 @@ File: `packages/chrome-extension/vite.config.ts` `closeBundle` hook must:
 
 1. Copy Pyodide from node_modules (~13MB) to `dist/extension/pyodide/`
 2. Bundle ImageMagick WASM to `dist/extension/magick.wasm`
-3. Ensure manifest `web_accessible_resources` includes all assets
+3. Copy `@ffmpeg/core/dist/esm/ffmpeg-core.js` (~112 KB) to `dist/extension/vendor/ffmpeg-core.js` and sanitize the leftover `unpkg.com/@ffmpeg/core@…/ffmpeg-core.js` literal that `@ffmpeg/ffmpeg`'s `const.js` bundles into the output (Chrome Web Store MV3 reviewers string-match full CDN URLs)
+4. Ensure manifest `web_accessible_resources` includes all assets (`vendor/*` for ffmpeg-core)
 
 ## emscripten WASM Heap Views: Copy Inside the Callback
 
@@ -356,6 +358,14 @@ Host the real leader tray `WebSocket` in `packages/chrome-extension/src/service-
 | ------------- | ------------------------------------------------ |
 | **CLI**       | Direct `WebSocket` in the app runtime            |
 | **Extension** | Service worker proxy, not the offscreen document |
+
+## Silent OAuth renewal must stay windowless (IMS JS redirect)
+
+`launchWebAuthFlow({ interactive: false })` alone flashes / fails for Adobe IMS
+because its `prompt=none` page JS-redirects after load. Keep the
+`abortOnLoadForNonInteractive: false` + `timeoutMsForNonInteractive` options in
+`packages/chrome-extension/src/oauth-flow-options.ts`. See
+`docs/oauth-intercept.md` "Silent token renewal".
 
 ## Fetch Proxy: CORS & CSP
 

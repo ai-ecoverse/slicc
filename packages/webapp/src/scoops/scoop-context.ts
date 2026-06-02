@@ -10,41 +10,41 @@
  * - NanoClaw-style tools (send_message, scoop management)
  */
 
-import type { RegisteredScoop } from './types.js';
-import type { VirtualFS } from '../fs/index.js';
-import type { RestrictedFS } from '../fs/restricted-fs.js';
-import { WasmShell } from '../shell/index.js';
-import { Agent, adaptTools, createLogger } from '../core/index.js';
+import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
+import type { Api, AssistantMessage as PiAssistantMessage } from '@earendil-works/pi-ai';
+import { getSupportedThinkingLevels, isContextOverflow, streamSimple } from '@earendil-works/pi-ai';
+import type { BrowserAPI } from '../cdp/index.js';
 import { createCompactContext, stripOrphanedToolResults } from '../core/context-compaction.js';
 import type {
-  AgentEvent as CoreAgentEvent,
   AgentMessage,
   AssistantMessage,
   AssistantMessageEvent,
-  TextContent,
+  AgentEvent as CoreAgentEvent,
   ImageContent,
   Model,
+  TextContent,
 } from '../core/index.js';
-import { isContextOverflow, streamSimple, getSupportedThinkingLevels } from '@earendil-works/pi-ai';
-import type { Api, AssistantMessage as PiAssistantMessage } from '@earendil-works/pi-ai';
-import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
+import { Agent, adaptTools, createLogger } from '../core/index.js';
+import { fetchSecretEnvVars } from '../core/secret-env.js';
 import type { SessionStore } from '../core/session.js';
-import { createFileTools, createBashTool } from '../tools/index.js';
-import type { BrowserAPI } from '../cdp/index.js';
+import type { VirtualFS } from '../fs/index.js';
+import type { RestrictedFS } from '../fs/restricted-fs.js';
+import type { Process, ProcessManager } from '../kernel/process-manager.js';
+import { WasmShell } from '../shell/index.js';
+import { createBashTool, createFileTools } from '../tools/index.js';
 import {
   getApiKey,
+  getSelectedProvider,
   resolveCurrentModel,
   resolveModelById,
-  getSelectedProvider,
 } from '../ui/provider-settings.js';
-import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
+import { getAdobeSessionId } from './llm-session-id.js';
 import {
   createScoopManagementTools,
   type ScoopManagementToolsConfig,
 } from './scoop-management-tools.js';
-import { getAdobeSessionId } from './llm-session-id.js';
-import { fetchSecretEnvVars } from '../core/secret-env.js';
-import type { Process, ProcessManager } from '../kernel/process-manager.js';
+import { createDefaultSkills, formatSkillsForPrompt, loadSkills } from './skills.js';
+import type { RegisteredScoop } from './types.js';
 
 const log = createLogger('scoop-context');
 
@@ -107,6 +107,8 @@ export function isNonRetryableError(msg: string): boolean {
     /\b(401|403|404|405|410|422)\b/.test(msg) ||
     // Authentication / authorization failures
     /unauthorized|forbidden|authentication.*failed|invalid.*api.?key/i.test(msg) ||
+    // Expired session that needs interactive re-auth (won't succeed on retry)
+    /session expired|log in again|re-?authenticate/i.test(msg) ||
     // Invalid model errors
     /model.*not.*found|invalid.*model|unknown.*model|does.*not.*exist/i.test(msg) ||
     // Account/billing issues

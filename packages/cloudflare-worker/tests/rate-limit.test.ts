@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { checkRateLimit, clearAll } from '../src/cloud/rate-limit.js';
 
 beforeEach(() => clearAll());

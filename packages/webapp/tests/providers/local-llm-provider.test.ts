@@ -7,7 +7,7 @@
  * for the same pattern.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Storage stub — provider-settings.ts reads localStorage during getModelIds.
 const storage = new Map<string, string>();
@@ -23,8 +23,8 @@ vi.stubGlobal('localStorage', {
 });
 
 import {
-  originOf,
   detectRuntime,
+  originOf,
   verifyConnection,
 } from '../../src/providers/built-in/local-llm.js';
 

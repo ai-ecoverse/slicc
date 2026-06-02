@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { normalizePath, splitPath, pathSegments, joinPath } from '../../src/fs/path-utils.js';
+import { describe, expect, it } from 'vitest';
+import { joinPath, normalizePath, pathSegments, splitPath } from '../../src/fs/path-utils.js';
 
 describe('normalizePath', () => {
   it('returns / for empty string', () => {

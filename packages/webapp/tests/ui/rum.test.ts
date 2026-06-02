@@ -1,14 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 describe('rum.js', () => {
   let sendBeaconSpy: ReturnType<typeof vi.fn>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let randomSpy: ReturnType<typeof vi.spyOn<any, any>>;
 
   beforeEach(() => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (globalThis as any).window;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (globalThis as any).window = {
       hlx: undefined,
       location: { href: 'https://example.test/page' },
@@ -21,7 +18,6 @@ describe('rum.js', () => {
       configurable: true,
     });
     const store: Record<string, string> = {};
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (globalThis as any).localStorage = {
       getItem: (k: string) => store[k] ?? null,
       setItem: (k: string, v: string) => {
@@ -33,13 +29,10 @@ describe('rum.js', () => {
 
   afterEach(() => {
     randomSpy?.mockRestore();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (globalThis as any).window;
     if (Object.getOwnPropertyDescriptor(globalThis, 'navigator')?.configurable) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       delete (globalThis as any).navigator;
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (globalThis as any).localStorage;
   });
 
@@ -111,7 +104,6 @@ describe('rum.js', () => {
 
   it('bails silently when window is undefined', async () => {
     // Simulate non-browser context (e.g., SSR, worker without window).
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (globalThis as any).window;
     const { default: sampleRUM } = await import('../../src/ui/rum.js');
 
@@ -120,7 +112,6 @@ describe('rum.js', () => {
   });
 
   it('bails silently when navigator is undefined', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (globalThis as any).navigator;
     randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.05);
     const { default: sampleRUM } = await import('../../src/ui/rum.js');
@@ -130,7 +121,6 @@ describe('rum.js', () => {
 
   it('falls back to default weight when localStorage.getItem throws', async () => {
     // Simulate restricted privacy context where localStorage access throws.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (globalThis as any).localStorage = {
       getItem: () => {
         throw new Error('SecurityError: storage blocked');

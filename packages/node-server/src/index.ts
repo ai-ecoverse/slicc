@@ -1,21 +1,17 @@
 #!/usr/bin/env node
+import { promises as fsPromises } from 'node:fs';
+import { createSubstrate } from '@slicc/cloud-core';
+import { type ChildProcess, spawn } from 'child_process';
+import express, { type NextFunction, type Request, type Response } from 'express';
+import { existsSync, readFileSync } from 'fs';
 import { createServer } from 'http';
 import { createServer as createNetServer } from 'net';
-import { spawn, type ChildProcess } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
-import { join, resolve, dirname, sep } from 'path';
 import { homedir } from 'os';
+import { dirname, join, resolve, sep } from 'path';
 import { Readable, Transform } from 'stream';
 import { StringDecoder } from 'string_decoder';
 import { fileURLToPath } from 'url';
-import express, { type Request, type Response, type NextFunction } from 'express';
-import { WebSocketServer, WebSocket } from 'ws';
-import {
-  ElectronAppAlreadyRunningError,
-  ElectronOverlayInjector,
-  launchElectronApp,
-} from './electron-controller.js';
-import { getElectronAppPorts } from './electron-runtime.js';
+import { WebSocket, WebSocketServer } from 'ws';
 import {
   buildChromeLaunchArgs,
   clearStaleDevToolsActivePort,
@@ -25,34 +21,37 @@ import {
   resolveChromeLaunchProfile,
   waitForCdpPort,
 } from './chrome-launch.js';
-import { resolveCliBrowserLaunchUrl } from './launch-url.js';
-import { parseCliRuntimeFlags } from './runtime-flags.js';
-import { FileLogger } from './file-logger.js';
 import { CliLogDedup } from './cli-log-dedup.js';
-import { EnvSecretStore } from './secrets/env-secret-store.js';
-import { SecretProxyManager } from './secrets/proxy-manager.js';
-import { OauthSecretStore } from './secrets/oauth-secret-store.js';
-import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
-import { readOrCreateSessionId } from './secrets/session-id-file.js';
-import { registerCloudStatusEndpoint } from './cloud-status.js';
-import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
+import { type ParsedCloudArgs, parseCloudArgs } from './cloud/dispatch.js';
+import { runKill } from './cloud/kill.js';
 import { registerSecretsReloadEndpoint } from './secrets-reload-endpoint.js';
-import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
-
-import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
-import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
-import { parseCloudArgs, type ParsedCloudArgs } from './cloud/dispatch.js';
-import { createSubstrate } from '@slicc/cloud-core';
-import { FileRegistry } from './cloud/registry-file.js';
-import { runStart } from './cloud/start.js';
 import { runList } from './cloud/list.js';
 import { runPause } from './cloud/pause.js';
+import { FileRegistry } from './cloud/registry-file.js';
 import { runResume } from './cloud/resume.js';
-import { runKill } from './cloud/kill.js';
-import { promises as fsPromises } from 'node:fs';
+import { runStart } from './cloud/start.js';
+import { registerCloudStatusEndpoint } from './cloud-status.js';
+import {
+  ElectronAppAlreadyRunningError,
+  ElectronOverlayInjector,
+  launchElectronApp,
+} from './electron-controller.js';
+import { getElectronAppPorts } from './electron-runtime.js';
+import { FETCH_PROXY_SKIP_HEADERS } from './fetch-proxy-headers.js';
+import { FileLogger } from './file-logger.js';
+import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
+import { resolveCliBrowserLaunchUrl } from './launch-url.js';
+import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
+import { buildLocalApiDescriptor, sliccLinksMiddleware } from './links-middleware.js';
+import { parseCliRuntimeFlags } from './runtime-flags.js';
+import { EnvSecretStore } from './secrets/env-secret-store.js';
+import { OauthSecretStore } from './secrets/oauth-secret-store.js';
+import { SecretProxyManager } from './secrets/proxy-manager.js';
+import { readOrCreateSessionId } from './secrets/session-id-file.js';
+import { handleDaSignAndForward, handleS3SignAndForward } from './secrets/sign-and-forward.js';
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const PROJECT_ROOT = resolve(__dirname, '..', '..');
+const Dirname = fileURLToPath(new URL('.', import.meta.url));
+const PROJECT_ROOT = resolve(Dirname, '..', '..');
 
 // ---------------------------------------------------------------------------
 // Cloud dispatcher — must run BEFORE any other boot logic
@@ -471,7 +470,7 @@ async function main() {
             }
           }),
         ]);
-      } catch (err) {
+      } catch (_err) {
         // Check if app exited quickly (likely due to disabled remote debugging fuse)
         if (exitCode !== null) {
           console.error(
@@ -1583,7 +1582,7 @@ async function main() {
     console.log(`Vite dev server middleware attached (HMR on ${SERVE_ORIGIN}/__vite_hmr)`);
   } else {
     // Production mode: serve built static files
-    const uiDir = resolve(__dirname, '..', 'ui');
+    const uiDir = resolve(Dirname, '..', 'ui');
     app.use(
       express.static(uiDir, {
         setHeaders: (res, path) => {

@@ -1,20 +1,20 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { PYODIDE_CDN } from '../../../src/kernel/realm/py-realm-shared.js';
+import { resolvePyodideIndexURL } from '../../../src/kernel/realm/realm-factory.js';
 import {
-  toPreviewUrl,
-  isLikelyUrl,
   basename,
   dirname,
-  joinPath,
   ensureWithinRoot,
+  isExtensionRuntime,
+  isLikelyUrl,
+  isNodeRuntime,
   isSafeServeEntry,
-  resolveServeEntryPath,
+  joinPath,
   resolveNodePackageBaseUrl,
   resolvePinnedPackageVersion,
-  isNodeRuntime,
-  isExtensionRuntime,
+  resolveServeEntryPath,
+  toPreviewUrl,
 } from '../../../src/shell/supplemental-commands/shared.js';
-import { resolvePyodideIndexURL } from '../../../src/kernel/realm/realm-factory.js';
-import { PYODIDE_CDN } from '../../../src/kernel/realm/py-realm-shared.js';
 
 describe('toPreviewUrl', () => {
   it('returns localhost preview URL in non-extension environment', () => {

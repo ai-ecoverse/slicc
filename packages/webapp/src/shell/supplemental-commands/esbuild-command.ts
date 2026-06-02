@@ -9,9 +9,9 @@
  *     the entry point and all transitively resolved local imports
  *     into a single output. Local paths are read from the VFS via
  *     `ctx.fs`; bare specifiers (`react`, `lodash/fp`, …) are
- *     redirected to `https://esm.sh/<spec>` and stitched together
- *     through an `http-url` plugin namespace so esbuild can fetch
- *     their bodies and recurse.
+ *     redirected through the esm.sh CDN (see `cdn-url-builder`)
+ *     and stitched together through an `http-url` plugin namespace
+ *     so esbuild can fetch their bodies and recurse.
  *
  *  2. **`esbuild --transform <file>`** (or stdin → stdout): runs
  *     the single-file `transform` API. Supports `--format`,
@@ -23,9 +23,11 @@
  * fidelity with the upstream CLI.
  */
 
-import { defineCommand } from 'just-bash';
-import type { Command, CommandContext } from 'just-bash';
 import type { BuildOptions, Loader, Plugin, TransformOptions } from 'esbuild-wasm';
+import type { Command, CommandContext } from 'just-bash';
+import { defineCommand } from 'just-bash';
+import { stdinAsText } from '../just-bash-compat.js';
+import { esmShUrl } from './cdn-url-builder.js';
 import { getEsbuild } from './esbuild-wasm.js';
 import { basename, dirname, joinPath } from './shared.js';
 
@@ -51,7 +53,7 @@ Output:
 
 Module resolution:
   - Local paths (./foo, /workspace/bar) read from the VFS.
-  - Bare specifiers (react, lodash/fp, ...) resolve to https://esm.sh/<spec>.
+  - Bare specifiers (react, lodash/fp, ...) resolve through the esm.sh CDN.
 
 First run downloads ~10 MB of esbuild.wasm; subsequent runs reuse
 the cached copy via the Cache Storage API.
@@ -184,7 +186,8 @@ export function parseEsbuildArgs(args: string[]): ParsedEsbuildArgs {
 
 /** Marker namespace for esm.sh-redirected bare specifiers. */
 const ESM_SH_NAMESPACE = 'http-url';
-const ESM_SH_BASE = 'https://esm.sh/';
+/** Trailing-slash base URL the bare-specifier branch concatenates against. */
+const ESM_SH_BASE = esmShUrl('').toString();
 
 /**
  * Build a plugin that bridges esbuild's resolver to the VFS for
@@ -241,8 +244,7 @@ export function createVfsPlugin(
           args.path.startsWith('../') ||
           args.path.startsWith('/')
         ) {
-          const importerDir =
-            args.importer && args.importer.startsWith('/') ? dirname(args.importer) : cwd;
+          const importerDir = args.importer?.startsWith('/') ? dirname(args.importer) : cwd;
           const resolved = fs.resolvePath(importerDir, args.path);
           const withExt = await resolveWithExtensions(fs, resolved);
           return { path: withExt };
@@ -334,15 +336,13 @@ async function resolveWithExtensions(fs: CommandContext['fs'], candidate: string
   return candidate;
 }
 
-interface FormatMessagesFn {
-  (
-    messages: {
-      text: string;
-      location?: { file?: string; line?: number; column?: number } | null;
-    }[],
-    opts: { kind: 'error' | 'warning'; color?: boolean }
-  ): Promise<string[]>;
-}
+type FormatMessagesFn = (
+  messages: {
+    text: string;
+    location?: { file?: string; line?: number; column?: number } | null;
+  }[],
+  opts: { kind: 'error' | 'warning'; color?: boolean }
+) => Promise<string[]>;
 
 async function renderDiagnostics(
   formatMessages: FormatMessagesFn,
@@ -433,7 +433,7 @@ async function runTransform(
     source = await ctx.fs.readFile(inputPath);
     sourcefile = inputPath;
   } else {
-    source = ctx.stdin ?? '';
+    source = stdinAsText(ctx.stdin);
     if (!source) {
       return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
     }

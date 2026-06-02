@@ -1,10 +1,10 @@
 import type {
-  SandboxSubstrate,
-  SandboxHandle,
   CreateOpts,
-  SandboxInfo,
-  SandboxSummary,
   RunResult,
+  SandboxHandle,
+  SandboxInfo,
+  SandboxSubstrate,
+  SandboxSummary,
 } from '@slicc/cloud-core';
 
 interface FakeSandboxData {

@@ -1,14 +1,14 @@
 import {
+  closeSync,
   mkdirSync,
   openSync,
-  writeSync,
-  closeSync,
   readdirSync,
   statSync,
   unlinkSync,
+  writeSync,
 } from 'node:fs';
-import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { LogLevel } from './runtime-flags.js';
 
 // ---------------------------------------------------------------------------
@@ -16,7 +16,6 @@ import type { LogLevel } from './runtime-flags.js';
 // ---------------------------------------------------------------------------
 
 // Matches all ANSI escape sequences (CSI sequences, OSC, etc.)
-// eslint-disable-next-line no-control-regex
 const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b[^[].?/g;
 
 export function stripAnsi(str: string): string {

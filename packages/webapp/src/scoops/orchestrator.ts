@@ -9,34 +9,33 @@
  * - Owns a single shared VirtualFS instance
  */
 
-import {
-  CURRENT_SCOOP_CONFIG_VERSION,
-  type RegisteredScoop,
-  type ChannelMessage,
-  type ScoopTabState,
-  type ScheduledTask,
-  type ThinkingLevel,
-} from './types.js';
-import * as db from './db.js';
-import { createLogger } from '../core/logger.js';
-import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
-import { TaskScheduler } from './scheduler.js';
-import { VirtualFS, FsWatcher } from '../fs/index.js';
-import { RestrictedFS } from '../fs/restricted-fs.js';
+import type { Api, Model } from '@earendil-works/pi-ai';
 import type { BrowserAPI } from '../cdp/index.js';
-import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
-import type { ProcessManager } from '../kernel/process-manager.js';
-import { buildActiveLicksError, type LickManager } from './lick-manager.js';
-import { isExternalLickChannel } from './lick-formatting.js';
-import { SessionStore } from '../core/session.js';
 import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
+import { createLogger } from '../core/logger.js';
+import { SessionStore } from '../core/session.js';
+import type { AssistantMessage, ImageContent } from '../core/types.js';
+import { FsWatcher, VirtualFS } from '../fs/index.js';
+import { RestrictedFS } from '../fs/restricted-fs.js';
+import type { ProcessManager } from '../kernel/process-manager.js';
 import {
   registerSessionCostsProvider,
   type ScoopCostData,
 } from '../shell/supplemental-commands/cost-command.js';
-import type { AssistantMessage, ImageContent } from '../core/types.js';
 import { applyConeMemoryBudget, CONE_MEMORY_PATH } from './cone-memory-budget.js';
-import type { Api, Model } from '@earendil-works/pi-ai';
+import * as db from './db.js';
+import { isExternalLickChannel } from './lick-formatting.js';
+import { buildActiveLicksError, type LickManager } from './lick-manager.js';
+import { TaskScheduler } from './scheduler.js';
+import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
+import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
+import {
+  type ChannelMessage,
+  CURRENT_SCOOP_CONFIG_VERSION,
+  type RegisteredScoop,
+  type ScoopTabState,
+  type ThinkingLevel,
+} from './types.js';
 
 const log = createLogger('orchestrator');
 

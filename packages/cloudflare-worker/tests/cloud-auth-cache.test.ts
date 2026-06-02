@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { getCached, setCached, invalidate, clearAll } from '../src/cloud/auth-cache.js';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { clearAll, getCached, invalidate, setCached } from '../src/cloud/auth-cache.js';
 
 beforeEach(() => clearAll());
 

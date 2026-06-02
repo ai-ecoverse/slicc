@@ -1,12 +1,12 @@
-import { describe, it, expect } from 'vitest';
-import { startCone, reserveSlot } from '../src/operations/start.js';
+import { describe, expect, it } from 'vitest';
 import type {
   CreateOpts,
   SandboxHandle,
   SandboxSubstrate,
-  SubstrateId,
   SandboxSummary,
+  SubstrateId,
 } from '../src/index.js';
+import { reserveSlot, startCone } from '../src/operations/start.js';
 import { MemRegistry, makeFakeHandle, makeFakeSubstrate } from './fixtures/index.js';
 
 // Specialized for startCone: handle stores files per-create, tracks kill state for list result.

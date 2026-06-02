@@ -13,9 +13,9 @@
  * pending entries left behind by the impatient (double-click) path.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { DEFAULT_DOUBLE_CLICK_MS, type SliccPressButton } from '../../src/ui/press-button.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LONG_PRESS_MS } from '../../src/ui/long-press.js';
+import { DEFAULT_DOUBLE_CLICK_MS, type SliccPressButton } from '../../src/ui/press-button.js';
 
 // Mirror the exact event wiring `layout.ts` installs on the new-session
 // `<slicc-press-button>`. Keeping the wiring inline in the test makes

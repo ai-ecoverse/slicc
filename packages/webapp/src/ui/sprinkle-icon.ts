@@ -21,8 +21,8 @@
  * cannot escape the rail back into the parent UI.
  */
 
-import type { VirtualFS } from '../fs/index.js';
 import { createLogger } from '../core/logger.js';
+import type { VirtualFS } from '../fs/index.js';
 
 const log = createLogger('sprinkle-icon');
 

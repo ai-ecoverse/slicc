@@ -17,8 +17,8 @@
  *   overflow the available rail height.
  */
 
-import type { ZoneId } from './panel-types.js';
 import { LONG_PRESS_MS } from './long-press.js';
+import type { ZoneId } from './panel-types.js';
 // Side-effect import: registers the `<slicc-press-button>` custom element.
 import './press-button.js';
 import type { SliccPressButton } from './press-button.js';

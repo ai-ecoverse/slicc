@@ -37,27 +37,27 @@
  *   then delegate.
  */
 
-import type {
-  ProviderConfig,
-  InterceptingOAuthLauncher,
-  OAuthLoginOptions,
-  DeviceCodePrompter,
-  ModelMetadata,
-} from '../src/providers/types.js';
+import type { Api, Context, Model } from '@earendil-works/pi-ai';
 import {
-  registerApiProvider,
-  streamAnthropic,
-  streamSimpleAnthropic,
-  streamOpenAICompletions,
-  streamSimpleOpenAICompletions,
-  streamOpenAIResponses,
-  streamSimpleOpenAIResponses,
   createAssistantMessageEventStream,
   getModel,
   getModels,
+  registerApiProvider,
+  streamAnthropic,
+  streamOpenAICompletions,
+  streamOpenAIResponses,
+  streamSimpleAnthropic,
+  streamSimpleOpenAICompletions,
+  streamSimpleOpenAIResponses,
 } from '@earendil-works/pi-ai';
-import type { Api, Model, Context } from '@earendil-works/pi-ai';
-import { saveOAuthAccount, getAccounts } from '../src/ui/provider-settings.js';
+import type {
+  DeviceCodePrompter,
+  InterceptingOAuthLauncher,
+  ModelMetadata,
+  OAuthLoginOptions,
+  ProviderConfig,
+} from '../src/providers/types.js';
+import { getAccounts, saveOAuthAccount } from '../src/ui/provider-settings.js';
 
 // ── Constants ──────────────────────────────────────────────────────
 

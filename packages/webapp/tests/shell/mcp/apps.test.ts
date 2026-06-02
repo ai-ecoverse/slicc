@@ -1,15 +1,15 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { GLOBAL_FS_DB_NAME } from '../../../src/fs/global-db.js';
+import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import {
-  MCP_SPRINKLES_DIR,
   escapeHtml,
+  MCP_SPRINKLES_DIR,
   materializeAppSprinkles,
   removeAppSprinkles,
   renderAppSprinkle,
   slugifyAppName,
 } from '../../../src/shell/mcp/apps.js';
-import { VirtualFS } from '../../../src/fs/virtual-fs.js';
-import { GLOBAL_FS_DB_NAME } from '../../../src/fs/global-db.js';
 
 async function wipeFs(): Promise<VirtualFS> {
   return VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME, wipe: true });

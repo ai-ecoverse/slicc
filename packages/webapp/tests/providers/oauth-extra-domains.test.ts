@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock provider config so saveOAuthAccount sees a hardcoded oauthTokenDomains.
 vi.mock('../../src/providers/index.js', async () => {
@@ -48,8 +48,9 @@ describe('OAuth extra-domains store', () => {
   });
 
   it('round-trips extra domains per-provider', async () => {
-    const { setExtraOAuthDomains, getExtraOAuthDomains } =
-      await import('../../src/ui/provider-settings.js');
+    const { setExtraOAuthDomains, getExtraOAuthDomains } = await import(
+      '../../src/ui/provider-settings.js'
+    );
     expect(getExtraOAuthDomains('adobe')).toEqual([]);
     setExtraOAuthDomains('adobe', ['admin.da.live', '*.da.live']);
     expect(getExtraOAuthDomains('adobe')).toEqual(['admin.da.live', '*.da.live']);
@@ -59,8 +60,9 @@ describe('OAuth extra-domains store', () => {
   });
 
   it('setExtraOAuthDomains([]) clears the provider entry', async () => {
-    const { setExtraOAuthDomains, getExtraOAuthDomains, getAllExtraOAuthDomains } =
-      await import('../../src/ui/provider-settings.js');
+    const { setExtraOAuthDomains, getExtraOAuthDomains, getAllExtraOAuthDomains } = await import(
+      '../../src/ui/provider-settings.js'
+    );
     setExtraOAuthDomains('adobe', ['admin.da.live']);
     setExtraOAuthDomains('github', ['hub.example.com']);
     expect(getAllExtraOAuthDomains()).toEqual({
@@ -73,16 +75,18 @@ describe('OAuth extra-domains store', () => {
   });
 
   it('trims whitespace and drops empty entries on write', async () => {
-    const { setExtraOAuthDomains, getExtraOAuthDomains } =
-      await import('../../src/ui/provider-settings.js');
+    const { setExtraOAuthDomains, getExtraOAuthDomains } = await import(
+      '../../src/ui/provider-settings.js'
+    );
     setExtraOAuthDomains('adobe', ['  admin.da.live  ', '', '   ', '*.da.live']);
     expect(getExtraOAuthDomains('adobe')).toEqual(['admin.da.live', '*.da.live']);
   });
 
   it('survives malformed localStorage payloads', async () => {
     lsData['slicc_oauth_extra_domains'] = '{not json';
-    const { getExtraOAuthDomains, getAllExtraOAuthDomains } =
-      await import('../../src/ui/provider-settings.js');
+    const { getExtraOAuthDomains, getAllExtraOAuthDomains } = await import(
+      '../../src/ui/provider-settings.js'
+    );
     expect(getExtraOAuthDomains('adobe')).toEqual([]);
     expect(getAllExtraOAuthDomains()).toEqual({});
   });
@@ -164,8 +168,9 @@ describe('setExtraOAuthDomainsAsync — DOM vs worker path', () => {
       },
       dispose: () => {},
     };
-    const { setExtraOAuthDomainsAsync, getExtraOAuthDomains } =
-      await import('../../src/ui/provider-settings.js');
+    const { setExtraOAuthDomainsAsync, getExtraOAuthDomains } = await import(
+      '../../src/ui/provider-settings.js'
+    );
     await setExtraOAuthDomainsAsync('adobe', ['admin.hlx.page', '*.aem.page']);
     expect(getExtraOAuthDomains('adobe')).toEqual(['admin.hlx.page', '*.aem.page']);
     expect(calls).toEqual([]);
@@ -189,8 +194,9 @@ describe('setExtraOAuthDomainsAsync — DOM vs worker path', () => {
       },
       dispose: () => {},
     };
-    const { setExtraOAuthDomainsAsync, getExtraOAuthDomains } =
-      await import('../../src/ui/provider-settings.js');
+    const { setExtraOAuthDomainsAsync, getExtraOAuthDomains } = await import(
+      '../../src/ui/provider-settings.js'
+    );
     await setExtraOAuthDomainsAsync('adobe', ['admin.hlx.page']);
     expect(calls).toEqual([
       { op: 'oauth-extras-set', payload: { providerId: 'adobe', domains: ['admin.hlx.page'] } },
@@ -346,8 +352,9 @@ describe('saveOAuthAccount — merges provider defaults + extras', () => {
   });
 
   it('POSTs defaults + extras merged when extras configured', async () => {
-    const { saveOAuthAccount, setExtraOAuthDomains } =
-      await import('../../src/ui/provider-settings.js');
+    const { saveOAuthAccount, setExtraOAuthDomains } = await import(
+      '../../src/ui/provider-settings.js'
+    );
     setExtraOAuthDomains('adobe', ['admin.da.live', '*.da.live']);
     await saveOAuthAccount({ providerId: 'adobe', accessToken: 'eyJrealtoken' });
     expect(postedDomains).toEqual([
@@ -360,8 +367,9 @@ describe('saveOAuthAccount — merges provider defaults + extras', () => {
   });
 
   it('deduplicates case-insensitively when an extra duplicates a default', async () => {
-    const { saveOAuthAccount, setExtraOAuthDomains } =
-      await import('../../src/ui/provider-settings.js');
+    const { saveOAuthAccount, setExtraOAuthDomains } = await import(
+      '../../src/ui/provider-settings.js'
+    );
     setExtraOAuthDomains('adobe', ['IMS-NA1.ADOBELOGIN.COM', 'admin.da.live']);
     await saveOAuthAccount({ providerId: 'adobe', accessToken: 'eyJrealtoken' });
     // First-seen wins (provider defaults preserved); duplicate dropped.

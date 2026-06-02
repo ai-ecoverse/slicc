@@ -1,5 +1,5 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 
 // Keep a module-level registry of active fswatches
 interface FsWatchEntry {

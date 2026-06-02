@@ -7,31 +7,31 @@
  * LOCAL TESTING ONLY — not committed.
  */
 
-import type { ProviderConfig } from '../types.js';
-import {
-  registerApiProvider,
-  calculateCost,
-  createAssistantMessageEventStream,
-} from '@earendil-works/pi-ai';
-import type { AssistantMessageEventStream } from '@earendil-works/pi-ai';
-import { transformMessages } from '@earendil-works/pi-ai/dist/providers/transform-messages.js';
-import { buildBaseOptions } from '@earendil-works/pi-ai/dist/providers/simple-options.js';
 import type {
   Api,
-  Model,
-  Context,
-  SimpleStreamOptions,
   AssistantMessage,
+  AssistantMessageEventStream,
+  Context,
+  Model,
+  SimpleStreamOptions,
   TextContent,
   ToolCall,
 } from '@earendil-works/pi-ai';
+import {
+  calculateCost,
+  createAssistantMessageEventStream,
+  registerApiProvider,
+} from '@earendil-works/pi-ai';
+import { buildBaseOptions } from '@earendil-works/pi-ai/dist/providers/simple-options.js';
+import { transformMessages } from '@earendil-works/pi-ai/dist/providers/transform-messages.js';
 import { AzureOpenAI } from 'openai';
 import type {
   ChatCompletionChunk,
   ChatCompletionMessageParam,
   ChatCompletionTool,
 } from 'openai/resources/chat/completions';
-import { getDeploymentForProvider, getApiVersionForProvider } from '../../ui/provider-settings.js';
+import { getApiVersionForProvider, getDeploymentForProvider } from '../../ui/provider-settings.js';
+import type { ProviderConfig } from '../types.js';
 
 // ── Config ─────────────────────────────────────────────────────────
 

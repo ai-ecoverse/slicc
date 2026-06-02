@@ -14,8 +14,17 @@ swift build
 swift test
 swift run Sliccstart
 npm run build
+npm run lint -w @slicc/swift-launcher   # SwiftLint
 ./sign-and-package.sh
 ```
+
+## Linting
+
+`packages/swift-launcher/.swiftlint.yml` inherits the shared rule set from the
+repo-root `.swiftlint.yml` (via `parent_config`) and excludes this package's
+`.build`. Warnings surface code-quality issues; only `error`-severity violations
+fail CI. Run `npm run lint:fix -w @slicc/swift-launcher` to auto-correct fixable
+violations.
 
 ## Main Package Layout
 

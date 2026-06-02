@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { SprinkleBridge } from '../../src/ui/sprinkle-bridge.js';
-import type { LickEvent } from '../../src/scoops/lick-manager.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VirtualFS } from '../../src/fs/index.js';
+import type { LickEvent } from '../../src/scoops/lick-manager.js';
+import { SprinkleBridge } from '../../src/ui/sprinkle-bridge.js';
 
 describe('SprinkleBridge', () => {
   let bridge: SprinkleBridge;
@@ -12,6 +12,7 @@ describe('SprinkleBridge', () => {
   let minimizeHandlerMock: ReturnType<typeof vi.fn>;
   let stopConeHandlerMock: ReturnType<typeof vi.fn>;
   let attachImageHandlerMock: ReturnType<typeof vi.fn>;
+  let captureScreenHandlerMock: ReturnType<typeof vi.fn>;
   let mockFs: VirtualFS;
 
   beforeEach(() => {
@@ -22,6 +23,12 @@ describe('SprinkleBridge', () => {
     minimizeHandlerMock = vi.fn();
     stopConeHandlerMock = vi.fn();
     attachImageHandlerMock = vi.fn();
+    captureScreenHandlerMock = vi.fn().mockResolvedValue({
+      base64: 'defaultBase64',
+      width: 800,
+      height: 600,
+      mimeType: 'image/png',
+    });
     mockFs = {
       readFile: vi.fn().mockResolvedValue('file content'),
       writeFile: vi.fn().mockResolvedValue(undefined),
@@ -40,7 +47,8 @@ describe('SprinkleBridge', () => {
       closeHandler,
       minimizeHandlerMock,
       stopConeHandlerMock,
-      attachImageHandlerMock
+      attachImageHandlerMock,
+      captureScreenHandlerMock
     );
   });
 
@@ -219,5 +227,32 @@ describe('SprinkleBridge', () => {
     const api = bridge.createAPI('test-sprinkle');
     api.attachImage('abc123');
     expect(attachImageHandlerMock).toHaveBeenCalledWith('abc123', undefined, undefined);
+  });
+
+  it('captureScreen() delegates to the captureScreen handler', async () => {
+    const customCaptureScreenHandler = vi.fn().mockResolvedValue({
+      base64: 'iVBORw0KGgo=',
+      width: 1920,
+      height: 1080,
+      mimeType: 'image/png',
+    });
+    bridge = new SprinkleBridge(
+      mockFs,
+      lickHandler,
+      closeHandler,
+      minimizeHandlerMock,
+      stopConeHandlerMock,
+      attachImageHandlerMock,
+      customCaptureScreenHandler
+    );
+    const api = bridge.createAPI('test-sprinkle');
+    const result = await api.captureScreen();
+    expect(customCaptureScreenHandler).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      base64: 'iVBORw0KGgo=',
+      width: 1920,
+      height: 1080,
+      mimeType: 'image/png',
+    });
   });
 });

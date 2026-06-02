@@ -6,7 +6,7 @@
  * `tests/core/context-compaction.test.ts`.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import type { Api, Model } from '@earendil-works/pi-ai';
 
@@ -23,18 +23,18 @@ vi.mock('@earendil-works/pi-ai', async (importOriginal) => {
 import { VirtualFS } from '../../src/fs/index.js';
 import {
   applyConeMemoryBudget,
-  computeBudget,
   CONE_MEMORY_PATH,
+  computeBudget,
   MEMORY_BASE_CHARS,
   MEMORY_OVERSHOOT_RATIO,
   MEMORY_PER_LOG_CHARS,
   readSessionCount,
   restructureConeMemory,
-  splitConeMemory,
   SESSIONS_INDEX_PATH,
+  splitConeMemory,
 } from '../../src/scoops/cone-memory-budget.js';
+import { getAllScoops, initDB } from '../../src/scoops/db.js';
 import { Orchestrator } from '../../src/scoops/orchestrator.js';
-import { initDB, getAllScoops } from '../../src/scoops/db.js';
 
 const fakeModel = { provider: 'anthropic', id: 'claude-opus-4-6' } as unknown as Model<Api>;
 

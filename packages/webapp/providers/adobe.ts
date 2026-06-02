@@ -18,32 +18,33 @@
  * secrets are hardcoded; the proxy endpoint (base URL) must be configured at runtime.
  */
 
-import type { ProviderConfig, OAuthLauncher } from '../src/providers/types.js';
+import type {
+  AnthropicOptions,
+  Api,
+  Context,
+  Model,
+  OpenAICompletionsOptions,
+  SimpleStreamOptions,
+} from '@earendil-works/pi-ai';
 import {
-  registerApiProvider,
-  streamAnthropic,
-  streamSimpleAnthropic,
-  streamOpenAICompletions,
-  streamSimpleOpenAICompletions,
+  createAssistantMessageEventStream,
   getModels,
   getProviders,
-  createAssistantMessageEventStream,
+  registerApiProvider,
+  streamAnthropic,
+  streamOpenAICompletions,
+  streamSimpleAnthropic,
+  streamSimpleOpenAICompletions,
 } from '@earendil-works/pi-ai';
-import type {
-  Api,
-  Model,
-  Context,
-  SimpleStreamOptions,
-  AnthropicOptions,
-  OpenAICompletionsOptions,
-} from '@earendil-works/pi-ai';
+import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
+import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
+import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
+import { getDailyAdobeUuid } from '../src/scoops/llm-session-id.js';
 import {
-  saveOAuthAccount,
   getAccounts,
   getBaseUrlForProvider,
+  saveOAuthAccount,
 } from '../src/ui/provider-settings.js';
-import { getOAuthPageOrigin } from '../src/providers/oauth-service.js';
-import { getDailyAdobeUuid } from '../src/scoops/llm-session-id.js';
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -305,7 +306,11 @@ export const config: ProviderConfig = {
     return [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }];
   },
 
-  onOAuthLogin: async (launcher: OAuthLauncher, onSuccess: () => void) => {
+  onOAuthLogin: async (
+    launcher: OAuthLauncher,
+    onSuccess: () => void,
+    options?: OAuthLoginOptions
+  ) => {
     const proxyEndpoint = getProxyEndpoint();
     const proxyConfig = await fetchProxyConfig(proxyEndpoint);
 
@@ -341,6 +346,9 @@ export const config: ProviderConfig = {
       redirect_uri: redirectUri,
     });
     if (oauthState) params.set('state', oauthState);
+    // Force re-authentication when reconnecting from a logged-out state so
+    // IMS doesn't silently re-authorize the previous account via SSO.
+    if (options?.forceReauth) params.set('prompt', 'login');
     const authorizeUrl = `${imsHost(imsEnv)}/ims/authorize/v2?${params}`;
 
     const redirectUrl = await launcher(authorizeUrl);
@@ -430,6 +438,11 @@ export const config: ProviderConfig = {
     await saveOAuthAccount({ providerId: 'adobe', accessToken: '' });
   },
 
+  // Note: getOAuthLogoutUrl is intentionally absent for Adobe IMS. The IMS
+  // logout/v1 endpoint requires the access_token in the POST body (not as a
+  // query parameter), so it cannot be driven via a browser popup URL. Token
+  // revocation is handled by onOAuthLogout above via POST /ims/revoke.
+
   onSilentRenew: async () => {
     const account = getAdobeAccount();
     if (!account?.accessToken) return null;
@@ -442,6 +455,9 @@ export const config: ProviderConfig = {
 /** Track in-flight renewal to avoid duplicate attempts. */
 let renewalInProgress: Promise<string | null> | null = null;
 
+/** Skips re-attempting a failed silent renewal until the cooldown elapses. */
+const silentRenewBackoff = createSilentRenewBackoff();
+
 async function getValidAccessToken(): Promise<string> {
   const account = getAdobeAccount();
   if (!account?.accessToken) throw new Error('Not logged in to Adobe — please log in first');
@@ -450,17 +466,11 @@ async function getValidAccessToken(): Promise<string> {
   const expiresIn = (account.tokenExpiresAt ?? 0) - Date.now();
   if (expiresIn > 60000) return account.accessToken;
 
-  // Token expired or about to expire — try silent renewal
+  // Token expired or about to expire — try silent renewal, throttled so a dead
+  // session doesn't re-hit IMS on every stream/turn (see silent-renew-backoff).
   console.log('[adobe] Token expired or expiring soon, attempting silent renewal...');
-  try {
-    const newToken = await silentRenewToken();
-    if (newToken) return newToken;
-  } catch (err) {
-    console.warn(
-      '[adobe] Silent renewal failed:',
-      err instanceof Error ? err.message : String(err)
-    );
-  }
+  const newToken = await silentRenewBackoff.run(() => silentRenewToken());
+  if (newToken) return newToken;
 
   // Re-read account — another concurrent call may have renewed it
   const refreshedAccount = getAdobeAccount();
@@ -535,7 +545,9 @@ async function silentRenewToken(): Promise<string | null> {
       // Use the same launcher as normal login — handles CLI, extension, and Electron
       const { createOAuthLauncher } = await import('../src/providers/oauth-service.js');
       const launcher = createOAuthLauncher();
-      const redirectUrl = await launcher(authorizeUrl);
+      // prompt=none needs no user interaction → drive the launcher silently.
+      // In the extension this maps to launchWebAuthFlow({ interactive: false }).
+      const redirectUrl = await launcher(authorizeUrl, { interactive: false });
 
       if (!redirectUrl) return null;
 

@@ -15,10 +15,9 @@
  * covered by the class-level tests already.
  */
 
-import { describe, it, expect, vi } from 'vitest';
-
-import { startPageFollowerTray } from '../../src/ui/page-follower-tray.js';
+import { describe, expect, it, vi } from 'vitest';
 import type { StartPageFollowerTrayOptions } from '../../src/ui/page-follower-tray.js';
+import { startPageFollowerTray } from '../../src/ui/page-follower-tray.js';
 
 /**
  * Minimal `BrowserAPI`-shaped fake. The helper only references

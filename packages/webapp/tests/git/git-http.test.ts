@@ -2,9 +2,9 @@
  * Tests for git-http client routing through createProxiedFetch.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createGitHttpClient } from '../../src/git/git-http.js';
 import type { GitHttpRequest } from 'isomorphic-git';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createGitHttpClient } from '../../src/git/git-http.js';
 
 describe('git-http', () => {
   describe('createProxiedFetch routing', () => {

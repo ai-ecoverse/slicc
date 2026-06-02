@@ -1,4 +1,3 @@
-/* eslint-disable no-undef */
 /**
  * Inlined Helix RUM sampler — extension panel only.
  * Modeled on @adobe/aem-sidekick's src/extension/utils/rum.js.

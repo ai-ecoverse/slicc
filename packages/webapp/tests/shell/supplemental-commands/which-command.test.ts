@@ -1,13 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { createWhichCommand } from '../../../src/shell/supplemental-commands/which-command.js';
 import type { IFileSystem } from 'just-bash';
+import { describe, expect, it } from 'vitest';
 import type { VirtualFS } from '../../../src/fs/index.js';
+import { createWhichCommand } from '../../../src/shell/supplemental-commands/which-command.js';
 
 function createMockCtx(
-  overrides: {
-    registeredCommands?: string[];
-    fs?: Partial<IFileSystem>;
-  } = {}
+  overrides: { registeredCommands?: string[]; fs?: Partial<IFileSystem> } = {}
 ) {
   const fs: Partial<IFileSystem> = {
     resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),

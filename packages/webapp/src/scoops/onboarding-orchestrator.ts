@@ -27,10 +27,10 @@
 
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/index.js';
-import { recordWelcomed } from './welcome-detection.js';
+import { type ValidationResult, validateApiKey } from './api-key-validator.js';
 import type { OnboardingProfile, RandomFn } from './onboarding-messages.js';
 import { buildIntroMessages } from './onboarding-messages.js';
-import { validateApiKey, type ValidationResult } from './api-key-validator.js';
+import { recordWelcomed } from './welcome-detection.js';
 
 const log = createLogger('onboarding-orchestrator');
 

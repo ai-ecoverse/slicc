@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RailZone } from '../../src/ui/rail-zone.js';
 
 // jsdom under vitest doesn't always expose a working localStorage with

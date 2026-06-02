@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import { resolveSprinkleIconHtml, lucideIconHtml } from '../../src/ui/sprinkle-icon.js';
+import { lucideIconHtml, resolveSprinkleIconHtml } from '../../src/ui/sprinkle-icon.js';
 
 describe('lucideIconHtml', () => {
   it('returns SVG markup for a known kebab-case name', async () => {

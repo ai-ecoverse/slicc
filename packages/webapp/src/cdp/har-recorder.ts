@@ -6,9 +6,9 @@
  * Supports filtering via user-provided JS functions.
  */
 
-import type { CDPTransport } from './transport.js';
-import type { VirtualFS } from '../fs/index.js';
 import { createLogger } from '../core/logger.js';
+import type { VirtualFS } from '../fs/index.js';
+import type { CDPTransport } from './transport.js';
 
 const log = createLogger('har-recorder');
 
@@ -545,7 +545,6 @@ export class HarRecorder {
       try {
         // User-authored HAR filter expression — evaluated via sandbox postMessage in extension mode.
         // The filterCode string comes from the user's har filter command, not from remote input.
-        // eslint-disable-next-line @typescript-eslint/no-implied-eval -- intentional: user-provided filter code
         const filterFn = new Function('entry', `return (${filterCode})(entry);`) as HarFilterFn;
         const result: HarEntry[] = [];
         for (const entry of entries) {

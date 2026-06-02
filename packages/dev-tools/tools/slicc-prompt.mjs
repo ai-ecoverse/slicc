@@ -239,7 +239,7 @@ async function main() {
     await waitForChatReady(cdp);
 
     let response = null;
-    let scriptOutput = undefined;
+    let scriptOutput;
 
     if (flags.clear) {
       await clearChat(cdp);

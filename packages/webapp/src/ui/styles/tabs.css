@@ -478,7 +478,7 @@ slicc-press-button {
   background: var(--s2-gray-200);
 }
 .rail__item--attention::after {
-  content: '';
+  content: "";
   position: absolute;
   top: 4px;
   right: 4px;
@@ -514,7 +514,7 @@ slicc-press-button {
   background: var(--s2-bg-base);
 }
 .rail-content--collapsed {
-  display: none !important;
+  display: none;
 }
 /* Hide the chat<->content divider while the content panel is
    collapsed. Otherwise we'd render a vestigial 1px hairline next to

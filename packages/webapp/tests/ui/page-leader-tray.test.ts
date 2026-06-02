@@ -18,15 +18,15 @@
  *      subscription.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
   LeaderTraySession,
   LeaderTraySessionStore,
   LeaderTrayWebSocket,
 } from '../../src/scoops/tray-leader.js';
-import type { AgentEvent } from '../../src/ui/types.js';
 import { startPageLeaderTray } from '../../src/ui/page-leader-tray.js';
+import type { AgentEvent } from '../../src/ui/types.js';
 
 // ---------------------------------------------------------------------------
 // Shared fakes

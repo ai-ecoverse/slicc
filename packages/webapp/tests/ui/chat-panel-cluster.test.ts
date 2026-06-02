@@ -16,7 +16,7 @@
  * path that fires when tool results arrive.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import { ChatPanel } from '../../src/ui/chat-panel.js';
 import type { ChatMessage, ToolCall } from '../../src/ui/types.js';

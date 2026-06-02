@@ -5,18 +5,33 @@
  * can use it as its filesystem backend.
  */
 
-import type { VirtualFS } from '../fs/index.js';
-import { normalizePath, joinPath, FsError } from '../fs/index.js';
-import { consumeCachedBinary } from './binary-cache.js';
 import type {
-  IFileSystem,
-  FsStat,
-  MkdirOptions,
-  RmOptions,
+  BufferEncoding,
   CpOptions,
   FileContent,
-  BufferEncoding,
+  FsStat,
+  IFileSystem,
+  MkdirOptions,
+  RmOptions,
 } from 'just-bash';
+import * as justBash from 'just-bash';
+import type { VirtualFS } from '../fs/index.js';
+import { FsError, joinPath, normalizePath } from '../fs/index.js';
+import { consumeCachedBinary } from './binary-cache.js';
+
+// just-bash v3 ships `DefenseInDepthBox` from `security/index.js` (re-exported
+// at the package root for the Node bundle, but NOT from the browser bundle).
+// Resolve via `Reflect.get` so Rolldown's namespace-import analysis cannot
+// statically prove the property is undefined (which would emit
+// `[IMPORT_IS_UNDEFINED]` and break the IIFE bundle warning budget) — the
+// access still resolves correctly at runtime against the Node bundle and
+// falls through to `undefined` in the browser bundle. The browser bundle
+// also skips sandbox enforcement when `defenseInDepth` isn't explicitly
+// enabled on `new Bash({...})`, so a no-op fallback is safe there.
+type RunTrustedAsync = <T>(fn: () => Promise<T> | T) => Promise<T>;
+const DefenseInDepthBox = Reflect.get(justBash, 'DefenseInDepthBox') as
+  | { runTrustedAsync?: RunTrustedAsync }
+  | undefined;
 
 // These types are defined in just-bash's fs/interface.d.ts but not re-exported
 // from the package root. Define locally to match IFileSystem's method signatures.
@@ -66,30 +81,48 @@ export class VfsAdapter implements IFileSystem {
     return typeof wrapped.canWrite === 'function' ? wrapped.canWrite(path) : true;
   }
 
+  /**
+   * Run an async FS operation inside `DefenseInDepthBox.runTrustedAsync` so
+   * the just-bash v3 sandbox permits LightningFS / fake-indexeddb's internal
+   * `setTimeout`, `Promise.then`, and friends. The trusted scope is bounded
+   * to the duration of the wrapped operation — same pattern just-bash uses
+   * internally for `fetch` and command-module loaders. When `DefenseInDepthBox`
+   * is unavailable (e.g. the browser bundle strips it), fall through to
+   * direct invocation — the sandbox guard is not active in that build either.
+   */
+  private trusted<T>(fn: () => Promise<T>): Promise<T> {
+    const runTrustedAsync = DefenseInDepthBox?.runTrustedAsync;
+    return runTrustedAsync ? runTrustedAsync(fn) : Promise.resolve().then(fn);
+  }
+
   async readFile(path: string, options?: ReadFileOptions | BufferEncoding): Promise<string> {
-    const normalized = normalizePath(path);
-    const raw = await this.vfs.readFile(normalized, { encoding: 'binary' });
-    const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw as string);
-    // Try UTF-8 first — valid text files decode cleanly.
-    // Binary files (PNG, JPEG, etc.) contain invalid UTF-8 sequences;
-    // fall back to latin1 which maps each byte to a char, preserving all values.
-    try {
-      return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    } catch {
-      // Don't use TextDecoder('iso-8859-1') — browsers treat it as windows-1252
-      // per WHATWG spec, remapping bytes 0x80-0x9F to different codepoints.
-      // String.fromCharCode maps each byte directly to its Unicode codepoint.
-      const chars = new Array(bytes.length);
-      for (let i = 0; i < bytes.length; i++) chars[i] = String.fromCharCode(bytes[i]);
-      return chars.join('');
-    }
+    return this.trusted(async () => {
+      const normalized = normalizePath(path);
+      const raw = await this.vfs.readFile(normalized, { encoding: 'binary' });
+      const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw as string);
+      // Try UTF-8 first — valid text files decode cleanly.
+      // Binary files (PNG, JPEG, etc.) contain invalid UTF-8 sequences;
+      // fall back to latin1 which maps each byte to a char, preserving all values.
+      try {
+        return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      } catch {
+        // Don't use TextDecoder('iso-8859-1') — browsers treat it as windows-1252
+        // per WHATWG spec, remapping bytes 0x80-0x9F to different codepoints.
+        // String.fromCharCode maps each byte directly to its Unicode codepoint.
+        const chars = new Array(bytes.length);
+        for (let i = 0; i < bytes.length; i++) chars[i] = String.fromCharCode(bytes[i]);
+        return chars.join('');
+      }
+    });
   }
 
   async readFileBuffer(path: string): Promise<Uint8Array> {
-    const normalized = normalizePath(path);
-    const content = await this.vfs.readFile(normalized, { encoding: 'binary' });
-    if (content instanceof Uint8Array) return content;
-    return new TextEncoder().encode(content as string);
+    return this.trusted(async () => {
+      const normalized = normalizePath(path);
+      const content = await this.vfs.readFile(normalized, { encoding: 'binary' });
+      if (content instanceof Uint8Array) return content;
+      return new TextEncoder().encode(content as string);
+    });
   }
 
   async writeFile(
@@ -97,41 +130,43 @@ export class VfsAdapter implements IFileSystem {
     content: FileContent,
     _options?: WriteFileOptions | BufferEncoding
   ): Promise<void> {
-    const normalized = normalizePath(path);
-    if (typeof content === 'string') {
-      // Check binary cache first — createProxiedFetch stores original bytes
-      // here for binary responses so we can bypass string encoding entirely.
-      const cachedBytes = consumeCachedBinary(content);
-      if (cachedBytes) {
-        await this.vfs.writeFile(normalized, cachedBytes);
-        return;
-      }
-      // Detect whether the string contains characters above U+00FF.
-      // If so, it's definitely Unicode text (from resp.text()) — use UTF-8 encoding.
-      // If all chars are ≤ 0xFF, it may be latin1-encoded binary data (from curl
-      // fetching images/archives) — use charCodeAt to preserve raw bytes.
-      // ASCII text (all chars ≤ 0x7F) is identical in both encodings.
-      let hasHighCodepoints = false;
-      for (let i = 0; i < content.length; i++) {
-        if (content.charCodeAt(i) > 0xff) {
-          hasHighCodepoints = true;
-          break;
+    return this.trusted(async () => {
+      const normalized = normalizePath(path);
+      if (typeof content === 'string') {
+        // Check binary cache first — createProxiedFetch stores original bytes
+        // here for binary responses so we can bypass string encoding entirely.
+        const cachedBytes = consumeCachedBinary(content);
+        if (cachedBytes) {
+          await this.vfs.writeFile(normalized, cachedBytes);
+          return;
         }
-      }
-      if (hasHighCodepoints) {
-        // Unicode text — encode as proper UTF-8
-        await this.vfs.writeFile(normalized, new TextEncoder().encode(content));
-      } else {
-        // ASCII or latin1-encoded binary — charCodeAt preserves byte values
-        const bytes = new Uint8Array(content.length);
+        // Detect whether the string contains characters above U+00FF.
+        // If so, it's definitely Unicode text (from resp.text()) — use UTF-8 encoding.
+        // If all chars are ≤ 0xFF, it may be latin1-encoded binary data (from curl
+        // fetching images/archives) — use charCodeAt to preserve raw bytes.
+        // ASCII text (all chars ≤ 0x7F) is identical in both encodings.
+        let hasHighCodepoints = false;
         for (let i = 0; i < content.length; i++) {
-          bytes[i] = content.charCodeAt(i);
+          if (content.charCodeAt(i) > 0xff) {
+            hasHighCodepoints = true;
+            break;
+          }
         }
-        await this.vfs.writeFile(normalized, bytes);
+        if (hasHighCodepoints) {
+          // Unicode text — encode as proper UTF-8
+          await this.vfs.writeFile(normalized, new TextEncoder().encode(content));
+        } else {
+          // ASCII or latin1-encoded binary — charCodeAt preserves byte values
+          const bytes = new Uint8Array(content.length);
+          for (let i = 0; i < content.length; i++) {
+            bytes[i] = content.charCodeAt(i);
+          }
+          await this.vfs.writeFile(normalized, bytes);
+        }
+      } else {
+        await this.vfs.writeFile(normalized, content);
       }
-    } else {
-      await this.vfs.writeFile(normalized, content);
-    }
+    });
   }
 
   async appendFile(
@@ -139,196 +174,243 @@ export class VfsAdapter implements IFileSystem {
     content: FileContent,
     _options?: WriteFileOptions | BufferEncoding
   ): Promise<void> {
-    const normalized = normalizePath(path);
-    // Read existing content as binary to avoid encoding corruption
-    let existingBytes = new Uint8Array(0);
-    try {
-      const existing = await this.vfs.readFile(normalized, { encoding: 'binary' });
-      existingBytes =
-        existing instanceof Uint8Array
-          ? new Uint8Array(existing)
-          : new TextEncoder().encode(existing as string);
-    } catch (err) {
-      // Only treat ENOENT as "file doesn't exist yet" — re-throw other errors
-      if (err instanceof FsError && err.code === 'ENOENT') {
-        // File doesn't exist yet, start empty
+    return this.trusted(async () => {
+      const normalized = normalizePath(path);
+      // Read existing content as binary to avoid encoding corruption
+      let existingBytes = new Uint8Array(0);
+      try {
+        const existing = await this.vfs.readFile(normalized, { encoding: 'binary' });
+        existingBytes =
+          existing instanceof Uint8Array
+            ? new Uint8Array(existing)
+            : new TextEncoder().encode(existing as string);
+      } catch (err) {
+        // Only treat ENOENT as "file doesn't exist yet" — re-throw other errors
+        if (err instanceof FsError && err.code === 'ENOENT') {
+          // File doesn't exist yet, start empty
+        } else {
+          throw err;
+        }
+      }
+      // Convert new content to bytes
+      let newBytes: Uint8Array;
+      if (typeof content === 'string') {
+        newBytes = new Uint8Array(content.length);
+        for (let i = 0; i < content.length; i++) {
+          newBytes[i] = content.charCodeAt(i) & 0xff;
+        }
       } else {
-        throw err;
+        newBytes = content instanceof Uint8Array ? content : new Uint8Array(content);
       }
-    }
-    // Convert new content to bytes
-    let newBytes: Uint8Array;
-    if (typeof content === 'string') {
-      newBytes = new Uint8Array(content.length);
-      for (let i = 0; i < content.length; i++) {
-        newBytes[i] = content.charCodeAt(i) & 0xff;
-      }
-    } else {
-      newBytes = content instanceof Uint8Array ? content : new Uint8Array(content);
-    }
-    // Concatenate and write
-    const combined = new Uint8Array(existingBytes.length + newBytes.length);
-    combined.set(existingBytes);
-    combined.set(newBytes, existingBytes.length);
-    await this.vfs.writeFile(normalized, combined);
+      // Concatenate and write
+      const combined = new Uint8Array(existingBytes.length + newBytes.length);
+      combined.set(existingBytes);
+      combined.set(newBytes, existingBytes.length);
+      await this.vfs.writeFile(normalized, combined);
+    });
   }
 
   async exists(path: string): Promise<boolean> {
-    const normalized = normalizePath(path);
-    if (normalized === '/usr' || normalized === '/usr/bin') return true;
-    if (normalized.startsWith('/usr/bin/')) {
-      const cmdName = normalized.slice('/usr/bin/'.length);
-      return (
-        cmdName.length > 0 &&
-        !cmdName.includes('/') &&
-        this.getVirtualBinCommands().includes(cmdName)
-      );
-    }
-    return this.vfs.exists(normalized);
+    return this.trusted(async () => {
+      const normalized = normalizePath(path);
+      if (normalized === '/usr' || normalized === '/usr/bin') return true;
+      if (normalized.startsWith('/usr/bin/')) {
+        const cmdName = normalized.slice('/usr/bin/'.length);
+        return (
+          cmdName.length > 0 &&
+          !cmdName.includes('/') &&
+          this.getVirtualBinCommands().includes(cmdName)
+        );
+      }
+      return this.vfs.exists(normalized);
+    });
   }
 
   async stat(path: string): Promise<FsStat> {
-    const normalized = normalizePath(path);
-    // Virtual /usr and /usr/bin directories
-    if (normalized === '/usr' || normalized === '/usr/bin') {
-      return {
-        isFile: false,
-        isDirectory: true,
-        isSymbolicLink: false,
-        mode: 0o755,
-        size: 0,
-        mtime: new Date(0),
-      };
-    }
-    // Virtual /usr/bin/<command> entries
-    if (normalized.startsWith('/usr/bin/')) {
-      const cmdName = normalized.slice('/usr/bin/'.length);
-      if (
-        cmdName.length > 0 &&
-        !cmdName.includes('/') &&
-        this.getVirtualBinCommands().includes(cmdName)
-      ) {
+    return this.trusted(async () => {
+      const normalized = normalizePath(path);
+      // Virtual /usr and /usr/bin directories
+      if (normalized === '/usr' || normalized === '/usr/bin') {
         return {
-          isFile: true,
-          isDirectory: false,
+          isFile: false,
+          isDirectory: true,
           isSymbolicLink: false,
           mode: 0o755,
           size: 0,
           mtime: new Date(0),
         };
       }
-    }
-    // Fast path: synchronous CacheFS stat for non-mounted paths
-    const fast = this.vfs.statSync(normalized);
-    if (fast) {
+      // Virtual /usr/bin/<command> entries
+      if (normalized.startsWith('/usr/bin/')) {
+        const cmdName = normalized.slice('/usr/bin/'.length);
+        if (
+          cmdName.length > 0 &&
+          !cmdName.includes('/') &&
+          this.getVirtualBinCommands().includes(cmdName)
+        ) {
+          return {
+            isFile: true,
+            isDirectory: false,
+            isSymbolicLink: false,
+            mode: 0o755,
+            size: 0,
+            mtime: new Date(0),
+          };
+        }
+      }
+      // Fast path: synchronous CacheFS stat for non-mounted paths
+      const fast = this.vfs.statSync(normalized);
+      if (fast) {
+        return {
+          isFile: fast.type === 'file',
+          isDirectory: fast.type === 'directory',
+          isSymbolicLink: !!fast.isSymlink,
+          mode: fast.type === 'directory' ? 0o755 : 0o644,
+          size: fast.size,
+          mtime: new Date(fast.mtime),
+        };
+      }
+      const s = await this.vfs.stat(normalized);
       return {
-        isFile: fast.type === 'file',
-        isDirectory: fast.type === 'directory',
-        isSymbolicLink: !!fast.isSymlink,
-        mode: fast.type === 'directory' ? 0o755 : 0o644,
-        size: fast.size,
-        mtime: new Date(fast.mtime),
+        isFile: s.type === 'file',
+        isDirectory: s.type === 'directory',
+        isSymbolicLink: !!s.isSymlink,
+        mode: s.type === 'directory' ? 0o755 : 0o644,
+        size: s.size,
+        mtime: new Date(s.mtime),
       };
-    }
-    const s = await this.vfs.stat(normalized);
-    return {
-      isFile: s.type === 'file',
-      isDirectory: s.type === 'directory',
-      isSymbolicLink: !!s.isSymlink,
-      mode: s.type === 'directory' ? 0o755 : 0o644,
-      size: s.size,
-      mtime: new Date(s.mtime),
-    };
+    });
   }
 
   async lstat(path: string): Promise<FsStat> {
-    const normalized = normalizePath(path);
-    // Fast path: synchronous CacheFS lstat for non-mounted paths
-    const fast = this.vfs.lstatSync(normalized);
-    if (fast) {
+    return this.trusted(async () => {
+      const normalized = normalizePath(path);
+      // Fast path: synchronous CacheFS lstat for non-mounted paths
+      const fast = this.vfs.lstatSync(normalized);
+      if (fast) {
+        return {
+          isFile: fast.type === 'file',
+          isDirectory: fast.type === 'directory',
+          isSymbolicLink: fast.type === 'symlink',
+          mode: fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644,
+          size: fast.size,
+          mtime: new Date(fast.mtime),
+        };
+      }
+      const s = await this.vfs.lstat(normalized);
       return {
-        isFile: fast.type === 'file',
-        isDirectory: fast.type === 'directory',
-        isSymbolicLink: fast.type === 'symlink',
-        mode: fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644,
-        size: fast.size,
-        mtime: new Date(fast.mtime),
+        isFile: s.type === 'file',
+        isDirectory: s.type === 'directory',
+        isSymbolicLink: s.type === 'symlink',
+        mode: s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644,
+        size: s.size,
+        mtime: new Date(s.mtime),
       };
-    }
-    const s = await this.vfs.lstat(normalized);
-    return {
-      isFile: s.type === 'file',
-      isDirectory: s.type === 'directory',
-      isSymbolicLink: s.type === 'symlink',
-      mode: s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644,
-      size: s.size,
-      mtime: new Date(s.mtime),
-    };
+    });
   }
 
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
-    await this.vfs.mkdir(normalizePath(path), options);
+    return this.trusted(async () => {
+      await this.vfs.mkdir(normalizePath(path), options);
+    });
   }
 
   async readdir(path: string): Promise<string[]> {
-    const normalized = normalizePath(path);
-    if (normalized === '/usr') return ['bin'];
-    if (normalized === '/usr/bin') return this.getVirtualBinCommands().slice().sort();
-    // Fast path: synchronous CacheFS read for non-mounted paths
-    const fast = this.vfs.readDirSync(normalized);
-    if (fast !== null) return fast.map((e) => e.name);
-    const entries = await this.vfs.readDir(normalized);
-    return entries.map((e) => e.name);
+    return this.trusted(async () => {
+      const normalized = normalizePath(path);
+      if (normalized === '/usr') return ['bin'];
+      if (normalized === '/usr/bin') return this.getVirtualBinCommands().slice().sort();
+      // Fast path: synchronous CacheFS read for non-mounted paths
+      const fast = this.vfs.readDirSync(normalized);
+      if (fast !== null) return fast.map((e) => e.name);
+      const entries = await this.vfs.readDir(normalized);
+      return entries.map((e) => e.name);
+    });
   }
 
   async readdirWithFileTypes(path: string): Promise<DirentEntry[]> {
-    const normalized = normalizePath(path);
-    if (normalized === '/usr') {
-      return [{ name: 'bin', isFile: false, isDirectory: true, isSymbolicLink: false }];
-    }
-    if (normalized === '/usr/bin') {
-      return this.getVirtualBinCommands()
-        .slice()
-        .sort()
-        .map((name) => ({
-          name,
-          isFile: true,
-          isDirectory: false,
-          isSymbolicLink: false,
-        }));
-    }
+    return this.trusted(async () => {
+      const normalized = normalizePath(path);
+      if (normalized === '/usr') {
+        return [{ name: 'bin', isFile: false, isDirectory: true, isSymbolicLink: false }];
+      }
+      if (normalized === '/usr/bin') {
+        return this.getVirtualBinCommands()
+          .slice()
+          .sort()
+          .map((name) => ({
+            name,
+            isFile: true,
+            isDirectory: false,
+            isSymbolicLink: false,
+          }));
+      }
 
-    // Fast path: synchronous CacheFS read for non-mounted paths.
-    // readDirSync returns null when the path is under a mount or
-    // the CacheFS internal isn't available.
-    const fastEntries = this.vfs.readDirSync(normalized);
-    if (fastEntries !== null) {
-      const result: DirentEntry[] = [];
-      for (const e of fastEntries) {
-        if (e.type === 'symlink') {
-          const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
-          // Try synchronous stat first (follows symlinks via CacheFS)
-          const targetStat = this.vfs.statSync(childPath);
-          if (targetStat) {
+      // Fast path: synchronous CacheFS read for non-mounted paths.
+      // readDirSync returns null when the path is under a mount or
+      // the CacheFS internal isn't available.
+      const fastEntries = this.vfs.readDirSync(normalized);
+      if (fastEntries !== null) {
+        const result: DirentEntry[] = [];
+        for (const e of fastEntries) {
+          if (e.type === 'symlink') {
+            const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
+            // Try synchronous stat first (follows symlinks via CacheFS)
+            const targetStat = this.vfs.statSync(childPath);
+            if (targetStat) {
+              result.push({
+                name: e.name,
+                isFile: targetStat.type === 'file',
+                isDirectory: targetStat.type === 'directory',
+                isSymbolicLink: true,
+              });
+            } else {
+              // Symlink target is in a mount or unresolvable — fall back to async
+              let isFile = false;
+              let isDir = false;
+              try {
+                const asyncStat = await this.vfs.stat(childPath);
+                isFile = asyncStat.type === 'file';
+                isDir = asyncStat.type === 'directory';
+              } catch {
+                // Dangling symlink
+              }
+              result.push({ name: e.name, isFile, isDirectory: isDir, isSymbolicLink: true });
+            }
+          } else {
             result.push({
               name: e.name,
-              isFile: targetStat.type === 'file',
-              isDirectory: targetStat.type === 'directory',
-              isSymbolicLink: true,
+              isFile: e.type === 'file',
+              isDirectory: e.type === 'directory',
+              isSymbolicLink: false,
             });
-          } else {
-            // Symlink target is in a mount or unresolvable — fall back to async
-            let isFile = false;
-            let isDir = false;
-            try {
-              const asyncStat = await this.vfs.stat(childPath);
-              isFile = asyncStat.type === 'file';
-              isDir = asyncStat.type === 'directory';
-            } catch {
-              // Dangling symlink
-            }
-            result.push({ name: e.name, isFile, isDirectory: isDir, isSymbolicLink: true });
           }
+        }
+        return result;
+      }
+
+      // Slow path: async VirtualFS readDir for mounted paths.
+      const entries = await this.vfs.readDir(normalized);
+      const result: DirentEntry[] = [];
+      for (const e of entries) {
+        if (e.type === 'symlink') {
+          // Try to determine if symlink target is file or directory
+          let isFile = false;
+          let isDir = false;
+          try {
+            const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
+            const targetStat = await this.vfs.stat(childPath);
+            isFile = targetStat.type === 'file';
+            isDir = targetStat.type === 'directory';
+          } catch {
+            // Dangling symlink — report as symlink only
+          }
+          result.push({
+            name: e.name,
+            isFile,
+            isDirectory: isDir,
+            isSymbolicLink: true,
+          });
         } else {
           result.push({
             name: e.name,
@@ -339,59 +421,30 @@ export class VfsAdapter implements IFileSystem {
         }
       }
       return result;
-    }
-
-    // Slow path: async VirtualFS readDir for mounted paths.
-    const entries = await this.vfs.readDir(normalized);
-    const result: DirentEntry[] = [];
-    for (const e of entries) {
-      if (e.type === 'symlink') {
-        // Try to determine if symlink target is file or directory
-        let isFile = false;
-        let isDir = false;
-        try {
-          const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
-          const targetStat = await this.vfs.stat(childPath);
-          isFile = targetStat.type === 'file';
-          isDir = targetStat.type === 'directory';
-        } catch {
-          // Dangling symlink — report as symlink only
-        }
-        result.push({
-          name: e.name,
-          isFile,
-          isDirectory: isDir,
-          isSymbolicLink: true,
-        });
-      } else {
-        result.push({
-          name: e.name,
-          isFile: e.type === 'file',
-          isDirectory: e.type === 'directory',
-          isSymbolicLink: false,
-        });
-      }
-    }
-    return result;
+    });
   }
 
   async rm(path: string, options?: RmOptions): Promise<void> {
-    await this.vfs.rm(normalizePath(path), options);
+    return this.trusted(async () => {
+      await this.vfs.rm(normalizePath(path), options);
+    });
   }
 
   async cp(src: string, dest: string, options?: CpOptions): Promise<void> {
-    const normalizedSrc = normalizePath(src);
-    const normalizedDest = normalizePath(dest);
-    const stat = await this.vfs.stat(normalizedSrc);
+    return this.trusted(async () => {
+      const normalizedSrc = normalizePath(src);
+      const normalizedDest = normalizePath(dest);
+      const stat = await this.vfs.stat(normalizedSrc);
 
-    if (stat.type === 'directory') {
-      if (!options?.recursive) {
-        throw new FsError('EISDIR', 'is a directory', normalizedSrc);
+      if (stat.type === 'directory') {
+        if (!options?.recursive) {
+          throw new FsError('EISDIR', 'is a directory', normalizedSrc);
+        }
+        await this.cpDir(normalizedSrc, normalizedDest);
+      } else {
+        await this.vfs.copyFile(normalizedSrc, normalizedDest);
       }
-      await this.cpDir(normalizedSrc, normalizedDest);
-    } else {
-      await this.vfs.copyFile(normalizedSrc, normalizedDest);
-    }
+    });
   }
 
   /** Recursively copy a directory tree. */
@@ -410,7 +463,9 @@ export class VfsAdapter implements IFileSystem {
   }
 
   async mv(src: string, dest: string): Promise<void> {
-    await this.vfs.rename(normalizePath(src), normalizePath(dest));
+    return this.trusted(async () => {
+      await this.vfs.rename(normalizePath(src), normalizePath(dest));
+    });
   }
 
   resolvePath(base: string, path: string): string {
@@ -429,7 +484,9 @@ export class VfsAdapter implements IFileSystem {
   }
 
   async symlink(target: string, linkPath: string): Promise<void> {
-    await this.vfs.symlink(target, normalizePath(linkPath));
+    return this.trusted(async () => {
+      await this.vfs.symlink(target, normalizePath(linkPath));
+    });
   }
 
   async link(_existingPath: string, _newPath: string): Promise<void> {
@@ -437,11 +494,15 @@ export class VfsAdapter implements IFileSystem {
   }
 
   async readlink(path: string): Promise<string> {
-    return this.vfs.readlink(normalizePath(path));
+    return this.trusted(async () => {
+      return this.vfs.readlink(normalizePath(path));
+    });
   }
 
   async realpath(path: string): Promise<string> {
-    return this.vfs.realpath(normalizePath(path));
+    return this.trusted(async () => {
+      return this.vfs.realpath(normalizePath(path));
+    });
   }
 
   async utimes(path: string, _atime: Date, _mtime: Date): Promise<void> {

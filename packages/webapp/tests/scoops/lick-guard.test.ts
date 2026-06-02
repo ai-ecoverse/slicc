@@ -4,9 +4,9 @@
  * Tests getLicksForScoop on LickManager and the guard logic in unregisterScoop.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
-import { LickManager, buildActiveLicksError } from '../../src/scoops/lick-manager.js';
+import { buildActiveLicksError, LickManager } from '../../src/scoops/lick-manager.js';
 
 // Each test gets a fresh LickManager WITHOUT calling init() to avoid
 // accumulating state in the shared IndexedDB across tests.

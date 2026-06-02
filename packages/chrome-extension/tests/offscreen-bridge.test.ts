@@ -8,7 +8,7 @@
  * - getBuffer/getOrCreateAssistantMsg - buffer isolation, source attribution
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChannelMessage } from '../../webapp/src/scoops/types.js';
 
 // Mock chrome.runtime

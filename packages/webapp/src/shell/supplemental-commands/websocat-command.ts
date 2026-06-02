@@ -1,5 +1,6 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
+import { stdinAsText } from '../just-bash-compat.js';
 
 interface ParsedArgs {
   url?: string;
@@ -627,6 +628,6 @@ export async function runWebsocat(
 
 export function createWebsocatCommand(): Command {
   return defineCommand('websocat', async (args, ctx) => {
-    return runWebsocat(args, { stdin: ctx.stdin });
+    return runWebsocat(args, { stdin: stdinAsText(ctx.stdin) });
   });
 }

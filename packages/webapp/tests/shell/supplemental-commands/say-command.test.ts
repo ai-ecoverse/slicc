@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem } from 'just-bash';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSayCommand } from '../../../src/shell/supplemental-commands/say-command.js';
 
 function createMockCtx() {

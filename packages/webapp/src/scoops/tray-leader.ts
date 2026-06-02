@@ -1,8 +1,8 @@
 import { createLogger } from '../core/logger.js';
 import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
-import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from './tray-types.js';
 import * as db from './db.js';
 import { buildTrayWorkerUrl } from './tray-runtime-config.js';
+import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from './tray-types.js';
 
 /**
  * Mirrors TrayKind in packages/cloudflare-worker/src/shared.ts.

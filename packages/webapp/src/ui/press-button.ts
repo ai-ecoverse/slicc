@@ -39,7 +39,7 @@
  * bounding rect matches what the user sees as "the button".
  */
 
-import { LONG_PRESS_MS, attachLongPressGesture, type LongPressHandle } from './long-press.js';
+import { attachLongPressGesture, LONG_PRESS_MS, type LongPressHandle } from './long-press.js';
 
 /** Default delay before committing a single click as a `short-click`. */
 export const DEFAULT_DOUBLE_CLICK_MS = 350;

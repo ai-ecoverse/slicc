@@ -115,7 +115,7 @@ class ToolUIRegistry {
   /** Cancel all pending UIs (e.g., agent stopped) */
   cancelAll(reason = 'cancelled'): void {
     const count = this.pending.size;
-    for (const [id, pending] of this.pending) {
+    for (const [_id, pending] of this.pending) {
       pending.reject(new Error(reason));
     }
     this.pending.clear();

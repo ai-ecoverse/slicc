@@ -1,7 +1,7 @@
 name: Documentation issue
 description: Incorrect, missing, or confusing docs in README, `CLAUDE.md`, `AGENTS.md`, `docs/`, or skill `SKILL.md` files.
 title: 'docs: '
-labels: ['documentation']
+labels: ['documentation', 'area/docs']
 body:
   - type: input
     id: location

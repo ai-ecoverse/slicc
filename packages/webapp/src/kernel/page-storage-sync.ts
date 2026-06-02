@@ -38,9 +38,9 @@
  */
 
 import type {
-  LocalStorageSetMsg,
-  LocalStorageRemoveMsg,
   LocalStorageClearMsg,
+  LocalStorageRemoveMsg,
+  LocalStorageSetMsg,
   PanelToOffscreenMessage,
 } from '../../../chrome-extension/src/messages.js';
 

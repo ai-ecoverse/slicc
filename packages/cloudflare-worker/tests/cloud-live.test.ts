@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { createSubstrate, startCone, killCone } from '@slicc/cloud-core';
 import type { ConeEntry, Registry } from '@slicc/cloud-core';
+import { createSubstrate, killCone, startCone } from '@slicc/cloud-core';
+import { describe, expect, it } from 'vitest';
 
 const apiKey = process.env['SLICC_TEST_E2B_API_KEY'];
 const describeFn = apiKey ? describe : describe.skip;

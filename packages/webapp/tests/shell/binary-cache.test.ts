@@ -3,7 +3,7 @@
  * through just-bash's string-typed FetchResult.body pipeline.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cacheBinaryBody, consumeCachedBinary } from '../../src/shell/binary-cache.js';
 
 describe('binary-cache', () => {

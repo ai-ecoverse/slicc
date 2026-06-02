@@ -26,6 +26,7 @@ jobs:
       swift-server: ${{ steps.filter.outputs.swift-server }}
       swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
       ios-app: ${{ steps.filter.outputs.ios-app }}
+      swift-config: ${{ steps.filter.outputs.swift-config }}
       root-config: ${{ steps.filter.outputs.root-config }}
       is-queue-leader: ${{ steps.queue-position.outputs.leader }}
     steps:
@@ -54,6 +55,8 @@ jobs:
               - 'packages/swift-launcher/**'
             ios-app:
               - 'packages/ios-app/**'
+            swift-config:
+              - '.swiftlint.yml'
             root-config:
               - 'package.json'
               - 'package-lock.json'
@@ -93,7 +96,9 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Format check
+      - name: Biome lint + format check
+        run: npx biome check .
+      - name: Prettier format check (docs/yaml/html only)
         run: npx prettier --check .
       - name: Check CLAUDE.md size
         run: |
@@ -291,6 +296,8 @@ jobs:
         run: npm run build -w @slicc/webapp
       - name: Build extension
         run: npm run build -w @slicc/chrome-extension
+      - name: Check bundle for forbidden CDN URL literals (MV3 RHC guard)
+        run: bash packages/dev-tools/tools/check-extension-rhc.sh
       - name: Check bundle for Node-only APIs
         run: |
           # Scan extension bundles for Node-only APIs that should never be bundled.
@@ -324,6 +331,20 @@ jobs:
             exit 1
           fi
           echo "✓ No Node-only APIs found in dev-optimized deps (extension)"
+      - name: Install Chrome for Testing
+        run: npx --yes @puppeteer/browsers install chrome@stable
+      - name: Install xvfb
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb
+      - name: Extension smoke test (CDP)
+        env:
+          SLICC_CI: '1'
+        # MV3 extensions with side panels need headed Chrome; xvfb provides
+        # the required display on a headless runner. The test is permitted
+        # to fail loudly while the ffmpeg-core.js bundling work lands —
+        # `continue-on-error: true` keeps CI green during the rollout but
+        # surfaces the artifact so the breakage stays visible.
+        continue-on-error: true
+        run: xvfb-run -a npm run test:extension-smoke -w @slicc/chrome-extension
 
   cloudflare-worker:
     needs: changes
@@ -474,10 +495,15 @@ jobs:
     if: >-
       needs.lint.result == 'success' &&
       needs.changes.outputs.is-queue-leader == 'true' &&
-      needs.changes.outputs.swift-server == 'true'
+      (needs.changes.outputs.swift-server == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-server && swiftlint lint --reporter github-actions-logging
       - name: Build
         run: cd packages/swift-server && swift build -c release
       - name: Test (with coverage threshold gate)
@@ -506,6 +532,7 @@ jobs:
       needs.changes.outputs.is-queue-leader == 'true' &&
       (needs.changes.outputs.swift-launcher == 'true' ||
       needs.changes.outputs.swift-server == 'true' ||
+      needs.changes.outputs.swift-config == 'true' ||
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
       needs.changes.outputs.assets == 'true' ||
@@ -518,6 +545,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-launcher && swiftlint lint --reporter github-actions-logging
       - name: Build webapp (dependency)
         run: npm run build -w @slicc/webapp
       - name: Build swift-server (dependency)
@@ -559,10 +590,15 @@ jobs:
     needs: [changes, lint]
     if: >-
       needs.lint.result == 'success' &&
-      needs.changes.outputs.ios-app == 'true'
+      (needs.changes.outputs.ios-app == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/ios-app && swiftlint lint --reporter github-actions-logging
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project

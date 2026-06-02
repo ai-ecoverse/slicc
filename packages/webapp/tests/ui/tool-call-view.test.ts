@@ -7,12 +7,12 @@
  * cluster.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  groupToolCalls,
   clusterPreview,
-  toolStatus,
+  groupToolCalls,
   TOOL_CLUSTER_MIN,
+  toolStatus,
 } from '../../src/ui/tool-call-view.js';
 import type { ToolCall } from '../../src/ui/types.js';
 

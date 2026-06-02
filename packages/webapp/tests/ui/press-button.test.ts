@@ -5,9 +5,9 @@
  * thread-header new-session button, and the chat copy button.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { SliccPressButton, DEFAULT_DOUBLE_CLICK_MS } from '../../src/ui/press-button.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LONG_PRESS_MS } from '../../src/ui/long-press.js';
+import { DEFAULT_DOUBLE_CLICK_MS, SliccPressButton } from '../../src/ui/press-button.js';
 
 function mkBtn(opts: { disableDouble?: boolean; label?: string } = {}): SliccPressButton {
   const el = document.createElement('slicc-press-button') as SliccPressButton;

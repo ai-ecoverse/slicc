@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Tests stub the IDB-backed mount-table-store so handles with function
@@ -18,17 +18,17 @@ vi.mock('../../src/fs/mount-table-store.js', async () => {
   };
 });
 
-import {
-  recoverMounts,
-  formatMountRecoveryPrompt,
-  mdInlineCode,
-  shellQuote,
-  type MountRecoveryFS,
-  type MountRecoveryEntry,
-} from '../../src/fs/mount-recovery.js';
-import { newMountId } from '../../src/fs/mount/mount-id.js';
 import type { MountBackend } from '../../src/fs/mount/backend.js';
 import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
+import { newMountId } from '../../src/fs/mount/mount-id.js';
+import {
+  formatMountRecoveryPrompt,
+  type MountRecoveryEntry,
+  type MountRecoveryFS,
+  mdInlineCode,
+  recoverMounts,
+  shellQuote,
+} from '../../src/fs/mount-recovery.js';
 
 interface MountTableEntry {
   targetPath: string;

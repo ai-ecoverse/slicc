@@ -1,4 +1,4 @@
-import { type SecretsPipeline } from '@slicc/shared-ts';
+import type { SecretsPipeline } from '@slicc/shared-ts';
 import { decodeForbiddenRequestHeaders } from '../../webapp/src/shell/proxy-headers.js';
 
 export const REQUEST_BODY_CAP = 32 * 1024 * 1024;

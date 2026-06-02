@@ -1,10 +1,10 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { FsWatcher, RestrictedFS, VirtualFS } from '../../src/fs/index.js';
-import { ScriptCatalog } from '../../src/shell/script-catalog.js';
-import { createMutableDirectoryHandle } from '../fs/fsa-test-helpers.js';
 import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
 import { newMountId } from '../../src/fs/mount/mount-id.js';
+import { ScriptCatalog } from '../../src/shell/script-catalog.js';
+import { createMutableDirectoryHandle } from '../fs/fsa-test-helpers.js';
 
 function backendOf(handle: FileSystemDirectoryHandle): LocalMountBackend {
   return LocalMountBackend.fromHandle(handle, { mountId: newMountId() });

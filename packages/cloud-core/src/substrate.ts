@@ -58,6 +58,4 @@ export interface SandboxSubstrate {
   extendTimeout(sandboxId: string, ttlMs: number): Promise<void>;
 }
 
-export interface SubstrateFactory {
-  (id: SubstrateId, cfg: SubstrateConfig): SandboxSubstrate;
-}
+export type SubstrateFactory = (id: SubstrateId, cfg: SubstrateConfig) => SandboxSubstrate;

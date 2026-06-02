@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { signSigV4 } from '../../../src/fs/mount/signing-s3.js';
 
 /**

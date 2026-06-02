@@ -52,9 +52,12 @@ The flag is read by `rum.js` on first call and cached in `window.hlx.rum`. CLI/E
 ### Where init happens
 
 - **CLI / Electron**: `packages/webapp/src/ui/main.ts:main()` calls `initTelemetry().catch(() => {})` near the end of bootstrap.
-- **Extension**: `packages/webapp/src/ui/main.ts:mainExtension()` calls `initTelemetry().catch(() => {})` after the panel is connected to the offscreen agent engine. Only the side panel realm initializes; the offscreen document and the service worker never call `initTelemetry`.
+- **Extension side panel**: `packages/webapp/src/ui/main.ts:mainExtension()` calls `initTelemetry().catch(() => {})` after the panel is connected to the offscreen agent engine.
+- **Extension offscreen document**: `packages/chrome-extension/src/offscreen.ts:init()` calls `initTelemetry().catch(() => {})` at the top of bootstrap. Without this, `trackShellCommand` calls from the offscreen `WasmShell` (which runs the agent's bash tool — including `agent` scoop delegations from the cone) silently no-op because `sampleRUM` is module-level singleton state and is per-realm. The service worker still never calls `initTelemetry`.
 
-`navigator.sendBeacon` is available in all three contexts where telemetry initializes. Side-panel close/reopen produces a fresh `initTelemetry` run with a new pageview id — fine because each call generates an independent sampling decision and an independent id.
+The side panel and offscreen are independent realms — each makes its own sampling decision and emits its own `navigate` beacon. Both beacons carry `target: 'extension'`; the `referer` field in the beacon body (`window.location.href`) distinguishes them — `chrome-extension://<id>/index.html` vs `chrome-extension://<id>/offscreen.html`. Side-panel close/reopen produces a fresh init in that realm; offscreen survives panel close, so its sampling decision persists for the lifetime of the offscreen document.
+
+`navigator.sendBeacon` is available in all four contexts where telemetry initializes.
 
 ## Checkpoints
 
@@ -94,9 +97,9 @@ These work out of the box in CLI/Electron with no custom code. They do NOT fire 
 `fill` beacons fire from `wasm-shell.ts:679`, which runs in two contexts in the extension: the panel terminal and the offscreen agent shell.
 
 - **CLI / Electron:** both contexts are the same realm; every shell command produces a beacon.
-- **Extension:** only the panel-terminal `WasmShell` initializes telemetry. The offscreen agent shell's `trackShellCommand` calls silently no-op. Extension `fill` beacons therefore represent commands the user typed in the panel terminal — not commands the agent ran via its bash tool.
+- **Extension:** both realms now initialize telemetry independently — the panel-terminal `WasmShell` and the offscreen agent `WasmShell`. User-typed commands fire `fill` from the panel realm; agent-initiated bash calls (including `agent` scoop delegations from the cone) fire `fill` from the offscreen realm. Distinguish in the data via the `referer` field on the beacon body: `index.html` vs `offscreen.html`.
 
-Dashboard readers comparing extension and CLI shell volume should expect this gap.
+Historical note: before 2026-05-29, the offscreen realm did not initialize telemetry, so extension `fill` beacons represented only panel-terminal commands. Cone delegation activity (visible as `agent ...` bash calls) was therefore invisible in RUM despite running thousands of times per day. Dashboards that bucket on the older period should account for this gap.
 
 ### `viewmedia` wiring
 
@@ -104,8 +107,8 @@ Dashboard readers comparing extension and CLI shell volume should expect this ga
 
 ### Not instrumented in this iteration
 
-- The offscreen document (`packages/chrome-extension/src/offscreen.ts`). Agent-loop events — turn end, tool-call durations, scoop create/delegate/drop — would require offscreen-side init.
 - The extension service worker (`packages/chrome-extension/src/service-worker.ts`). CDP attach/detach, OAuth completion, navigate-licks, tray-socket lifecycle.
+- Custom agent-loop events from the offscreen realm — turn end, tool-call durations, explicit scoop create/delegate/drop. The offscreen `WasmShell` now emits `fill` beacons for every bash call (so the cone-side `agent ...` invocations and `feed_scoop` tool calls show up indirectly), but there are no dedicated `agent-spawn` or `scoop-delegate` checkpoints yet.
 - Core Web Vitals in the extension. The helix enhancer that captures CWV cannot run under the extension's CSP, and we do not self-host it here.
 
 These are tracked as future work in `docs/superpowers/specs/2026-04-28-extension-telemetry-design.md`.

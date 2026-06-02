@@ -1,8 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  NODE_NATIVE_PACKAGES,
-  NATIVE_PACKAGE_HINTS,
   LOAD_MODULE_TIMEOUT_MS,
+  NATIVE_PACKAGE_HINTS,
+  NODE_NATIVE_PACKAGES,
   nativePackageError,
   withTimeout,
 } from '../../../src/kernel/realm/require-guards.js';

@@ -213,6 +213,55 @@ describe('extension service worker', () => {
     await loadServiceWorker();
   });
 
+  it('oauth-request with interactive:false runs launchWebAuthFlow with the silent (windowless) options', async () => {
+    const chromeMock = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    chromeMock.identity.launchWebAuthFlow.mockResolvedValue(undefined);
+
+    await dispatchAndCaptureResponse({
+      source: 'panel',
+      payload: {
+        type: 'oauth-request',
+        providerId: 'adobe',
+        authorizeUrl: 'https://ims.example.com/authorize',
+        interactive: false,
+      },
+    });
+    await flushAsync();
+
+    expect(chromeMock.identity.launchWebAuthFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: 'https://ims.example.com/authorize',
+        interactive: false,
+        abortOnLoadForNonInteractive: false,
+        timeoutMsForNonInteractive: expect.any(Number),
+      })
+    );
+  });
+
+  it('oauth-request without interactive defaults to a visible (interactive:true) flow', async () => {
+    const chromeMock = (
+      globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }
+    ).chrome;
+    chromeMock.identity.launchWebAuthFlow.mockResolvedValue(undefined);
+
+    await dispatchAndCaptureResponse({
+      source: 'panel',
+      payload: {
+        type: 'oauth-request',
+        providerId: 'adobe',
+        authorizeUrl: 'https://ims.example.com/authorize',
+      },
+    });
+    await flushAsync();
+
+    expect(chromeMock.identity.launchWebAuthFlow).toHaveBeenCalledWith({
+      url: 'https://ims.example.com/authorize',
+      interactive: true,
+    });
+  });
+
   it('hosts the leader tray socket in the service worker and relays frames', async () => {
     dispatchOffscreenMessage({
       type: 'tray-socket-open',

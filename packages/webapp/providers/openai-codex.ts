@@ -26,25 +26,25 @@
  */
 
 import type {
-  ProviderConfig,
-  InterceptingOAuthLauncher,
-  OAuthLoginOptions,
-  ModelMetadata,
-} from '../src/providers/types.js';
+  Api,
+  Context,
+  Model,
+  ProviderStreamOptions,
+  SimpleStreamOptions,
+} from '@earendil-works/pi-ai';
 import {
+  createAssistantMessageEventStream,
   registerApiProvider,
   streamOpenAICodexResponses,
   streamSimpleOpenAICodexResponses,
-  createAssistantMessageEventStream,
 } from '@earendil-works/pi-ai';
 import type {
-  Api,
-  Model,
-  Context,
-  SimpleStreamOptions,
-  ProviderStreamOptions,
-} from '@earendil-works/pi-ai';
-import { saveOAuthAccount, getAccounts } from '../src/ui/provider-settings.js';
+  InterceptingOAuthLauncher,
+  ModelMetadata,
+  OAuthLoginOptions,
+  ProviderConfig,
+} from '../src/providers/types.js';
+import { getAccounts, saveOAuthAccount } from '../src/ui/provider-settings.js';
 
 // ── Constants ──────────────────────────────────────────────────────
 

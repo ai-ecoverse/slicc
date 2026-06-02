@@ -1,7 +1,7 @@
-import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-import { detectMimeType } from './shared.js';
+import { defineCommand } from 'just-bash';
 import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
+import { detectMimeType } from './shared.js';
 
 type CommandContext = Parameters<Parameters<typeof defineCommand>[1]>[1];
 type CommandResult = { stdout: string; stderr: string; exitCode: number };

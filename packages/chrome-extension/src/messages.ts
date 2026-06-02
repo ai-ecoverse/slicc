@@ -5,12 +5,12 @@
  * All messages flow through the service worker as a relay.
  */
 
-import type { ScoopTabState } from './types.js';
 import type { MessageAttachment } from '../../webapp/src/core/attachments.js';
 import type {
   TerminalControlMsg,
   TerminalEventMsg,
 } from '../../webapp/src/shell/terminal-protocol.js';
+import type { ScoopTabState } from './types.js';
 
 /**
  * Local mirror of `SprinkleSummary` from
@@ -196,6 +196,12 @@ export interface OAuthRequestMsg {
   type: 'oauth-request';
   providerId: string;
   authorizeUrl: string;
+  /**
+   * Whether to show the auth window. Silent renewals (prompt=none) pass
+   * `false` so `chrome.identity.launchWebAuthFlow` runs without UI; explicit
+   * user-initiated logins pass `true` (the default when omitted).
+   */
+  interactive?: boolean;
 }
 
 /** Sprinkle lick event from side panel to offscreen agent. */

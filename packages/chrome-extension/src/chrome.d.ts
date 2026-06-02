@@ -165,7 +165,19 @@ interface ChromeAPI {
     getCurrent(): Promise<{ id: number }>;
   };
   identity: {
-    launchWebAuthFlow(options: { url: string; interactive: boolean }): Promise<string | undefined>;
+    launchWebAuthFlow(options: {
+      url: string;
+      interactive: boolean;
+      /**
+       * Non-interactive only (Chrome 113+). When `false`, the hidden web view
+       * is NOT terminated the moment the authorization page loads — it keeps
+       * following navigations (including JS-driven redirects) until the flow
+       * reaches the redirect URL. Default `true`.
+       */
+      abortOnLoadForNonInteractive?: boolean;
+      /** Non-interactive only: max total run time in ms. */
+      timeoutMsForNonInteractive?: number;
+    }): Promise<string | undefined>;
     getRedirectURL(path?: string): string;
   };
   action: ChromeActionAPI;

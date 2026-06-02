@@ -4,14 +4,14 @@
  * gates purely on the `/shared/.welcomed` marker file.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
+  __test__,
   detectWelcomeFirstRun,
   hasWelcomeLickInHistory,
   recordWelcomed,
-  __test__,
 } from '../../src/scoops/welcome-detection.js';
 
 interface PersistedSession {

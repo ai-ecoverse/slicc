@@ -6,11 +6,11 @@
  * variant is present so refactors don't accidentally drop coverage.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   createChatFixture,
-  FIXTURE_SESSION_ID,
   FIXTURE_SCOOP_NAME,
+  FIXTURE_SESSION_ID,
 } from '../../src/ui/chat-fixture.js';
 
 describe('createChatFixture', () => {

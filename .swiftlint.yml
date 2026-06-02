@@ -1,0 +1,91 @@
+# SwiftLint configuration for the SLICC Swift/iOS packages
+# (swift-server, swift-launcher, ios-app).
+#
+# This is the single source of truth for Swift linting. Each Swift package has a
+# thin `.swiftlint.yml` that inherits this file via `parent_config` and excludes
+# its own `.build`; `npm run lint` (and the CI gate) run `swiftlint lint` in the
+# package. Following SwiftLint's standard model, warnings surface code-quality
+# issues for incremental cleanup while only `error`-severity violations fail the
+# build. Thresholds are tuned to the existing codebase so the current sources
+# lint cleanly (zero errors) while keeping the rules meaningful.
+
+excluded:
+  - '**/.build'
+  - '**/Package.resolved'
+  - node_modules
+
+# High-value opt-in rules layered on top of the default set.
+opt_in_rules:
+  - first_where
+  - last_where
+  - contains_over_filter_count
+  - contains_over_first_not_nil
+  - sorted_first_last
+  - redundant_nil_coalescing
+  - closure_spacing
+  - fatal_error_message
+  - toggle_bool
+  - yoda_condition
+
+# Rules intentionally relaxed/disabled for this codebase.
+disabled_rules:
+  # The project deliberately uses trailing commas in multiline literals.
+  - trailing_comma
+  # TODO/FIXME markers are tracked via issues, not the linter.
+  - todo
+
+# Allow short identifiers (e.g. test locals like `a`, `fd`, `n1`) while still
+# catching overly long names and type-name style issues.
+identifier_name:
+  min_length:
+    warning: 0
+    error: 0
+  max_length:
+    warning: 50
+    error: 60
+  # Test-only helpers use a leading-underscore convention (e.g.
+  # `_testing_seedLaunchRecord`); report rather than block on it.
+  validates_start_with_lowercase: warning
+
+# Force tries appear only for compile-time-constant resources (e.g. static
+# regular expressions). Keep the rule reporting as a warning rather than an
+# error so it surfaces without blocking the build.
+force_try:
+  severity: warning
+
+line_length:
+  warning: 160
+  # Generous error cap: a few lines embed long inline scripts/string literals
+  # that cannot be wrapped. The 160-char warning still flags everything else.
+  error: 500
+  ignores_urls: true
+  ignores_comments: true
+  ignores_function_declarations: true
+
+file_length:
+  warning: 1200
+  error: 2000
+
+type_body_length:
+  warning: 600
+  error: 1000
+
+function_body_length:
+  warning: 120
+  error: 400
+
+cyclomatic_complexity:
+  warning: 25
+  error: 50
+
+function_parameter_count:
+  warning: 8
+  error: 10
+
+large_tuple:
+  warning: 4
+  error: 5
+
+nesting:
+  type_level:
+    warning: 3

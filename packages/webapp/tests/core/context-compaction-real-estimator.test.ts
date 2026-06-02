@@ -14,9 +14,10 @@
  * `completeSimple` IS still mocked: we only need to verify compaction
  * *triggers*, not that the summary call hits a real API.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { Api, Model } from '@earendil-works/pi-ai';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockCompleteSimple = vi.fn();
 

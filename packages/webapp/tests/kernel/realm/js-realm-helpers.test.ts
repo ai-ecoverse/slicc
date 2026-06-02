@@ -7,15 +7,15 @@
  * mirror surfaces stay in lockstep with this canonical TS module.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  parseFlags,
   attachArgvParseFlags,
   createCli,
   createColor,
-  time,
   fmt,
+  parseFlags,
   pool,
+  time,
 } from '../../../src/kernel/realm/js-realm-helpers.js';
 
 describe('parseFlags', () => {

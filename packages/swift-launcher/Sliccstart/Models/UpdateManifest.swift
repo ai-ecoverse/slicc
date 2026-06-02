@@ -191,10 +191,10 @@ struct ReleaseAssetResolver {
         let decoder = JSONDecoder()
         let releases = try decoder.decode([ReleaseRecord].self, from: data)
         let matching = releases
-            .filter { $0.tag_name.hasPrefix(releasePrefix) || $0.name?.hasPrefix(releasePrefix) == true }
+            .filter { $0.tagName.hasPrefix(releasePrefix) || $0.name?.hasPrefix(releasePrefix) == true }
             .first
         guard let release = matching else { return nil }
-        let version = release.tag_name
+        let version = release.tagName
             .replacingOccurrences(of: releasePrefix, with: "")
             .trimmingCharacters(in: CharacterSet(charactersIn: "-v "))
         let manifestAsset = release.assets.first { $0.name == "manifest-\(version).json" }
@@ -203,21 +203,32 @@ struct ReleaseAssetResolver {
         guard let manifest = manifestAsset, let webapp = webappAsset else { return nil }
         return ReleaseAssetLocator(
             version: version,
-            manifestURL: URL(string: manifest.browser_download_url)!,
-            webappAssetURL: URL(string: webapp.browser_download_url)!,
-            fullAppAssetURL: fullAsset.flatMap { URL(string: $0.browser_download_url) }
+            manifestURL: URL(string: manifest.browserDownloadURL)!,
+            webappAssetURL: URL(string: webapp.browserDownloadURL)!,
+            fullAppAssetURL: fullAsset.flatMap { URL(string: $0.browserDownloadURL) }
         )
     }
 
     private struct ReleaseRecord: Decodable {
-        let tag_name: String
+        let tagName: String
         let name: String?
         let assets: [AssetRecord]
+
+        enum CodingKeys: String, CodingKey {
+            case tagName = "tag_name"
+            case name
+            case assets
+        }
     }
 
     private struct AssetRecord: Decodable {
         let name: String
-        let browser_download_url: String
+        let browserDownloadURL: String
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case browserDownloadURL = "browser_download_url"
+        }
     }
 }
 

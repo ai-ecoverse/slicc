@@ -130,7 +130,7 @@ export async function discoverAuth(
   let asBase: string;
   let asmUrl: string;
   let discoveryPath: 'prm' | 'asm-origin-fallback';
-  if (prm && prm.authorization_servers && prm.authorization_servers.length > 0) {
+  if (prm?.authorization_servers && prm.authorization_servers.length > 0) {
     asBase = prm.authorization_servers[0].replace(/\/+$/, '');
     asmUrl = `${asBase}/.well-known/oauth-authorization-server`;
     discoveryPath = 'prm';

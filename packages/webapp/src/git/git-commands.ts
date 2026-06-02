@@ -9,17 +9,17 @@
 import '../shims/buffer-polyfill.js';
 
 import * as git from 'isomorphic-git';
-import { VirtualFS } from '../fs/index.js';
 import { GLOBAL_FS_DB_NAME } from '../fs/global-db.js';
-import { gitHttp } from './git-http.js';
-import { unifiedDiff, diffStat } from './diff.js';
-import { createIsomorphicGitFs, type IsoGitFsPromises } from './vfs-fs-adapter.js';
+import { VirtualFS } from '../fs/index.js';
+import { diffStat, unifiedDiff } from './diff.js';
 import {
   GLOBAL_GITCONFIG_PATH,
   readGlobalGitConfigValue,
-  writeGlobalGitConfigValue,
   removeGitConfigKey,
+  writeGlobalGitConfigValue,
 } from './git-config.js';
+import { gitHttp } from './git-http.js';
+import { createIsomorphicGitFs, type IsoGitFsPromises } from './vfs-fs-adapter.js';
 
 export interface GitCommandResult {
   stdout: string;
@@ -39,6 +39,19 @@ export interface GitCommandsOptions {
   globalDbName?: string;
 }
 
+/** Read an env var from either a Map (shell ctx.env) or a plain Record. */
+function readEnvVar(
+  env: ReadonlyMap<string, string> | Readonly<Record<string, string>>,
+  name: string
+): string | undefined {
+  if (env instanceof Map) {
+    const v = env.get(name);
+    return v && v.length > 0 ? v : undefined;
+  }
+  const v = (env as Record<string, string>)[name];
+  return v && v.length > 0 ? v : undefined;
+}
+
 /**
  * Git commands handler that provides CLI-like git functionality.
  * Uses the shared VirtualFS instance (backed by LightningFS).
@@ -53,6 +66,13 @@ export class GitCommands {
   private globalDbName: string;
   /** GitHub token for authentication (avoids rate limits on public repos, required for private). */
   private githubToken?: string;
+  /**
+   * Shell env vars threaded in from the current `execute()` call. Used as an
+   * ambient fallback by `resolveAuthToken()` when no explicit `github.token`
+   * file is set. Cleared at the end of every `execute()` invocation so a
+   * subsequent call without env doesn't accidentally inherit it.
+   */
+  private currentEnv?: ReadonlyMap<string, string> | Readonly<Record<string, string>>;
 
   constructor(private options: GitCommandsOptions) {
     // Route through a VirtualFS-backed adapter so isomorphic-git sees mount
@@ -67,15 +87,34 @@ export class GitCommands {
 
   /**
    * Get onAuth callback for isomorphic-git operations.
-   * Returns credentials if a GitHub token is configured.
+   * Returns credentials if a GitHub token is configured (via file or env).
    */
   private getOnAuth(): (() => { username: string; password: string }) | undefined {
-    if (!this.githubToken) return undefined;
-    const token = this.githubToken;
+    const token = this.resolveAuthToken();
+    if (!token) return undefined;
     return () => ({
       username: 'x-access-token',
       password: token,
     });
+  }
+
+  /**
+   * Resolve the effective GitHub auth token, in priority order:
+   *   1. `git config github.token` (the `/workspace/.git/github-token` file,
+   *      loaded into `this.githubToken` at the start of every `execute()`)
+   *   2. `$GH_TOKEN` from the shell env (matches the `gh` CLI convention)
+   *   3. `$GITHUB_TOKEN` from the shell env
+   * Returns undefined when none is set.
+   */
+  private resolveAuthToken(): string | undefined {
+    if (this.githubToken) return this.githubToken;
+    const env = this.currentEnv;
+    if (!env) return undefined;
+    const gh = readEnvVar(env, 'GH_TOKEN');
+    if (gh) return gh;
+    const gt = readEnvVar(env, 'GITHUB_TOKEN');
+    if (gt) return gt;
+    return undefined;
   }
 
   /** Get or create the shared Global VirtualFS instance for config persistence. */
@@ -151,14 +190,22 @@ export class GitCommands {
    * Execute a git command.
    * @param args Command arguments (e.g., ['init'], ['commit', '-m', 'message'])
    * @param cwd Current working directory
+   * @param env Optional shell env vars used as an ambient auth fallback
+   *   (`$GH_TOKEN`, `$GITHUB_TOKEN`) when no explicit `github.token` file is
+   *   set. Matches the `gh` CLI convention.
    */
-  async execute(args: string[], cwd: string): Promise<GitCommandResult> {
+  async execute(
+    args: string[],
+    cwd: string,
+    env?: ReadonlyMap<string, string> | Readonly<Record<string, string>>
+  ): Promise<GitCommandResult> {
     if (args.length === 0) {
       return this.help();
     }
 
     const [command, ...rest] = args;
 
+    this.currentEnv = env;
     try {
       await this.loadGithubToken();
       switch (command) {
@@ -231,6 +278,8 @@ export class GitCommands {
         stderr: `fatal: ${message}\n`,
         exitCode: 128,
       };
+    } finally {
+      this.currentEnv = undefined;
     }
   }
 
@@ -309,7 +358,7 @@ Available commands:
 
     // Extract repo name from URL if dir not specified
     if (!dir) {
-      const match = url.match(/\/([^\/]+?)(\.git)?$/);
+      const match = url.match(/\/([^/]+?)(\.git)?$/);
       dir = match ? match[1] : 'repo';
     }
 
@@ -1201,7 +1250,7 @@ Available commands:
     }
 
     // Handle <commit>:<path> syntax — show file content at a commit
-    if (ref && ref.includes(':')) {
+    if (ref?.includes(':')) {
       return await this.showFileAtCommit(cwd, ref);
     }
 
@@ -2194,7 +2243,7 @@ Available commands:
       let current = root;
       for (let i = 0; i < parts.length - 1; i++) {
         let node = current.get(parts[i]);
-        if (!node || node.type !== 'tree') {
+        if (node?.type !== 'tree') {
           node = { type: 'tree', children: new Map() };
           current.set(parts[i], node);
         }

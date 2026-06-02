@@ -20,9 +20,9 @@
 
 body {
   font:
-    14.5px/1.55 -apple-system,
+    14.5px / 1.55 -apple-system,
     BlinkMacSystemFont,
-    'SF Pro Text',
+    "SF Pro Text",
     system-ui,
     sans-serif;
   background: var(--bg);
@@ -58,7 +58,7 @@ header h1 {
 }
 
 header h1::before {
-  content: '🍦 ';
+  content: "🍦 ";
 }
 
 #user-label {
@@ -68,7 +68,7 @@ header h1::before {
 }
 
 .hidden {
-  display: none !important;
+  display: none;
 }
 
 button {
@@ -106,7 +106,7 @@ button:disabled {
 }
 
 .cone--busy .cone-busy-badge::before {
-  content: '';
+  content: "";
   display: inline-block;
   width: 10px;
   height: 10px;

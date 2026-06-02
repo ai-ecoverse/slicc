@@ -10,8 +10,8 @@
  */
 
 import {
-  TRAY_WORKER_STORAGE_KEY,
   DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+  TRAY_WORKER_STORAGE_KEY,
 } from '../scoops/tray-runtime-config.js';
 
 /** Resolve the worker base URL (localStorage override → production default). */

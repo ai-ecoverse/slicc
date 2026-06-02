@@ -1,9 +1,9 @@
 import { CloudError } from '../errors.js';
-import { filterSecretsEnv } from '../secrets-filter.js';
 import { pollCloudStatus } from '../polling.js';
 import { encodeBundleEnv } from '../cone-config/index.js';
 import type { Registry } from '../registry.js';
-import type { SandboxSubstrate, SandboxHandle } from '../substrate.js';
+import { filterSecretsEnv } from '../secrets-filter.js';
+import type { SandboxHandle, SandboxSubstrate } from '../substrate.js';
 import type { ConeEntry, StartResult } from '../types.js';
 
 export interface StartConeOpts {

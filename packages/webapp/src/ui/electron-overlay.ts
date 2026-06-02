@@ -1,19 +1,3 @@
-import {
-  createElectronOverlayShellState,
-  isEdgePosition,
-  normalizeElectronOverlayLauncherCorner,
-  resolveElectronOverlayLauncherCorner,
-  setElectronOverlayCorner,
-  setElectronOverlayOpen,
-  setElectronOverlayTab,
-  shouldSnapElectronOverlayLauncher,
-  toggleElectronOverlay,
-  type ElectronOverlayLauncherCorner,
-  type ElectronOverlayShellState,
-} from './overlay-shell-state.js';
-import { ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE } from './runtime-mode.js';
-import { EXTENSION_TAB_SPECS, normalizeExtensionTabId, type ExtensionTabId } from './tabbed-ui.js';
-
 // Monochrome Sliccy logos inlined at build time.
 // Dark variant: dark fill + white strokes (shows on light backgrounds).
 // Light variant: white fill + dark strokes (shows on dark backgrounds — appears as light icon).
@@ -23,6 +7,20 @@ import { EXTENSION_TAB_SPECS, normalizeExtensionTabId, type ExtensionTabId } fro
 // "light" SVG = white fill + black outlines → visible on light backgrounds.
 import sliccyDarkSvg from '../../../assets/logos/sliccy-mono-dark-1scoops.svg?raw';
 import sliccyLightSvg from '../../../assets/logos/sliccy-mono-light-1scoops.svg?raw';
+import {
+  createElectronOverlayShellState,
+  type ElectronOverlayLauncherCorner,
+  type ElectronOverlayShellState,
+  normalizeElectronOverlayLauncherCorner,
+  resolveElectronOverlayLauncherCorner,
+  setElectronOverlayCorner,
+  setElectronOverlayOpen,
+  setElectronOverlayTab,
+  shouldSnapElectronOverlayLauncher,
+  toggleElectronOverlay,
+} from './overlay-shell-state.js';
+import { ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE } from './runtime-mode.js';
+import { EXTENSION_TAB_SPECS, type ExtensionTabId, normalizeExtensionTabId } from './tabbed-ui.js';
 
 export const ELECTRON_OVERLAY_HOST_ID = 'slicc-electron-overlay-root';
 export const ELECTRON_OVERLAY_TAG_NAME = 'slicc-electron-overlay';
@@ -61,11 +59,14 @@ function createStyle(doc: Document, css: string): HTMLStyleElement {
   return style;
 }
 
-/**
- * Strip the XML declaration from an SVG string so it can be injected as innerHTML.
- */
 function stripXmlDeclaration(svg: string): string {
   return svg.replace(/<\?xml[^?]*\?>\s*/i, '');
+}
+
+function parseSvgFragment(doc: Document, svg: string): Node {
+  const parsed = new DOMParser().parseFromString(svg, 'image/svg+xml');
+  const root = parsed.documentElement;
+  return doc.importNode(root, true);
 }
 
 const BASE_TOKENS = `
@@ -272,12 +273,12 @@ class SliccElectronLauncherElement extends HTMLElement {
 
     const forDark = doc.createElement('div');
     forDark.className = 'logo-icon logo-for-dark';
-    forDark.innerHTML = stripXmlDeclaration(sliccyDarkSvg);
+    forDark.appendChild(parseSvgFragment(doc, stripXmlDeclaration(sliccyDarkSvg)));
     forDark.setAttribute('aria-hidden', 'true');
 
     const forLight = doc.createElement('div');
     forLight.className = 'logo-icon logo-for-light';
-    forLight.innerHTML = stripXmlDeclaration(sliccyLightSvg);
+    forLight.appendChild(parseSvgFragment(doc, stripXmlDeclaration(sliccyLightSvg)));
     forLight.setAttribute('aria-hidden', 'true');
 
     const tabLabel = doc.createElement('span');

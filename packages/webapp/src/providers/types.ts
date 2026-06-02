@@ -12,8 +12,16 @@ import type {
  * Opens a browser window/flow for the given authorize URL and returns the
  * redirect URL (with token/code in fragment or query) once the flow completes.
  * Returns null if the user cancelled or the flow timed out.
+ *
+ * `opts.interactive` controls whether the flow is allowed to show UI. Silent
+ * renewals (prompt=none) pass `false` so the transport runs without a visible
+ * window; explicit user-initiated logins omit it (defaults to interactive).
+ * Transports that cannot run non-interactively (e.g. CLI popup) may ignore it.
  */
-export type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
+export type OAuthLauncher = (
+  authorizeUrl: string,
+  opts?: { interactive?: boolean }
+) => Promise<string | null>;
 
 /**
  * Outbound-request rewrite applied during an intercepted OAuth flow.
@@ -113,6 +121,13 @@ export interface OAuthLoginOptions {
    * space-separated). The provider is responsible for any normalization.
    */
   scopes?: string;
+  /**
+   * When true, the provider should force the user to re-authenticate even if
+   * an active SSO session exists (e.g. Adobe IMS prompt=login). Used by the
+   * Login button on a logged-out account row to guarantee a fresh account
+   * selection rather than silently re-authorizing the previous account.
+   */
+  forceReauth?: boolean;
   /**
    * UI hook for device-code OAuth flows. When present, the provider MUST
    * await its resolution before navigating any auth tab, so the user
@@ -248,6 +263,18 @@ export interface ProviderConfig {
   ) => Promise<void>;
   /** Called when the user clicks logout for this OAuth provider. */
   onOAuthLogout?: () => Promise<void>;
+  /**
+   * Returns the URL to open in a popup to clear the IdP browser session before
+   * re-authentication. When defined, the URL is opened during logout (not login)
+   * so that a subsequent Login always gets a fresh account selection.
+   *
+   * Design note: This is intentionally disruptive because it signs the user
+   * out of the provider in their browser.
+   *
+   * If undefined, IdP session logout is skipped for this provider (token revocation
+   * via onOAuthLogout still runs).
+   */
+  getOAuthLogoutUrl?: (account: { accessToken?: string; providerId: string }) => string | undefined;
   /**
    * Optional: refresh an expired/expiring token silently from page context.
    * Called by oauth-bootstrap at page load so the kernel-worker can stream

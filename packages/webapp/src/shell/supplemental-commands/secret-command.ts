@@ -1,6 +1,6 @@
-import { defineCommand } from 'just-bash';
-import type { Command } from 'just-bash';
 import { isAllowedDomain } from '@slicc/shared-ts';
+import type { Command } from 'just-bash';
+import { defineCommand } from 'just-bash';
 
 function helpText(): string {
   return `secret — manage secrets for the fetch proxy and mount backends
@@ -312,7 +312,7 @@ export function createSecretCommand(): Command {
               stderr: '',
               exitCode: 0,
             };
-          } catch (err) {
+          } catch (_err) {
             // Fallback: open the URL directly via window.open (no permission needed
             // for extension pages; works from the side panel context).
             const url = chrome.runtime.getURL('secrets.html');

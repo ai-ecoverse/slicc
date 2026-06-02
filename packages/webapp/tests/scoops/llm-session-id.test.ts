@@ -7,10 +7,10 @@
  * and its scoops.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  getAdobeSessionId,
   __resetAdobeSessionIdCacheForTests,
+  getAdobeSessionId,
 } from '../../src/scoops/llm-session-id.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 

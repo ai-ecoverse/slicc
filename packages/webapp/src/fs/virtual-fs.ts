@@ -9,9 +9,20 @@
  */
 
 import FS from '@isomorphic-git/lightning-fs';
+import type { FsWatcher } from './fs-watcher.js';
+import type { MountBackend, RefreshReport } from './mount/backend.js';
+import { LocalMountBackend } from './mount/backend-local.js';
+import { MountIndex } from './mount-index.js';
+import type { BackendDescriptor, MountTableEntry } from './mount-table-store.js';
+import {
+  clearMountEntries,
+  loadMountHandle,
+  removeMountEntry,
+  saveMountEntry,
+} from './mount-table-store.js';
+import { joinPath, normalizePath, splitPath } from './path-utils.js';
 import type {
   DirEntry,
-  Encoding,
   EntryType,
   FileContent,
   MkdirOptions,
@@ -20,18 +31,6 @@ import type {
   Stats,
 } from './types.js';
 import { FsError } from './types.js';
-import { normalizePath, splitPath, joinPath } from './path-utils.js';
-import type { FsWatcher } from './fs-watcher.js';
-import {
-  saveMountEntry,
-  removeMountEntry,
-  clearMountEntries,
-  loadMountHandle,
-} from './mount-table-store.js';
-import type { BackendDescriptor, MountTableEntry } from './mount-table-store.js';
-import type { MountBackend, RefreshReport } from './mount/backend.js';
-import { LocalMountBackend } from './mount/backend-local.js';
-import { MountIndex } from './mount-index.js';
 
 /** Maximum number of symlink hops before throwing ELOOP. */
 const MAX_SYMLINK_DEPTH = 10;
@@ -534,8 +533,9 @@ export class VirtualFS {
         return LocalMountBackend.fromHandle(handle, { mountId: descriptor.mountId });
       }
       case 's3': {
-        const { S3MountBackend, RemoteMountCache, makeSignedFetchS3 } =
-          await import('./mount/index.js');
+        const { S3MountBackend, RemoteMountCache, makeSignedFetchS3 } = await import(
+          './mount/index.js'
+        );
         const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
         return new S3MountBackend({
           source: descriptor.source,
@@ -546,8 +546,9 @@ export class VirtualFS {
         });
       }
       case 'da': {
-        const { DaMountBackend, RemoteMountCache, makeSignedFetchDa } =
-          await import('./mount/index.js');
+        const { DaMountBackend, RemoteMountCache, makeSignedFetchDa } = await import(
+          './mount/index.js'
+        );
         const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
         return new DaMountBackend({
           source: descriptor.source,

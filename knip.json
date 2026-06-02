@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreBinaries": ["swift", "wrangler", "playwright", "sleep"],
+  "ignoreBinaries": ["swift", "swiftlint", "wrangler", "playwright", "sleep"],
   "ignoreDependencies": ["pyodide", "@cloudflare/workers-types", "e2b"],
   "ignore": [
     "dist/**",
@@ -15,7 +15,7 @@
   ],
   "workspaces": {
     ".": {
-      "entry": ["vitest.config.ts", "eslint.config.js", ".releaserc.json"],
+      "entry": ["vitest.config.ts", "biome.json", ".releaserc.json"],
       "project": ["*.{js,ts,mjs}"]
     },
     "packages/webapp": {
@@ -61,6 +61,7 @@
       "ignore": ["src/chrome.d.ts"],
       "ignoreDependencies": [
         "@imagemagick/magick-wasm",
+        "@ffmpeg/core",
         "@earendil-works/pi-ai",
         "@earendil-works/pi-coding-agent"
       ]

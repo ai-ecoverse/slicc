@@ -8,9 +8,9 @@
  * WebSocket.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import express from 'express';
 import type { Request, Response } from 'express';
+import express from 'express';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 interface RecordedEvent {
   type: 'navigate_event';

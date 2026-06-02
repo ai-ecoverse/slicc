@@ -8,9 +8,9 @@
  */
 
 export {
-  readMcpAuthEntry,
-  readMcpAuthEntries,
   _testOnly_resetStoreCache,
   _testOnly_setFsModule,
+  readMcpAuthEntries,
+  readMcpAuthEntry,
 } from './store.js';
 export type { McpAuthEntry, McpServerAuthRecord } from './types.js';

@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
 import express from 'express';
+import { describe, expect, it } from 'vitest';
 import {
-  registerHostedBootstrapEndpoint,
   buildHostedBootstrapPayload,
+  registerHostedBootstrapEndpoint,
 } from '../src/hosted-bootstrap.js';
 import type { Secret, SecretEntry, SecretStore } from '../src/secrets/types.js';
 
