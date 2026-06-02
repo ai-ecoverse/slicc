@@ -5,8 +5,8 @@
  * turn: a genuinely dead session won't recover by retrying, and pi-agent-core
  * stream retries amplify the traffic. The cooldown re-probes once it elapses
  * (so it recovers if the user re-authenticated elsewhere) and clears
- * immediately on a successful renewal. A valid token never reaches this unit —
- * callers gate it behind their own expiry check.
+ * immediately on a successful renewal. Callers are expected to gate this behind
+ * their own expiry check, so a still-valid token normally never reaches here.
  *
  * Five minutes balances "stop hammering IMS on a dead session" against
  * "recover promptly after re-auth". Not derived from token lifetime; tune
@@ -34,7 +34,14 @@ export function createSilentRenewBackoff(
       let token: string | null = null;
       try {
         token = await renew();
-      } catch {
+      } catch (err) {
+        // renew() is expected to log its own failure reason; this is a safety
+        // net so a caller whose renew() throws an un-logged reason still leaves
+        // a trace instead of vanishing silently.
+        console.debug(
+          '[silent-renew-backoff] renew threw:',
+          err instanceof Error ? err.message : String(err)
+        );
         token = null;
       }
       cooldownUntil = token ? 0 : now + cooldownMs;
