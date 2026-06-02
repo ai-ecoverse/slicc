@@ -10,6 +10,7 @@ import {
   SUDOERS_D_DIR,
   SUDOERS_FILE,
   type SudoersPolicy,
+  sanitizeGrantPattern,
 } from '../../../src/shell/sudo/sudoers.js';
 
 const SAMPLE = `# SLICC sudoers
@@ -56,6 +57,22 @@ describe('parseSudoers', () => {
   it('empty input yields an empty policy', () => {
     expect(parseSudoers('')).toEqual(emptyPolicy());
     expect(parseSudoers('   \n# only comments\n')).toEqual(emptyPolicy());
+  });
+});
+
+describe('sanitizeGrantPattern', () => {
+  it('returns only the first trimmed line for newline-bearing input', () => {
+    expect(sanitizeGrantPattern('git push*\nNOPASSWD Cmnd  /etc/sudoers')).toBe('git push*');
+    expect(sanitizeGrantPattern('a\r\nb')).toBe('a');
+  });
+
+  it('trims leading/trailing whitespace', () => {
+    expect(sanitizeGrantPattern('  git push*  ')).toBe('git push*');
+  });
+
+  it('returns an empty string for all-whitespace or empty input', () => {
+    expect(sanitizeGrantPattern('   ')).toBe('');
+    expect(sanitizeGrantPattern('')).toBe('');
   });
 });
 

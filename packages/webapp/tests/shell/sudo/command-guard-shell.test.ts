@@ -142,6 +142,19 @@ describe('WasmShell command-level sudo enforcement', () => {
     });
   });
 
+  it('still gates a git push that source re-dispatches through the registry', async () => {
+    const broker = brokerReturning({ decision: 'deny' });
+    const shell = makeShell({ getPolicy: () => GIT_POLICY, broker });
+
+    await fs.writeFile('/workspace/run.sh', 'git push origin main\n');
+    await shell.executeCommand('source /workspace/run.sh');
+
+    expect(broker.requestApproval).toHaveBeenCalledWith({
+      kind: 'command',
+      detail: 'git push origin main',
+    });
+  });
+
   it('sanitizes a newline-bearing "Always" pattern before persisting', async () => {
     const broker = brokerReturning({
       decision: 'always',

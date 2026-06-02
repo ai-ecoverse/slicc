@@ -101,6 +101,20 @@ describe('SudoManager', () => {
     mgr.dispose();
   });
 
+  it('persistCommandGrant sanitizes a newline-bearing pattern before writing', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    const sink = mgr.getShellConfig().persistCommandGrant;
+
+    await sink?.('rm -rf *\nNOPASSWD Cmnd  /etc/sudoers');
+
+    const granted = (await vfs.readFile('/etc/sudoers.d/granted', { encoding: 'utf-8' })) as string;
+    // Only the first trimmed line is persisted — no injected second rule.
+    expect(granted).toContain('NOPASSWD Cmnd  rm -rf *');
+    expect(granted).not.toContain('/etc/sudoers');
+    mgr.dispose();
+  });
+
   it('stops reacting to changes after dispose()', async () => {
     const mgr = new SudoManager({ fs: vfs, watcher, broker });
     await mgr.init();

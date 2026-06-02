@@ -101,6 +101,49 @@ describe('SudoFS', () => {
     expect(await vfs.readTextFile('/workspace/.git/config')).toBe('two');
   });
 
+  it('gates the source path as a read in rename (before writes) and moves on allow', async () => {
+    const { calls, broker } = makeBroker({ decision: 'allow' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    // Source is read-protected (`Read /shared/secrets/**`); destination is not.
+    await sfs.rename('/shared/secrets/api.key', '/workspace/moved.key');
+
+    // A read approval was requested on the SOURCE path before the move.
+    expect(calls.some((c) => c.kind === 'read' && c.detail === '/shared/secrets/api.key')).toBe(
+      true
+    );
+    expect(await vfs.exists('/workspace/moved.key')).toBe(true);
+    expect(await vfs.exists('/shared/secrets/api.key')).toBe(false);
+  });
+
+  it('blocks the rename when the source read approval is denied', async () => {
+    const { calls, broker } = makeBroker({ decision: 'deny' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(
+      sfs.rename('/shared/secrets/api.key', '/workspace/moved.key')
+    ).rejects.toMatchObject({ code: 'EACCES' });
+    expect(calls[0]).toMatchObject({ kind: 'read', detail: '/shared/secrets/api.key' });
+    // No silent move-then-read: the source stays put, the destination is absent.
+    expect(await vfs.exists('/shared/secrets/api.key')).toBe(true);
+    expect(await vfs.exists('/workspace/moved.key')).toBe(false);
+  });
+
+  it('sanitizes a newline-bearing pattern at the default persist sink', async () => {
+    const { broker } = makeBroker({
+      decision: 'always',
+      pattern: '/workspace/.git/**\nNOPASSWD Write /etc/sudoers',
+    });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await sfs.writeFile('/workspace/.git/config', 'one');
+
+    const granted = await vfs.readTextFile(GRANTED_FILE);
+    // Only the first trimmed line is written — no injected second rule.
+    expect(granted).toContain('NOPASSWD Write /workspace/.git/**');
+    expect(granted).not.toContain('/etc/sudoers');
+  });
+
   it('forces async fallback for gated sync fast-paths', () => {
     const { broker } = makeBroker({ decision: 'allow' });
     const sfs = createSudoFs(vfs, { broker, getPolicy });
