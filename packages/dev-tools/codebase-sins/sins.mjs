@@ -87,9 +87,9 @@ function dayOfYearUTC(d) {
 }
 
 /**
- * The sin of the given day via day-of-year (UTC) mod 7. Deterministic, pure,
- * no I/O. Drifts by one each day, independent of weekday, and cycles through
- * all seven.
+ * The sin of the given day via day-of-year (UTC) mod 7. Deterministic for a
+ * given `date` argument (defaults to the current date). Drifts by one each day,
+ * independent of weekday, and cycles through all seven.
  * @param {Date} [date]
  * @returns {(typeof SINS)[number]}
  */
