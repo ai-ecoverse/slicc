@@ -18,6 +18,10 @@ import { discoverLinks } from '../../net/discover-links.js';
 import { extractHandoff, type HandoffMatch } from '../../net/handoff-link.js';
 import { type ParsedLink, parseLinkHeader } from '../../net/link-header.js';
 import type { FloatType } from '../../scoops/tray-leader-sync.js';
+import {
+  TRAY_JOIN_STORAGE_KEY,
+  TRAY_WORKER_STORAGE_KEY,
+} from '../../scoops/tray-runtime-config.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
 import { normalizeHeadersInit } from '../proxy-headers.js';
 import {
@@ -513,16 +517,55 @@ function isActionablePage(state: PlaywrightState, page: PageInfo): boolean {
   return !isAppTab(state, page.targetId) && !isChromeInternalUiTarget(page);
 }
 
+/**
+ * Cheap, synchronous check for whether a multi-browser tray is configured
+ * (leader worker URL or follower join URL present). Reads `globalThis.localStorage`
+ * — the real Storage on the page, or the page-seeded shim in the kernel worker.
+ * Used to skip the `list-remote-targets` panel-RPC round-trip entirely when no
+ * tray exists, so plain (non-tray) playwright commands stay at one local call.
+ */
+function isTrayConfigured(): boolean {
+  try {
+    const ls = (globalThis as { localStorage?: Storage }).localStorage;
+    if (!ls) return false;
+    return !!(ls.getItem(TRAY_WORKER_STORAGE_KEY) || ls.getItem(TRAY_JOIN_STORAGE_KEY));
+  } catch {
+    return false;
+  }
+}
+
 async function getActionablePages(
   browser: BrowserAPI,
   state: PlaywrightState
 ): Promise<PageInfo[]> {
   await resolveAppTabId(browser, state);
-  // Use listAllTargets when available (includes remote tray targets)
-  const pages =
-    typeof browser.listAllTargets === 'function'
-      ? await browser.listAllTargets()
-      : await browser.listPages();
+  // Use listAllTargets when available (includes remote tray targets).
+  // In standalone mode the worker-side BrowserAPI has no trayTargetProvider, so
+  // listAllTargets() returns local-only. When a tray is configured, supplement via
+  // panel-RPC from the page-side BrowserAPI (fully wired) and dedupe by targetId.
+  // The tray-configured gate keeps the no-tray common case to a single local call
+  // (no per-command BroadcastChannel round-trip, no 3s-timeout exposure).
+  let pages: PageInfo[];
+  if (typeof browser.listAllTargets === 'function') {
+    pages = await browser.listAllTargets();
+    const rpc = isTrayConfigured() ? getPanelRpcClient() : null;
+    if (rpc) {
+      try {
+        const { targets } = await rpc.call('list-remote-targets', undefined, { timeoutMs: 3000 });
+        const seen = new Set(pages.map((p) => p.targetId));
+        for (const t of targets) {
+          if (!seen.has(t.targetId)) {
+            seen.add(t.targetId);
+            pages.push({ targetId: t.targetId, title: t.title, url: t.url });
+          }
+        }
+      } catch (err) {
+        log.debug('panel-rpc list-remote-targets failed', { err: String(err) });
+      }
+    }
+  } else {
+    pages = await browser.listPages();
+  }
   return pages.filter((page) => isActionablePage(state, page));
 }
 

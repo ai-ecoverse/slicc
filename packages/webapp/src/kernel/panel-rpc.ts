@@ -172,6 +172,16 @@ export type PanelRpcRequest =
       // mirror it into its shim immediately. See issue #701.
       op: 'save-oauth-accounts';
       payload: { accountsJson: string };
+    }
+  | {
+      // Fetch remote (follower) browser targets from the page-side
+      // BrowserAPI. The tray provider is set on the page-side instance
+      // only — the worker's BrowserAPI has no reference to it, so
+      // listAllTargets() in the worker falls back to local CDP tabs.
+      // This op bridges the gap: the page fetches its full target list
+      // and returns only entries with composite targetIds (remote ones).
+      op: 'list-remote-targets';
+      payload?: undefined;
     };
 
 export interface PanelRpcResults {
@@ -201,6 +211,9 @@ export interface PanelRpcResults {
   'tray-leave': TrayLeaveResult;
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
   'save-oauth-accounts': { storedJson: string };
+  'list-remote-targets': {
+    targets: Array<{ targetId: string; title: string; url: string }>;
+  };
 }
 
 export type PanelRpcOp = PanelRpcRequest['op'];
