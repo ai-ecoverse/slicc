@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreBinaries": ["swift", "wrangler", "playwright", "sleep"],
+  "ignoreBinaries": ["swift", "swiftlint", "wrangler", "playwright", "sleep"],
   "ignoreDependencies": ["pyodide", "@cloudflare/workers-types", "e2b"],
   "ignore": [
     "dist/**",
