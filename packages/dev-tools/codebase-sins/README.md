@@ -20,7 +20,7 @@ tests run by the `dev-tools` vitest project).
 
 `selectSinOfDay(date)` picks the sin via **day-of-year (UTC) mod 7**:
 `SINS[dayOfYearUTC % 7]`. The sin drifts by one each day, is independent of the
-weekday, and cycles through all seven. It is pure and deterministic.
+weekday, cycles through all seven, and is deterministic for a given `date` argument.
 
 `resolveSin(override)` honours a `workflow_dispatch` override that may be a `1-7`
 rank or a sin name/id, falling back to `selectSinOfDay()` when empty or invalid.
