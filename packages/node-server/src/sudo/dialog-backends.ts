@@ -139,7 +139,7 @@ export function createKdialogBackend(exec: ExecFn = defaultExec): SudoBackend {
     async prompt(req: SudoApproveRequest): Promise<SudoDecision> {
       const suggested = fallbackPattern(req);
       const text = `SLICC sudo — approve ${describeRequest(req)}\n\nYes = Allow once   No = Deny   Cancel = Always`;
-      let code = 1;
+      let code: number;
       try {
         await exec('kdialog', ['--warningyesnocancel', text, '--title', 'SLICC sudo']);
         code = 0; // Yes
