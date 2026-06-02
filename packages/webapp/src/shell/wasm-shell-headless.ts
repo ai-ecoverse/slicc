@@ -32,6 +32,7 @@ import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { MountCommands } from '../fs/mount-commands.js';
 import { GitCommands } from '../git/git-commands.js';
 import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
+import type { SudoBroker } from '../sudo/types.js';
 import { trackShellCommand } from '../ui/telemetry.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
 import type { JshDiscoveryFS } from './jsh-discovery.js';
@@ -41,6 +42,8 @@ import { EMPTY_BYTES } from './just-bash-compat.js';
 import { parseShellArgs } from './parse-shell-args.js';
 import { createProxiedFetch } from './proxied-fetch.js';
 import { ScriptCatalog } from './script-catalog.js';
+import { enforceCommandSudo } from './sudo/command-guard.js';
+import { SUDOERS_D_DIR, type SudoersPolicy } from './sudo/sudoers.js';
 import {
   createSkillCommand,
   createUpskillCommand,
@@ -98,6 +101,21 @@ export interface HeadlessShellOptions {
    * show them but as orphans.
    */
   getCurrentShellPid?: () => number | undefined;
+  /**
+   * Optional command-level sudo enforcement. When omitted (or when
+   * `getPolicy()` returns `null`), commands run ungated with zero added
+   * prompts. Wired by the kernel host / orchestrator once the sudoers policy
+   * and broker are available.
+   */
+  sudo?: ShellSudoConfig;
+}
+
+/** Command-level sudo enforcement hooks supplied to the shell. */
+export interface ShellSudoConfig {
+  /** Returns the current (live-reloadable) policy, or `null` to disable gating. */
+  getPolicy: () => SudoersPolicy | null;
+  /** Trusted-realm approval broker (the agent can only request, never fabricate). */
+  broker: SudoBroker;
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +434,9 @@ export class WasmShellHeadless implements HeadlessShellLike {
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
     trackShellCommand(commandName);
 
+    const denial = await this.runSudoGuard(command);
+    if (denial) return denial;
+
     // just-bash's published ExecOptions type does not yet expose
     // AbortSignal, but we still forward it so external callers and
     // terminal Ctrl+C keep a consistent cancellation path.
@@ -446,6 +467,52 @@ export class WasmShellHeadless implements HeadlessShellLike {
   // -------------------------------------------------------------------------
   // Internal
   // -------------------------------------------------------------------------
+
+  /**
+   * Run the command-level sudo guard. Returns a denial `BashExecResult` (exit 1,
+   * no execution) when approval was refused; `null` when the command may run.
+   * No-op when sudo is unconfigured or the active policy is empty/null.
+   */
+  private async runSudoGuard(command: string): Promise<BashExecResult | null> {
+    const sudo = this.options.sudo;
+    if (!sudo) return null;
+    const policy = sudo.getPolicy();
+    if (!policy) return null;
+
+    const result = await enforceCommandSudo(command, {
+      policy,
+      broker: sudo.broker,
+      persistGrant: (pattern) => this.persistCommandGrant(pattern),
+    });
+    if (result.allowed) return null;
+
+    return {
+      stdout: '',
+      stderr: `${result.message}\n`,
+      exitCode: 1,
+      env: this.lastEnv,
+    };
+  }
+
+  /**
+   * Append a human-confirmed `NOPASSWD Cmnd` grant to `/etc/sudoers.d/granted`.
+   * Uses the raw VFS handle so the self-protection invariant (which the FS-level
+   * gate enforces on the agent's handle) does not re-prompt on the grant write.
+   */
+  private async persistCommandGrant(pattern: string): Promise<void> {
+    const path = `${SUDOERS_D_DIR}/granted`;
+    const fs = this.options.fs;
+    let existing = '';
+    try {
+      if (await fs.exists(path)) {
+        existing = (await fs.readFile(path)) as string;
+      }
+    } catch {
+      existing = '';
+    }
+    const prefix = existing && !existing.endsWith('\n') ? `${existing}\n` : existing;
+    await fs.writeFile(path, `${prefix}NOPASSWD Cmnd  ${pattern}\n`);
+  }
 
   /** True when `name` is registrable/executable under the allow-list. */
   private isCommandAllowed(name: string): boolean {
