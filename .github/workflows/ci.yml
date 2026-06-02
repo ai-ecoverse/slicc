@@ -114,6 +114,12 @@ jobs:
             echo "::error::packages/vfs-root/shared/CLAUDE.md exceeds 3KB limit ($size bytes). Keep agent instructions concise."
             exit 1
           fi
+      - name: Check Chrome Web Store manifest justifications
+        # Fail if the extension manifest gains/drops a permission without a
+        # matching reviewer justification in docs/chrome-web-store-submission.md
+        # (or vice-versa). Keeps the CWS submission pack in sync with the
+        # shipped permission set.
+        run: bash packages/dev-tools/tools/check-manifest-justifications.sh
       - name: Dead code detection (knip)
         # Hard-fail on unused files, missing/unlisted dependencies,
         # unresolved imports, duplicate exports, and unused binaries.
