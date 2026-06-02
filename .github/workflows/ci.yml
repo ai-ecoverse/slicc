@@ -27,6 +27,7 @@ jobs:
       swift-server: ${{ steps.filter.outputs.swift-server }}
       swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
       ios-app: ${{ steps.filter.outputs.ios-app }}
+      swift-config: ${{ steps.filter.outputs.swift-config }}
       root-config: ${{ steps.filter.outputs.root-config }}
       is-queue-leader: ${{ steps.queue-position.outputs.leader }}
     steps:
@@ -57,6 +58,8 @@ jobs:
               - 'packages/swift-launcher/**'
             ios-app:
               - 'packages/ios-app/**'
+            swift-config:
+              - '.swiftlint.yml'
             root-config:
               - 'package.json'
               - 'package-lock.json'
@@ -523,10 +526,15 @@ jobs:
     if: >-
       needs.lint.result == 'success' &&
       needs.changes.outputs.is-queue-leader == 'true' &&
-      needs.changes.outputs.swift-server == 'true'
+      (needs.changes.outputs.swift-server == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-server && swiftlint lint --reporter github-actions-logging
       - name: Build
         run: cd packages/swift-server && swift build -c release
       - name: Test (with coverage threshold gate)
@@ -555,6 +563,7 @@ jobs:
       needs.changes.outputs.is-queue-leader == 'true' &&
       (needs.changes.outputs.swift-launcher == 'true' ||
       needs.changes.outputs.swift-server == 'true' ||
+      needs.changes.outputs.swift-config == 'true' ||
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
       needs.changes.outputs.assets == 'true' ||
@@ -567,6 +576,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-launcher && swiftlint lint --reporter github-actions-logging
       - name: Build webapp (dependency)
         run: npm run build -w @slicc/webapp
       - name: Build swift-server (dependency)
@@ -608,10 +621,15 @@ jobs:
     needs: [changes, lint]
     if: >-
       needs.lint.result == 'success' &&
-      needs.changes.outputs.ios-app == 'true'
+      (needs.changes.outputs.ios-app == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/ios-app && swiftlint lint --reporter github-actions-logging
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project

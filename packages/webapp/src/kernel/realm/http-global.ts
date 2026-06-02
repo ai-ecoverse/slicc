@@ -61,6 +61,8 @@ export interface HttpClient {
   post(path: string, opts?: HttpRequestOpts & { raw?: false }): Promise<unknown>;
   put(path: string, opts: HttpRequestOpts & { raw: true }): Promise<HttpResponse>;
   put(path: string, opts?: HttpRequestOpts & { raw?: false }): Promise<unknown>;
+  patch(path: string, opts: HttpRequestOpts & { raw: true }): Promise<HttpResponse>;
+  patch(path: string, opts?: HttpRequestOpts & { raw?: false }): Promise<unknown>;
   delete(path: string, opts: HttpRequestOpts & { raw: true }): Promise<HttpResponse>;
   delete(path: string, opts?: HttpRequestOpts & { raw?: false }): Promise<unknown>;
 }
@@ -290,6 +292,8 @@ export function createHttpGlobal(deps: HttpGlobalDeps): HttpGlobal {
         request('POST', path, opts)) as HttpClient['post'],
       put: ((path: string, opts?: HttpRequestOpts) =>
         request('PUT', path, opts)) as HttpClient['put'],
+      patch: ((path: string, opts?: HttpRequestOpts) =>
+        request('PATCH', path, opts)) as HttpClient['patch'],
       delete: ((path: string, opts?: HttpRequestOpts) =>
         request('DELETE', path, opts)) as HttpClient['delete'],
     };

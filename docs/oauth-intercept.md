@@ -133,3 +133,31 @@ The intercepted path requires the controlled-browser CDP transport
 (standalone or extension float). In a worker context with no transport,
 all three surfaces surface a clean "no CDP transport available" error
 instead of silently failing.
+
+## Silent token renewal (extension, launchWebAuthFlow)
+
+Providers with an `onSilentRenew` hook renew expired tokens without UI. In the
+extension this routes through `chrome.identity.launchWebAuthFlow`. The provider
+passes `{ interactive: false }` to the launcher; the service worker then calls
+`launchWebAuthFlow` with **three** required options
+(`packages/chrome-extension/src/oauth-flow-options.ts`):
+
+- `interactive: false` — no window.
+- `abortOnLoadForNonInteractive: false` — do **not** stop when the authorize
+  page loads. Adobe IMS's `prompt=none` page loads and then performs a
+  JS-driven redirect; the default non-interactive mode aborts before that
+  redirect fires ("User interaction required").
+- `timeoutMsForNonInteractive: 10000` — bound a stuck flow.
+
+**Do not regress this triple** — `interactive: false` alone fails for IMS.
+Requires Chrome 113+ (older Chrome ignores the options → renewal fails silently,
+no window).
+
+### Failure backoff (Adobe)
+
+`getValidAccessToken` routes silent renewal through a 5-minute cooldown
+(`packages/webapp/src/providers/silent-renew-backoff.ts`): after a failure it
+short-circuits to "session expired — please log in again" without re-hitting
+IMS, then re-probes once the cooldown elapses (recovering if the user re-authed
+elsewhere). That error is classified non-retryable in `scoop-context.ts` so a
+dead-session turn fails fast with one clean error.

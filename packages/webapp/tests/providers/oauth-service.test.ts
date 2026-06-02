@@ -590,4 +590,43 @@ describe('createOAuthLauncher — runtime gating regression', () => {
     expect(sendMessage).toHaveBeenCalled();
     expect(onMessage.addListener).toHaveBeenCalled();
   });
+
+  it('extension launcher forwards interactive:true into the oauth-request by default', async () => {
+    const sendMessage = vi.fn(() => Promise.resolve());
+    const onMessage = { addListener: vi.fn(), removeListener: vi.fn() };
+    (globalThis as any).chrome = { runtime: { id: 'test-extension-id', sendMessage, onMessage } };
+
+    vi.resetModules();
+    const mod = await import('../../src/providers/oauth-service.js');
+    const launcher = mod.createOAuthLauncher();
+
+    void launcher('https://idp.example.com/authorize');
+    await Promise.resolve();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'panel',
+        payload: expect.objectContaining({ type: 'oauth-request', interactive: true }),
+      })
+    );
+  });
+
+  it('extension launcher forwards interactive:false when requested (silent renewal)', async () => {
+    const sendMessage = vi.fn(() => Promise.resolve());
+    const onMessage = { addListener: vi.fn(), removeListener: vi.fn() };
+    (globalThis as any).chrome = { runtime: { id: 'test-extension-id', sendMessage, onMessage } };
+
+    vi.resetModules();
+    const mod = await import('../../src/providers/oauth-service.js');
+    const launcher = mod.createOAuthLauncher();
+
+    void launcher('https://idp.example.com/authorize', { interactive: false });
+    await Promise.resolve();
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ type: 'oauth-request', interactive: false }),
+      })
+    );
+  });
 });

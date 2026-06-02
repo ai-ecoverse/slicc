@@ -75,7 +75,16 @@ cd packages/ios-app
 swift build                                      # Library build (CI smoke)
 xcodegen generate                                # Regenerate SliccFollower.xcodeproj from project.yml
 xcodebuild -project SliccFollower.xcodeproj …    # IPA / TestFlight builds
+swiftlint lint                                   # SwiftLint (config inherits repo-root .swiftlint.yml)
 ```
+
+## Linting
+
+`packages/ios-app/.swiftlint.yml` inherits the shared rule set from the
+repo-root `.swiftlint.yml` (via `parent_config`) and excludes this package's
+`.build`/`SliccFollower.xcodeproj`. Warnings surface code-quality issues; only
+`error`-severity violations fail CI. Use `swiftlint --fix` to auto-correct
+fixable violations.
 
 TestFlight automation lives in `scripts/package-and-upload-testflight.sh` (consumes secrets via `setup-testflight-secrets.sh`).
 

@@ -107,6 +107,8 @@ export function isNonRetryableError(msg: string): boolean {
     /\b(401|403|404|405|410|422)\b/.test(msg) ||
     // Authentication / authorization failures
     /unauthorized|forbidden|authentication.*failed|invalid.*api.?key/i.test(msg) ||
+    // Expired session that needs interactive re-auth (won't succeed on retry)
+    /session expired|log in again|re-?authenticate/i.test(msg) ||
     // Invalid model errors
     /model.*not.*found|invalid.*model|unknown.*model|does.*not.*exist/i.test(msg) ||
     // Account/billing issues

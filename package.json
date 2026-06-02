@@ -1,6 +1,6 @@
 {
   "name": "sliccy",
-  "version": "3.18.4",
+  "version": "3.21.0",
   "description": "Browser-based coding agent with thin CLI server",
   "license": "Apache-2.0",
   "type": "module",
@@ -56,6 +56,7 @@
     "start:extension": "npm run build -w @slicc/chrome-extension && npm run dev -- --profile=extension",
     "lint": "biome check --write . && prettier --write .",
     "lint:ci": "biome check . && prettier --check .",
+    "lint:swift": "npm run lint -w @slicc/swift-server && npm run lint -w @slicc/swift-launcher && cd packages/ios-app && swiftlint lint",
     "deadcode": "knip --include files,dependencies,devDependencies,unlisted,binaries,unresolved,duplicates",
     "deadcode:full": "knip",
     "deadcode:files": "knip --include files",

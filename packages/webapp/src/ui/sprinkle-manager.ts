@@ -5,8 +5,9 @@
 
 import { createLogger } from '../core/logger.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
+import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
-import { SprinkleBridge } from './sprinkle-bridge.js';
+import { type CaptureScreenResult, SprinkleBridge } from './sprinkle-bridge.js';
 import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
 import { trackSprinkleView } from './telemetry.js';
@@ -268,13 +269,90 @@ export class SprinkleManager {
     options: SprinkleManagerOptions = {}
   ) {
     this.fs = fs;
+
+    const captureScreenHandler = async (): Promise<CaptureScreenResult> => {
+      const mimeType = 'image/png';
+      const quality = 1.0;
+
+      const local = hasLocalDom();
+      const panelRpc = getPanelRpcClient();
+
+      if (!local && !panelRpc) {
+        throw new Error('Screen capture unavailable in this environment');
+      }
+
+      if (local && !navigator.mediaDevices?.getDisplayMedia) {
+        throw new Error('Screen capture not supported in this browser');
+      }
+
+      let bytes: ArrayBuffer;
+      let width: number;
+      let height: number;
+
+      if (local) {
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+        try {
+          const video = document.createElement('video');
+          video.srcObject = stream;
+          video.muted = true;
+          video.playsInline = true;
+          await new Promise<void>((resolve, reject) => {
+            video.onloadedmetadata = () =>
+              video
+                .play()
+                .then(() => resolve())
+                .catch(reject);
+            video.onerror = () => reject(new Error('Failed to load video stream'));
+          });
+          await new Promise<void>((r) => setTimeout(r, 100));
+          width = video.videoWidth;
+          height = video.videoHeight;
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) throw new Error('Failed to get canvas context');
+          ctx.drawImage(video, 0, 0, width, height);
+          const blob = await new Promise<Blob>((resolve, reject) => {
+            canvas.toBlob(
+              (b) => (b ? resolve(b) : reject(new Error('Failed to create image blob'))),
+              mimeType,
+              quality
+            );
+          });
+          bytes = await blob.arrayBuffer();
+        } finally {
+          for (const t of stream.getTracks()) t.stop();
+        }
+      } else {
+        const result = await panelRpc!.call(
+          'screencapture',
+          { mimeType, quality },
+          { timeoutMs: 5 * 60_000 }
+        );
+        bytes = result.bytes;
+        width = result.width;
+        height = result.height;
+      }
+
+      const uint8 = new Uint8Array(bytes);
+      const parts: string[] = [];
+      const chunk = 8192;
+      for (let i = 0; i < uint8.length; i += chunk) {
+        parts.push(String.fromCharCode(...uint8.subarray(i, i + chunk)));
+      }
+      const base64 = btoa(parts.join(''));
+      return { base64, width, height, mimeType };
+    };
+
     this.bridge = new SprinkleBridge(
       fs,
       lickHandler,
       (name) => this.close(name),
       (name) => this.minimize(name),
       stopConeHandler,
-      options.onAttachImage ?? (() => {})
+      options.onAttachImage ?? (() => {}),
+      captureScreenHandler
     );
     this.callbacks = callbacks;
     this.autoOpenBehavior = options.autoOpenBehavior ?? 'activate';

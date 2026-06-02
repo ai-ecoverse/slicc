@@ -7,6 +7,13 @@ import type { EntryType, VirtualFS } from '../fs/index.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 
+export interface CaptureScreenResult {
+  base64: string;
+  width: number;
+  height: number;
+  mimeType: string;
+}
+
 export interface SprinkleBridgeAPI {
   /** Send a lick event to the agent. Accepts {action, data} or a plain action string. */
   lick(event: { action: string; data?: unknown } | string): void;
@@ -46,6 +53,8 @@ export interface SprinkleBridgeAPI {
   stopCone(): void;
   /** Push an image into the chat input as a pending attachment (no agent turn). */
   attachImage(base64: string, name?: string, mimeType?: string): void;
+  /** Capture a screen/window/tab via Chrome's native picker. Returns base64 PNG + metadata. */
+  captureScreen(): Promise<CaptureScreenResult>;
   /** Sprinkle name */
   readonly name: string;
 }
@@ -60,6 +69,7 @@ export class SprinkleBridge {
   private minimizeHandler: (name: string) => void;
   private stopConeHandler: () => void;
   private attachImageHandler: (base64: string, name?: string, mimeType?: string) => void;
+  private captureScreenHandler: () => Promise<CaptureScreenResult>;
 
   constructor(
     fs: VirtualFS,
@@ -67,7 +77,8 @@ export class SprinkleBridge {
     closeHandler: (name: string) => void,
     minimizeHandler: (name: string) => void,
     stopConeHandler: () => void,
-    attachImageHandler: (base64: string, name?: string, mimeType?: string) => void
+    attachImageHandler: (base64: string, name?: string, mimeType?: string) => void,
+    captureScreenHandler: () => Promise<CaptureScreenResult>
   ) {
     this.fs = fs;
     this.lickHandler = lickHandler;
@@ -75,6 +86,7 @@ export class SprinkleBridge {
     this.minimizeHandler = minimizeHandler;
     this.stopConeHandler = stopConeHandler;
     this.attachImageHandler = attachImageHandler;
+    this.captureScreenHandler = captureScreenHandler;
   }
 
   /** Create a bridge API for a specific sprinkle. */
@@ -177,6 +189,7 @@ export class SprinkleBridge {
       stopCone: () => this.stopConeHandler(),
       attachImage: (base64: string, name?: string, mimeType?: string) =>
         this.attachImageHandler(base64, name, mimeType),
+      captureScreen: () => this.captureScreenHandler(),
     };
     return api;
   }

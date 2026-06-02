@@ -24,6 +24,7 @@ import {
 } from '../../kernel/realm/realm-factory.js';
 import type { RealmFactory } from '../../kernel/realm/realm-runner.js';
 import { runInRealm } from '../../kernel/realm/realm-runner.js';
+import { stdinAsText } from '../just-bash-compat.js';
 
 export interface PythonCommandOptions {
   /**
@@ -98,8 +99,8 @@ export function createPython3LikeCommand(
       filename = scriptArg;
       sysArgv = [scriptArg, ...args.slice(1)];
       procArgv = [name, scriptArg, ...args.slice(1)];
-    } else if (ctx.stdin.trim().length > 0) {
-      code = ctx.stdin;
+    } else if (stdinAsText(ctx.stdin).trim().length > 0) {
+      code = stdinAsText(ctx.stdin);
       filename = '<stdin>';
       sysArgv = ['<stdin>'];
       procArgv = [name];
@@ -133,6 +134,10 @@ export function createPython3LikeCommand(
     const owner: ProcessOwner = { kind: 'system' };
     const realmFactory = options.realmFactory ?? createDefaultRealmFactory();
     const pyodideIndexURL = options.pyodideIndexURL ?? resolvePyodideIndexURL();
+    // When the program source itself was read from piped stdin, the script
+    // must not re-read its own code as input — mirror the `node` command's
+    // empty-stdin behavior in that branch.
+    const realmStdin = filename === '<stdin>' ? '' : stdinAsText(ctx.stdin);
 
     if (!pm) {
       return runWithEphemeralPm({
@@ -145,7 +150,7 @@ export function createPython3LikeCommand(
         cwd: ctx.cwd,
         filename,
         ctx,
-        stdin: ctx.stdin,
+        stdin: realmStdin,
         pyodideIndexURL,
         pyodideSyncDirs: syncDirs,
       });
@@ -163,7 +168,7 @@ export function createPython3LikeCommand(
       cwd: ctx.cwd,
       filename,
       ctx,
-      stdin: ctx.stdin,
+      stdin: realmStdin,
       pyodideIndexURL,
       pyodideSyncDirs: syncDirs,
       procKind: 'py',

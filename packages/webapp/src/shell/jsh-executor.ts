@@ -21,6 +21,7 @@ import { createDefaultRealmFactory } from '../kernel/realm/realm-factory.js';
 import { createInProcessJsRealmFactory } from '../kernel/realm/realm-inprocess.js';
 import type { RealmFactory } from '../kernel/realm/realm-runner.js';
 import { runInRealm } from '../kernel/realm/realm-runner.js';
+import { stdinAsLatin1 } from './just-bash-compat.js';
 
 export interface JshResult {
   stdout: string;
@@ -111,11 +112,11 @@ export async function executeJsCode(
     env: Object.fromEntries(ctx.env.entries()),
     cwd: ctx.cwd,
     filename,
-    // Forward the upstream pipeline's stdin (just-bash exposes it as a
-    // string per `CommandContext.stdin`) so `.jsh` scripts and `node`/
-    // `node -e` invocations can read piped input via `process.stdin.read()`
-    // or the top-level `stdin` parameter.
-    stdin: ctx.stdin,
+    // Forward the upstream pipeline's stdin (just-bash v3 exposes it as
+    // an opaque `ByteString` per `CommandContext.stdin`) so `.jsh`
+    // scripts and `node` / `node -e` invocations can read piped input
+    // via `process.stdin.read()` or the top-level `stdin` parameter.
+    stdin: stdinAsLatin1(ctx.stdin),
     ctx,
     ppid: pmConfig?.getParentPid?.(),
   });
