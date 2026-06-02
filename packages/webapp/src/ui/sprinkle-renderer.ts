@@ -307,6 +307,40 @@ export class SprinkleRenderer {
               '*'
             )
         );
+      } else if (msg.type === 'sprinkle-exec') {
+        this.bridge.exec(msg.cmd).then(
+          (result) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-exec-response', id: msg.id, result },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-exec-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-agent') {
+        this.bridge.agent(msg.prompt, msg.opts).then(
+          (result) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-agent-response', id: msg.id, result },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-agent-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
       } else if (msg.type === 'sprinkle-fetch-script') {
         const url = msg.url as string;
         const id = msg.id as string;
@@ -520,6 +554,12 @@ export class SprinkleRenderer {
       return _vfsCall('sprinkle-capture-screen', {}, function(m) {
         return { base64: m.base64, width: m.width, height: m.height, mimeType: m.mimeType };
       });
+    },
+    exec: function(cmd) {
+      return _vfsCall('sprinkle-exec', { cmd: cmd }, function(m) { return m.result; });
+    },
+    agent: function(prompt, opts) {
+      return _vfsCall('sprinkle-agent', { prompt: prompt, opts: opts }, function(m) { return m.result; });
     },
     name: ''
   };
@@ -764,6 +804,40 @@ export class SprinkleRenderer {
               '*'
             )
         );
+      } else if (msg.type === 'sprinkle-exec') {
+        this.bridge.exec(msg.cmd).then(
+          (result) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-exec-response', id: msg.id, result },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-exec-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-agent') {
+        this.bridge.agent(msg.prompt, msg.opts).then(
+          (result) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-agent-response', id: msg.id, result },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-agent-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
       }
     };
     window.addEventListener('message', this.messageHandler);
@@ -828,7 +902,8 @@ export class SprinkleRenderer {
           const attr = el.getAttribute('onclick') || '';
           for (const m of attr.matchAll(/\b(\w+)\s*\(/g)) {
             const name = m[1];
-            if (!['slicc', 'bridge', 'lick', 'close'].includes(name)) onclickFns.add(name);
+            if (!['slicc', 'bridge', 'lick', 'close', 'exec', 'agent'].includes(name))
+              onclickFns.add(name);
           }
         }
         const hoists = [...onclickFns]

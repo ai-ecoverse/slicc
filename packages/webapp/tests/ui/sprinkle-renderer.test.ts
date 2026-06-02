@@ -24,6 +24,8 @@ function makeBridge(name: string): SprinkleBridgeAPI {
     stopCone: vi.fn(),
     attachImage: vi.fn(),
     captureScreen: vi.fn(),
+    exec: vi.fn(),
+    agent: vi.fn(),
   };
 }
 
@@ -401,6 +403,9 @@ describe('full document rendering', () => {
     const srcdoc = iframe?.getAttribute('srcdoc') || '';
     expect(srcdoc).toContain('window.slicc');
     expect(srcdoc).toContain('sprinkle-lick');
+    // exec/agent bridge methods are wired into the srcdoc bridge script
+    expect(srcdoc).toContain('sprinkle-exec');
+    expect(srcdoc).toContain('sprinkle-agent');
   });
 
   it('dispose removes full-doc iframe', async () => {
@@ -484,6 +489,105 @@ describe('full document rendering', () => {
         type: 'sprinkle-capture-screen-response',
         id: 'req-2',
         error: 'Screen capture denied',
+      },
+      '*'
+    );
+  });
+
+  it('handles sprinkle-exec message and posts result response', async () => {
+    const bridge = makeBridge('full-doc');
+    (bridge.exec as ReturnType<typeof vi.fn>).mockResolvedValue({
+      stdout: 'hi\n',
+      stderr: '',
+      exitCode: 0,
+    });
+    const renderer = new SprinkleRenderer(container, bridge);
+    const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
+    await renderer.render(html, 'full-doc');
+
+    const iframe = container.querySelector('iframe')!;
+    const postMessageSpy = vi.fn();
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: { postMessage: postMessageSpy },
+      writable: true,
+    });
+
+    const event = new dom.window.MessageEvent('message', {
+      data: { type: 'sprinkle-exec', id: 'exec-1', cmd: 'echo hi' },
+      source: iframe.contentWindow as any,
+    });
+    dom.window.dispatchEvent(event);
+    await Promise.resolve();
+
+    expect(bridge.exec).toHaveBeenCalledWith('echo hi');
+    expect(postMessageSpy).toHaveBeenCalledWith(
+      {
+        type: 'sprinkle-exec-response',
+        id: 'exec-1',
+        result: { stdout: 'hi\n', stderr: '', exitCode: 0 },
+      },
+      '*'
+    );
+  });
+
+  it('handles sprinkle-exec rejection and posts error response', async () => {
+    const bridge = makeBridge('full-doc');
+    (bridge.exec as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('shell down'));
+    const renderer = new SprinkleRenderer(container, bridge);
+    const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
+    await renderer.render(html, 'full-doc');
+
+    const iframe = container.querySelector('iframe')!;
+    const postMessageSpy = vi.fn();
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: { postMessage: postMessageSpy },
+      writable: true,
+    });
+
+    const event = new dom.window.MessageEvent('message', {
+      data: { type: 'sprinkle-exec', id: 'exec-2', cmd: 'boom' },
+      source: iframe.contentWindow as any,
+    });
+    dom.window.dispatchEvent(event);
+    await Promise.resolve();
+
+    expect(postMessageSpy).toHaveBeenCalledWith(
+      { type: 'sprinkle-exec-response', id: 'exec-2', error: 'shell down' },
+      '*'
+    );
+  });
+
+  it('handles sprinkle-agent message and posts result response', async () => {
+    const bridge = makeBridge('full-doc');
+    (bridge.agent as ReturnType<typeof vi.fn>).mockResolvedValue({
+      stdout: 'done',
+      exitCode: 0,
+    });
+    const renderer = new SprinkleRenderer(container, bridge);
+    const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
+    await renderer.render(html, 'full-doc');
+
+    const iframe = container.querySelector('iframe')!;
+    const postMessageSpy = vi.fn();
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: { postMessage: postMessageSpy },
+      writable: true,
+    });
+
+    const opts = { cwd: '/workspace', model: 'claude-opus-4-6' };
+    const event = new dom.window.MessageEvent('message', {
+      data: { type: 'sprinkle-agent', id: 'agent-1', prompt: 'do it', opts },
+      source: iframe.contentWindow as any,
+    });
+    dom.window.dispatchEvent(event);
+    await Promise.resolve();
+
+    expect(bridge.agent).toHaveBeenCalledWith('do it', opts);
+    expect(postMessageSpy).toHaveBeenCalledWith(
+      {
+        type: 'sprinkle-agent-response',
+        id: 'agent-1',
+        result: { stdout: 'done', exitCode: 0 },
       },
       '*'
     );

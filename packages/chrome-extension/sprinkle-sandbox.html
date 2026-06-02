@@ -235,6 +235,32 @@ window.slicc = {
   attachImage: function(base64, name, mimeType) {
     parent.postMessage({ type: 'sprinkle-attach-image', base64: base64, name: name, mimeType: mimeType }, '*');
   },
+  exec: function(cmd) {
+    return new Promise(function(resolve, reject) {
+      var id = 'xc-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-exec-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error)); else resolve(event.data.result);
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-exec', id: id, cmd: cmd }, '*');
+    });
+  },
+  agent: function(prompt, opts) {
+    return new Promise(function(resolve, reject) {
+      var id = 'ag-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-agent-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error)); else resolve(event.data.result);
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-agent', id: id, prompt: prompt, opts: opts }, '*');
+    });
+  },
 };
 window.bridge = window.slicc;
 
@@ -338,7 +364,9 @@ function buildNestedBridgeScript(savedState, savedStorage, name, isLight) {
       'close: function() { parent.postMessage({ type: "sprinkle-close" }, "*"); },' +
       'minimize: function() { parent.postMessage({ type: "sprinkle-minimize" }, "*"); },' +
       'stopCone: function() { parent.postMessage({ type: "sprinkle-stop-cone" }, "*"); },' +
-      'attachImage: function(base64, name, mimeType) { parent.postMessage({ type: "sprinkle-attach-image", base64: base64, name: name, mimeType: mimeType }, "*"); }' +
+      'attachImage: function(base64, name, mimeType) { parent.postMessage({ type: "sprinkle-attach-image", base64: base64, name: name, mimeType: mimeType }, "*"); },' +
+      'exec: function(cmd) { return _vfsCall("sprinkle-exec", { cmd: cmd }, function(m) { return m.result; }); },' +
+      'agent: function(prompt, opts) { return _vfsCall("sprinkle-agent", { prompt: prompt, opts: opts }, function(m) { return m.result; }); }' +
     '};' +
     'window.bridge = window.slicc;' +
     'addEventListener("message", function(e) {' +
@@ -526,6 +554,7 @@ addEventListener('message', function(e) {
     'sprinkle-readdir-response', 'sprinkle-exists-response',
     'sprinkle-stat-response', 'sprinkle-mkdir-response', 'sprinkle-rm-response',
     'sprinkle-fetch-script-response',
+    'sprinkle-exec-response', 'sprinkle-agent-response',
     'dip-readfile-response', 'dip-exists-response', 'dip-stat-response'
   ];
   if (responseTypes.indexOf(msg.type) !== -1) {
@@ -574,6 +603,7 @@ addEventListener('message', function(e) {
       'sprinkle-stat', 'sprinkle-mkdir', 'sprinkle-rm',
       'sprinkle-storage-set', 'sprinkle-storage-remove', 'sprinkle-storage-clear',
       'sprinkle-fetch-script',
+      'sprinkle-exec', 'sprinkle-agent',
       'dip-lick', 'dip-height', 'dip-open-link',
       'dip-readfile', 'dip-exists', 'dip-stat'
     ];
