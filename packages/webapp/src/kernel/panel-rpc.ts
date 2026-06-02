@@ -41,6 +41,7 @@
 import type { OAuthExtraDomainsStore } from '@slicc/shared-ts';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { TrayLeaveResult } from '../scoops/tray-leave.js';
+import type { UsbControlSetup, UsbDeviceFilter, UsbDeviceInfo } from './usb-device-registry.js';
 
 const PANEL_RPC_CHANNEL = 'slicc-panel-rpc';
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -172,7 +173,36 @@ export type PanelRpcRequest =
       // mirror it into its shim immediately. See issue #701.
       op: 'save-oauth-accounts';
       payload: { accountsJson: string };
-    };
+    }
+  // ── WebUSB bridge ─────────────────────────────────────────────────
+  // The kernel worker has no `navigator.usb`. These ops let the worker-
+  // side `usb` command drive WebUSB through the page-side device-handle
+  // registry. `USBDevice` objects are non-serializable, so every op is
+  // keyed by an opaque string handle and exchanges only plain data /
+  // `ArrayBuffer`s. `usb-request` and `usb-list` resolve handles; the
+  // remaining ops act on an already-resolved handle.
+  | { op: 'usb-list'; payload?: undefined }
+  | { op: 'usb-request'; payload: { filters: UsbDeviceFilter[] } }
+  | { op: 'usb-device-info'; payload: { handle: string } }
+  | { op: 'usb-open'; payload: { handle: string } }
+  | { op: 'usb-close'; payload: { handle: string } }
+  | { op: 'usb-select-configuration'; payload: { handle: string; configurationValue: number } }
+  | { op: 'usb-claim-interface'; payload: { handle: string; interfaceNumber: number } }
+  | { op: 'usb-release-interface'; payload: { handle: string; interfaceNumber: number } }
+  | {
+      op: 'usb-control-transfer-in';
+      payload: { handle: string; setup: UsbControlSetup; length: number };
+    }
+  | {
+      op: 'usb-control-transfer-out';
+      payload: { handle: string; setup: UsbControlSetup; bytes: ArrayBuffer };
+    }
+  | { op: 'usb-transfer-in'; payload: { handle: string; endpointNumber: number; length: number } }
+  | {
+      op: 'usb-transfer-out';
+      payload: { handle: string; endpointNumber: number; bytes: ArrayBuffer };
+    }
+  | { op: 'usb-reset'; payload: { handle: string } };
 
 export interface PanelRpcResults {
   'page-info': { origin: string; href: string; title: string };
@@ -201,6 +231,19 @@ export interface PanelRpcResults {
   'tray-leave': TrayLeaveResult;
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
   'save-oauth-accounts': { storedJson: string };
+  'usb-list': { devices: UsbDeviceInfo[] };
+  'usb-request': { device: UsbDeviceInfo };
+  'usb-device-info': { device: UsbDeviceInfo };
+  'usb-open': { done: true };
+  'usb-close': { done: true };
+  'usb-select-configuration': { done: true };
+  'usb-claim-interface': { done: true };
+  'usb-release-interface': { done: true };
+  'usb-control-transfer-in': { status: string; bytes: ArrayBuffer };
+  'usb-control-transfer-out': { status: string; bytesWritten: number };
+  'usb-transfer-in': { status: string; bytes: ArrayBuffer };
+  'usb-transfer-out': { status: string; bytesWritten: number };
+  'usb-reset': { done: true };
 }
 
 export type PanelRpcOp = PanelRpcRequest['op'];

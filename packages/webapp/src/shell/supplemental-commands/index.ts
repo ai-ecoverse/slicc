@@ -47,6 +47,7 @@ import { createTestCommand } from './test-command.js';
 import { createTscCommand } from './tsc-command.js';
 import { createUnameCommand } from './uname-command.js';
 import { createUnzipCommand } from './unzip-command.js';
+import { createUsbCommand } from './usb-command.js';
 import { createWebhookCommand } from './webhook-command.js';
 import { createWebsocatCommand } from './websocat-command.js';
 import { createWhichCommand } from './which-command.js';
@@ -135,6 +136,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createDiscoverCommand(),
     createPsCommand({ processManager: options.processManager }),
     createKillCommand({ processManager: options.processManager }),
+    createUsbCommand(),
   ];
 
   if (options.fs) {

@@ -37,9 +37,15 @@
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 import { storePendingHandle } from '../fs/mount-picker-popup.js';
+import { parseUsbArgs, parseUsbFilters } from '../shell/supplemental-commands/usb-command.js';
 import type { TerminalEventMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
 import type { OffscreenClient } from '../ui/offscreen-client.js';
 import { type TerminalExecResult, TerminalSessionClient } from './terminal-session-client.js';
+import {
+  getNavigatorUsb,
+  getSharedUsbRegistry,
+  type UsbDeviceFilter,
+} from './usb-device-registry.js';
 
 export interface RemoteTerminalViewOptions {
   client: OffscreenClient;
@@ -626,7 +632,52 @@ export class RemoteTerminalView {
       void this.runRemoteWithLocalPicker(command, mountTarget);
       return;
     }
+    // Pre-intercept `usb request`. `navigator.usb.requestDevice` needs a
+    // user gesture; the worker shell has none. The Enter keystroke IS a
+    // gesture, so we run the chooser on the page, stash the granted
+    // device in the shared registry, and forward a rewritten command
+    // carrying the resolved handle so the worker prints its descriptor.
+    const usbFilters = parseUsbRequestCommand(command);
+    if (usbFilters) {
+      void this.runRemoteWithUsbPicker(usbFilters);
+      return;
+    }
     void this.runRemote(command);
+  }
+
+  /**
+   * Run the WebUSB chooser on the Enter-keystroke gesture, register the
+   * granted device in the page-side registry, then forward
+   * `usb request --__resolved <handle>` so the worker command renders
+   * the device descriptor. Cancellation surfaces as a terminal line and
+   * skips the worker exec entirely.
+   */
+  private async runRemoteWithUsbPicker(filters: UsbDeviceFilter[]): Promise<void> {
+    this.isExecuting = true;
+    try {
+      const usb = getNavigatorUsb();
+      if (!usb) {
+        this.terminal?.writeln('usb: WebUSB is not available in this browser');
+        return;
+      }
+      let handle: string;
+      try {
+        const device = await usb.requestDevice({ filters });
+        handle = getSharedUsbRegistry().register(device);
+      } catch (err: unknown) {
+        const name = err instanceof Error ? err.name : '';
+        if (name === 'NotFoundError' || name === 'AbortError') {
+          this.terminal?.writeln('usb: cancelled');
+          return;
+        }
+        this.terminal?.writeln(`usb: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+      await this.runRemoteImpl(`usb request --__resolved ${handle}`);
+    } finally {
+      this.isExecuting = false;
+      this.showPrompt();
+    }
   }
 
   /**
@@ -802,6 +853,21 @@ function parseLocalMountTarget(line: string): string | null {
  */
 export function localMountIdbKey(target: string): string {
   return `pendingMount:term:${target}`;
+}
+
+/**
+ * Parse a typed command line and return the WebUSB filters when it is a
+ * gesture-requiring `usb request` (no `--__resolved` handle and no help
+ * flag). Returns `null` for anything else so the worker handles it.
+ */
+function parseUsbRequestCommand(line: string): UsbDeviceFilter[] | null {
+  const tokens = line.trim().split(/\s+/);
+  if (tokens[0] !== 'usb' || tokens[1] !== 'request') return null;
+  if (tokens.includes('--__resolved') || tokens.includes('--help') || tokens.includes('-h')) {
+    return null;
+  }
+  const { flags } = parseUsbArgs(tokens.slice(2));
+  return parseUsbFilters(flags);
 }
 
 // ---------------------------------------------------------------------------

@@ -11,6 +11,8 @@
  */
 
 import type { PanelRpcHandlers, PanelRpcResults } from '../kernel/panel-rpc.js';
+import { getNavigatorUsb, getSharedUsbRegistry } from '../kernel/usb-device-registry.js';
+import * as usbOps from '../kernel/usb-operations.js';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import { getAllExtraOAuthDomains, setExtraOAuthDomains } from './provider-settings.js';
 
@@ -302,7 +304,77 @@ export function createStandalonePanelRpcHandlers(
       const storedJson = localStorage.getItem('slicc_accounts') ?? accountsJson;
       return { storedJson };
     },
+
+    // ── WebUSB ────────────────────────────────────────────────────────
+    // The kernel worker drives WebUSB through these handlers, keyed by
+    // opaque handles backed by the page-side `DeviceHandleRegistry`.
+    // `usb-request` calls `requestDevice` and therefore only succeeds
+    // when invoked during a user gesture; outside one the browser
+    // rejects it and the error surfaces to the worker command.
+    'usb-list': async () => ({ devices: await usbOps.usbList(usbRegistry(), requireUsb()) }),
+
+    'usb-request': async ({ filters }) => ({
+      device: await usbOps.usbRequest(usbRegistry(), requireUsb(), filters),
+    }),
+
+    'usb-device-info': ({ handle }) => ({
+      device: usbOps.usbDeviceInfo(usbRegistry(), handle),
+    }),
+
+    'usb-open': async ({ handle }) => {
+      await usbOps.usbOpen(usbRegistry(), handle);
+      return { done: true };
+    },
+
+    'usb-close': async ({ handle }) => {
+      await usbOps.usbClose(usbRegistry(), handle);
+      return { done: true };
+    },
+
+    'usb-select-configuration': async ({ handle, configurationValue }) => {
+      await usbOps.usbSelectConfiguration(usbRegistry(), handle, configurationValue);
+      return { done: true };
+    },
+
+    'usb-claim-interface': async ({ handle, interfaceNumber }) => {
+      await usbOps.usbClaimInterface(usbRegistry(), handle, interfaceNumber);
+      return { done: true };
+    },
+
+    'usb-release-interface': async ({ handle, interfaceNumber }) => {
+      await usbOps.usbReleaseInterface(usbRegistry(), handle, interfaceNumber);
+      return { done: true };
+    },
+
+    'usb-control-transfer-in': async ({ handle, setup, length }) =>
+      usbOps.usbControlTransferIn(usbRegistry(), handle, setup, length),
+
+    'usb-control-transfer-out': async ({ handle, setup, bytes }) =>
+      usbOps.usbControlTransferOut(usbRegistry(), handle, setup, bytes),
+
+    'usb-transfer-in': async ({ handle, endpointNumber, length }) =>
+      usbOps.usbTransferIn(usbRegistry(), handle, endpointNumber, length),
+
+    'usb-transfer-out': async ({ handle, endpointNumber, bytes }) =>
+      usbOps.usbTransferOut(usbRegistry(), handle, endpointNumber, bytes),
+
+    'usb-reset': async ({ handle }) => {
+      await usbOps.usbReset(usbRegistry(), handle);
+      return { done: true };
+    },
   };
+}
+
+/** Shared page-side WebUSB registry (lazy singleton). */
+function usbRegistry() {
+  return getSharedUsbRegistry();
+}
+
+/** Resolve `navigator.usb` or throw a clear error for the worker side. */
+function requireUsb() {
+  const usb = getNavigatorUsb();
+  if (!usb) throw new Error('WebUSB is unavailable in this browser');
+  return usb;
 }
 
 // ── Camera capture (page-side) ──────────────────────────────────────
